@@ -26,3 +26,5 @@ target
 !src/bin/
 
 data/*
+.mcp.json
+/scripts/__pycache__
