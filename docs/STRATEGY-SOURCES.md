@@ -194,6 +194,20 @@ builds a flat `Map<String, DrofusRecord>` — no collision handling needed.
   just gets no dRofus data. A key present on the room but absent from the map
   is a useful mismatch — the two exports saw different model state, same
   diagnostic role as the room↔level join below.
+- **A joined source is queryable under its `[sources.<name>]` key.** `/rooms`'
+  property filter (see [Server](STRATEGY-SERVER.md)) namespaces a predicate's
+  field as `<source>.<label>` — `drofus.NetArea>20` — where `<source>` is
+  exactly a field name of `settings::Sources`, so "what goes before the dot"
+  has the same answer as the settings file. **This is the extension point a
+  second source touches:** one entry in `rooms::JOINED_SOURCES` and one arm in
+  `rooms::resolve_field`, nothing else. The namespace is reserved in the
+  grammar rather than inferred — an unknown prefix is a parse error naming the
+  known sources, never a silent fallback to a room property, so a raw property
+  literally named `Newsource.Field` can't quietly change meaning the day that
+  source is added. The filter runs on the *assembled* room (after the join)
+  precisely so a source's fields are reachable at all; consistent with
+  "unmatched key is a signal", a room whose link value matched no record fails
+  every predicate on that source, negative operators included.
 
 ## Open items / things to watch
 

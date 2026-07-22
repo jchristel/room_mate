@@ -39,8 +39,9 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   silently corrupts the protocol.
 - **Twelve tools: one per existing read route, two settings reads, and one
   forwarded upload.**
-  `list_projects`, `list_buildings`, `get_rooms` (project/building/milestone
-  filters optional), `get_validation`, `list_snapshots`,
+  `list_projects`, `list_buildings`, `get_rooms` (project/building/milestone/
+  property filters optional — see the property-filter bullet below),
+  `get_validation`, `list_snapshots`,
   `get_latest_snapshot`, `list_milestones`, `list_drofus_snapshots`, and
   `get_drofus_snapshot` mirror the nine HTTP read routes (snapshot-history,
   milestone, and dRofus-upload endpoints: see [Server](STRATEGY-SERVER.md);
@@ -70,6 +71,25 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   declares. Ingest (`POST /rooms`, `/rooms/stream`) has no MCP counterpart
   either — an LLM pushing a full room snapshot isn't a realistic flow, and
   the HTTP server remains the only ingest path.
+- **`get_rooms`' property filter: the reason a read tool needs more than
+  scoping.** Without it, a client asking "which rooms are Department =
+  Cardiology?" has to pull all 5,000+ rooms and match them itself — exactly the
+  waste `list_buildings` exists to avoid (the server answers a scoped facet
+  question rather than dumping rooms). `filter` takes an **array of predicate
+  strings**, all of which must hold: `["Department=Cardiology", "Area>=20",
+  "drofus.NetArea>20"]`. One predicate per array element, so a client never has
+  to escape a separator; the HTTP route's comma-separated `?filter=` string is
+  the same grammar through the same parser
+  (`service::rooms::RoomFilter::parse` / `parse_query`), so the two adapters
+  can't drift on semantics. A malformed predicate is `invalid_params` carrying
+  the parser's message — the MCP counterpart of the HTTP 400, mapped in the
+  adapter from the shared `ServiceError::Invalid`. The tool description states
+  the one rule a caller can't infer from an empty result: **a room missing the
+  field never matches, negative operators included.** Milestone composition is
+  inherited, not re-plumbed, for the same reason dRofus pinning was: the filter
+  runs below the transport seam and downstream of pin substitution, so a
+  `drofus.`-qualified predicate under a `milestone` matches the *pinned* dRofus
+  values automatically.
 - **`upload_drofus`: mutation by forwarding, not by writing.** The one
   mutating tool doesn't break the read-only stance, it routes around the
   split-brain problem: it reads a dRofus CSV from an absolute file path and

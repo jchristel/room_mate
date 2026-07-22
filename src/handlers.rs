@@ -13,6 +13,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     Json,
 };
 use futures_util::StreamExt;
@@ -266,16 +267,22 @@ pub async fn ingest_rooms_stream(
     Ok(Json(IngestResponse { accepted: true, room_count: count, snapshot_taken_at, snapshot_id_generated }))
 }
 
-/// `ServiceError` -> `StatusCode`, with no body -- matches what every read
-/// handler below returned before the service extraction. Only `Internal`
-/// exists today (variants join with their first producer -- see
-/// `ServiceError`), so every service failure is a 500.
-fn map_service_error(err: ServiceError) -> StatusCode {
+/// `ServiceError` -> `(StatusCode, String)`, the same message-carrying error
+/// shape the ingest and settings handlers already use. It replaced a bare
+/// `StatusCode` when `ServiceError::Invalid` arrived: a caller-fault status
+/// with no body would leave a client unable to tell a malformed filter from a
+/// filter that legitimately matched nothing.
+fn map_service_error(err: ServiceError) -> (StatusCode, String) {
     match err {
         ServiceError::Internal(e) => {
             tracing::error!("internal service error: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR
+            // The internal detail is logged, never echoed: a storage path or
+            // an io error is not the caller's business.
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
         }
+        // Caller-fault: the message IS the useful part (which predicate, and
+        // why), so it goes back verbatim.
+        ServiceError::Invalid(msg) => (StatusCode::BAD_REQUEST, msg),
     }
 }
 
@@ -284,7 +291,7 @@ fn map_service_error(err: ServiceError) -> StatusCode {
 /// yet: an empty list is a perfectly good answer for a picker, unlike
 /// `/rooms`'s 204 (which exists for the poller's specific "nothing posted
 /// yet" signal).
-pub async fn get_projects(State(state): State<Shared>) -> Result<Json<Vec<ProjectSummary>>, StatusCode> {
+pub async fn get_projects(State(state): State<Shared>) -> Result<Json<Vec<ProjectSummary>>, (StatusCode, String)> {
     let projects = projects::list_projects(&state).map_err(map_service_error)?;
     Ok(Json(projects))
 }
@@ -294,7 +301,7 @@ pub async fn get_projects(State(state): State<Shared>) -> Result<Json<Vec<Projec
 pub async fn get_project_snapshots(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
-) -> Result<Json<ProjectSnapshotsResponse>, StatusCode> {
+) -> Result<Json<ProjectSnapshotsResponse>, (StatusCode, String)> {
     let result = snapshots::list_project_snapshots(&state, &project_id).map_err(map_service_error)?;
     Ok(Json(result))
 }
@@ -306,10 +313,10 @@ pub async fn get_project_snapshots(
 pub async fn get_model_latest_snapshot(
     State(state): State<Shared>,
     Path((project_id, model_id)): Path<(String, String)>,
-) -> Result<Json<LatestSnapshot>, StatusCode> {
+) -> Result<Json<LatestSnapshot>, (StatusCode, String)> {
     let result = snapshots::latest_snapshot(&state, &project_id, &model_id).map_err(map_service_error)?;
     match result {
-        None => Err(StatusCode::NOT_FOUND),
+        None => Err((StatusCode::NOT_FOUND, "no snapshots stored for that project/model".to_string())),
         Some(latest) => Ok(Json(latest)),
     }
 }
@@ -320,7 +327,7 @@ pub async fn get_model_latest_snapshot(
 pub async fn get_drofus_snapshots(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
-) -> Result<Json<DrofusSnapshotList>, StatusCode> {
+) -> Result<Json<DrofusSnapshotList>, (StatusCode, String)> {
     let result = drofus::list_drofus_snapshots(&state, &project_id).map_err(map_service_error)?;
     Ok(Json(result))
 }
@@ -332,10 +339,10 @@ pub async fn get_drofus_snapshots(
 pub async fn get_drofus_latest(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
-) -> Result<Json<DrofusSnapshotInfo>, StatusCode> {
+) -> Result<Json<DrofusSnapshotInfo>, (StatusCode, String)> {
     let result = drofus::get_drofus_snapshot(&state, &project_id, None).map_err(map_service_error)?;
     match result {
-        None => Err(StatusCode::NOT_FOUND),
+        None => Err((StatusCode::NOT_FOUND, "no dRofus upload stored for that project".to_string())),
         Some(info) => Ok(Json(info)),
     }
 }
@@ -345,7 +352,7 @@ pub async fn get_drofus_latest(
 pub async fn get_project_milestones(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
-) -> Result<Json<MilestonesResponse>, StatusCode> {
+) -> Result<Json<MilestonesResponse>, (StatusCode, String)> {
     let result = milestones::list_milestones(&state, &project_id).map_err(map_service_error)?;
     Ok(Json(result))
 }
@@ -355,7 +362,7 @@ pub async fn get_project_milestones(
 pub async fn get_project_buildings(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
-) -> Result<Json<BuildingsResponse>, StatusCode> {
+) -> Result<Json<BuildingsResponse>, (StatusCode, String)> {
     let buildings = projects::list_buildings(&state, &project_id).map_err(map_service_error)?;
     Ok(Json(buildings))
 }
@@ -373,28 +380,51 @@ pub struct RoomsQuery {
     pub building: Option<String>,
     #[serde(default)]
     pub milestone: Option<String>,
+    /// Comma-separated property predicates, all of which must hold, e.g.
+    /// `?filter=Department=Cardiology,Area>20`. A value containing a literal
+    /// comma must be quoted (`Department="A, B"`). Exists for programmatic
+    /// callers — the viewer holds the whole payload and matches locally, so it
+    /// never sends this. See `service::rooms::RoomFilter`.
+    #[serde(default)]
+    pub filter: Option<String>,
 }
 
 /// The viewer fetches here — see `service::rooms::assemble_rooms`. Returns
-/// 204 when nothing has ever been posted (the service's `None` case); a
-/// project/building filter matching nothing still returns 200 with empty
-/// arrays. `RoomsResult` serializes directly — every field is wire shape, so
-/// no hand-built JSON is needed here.
+/// 204 when nothing has ever been posted (the service's `None` case); a scope
+/// matching nothing still returns 200 with empty arrays; a malformed `filter`
+/// is 400 with the parser's message. `RoomsResult` serializes directly — every
+/// field is wire shape, so no hand-built JSON is needed here.
+///
+/// Returns `Response` rather than `Json<..>` so the 204 stays on the `Ok` arm:
+/// the error arm now carries a message (`(StatusCode, String)`, the shape the
+/// ingest and settings handlers already use), and threading a body-less 204
+/// through it would have meant answering the viewer's poll with an empty-bodied
+/// error.
 pub async fn get_rooms(
     State(state): State<Shared>,
     Query(query): Query<RoomsQuery>,
-) -> Result<Json<rooms::RoomsResult>, StatusCode> {
-    let result = rooms::assemble_rooms(
-        &state,
-        query.project.as_deref(),
-        query.building.as_deref(),
-        query.milestone.as_deref(),
-    )
-    .map_err(map_service_error)?;
+) -> Result<Response, (StatusCode, String)> {
+    // Parsed here, in the adapter that holds the raw string, then passed down
+    // as a domain type -- `service` never sees the query syntax.
+    let filter = query
+        .filter
+        .as_deref()
+        .map(rooms::RoomFilter::parse_query)
+        .transpose()
+        .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
+        .filter(|f| !f.is_empty());
+
+    let scope = rooms::RoomScope {
+        project: query.project.as_deref(),
+        building: query.building.as_deref(),
+        milestone: query.milestone.as_deref(),
+        filter: filter.as_ref(),
+    };
+    let result = rooms::assemble_rooms(&state, &scope).map_err(map_service_error)?;
 
     match result {
-        None => Err(StatusCode::NO_CONTENT),
-        Some(result) => Ok(Json(result)),
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(Json(result).into_response()),
     }
 }
 
@@ -403,7 +433,7 @@ pub async fn get_rooms(
 pub async fn get_project_validation(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
-) -> Result<Json<ValidationResponse>, StatusCode> {
+) -> Result<Json<ValidationResponse>, (StatusCode, String)> {
     let report = validation::compute_project_validation(&state, &project_id).map_err(map_service_error)?;
     Ok(Json(report))
 }
@@ -420,17 +450,19 @@ pub struct AreasQuery {
 
 /// Hierarchy gross-area footprints for one project — see
 /// `service::areas::assemble_areas`. 204 when nothing has ever been posted
-/// (mirrors `/rooms`); a scope matching nothing is 200 with empty `groups`.
+/// (mirrors `/rooms`, including keeping that 204 on the `Ok` arm so it stays
+/// body-less now that the error arm carries a message); a scope matching
+/// nothing is 200 with empty `groups`.
 pub async fn get_project_areas(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
     Query(query): Query<AreasQuery>,
-) -> Result<Json<areas::AreasResult>, StatusCode> {
+) -> Result<Response, (StatusCode, String)> {
     let result = areas::assemble_areas(&state, &project_id, query.building.as_deref(), query.milestone.as_deref())
         .map_err(map_service_error)?;
     match result {
-        None => Err(StatusCode::NO_CONTENT),
-        Some(result) => Ok(Json(result)),
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(Json(result).into_response()),
     }
 }
 
@@ -454,7 +486,7 @@ pub async fn compare_project_milestones(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
     Json(req): Json<ComparisonRequest>,
-) -> Result<Json<ComparisonResponse>, StatusCode> {
+) -> Result<Json<ComparisonResponse>, (StatusCode, String)> {
     let result = comparison::compare_milestones(&state, &project_id, &req.baseline, &req.others)
         .map_err(map_service_error)?;
     Ok(Json(result))
@@ -501,18 +533,52 @@ mod tests {
         std::collections::HashMap::from([(project_id.to_string(), make_bundle())])
     }
 
+    /// A `RoomsQuery` with no scoping at all -- the viewer's request shape.
+    fn unscoped_query() -> RoomsQuery {
+        RoomsQuery { project: None, building: None, milestone: None, filter: None }
+    }
+
     /// An empty store yields 204 through the full handler, not just at the
     /// service layer -- the one behavior that genuinely lives at the HTTP
-    /// seam (`service::rooms::assemble_rooms` has no notion of "204").
+    /// seam (`service::rooms::assemble_rooms` has no notion of "204"). Also
+    /// guards that the 204 stayed on the `Ok` arm when the error type grew a
+    /// message: the viewer polls on this status and must not receive a body.
     #[tokio::test]
     async fn test_get_rooms_returns_204_when_store_empty() {
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let result = get_rooms(State(state), Query(RoomsQuery { project: None, building: None, milestone: None })).await;
-        match result {
-            Err(status) => assert_eq!(status, StatusCode::NO_CONTENT),
-            Ok(_) => panic!("expected 204 for an empty store"),
-        }
+        let response = get_rooms(State(state), Query(unscoped_query())).await.expect("204 is not an error");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    /// The query-string seam: a predicate's own `=` must survive
+    /// deserialization. `form_urlencoded` splits each pair at its FIRST `=`,
+    /// so `?filter=Department=Cardiology` arrives as the value
+    /// "Department=Cardiology" rather than being truncated -- the reason the
+    /// grammar can use `=` as an operator in a query param at all.
+    #[test]
+    fn test_rooms_query_keeps_operators_in_the_filter_value() {
+        let uri: axum::http::Uri = "/rooms?project=p1&filter=Department=Cardiology,Area%3E20".parse().unwrap();
+        let Query(query) = Query::<RoomsQuery>::try_from_uri(&uri).expect("must deserialize");
+
+        assert_eq!(query.project.as_deref(), Some("p1"));
+        assert_eq!(query.filter.as_deref(), Some("Department=Cardiology,Area>20"));
+        let filter = rooms::RoomFilter::parse_query(query.filter.as_deref().unwrap()).expect("must parse");
+        assert!(!filter.is_empty());
+    }
+
+    /// A malformed `?filter=` predicate is a 400 carrying the parser's
+    /// message -- the whole point of the message-bearing error type, since a
+    /// bare status would leave a client unable to tell a typo from a filter
+    /// that legitimately matched nothing.
+    #[tokio::test]
+    async fn test_get_rooms_rejects_malformed_filter() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let query = RoomsQuery { filter: Some("Department".to_string()), ..unscoped_query() };
+        let (status, message) = get_rooms(State(state), Query(query)).await.expect_err("no operator in the predicate");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("no operator"), "the parser's reason must reach the caller, got {message:?}");
     }
 
     /// A project filter matching nothing still returns 200 with empty
@@ -531,14 +597,13 @@ mod tests {
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
         state.set_snapshot(payload).unwrap();
 
-        let result = get_rooms(
-            State(state),
-            Query(RoomsQuery { project: Some("nonexistent".to_string()), building: None, milestone: None }),
-        )
-        .await
-        .unwrap();
+        let query = RoomsQuery { project: Some("nonexistent".to_string()), ..unscoped_query() };
+        let response = get_rooms(State(state), Query(query)).await.unwrap();
 
-        assert!(result.0.rooms.is_empty());
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(body["rooms"].as_array().unwrap().is_empty());
     }
 
     /// A project/model id that could escape the storage root as a path

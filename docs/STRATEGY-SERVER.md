@@ -111,7 +111,8 @@ each module carrying its rationale in a header, all with unit tests.
   fixing the multi-document overwrite bug. `/rooms` merges every model's
   latest into one flat payload by default; optional `?project=`/`?building=`
   query params (the latter matched against the same Building tier as above)
-  narrow that merge to one project or building. Under an active building
+  narrow that merge to one project or building, and `?filter=` narrows it by
+  room property (see the property-filter bullet below). Under an active building
   filter, a project whose hierarchy has no "Building" tier matches *nothing*,
   not everything — the caller asked for a building, and a project with no
   notion of one can't answer that question (a silently ignored filter used to
@@ -119,7 +120,7 @@ each module carrying its rationale in a header, all with unit tests.
   `list_buildings`' `tier_configured: false` already tells a well-behaved
   client not to send the combination). A model contributes its
   `levels` only when it contributed at least one matching room when a
-  building filter is active — levels are their own array from a separate
+  building or property filter is active — levels are their own array from a separate
   Revit export, so a floor can legitimately have zero rooms of a given
   building right now yet still belong to it; with no filter, every scoped
   model's levels are included exactly as before. Levels are also
@@ -133,6 +134,27 @@ each module carrying its rationale in a header, all with unit tests.
   contributing room's `level_id` is remapped to it before serialization, so
   the level picker and room filtering agree on one id per real-world level.
   A dedicated per-model endpoint is still deferred.
+- **Server-side property filter (`/rooms?filter=`).** Comma-separated
+  predicates, all of which must hold: `?filter=Department=Cardiology,Area>20`
+  (quote a value containing a comma). Operators `= != > >= < <= ~`, the last
+  being a case-insensitive substring; `=`/`!=` inherit the stated-precision
+  numeric tolerance the validation report uses, and the ordering operators are
+  numeric-only (a non-numeric value is a no-match, not an error). Field names
+  are *canonical* property names resolved through `lookup_property` — the same
+  resolution the dRofus join, classification and the room label already use, so
+  a filter means the same thing everywhere — plus `$name`/`$id` for the room's
+  own fields and `drofus.<label>` for a joined dRofus field. **A room missing
+  the field never matches, negative operators included**: "no Department" is
+  not evidence that the Department differs, and for a joined source an
+  unmatched link key is a signal, not a value. A malformed predicate is 400
+  with the parser's message (`ServiceError::Invalid`, the first caller-fault
+  input any read path accepts) rather than a silently empty 200 — the
+  difference between a typo and a genuine no-match has to be visible.
+  **This exists for programmatic callers, not the viewer**, which holds the
+  whole payload and matches locally (see [Browser](STRATEGY-BROWSER.md)); the
+  two matchers are deliberately different — free-text substring for a human
+  eyeballing a plan, structured and typed for a machine asking a precise
+  question.
 - **Swappable persistence (`SnapshotStore` trait).** `FsStore` writes
   `<root>/<project-guid>/{project.toml, <model-guid>/<ts>.json}` — a two-way
   `project.toml` manifest, upsert-on-push (creates unknown project/model

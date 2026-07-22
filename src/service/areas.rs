@@ -20,7 +20,7 @@ use crate::contract::{Level, Loop, Room, SUPPORTED_SCHEMA};
 use crate::settings::HierarchyExclusion;
 use crate::state::AppState;
 
-use super::rooms::assemble_rooms;
+use super::rooms::{assemble_rooms, RoomScope};
 use super::ServiceError;
 
 /// Perpendicular distance (in model units — feet) below which a vertex is
@@ -327,7 +327,8 @@ pub fn assemble_areas(
     building: Option<&str>,
     milestone: Option<&str>,
 ) -> Result<Option<AreasResult>, ServiceError> {
-    let Some(rooms) = assemble_rooms(state, Some(project), building, milestone)? else {
+    let scope = RoomScope { project: Some(project), building, milestone, ..Default::default() };
+    let Some(rooms) = assemble_rooms(state, &scope)? else {
         return Ok(None);
     };
 

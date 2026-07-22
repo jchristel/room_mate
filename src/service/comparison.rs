@@ -31,7 +31,7 @@ use crate::contract::{lookup_property, numeric_match, property_presence, Propert
 use crate::settings::BuiltinPropertyDef;
 use crate::state::AppState;
 
-use super::rooms::{assemble_rooms, RoomResponse};
+use super::rooms::{assemble_rooms, RoomResponse, RoomScope};
 use super::ServiceError;
 
 /// One comparable property whose value differs between the baseline room and
@@ -245,6 +245,13 @@ fn diff_room(
     })
 }
 
+/// One milestone's full room set for a project: no building narrowing and no
+/// property filter, because a comparison is only meaningful over the whole
+/// scope on both sides of the diff.
+fn scope<'a>(project: &'a str, milestone: &'a str) -> RoomScope<'a> {
+    RoomScope { project: Some(project), milestone: Some(milestone), ..Default::default() }
+}
+
 /// Compare N milestones against a baseline for one project. Reads the
 /// comparison key and the comparable-property list from the project's settings
 /// bundle (both persisted config), not from arguments. Each milestone's rooms
@@ -275,7 +282,7 @@ pub fn compare_milestones(
     // Baseline once; its index and duplicates are shared across every compared
     // milestone. `assemble_rooms` returns None only when the store is entirely
     // empty — an empty room set for comparison purposes.
-    let baseline_rooms = assemble_rooms(state, Some(project), None, Some(baseline))?
+    let baseline_rooms = assemble_rooms(state, &scope(project, baseline))?
         .map(|r| r.rooms)
         .unwrap_or_default();
     let (baseline_index, baseline_duplicates) = index_by_key(&baseline_rooms, &key_prop, builtin);
@@ -286,7 +293,7 @@ pub fn compare_milestones(
             continue; // a milestone compared against itself has nothing to show
         }
 
-        let other_rooms = assemble_rooms(state, Some(project), None, Some(other))?
+        let other_rooms = assemble_rooms(state, &scope(project, other))?
             .map(|r| r.rooms)
             .unwrap_or_default();
         let (other_index, other_duplicates) = index_by_key(&other_rooms, &key_prop, builtin);

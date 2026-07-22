@@ -71,6 +71,18 @@ struct GetRoomsParams {
     /// milestone pins instead of each model's latest. Omit for latest.
     #[serde(default)]
     milestone: Option<String>,
+    /// Property predicates, ALL of which must hold (AND), one per element:
+    /// ["Department=Cardiology", "Area>=20", "drofus.NetArea>20"]. Operators:
+    /// = != > >= < <= and ~ (case-insensitive contains). An unqualified name
+    /// is a canonical room property (as listed by get_project_settings'
+    /// builtin_properties), plus $name / $id for the room's own fields; a
+    /// "drofus."-prefixed name reads the joined dRofus record's field label
+    /// (as listed by get_drofus_snapshot). A room missing the property -- or
+    /// with no joined dRofus record at all -- never matches, negative
+    /// operators included. Quote a value containing spaces if in doubt.
+    /// Omit for no filter.
+    #[serde(default)]
+    filter: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -111,15 +123,20 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-/// `ServiceError` -> `McpError`. Only `Internal` exists today (variants join
-/// with their first producer -- see `ServiceError`); it becomes
-/// `internal_error`.
+/// `ServiceError` -> `McpError`: an internal failure becomes `internal_error`,
+/// a malformed request `invalid_params` -- the MCP counterpart of the HTTP
+/// adapter's 500/400 split, mapped here in the adapter rather than in the
+/// domain layer.
 fn to_mcp_error(err: ServiceError) -> McpError {
     match err {
         ServiceError::Internal(e) => {
             tracing::error!("internal service error: {e:#}");
             McpError::internal_error(e.to_string(), None)
         }
+        // Caller-addressable, and worth passing verbatim: the message names
+        // the offending predicate, which is what lets the client fix it
+        // instead of guessing why a result was empty.
+        ServiceError::Invalid(msg) => McpError::invalid_params(msg, None),
     }
 }
 
@@ -196,10 +213,23 @@ impl RoommateMcp {
     /// service's `None` ("nothing has ever been pushed" -- the HTTP 204 case)
     /// has no MCP status-code equivalent, so it becomes a short plain-text
     /// answer instead of a JSON body; an LLM client reads either just fine.
-    #[tool(description = "Fetch merged rooms and levels across stored models, optionally scoped by project id, building key, and milestone name. A project whose hierarchy has no 'Building' tier matches nothing under a building filter (check list_buildings' tier_configured before filtering); under a milestone filter, models are served from the snapshots that milestone pins instead of their latest.")]
+    #[tool(description = "Fetch merged rooms and levels across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
+                          A project whose hierarchy has no 'Building' tier matches nothing under a building filter (check list_buildings' tier_configured before filtering); \
+                          under a milestone filter, models are served from the snapshots that milestone pins instead of their latest. \
+                          Prefer the 'filter' parameter over fetching every room and matching client-side -- it answers property questions ('which rooms are Department = Cardiology?') \
+                          server-side, against the same canonical property names the rest of the settings use. Note that a room missing the filtered property never matches, \
+                          negative operators included, so an empty result can mean 'no room has that property' rather than 'no room has that value'.")]
     fn get_rooms(&self, Parameters(p): Parameters<GetRoomsParams>) -> Result<CallToolResult, McpError> {
-        let result = rooms::assemble_rooms(&self.state, p.project.as_deref(), p.building.as_deref(), p.milestone.as_deref())
-            .map_err(to_mcp_error)?;
+        // Parsed here, in the adapter holding the raw strings, then passed
+        // down as a domain type -- `service` never sees the filter syntax.
+        let filter = rooms::RoomFilter::parse(&p.filter).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = rooms::RoomScope {
+            project: p.project.as_deref(),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+        };
+        let result = rooms::assemble_rooms(&self.state, &scope).map_err(to_mcp_error)?;
         match result {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no snapshots have been pushed to this server yet",
