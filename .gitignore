@@ -24,3 +24,5 @@ target
 # own convention) -- unignore it from the [Bb]in/ rules above, which are
 # meant for .NET build-output directories, not Rust source directories.
 !src/bin/
+
+data/*
