@@ -20,8 +20,9 @@
 
   header {
     display: flex;
+    flex-wrap: wrap; /* scope pickers joined the header; degrade by wrapping, not clipping */
     align-items: baseline;
-    gap: 1rem;
+    gap: 0.6rem 1rem;
     padding: 0.75rem 1.25rem;
     border-bottom: 1px solid var(--ink);
   }
@@ -35,6 +36,15 @@
   header .links { margin-left: auto; display: flex; gap: 1rem; align-items: baseline; }
   header .links a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
   header .links a:hover { text-decoration: underline; }
+
+  /* Global scope pickers: project / milestone / building — one scope for the
+     whole page (see "single-project viewer", HANDOVER-ui-layout Decision 1). */
+  header select.picker {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.25rem 0.4rem;
+  }
+  header select.picker.hidden { display: none; }
 
   /* App-wide controls: add/remove zone, link toggle. */
   header button.ctl {
@@ -81,8 +91,9 @@
     overflow: hidden;
   }
 
-  /* Per-zone toolbar: this zone's own project/building/milestone/colour/level
-     pickers plus its validation toggle and meta line. */
+  /* Per-zone toolbar — a caption strip: this zone's own colour/level pickers
+     (presentation) plus its validation toggle and meta line. Scope pickers
+     live in the header; a zone never chooses what data it shows. */
   .zone-toolbar {
     display: flex; align-items: center; flex-wrap: wrap;
     gap: 0.4rem; padding: 0.4rem 0.6rem;
@@ -212,6 +223,9 @@
 <body>
   <header>
     <h1>Room Plan</h1>
+    <select class="picker hidden" id="projectSelect" title="Project — the scope of everything on screen"></select>
+    <select class="picker hidden" id="milestoneSelect" title="Milestone — Latest or a pinned issue"></select>
+    <select class="picker hidden" id="buildingSelect" title="Building"></select>
     <button class="ctl" id="addZone" title="Add a zone">+ zone</button>
     <button class="ctl" id="removeZone" title="Remove the last zone">− zone</button>
     <button class="ctl" id="linkToggle" title="Sync zoom/pan across all zones">Link views: off</button>
@@ -232,10 +246,9 @@
        reached via querySelector on the clone, never a document-wide id. -->
   <template id="zoneTemplate">
     <div class="zone">
+      <!-- Presentation only: scope (project/milestone/building) is global and
+           lives in the header — zones differ in level and colour, never data. -->
       <div class="zone-toolbar">
-        <select class="picker projectSelect hidden"></select>
-        <select class="picker milestoneSelect hidden"></select>
-        <select class="picker buildingSelect hidden"></select>
         <select class="picker colourSelect hidden"></select>
         <select class="picker levelSelect hidden"></select>
         <button class="validation-toggle hidden"></button>
@@ -273,13 +286,37 @@ const SVG = "http://www.w3.org/2000/svg";
 const zonesEl = document.getElementById("zones");
 const zoneTemplate = document.getElementById("zoneTemplate");
 
-// Every zone is a self-contained viewer: its own SVG, view transform, scope
-// selection, poll cursor, colour plan, and validation state. What used to be a
-// module-level singleton (`view`, `currentProjectId`, `lastRevision`, …) is
-// now a field on the zone; the pure geometry/colour helpers below stay
-// module-level and take data in, data out.
+// A zone is a PRESENTATION of the one global scope: its own SVG, view
+// transform, level and colour selection. Scope (project/milestone/building),
+// the poll cursor, the payload, colour-plan config, and validation state are
+// module-level singletons — there is exactly one scope on screen, so zones
+// can never disagree about what data they show, only how they draw it
+// (HANDOVER-ui-layout Decision 1: the single-project viewer). Multiple zones
+// exist to show several LEVELS of one building at once.
 const zones = [];
 let zoneSeq = 0;
+
+// ---- global scope + data (one for the page, not per zone) ----
+let projectId = null;
+let buildingKey = null;
+let milestone = null;        // null = Latest
+let currentPayload = null;   // the one /rooms payload every zone renders from
+let lastRevision = null;     // poll change-detection cursor
+// Picker refresh guards (diff signatures so the 2s tick doesn't fight the user).
+let lastProjectIds = null;
+let lastBuildingsSignature = null;
+let lastMilestonesSignature = null;
+// One-shot guards: URL/localStorage restore runs once, then ticks re-default plainly.
+let seededProject = false;
+let seededScope = false;
+// Colour-plan config for the current project (fetched once per project change).
+// Which plan is APPLIED stays per zone — that is presentation.
+let colourPlans = [];
+let colourPlansProjectId = null;
+// Validation is project-scoped, so one report and one error set serve every
+// zone; only panel visibility (zone.showErrors) is per zone.
+let currentValidation = null;
+let errorRoomIds = new Set();
 
 // Global: sync the view transform across every zone when on (see commitView).
 let linkViews = false;
@@ -298,6 +335,10 @@ let showRoomLabels = true;
 let searchQuery = "";
 const searchFields = new Set();
 let searchFieldsInitialised = false;
+// One payload -> one match set; zones share it and differ only in which level's
+// matches are visible.
+let searchMatchIds = null;
+let searchActive = false;
 
 async function fetchJson(url) {
   const res = await fetch(url, { cache: "no-store" });
@@ -786,12 +827,12 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
 
   zone.cullUnits = [];
   paintLevel(plan, rooms, zone.fitted, {
-    colourPlan: zone.activeColourPlan,
-    errorRoomIds: zone.errorRoomIds,
-    showErrors: zone.showErrors,
+    colourPlan: zone.activeColourPlan,   // presentation: per zone
+    errorRoomIds,                        // data-quality state: global
+    showErrors: zone.showErrors,         // panel visibility: per zone
     cullUnits: zone.cullUnits,
-    matchRoomIds: zone.searchMatchIds,
-    searchActive: zone.searchActive,
+    matchRoomIds: searchMatchIds,        // one payload -> one match set
+    searchActive,
     showLabels: showRoomLabels,
   });
   cullZone(zone); // hide off-screen rooms for the current view straight away
@@ -858,36 +899,46 @@ function buildLevelControl(zone, payload, levels) {
 }
 
 function selectLevel(zone, levelId) {
-  if (!zone.currentPayload) return;
+  if (!currentPayload) return;
   zone.activeLevelId = levelId;
-  renderLevel(zone, zone.currentPayload, levelId, { refit: true });
+  renderLevel(zone, currentPayload, levelId, { refit: true });
   updateMeta(zone);
   if (zone.areasMode) renderAreasSummary(zone); // overlay follows via renderLevel
 }
 
 function updateMeta(zone) {
-  if (!zone.currentPayload) return;
-  const lvls = levelsForPayload(zone.currentPayload);
+  if (!currentPayload) return;
+  const lvls = levelsForPayload(currentPayload);
   const active = lvls.find(l => l.id === zone.activeLevelId);
-  const n = roomsOnLevel(zone.currentPayload, zone.activeLevelId).length;
+  const n = roomsOnLevel(currentPayload, zone.activeLevelId).length;
   const lvlName = active ? active.name : "—";
-  // While a search is active, surface this zone's match count (over its whole
-  // payload, all levels — highlighting is visible only on the shown level).
-  const matches = zone.searchActive && zone.searchMatchIds
-    ? ` · ${zone.searchMatchIds.size} match${zone.searchMatchIds.size === 1 ? "" : "es"}`
+  // While a search is active, surface the match count (over the whole payload,
+  // all levels — highlighting is visible only on this zone's shown level).
+  const matches = searchActive && searchMatchIds
+    ? ` · ${searchMatchIds.size} match${searchMatchIds.size === 1 ? "" : "es"}`
     : "";
-  zone.els.meta.textContent = `${lvlName} · ${n} room${n === 1 ? "" : "s"} · v${zone.currentPayload.schema_version} · ${new Date().toLocaleTimeString()}${matches}`;
+  zone.els.meta.textContent = `${lvlName} · ${n} room${n === 1 ? "" : "s"} · v${currentPayload.schema_version} · ${new Date().toLocaleTimeString()}${matches}`;
   zone.els.meta.classList.remove("stale");
 }
 
-// Called only when new data arrives for a zone.
-function ingest(zone, payload) {
-  zone.currentPayload = payload;
+// Fan a freshly-changed payload out: the page-level half runs once (search
+// fields + match set are payload-derived, not zone-derived), then each zone
+// re-renders its own level from the shared payload.
+function ingestAll(payload) {
+  currentPayload = payload;
   // A new payload may add properties (a different project) — refresh the search
-  // field checklist, then recompute this zone's matches so the render below
-  // carries the highlight.
+  // field checklist, then recompute the match set so the renders below carry
+  // the highlight.
   refreshFieldsPanel();
-  computeZoneMatches(zone);
+  computeMatches();
+  for (const zone of zones) ingestZone(zone);
+}
+
+// Bring ONE zone up to date with the current global payload. Also the whole
+// init a newly-added zone needs (see the add-zone handler).
+function ingestZone(zone) {
+  const payload = currentPayload;
+  if (!payload) return;
   zone.els.empty.classList.add("hidden");
   zone.els.exportSvg.classList.remove("hidden"); // there's now something to export
   zone.els.areasToggle.classList.remove("hidden"); // footprints can be computed now
@@ -932,30 +983,50 @@ function populateColourSelect(zone, plans) {
   sel.classList.toggle("hidden", plans.length === 0);
 }
 
-// Read this zone's project's colour plans from the settings API (the viewer's
-// one read-only use of /api/settings) and default the picker to the `active`
-// plan. "No colour" always overrides, so `active` is just the default.
-async function loadColourPlansForProject(zone, projectId) {
+// Reset one zone's picker to the loaded plan list, applying the `active`
+// default. Used on project change (every zone resets together) and to bring a
+// newly-added zone up to speed. "No colour" always overrides, so `active` is
+// just the default.
+function applyColourPlans(zone) {
+  populateColourSelect(zone, colourPlans);
+  const active = colourPlans.find(p => p.active) || null;
+  zone.activeColourPlan = active;
+  zone.els.colourSelect.value = active ? active.name : "";
+}
+
+// Read the project's colour plans from the settings API — the viewer's one
+// read-only use of /api/settings, once per project change (scope is global,
+// so this is one fetch for the page, not one per zone).
+async function loadColourPlans(pid) {
   try {
     // Resolving route (not the strict /api/settings/projects/{id} the editors
     // use): the viewer holds the *payload* project id, which is not a settings
     // project_id, so it needs the server's default-fallback to find the file
     // that carries this project's colour plans. See resolve_project_file.
-    const data = await fetchJson(`/api/settings/resolve/${encodeURIComponent(projectId)}`);
-    zone.colourPlans = (data.settings && data.settings.colour_plans) || [];
+    const data = await fetchJson(`/api/settings/resolve/${encodeURIComponent(pid)}`);
+    colourPlans = (data.settings && data.settings.colour_plans) || [];
   } catch (err) {
-    zone.colourPlans = [];
+    colourPlans = [];
   }
-  populateColourSelect(zone, zone.colourPlans);
-  const active = zone.colourPlans.find(p => p.active) || null;
-  zone.activeColourPlan = active;
-  zone.els.colourSelect.value = active ? active.name : "";
+  for (const zone of zones) applyColourPlans(zone);
 }
 
-// ============================ project/building/milestone pickers =========
+// ============================ scope pickers (header, global) =============
+//
+// One project/milestone/building selection for the whole page. Under the old
+// per-zone scope these were populated per zone and carried per-zone diff
+// signatures, a one-shot seed for zones[0] only, and a focus question ("whose
+// scope does the URL persist?"). Global scope deletes all of that: one set of
+// header <select>s, one signature each, no zones[0] special case.
 
-function populateProjectSelect(zone, projects) {
-  const sel = zone.els.projectSelect;
+const scopeEls = {
+  project: document.getElementById("projectSelect"),
+  milestone: document.getElementById("milestoneSelect"),
+  building: document.getElementById("buildingSelect"),
+};
+
+function populateProjectSelect(projects) {
+  const sel = scopeEls.project;
   const prevValue = sel.value;
   sel.replaceChildren();
   for (const p of projects) {
@@ -968,8 +1039,8 @@ function populateProjectSelect(zone, projects) {
   if (projects.some(p => p.id === prevValue)) sel.value = prevValue;
 }
 
-function populateBuildingSelect(zone, data) {
-  const sel = zone.els.buildingSelect;
+function populateBuildingSelect(data) {
+  const sel = scopeEls.building;
   const prevValue = sel.value;
   sel.replaceChildren();
   for (const b of data.buildings) {
@@ -984,8 +1055,8 @@ function populateBuildingSelect(zone, data) {
   if (data.buildings.some(b => b.key === prevValue)) sel.value = prevValue;
 }
 
-function populateMilestoneSelect(zone, data) {
-  const sel = zone.els.milestoneSelect;
+function populateMilestoneSelect(data) {
+  const sel = scopeEls.milestone;
   const prevValue = sel.value;
   sel.replaceChildren();
   const latest = document.createElement("option");
@@ -1002,139 +1073,129 @@ function populateMilestoneSelect(zone, data) {
   if (data.milestones.some(m => m.name === prevValue)) sel.value = prevValue;
 }
 
-// Fetch the known projects for one zone; auto-select if the zone's current
-// project (if any) no longer exists. Diffs against the zone's last-seen id
-// list so it doesn't fight an in-progress user selection every tick.
-async function loadProjects(zone, projects) {
-  // `tick` fetches /projects once and shares the list across every zone (the
-  // list is global, so one fetch per tick, not one per zone). Callers without a
-  // list — e.g. the add-zone handler bringing a new zone up to speed — pass none
-  // and we fetch our own.
-  if (!projects) {
-    try {
-      projects = await fetchJson("/projects");
-    } catch (err) {
-      return; // leave selection alone; poll() reports connection loss
-    }
-  }
-  const ids = projects.map(p => p.id).join(",");
-
-  // Colour plans depend only on the zone's *current* project, not on whether the
+// Refresh the global scope from the known-projects list; auto-select if the
+// current project no longer exists. Diffs against the last-seen id list so
+// the 2s tick doesn't fight an in-progress user selection.
+async function refreshScope(projects) {
+  // Colour plans depend only on the *current* project, not on whether the
   // project *list* changed — so load them before the early-return guard below.
   // Without this, the picker never appears in the steady state: the list is
-  // unchanged every tick, `loadProjects` returns early, and the load lower down
-  // is unreachable. The colourPlansProjectId guard keeps this to one fetch per
-  // project change.
-  if (zone.projectId && zone.colourPlansProjectId !== zone.projectId) {
-    zone.colourPlansProjectId = zone.projectId;
-    loadColourPlansForProject(zone, zone.projectId);
+  // unchanged every tick, so the code below the guard is unreachable. The
+  // colourPlansProjectId guard keeps this to one fetch per project change.
+  if (projectId && colourPlansProjectId !== projectId) {
+    colourPlansProjectId = projectId;
+    loadColourPlans(projectId);
   }
 
-  if (ids === zone.lastProjectIds) return;
-  zone.lastProjectIds = ids;
-  populateProjectSelect(zone, projects);
+  const ids = projects.map(p => p.id).join(",");
+  if (ids === lastProjectIds) return;
+  lastProjectIds = ids;
+  populateProjectSelect(projects);
 
-  if (!projects.some(p => p.id === zone.projectId)) {
-    // Restore the first zone's project from URL/localStorage on first resolve;
-    // additional zones (and later re-resolves) keep the plain projects[0]
-    // default. A seed the server no longer lists falls through to projects[0].
+  if (!projects.some(p => p.id === projectId)) {
+    // Restore the project from URL/localStorage on first resolve; later
+    // re-resolves keep the plain projects[0] default. A seed the server no
+    // longer lists falls through to projects[0].
     let fallback = projects.length ? projects[0].id : null;
-    if (zone === zones[0] && !zone._seeded && projects.length) {
-      zone._seeded = true; // one-shot, so a later project deletion re-defaults cleanly
+    if (!seededProject && projects.length) {
+      seededProject = true; // one-shot, so a later project deletion re-defaults cleanly
       const seed = seedProjectId();
       if (seed && projects.some(p => p.id === seed)) fallback = seed;
     }
-    zone.projectId = fallback;
+    projectId = fallback;
     // Sync the picker to the resolved/restored project. populateProjectSelect
-    // above runs before this block, so on a first-load restore it would otherwise
-    // leave the dropdown showing projects[0] while the zone renders the restored
-    // project — a confusing mismatch.
-    if (zone.projectId) zone.els.projectSelect.value = zone.projectId;
-    zone.lastBuildingsSignature = null;
-    zone.lastMilestonesSignature = null;
-    zone.milestone = null;
-    if (zone.projectId) {
-      loadValidation(zone, zone.projectId);
+    // above runs before this block, so on a first-load restore it would
+    // otherwise leave the dropdown showing projects[0] while the page renders
+    // the restored project — a confusing mismatch.
+    if (projectId) scopeEls.project.value = projectId;
+    lastBuildingsSignature = null;
+    lastMilestonesSignature = null;
+    milestone = null;
+    if (projectId) {
+      loadValidation(projectId);
       // Colour plans load via the guarded block above; a reset changes
-      // zone.projectId, so the guard re-fires on the next tick.
+      // projectId, so the guard re-fires on the next tick.
     }
   }
-  if (zone.projectId) {
-    await loadBuildingsForProject(zone, zone.projectId);
-    await loadMilestonesForProject(zone, zone.projectId);
+  if (projectId) {
+    await loadBuildings(projectId);
+    await loadMilestones(projectId);
 
-    // Restore the first zone's building/milestone from the URL once, after their
-    // option lists exist — and only if the freshly-loaded lists still contain
-    // them (stale scope falls away, same discipline as the project seed). A
-    // second one-shot flag so the 2s poll's picker refreshes never clobber a
-    // later manual change. building/milestone are URL-only (never localStorage).
-    if (zone === zones[0] && !zone._seededScope) {
-      zone._seededScope = true;
+    // Restore building/milestone from the URL once, after their option lists
+    // exist — and only if the freshly-loaded lists still contain them (stale
+    // scope falls away, same discipline as the project seed). A second
+    // one-shot flag so the 2s poll's picker refreshes never clobber a later
+    // manual change. building/milestone are URL-only (never localStorage).
+    if (!seededScope) {
+      seededScope = true;
       const hasOpt = (sel, v) => Array.from(sel.options).some(o => o.value === v);
       const b = urlParam("building");
-      if (b && hasOpt(zone.els.buildingSelect, b)) {
-        zone.buildingKey = b;
-        zone.els.buildingSelect.value = b;
-        zone.lastRevision = null;
+      if (b && hasOpt(scopeEls.building, b)) {
+        buildingKey = b;
+        scopeEls.building.value = b;
+        lastRevision = null;
       }
       const m = urlParam("milestone");
-      if (m && hasOpt(zone.els.milestoneSelect, m)) {
-        zone.milestone = m;
-        zone.els.milestoneSelect.value = m;
-        zone.lastRevision = null;
+      if (m && hasOpt(scopeEls.milestone, m)) {
+        milestone = m;
+        scopeEls.milestone.value = m;
+        lastRevision = null;
       }
 
-      // Seed cross-page persistence from a restored/deep-linked selection too, so
-      // the viewer matches settings/comparison (whose restore persists via their
-      // selectProject). Writes the project id to localStorage + URL and mirrors
-      // the actual current scope — a URL value, or the auto-selected building —
-      // back into the URL, replacing any stale scope the deep-link carried. This
-      // is why a bookmarked viewer link carries the project to the other pages.
-      persistSelection(zone.projectId, { building: zone.buildingKey, milestone: zone.milestone });
+      // Seed cross-page persistence from a restored/deep-linked selection too,
+      // so the viewer matches settings/comparison (whose restore persists via
+      // their selectProject). Writes the project id to localStorage + URL and
+      // mirrors the actual current scope — a URL value, or the auto-selected
+      // building — back into the URL, replacing any stale scope the deep-link
+      // carried. This is why a bookmarked viewer link carries the project to
+      // the other pages.
+      persistSelection(projectId, { building: buildingKey, milestone });
     }
   }
 }
 
-async function loadBuildingsForProject(zone, projectId) {
+async function loadBuildings(pid) {
   let data;
   try {
-    data = await fetchJson(`/projects/${encodeURIComponent(projectId)}/buildings`);
+    data = await fetchJson(`/projects/${encodeURIComponent(pid)}/buildings`);
   } catch (err) {
     return;
   }
   const signature = `${data.tier_configured}:${data.buildings.map(b => b.key).join(",")}`;
-  if (signature === zone.lastBuildingsSignature) return;
-  zone.lastBuildingsSignature = signature;
-  populateBuildingSelect(zone, data);
+  if (signature === lastBuildingsSignature) return;
+  lastBuildingsSignature = signature;
+  populateBuildingSelect(data);
 
-  if (!data.buildings.some(b => b.key === zone.buildingKey)) {
-    zone.buildingKey = data.buildings.length ? data.buildings[0].key : null;
+  if (!data.buildings.some(b => b.key === buildingKey)) {
+    buildingKey = data.buildings.length ? data.buildings[0].key : null;
   }
 }
 
-async function loadMilestonesForProject(zone, projectId) {
+async function loadMilestones(pid) {
   let data;
   try {
-    data = await fetchJson(`/projects/${encodeURIComponent(projectId)}/milestones`);
+    data = await fetchJson(`/projects/${encodeURIComponent(pid)}/milestones`);
   } catch (err) {
     return;
   }
   const signature = data.milestones.map(m => `${m.name}@${m.date}`).join(",");
-  if (signature === zone.lastMilestonesSignature) return;
-  zone.lastMilestonesSignature = signature;
-  populateMilestoneSelect(zone, data);
+  if (signature === lastMilestonesSignature) return;
+  lastMilestonesSignature = signature;
+  populateMilestoneSelect(data);
 
-  if (zone.milestone && !data.milestones.some(m => m.name === zone.milestone)) {
-    zone.milestone = null;
-    zone.els.milestoneSelect.value = "";
-    zone.lastRevision = null; // selection changed under us -> re-render next tick
+  if (milestone && !data.milestones.some(m => m.name === milestone)) {
+    milestone = null;
+    scopeEls.milestone.value = "";
+    lastRevision = null; // selection changed under us -> re-render next tick
   }
 }
 
-// ============================ validation panel (per zone) ============================
+// ============================ validation ============================
 //
-// An on-demand health check, not part of the room poll. Fetched when the
-// zone's project changes, or via the panel's own Refresh button.
+// An on-demand health check, not part of the room poll. Fetched once when the
+// project changes, or via a panel's Refresh button. The report and the error
+// room set are project-scoped — global under the single-scope model — while
+// each zone keeps its own panel DOM and visibility toggle (presentation).
 
 function section(title, items, renderItem) {
   if (items.length === 0) return "";
@@ -1153,26 +1214,37 @@ function renderFieldCoverage(coverage) {
   ).join("")}</ul></section>`;
 }
 
-function renderValidation(zone, data) {
-  zone.currentValidation = data;
+// Update the globals from a fresh report, then reflect it into every zone's
+// panel — the report is one per project, the panels are one per zone.
+function renderValidation(data) {
+  currentValidation = data;
+  errorRoomIds = data.drofus_configured
+    ? new Set([
+        ...data.rooms_missing_link_value,
+        ...data.duplicate_link_values.flatMap(d => d.room_ids),
+        ...data.rooms_unmatched_in_drofus,
+        ...data.property_mismatches.map(m => m.room_id),
+        ...data.fields_absent_in_revit.map(m => m.room_id),
+        ...data.fields_empty_in_revit.map(m => m.room_id),
+      ])
+    : new Set();
+  for (const zone of zones) renderValidationZone(zone);
+}
+
+// Reflect the current global report into ONE zone's toggle + panel. Split out
+// so a newly-added zone can catch up without a refetch.
+function renderValidationZone(zone) {
+  const data = currentValidation;
+  if (!data) return;
 
   if (!data.drofus_configured) {
     zone.els.validationToggle.classList.add("hidden");
     zone.els.validationPanel.classList.add("hidden");
-    zone.errorRoomIds = new Set();
     return;
   }
 
-  zone.errorRoomIds = new Set([
-    ...data.rooms_missing_link_value,
-    ...data.duplicate_link_values.flatMap(d => d.room_ids),
-    ...data.rooms_unmatched_in_drofus,
-    ...data.property_mismatches.map(m => m.room_id),
-    ...data.fields_absent_in_revit.map(m => m.room_id),
-    ...data.fields_empty_in_revit.map(m => m.room_id),
-  ]);
-  if (zone.showErrors && zone.currentPayload && zone.activeLevelId) {
-    renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
+  if (zone.showErrors && currentPayload && zone.activeLevelId) {
+    renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
   }
 
   // The server now tallies this (data.discrepancies.total); fall back to the
@@ -1206,11 +1278,11 @@ function renderValidation(zone, data) {
     + renderFieldCoverage(data.field_coverage);
 }
 
-async function loadValidation(zone, projectId) {
-  if (!projectId) return;
+async function loadValidation(pid) {
+  if (!pid) return;
   try {
-    const data = await fetchJson(`/projects/${encodeURIComponent(projectId)}/validation`);
-    renderValidation(zone, data);
+    const data = await fetchJson(`/projects/${encodeURIComponent(pid)}/validation`);
+    renderValidation(data);
   } catch (err) {
     // transient fetch failure -- leave the last-known validation state alone
   }
@@ -1254,9 +1326,9 @@ function downloadCsv(filename, csvText) {
   URL.revokeObjectURL(url);
 }
 
-function downloadValidationCsv(zone) {
-  if (!zone.currentValidation || !zone.currentValidation.drofus_configured) return;
-  downloadCsv(`validation-${zone.projectId || "project"}.csv`, buildValidationCsv(zone.currentValidation));
+function downloadValidationCsv() {
+  if (!currentValidation || !currentValidation.drofus_configured) return;
+  downloadCsv(`validation-${projectId || "project"}.csv`, buildValidationCsv(currentValidation));
 }
 
 // ============================ SVG export ============================
@@ -1316,11 +1388,11 @@ function buildLevelSvgFile(payload, levelId, { withErrors = false, colourPlan = 
 }
 
 // A filesystem-safe, self-describing name: roomplan_<project>_<level>[_<milestone>][_errors].svg
-function svgFilename(zone, levelName, withErrors) {
+function svgFilename(levelName, withErrors) {
   const safe = (s, fallback) =>
     (s ? String(s) : "").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || fallback;
-  const parts = ["roomplan", safe(zone.projectId, "project"), safe(levelName, "level")];
-  if (zone.milestone) parts.push(safe(zone.milestone, "milestone"));
+  const parts = ["roomplan", safe(projectId, "project"), safe(levelName, "level")];
+  if (milestone) parts.push(safe(milestone, "milestone"));
   if (withErrors) parts.push("errors");
   return parts.join("_") + ".svg";
 }
@@ -1344,41 +1416,43 @@ function downloadSvg(svgText, filename) {
 // (`showErrors`), which is only on once validation is loaded — so an exported
 // "errors" file is never a silent empty highlight.
 async function exportZoneLevels(zone) {
-  if (!zone.currentPayload) return;
-  const levels = levelsForPayload(zone.currentPayload);
+  if (!currentPayload) return;
+  const levels = levelsForPayload(currentPayload);
   if (levels.length === 0) return;
   const withErrors = zone.showErrors;
   for (const lvl of levels) {
-    const svgText = buildLevelSvgFile(zone.currentPayload, lvl.id, {
+    const svgText = buildLevelSvgFile(currentPayload, lvl.id, {
       withErrors,
-      colourPlan: zone.activeColourPlan,
-      errorRoomIds: zone.errorRoomIds,
+      colourPlan: zone.activeColourPlan, // per-zone presentation still applies
+      errorRoomIds,
       showLabels: showRoomLabels, // export follows the header toggle
     });
     if (!svgText) continue; // level with no drawable rooms
-    downloadSvg(svgText, svgFilename(zone, lvl.name, withErrors));
+    downloadSvg(svgText, svgFilename(lvl.name, withErrors));
     await new Promise((r) => setTimeout(r, 150));
   }
 }
 
 // ============================ hierarchy areas ============================
 
-function areasUrl(zone) {
+function areasUrl() {
   const params = new URLSearchParams();
-  if (zone.buildingKey) params.set("building", zone.buildingKey);
-  if (zone.milestone) params.set("milestone", zone.milestone);
+  if (buildingKey) params.set("building", buildingKey);
+  if (milestone) params.set("milestone", milestone);
   const qs = params.toString();
-  return `/projects/${encodeURIComponent(zone.projectId)}/areas${qs ? "?" + qs : ""}`;
+  return `/projects/${encodeURIComponent(projectId)}/areas${qs ? "?" + qs : ""}`;
 }
 
-// Fetch the dissolved footprints for this zone's scope, then refresh the tier
-// picker, overlay, and summary. On-demand (NOT on the 2s room poll): areas are
-// derived and heavier than a room fetch, and only needed while the mode is on —
-// re-fetched on toggle-on and whenever real new room data arrives (see ingest).
+// Fetch the dissolved footprints for the global scope, then refresh this
+// zone's tier picker, overlay, and summary. On-demand (NOT on the 2s room
+// poll): areas are derived and heavier than a room fetch, and only needed
+// while the mode is on — re-fetched on toggle-on and whenever real new room
+// data arrives (see ingestZone). Per-zone because the mode, tier, and level
+// are presentation; two zones with areas on fetch twice, acceptably.
 async function loadAreas(zone) {
-  if (!zone.projectId) return;
+  if (!projectId) return;
   try {
-    zone.areasData = await fetchJson(areasUrl(zone));
+    zone.areasData = await fetchJson(areasUrl());
   } catch (err) {
     zone.areasData = null;
   }
@@ -1556,7 +1630,7 @@ function renderAreasSummary(zone) {
 
   // Net room area per group on the active level, keyed by the same path prefix.
   const net = new Map();
-  const rooms = zone.currentPayload ? roomsOnLevel(zone.currentPayload, zone.activeLevelId) : [];
+  const rooms = currentPayload ? roomsOnLevel(currentPayload, zone.activeLevelId) : [];
   for (const r of rooms) {
     if (!r.classification || r.classification.length < depth + 1) continue;
     const key = pathKey(r.classification, depth);
@@ -1602,7 +1676,7 @@ function buildAreasCsv(zone) {
   // Net room area per (level, depth, path-prefix) over every room, so each
   // group at any depth on any level can look up its summed net directly.
   const net = new Map();
-  for (const r of (zone.currentPayload ? zone.currentPayload.rooms : [])) {
+  for (const r of (currentPayload ? currentPayload.rooms : [])) {
     if (!r.classification) continue;
     for (let d = 0; d < r.classification.length; d++) {
       const key = `${r.level_id}|${d}|${pathKey(r.classification, d)}`;
@@ -1628,7 +1702,7 @@ function buildAreasCsv(zone) {
 
 function downloadAreasCsv(zone) {
   if (!zone.areasData || !zone.areasData.groups || zone.areasData.groups.length === 0) return;
-  downloadCsv(`areas-${zone.projectId || "project"}.csv`, buildAreasCsv(zone));
+  downloadCsv(`areas-${projectId || "project"}.csv`, buildAreasCsv(zone));
 }
 
 // ============================ room search (global) ============================
@@ -1650,13 +1724,12 @@ const SEARCH_FIELD_LABELS = { "$name": "Name", "$id": "Id", "$classification": "
 function searchFieldLabel(key) { return SEARCH_FIELD_LABELS[key] || key; }
 
 // Every field the search can look at: the intrinsic/aggregate keys plus the
-// union of raw property keys across ALL zones' loaded rooms, so the checklist
-// lists everything available even if a given zone lacks a property.
+// union of raw property keys across the loaded payload (one payload for the
+// page — every zone shows the same scope).
 function availableSearchFields() {
   const props = new Set();
-  for (const z of zones)
-    for (const r of (z.currentPayload ? z.currentPayload.rooms : []))
-      for (const k of Object.keys(r.properties || {})) props.add(k);
+  for (const r of (currentPayload ? currentPayload.rooms : []))
+    for (const k of Object.keys(r.properties || {})) props.add(k);
   return ["$name", "$id", "$classification", "$drofus", ...[...props].sort()];
 }
 
@@ -1674,32 +1747,33 @@ function roomMatches(room, q, fields) {
   return false;
 }
 
-// Recompute one zone's match set over its WHOLE payload (level-independent, so a
-// level switch re-paints with the same set).
-function computeZoneMatches(zone) {
+// Recompute the match set over the WHOLE payload (level-independent, so a
+// level switch re-paints with the same set). One payload -> one match set,
+// shared by every zone; each zone only differs in which level's matches are
+// on screen.
+function computeMatches() {
   const q = searchQuery.trim().toLowerCase();
-  zone.searchActive = q.length > 0;
-  if (!q || !zone.currentPayload) { zone.searchMatchIds = null; return; }
+  searchActive = q.length > 0;
+  if (!q || !currentPayload) { searchMatchIds = null; return; }
   const ids = new Set();
-  for (const r of zone.currentPayload.rooms) if (roomMatches(r, q, searchFields)) ids.add(r.id);
-  zone.searchMatchIds = ids;
+  for (const r of currentPayload.rooms) if (roomMatches(r, q, searchFields)) ids.add(r.id);
+  searchMatchIds = ids;
 }
 
 // Fast path: toggle `.match`/`.dim` on the already-rendered nodes via the
 // cull-unit room->nodes map (nodes[0] = room polygon, rest = holes + label).
 function applyHighlight(zone) {
-  const active = zone.searchActive;
   for (const u of (zone.cullUnits || [])) {
-    const isMatch = active && zone.searchMatchIds && zone.searchMatchIds.has(u.room.id);
+    const isMatch = searchActive && searchMatchIds && searchMatchIds.has(u.room.id);
     u.nodes[0].classList.toggle("match", !!isMatch);
-    for (let i = 0; i < u.nodes.length; i++) u.nodes[i].classList.toggle("dim", active && !isMatch);
+    for (let i = 0; i < u.nodes.length; i++) u.nodes[i].classList.toggle("dim", searchActive && !isMatch);
   }
 }
 
-// Recompute + re-highlight every zone, and refresh each zone's match count.
+// Recompute once, then re-highlight every zone and refresh its match count.
 function applySearch() {
+  computeMatches();
   for (const z of zones) {
-    computeZoneMatches(z);
     applyHighlight(z);
     updateMeta(z);
   }
@@ -1763,37 +1837,50 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".search")) document.getElementById("fieldsPanel").classList.add("hidden");
 });
 
-// ============================ polling (per zone) ============================
+// ============================ polling (global) ============================
+//
+// One scope -> ONE fetch and ONE poll cursor per tick, fanned out to every
+// zone. This deletes the bug class where two zones on the same project could
+// drift a tick apart (each used to carry its own cursor and fetch).
 
-// Build this zone's /rooms URL from its project/building/milestone selection.
-function roomsUrl(zone) {
+// Build the /rooms URL from the global project/building/milestone selection.
+function roomsUrl() {
   const params = new URLSearchParams();
-  if (zone.projectId) params.set("project", zone.projectId);
-  if (zone.buildingKey) params.set("building", zone.buildingKey);
-  if (zone.projectId && zone.milestone) params.set("milestone", zone.milestone);
+  if (projectId) params.set("project", projectId);
+  if (buildingKey) params.set("building", buildingKey);
+  if (projectId && milestone) params.set("milestone", milestone);
   const qs = params.toString();
   return qs ? `/rooms?${qs}` : "/rooms";
 }
 
-async function poll(zone) {
+// Every zone's meta line reports poll-level states (waiting / connection lost)
+// identically — they share the one fetch.
+function metaAll(text) {
+  for (const zone of zones) {
+    zone.els.meta.textContent = text;
+    zone.els.meta.classList.add("stale");
+  }
+}
+
+async function poll() {
   try {
-    const res = await fetch(roomsUrl(zone), { cache: "no-store" });
-    if (res.status === 204) { zone.els.meta.textContent = "waiting for data"; zone.els.meta.classList.add("stale"); return; }
+    const res = await fetch(roomsUrl(), { cache: "no-store" });
+    if (res.status === 204) { metaAll("waiting for data"); return; }
     if (!res.ok) throw new Error(res.status);
     const payload = await res.json();
     // Change-detection compares the server's one-value content revision instead
     // of re-stringifying the whole payload every poll (see the `revision` field
     // in rooms.rs / HANDOVER-viewer-performance.md). A quiet system returns the
-    // same revision every tick, so `ingest` (full teardown + rebuild) never
+    // same revision every tick, so `ingestAll` (full teardown + rebuild) never
     // fires between real pushes. Fall back to a stringify only if an older
     // server omits the field, so the viewer still updates against one.
     const incoming = payload.revision ?? JSON.stringify(payload);
-    if (incoming !== zone.lastRevision) {
-      zone.lastRevision = incoming;
-      ingest(zone, payload); // re-fits + rebuilds level control only on real change
+    if (incoming !== lastRevision) {
+      lastRevision = incoming;
+      ingestAll(payload); // re-fits + rebuilds level controls only on real change
     }
   } catch (err) {
-    zone.els.meta.textContent = "connection lost"; zone.els.meta.classList.add("stale");
+    metaAll("connection lost");
   }
 }
 
@@ -1857,55 +1944,26 @@ function wireInteractions(zone) {
 
 // ============================ zone lifecycle ============================
 
+// Presentation-only controls: level, colour, validation visibility, export,
+// areas. Scope handlers live on the header pickers (see "header controls").
 function wireZoneControls(zone) {
   const e = zone.els;
   e.levelSelect.addEventListener("change", () => selectLevel(zone, e.levelSelect.value));
 
-  e.projectSelect.addEventListener("change", async () => {
-    zone.projectId = e.projectSelect.value;
-    zone.buildingKey = null;
-    zone.lastBuildingsSignature = null;
-    zone.milestone = null;
-    zone.lastMilestonesSignature = null;
-    await loadBuildingsForProject(zone, zone.projectId);
-    await loadMilestonesForProject(zone, zone.projectId);
-    zone.colourPlansProjectId = zone.projectId; // keep the refresh guard in sync
-    await loadColourPlansForProject(zone, zone.projectId);
-    loadValidation(zone, zone.projectId);
-    zone.lastRevision = null; // force the next poll tick to render immediately
-    // Persist only the first zone's scope; a second zone's picker must not
-    // overwrite the URL. building/milestone are null here (just reset), so the
-    // helper drops them from the URL — the pick carries project only until the
-    // user re-scopes.
-    if (zone === zones[0]) persistSelection(zone.projectId, { building: zone.buildingKey, milestone: zone.milestone });
-  });
-
-  e.buildingSelect.addEventListener("change", () => {
-    zone.buildingKey = e.buildingSelect.value;
-    zone.lastRevision = null;
-    if (zone === zones[0]) persistSelection(zone.projectId, { building: zone.buildingKey, milestone: zone.milestone });
-  });
-
-  e.milestoneSelect.addEventListener("change", () => {
-    zone.milestone = e.milestoneSelect.value || null; // "" = Latest
-    zone.lastRevision = null;
-    if (zone === zones[0]) persistSelection(zone.projectId, { building: zone.buildingKey, milestone: zone.milestone });
-  });
-
   e.colourSelect.addEventListener("change", () => {
     // Re-render the current level with refit:false so pan/zoom is preserved —
     // a pure presentation change. No /rooms refetch.
-    zone.activeColourPlan = e.colourSelect.value ? (zone.colourPlans.find(p => p.name === e.colourSelect.value) || null) : null;
-    if (zone.currentPayload && zone.activeLevelId) renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
+    zone.activeColourPlan = e.colourSelect.value ? (colourPlans.find(p => p.name === e.colourSelect.value) || null) : null;
+    if (currentPayload && zone.activeLevelId) renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
   });
 
   e.validationToggle.addEventListener("click", () => {
     e.validationPanel.classList.toggle("hidden");
     zone.showErrors = !e.validationPanel.classList.contains("hidden");
-    if (zone.currentPayload && zone.activeLevelId) renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
+    if (currentPayload && zone.activeLevelId) renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
   });
-  e.validationRefresh.addEventListener("click", () => loadValidation(zone, zone.projectId));
-  e.validationDownload.addEventListener("click", () => downloadValidationCsv(zone));
+  e.validationRefresh.addEventListener("click", () => loadValidation(projectId));
+  e.validationDownload.addEventListener("click", () => downloadValidationCsv());
   e.exportSvg.addEventListener("click", () => exportZoneLevels(zone));
 
   e.areasToggle.addEventListener("click", () => {
@@ -1928,10 +1986,11 @@ function wireZoneControls(zone) {
   e.areasDownload.addEventListener("click", () => downloadAreasCsv(zone));
 }
 
-// Build one zone: clone the template, wire its own state object, controls, and
-// interactions. `seed` (optional) clones scope from an existing zone so a
-// newly-added zone starts on the same project/building rather than blank.
-function createZone(seed) {
+// Build one zone: clone the template, wire its presentation state, controls,
+// and interactions. Zones carry NO scope and no poll/validation/colour-config
+// state — all global — so a new zone needs no seeding from its siblings: it
+// catches up from the globals (see the add-zone handler).
+function createZone() {
   const id = `zone-${zoneSeq++}`;
   const frag = zoneTemplate.content.cloneNode(true);
   const root = frag.querySelector(".zone");
@@ -1942,36 +2001,16 @@ function createZone(seed) {
     svg: q("svg.plan"),
     view: { x: 0, y: 0, w: 100, h: 100 },
     fitted: { x: 0, y: 0, w: 100, h: 100 },
-    lastRevision: null,
-    currentPayload: null,
     activeLevelId: null,
     cullUnits: null,   // per-room {bbox, nodes} for viewport culling on pan/zoom
     _cullRaf: 0,       // pending requestAnimationFrame id, throttles the cull
-    // scope selection (was the global currentProjectId etc.)
-    projectId: seed ? seed.projectId : null,
-    buildingKey: seed ? seed.buildingKey : null,
-    milestone: seed ? seed.milestone : null,
-    _seeded: false,       // one-shot guard: first-zone URL/localStorage project restore has run
-    _seededScope: false,  // one-shot guard: first-zone building/milestone URL restore has run
-    // per-zone poll bookkeeping
-    lastProjectIds: null,
-    lastBuildingsSignature: null,
-    lastMilestonesSignature: null,
-    // per-zone colour + validation state
-    colourPlans: [],
+    // presentation state — everything a zone still owns
     activeColourPlan: null,
-    colourPlansProjectId: null, // guard: which project's plans are loaded
-    currentValidation: null,
-    errorRoomIds: new Set(),
     showErrors: false,
-    // per-zone hierarchy-areas state
     areasMode: false,
     areasData: null,   // last /areas result (all levels + tiers)
     areasTier: 0,      // selected tier depth (0 = outermost, e.g. Building)
     els: {
-      projectSelect: q(".projectSelect"),
-      milestoneSelect: q(".milestoneSelect"),
-      buildingSelect: q(".buildingSelect"),
       colourSelect: q(".colourSelect"),
       levelSelect: q(".levelSelect"),
       validationToggle: q(".validation-toggle"),
@@ -2012,36 +2051,60 @@ function setLayout() {
 
 // ============================ polling loop ============================
 
-// Each tick: for every zone, refresh its pickers (cheap, in-memory-derived —
-// also how a newly-pushed project/building shows up without a reload), then
-// fetch rooms scoped to that zone's selection.
+// Each tick: refresh the scope pickers (cheap, signature-gated — also how a
+// newly-pushed project shows up without a reload), then ONE scoped /rooms
+// fetch fanned out to every zone. Tick cost no longer scales with zone count.
 async function tick() {
-  // Fetch the global project list once, then fan out over zones concurrently.
-  // Previously this looped zones serially and re-fetched /projects per zone, so
-  // N zones cost N× the work back-to-back every tick; sharing the list and
-  // running zones in parallel keeps idle tick cost roughly flat in N.
   let projects = null;
   try {
     projects = await fetchJson("/projects");
   } catch (err) {
-    // Connection issue: skip the picker refresh (as a per-zone loadProjects
-    // would have on its own failed fetch) and let each zone's poll surface it.
+    // Connection issue: skip the picker refresh and let poll() surface it.
   }
-  await Promise.all(zones.map(async (zone) => {
-    if (projects) await loadProjects(zone, projects);
-    await poll(zone);
-  }));
+  if (projects) await refreshScope(projects);
+  await poll();
 }
 
 // ============================ header controls ============================
 
-document.getElementById("addZone").addEventListener("click", async () => {
-  const seed = zones.length ? zones[zones.length - 1] : null;
-  const zone = createZone(seed);
+scopeEls.project.addEventListener("change", async () => {
+  projectId = scopeEls.project.value;
+  buildingKey = null;
+  lastBuildingsSignature = null;
+  milestone = null;
+  lastMilestonesSignature = null;
+  await loadBuildings(projectId);
+  await loadMilestones(projectId);
+  colourPlansProjectId = projectId; // keep the refresh guard in sync
+  await loadColourPlans(projectId);
+  loadValidation(projectId);
+  lastRevision = null; // force the next poll tick to render immediately
+  // One scope on screen means the URL always mirrors it — the "which zone's
+  // scope does the URL carry" question is gone. building/milestone are null
+  // here (just reset), so the helper drops them from the URL.
+  persistSelection(projectId, { building: buildingKey, milestone });
+});
+
+scopeEls.building.addEventListener("change", () => {
+  buildingKey = scopeEls.building.value;
+  lastRevision = null;
+  persistSelection(projectId, { building: buildingKey, milestone });
+});
+
+scopeEls.milestone.addEventListener("change", () => {
+  milestone = scopeEls.milestone.value || null; // "" = Latest
+  lastRevision = null;
+  persistSelection(projectId, { building: buildingKey, milestone });
+});
+
+document.getElementById("addZone").addEventListener("click", () => {
+  const zone = createZone();
   setLayout();
-  // Bring the new zone up to speed immediately rather than waiting a full tick.
-  await loadProjects(zone);
-  await poll(zone);
+  // Catch the new zone up from the globals — no refetch needed: the payload,
+  // colour plans, and validation report are already in memory.
+  applyColourPlans(zone);
+  renderValidationZone(zone);
+  ingestZone(zone);
 });
 
 document.getElementById("removeZone").addEventListener("click", removeZone);
@@ -2062,15 +2125,15 @@ document.getElementById("labelsToggle").addEventListener("click", (e) => {
   // refit:false — a display toggle must not snap zones back to fitted bounds
   // and lose the user's pan/zoom. Zones with no data yet just skip.
   for (const zone of zones) {
-    if (zone.currentPayload && zone.activeLevelId) {
-      renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
+    if (currentPayload && zone.activeLevelId) {
+      renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
     }
   }
 });
 
 // ============================ boot ============================
 
-createZone(null);
+createZone();
 setLayout();
 tick();
 setInterval(tick, 2000);

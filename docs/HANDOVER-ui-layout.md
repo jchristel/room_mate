@@ -1,14 +1,23 @@
 # RoomMate — Handover: UI layout restructure
 
-> **Status (2026-07-23): sequencing step 4 has LANDED** (see
-> PLAN-handover-actioning.md P2), with one correction to the text below: the
-> label set rides `RoomsResult` **keyed by project id** (`drofus_labels`),
-> not flat — this doc's claim that the response "is already project-scoped"
-> is wrong for the unscoped merge, where dRofus resolves per project inside
-> the loop. Everything else in this document remains unbuilt.
+> **Status (2026-07-23): sequencing steps 1, 4 and 6 have LANDED** (see
+> PLAN-handover-actioning.md P6, P2, P3).
+> **Step 1 (scope migration / Decision 1)**: project/milestone/building are
+> global header state; zones carry level + colour + areas only; one poll,
+> one colour-plan read, one validation state; `persistSelection` lost its
+> `zones[0]` special case — the open question ("does anything else depend on
+> per-zone scope?") resolved cleanly, nothing did.
+> **Step 4** landed with one correction: the label set rides `RoomsResult`
+> **keyed by project id** (`drofus_labels`), not flat — the claim below that
+> the response "is already project-scoped" is wrong for the unscoped merge.
+> **Step 6** is the labels toggle, threaded through `paintLevel` so export
+> honours it.
+> **Still open: steps 2, 3, 5** — the bottom region, the panel migration,
+> and the source-data grid (Decisions 2–3 below).
 
-Design settled, **nothing built** apart from the server-side step above. This
-document exists so the work can be picked up cold. Companion to [Browser](STRATEGY-BROWSER.md), which describes
+Design settled; steps 1, 4 and 6 built (see status above), the bottom
+region and grid not yet. This document exists so the remaining work can be
+picked up cold. Companion to [Browser](STRATEGY-BROWSER.md), which describes
 the viewer as it stands today; when this lands, that doc absorbs the outcome
 and this one moves to `Superseded/`.
 

@@ -408,6 +408,14 @@ assumed.
 
 ### P6 — Scope migration
 
+> **Status: LANDED 2026-07-23.** Verified in the running app: header scope
+> pickers (one set); add-zone catches up from globals with zero refetch;
+> per-zone level independence; global project/milestone switches fan to all
+> zones from one poll; URL/localStorage persistence without the `zones[0]`
+> special case; search shares one match set; areas and validation follow the
+> global scope; picker auto-hide intact; no console errors. The open
+> question resolved cleanly — nothing else depended on per-zone scope.
+
 Handover H3 step 1. **Land it alone** — debugging a scope migration alongside
 anything else means debugging two unfamiliar things at once.
 

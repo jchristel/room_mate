@@ -11,11 +11,23 @@ side should shape future server endpoints.
 
 - **SVG floor-plan rendering.** Draws room outlines per level from the
   `/rooms` payload.
-- **Header scope pickers: project, building, level.** Three `<select>`s in the
-  header row, right of "Room Plan" — project and building (see
-  [Server](STRATEGY-SERVER.md)'s `/projects`/`/projects/{id}/buildings`), and
-  the level picker moved here from its former floating panel over the canvas.
-  Building and level auto-hide when they have ≤1 option and auto-select when
+- **Global scope pickers: project, milestone, building — the single-project
+  viewer.** One set of header `<select>`s carrying the scope of the whole
+  page (see [Server](STRATEGY-SERVER.md)'s `/projects` /
+  `/projects/{id}/buildings` / `/projects/{id}/milestones`); the level picker
+  is per-zone (see the zones bullet below — zones differ in level and colour,
+  never data). Scope was per-zone for a while under the multizone viewer;
+  HANDOVER-ui-layout.md Decision 1 deliberately reversed that: cross-project
+  side-by-side display was an emergent capability nobody used, and making
+  scope global deleted the entire focus model (no `activeZoneId`, no
+  active-zone border, no "whose scope does the URL persist" question) and
+  collapsed polling, the colour-plan read, and validation state to one each.
+  **Poll once, fan out:** each 2s tick issues one scoped `/rooms` fetch
+  against one revision cursor and distributes the payload to every zone —
+  deleting the bug class where two zones on the same project could drift a
+  tick apart. A future multi-project comparator gets its own page (the
+  `comparison.html` precedent), not a mode flag here.
+  Building auto-hides when it has ≤1 option and auto-selects when
   there's exactly one real choice, so the common single-building dev case
   shows no picker at all. **Project is the exception: it's shown whenever any
   project exists, single option included** (hidden only at zero, where there's
@@ -31,11 +43,12 @@ side should shape future server endpoints.
   are distinct by `(code, name)`) renders as "Name (CODE)" so the two options
   are distinguishable; a same-name entry with no code stays the bare name,
   its code-bearing twin carrying the visible distinction.
-- **Scoped polling.** `poll()` builds `/rooms`'s URL from the current
-  project/building selection every tick; project/building pickers themselves
-  refresh on the same 2s cadence (gated by a shallow id-list diff so they
-  don't fight an in-progress selection), which is also how a newly-pushed
-  project or building shows up without a page reload.
+- **Scoped polling — once per page.** `poll()` builds `/rooms`'s URL from the
+  global project/building/milestone selection every tick and fans the payload
+  out to every zone (`ingestAll`); the scope pickers refresh on the same 2s
+  cadence (gated by a shallow id-list diff so they don't fight an in-progress
+  selection), which is also how a newly-pushed project shows up without a
+  page reload.
 - **Room labels: configurable, always-rendered, correctly layered.** `addLabel`
   renders `room.label` (the server-resolved, ordered field list — see
   [Server](STRATEGY-SERVER.md)'s `room_label` setting) instead of hardcoding
@@ -274,11 +287,12 @@ side should shape future server endpoints.
   not a navigation, so it adds no Back-button history). localStorage stores
   **only the project id** (the one selection every page shares); the viewer's
   building/milestone are viewer-specific and per-project, so they ride the **URL
-  only** and never seed the other pages. The viewer persists only its **first
-  zone** (`zones[0]`) — restoring N independent zone scopes from one URL isn't
-  worth the complexity — and its restore also seeds localStorage (parity with the
-  editors, whose restore persists via `selectProject`), so a bookmarked viewer
-  link carries the project onward. Deliberately kept a small URL/localStorage fix,
+  only** and never seed the other pages. Under global scope the URL simply
+  mirrors *the* selection — the old "persist only `zones[0]`" special case
+  (and the question it papered over) fell away with per-zone scope — and the
+  viewer's restore also seeds localStorage (parity with the editors, whose
+  restore persists via `selectProject`), so a bookmarked viewer link carries
+  the project onward. Deliberately kept a small URL/localStorage fix,
   not a router or framework — the STRATEGY trigger for that ("writing the same
   state into several DOM places and watching them drift") isn't met.
 
