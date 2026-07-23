@@ -1,0 +1,13 @@
+[mcp_servers.roommate]
+command = "cargo"
+args = [
+    "run",
+    "-q",
+    "--bin",
+    "mcp",
+    "--",
+    "--server-settings",
+    "settings/server.toml",
+    "--project-settings",
+    "settings/projects",
+]
