@@ -179,18 +179,44 @@
   #bottomRegion {
     border-top: 1px solid var(--ink); background: var(--paper);
     display: flex; flex-direction: column;
-    height: var(--bottom-h, 16rem); min-height: 0;
+    /* 20rem, not 16: the region hosts a results band over the grid now, and
+       16rem left too little for both once a results block was expanded. */
+    height: var(--bottom-h, 20rem); min-height: 0;
     min-width: 0; /* see body's grid-template-columns: the grid must scroll, not stretch */
   }
   #bottomRegion.empty { height: auto; }
-  /* Drag handle: the region's whole top edge. */
+  /* Drag handle: the region's whole top edge — resizes the region against
+     the plans. The second handle (#bandDivide) splits band 1 against band 2
+     *within* that height; the two never fight, because this one moves the
+     region's outer edge and that one moves an inner boundary. */
   #regionDrag { flex: 0 0 4px; cursor: row-resize; background: transparent; }
   #regionDrag:hover, #regionDrag.dragging { background: var(--accent); }
+
+  /* Band 1 as a real element, so the split between the results and the grid
+     has something to move. Content-sized by default (a collapsed strip costs
+     one line); once dragged it takes an explicit height and `.sized` wins. */
+  /* `--band1-max` is recomputed in JS as "region minus the grid's own
+     minimum", so band 1 can never starve the table — a percentage cap can't
+     express that, since the grid's floor depends on its toolbar and header. */
+  #band1 { display: flex; flex-direction: column; min-height: 0; flex: 0 1 auto; max-height: var(--band1-max, 65%); }
+  #band1.sized { flex: 0 0 var(--band1-h); }
+  #bandDivide {
+    flex: 0 0 5px; cursor: row-resize; background: var(--rule);
+    border-top: 1px solid var(--ink);
+  }
+  #bandDivide:hover, #bandDivide.dragging { background: var(--accent); }
+  #bandDivide.hidden { display: none; }
+
   .result-band {
     border-bottom: 1px solid var(--rule);
     display: flex; flex-direction: column; min-height: 0;
-    flex: 0 1 auto; max-height: 60%;
+    flex: 0 0 auto;
   }
+  /* An expanded block shares band 1's height with any sibling; a collapsed
+     one stays exactly its summary strip. `flex-basis: auto` (not 0) is
+     required: band 1 is content-sized until it is dragged, and a zero basis
+     would collapse that parent to nothing. */
+  .result-band.open { flex: 1 1 auto; }
   .result-band.hidden { display: none; }
   .band-head {
     display: block; width: 100%; text-align: left; flex: 0 0 auto;
@@ -256,7 +282,11 @@
   /* --- bottom region, band 2: the source-data grid ---
      Ambient, always visible, not dismissable: the tabular view of what the
      plans show graphically. Takes whatever height band 1 leaves. */
-  #gridBand { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  /* `flex-basis: 0`, not auto: an auto basis resolves to the whole table's
+     content height (thousands of px), which would dominate the region's
+     shrink distribution and squeeze band 1 to nothing. A zero basis makes
+     the grid purely "whatever is left over". */
+  #gridBand { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   #gridBand.hidden { display: none; }
   #gridBar {
     flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
@@ -346,7 +376,8 @@
        both blocks are scope-derived, and a region that multiplied with zone
        count would stop being a stable place users can point at. -->
   <footer id="bottomRegion">
-    <div id="regionDrag" title="Drag to resize"></div>
+    <div id="regionDrag" title="Drag to resize the whole panel"></div>
+    <div id="band1">
     <div class="result-band hidden" id="qaBand">
       <button class="band-head" id="qaHead">▸ QA</button>
       <div class="band-body hidden" id="qaBody">
@@ -363,6 +394,12 @@
         <div id="areasContent"></div>
       </div>
     </div>
+    </div><!-- /#band1 -->
+
+    <!-- The band 1 / band 2 split. Shown only when a band-1 block is actually
+         expanded, since there is nothing to redistribute between a collapsed
+         summary strip and the grid. -->
+    <div id="bandDivide" class="hidden" title="Drag to split space between the results and the table"></div>
 
     <!-- Band 2: source data. Always visible (never a summary strip) — it is
          the tabular view of the data itself, not the output of an action. -->
@@ -1921,6 +1958,8 @@ function updateRegionEmpty() {
   const anyVisible = ["qaBand", "areasBand", "gridBand"]
     .some(id => !document.getElementById(id).classList.contains("hidden"));
   document.getElementById("bottomRegion").classList.toggle("empty", !anyVisible);
+  // A band appearing or disappearing can make the split meaningful or moot.
+  updateBandDivide();
 }
 
 const GRID_ROW_H = 20;      // px; fixed so a row's offset is index * height
@@ -2606,9 +2645,64 @@ function toggleBand(bodyId, headId, label) {
   const open = body.classList.toggle("hidden") === false;
   const head = document.getElementById(headId);
   head.innerHTML = (open ? "▾ " : "▸ ") + label();
+  // `.open` on the block is what lets an expanded block share band 1's height
+  // with a sibling while a collapsed one stays a single strip.
+  body.closest(".result-band").classList.toggle("open", open);
+  updateBandDivide();
   // Expanding takes height from the grid, so its visible row count changed.
   onGridScroll();
   return open;
+}
+
+// The band 1 / band 2 divider is only meaningful when a band-1 block is
+// expanded AND the grid is present — otherwise there are not two things to
+// split. Also re-clamps a dragged height that no longer fits (e.g. after the
+// region itself was shrunk, or a block collapsed).
+function updateBandDivide() {
+  const band1 = document.getElementById("band1");
+  const divide = document.getElementById("bandDivide");
+  const anyOpen = !!band1.querySelector(".result-band.open:not(.hidden)");
+  const gridShown = !document.getElementById("gridBand").classList.contains("hidden");
+  divide.classList.toggle("hidden", !(anyOpen && gridShown));
+  if (!anyOpen) {
+    // Nothing expanded: drop any dragged height so collapsed strips don't
+    // hold on to space they no longer need.
+    band1.classList.remove("sized");
+  }
+  updateBand1Max();
+  if (band1.classList.contains("sized")) clampBand1();
+}
+
+// The floor the grid keeps when band 1 is dragged large: its own toolbar and
+// sticky header plus a couple of data rows. Measured rather than guessed, so
+// it stays right if the bar wraps to two lines on a narrow window.
+function gridMinHeight() {
+  const bar = document.getElementById("gridBar").offsetHeight || 30;
+  const head = document.querySelector("#gridTable thead")?.offsetHeight || 40;
+  return bar + head + GRID_ROW_H * 2;
+}
+
+// How much height band 1 may take: everything the region has, less the two
+// handles and the grid's own floor. Applies to BOTH the content-sized default
+// (via the `--band1-max` cap) and any dragged height, so a tall results table
+// can never squeeze the grid out of existence — which is what it did before
+// this cap existed.
+function band1Available() {
+  const region = document.getElementById("bottomRegion");
+  const handles = document.getElementById("regionDrag").offsetHeight
+    + document.getElementById("bandDivide").offsetHeight;
+  return Math.max(40, region.clientHeight - handles - gridMinHeight());
+}
+
+function updateBand1Max() {
+  document.getElementById("band1").style.setProperty("--band1-max", `${Math.round(band1Available())}px`);
+}
+
+// Re-clamp a dragged height after the region itself changed size.
+function clampBand1() {
+  const band1 = document.getElementById("band1");
+  const current = parseFloat(band1.style.getPropertyValue("--band1-h")) || band1.getBoundingClientRect().height;
+  band1.style.setProperty("--band1-h", `${Math.round(Math.max(40, Math.min(current, band1Available())))}px`);
 }
 
 document.getElementById("qaHead").addEventListener("click", () => {
@@ -2676,29 +2770,69 @@ document.getElementById("gridClearFilters").addEventListener("click", () => {
 });
 document.getElementById("gridDownload").addEventListener("click", () => downloadGridCsv());
 
-// ---- region height: one drag for the whole region ----
-// Dragging changes the region's total height; band 1's blocks keep their own
-// (capped) heights, so the give comes from the grid — never from the plans.
-(() => {
-  const handle = document.getElementById("regionDrag");
-  const region = document.getElementById("bottomRegion");
-  let startY = 0, startH = 0;
+// ---- two drags: the region's outer edge, and the band 1 / band 2 split ----
+//
+// Shared plumbing: pointer capture, a `dragging` class, and a per-move
+// callback. Both handles resize by *pixels from the drag start* rather than
+// by tracking the cursor absolutely, so neither drifts if a clamp bites.
+function wireDragHandle(handle, onStart, onMove) {
+  let startY = 0, start = 0;
   handle.addEventListener("pointerdown", (e) => {
     startY = e.clientY;
-    startH = region.getBoundingClientRect().height;
+    start = onStart();
     handle.classList.add("dragging");
     handle.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
   handle.addEventListener("pointermove", (e) => {
     if (!handle.classList.contains("dragging")) return;
-    // Drag up = taller. Clamped so the region can neither vanish nor swallow
-    // the plans entirely.
-    const h = Math.min(Math.max(startH + (startY - e.clientY), 80), window.innerHeight * 0.75);
-    region.style.setProperty("--bottom-h", `${Math.round(h)}px`);
-    onGridScroll(); // the visible row count changed
+    onMove(start, e.clientY - startY);
+    onGridScroll(); // either drag changes the grid's visible row count
   });
-  handle.addEventListener("pointerup", () => handle.classList.remove("dragging"));
+  const stop = () => handle.classList.remove("dragging");
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
+}
+
+// The region's total height, against the plans. Dragging UP makes it taller.
+(() => {
+  const region = document.getElementById("bottomRegion");
+  wireDragHandle(
+    document.getElementById("regionDrag"),
+    () => region.getBoundingClientRect().height,
+    (startH, dy) => {
+      // Clamped so the region can neither vanish nor swallow the plans.
+      const h = Math.min(Math.max(startH - dy, 80), window.innerHeight * 0.75);
+      region.style.setProperty("--bottom-h", `${Math.round(h)}px`);
+      // A taller/shorter region changes what band 1 may take, both as a cap
+      // on the content-sized default and as a clamp on a dragged height.
+      updateBand1Max();
+      if (document.getElementById("band1").classList.contains("sized")) clampBand1();
+    }
+  );
+})();
+
+// The split between band 1 (results) and band 2 (the table), *within* the
+// region's height: dragging DOWN gives the results more and the table less.
+// The region total doesn't move, so the plans are untouched either way.
+(() => {
+  const band1 = document.getElementById("band1");
+  const region = document.getElementById("bottomRegion");
+  wireDragHandle(
+    document.getElementById("bandDivide"),
+    () => {
+      // First drag switches band 1 from content-sized to explicitly sized,
+      // starting at exactly its current height so nothing jumps.
+      const h = band1.getBoundingClientRect().height;
+      band1.style.setProperty("--band1-h", `${Math.round(h)}px`);
+      band1.classList.add("sized");
+      return h;
+    },
+    (startH, dy) => {
+      const h = Math.max(40, Math.min(startH + dy, band1Available()));
+      band1.style.setProperty("--band1-h", `${Math.round(h)}px`);
+    }
+  );
 })();
 
 // ============================ boot ============================

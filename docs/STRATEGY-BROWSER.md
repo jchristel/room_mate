@@ -74,13 +74,23 @@ side should shape future server endpoints.
   one eats plan area. **One instance per page, never per zone** — both blocks
   are scope-derived, and a region that multiplied with zone count would stop
   being a stable place users can point at. The region carries **one height
-  budget** — a user-draggable total height — that expanded blocks divide
-  between them, each scrolling internally, so a long mismatch list can never
-  squeeze its sibling to nothing. **Expanding a band-1 block takes space from
-  the grid, never from the plans** (measured: plans unchanged at 969px while
-  the grid yields 103px), which is the whole point of one shared budget; only
-  an explicit drag resizes the plans. An empty region reserves no height at
-  all.
+  budget** that expanded blocks divide between them, each scrolling
+  internally, so a long mismatch list can never squeeze its sibling to
+  nothing. **Expanding a band-1 block takes space from the grid, never from
+  the plans** (measured: plans unchanged while the grid yields the
+  difference); only an explicit drag resizes the plans. An empty region
+  reserves no height at all.
+  **Two drag handles, because there are two independent questions.** The
+  region's top edge sets its *total* height against the plans; a divider
+  between band 1 and band 2 splits that total between the results and the
+  table, leaving the plans untouched. The divider appears only when a band-1
+  block is actually expanded — there is nothing to redistribute between a
+  collapsed summary strip and the grid — and releases any dragged height when
+  the last block collapses. Band 1 is capped at "the region minus the grid's
+  own minimum" (its toolbar, sticky header and two rows, measured rather than
+  guessed), which is what stops a tall results table starving the grid; a
+  percentage cap can't express that, since the floor depends on the grid's
+  own chrome.
 - **Bottom region, band 2: the source-data grid.** A read-only table over the
   rooms of the current scope — **every level, not the levels on screen**.
   That is deliberate and worth restating because a level filter feels like it
