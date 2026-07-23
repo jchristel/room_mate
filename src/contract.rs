@@ -391,6 +391,65 @@ pub fn numeric_match(a: &str, b: &str) -> Option<bool> {
     Some(format!("{:.*}", n, x) == format!("{:.*}", n, y))
 }
 
+/// How a date string parsed, which decides how two sides can be compared
+/// (see `date_match`).
+enum ParsedDate {
+    /// The pattern carried an offset (`%z`-family): a real instant.
+    Zoned(chrono::DateTime<chrono::FixedOffset>),
+    /// No offset in the pattern: a wall-clock reading with no timezone.
+    Naive(chrono::NaiveDateTime),
+}
+
+/// Parse one side's raw string with its declared strftime pattern. Tries the
+/// offset-aware form first (a pattern without `%z` never matches it), then
+/// datetime, then bare date (midnight) — so one declaration covers whichever
+/// granularity the column actually holds.
+fn parse_date_side(s: &str, fmt: &str) -> Option<ParsedDate> {
+    use chrono::{DateTime, NaiveDate, NaiveDateTime};
+    if let Ok(dt) = DateTime::parse_from_str(s, fmt) {
+        return Some(ParsedDate::Zoned(dt));
+    }
+    if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+        return Some(ParsedDate::Naive(dt));
+    }
+    if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
+        return Some(ParsedDate::Naive(d.and_hms_opt(0, 0, 0).expect("midnight is always valid")));
+    }
+    None
+}
+
+/// Typed comparison for a date-declared field: parse both sides with their
+/// declared patterns and compare what they *denote*, so two renderings of the
+/// same moment don't count as a difference. Same `None = fall back` contract
+/// as `numeric_match`: if either side fails to parse, the caller drops to the
+/// string path — the declaration is a hint, not truth (the same stance
+/// `CustomValue.storage_type` takes).
+///
+/// Comparison rule when the two sides differ in offset-awareness: two zoned
+/// sides compare as instants; a zoned side against a naive side compares the
+/// zoned side's *local* wall-clock reading against the naive one (the naive
+/// side has no timezone to convert with, and its writer most plausibly wrote
+/// local time); two naive sides compare directly.
+///
+/// **Symmetric by construction** — a value and a pattern per side, with no
+/// notion of which side is dRofus and which is Revit. That is what lets two
+/// unrelated callers share it: `validation` compares dRofus *against* Revit
+/// (two different patterns), while `service::comparison` compares one dRofus
+/// snapshot against another (the same pattern twice). Contrast
+/// `validation::field_values_agree`, which is deliberately asymmetric and is
+/// **not** reusable for a same-source diff.
+pub fn date_match(left: &str, right: &str, left_fmt: &str, right_fmt: &str) -> Option<bool> {
+    let a = parse_date_side(left.trim(), left_fmt)?;
+    let b = parse_date_side(right.trim(), right_fmt)?;
+    Some(match (a, b) {
+        (ParsedDate::Zoned(a), ParsedDate::Zoned(b)) => a == b,
+        (ParsedDate::Zoned(z), ParsedDate::Naive(n)) | (ParsedDate::Naive(n), ParsedDate::Zoned(z)) => {
+            z.naive_local() == n
+        }
+        (ParsedDate::Naive(a), ParsedDate::Naive(b)) => a == b,
+    })
+}
+
 /// Same rounding discipline as `numeric_match`, for a value that was never a
 /// string to begin with (`Level.elevation` arrives as a parsed JSON number,
 /// so any "stated precision" it once had is already gone by the time Rust

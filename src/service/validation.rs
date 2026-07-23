@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::contract::{lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload};
+use crate::contract::{date_match, lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload};
 use crate::drofus::DrofusData;
 use crate::settings::{BuiltinPropertyDef, CompareMode, DrofusFieldConfig, FieldType};
 use crate::state::{AppState, ModelKey};
@@ -169,57 +169,6 @@ fn field_config<'a>(drofus_fields: &'a [DrofusFieldConfig], label: &str) -> Opti
 /// string match).
 fn compare_mode(drofus_fields: &[DrofusFieldConfig], label: &str) -> Option<CompareMode> {
     field_config(drofus_fields, label).and_then(|f| f.qa)
-}
-
-/// One side of a date comparison. Whether the pattern captured a UTC offset
-/// decides how the two sides can be compared (see `date_match`).
-enum ParsedDate {
-    /// The pattern carried an offset (`%z`-family): a real instant.
-    Zoned(chrono::DateTime<chrono::FixedOffset>),
-    /// No offset in the pattern: a wall-clock reading with no timezone.
-    Naive(chrono::NaiveDateTime),
-}
-
-/// Parse one side's raw string with its declared strftime pattern. Tries the
-/// offset-aware form first (a pattern without `%z` never matches it), then
-/// datetime, then bare date (midnight) — so one declaration covers whichever
-/// granularity the column actually holds.
-fn parse_date_side(s: &str, fmt: &str) -> Option<ParsedDate> {
-    use chrono::{DateTime, NaiveDate, NaiveDateTime};
-    if let Ok(dt) = DateTime::parse_from_str(s, fmt) {
-        return Some(ParsedDate::Zoned(dt));
-    }
-    if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
-        return Some(ParsedDate::Naive(dt));
-    }
-    if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
-        return Some(ParsedDate::Naive(d.and_hms_opt(0, 0, 0).expect("midnight is always valid")));
-    }
-    None
-}
-
-/// Typed comparison for a `Date`-declared field: parse both sides with their
-/// declared patterns and compare what they denote, so two renderings of the
-/// same moment don't count as a mismatch. Same `None = fall back` contract as
-/// `numeric_match`: if either side fails to parse, the caller drops to the
-/// string path — the declaration is a hint, not truth (the same stance
-/// `CustomValue.storage_type` takes).
-///
-/// Comparison rule when the two sides differ in offset-awareness: two zoned
-/// sides compare as instants; a zoned side against a naive side compares the
-/// zoned side's *local* wall-clock reading against the naive one (the naive
-/// side has no timezone to convert with, and its writer most plausibly wrote
-/// local time); two naive sides compare directly.
-fn date_match(drofus_value: &str, room_value: &str, drofus_fmt: &str, revit_fmt: &str) -> Option<bool> {
-    let a = parse_date_side(drofus_value.trim(), drofus_fmt)?;
-    let b = parse_date_side(room_value.trim(), revit_fmt)?;
-    Some(match (a, b) {
-        (ParsedDate::Zoned(a), ParsedDate::Zoned(b)) => a == b,
-        (ParsedDate::Zoned(z), ParsedDate::Naive(n)) | (ParsedDate::Naive(n), ParsedDate::Zoned(z)) => {
-            z.naive_local() == n
-        }
-        (ParsedDate::Naive(a), ParsedDate::Naive(b)) => a == b,
-    })
 }
 
 /// A copy of `s` with every non-ASCII character replaced by `?`, mirroring

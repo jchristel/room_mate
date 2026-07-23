@@ -551,6 +551,21 @@ layout. P2 is its prerequisite.
 
 ### P9 — Source-aware `values_agree`
 
+> **Status: LANDED 2026-07-23, with one deliberate departure from the
+> handover.** The date rung is now applied to `drofus.`-qualified fields via
+> a shared, symmetric `contract::date_match` (extraction option 1, scoped to
+> the rung actually needed). **The ASCII-narrowing rung was NOT added, and
+> the handover's rationale for it does not hold**: that rung forgives
+> duHast's `encode_ascii` step, which narrows *Revit* strings before they
+> reach the server, whereas dRofus CSVs are uploaded raw and never pass
+> through it — so on a dRofus-vs-dRofus diff the artefact cannot arise, and
+> adding the rung would forgive genuine differences with nothing to blame.
+> Verified: `ascii_narrowed` exists only in `validation.rs`, and the dRofus
+> upload path does no narrowing. Also settled: `qa = "exact"` is honoured,
+> `qa = "ignore"` is not. 185 lib tests pass (6 added).
+> With this, `HANDOVER-comparison-sources.md` is fully actioned and moves to
+> `Superseded/`.
+
 Handover H2 step 4. Sequenced last of the functional work because the handover
 itself rates deferral a legitimate ship, and P1 leaves it a clean follow-up: the
 resolved namespace is already threaded through.

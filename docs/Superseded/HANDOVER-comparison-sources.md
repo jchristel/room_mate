@@ -14,8 +14,17 @@
 > **Step 6 also LANDED** (plan item P4): `comparison.html`'s datalist reads
 > the `drofus_labels` set P2 put on `/rooms` — the authoritative column list,
 > not a mirror of `settings.html`'s `drofusLabels`.
-> **Still open:** step 4 only (source-aware `values_agree` — TODO recorded at
-> the function, plan item P9).
+> **Step 4 LANDED (plan item P9), with one correction to this document.** The
+> date rung now applies to `drofus.`-qualified fields via a shared, symmetric
+> `contract::date_match` (option 1 below, scoped to that rung). **The
+> ASCII-narrowing rung was NOT added: step 4's rationale for it is wrong.**
+> That rung forgives duHast's `encode_ascii` step, which narrows *Revit*
+> strings before they reach the server; dRofus CSVs are uploaded raw and
+> never pass through it, so on a dRofus-vs-dRofus diff the artefact cannot
+> arise and the rung would only forgive genuine differences. See the
+> `values_agree` doc comment for the reasoning in place.
+>
+> **This handover is now fully actioned — every step is built.**
 
 **Goal.** Let `comparison_key` and `comparison_properties` name fields from
 joined sources (`drofus.NetArea`) as well as Revit room properties (`Area`),

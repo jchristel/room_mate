@@ -34,11 +34,13 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::contract::{numeric_match, PropertyPresence};
-use crate::settings::BuiltinPropertyDef;
+use crate::contract::{date_match, numeric_match, PropertyPresence};
+use crate::settings::{BuiltinPropertyDef, CompareMode, DrofusFieldConfig, FieldType};
 use crate::state::AppState;
 
-use super::rooms::{assemble_rooms, resolve_presence, source_joined, RoomResponse, RoomScope};
+use super::rooms::{
+    assemble_rooms, resolve_presence, source_joined, split_namespace, NamespaceSplit, RoomResponse, RoomScope,
+};
 use super::ServiceError;
 
 /// One comparable property whose value differs between the baseline room and
@@ -193,24 +195,80 @@ fn index_by_key<'a>(
     (index, duplicates)
 }
 
-/// Two property values agree iff they match numerically (numeric-adaptive, the
-/// same tolerance the dRofus QA path uses) or, when either side isn't a number,
-/// as trimmed strings. Deliberately does NOT pull in the dRofus QA path's date
-/// and ASCII-narrowing rungs: for an unqualified field both sides came through
-/// the same Revit export, so any such artefact is symmetric and cancels.
+/// Do two values of the same comparable field agree?
 ///
-/// TODO(HANDOVER-comparison-sources.md step 4): that reasoning is weaker for a
-/// `drofus.`-qualified field — two dRofus exports can render the same date
-/// differently, which this comparator reports as a difference. Fixing it means
-/// a source-aware ladder keyed on `resolve_presence`'s returned namespace.
-/// `validation::field_values_agree` must NOT be reused as-is for that: it is
-/// asymmetric (narrows only its dRofus side, comparing dRofus *against*
-/// Revit), and a milestone diff of a dRofus field is dRofus-vs-dRofus.
-fn values_agree(a: &str, b: &str) -> bool {
+/// The rungs are chosen per *source*, because what counts as an artefact
+/// depends on the pipeline each side came through:
+///
+/// - **Unqualified (Revit vs Revit)** — numeric-adaptive, then trimmed
+///   string. Both sides came through the same Revit export at different
+///   times, so encoding and formatting artefacts are symmetric and cancel.
+/// - **`drofus.`-qualified (dRofus vs dRofus)** — the same two rungs, plus a
+///   **date** rung ahead of them when the column is declared `type = "date"`.
+///   dRofus hands dates back as *formatted text*, not a structured value, so
+///   two snapshots can render the same instant differently if the export's
+///   format or locale changed between them. That is a real, reachable
+///   difference this comparator would otherwise report as a change, and the
+///   `drofus_fields` declaration needed to detect it already exists.
+///
+/// **The ASCII-narrowing rung is deliberately NOT applied here**, though
+/// HANDOVER-comparison-sources.md step 4 proposed it. That rung exists to
+/// forgive duHast's `encode_ascii` export step, which narrows *Revit* strings
+/// before they reach this service; dRofus CSVs are uploaded raw and never
+/// pass through it. So on a dRofus-vs-dRofus diff the artefact cannot arise,
+/// and adding the rung would forgive a genuine difference (a real `–` against
+/// a literal `?`) with nothing to blame it on. See `validation::ascii_narrowed`,
+/// which stays where the artefact actually happens.
+///
+/// `qa = "exact"` is honoured (it declares *how* a column should be compared,
+/// which applies equally here); `qa = "ignore"` is not (it declares whether
+/// the QA pass checks a column, and comparison has its own explicit property
+/// list — naming a column there is a deliberate request to compare it).
+fn values_agree(a: &str, b: &str, source: Option<&str>, field_cfg: Option<&DrofusFieldConfig>) -> bool {
+    let exact = field_cfg.and_then(|f| f.qa) == Some(CompareMode::Exact);
+
+    if source == Some("drofus") && !exact {
+        // Same pattern on BOTH sides: this is one dRofus snapshot against
+        // another, so `revit_format` (the Revit side of a QA comparison) has
+        // no meaning here.
+        if let Some(fmt) = field_cfg
+            .filter(|f| f.field_type == FieldType::Date)
+            .and_then(|f| f.format.as_deref())
+        {
+            if let Some(same_instant) = date_match(a, b, fmt, fmt) {
+                return same_instant;
+            }
+            // Either side failed to parse: fall through to the string rungs,
+            // the same "declaration is a hint, not truth" contract as QA.
+        }
+    }
+
+    if exact {
+        return a.trim() == b.trim();
+    }
     match numeric_match(a, b) {
         Some(equal) => equal,
         None => a.trim() == b.trim(),
     }
+}
+
+/// The `drofus_fields` declaration for a comparable field, when it names a
+/// dRofus column. Resolved through the shared `split_namespace` so "what goes
+/// before the dot" keeps one answer across filtering, comparison and settings
+/// validation.
+fn field_config<'a>(
+    property: &str,
+    source: Option<&str>,
+    drofus_fields: &'a [DrofusFieldConfig],
+) -> Option<&'a DrofusFieldConfig> {
+    if source != Some("drofus") {
+        return None;
+    }
+    let label = match split_namespace(property) {
+        NamespaceSplit::Joined { property, .. } => property,
+        _ => return None,
+    };
+    drofus_fields.iter().find(|f| f.label == label)
 }
 
 /// Compare one common room (present in both baseline and other, by key) over
@@ -226,6 +284,7 @@ fn diff_room(
     other: &RoomResponse,
     properties: &[String],
     builtin: &[BuiltinPropertyDef],
+    drofus_fields: &[DrofusFieldConfig],
 ) -> Option<ChangedRoom> {
     let mut differences = Vec::new();
     let mut missing_properties = Vec::new();
@@ -237,10 +296,11 @@ fn diff_room(
         // baseline room with no dRofus record has nothing to compare, so a
         // join *gained* on the other side goes unreported — exactly as a
         // property gained on the other side always has.
-        let (_, base) = resolve_presence(baseline, property, builtin);
+        let (source, base) = resolve_presence(baseline, property, builtin);
         let PropertyPresence::Present(baseline_value) = base else {
             continue;
         };
+        let cfg = field_config(property, source, drofus_fields);
 
         match resolve_presence(other, property, builtin) {
             // The whole source is unmatched on the other side: one per-room
@@ -261,7 +321,7 @@ fn diff_room(
                 other_value: String::new(),
             }),
             (_, PropertyPresence::Present(other_value)) => {
-                if !values_agree(&baseline_value, &other_value) {
+                if !values_agree(&baseline_value, &other_value, source, cfg) {
                     differences.push(PropertyDifference {
                         property: property.clone(),
                         baseline_value,
@@ -359,7 +419,7 @@ pub fn compare_milestones(
             .iter()
             .filter_map(|(key, base_room)| {
                 let other_room = other_index.get(key)?;
-                diff_room(key, base_room, other_room, &properties, builtin)
+                diff_room(key, base_room, other_room, &properties, builtin, &bundle.drofus_fields)
             })
             .collect();
 
@@ -776,16 +836,117 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// TODO-anchor for the deferred source-aware comparator (see the
-    /// `values_agree` doc comment): today the strict two-rung ladder applies
-    /// to every field, so an ASCII-narrowing artefact on a dRofus-valued field
-    /// IS reported as a difference. When step 4 of
-    /// HANDOVER-comparison-sources.md lands, this assertion flips for
-    /// `drofus.`-qualified fields only.
+    /// A `date`-declared dRofus column: two renderings of the same instant
+    /// agree, a genuinely different instant still differs. This is the rung
+    /// that earns source-awareness — dRofus returns dates as formatted text,
+    /// so an export whose format changed between snapshots would otherwise
+    /// report every date as a change.
     #[test]
-    fn test_values_agree_is_strict_regardless_of_source() {
-        assert!(!values_agree("Room – A", "Room ? A"), "no ASCII-narrowing rung today");
-        assert!(values_agree(" x ", "x"), "trimmed string equality");
-        assert!(values_agree("10", "10.0"), "numeric-adaptive rung");
+    fn test_values_agree_drofus_date_compares_instants() {
+        let cfg = DrofusFieldConfig {
+            label: "LastSync".to_string(),
+            field_type: FieldType::Date,
+            format: Some("%Y-%m-%d %H:%M".to_string()),
+            revit_format: None,
+            qa: None,
+        };
+        let d = Some("drofus");
+        assert!(
+            values_agree("2026-06-30 00:00", "2026-06-30 00:00", d, Some(&cfg)),
+            "same rendering of the same instant"
+        );
+        assert!(
+            !values_agree("2026-06-30 09:00", "2026-07-01 09:00", d, Some(&cfg)),
+            "a genuinely different instant is still a difference"
+        );
+        // Unparseable against the declared pattern falls back to the string
+        // rungs rather than silently agreeing — the declaration is a hint.
+        assert!(!values_agree("not-a-date", "2026-06-30 09:00", d, Some(&cfg)));
+        assert!(values_agree("not-a-date", "not-a-date", d, Some(&cfg)));
+    }
+
+    /// The date rung applies ONLY to the declaring source: the identical
+    /// values under an unqualified (Revit-vs-Revit) field take the plain
+    /// string path, which is the regression guard for the pre-P9 behaviour.
+    #[test]
+    fn test_values_agree_unqualified_unchanged() {
+        assert!(values_agree(" x ", "x", None, None), "trimmed string equality");
+        assert!(values_agree("10", "10.0", None, None), "numeric-adaptive rung");
+        assert!(!values_agree("Cardio", "Radio", None, None));
+        // ASCII narrowing is a Revit-export artefact and is forgiven NOWHERE
+        // in this comparator — on either source. A real dash is not a `?`.
+        assert!(!values_agree("Room – A", "Room ? A", None, None));
+        assert!(!values_agree("Room – A", "Room ? A", Some("drofus"), None));
+    }
+
+    /// `qa = "exact"` forces the string path even when both sides parse as
+    /// numbers; `qa = "ignore"` does NOT exclude a field from comparison,
+    /// because naming it in `comparison_properties` is an explicit request.
+    #[test]
+    fn test_values_agree_honours_exact_but_not_ignore() {
+        let mk = |qa| DrofusFieldConfig {
+            label: "NetArea".to_string(),
+            field_type: FieldType::String,
+            format: None,
+            revit_format: None,
+            qa: Some(qa),
+        };
+        let exact = mk(CompareMode::Exact);
+        assert!(
+            !values_agree("10", "10.0", Some("drofus"), Some(&exact)),
+            "exact forces string comparison"
+        );
+        let ignore = mk(CompareMode::Ignore);
+        assert!(
+            values_agree("10", "10.0", Some("drofus"), Some(&ignore)),
+            "ignore does not exempt the field; it compares normally"
+        );
+    }
+
+    /// End-to-end: a dRofus date column rendered differently in two pinned
+    /// snapshots is NOT reported as a change, while a real change still is.
+    #[test]
+    fn test_compare_drofus_date_format_drift_is_not_a_difference() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let d_base = "2026-06-01T09:00:00Z";
+        let d_later = "2026-07-01T09:00:00Z";
+        let mut bundle = make_bundle(
+            Some("Number"),
+            &["drofus.LastSync"],
+            vec![
+                milestone_with_drofus("Base", "m1", base_ts, d_base),
+                milestone_with_drofus("Later", "m1", later_ts, d_later),
+            ],
+        );
+        bundle.drofus_fields = vec![DrofusFieldConfig {
+            label: "LastSync".to_string(),
+            field_type: FieldType::Date,
+            format: Some("%Y-%m-%d %H:%M:%S%z".to_string()),
+            revit_format: None,
+            qa: None,
+        }];
+        bundle.drofus = Some(drofus_data("Number", &[("101", &[("LastSync", "x")])]));
+        let (state, dir) = state_with(bundle, "date-drift");
+
+        state.set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101")])])).unwrap();
+        state.set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])])).unwrap();
+        // Same instant, two offsets: +10:00 local vs the same moment in UTC.
+        state
+            .put_drofus("p1", d_base, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n")
+            .unwrap();
+        state
+            .put_drofus("p1", d_later, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n")
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        let reported: Vec<String> = result.comparisons[0]
+            .changed_rooms
+            .iter()
+            .flat_map(|c| c.differences.iter().map(|d| format!("{}: {} -> {}", d.property, d.baseline_value, d.other_value)))
+            .collect();
+        assert!(reported.is_empty(), "two renderings of one instant are not a change, got {reported:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

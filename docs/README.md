@@ -24,9 +24,8 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 | Document | Status |
 |---|---|
-| [Comparison sources](HANDOVER-comparison-sources.md) | Steps 1–3, 5–6 landed; step 4 (source-aware comparator) open |
-| [UI layout restructure](HANDOVER-ui-layout.md) | Step 4 (server label set) and step 6 (labels toggle) landed; the restructure itself unbuilt |
+| [UI layout restructure](HANDOVER-ui-layout.md) | Every sequencing step built; only Decision 3 (the room inspector) remains, blocked on room click-selection |
 
 Handoff documents whose work has fully landed live in
-[Superseded](Superseded/), including the former
-`settings-infrastructure-handoff.md` and `HANDOVER-area-label-sizing.md`.
+[Superseded](Superseded/) — most recently `HANDOVER-comparison-sources.md`
+and `HANDOVER-area-label-sizing.md`.
