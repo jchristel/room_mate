@@ -12,8 +12,14 @@
 > the response "is already project-scoped" is wrong for the unscoped merge.
 > **Step 6** is the labels toggle, threaded through `paintLevel` so export
 > honours it.
-> **Still open: steps 2, 3, 5** — the bottom region, the panel migration,
-> and the source-data grid (Decisions 2–3 below).
+> **Steps 2 and 3 have LANDED too** (plan item P7): the bottom region exists
+> with band 1 holding the QA and areas blocks; both overlay panels are gone
+> from `.zone-canvas`. Two carry-overs into step 5: the region's height is
+> *capped* rather than fixed-and-draggable (nothing to take space from until
+> band 2 exists), and the stacked-vs-side-by-side test is still owed — run it
+> when band 2 gives it something to weigh.
+> **Still open: step 5** — the source-data grid (Decision 2, band 2), plus
+> the inspector (Decision 3), still blocked on click-selection.
 
 Design settled; steps 1, 4 and 6 built (see status above), the bottom
 region and grid not yet. This document exists so the remaining work can be

@@ -66,9 +66,25 @@ side should shape future server endpoints.
   per-room interleaved loop let a later room's opaque polygon paint over an
   earlier room's label whenever their screen-space boxes were anywhere
   close, which got worse on bigger plans with more rooms.
-- **Data validation panel: badge, highlighting, CSV export.** A header badge
-  (`⚠ N`, `✓`, or hidden when dRofus isn't configured) toggles a right-anchored
-  side panel listing [Server](STRATEGY-SERVER.md)'s six dRofus health checks
+- **Bottom region, band 1: results.** Tabular output lives in a page-level
+  region below the plans, not in overlays covering them (HANDOVER-ui-layout
+  Decision 2). It holds one block per computed result — QA and hierarchy
+  areas — each collapsed to a one-line summary strip by default (`▸ QA · ⚠ 3`)
+  and expanding on click: a fully hidden band gets forgotten, an always-open
+  one eats plan area. **One instance per page, never per zone** — both blocks
+  are scope-derived, and a region that multiplied with zone count would stop
+  being a stable place users can point at. The region carries **one height
+  budget** (currently capped, later user-draggable) that expanded blocks
+  divide between them, each scrolling internally, so a long mismatch list can
+  never squeeze its sibling to nothing. *Interim, honestly:* until band 2
+  (the always-visible source-data grid) exists there is nothing for a block
+  to take space **from**, so expanding still changes the plans' height within
+  that cap; the fixed/draggable total lands with band 2, which is what gives
+  the region a persistent height.
+- **Data validation in band 1: summary strip, highlighting, CSV export.** The
+  block's collapsed strip carries what the old header badge did (`⚠ N`, `✓`,
+  hidden entirely when dRofus isn't configured); expanding it lists
+  [Server](STRATEGY-SERVER.md)'s six dRofus health checks
   (missing/duplicate link values, unmatched-in-dRofus, property mismatches,
   and the two Revit-side presence checks, `fields_absent_in_revit` /
   `fields_empty_in_revit`), plus an always-shown, non-error **field
@@ -77,12 +93,13 @@ side should shape future server endpoints.
   from the issue sections specifically so it survives the "No issues found"
   collapse instead of disappearing with it, and it stays out of the badge
   count — it's a config reference, not a data-quality problem. Fetched only
-  when the project selection changes or via the panel's own Refresh button —
+  when the project selection changes or via the block's own Refresh button —
   deliberately not on the 2s room poll, since this is an on-demand check, not
   something to watch update live. Two things layered on top, both entirely
   client-side: (1) rooms with any issue (across all six checks) get a
   distinct fill (`.room.error`, a new `--error` CSS variable) *only while the
-  panel is open* — `showErrors` toggles with the panel's visibility and
+  block is expanded* — `showErrors` is page state tracking that expansion
+  (it was per-zone panel visibility before the region existed) and
   triggers a `refit: false` re-render, so opening/closing it never disturbs
   the current pan/zoom. (2) A "Download CSV" button builds a `room_id,error`
   CSV directly from the already-fetched report (one row per issue, so a room
@@ -211,12 +228,18 @@ side should shape future server endpoints.
   far you zoom (the overlay isn't re-rendered on pan/zoom); making labels
   zoom-responsive means driving `renderAreasOverlay` from the pan/zoom path
   with a view-derived `baseFont`, throttled the way `cullZone` is — deferred
-  pending need. A summary
-  panel puts each group's dissolved **footprint** area beside its summed **net**
-  room area (computed client-side by shoelace over each room's loops) and their
-  **Δ** = wall zones + filled voids, with a per-level total and a cross-level
-  total for the tier — the two numbers answer different questions, and their
-  difference is itself legible. All client-side, the same "axum stays a pure JSON
+  pending need. The **figures live in the bottom region's band 1**, not beside
+  the plan: one table for the page covering **every level in scope**, each
+  group's dissolved **footprint** area beside its summed **net** room area
+  (computed client-side by shoelace over each room's loops) and their **Δ** =
+  wall zones + filled voids, with per-level subtotals and an all-levels total
+  — the two numbers answer different questions, and their difference is itself
+  legible. The split is the region model's: the **overlay** is presentation on
+  one zone's level (so its tier picker stays per-zone), while the **figures**
+  are a result over the whole scope (so the band carries its own tier picker,
+  and can show Department figures while a zone's overlay draws Building). The
+  `/areas` fetch is shared — one dataset feeds every open overlay and the
+  table. All client-side, the same "axum stays a pure JSON
   API" line as the colour maths and CSV export: the server ships coordinates and
   areas, the browser draws and tabulates. Fetched **on demand** (on toggle, and
   refreshed when new room data arrives) rather than on the 2s room poll, since

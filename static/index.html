@@ -15,7 +15,9 @@
     color: var(--ink);
     font-family: var(--mono);
     display: grid;
-    grid-template-rows: auto 1fr;
+    /* header / zones / bottom region (results + future source-data grid).
+       The bottom row is auto so an empty region costs no plan height. */
+    grid-template-rows: auto 1fr auto;
   }
 
   header {
@@ -155,31 +157,55 @@
   .empty code { background: #0001; padding: 0.1rem 0.4rem; }
   .hidden { display: none; }
 
-  .validation-panel {
-    position: absolute;
-    top: 0; right: 0; bottom: 0;
-    width: 300px;
-    max-width: 80%;
-    background: rgba(243, 239, 230, 0.97);
-    border-left: 1px solid var(--ink);
-    padding: 1rem 1.1rem;
-    overflow-y: auto;
-    font-size: 0.72rem;
+  /* --- bottom region: the results band (HANDOVER-ui-layout Decision 2) ---
+     Tabular/temporal output lives at the bottom of the page, not in overlays
+     covering the plan. Band 1 = results (QA, area figures): sometimes
+     visible, collapsed to a one-line strip by default — a fully hidden band
+     gets forgotten, an always-open one eats plan area. Each block's body has
+     a max height and scrolls internally so a long mismatch list can never
+     squeeze the plans; expanding a block never resizes them either (the
+     region is auto-height below a cap). Band 2 (the always-on source-data
+     grid) is the next step and slots in as a sibling block. */
+  /* ONE height budget for the whole region, not one per block: two expanded
+     blocks share it rather than stacking their caps and pushing the plans
+     around. Expanding a block therefore takes space from its sibling, never
+     from the plans — the plans must not resize because a QA run finished.
+     (The user-draggable total height arrives with band 2.) */
+  #bottomRegion {
+    border-top: 1px solid var(--ink); background: var(--paper);
+    display: flex; flex-direction: column; max-height: 45vh; min-height: 0;
   }
-  .validation-panel.hidden { display: none; }
-  .validation-panel h2 {
-    font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
-    opacity: 0.6; margin: 0 0 0.75rem;
+  .result-band {
+    border-bottom: 1px solid var(--rule);
+    display: flex; flex-direction: column; min-height: 0;
   }
-  .validation-panel section { margin-bottom: 1rem; }
-  .validation-panel section h3 { font-size: 0.68rem; margin: 0 0 0.35rem; }
-  .validation-panel ul { margin: 0; padding-left: 1.1rem; }
-  .validation-panel .mismatch { margin-bottom: 0.3rem; }
-  .validation-panel .ok { opacity: 0.6; }
-  .validation-panel button.refresh {
+  .result-band.hidden { display: none; }
+  .band-head {
+    display: block; width: 100%; text-align: left; flex: 0 0 auto;
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em;
+    background: none; color: var(--ink); border: none;
+    padding: 0.35rem 1.25rem; cursor: pointer;
+  }
+  .band-head:hover { background: var(--fill); }
+  .band-head .issues { color: var(--accent); font-weight: 600; }
+  /* Flex inside the region's capped height, so expanded blocks divide it and
+     each scrolls internally rather than growing the page. */
+  .band-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0.2rem 1.25rem 0.7rem; font-size: 0.72rem; }
+  .band-body.hidden { display: none; }
+  .band-body section { margin-bottom: 1rem; }
+  .band-body section h3 { font-size: 0.68rem; margin: 0 0 0.35rem; }
+  .band-body ul { margin: 0; padding-left: 1.1rem; }
+  .band-body .mismatch { margin-bottom: 0.3rem; }
+  .band-body .ok { opacity: 0.6; }
+  .band-body button.refresh {
     font-family: var(--mono); font-size: 0.68rem; background: var(--paper);
     color: var(--ink); border: 1px solid var(--ink); padding: 0.25rem 0.5rem;
-    cursor: pointer; margin-bottom: 0.75rem;
+    cursor: pointer; margin: 0.2rem 0.5rem 0.6rem 0;
+  }
+  .band-body select.picker {
+    font-family: var(--mono); font-size: 0.68rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem; margin-bottom: 0.6rem;
   }
 
   /* --- hierarchy gross-area footprints: overlay + summary --- */
@@ -200,24 +226,17 @@
   .area-poly.faded { fill-opacity: 0.12; stroke-dasharray: 5 4; }
   .area-label { fill: var(--ink); text-anchor: middle; dominant-baseline: middle;
                 pointer-events: none; font-weight: 600; }
-  .areas-panel {
-    position: absolute; top: 0; right: 0; bottom: 0; width: 330px; max-width: 85%;
-    background: rgba(243, 239, 230, 0.97); border-left: 1px solid var(--ink);
-    padding: 1rem 1.1rem; overflow-y: auto; font-size: 0.72rem;
-  }
-  .areas-panel.hidden { display: none; }
-  .areas-panel h2 {
-    font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
-    opacity: 0.6; margin: 0 0 0.6rem;
-  }
-  .areas-panel .note { opacity: 0.6; margin: 0 0 0.6rem; }
-  .areas-panel table { width: 100%; border-collapse: collapse; }
-  .areas-panel th, .areas-panel td { text-align: right; padding: 0.22rem 0.3rem; border-bottom: 1px solid var(--rule); }
-  .areas-panel th:first-child, .areas-panel td:first-child { text-align: left; }
-  .areas-panel thead th { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; }
-  .areas-panel tr.total td { font-weight: 600; border-top: 2px solid var(--ink); }
-  .areas-panel .swatch { display: inline-block; width: 0.6rem; height: 0.6rem; margin-right: 0.35rem; vertical-align: middle; }
-  .areas-panel .uncounted { opacity: 0.6; font-style: italic; }
+  /* Areas results table (band 1). Table shape shared with the old overlay
+     panel; the note/total/swatch styling carried over. */
+  .band-body .note { opacity: 0.6; margin: 0 0 0.6rem; }
+  .band-body table { border-collapse: collapse; min-width: 34rem; }
+  .band-body th, .band-body td { text-align: right; padding: 0.22rem 0.5rem; border-bottom: 1px solid var(--rule); }
+  .band-body th:first-child, .band-body td:first-child,
+  .band-body th.lvl, .band-body td.lvl { text-align: left; }
+  .band-body thead th { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; }
+  .band-body tr.total td { font-weight: 600; border-top: 2px solid var(--ink); }
+  .band-body .swatch { display: inline-block; width: 0.6rem; height: 0.6rem; margin-right: 0.35rem; vertical-align: middle; }
+  .band-body .uncounted { opacity: 0.6; font-style: italic; }
 </style>
 </head>
 <body>
@@ -242,6 +261,28 @@
   </header>
   <main id="zones"></main>
 
+  <!-- Bottom region, band 1: results. One instance per page, never per zone —
+       both blocks are scope-derived, and a region that multiplied with zone
+       count would stop being a stable place users can point at. -->
+  <footer id="bottomRegion">
+    <div class="result-band hidden" id="qaBand">
+      <button class="band-head" id="qaHead">▸ QA</button>
+      <div class="band-body hidden" id="qaBody">
+        <button class="refresh" id="qaRefresh">Refresh</button>
+        <button class="refresh" id="qaDownload">Download CSV</button>
+        <div id="qaContent"></div>
+      </div>
+    </div>
+    <div class="result-band hidden" id="areasBand">
+      <button class="band-head" id="areasHead">▸ Hierarchy areas</button>
+      <div class="band-body hidden" id="areasBody">
+        <select class="picker" id="areasBandTier" title="Tier for the figures below"></select>
+        <button class="refresh" id="areasDownload">Download CSV</button>
+        <div id="areasContent"></div>
+      </div>
+    </div>
+  </footer>
+
   <!-- One zone's DOM. Cloned per panel by createZone(); every stateful node is
        reached via querySelector on the clone, never a document-wide id. -->
   <template id="zoneTemplate">
@@ -251,10 +292,9 @@
       <div class="zone-toolbar">
         <select class="picker colourSelect hidden"></select>
         <select class="picker levelSelect hidden"></select>
-        <button class="validation-toggle hidden"></button>
         <button class="export-svg hidden" title="Export every level as its own SVG file">Export SVGs</button>
-        <button class="areas-toggle hidden" title="Show hierarchy gross-area footprints">Areas</button>
-        <select class="picker areasTier hidden" title="Footprint tier"></select>
+        <button class="areas-toggle hidden" title="Show hierarchy footprints on this zone's plan">Areas</button>
+        <select class="picker areasTier hidden" title="Footprint tier (this zone's overlay)"></select>
         <span class="meta">waiting for data</span>
       </div>
       <div class="zone-canvas">
@@ -262,17 +302,6 @@
         <div class="empty">
           <strong>No rooms received yet</strong>
           <span>POST room JSON to <code>/rooms</code>, then this updates.</span>
-        </div>
-        <div class="validation-panel hidden">
-          <h2>Data Validation</h2>
-          <button class="refresh vRefresh">Refresh</button>
-          <button class="refresh vDownload">Download CSV</button>
-          <div class="vBody"></div>
-        </div>
-        <div class="areas-panel hidden">
-          <h2>Hierarchy areas</h2>
-          <button class="refresh aDownload">Download CSV</button>
-          <div class="aBody"></div>
         </div>
       </div>
     </div>
@@ -313,10 +342,19 @@ let seededScope = false;
 // Which plan is APPLIED stays per zone — that is presentation.
 let colourPlans = [];
 let colourPlansProjectId = null;
-// Validation is project-scoped, so one report and one error set serve every
-// zone; only panel visibility (zone.showErrors) is per zone.
+// Validation is project-scoped: one report, one error set, one results block
+// in the bottom band. Error highlighting on the plans follows the QA block's
+// expansion — page state, since the block it tracks is page-level.
 let currentValidation = null;
 let errorRoomIds = new Set();
+let showErrors = false;
+// Hierarchy-areas data is scope-derived, so one dataset serves every zone's
+// overlay AND the bottom band's figures. Per zone remain only the overlay
+// toggle (areasMode) and the overlay's tier (areasTier); the band's figures
+// have their own tier picker (areasBandTier) — overlay is presentation on one
+// zone's level, the figures are results over the whole scope.
+let areasData = null;
+let areasBandTier = 0;
 
 // Global: sync the view transform across every zone when on (see commitView).
 let linkViews = false;
@@ -829,7 +867,7 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
   paintLevel(plan, rooms, zone.fitted, {
     colourPlan: zone.activeColourPlan,   // presentation: per zone
     errorRoomIds,                        // data-quality state: global
-    showErrors: zone.showErrors,         // panel visibility: per zone
+    showErrors,                          // follows the QA block's expansion (global)
     cullUnits: zone.cullUnits,
     matchRoomIds: searchMatchIds,        // one payload -> one match set
     searchActive,
@@ -903,7 +941,8 @@ function selectLevel(zone, levelId) {
   zone.activeLevelId = levelId;
   renderLevel(zone, currentPayload, levelId, { refit: true });
   updateMeta(zone);
-  if (zone.areasMode) renderAreasSummary(zone); // overlay follows via renderLevel
+  // The overlay follows via renderLevel; the bottom band's figures span all
+  // levels, so a level switch doesn't touch them.
 }
 
 function updateMeta(zone) {
@@ -932,6 +971,9 @@ function ingestAll(payload) {
   refreshFieldsPanel();
   computeMatches();
   for (const zone of zones) ingestZone(zone);
+  // New room data means the footprints changed: refresh them (data + overlays
+  // + band figures) while any zone has the mode open. Fire-and-forget.
+  if (zones.some(z => z.areasMode)) loadAreas();
 }
 
 // Bring ONE zone up to date with the current global payload. Also the whole
@@ -960,9 +1002,6 @@ function ingestZone(zone) {
   const refit = !zone.fitted || zone.activeLevelId !== prevLevelId;
   if (zone.activeLevelId) renderLevel(zone, payload, zone.activeLevelId, { refit });
   updateMeta(zone);
-  // New room data means the footprints changed: refresh them (data + overlay +
-  // summary) while the mode is open. Fire-and-forget — ingest itself is sync.
-  if (zone.areasMode) loadAreas(zone);
 }
 
 // ============================ colour picker ============================
@@ -1190,12 +1229,14 @@ async function loadMilestones(pid) {
   }
 }
 
-// ============================ validation ============================
+// ============================ validation (QA band) ============================
 //
 // An on-demand health check, not part of the room poll. Fetched once when the
-// project changes, or via a panel's Refresh button. The report and the error
-// room set are project-scoped — global under the single-scope model — while
-// each zone keeps its own panel DOM and visibility toggle (presentation).
+// project changes, or via the band's Refresh button. Everything is
+// page-level: one report, one error set, ONE results block in the bottom
+// band whose collapsed strip doubles as the old header badge ("▸ QA · ⚠ 3").
+// Expanding the block turns on the plans' error highlighting (`showErrors`),
+// mirroring the old panel-open-shows-errors behaviour.
 
 function section(title, items, renderItem) {
   if (items.length === 0) return "";
@@ -1214,8 +1255,7 @@ function renderFieldCoverage(coverage) {
   ).join("")}</ul></section>`;
 }
 
-// Update the globals from a fresh report, then reflect it into every zone's
-// panel — the report is one per project, the panels are one per zone.
+// Update the globals from a fresh report and reflect it into the QA band.
 function renderValidation(data) {
   currentValidation = data;
   errorRoomIds = data.drofus_configured
@@ -1228,24 +1268,17 @@ function renderValidation(data) {
         ...data.fields_empty_in_revit.map(m => m.room_id),
       ])
     : new Set();
-  for (const zone of zones) renderValidationZone(zone);
-}
 
-// Reflect the current global report into ONE zone's toggle + panel. Split out
-// so a newly-added zone can catch up without a refetch.
-function renderValidationZone(zone) {
-  const data = currentValidation;
-  if (!data) return;
-
+  const band = document.getElementById("qaBand");
   if (!data.drofus_configured) {
-    zone.els.validationToggle.classList.add("hidden");
-    zone.els.validationPanel.classList.add("hidden");
+    band.classList.add("hidden");
+    setShowErrors(false);
     return;
   }
+  band.classList.remove("hidden");
 
-  if (zone.showErrors && currentPayload && zone.activeLevelId) {
-    renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
-  }
+  // Fresh error set: re-highlight open plans without disturbing pan/zoom.
+  if (showErrors) rerenderZones();
 
   // The server now tallies this (data.discrepancies.total); fall back to the
   // per-list sum for an older server that doesn't send the summary.
@@ -1254,10 +1287,9 @@ function renderValidationZone(zone) {
     + data.rooms_unmatched_in_drofus.length + data.property_mismatches.length
     + data.fields_absent_in_revit.length + data.fields_empty_in_revit.length);
 
-  const toggle = zone.els.validationToggle;
-  toggle.classList.remove("hidden");
-  toggle.textContent = issueCount ? `⚠ ${issueCount}` : "✓";
-  toggle.classList.toggle("issues", issueCount > 0);
+  const open = !document.getElementById("qaBody").classList.contains("hidden");
+  document.getElementById("qaHead").innerHTML =
+    `${open ? "▾" : "▸"} QA · ` + (issueCount ? `<span class="issues">⚠ ${issueCount}</span>` : "✓");
 
   const html = [
     `<p>${data.total_rooms} room(s) checked against link property <strong>${escapeHtml(data.link_property)}</strong>.</p>`,
@@ -1274,8 +1306,24 @@ function renderValidationZone(zone) {
       `<li class="mismatch">room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
   ].join("");
 
-  zone.els.validationBody.innerHTML = (issueCount ? html : `<p class="ok">No issues found.</p>`)
-    + renderFieldCoverage(data.field_coverage);
+  document.getElementById("qaContent").innerHTML =
+    (issueCount ? html : `<p class="ok">No issues found.</p>`) + renderFieldCoverage(data.field_coverage);
+}
+
+// Error highlighting is page state tracking the QA block: set + re-render.
+function setShowErrors(on) {
+  if (showErrors === on) return;
+  showErrors = on;
+  rerenderZones();
+}
+
+// Re-render every zone's current level in place (refit:false — never disturb
+// pan/zoom for a presentation change).
+function rerenderZones() {
+  if (!currentPayload) return;
+  for (const zone of zones) {
+    if (zone.activeLevelId) renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
+  }
 }
 
 async function loadValidation(pid) {
@@ -1419,7 +1467,7 @@ async function exportZoneLevels(zone) {
   if (!currentPayload) return;
   const levels = levelsForPayload(currentPayload);
   if (levels.length === 0) return;
-  const withErrors = zone.showErrors;
+  const withErrors = showErrors; // follows the QA band, like the on-screen plans
   for (const lvl of levels) {
     const svgText = buildLevelSvgFile(currentPayload, lvl.id, {
       withErrors,
@@ -1449,16 +1497,21 @@ function areasUrl() {
 // while the mode is on — re-fetched on toggle-on and whenever real new room
 // data arrives (see ingestZone). Per-zone because the mode, tier, and level
 // are presentation; two zones with areas on fetch twice, acceptably.
-async function loadAreas(zone) {
+async function loadAreas() {
   if (!projectId) return;
   try {
-    zone.areasData = await fetchJson(areasUrl());
+    areasData = await fetchJson(areasUrl());
   } catch (err) {
-    zone.areasData = null;
+    areasData = null;
   }
-  populateAreasTier(zone);
-  renderAreasOverlay(zone);
-  renderAreasSummary(zone);
+  // One dataset feeds every open overlay and the band's figures.
+  for (const zone of zones) {
+    if (!zone.areasMode) continue;
+    populateAreasTier(zone);
+    renderAreasOverlay(zone);
+  }
+  populateAreasBandTier();
+  renderAreasBand();
 }
 
 // Tier labels come from the group paths: path depth i carries that tier's label.
@@ -1471,7 +1524,7 @@ function tierNames(data) {
 
 function populateAreasTier(zone) {
   const sel = zone.els.areasTier;
-  const names = tierNames(zone.areasData);
+  const names = tierNames(areasData);
   sel.replaceChildren();
   names.forEach((name, depth) => {
     const opt = document.createElement("option");
@@ -1482,6 +1535,22 @@ function populateAreasTier(zone) {
   if (zone.areasTier >= names.length) zone.areasTier = 0;
   sel.value = String(zone.areasTier);
   sel.classList.toggle("hidden", !zone.areasMode || names.length === 0);
+}
+
+// The band's own tier picker: same option list, independent selection — the
+// figures need not follow any one zone's overlay tier.
+function populateAreasBandTier() {
+  const sel = document.getElementById("areasBandTier");
+  const names = tierNames(areasData);
+  sel.replaceChildren();
+  names.forEach((name, depth) => {
+    const opt = document.createElement("option");
+    opt.value = String(depth);
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (areasBandTier >= names.length) areasBandTier = 0;
+  sel.value = String(areasBandTier);
 }
 
 // Identity of a classification prefix — matches server area-groups to client
@@ -1550,12 +1619,11 @@ function roomNetArea(room) {
   return Math.max(0, area);
 }
 
-// Groups on the active level at the selected tier, in server order (so overlay
-// and summary agree on a group's colour index).
+// Groups on this zone's active level at its overlay tier, in server order.
 function activeAreaGroups(zone) {
-  if (!zone.areasData) return [];
+  if (!areasData) return [];
   const depth = zone.areasTier;
-  return zone.areasData.groups.filter(g => g.level_id === zone.activeLevelId && g.path.length === depth + 1);
+  return areasData.groups.filter(g => g.level_id === zone.activeLevelId && g.path.length === depth + 1);
 }
 
 // Draw the dissolved footprints for the active level at the selected tier, on
@@ -1567,7 +1635,7 @@ function renderAreasOverlay(zone) {
   const existing = svg.querySelector(".areas-overlay");
   if (existing) existing.remove();
   svg.classList.toggle("areas-active", zone.areasMode);
-  if (!zone.areasMode || !zone.areasData) return;
+  if (!zone.areasMode || !areasData) return;
 
   const groups = activeAreaGroups(zone);
   if (groups.length === 0) return;
@@ -1618,48 +1686,62 @@ function renderAreasOverlay(zone) {
   svg.appendChild(g);
 }
 
-// The summary panel: for the active level at the selected tier, each group's
-// dissolved FOOTPRINT area (server) beside its summed NET room area (client),
-// and the difference. Totals for the level, plus a cross-level total for the tier.
-function renderAreasSummary(zone) {
-  const body = zone.els.areasBody;
-  if (!zone.areasMode || !zone.areasData) { body.innerHTML = ""; return; }
+// The band's figures: EVERY level at the band's selected tier — each group's
+// dissolved FOOTPRINT area (server) beside its summed NET room area (client)
+// and the difference, with per-level subtotals and a grand total. All-levels
+// where the old overlay panel was active-level-only, because the band belongs
+// to the scope, not to any zone's level pick — the zone overlays remain the
+// per-level view.
+function renderAreasBand() {
+  const band = document.getElementById("areasBand");
+  const content = document.getElementById("areasContent");
+  const anyOpen = zones.some(z => z.areasMode);
+  band.classList.toggle("hidden", !anyOpen || !areasData);
+  if (!anyOpen || !areasData) { content.innerHTML = ""; return; }
 
-  const depth = zone.areasTier;
-  const groups = activeAreaGroups(zone);
+  const depth = areasBandTier;
+  const levelName = new Map((areasData.levels || []).map(l => [l.id, l.name]));
+  const groups = areasData.groups.filter(g => g.path.length === depth + 1);
 
-  // Net room area per group on the active level, keyed by the same path prefix.
+  // Net room area per (level, path-prefix), same identity the CSV export uses.
   const net = new Map();
-  const rooms = currentPayload ? roomsOnLevel(currentPayload, zone.activeLevelId) : [];
-  for (const r of rooms) {
+  for (const r of (currentPayload ? currentPayload.rooms : [])) {
     if (!r.classification || r.classification.length < depth + 1) continue;
-    const key = pathKey(r.classification, depth);
+    const key = `${r.level_id}|${pathKey(r.classification, depth)}`;
     net.set(key, (net.get(key) || 0) + roomNetArea(r));
   }
 
   const fmt = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
-  let tF = 0, tN = 0;
-  const rows = groups.map((grp, i) => {
-    const key = pathKey(grp.path, depth);
-    const netA = net.get(key) || 0;
-    tF += grp.area; tN += netA;
-    const colour = qualitative("Set2", i);
-    const flag = grp.counted_upward ? "" : ` <span class="uncounted">(not counted up)</span>`;
-    return `<tr>
-      <td><span class="swatch" style="background:${colour}"></span>${escapeHtml(tierLabel(grp.path[depth]))}${flag}</td>
-      <td>${fmt(grp.area)}</td><td>${fmt(netA)}</td><td>${fmt(grp.area - netA)}</td></tr>`;
+  // Group rows by level, keeping server order within each level (colour index
+  // parity with the overlays, which use per-level server order too).
+  const byLevel = new Map();
+  for (const g of groups) {
+    if (!byLevel.has(g.level_id)) byLevel.set(g.level_id, []);
+    byLevel.get(g.level_id).push(g);
+  }
+
+  let grandF = 0, grandN = 0;
+  const rows = [...byLevel.entries()].map(([lvlId, lvlGroups]) => {
+    let tF = 0, tN = 0;
+    const lvl = escapeHtml(levelName.get(lvlId) || lvlId);
+    const body = lvlGroups.map((grp, i) => {
+      const netA = net.get(`${lvlId}|${pathKey(grp.path, depth)}`) || 0;
+      tF += grp.area; tN += netA;
+      const colour = qualitative("Set2", i);
+      const flag = grp.counted_upward ? "" : ` <span class="uncounted">(not counted up)</span>`;
+      return `<tr><td class="lvl">${i === 0 ? lvl : ""}</td>
+        <td><span class="swatch" style="background:${colour}"></span>${escapeHtml(tierLabel(grp.path[depth]))}${flag}</td>
+        <td>${fmt(grp.area)}</td><td>${fmt(netA)}</td><td>${fmt(grp.area - netA)}</td></tr>`;
+    }).join("");
+    grandF += tF; grandN += tN;
+    return body + `<tr class="total"><td class="lvl"></td><td>${lvl} total</td><td>${fmt(tF)}</td><td>${fmt(tN)}</td><td>${fmt(tF - tN)}</td></tr>`;
   }).join("");
 
-  const grand = zone.areasData.groups
-    .filter(g => g.path.length === depth + 1)
-    .reduce((s, g) => s + g.area, 0);
-
-  body.innerHTML = groups.length
-    ? `<p class="note">Active level — dissolved footprint vs summed net room area (model units²). Δ = wall zones + filled voids.</p>
-       <table><thead><tr><th>Group</th><th>Footprint</th><th>Net</th><th>Δ</th></tr></thead>
-       <tbody>${rows}<tr class="total"><td>Level total</td><td>${fmt(tF)}</td><td>${fmt(tN)}</td><td>${fmt(tF - tN)}</td></tr></tbody></table>
-       <p class="note">All levels, this tier: ${fmt(grand)} footprint.</p>`
-    : `<p class="note">No footprints for this level and tier.</p>`;
+  content.innerHTML = groups.length
+    ? `<p class="note">Dissolved footprint vs summed net room area (model units²), every level in scope. Δ = wall zones + filled voids.</p>
+       <table><thead><tr><th class="lvl">Level</th><th>Group</th><th>Footprint</th><th>Net</th><th>Δ</th></tr></thead>
+       <tbody>${rows}<tr class="total"><td class="lvl"></td><td>All levels</td><td>${fmt(grandF)}</td><td>${fmt(grandN)}</td><td>${fmt(grandF - grandN)}</td></tr></tbody></table>`
+    : `<p class="note">No footprints at this tier.</p>`;
 }
 
 // Export every group's footprint across ALL levels and tiers (not just the
@@ -1667,8 +1749,8 @@ function renderAreasSummary(zone) {
 // server footprint area, the client-summed net room area, their Δ, and whether
 // the group counts toward tiers above it. Reuses the same roomNetArea/pathKey
 // the summary uses, generalised past the active level/tier.
-function buildAreasCsv(zone) {
-  const data = zone.areasData;
+function buildAreasCsv() {
+  const data = areasData;
   if (!data || !data.groups || data.groups.length === 0) return "";
   const levelName = new Map((data.levels || []).map(l => [l.id, l.name]));
   const tiers = tierNames(data);
@@ -1700,9 +1782,9 @@ function buildAreasCsv(zone) {
   return rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
 }
 
-function downloadAreasCsv(zone) {
-  if (!zone.areasData || !zone.areasData.groups || zone.areasData.groups.length === 0) return;
-  downloadCsv(`areas-${projectId || "project"}.csv`, buildAreasCsv(zone));
+function downloadAreasCsv() {
+  if (!areasData || !areasData.groups || areasData.groups.length === 0) return;
+  downloadCsv(`areas-${projectId || "project"}.csv`, buildAreasCsv());
 }
 
 // ============================ room search (global) ============================
@@ -1957,33 +2039,23 @@ function wireZoneControls(zone) {
     if (currentPayload && zone.activeLevelId) renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
   });
 
-  e.validationToggle.addEventListener("click", () => {
-    e.validationPanel.classList.toggle("hidden");
-    zone.showErrors = !e.validationPanel.classList.contains("hidden");
-    if (currentPayload && zone.activeLevelId) renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
-  });
-  e.validationRefresh.addEventListener("click", () => loadValidation(projectId));
-  e.validationDownload.addEventListener("click", () => downloadValidationCsv());
   e.exportSvg.addEventListener("click", () => exportZoneLevels(zone));
 
   e.areasToggle.addEventListener("click", () => {
     zone.areasMode = !zone.areasMode;
     e.areasToggle.classList.toggle("on", zone.areasMode);
-    e.areasPanel.classList.toggle("hidden", !zone.areasMode);
     if (zone.areasMode) {
-      loadAreas(zone); // fetch + tier picker + overlay + summary
+      loadAreas(); // fetch (shared) + this overlay + the band's figures
     } else {
       e.areasTier.classList.add("hidden");
       renderAreasOverlay(zone); // removes the overlay + un-ghosts rooms
-      renderAreasSummary(zone); // clears the panel body
+      renderAreasBand();        // hides the band when no zone has areas open
     }
   });
   e.areasTier.addEventListener("change", () => {
     zone.areasTier = parseInt(e.areasTier.value, 10) || 0;
-    renderAreasOverlay(zone);
-    renderAreasSummary(zone);
+    renderAreasOverlay(zone); // this zone's overlay only; the band has its own tier
   });
-  e.areasDownload.addEventListener("click", () => downloadAreasCsv(zone));
 }
 
 // Build one zone: clone the template, wire its presentation state, controls,
@@ -2006,26 +2078,16 @@ function createZone() {
     _cullRaf: 0,       // pending requestAnimationFrame id, throttles the cull
     // presentation state — everything a zone still owns
     activeColourPlan: null,
-    showErrors: false,
-    areasMode: false,
-    areasData: null,   // last /areas result (all levels + tiers)
-    areasTier: 0,      // selected tier depth (0 = outermost, e.g. Building)
+    areasMode: false,  // this zone's footprint overlay on/off
+    areasTier: 0,      // this zone's overlay tier (0 = outermost, e.g. Building)
     els: {
       colourSelect: q(".colourSelect"),
       levelSelect: q(".levelSelect"),
-      validationToggle: q(".validation-toggle"),
       exportSvg: q(".export-svg"),
       areasToggle: q(".areas-toggle"),
       areasTier: q(".areasTier"),
-      areasPanel: q(".areas-panel"),
-      areasBody: q(".aBody"),
-      areasDownload: q(".aDownload"),
       meta: q(".meta"),
       empty: q(".empty"),
-      validationPanel: q(".validation-panel"),
-      validationRefresh: q(".vRefresh"),
-      validationDownload: q(".vDownload"),
-      validationBody: q(".vBody"),
     },
   };
 
@@ -2100,10 +2162,10 @@ scopeEls.milestone.addEventListener("change", () => {
 document.getElementById("addZone").addEventListener("click", () => {
   const zone = createZone();
   setLayout();
-  // Catch the new zone up from the globals — no refetch needed: the payload,
-  // colour plans, and validation report are already in memory.
+  // Catch the new zone up from the globals — no refetch needed: the payload
+  // and colour plans are already in memory, and QA/areas results live in the
+  // bottom band, which is page-level and already rendered.
   applyColourPlans(zone);
-  renderValidationZone(zone);
   ingestZone(zone);
 });
 
@@ -2130,6 +2192,44 @@ document.getElementById("labelsToggle").addEventListener("click", (e) => {
     }
   }
 });
+
+// ============================ bottom-region controls ============================
+//
+// Each block collapses to its one-line summary strip. The QA strip carries the
+// count the old header badge did, so nothing was lost by moving the panel down.
+
+// Expand/collapse one block, returning the new open state.
+function toggleBand(bodyId, headId, label) {
+  const body = document.getElementById(bodyId);
+  const open = body.classList.toggle("hidden") === false;
+  const head = document.getElementById(headId);
+  head.innerHTML = (open ? "▾ " : "▸ ") + label();
+  return open;
+}
+
+document.getElementById("qaHead").addEventListener("click", () => {
+  const open = toggleBand("qaBody", "qaHead", () => {
+    const d = currentValidation;
+    if (!d) return "QA";
+    const n = d.discrepancies?.total ?? 0;
+    return "QA · " + (n ? `<span class="issues">⚠ ${n}</span>` : "✓");
+  });
+  // Expanding the results turns on the plans' error highlighting — the same
+  // coupling the old side panel had, now attached to a page-level block.
+  setShowErrors(open);
+});
+
+document.getElementById("qaRefresh").addEventListener("click", () => loadValidation(projectId));
+document.getElementById("qaDownload").addEventListener("click", () => downloadValidationCsv());
+
+document.getElementById("areasHead").addEventListener("click", () => {
+  toggleBand("areasBody", "areasHead", () => "Hierarchy areas");
+});
+document.getElementById("areasBandTier").addEventListener("change", (e) => {
+  areasBandTier = parseInt(e.target.value, 10) || 0;
+  renderAreasBand(); // figures only; each zone's overlay keeps its own tier
+});
+document.getElementById("areasDownload").addEventListener("click", () => downloadAreasCsv());
 
 // ============================ boot ============================
 

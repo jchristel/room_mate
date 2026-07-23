@@ -449,6 +449,25 @@ layer is where to look next.
 
 ### P7 — Bottom region shell, then migrate the panels
 
+> **Status: LANDED 2026-07-23** (steps 2–3 together — band 1 was a straight
+> move). `body` is now `auto 1fr auto`; band 1 holds a QA block and an areas
+> block, each collapsing to a summary strip, sharing one capped height budget
+> and scrolling internally. Both `.validation-panel` and `.areas-panel` are
+> gone from `.zone-canvas` — the hidden-coupling watch item surfaced nothing,
+> since both panels were absolutely positioned and read no canvas geometry.
+> Two deliberate outcomes beyond the brief: the QA strip absorbed the header
+> badge (so nothing was lost by moving the panel down), and the areas figures
+> now span **every level in scope** with their own tier picker, where the old
+> overlay panel was active-level-only — the band belongs to the scope, the
+> overlay to the zone.
+> **Deferred to P8, stated honestly:** the *fixed, user-draggable* total
+> height. Until band 2 exists there is nothing for a block to take space
+> *from*, so expanding still moves the plans within the cap; band 2 is what
+> gives the region a persistent height to drag.
+> **Not yet tried: side-by-side.** The plan says to test it with real data
+> before the grid makes it expensive to revisit — that test belongs at the
+> start of P8, when band 2 exists to be compared against.
+
 Handover H3 steps 2–3. These can land together if band 1 turns out to be a
 straight move.
 
