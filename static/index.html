@@ -1975,7 +1975,7 @@ let gridScrollTop = 0;
 // (row, column) address — so a mismatch is marked *on the disagreeing cell*
 // rather than only listed in band 1. Room-level findings (no link value,
 // unmatched, duplicate) have no column, so they mark the Id cell instead.
-let gridCellErrors = new Set(); // `${roomId} ${revitProperty}`
+let gridCellErrors = new Set(); // `${roomId}\0${revitProperty}`
 let gridRoomErrors = new Set(); // roomId
 
 function rebuildGridErrorIndex() {
@@ -1983,9 +1983,9 @@ function rebuildGridErrorIndex() {
   gridRoomErrors = new Set();
   const d = currentValidation;
   if (!d || !d.drofus_configured) return;
-  for (const m of d.property_mismatches) gridCellErrors.add(`${m.room_id} ${m.field}`);
-  for (const m of d.fields_absent_in_revit) gridCellErrors.add(`${m.room_id} ${m.field}`);
-  for (const m of d.fields_empty_in_revit) gridCellErrors.add(`${m.room_id} ${m.field}`);
+  for (const m of d.property_mismatches) gridCellErrors.add(`${m.room_id}\0${m.field}`);
+  for (const m of d.fields_absent_in_revit) gridCellErrors.add(`${m.room_id}\0${m.field}`);
+  for (const m of d.fields_empty_in_revit) gridCellErrors.add(`${m.room_id}\0${m.field}`);
   for (const id of d.rooms_missing_link_value) gridRoomErrors.add(id);
   for (const id of d.rooms_unmatched_in_drofus) gridRoomErrors.add(id);
   for (const dup of d.duplicate_link_values) for (const id of dup.room_ids) gridRoomErrors.add(id);
@@ -2140,7 +2140,7 @@ function renderGridBody(cols) {
       // A field-level finding marks its own cell; a room-level one (which has
       // no column) marks the Id cell.
       const bad = c.key.startsWith("p:")
-        ? gridCellErrors.has(`${room.id} ${c.key.slice(2)}`)
+        ? gridCellErrors.has(`${room.id}\0${c.key.slice(2)}`)
         : (c.key === "$id" && roomBad);
       return `<td class="src-${c.source}${bad ? " err" : ""}" title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
     }).join("");
