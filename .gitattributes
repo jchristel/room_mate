@@ -1,0 +1,51 @@
+# Line-ending policy, so working-tree endings stop depending on each clone's
+# core.autocrlf setting. Text files are stored LF in the repo; git detects
+# binary content on its own and leaves it alone.
+#
+# This is the file CODING-CONVENTIONS.md's "Line endings" section describes.
+# A file that has drifted is renormalized with `git add --renormalize .`.
+* text=auto
+
+# Source and config: LF in the working tree on every platform (matches
+# rustfmt/tooling defaults; pyRevit/IronPython reads LF fine).
+*.rs   text eol=lf
+*.py   text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Files with no extension to match above. The two dotfiles included so the
+# policy files themselves follow the policy they define; Cargo.lock because
+# it is diffed often enough that a stable line ending is worth stating.
+Cargo.lock     text eol=lf
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+
+# dRofus exports are a first-class input, not an incidental file: the loader
+# parses them (two header rows + data) and uploads are stored verbatim as
+# snapshots. Keep them LF so a fixture committed on Windows and one uploaded
+# from anywhere else are byte-comparable.
+*.csv text eol=lf
+
+# Windows-only scripts: CRLF in the working tree (cmd.exe is picky about it).
+# None exist today; the rule is here so the first one added lands correctly
+# rather than inheriting the LF default.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Never touch: binary assets git's auto-detection should not second-guess.
+# Revit families/templates are plausible test fixtures for this pipeline, and
+# images are plausible in docs/.
+*.rvt binary
+*.rfa binary
+*.rte binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
