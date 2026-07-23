@@ -74,13 +74,58 @@ side should shape future server endpoints.
   one eats plan area. **One instance per page, never per zone** — both blocks
   are scope-derived, and a region that multiplied with zone count would stop
   being a stable place users can point at. The region carries **one height
-  budget** (currently capped, later user-draggable) that expanded blocks
-  divide between them, each scrolling internally, so a long mismatch list can
-  never squeeze its sibling to nothing. *Interim, honestly:* until band 2
-  (the always-visible source-data grid) exists there is nothing for a block
-  to take space **from**, so expanding still changes the plans' height within
-  that cap; the fixed/draggable total lands with band 2, which is what gives
-  the region a persistent height.
+  budget** — a user-draggable total height — that expanded blocks divide
+  between them, each scrolling internally, so a long mismatch list can never
+  squeeze its sibling to nothing. **Expanding a band-1 block takes space from
+  the grid, never from the plans** (measured: plans unchanged at 969px while
+  the grid yields 103px), which is the whole point of one shared budget; only
+  an explicit drag resizes the plans. An empty region reserves no height at
+  all.
+- **Bottom region, band 2: the source-data grid.** A read-only table over the
+  rooms of the current scope — **every level, not the levels on screen**.
+  That is deliberate and worth restating because a level filter feels like it
+  "should" follow the plans: with several zones on different levels there is
+  no single answer, and it would make the grid's contents depend on
+  presentation state, reintroducing exactly the scope/presentation blur the
+  global-scope migration removed. Filtering by level stays available as an
+  ordinary per-column filter, driven by the user.
+  Model-derived and dRofus-derived columns are **grouped and tinted, never
+  interleaved** — [Sources](STRATEGY-SOURCES.md) keeps dRofus a distinct
+  sub-object ("store raw, join late") precisely because the two have
+  different lifecycles, and a flat table would imply a single source of truth
+  the data model deliberately doesn't have. A per-source toggle shows either
+  or both. dRofus columns come from the response's own `drofus_labels` set,
+  **not** a union of the rooms' joined fields, so a column that matched no
+  room in scope still appears (and one with no Revit counterpart in row 2 of
+  the CSV renders visibly *unmapped* rather than being hidden — the same
+  honesty the coverage report applies). An unmatched room simply has empty
+  dRofus cells, never an error.
+  **Row windowing from the start**, because the row count is the design
+  constraint: `big-plate` is 5,046 rooms on a *single* level and the grid
+  spans every level in scope. Only the visible slice is ever in the DOM, with
+  two spacer rows standing in for the rest of the scroll height — measured at
+  **28 rows in the DOM against 10,092 rows of data**. This is the
+  one-dimensional case of `paintLevel`'s cull units (precompute each item's
+  extent, render only what is in view) rather than a second pattern invented
+  for the same problem; `table-layout: fixed` is load-bearing, since
+  content-derived widths would jitter as rows swap in and out.
+  Sorting (numeric when both sides parse) and per-column filters are
+  client-side; the header is rebuilt only when the *column set* changes, so a
+  filter keystroke never detaches the input being typed into. CSV export
+  follows the existing precedent — visible columns, every filtered row,
+  client-side, no server endpoint.
+  **The two bands inform each other.** `compute_validation` keys its
+  field-level findings by (room, field), which in this grid *is* a (row,
+  column) address — so a mismatch is marked on the disagreeing cell in place,
+  not only listed above; room-level findings (no link value, unmatched,
+  duplicate) have no column and mark the Id cell instead. Clicking a band-1
+  entry scrolls band 2 to that room rather than repeating its values.
+  **Stacked, not side by side — settled with real data**, as the handover
+  asked. On a 50-column project the grid needs ~4,700px and has ~1,350px;
+  giving band 1 a 30% left column would cut visible columns from 10 to 7,
+  while the areas table's 544px minimum wouldn't fit the column it was given
+  — two horizontal scrollbars and a worse grid. Band 2 is the scarcer
+  resource, and stacking protects it.
 - **Data validation in band 1: summary strip, highlighting, CSV export.** The
   block's collapsed strip carries what the old header badge did (`⚠ N`, `✓`,
   hidden entirely when dRofus isn't configured); expanding it lists

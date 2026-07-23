@@ -15,9 +15,14 @@
     color: var(--ink);
     font-family: var(--mono);
     display: grid;
-    /* header / zones / bottom region (results + future source-data grid).
-       The bottom row is auto so an empty region costs no plan height. */
+    /* header / zones / bottom region (results + source-data grid).
+       The bottom row is auto so an empty region costs no plan height.
+       `minmax(0, 1fr)` is load-bearing, not decoration: a grid item defaults
+       to `min-width: auto`, so the grid's very wide table (dozens of columns)
+       would otherwise stretch the single column to its intrinsic width and
+       drag `main` — and the plan canvas — out to several thousand pixels. */
     grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   header {
@@ -166,18 +171,25 @@
      squeeze the plans; expanding a block never resizes them either (the
      region is auto-height below a cap). Band 2 (the always-on source-data
      grid) is the next step and slots in as a sibling block. */
-  /* ONE height budget for the whole region, not one per block: two expanded
-     blocks share it rather than stacking their caps and pushing the plans
-     around. Expanding a block therefore takes space from its sibling, never
-     from the plans — the plans must not resize because a QA run finished.
-     (The user-draggable total height arrives with band 2.) */
+  /* ONE height for the whole region, user-draggable, now that band 2 (the
+     always-visible grid) gives it a persistent height to drag. Expanding a
+     band-1 block takes space from the GRID, never from the plans — the plans
+     must not resize because a QA run finished. Band 1 blocks are auto-height
+     (capped, scrolling internally); the grid flexes into whatever is left. */
   #bottomRegion {
     border-top: 1px solid var(--ink); background: var(--paper);
-    display: flex; flex-direction: column; max-height: 45vh; min-height: 0;
+    display: flex; flex-direction: column;
+    height: var(--bottom-h, 16rem); min-height: 0;
+    min-width: 0; /* see body's grid-template-columns: the grid must scroll, not stretch */
   }
+  #bottomRegion.empty { height: auto; }
+  /* Drag handle: the region's whole top edge. */
+  #regionDrag { flex: 0 0 4px; cursor: row-resize; background: transparent; }
+  #regionDrag:hover, #regionDrag.dragging { background: var(--accent); }
   .result-band {
     border-bottom: 1px solid var(--rule);
     display: flex; flex-direction: column; min-height: 0;
+    flex: 0 1 auto; max-height: 60%;
   }
   .result-band.hidden { display: none; }
   .band-head {
@@ -197,6 +209,9 @@
   .band-body ul { margin: 0; padding-left: 1.1rem; }
   .band-body .mismatch { margin-bottom: 0.3rem; }
   .band-body .ok { opacity: 0.6; }
+  /* QA entries are jump targets into the grid below. */
+  .band-body [data-room] { cursor: pointer; }
+  .band-body [data-room]:hover { color: var(--accent); }
   .band-body button.refresh {
     font-family: var(--mono); font-size: 0.68rem; background: var(--paper);
     color: var(--ink); border: 1px solid var(--ink); padding: 0.25rem 0.5rem;
@@ -237,6 +252,72 @@
   .band-body tr.total td { font-weight: 600; border-top: 2px solid var(--ink); }
   .band-body .swatch { display: inline-block; width: 0.6rem; height: 0.6rem; margin-right: 0.35rem; vertical-align: middle; }
   .band-body .uncounted { opacity: 0.6; font-style: italic; }
+
+  /* --- bottom region, band 2: the source-data grid ---
+     Ambient, always visible, not dismissable: the tabular view of what the
+     plans show graphically. Takes whatever height band 1 leaves. */
+  #gridBand { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #gridBand.hidden { display: none; }
+  #gridBar {
+    flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+    padding: 0.3rem 1.25rem; font-size: 0.7rem; letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--rule);
+  }
+  #gridBar label { cursor: pointer; }
+  #gridBar .count { margin-left: auto; color: var(--accent); font-size: 0.66rem; }
+  #gridBar button {
+    font-family: var(--mono); font-size: 0.66rem; background: var(--paper);
+    color: var(--ink); border: 1px solid var(--ink); padding: 0.15rem 0.4rem; cursor: pointer;
+  }
+  /* The scroll container for BOTH axes: rows scroll vertically (windowed —
+     only the visible slice is in the DOM), columns horizontally when model +
+     dRofus are shown together. */
+  #gridScroll { flex: 1 1 auto; overflow: auto; min-height: 0; min-width: 0; }
+  /* table-layout:fixed is load-bearing for windowing: content-derived widths
+     would jitter as rows swap in and out, since only the visible slice is
+     ever measured. */
+  #gridTable { border-collapse: collapse; table-layout: fixed; font-size: 0.68rem; }
+  #gridTable th, #gridTable td {
+    width: 8rem; max-width: 8rem; padding: 0.15rem 0.4rem; text-align: left;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-right: 1px solid var(--rule);
+  }
+  #gridTable td { border-bottom: 1px solid var(--rule); }
+  #gridTable thead th {
+    position: sticky; background: var(--paper); z-index: 2;
+    font-weight: 600; text-transform: uppercase; font-size: 0.6rem;
+    letter-spacing: 0.06em; cursor: pointer; user-select: none;
+  }
+  /* Two header rows: the source group spans its columns, names sit beneath.
+     The group label is pinned to the left of the *scroll viewport* rather
+     than centred in its span — a span 48 columns wide centres its label
+     thousands of pixels off-screen, so the group would be invisible exactly
+     when the table is wide enough to need it. */
+  #gridTable thead tr.group th { top: 0; text-align: left; cursor: default; border-bottom: 1px solid var(--ink); }
+  #gridTable thead tr.group th > span { position: sticky; left: 0.4rem; display: inline-block; }
+  #gridTable thead tr.names th { top: 1.35rem; border-bottom: 1px solid var(--ink); }
+  #gridTable thead tr.group th.src-model { color: var(--ink); }
+  #gridTable thead tr.group th.src-drofus { color: var(--accent); }
+  /* dRofus columns tinted as a block, so the "separate sub-object, never
+     merged" boundary is visible rather than implied. */
+  #gridTable .src-drofus { background: color-mix(in srgb, var(--accent) 7%, var(--paper)); }
+  /* A dRofus column with no Revit counterpart in row 2 of the CSV: shown,
+     visibly distinguished, never hidden (see field coverage). */
+  #gridTable thead th.unmapped { font-style: italic; opacity: 0.75; }
+  #gridTable thead th.sorted::after { content: " ▾"; color: var(--accent); }
+  #gridTable thead th.sorted.asc::after { content: " ▴"; }
+  #gridTable tbody tr:hover td { background: var(--fill); }
+  #gridTable tbody tr.target td { outline: 1px solid var(--accent); }
+  /* A cell the QA report disagrees on, marked in place — the (room, field)
+     address compute_validation already produces IS a (row, column) here. */
+  #gridTable td.err { color: var(--accent); font-weight: 600; background: color-mix(in srgb, var(--error) 45%, transparent); }
+  #gridTable tr.spacer td { padding: 0; border: none; }
+  #gridFilters input {
+    font-family: var(--mono); font-size: 0.62rem; width: 100%;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--rule); padding: 0.1rem 0.2rem;
+  }
+  #gridEmpty { padding: 0.6rem 1.25rem; font-size: 0.7rem; opacity: 0.6; }
 </style>
 </head>
 <body>
@@ -265,6 +346,7 @@
        both blocks are scope-derived, and a region that multiplied with zone
        count would stop being a stable place users can point at. -->
   <footer id="bottomRegion">
+    <div id="regionDrag" title="Drag to resize"></div>
     <div class="result-band hidden" id="qaBand">
       <button class="band-head" id="qaHead">▸ QA</button>
       <div class="band-body hidden" id="qaBody">
@@ -280,6 +362,21 @@
         <button class="refresh" id="areasDownload">Download CSV</button>
         <div id="areasContent"></div>
       </div>
+    </div>
+
+    <!-- Band 2: source data. Always visible (never a summary strip) — it is
+         the tabular view of the data itself, not the output of an action. -->
+    <div id="gridBand" class="hidden">
+      <div id="gridBar">
+        <strong>Rooms</strong>
+        <label><input type="checkbox" id="srcModel" checked /> Model</label>
+        <label><input type="checkbox" id="srcDrofus" checked /> dRofus</label>
+        <button id="gridClearFilters" title="Clear all column filters">Clear filters</button>
+        <button id="gridDownload">Download CSV</button>
+        <span class="count" id="gridCount"></span>
+      </div>
+      <div id="gridScroll"><table id="gridTable"></table></div>
+      <div id="gridEmpty" class="hidden"></div>
     </div>
   </footer>
 
@@ -971,6 +1068,10 @@ function ingestAll(payload) {
   refreshFieldsPanel();
   computeMatches();
   for (const zone of zones) ingestZone(zone);
+  // The grid's column set is payload-derived (property keys + the response's
+  // dRofus labels), so it is rebuilt here rather than on every render.
+  gridColumns = buildGridColumns();
+  renderGrid();
   // New room data means the footprints changed: refresh them (data + overlays
   // + band figures) while any zone has the mode open. Fire-and-forget.
   if (zones.some(z => z.areasMode)) loadAreas();
@@ -1272,10 +1373,12 @@ function renderValidation(data) {
   const band = document.getElementById("qaBand");
   if (!data.drofus_configured) {
     band.classList.add("hidden");
+    updateRegionEmpty();
     setShowErrors(false);
     return;
   }
   band.classList.remove("hidden");
+  updateRegionEmpty();
 
   // Fresh error set: re-highlight open plans without disturbing pan/zoom.
   if (showErrors) rerenderZones();
@@ -1291,23 +1394,31 @@ function renderValidation(data) {
   document.getElementById("qaHead").innerHTML =
     `${open ? "▾" : "▸"} QA · ` + (issueCount ? `<span class="issues">⚠ ${issueCount}</span>` : "✓");
 
+  // Each entry names its room via `data-room`, which makes it a jump target
+  // into band 2 rather than a place to repeat the row's detail (see the
+  // delegated handler below). Cheap to allow for now, expensive to retrofit.
+  const at = (id) => ` data-room="${escapeHtml(id)}"`;
   const html = [
     `<p>${data.total_rooms} room(s) checked against link property <strong>${escapeHtml(data.link_property)}</strong>.</p>`,
-    section("Missing link value", data.rooms_missing_link_value, id => `<li>${escapeHtml(id)}</li>`),
+    section("Missing link value", data.rooms_missing_link_value, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
     section("Duplicate link values", data.duplicate_link_values,
-      d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(escapeHtml).join(", ")}</li>`),
-    section("Unmatched in dRofus", data.rooms_unmatched_in_drofus, id => `<li>${escapeHtml(id)}</li>`),
+      d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(id => `<span${at(id)}>${escapeHtml(id)}</span>`).join(", ")}</li>`),
+    section("Unmatched in dRofus", data.rooms_unmatched_in_drofus, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
     section("Property mismatches", data.property_mismatches, m =>
-      `<li class="mismatch">room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}: `
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}: `
       + `"${escapeHtml(m.room_value)}" vs dRofus "${escapeHtml(m.drofus_value)}"</li>`),
     section("Field absent in Revit", data.fields_absent_in_revit, m =>
-      `<li class="mismatch">room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
     section("Field empty in Revit", data.fields_empty_in_revit, m =>
-      `<li class="mismatch">room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
   ].join("");
 
   document.getElementById("qaContent").innerHTML =
     (issueCount ? html : `<p class="ok">No issues found.</p>`) + renderFieldCoverage(data.field_coverage);
+
+  // A fresh report re-addresses the grid's QA marks.
+  rebuildGridErrorIndex();
+  renderGrid();
 }
 
 // Error highlighting is page state tracking the QA block: set + re-render.
@@ -1697,6 +1808,7 @@ function renderAreasBand() {
   const content = document.getElementById("areasContent");
   const anyOpen = zones.some(z => z.areasMode);
   band.classList.toggle("hidden", !anyOpen || !areasData);
+  updateRegionEmpty();
   if (!anyOpen || !areasData) { content.innerHTML = ""; return; }
 
   const depth = areasBandTier;
@@ -1785,6 +1897,296 @@ function buildAreasCsv() {
 function downloadAreasCsv() {
   if (!areasData || !areasData.groups || areasData.groups.length === 0) return;
   downloadCsv(`areas-${projectId || "project"}.csv`, buildAreasCsv());
+}
+
+// ==================== bottom region, band 2: source-data grid ====================
+//
+// A read-only grid over the rooms of the CURRENT SCOPE — every level, not the
+// levels on screen. That is deliberate and worth restating, because a level
+// filter feels like it "should" follow the plans: with several zones showing
+// different levels there is no single answer, and it would make the grid's
+// contents depend on presentation state, reintroducing exactly the
+// scope/presentation blur the global-scope migration removed. Filtering by
+// level stays available as an ordinary column filter, driven by the user.
+//
+// Model-derived and dRofus-derived columns are grouped and visually separated
+// rather than interleaved: STRATEGY-SOURCES keeps dRofus a distinct
+// sub-object ("store raw, join late") precisely because the two have
+// different lifecycles, and an interleaved table would imply a single source
+// of truth the data model deliberately doesn't have.
+
+// An empty region must not reserve its dragged height — with nothing to show
+// that would just be a band of blank paper eating plan area.
+function updateRegionEmpty() {
+  const anyVisible = ["qaBand", "areasBand", "gridBand"]
+    .some(id => !document.getElementById(id).classList.contains("hidden"));
+  document.getElementById("bottomRegion").classList.toggle("empty", !anyVisible);
+}
+
+const GRID_ROW_H = 20;      // px; fixed so a row's offset is index * height
+const GRID_OVERSCAN = 8;    // rows rendered beyond the viewport, to hide scroll seams
+
+let gridColumns = [];       // [{ key, label, source: "model"|"drofus", get(room), unmapped }]
+let gridRows = [];          // rooms after filter + sort (the windowed row list)
+let gridSort = { key: null, asc: true };
+const gridFilters = new Map(); // column key -> lowercased filter text
+let gridScrollTop = 0;
+// QA marks, at the finest address the report supports. `compute_validation`
+// keys its field-level findings by (room, field), which in this grid IS a
+// (row, column) address — so a mismatch is marked *on the disagreeing cell*
+// rather than only listed in band 1. Room-level findings (no link value,
+// unmatched, duplicate) have no column, so they mark the Id cell instead.
+let gridCellErrors = new Set(); // `${roomId} ${revitProperty}`
+let gridRoomErrors = new Set(); // roomId
+
+function rebuildGridErrorIndex() {
+  gridCellErrors = new Set();
+  gridRoomErrors = new Set();
+  const d = currentValidation;
+  if (!d || !d.drofus_configured) return;
+  for (const m of d.property_mismatches) gridCellErrors.add(`${m.room_id} ${m.field}`);
+  for (const m of d.fields_absent_in_revit) gridCellErrors.add(`${m.room_id} ${m.field}`);
+  for (const m of d.fields_empty_in_revit) gridCellErrors.add(`${m.room_id} ${m.field}`);
+  for (const id of d.rooms_missing_link_value) gridRoomErrors.add(id);
+  for (const id of d.rooms_unmatched_in_drofus) gridRoomErrors.add(id);
+  for (const dup of d.duplicate_link_values) for (const id of dup.room_ids) gridRoomErrors.add(id);
+}
+
+// Intrinsic columns first — the identity a reader scans by — then the room's
+// own property keys. `$level` resolves through the payload's level list, which
+// is why it isn't just another property.
+function buildGridColumns() {
+  const cols = [];
+  if (!currentPayload) return cols;
+
+  const levelName = new Map(levelsForPayload(currentPayload).map(l => [l.id, l.name]));
+  cols.push({ key: "$level", label: "Level", source: "model", get: r => levelName.get(r.level_id) || r.level_id || "" });
+  cols.push({ key: "$name", label: "Name", source: "model", get: r => r.name || "" });
+  cols.push({ key: "$id", label: "Id", source: "model", get: r => r.id || "" });
+
+  const propKeys = new Set();
+  for (const r of currentPayload.rooms) for (const k of Object.keys(r.properties || {})) propKeys.add(k);
+  for (const k of [...propKeys].sort()) {
+    cols.push({ key: `p:${k}`, label: k, source: "model", get: r => (r.properties?.[k]?.value) ?? "" });
+  }
+
+  // dRofus columns come from the response's own label set, NOT a union of the
+  // rooms' joined fields: a column that matched no room in scope would
+  // otherwise be invisible — precisely the case the coverage report goes out
+  // of its way to show as "not checked" rather than omit. `reconciliation`
+  // marks which columns have a Revit counterpart; the rest render as unmapped.
+  const labels = (currentPayload.drofus_labels || {})[projectId];
+  if (labels) {
+    const mapped = labels.reconciliation || {};
+    for (const label of labels.all_labels || []) {
+      cols.push({
+        key: `d:${label}`, label, source: "drofus",
+        unmapped: !(label in mapped),
+        // An unmatched room simply has no `drofus` key — empty cells, never an
+        // error (an unmatched link value is a signal, not a failure).
+        get: r => (r.drofus?.fields?.[label]) ?? "",
+      });
+    }
+  }
+  return cols;
+}
+
+function visibleGridColumns() {
+  const model = document.getElementById("srcModel").checked;
+  const drofus = document.getElementById("srcDrofus").checked;
+  return gridColumns.filter(c => (c.source === "model" ? model : drofus));
+}
+
+// Rooms after every active column filter, then the active sort. Sorting is
+// numeric when both sides parse, so "10" doesn't sort before "9".
+function computeGridRows() {
+  const cols = visibleGridColumns();
+  const active = cols.filter(c => gridFilters.get(c.key));
+  let rows = currentPayload ? currentPayload.rooms : [];
+  if (active.length) {
+    rows = rows.filter(r => active.every(c => String(c.get(r)).toLowerCase().includes(gridFilters.get(c.key))));
+  } else {
+    rows = rows.slice();
+  }
+
+  const sortCol = cols.find(c => c.key === gridSort.key);
+  if (sortCol) {
+    const dir = gridSort.asc ? 1 : -1;
+    rows.sort((a, b) => {
+      const x = sortCol.get(a), y = sortCol.get(b);
+      const nx = parseFloat(x), ny = parseFloat(y);
+      if (Number.isFinite(nx) && Number.isFinite(ny) && nx !== ny) return (nx - ny) * dir;
+      return String(x).localeCompare(String(y)) * dir;
+    });
+  }
+  gridRows = rows;
+}
+
+// Header: a group row (Model | dRofus, spanning their columns) over a names
+// row carrying sort, over a filter row.
+//
+// Rebuilt ONLY when the column set changes — a sort or filter keystroke just
+// restyles the existing cells. That matters for more than cost: re-rendering
+// the head would detach the filter <input> the user is typing into, losing
+// focus and caret mid-word.
+let gridHeadSig = null;
+function renderGridHead(cols) {
+  const table = document.getElementById("gridTable");
+  let thead = table.querySelector("thead");
+  if (!thead) { thead = document.createElement("thead"); table.appendChild(thead); }
+
+  const sig = cols.map(c => c.key).join("|");
+  if (sig === gridHeadSig) {
+    // Same columns: only the sort indicator can have changed.
+    for (const th of thead.querySelectorAll("tr.names th")) {
+      th.classList.toggle("sorted", th.dataset.key === gridSort.key);
+      th.classList.toggle("asc", th.dataset.key === gridSort.key && gridSort.asc);
+    }
+    return;
+  }
+  gridHeadSig = sig;
+
+  const groups = [];
+  for (const c of cols) {
+    const last = groups[groups.length - 1];
+    if (last && last.source === c.source) last.span++;
+    else groups.push({ source: c.source, span: 1 });
+  }
+
+  const groupRow = groups.map(g =>
+    `<th class="group-cell src-${g.source}" colspan="${g.span}"><span>${g.source === "model" ? "Model" : "dRofus"}</span></th>`
+  ).join("");
+
+  const nameRow = cols.map(c => {
+    const sorted = gridSort.key === c.key ? ` sorted${gridSort.asc ? " asc" : ""}` : "";
+    const unmapped = c.unmapped ? " unmapped" : "";
+    const title = c.unmapped ? ` title="${escapeHtml(c.label)} — no Revit property mapped (not QA-checked)"` : "";
+    return `<th class="src-${c.source}${sorted}${unmapped}" data-key="${escapeHtml(c.key)}"${title}>${escapeHtml(c.label)}</th>`;
+  }).join("");
+
+  const filterRow = cols.map(c =>
+    `<th class="src-${c.source}"><input data-key="${escapeHtml(c.key)}" value="${escapeHtml(gridFilters.get(c.key) || "")}" placeholder="filter" /></th>`
+  ).join("");
+
+  thead.innerHTML = `<tr class="group">${groupRow}</tr><tr class="names">${nameRow}</tr><tr id="gridFilters">${filterRow}</tr>`;
+}
+
+// Row windowing: only the visible slice is ever in the DOM, with two spacer
+// rows standing in for the rest of the scroll height. This is the
+// one-dimensional case of paintLevel's cull units — same idea (precompute
+// each item's extent, render only what's in view), applied to rows instead of
+// room bboxes, rather than a second pattern invented for the same problem.
+function renderGridBody(cols) {
+  const table = document.getElementById("gridTable");
+  let tbody = table.querySelector("tbody");
+  if (!tbody) { tbody = document.createElement("tbody"); table.appendChild(tbody); }
+
+  const scroll = document.getElementById("gridScroll");
+  const viewH = scroll.clientHeight || 200;
+  const first = Math.max(0, Math.floor(gridScrollTop / GRID_ROW_H) - GRID_OVERSCAN);
+  const count = Math.ceil(viewH / GRID_ROW_H) + GRID_OVERSCAN * 2;
+  const last = Math.min(gridRows.length, first + count);
+
+  const span = cols.length || 1;
+  const before = first * GRID_ROW_H;
+  const after = Math.max(0, (gridRows.length - last) * GRID_ROW_H);
+
+  const parts = [];
+  if (before > 0) parts.push(`<tr class="spacer"><td colspan="${span}" style="height:${before}px"></td></tr>`);
+  for (let i = first; i < last; i++) {
+    const room = gridRows[i];
+    const roomBad = gridRoomErrors.has(room.id);
+    const cells = cols.map(c => {
+      const v = String(c.get(room));
+      // A field-level finding marks its own cell; a room-level one (which has
+      // no column) marks the Id cell.
+      const bad = c.key.startsWith("p:")
+        ? gridCellErrors.has(`${room.id} ${c.key.slice(2)}`)
+        : (c.key === "$id" && roomBad);
+      return `<td class="src-${c.source}${bad ? " err" : ""}" title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
+    }).join("");
+    parts.push(`<tr data-room="${escapeHtml(room.id)}" style="height:${GRID_ROW_H}px">${cells}</tr>`);
+  }
+  if (after > 0) parts.push(`<tr class="spacer"><td colspan="${span}" style="height:${after}px"></td></tr>`);
+  tbody.innerHTML = parts.join("");
+}
+
+// Full grid refresh: columns -> rows -> head + windowed body. Called on new
+// data, a source toggle, a sort, or a filter change.
+function renderGrid() {
+  const band = document.getElementById("gridBand");
+  if (!currentPayload || !currentPayload.rooms || currentPayload.rooms.length === 0) {
+    band.classList.add("hidden");
+    updateRegionEmpty();
+    return;
+  }
+  band.classList.remove("hidden");
+  updateRegionEmpty();
+
+  const cols = visibleGridColumns();
+  computeGridRows();
+
+  const empty = document.getElementById("gridEmpty");
+  const scroll = document.getElementById("gridScroll");
+  if (cols.length === 0) {
+    scroll.classList.add("hidden");
+    empty.classList.remove("hidden");
+    empty.textContent = "No columns shown — enable Model or dRofus above.";
+  } else {
+    scroll.classList.remove("hidden");
+    empty.classList.add("hidden");
+    renderGridHead(cols);
+    renderGridBody(cols);
+  }
+
+  const total = currentPayload.rooms.length;
+  document.getElementById("gridCount").textContent =
+    gridRows.length === total ? `${total} rooms` : `${gridRows.length} of ${total} rooms`;
+}
+
+// Scroll: re-window only (columns and row set are unchanged), throttled to a
+// frame like cullZone's own scheduler.
+let gridRaf = 0;
+function onGridScroll() {
+  gridScrollTop = document.getElementById("gridScroll").scrollTop;
+  if (gridRaf) return;
+  gridRaf = requestAnimationFrame(() => {
+    gridRaf = 0;
+    const cols = visibleGridColumns();
+    if (cols.length) renderGridBody(cols);
+  });
+}
+
+// Scroll the grid to a room and mark it — the jump target band 1 needs so a
+// mismatch entry can point at its row instead of duplicating the detail.
+function gridScrollToRoom(roomId) {
+  const idx = gridRows.findIndex(r => r.id === roomId);
+  if (idx < 0) return false;
+  const scroll = document.getElementById("gridScroll");
+  scroll.scrollTop = Math.max(0, idx * GRID_ROW_H - scroll.clientHeight / 2);
+  onGridScroll();
+  requestAnimationFrame(() => {
+    const row = document.querySelector(`#gridTable tbody tr[data-room="${CSS.escape(roomId)}"]`);
+    if (row) row.classList.add("target");
+  });
+  return true;
+}
+
+// CSV of what is on screen: the visible columns in order, every filtered row
+// (not just the windowed slice), honouring the source toggle. Client-side,
+// the same "a CSV is a presentation reshuffle of data the browser already
+// has" line as the validation and areas exports.
+function buildGridCsv() {
+  const cols = visibleGridColumns();
+  if (cols.length === 0) return "";
+  const rows = [cols.map(c => (c.source === "drofus" ? `drofus.${c.label}` : c.label))];
+  for (const room of gridRows) rows.push(cols.map(c => c.get(room)));
+  return rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
+}
+
+function downloadGridCsv() {
+  if (!gridRows.length) return;
+  downloadCsv(`rooms-${projectId || "project"}.csv`, buildGridCsv());
 }
 
 // ============================ room search (global) ============================
@@ -2204,6 +2606,8 @@ function toggleBand(bodyId, headId, label) {
   const open = body.classList.toggle("hidden") === false;
   const head = document.getElementById(headId);
   head.innerHTML = (open ? "▾ " : "▸ ") + label();
+  // Expanding takes height from the grid, so its visible row count changed.
+  onGridScroll();
   return open;
 }
 
@@ -2219,6 +2623,14 @@ document.getElementById("qaHead").addEventListener("click", () => {
   setShowErrors(open);
 });
 
+// The two bands inform each other: clicking a QA entry scrolls band 2 to that
+// room instead of the entry repeating the row's values. A room the current
+// filters exclude simply doesn't move the grid.
+document.getElementById("qaContent").addEventListener("click", (e) => {
+  const el = e.target.closest("[data-room]");
+  if (el) gridScrollToRoom(el.dataset.room);
+});
+
 document.getElementById("qaRefresh").addEventListener("click", () => loadValidation(projectId));
 document.getElementById("qaDownload").addEventListener("click", () => downloadValidationCsv());
 
@@ -2230,6 +2642,64 @@ document.getElementById("areasBandTier").addEventListener("change", (e) => {
   renderAreasBand(); // figures only; each zone's overlay keeps its own tier
 });
 document.getElementById("areasDownload").addEventListener("click", () => downloadAreasCsv());
+
+// ---- band 2: the grid ----
+document.getElementById("gridScroll").addEventListener("scroll", onGridScroll);
+for (const id of ["srcModel", "srcDrofus"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    gridScrollTop = 0;
+    document.getElementById("gridScroll").scrollTop = 0;
+    renderGrid();
+  });
+}
+// Sort and filter are delegated off <thead>, which is rebuilt on every render.
+document.getElementById("gridTable").addEventListener("click", (e) => {
+  const th = e.target.closest("thead tr.names th");
+  if (!th) return;
+  const key = th.dataset.key;
+  gridSort = gridSort.key === key ? { key, asc: !gridSort.asc } : { key, asc: true };
+  renderGrid();
+});
+document.getElementById("gridTable").addEventListener("input", debounce((e) => {
+  const input = e.target.closest("#gridFilters input");
+  if (!input) return;
+  const key = input.dataset.key;
+  const v = input.value.trim().toLowerCase();
+  if (v) gridFilters.set(key, v); else gridFilters.delete(key);
+  gridScrollTop = 0;
+  document.getElementById("gridScroll").scrollTop = 0;
+  renderGrid(); // the head survives (same columns), so focus/caret are kept
+}, 200));
+document.getElementById("gridClearFilters").addEventListener("click", () => {
+  gridFilters.clear();
+  renderGrid();
+});
+document.getElementById("gridDownload").addEventListener("click", () => downloadGridCsv());
+
+// ---- region height: one drag for the whole region ----
+// Dragging changes the region's total height; band 1's blocks keep their own
+// (capped) heights, so the give comes from the grid — never from the plans.
+(() => {
+  const handle = document.getElementById("regionDrag");
+  const region = document.getElementById("bottomRegion");
+  let startY = 0, startH = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    startY = e.clientY;
+    startH = region.getBoundingClientRect().height;
+    handle.classList.add("dragging");
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!handle.classList.contains("dragging")) return;
+    // Drag up = taller. Clamped so the region can neither vanish nor swallow
+    // the plans entirely.
+    const h = Math.min(Math.max(startH + (startY - e.clientY), 80), window.innerHeight * 0.75);
+    region.style.setProperty("--bottom-h", `${Math.round(h)}px`);
+    onGridScroll(); // the visible row count changed
+  });
+  handle.addEventListener("pointerup", () => handle.classList.remove("dragging"));
+})();
 
 // ============================ boot ============================
 

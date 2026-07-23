@@ -500,6 +500,23 @@ straight move.
 
 ### P8 — Source-data grid (band 2)
 
+> **Status: LANDED 2026-07-23.** Row windowing measured at **28 DOM rows
+> against 10,092 rows** on `big-plate`; grouped model/dRofus headers with a
+> per-source toggle; unmapped dRofus columns shown and marked; sort, per-column
+> filters, CSV export; cell-level QA marking at the (room, field) address plus
+> band-1 entries as jump targets.
+> **The two P7 carry-overs are closed:** the region's height is now
+> user-draggable, and expanding a band-1 block takes its space from the grid
+> with the plans measurably unchanged.
+> **Side-by-side was tested with real data and rejected**, as the handover
+> asked — on a 50-column project the grid needs ~4,700px against ~1,350px
+> available, so a 30% left column would cut visible columns 10 → 7 while the
+> areas table's 544px minimum wouldn't fit the column it was given.
+> One bug worth recording: the wide table initially stretched the whole page
+> grid to ~4,900px (a grid item's `min-width` defaults to `auto`), blanking
+> the plan canvas. Fixed with `minmax(0, 1fr)` on `body` plus `min-width: 0`
+> down the region chain.
+
 Handover H3 step 5. Largest piece after P6, and deliberately late: it benefits
 from scope already being global and from band 1 having established the region's
 layout. P2 is its prerequisite.
