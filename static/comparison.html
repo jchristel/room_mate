@@ -251,13 +251,19 @@ async function selectProject(projectId) {
 }
 
 // The union of property names on this project's rooms, for the two datalists —
-// same source settings.html uses. A free-text input still works if empty.
+// same source settings.html uses — plus `drofus.`-prefixed entries from the
+// response's per-project label set, so joined fields are discoverable in the
+// same vocabulary the server compares them in (a name that filters correctly
+// also compares correctly). The authoritative list, not a union of joined
+// per-room fields: a dRofus column that matched no room still appears.
+// A free-text input still works if empty.
 async function loadPropertyKeys(projectId) {
   let keys = [];
   try {
     const data = await apiGet(`/rooms?project=${encodeURIComponent(projectId)}`);
     const set = new Set();
     for (const room of (data.rooms || [])) for (const k of Object.keys(room.properties || {})) set.add(k);
+    for (const label of (((data.drofus_labels || {})[projectId] || {}).all_labels || [])) set.add(`drofus.${label}`);
     keys = [...set].sort();
   } catch (err) { keys = []; }
   $("propertyOptions").replaceChildren(...keys.map(k => el("option", { value: k })));
@@ -412,6 +418,12 @@ function renderResults(data) {
         }
         for (const m of r.missing_properties) {
           sub.push(el("li", {}, [`${m.property}: `, el("span", { class: "val", text: m.baseline_value }), el("span", { class: "miss", text: " · missing" })]));
+        }
+        // One row per unjoined source, standing in for its per-property rows —
+        // an unjoined source rendered as nothing would be the silent no-op
+        // this feature exists to remove. `|| []` tolerates an older server.
+        for (const s of (r.unjoined_sources || [])) {
+          sub.push(el("li", {}, [el("span", { class: "miss", text: `${s}: no ${s} record matched this room in this milestone` })]));
         }
         return el("li", {}, [...parts, el("ul", {}, sub)]);
       });

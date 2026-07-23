@@ -193,7 +193,7 @@ like the omittable snapshot id — adding it did **not** bump the schema. The
 producer reads it once per model from `ActiveProjectLocation` and stamps it on
 the envelope. This is Phase 1 of the georeferencing track; Phases 2–3 (the
 `survey_registered` opt-in and the map underlay) build on it — see
-`docs/HANDOVER-georeferencing.md`.
+`docs/Superseded/HANDOVER-georeferencing.md`.
 
 The **dRofus CSV upload** (`POST /projects/{id}/drofus` — see
 [Sources](STRATEGY-SOURCES.md) and [Server](STRATEGY-SERVER.md)) is the

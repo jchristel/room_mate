@@ -146,6 +146,36 @@ side should shape future server endpoints.
   click emits N downloads (browsers prompt once to allow multiple), staggered to
   avoid throttling. All-levels-in-one-file and raster (PNG/PDF) export remain out
   of scope.
+- **Room search (header input + field picker).** One free-text query applied
+  to every zone, with a "Fields ▾" checklist choosing which fields it scans:
+  the `$name`/`$id` intrinsics, `$classification` (any tier's name or code),
+  `$drofus` (any joined field's value), plus the union of raw property keys
+  across all zones' loaded rooms (a genuinely new field defaults to on).
+  Matching is a case-insensitive substring over enabled fields — the
+  free-text-for-a-human matcher, deliberately distinct from the server's
+  structured `?filter=` grammar for machines (see
+  [Server](STRATEGY-SERVER.md)). Entirely client-side and render-free on the
+  fast path: matches toggle `.match` (accent outline) and non-matches `.dim`
+  on the already-rendered nodes via the cull-unit room→nodes map, debounced,
+  so typing never re-paints the plan; the match set is computed over each
+  zone's whole payload (level-independent), so switching level keeps the same
+  matches, and each zone's meta line reports its match count.
+- **Labels toggle.** A header `button.ctl` ("Labels: on/off", default on)
+  switching room labels globally across every zone. Implemented as a
+  `showLabels` option on `paintLevel` (the label pass becomes conditional),
+  NOT a CSS class on the zone SVG — `buildLevelSvgFile` calls `paintLevel`
+  directly and never sees zone-level classes, so a CSS-only toggle would be
+  silently ignored by every exported file; threading the flag means **SVG
+  export follows the toggle** (a labels-off export simply contains no
+  `<text>` nodes — omitting beats styling away, and `exportStyleBlock`'s
+  leftover `.label` rule is harmless). The toggle re-renders every zone with
+  `refit: false` so pan/zoom is never disturbed, skipping zones with no
+  payload yet. Cull units are unaffected (`cullZone` iterates each unit's
+  nodes; nothing indexes them positionally). Deliberately **not persisted**,
+  matching `linkViews` — view prefs should persist together or not at all
+  (HANDOVER-ui-layout.md Decision 4). This also puts the label half of the
+  open level-of-detail item (below) in place: an automatic LOD mode would
+  drive the same `paintLevel` flag from zoom level rather than a button.
 - **Hierarchy areas overlay + summary.** A per-zone "Areas" toggle draws the
   server's dissolved gross-area footprints (`GET /projects/{id}/areas`, see
   [Server](STRATEGY-SERVER.md)) on top of the current level, rooms ghosted
@@ -154,7 +184,21 @@ side should shape future server endpoints.
   categorical `Set2` palette; footprints are hole-free, so each group is a plain
   `<polygon>` per island (no even-odd path) — a small simplification the
   "discard holes" server decision buys the front end. A Case-A excluded group
-  (`counted_upward: false`) reads dashed + faint rather than vanishing. A summary
+  (`counted_upward: false`) reads dashed + faint rather than vanishing. Tier
+  labels are fitted per group (`ringBox` against the group's largest ring,
+  mirroring `addLabel`'s room-label sizing but with a more conservative 0.7
+  width factor, since a bbox overstates the usable interior of the concave
+  footprints dissolves produce), and a group too small for legible text gets
+  **no label at all** (below `baseFont * 0.25`). That suppression threshold is
+  deliberately the one *removed* from room labels as a bug — the difference is
+  that a suppressed tier label loses nothing (the summary panel names every
+  group), whereas a suppressed room label had no other surface. Accepted
+  limitation: the threshold derives from the level's *fitted* bounds, not the
+  current view, so a group suppressed at floor scale stays unlabelled however
+  far you zoom (the overlay isn't re-rendered on pan/zoom); making labels
+  zoom-responsive means driving `renderAreasOverlay` from the pan/zoom path
+  with a view-derived `baseFont`, throttled the way `cullZone` is — deferred
+  pending need. A summary
   panel puts each group's dissolved **footprint** area beside its summed **net**
   room area (computed client-side by shoelace over each room's loops) and their
   **Δ** = wall zones + filled voids, with a per-level total and a cross-level
@@ -348,7 +392,10 @@ serving a different consumer (a hierarchy browser) than the room render.
 - **Fitted-view cost at very high room counts — still open.** Culling helps only
   when geometry is off-screen; a *fitted* view of a 5,000-room level still paints
   everything (~0.5 s+/frame), so the remaining lever there is level-of-detail
-  (drop labels / merge rooms when the whole plate is on screen), not culling. The
+  (drop labels / merge rooms when the whole plate is on screen), not culling.
+  The label half now has its mechanism: `paintLevel` takes a `showLabels` flag
+  (see the labels toggle above), so an automatic LOD mode is "drive that flag
+  from zoom level" rather than new plumbing. The
   grid is also not yet capped to the visible region — minor next to the rooms, but
   the same idea. Both deferred pending need.
 - **Coordinates and units.** Revit internal units are decimal feet, Y-up; SVG
@@ -359,7 +406,7 @@ serving a different consumer (a hierarchy browser) than the room render.
   [Index](STRATEGY.md) "The upload envelope") mapping its room points into the
   project's shared/real-world frame. The renderer ignores it today (auto-fit
   needs no absolute placement), but north-alignment, a real-world scale bar, and
-  the georeferencing map underlay (Phase 3 — `docs/HANDOVER-georeferencing.md`)
+  the georeferencing map underlay (Phase 3 — `docs/Superseded/HANDOVER-georeferencing.md`)
   are exactly the features that consume it. Composing it correctly is a
   browser-side job — the existing Y-flip *plus* the `model_to_shared` matrix
   *plus* (for the underlay) a reprojection into the tile frame — and the server

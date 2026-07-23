@@ -18,6 +18,15 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | Document | Description |
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
-| [Server Settings Infrastructure](settings-infrastructure-handoff.md) | Handoff summary for the server settings infrastructure |
+| [Plan: handover actioning](PLAN-handover-actioning.md) | Review of the open handovers against strategy, priorities, and the ordered plan (with per-item landed status) |
 
-Older handoff documents that have been superseded live in [Superseded](Superseded/).
+## Open handovers
+
+| Document | Status |
+|---|---|
+| [Comparison sources](HANDOVER-comparison-sources.md) | Steps 1–3, 5–6 landed; step 4 (source-aware comparator) open |
+| [UI layout restructure](HANDOVER-ui-layout.md) | Step 4 (server label set) and step 6 (labels toggle) landed; the restructure itself unbuilt |
+
+Handoff documents whose work has fully landed live in
+[Superseded](Superseded/), including the former
+`settings-infrastructure-handoff.md` and `HANDOVER-area-label-sizing.md`.

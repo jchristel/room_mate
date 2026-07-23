@@ -19,6 +19,7 @@ use std::sync::Arc;
 use anyhow::Context;
 
 use crate::drofus::{load_drofus_from_bytes, load_drofus_from_path};
+use crate::service::rooms::validate_comparison_field;
 use crate::settings::{
     load_server_config, load_settings, validate_drofus_field_shapes, validate_drofus_fields,
     DrofusSource, ServerConfig,
@@ -36,6 +37,24 @@ use crate::storage::{FsStore, MemStore, SnapshotStore};
 /// can never fail the next boot.
 pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Result<(String, bool, ProjectSettings)> {
     let settings = load_settings(&path.to_path_buf()).with_context(|| format!("bad settings file: {}", path.display()))?;
+
+    // Comparison fields: the namespace half is checkable right here, and a bad
+    // one left unchecked yields an empty milestone diff indistinguishable from
+    // "no changes" — the silent no-op this loud failure replaces. Lives here
+    // rather than in `load_settings` because the vocabulary belongs to
+    // `service::rooms` (settings must not depend on service); running inside
+    // this function is also what gives the settings-save path the same
+    // rejection for free. Unqualified names stay unvalidated — free-text room
+    // properties may legitimately match nothing yet.
+    for (which, field) in settings
+        .comparison_key
+        .iter()
+        .map(|f| ("comparison_key", f))
+        .chain(settings.comparison_properties.iter().map(|f| ("comparison_properties", f)))
+    {
+        validate_comparison_field(field)
+            .map_err(|msg| anyhow::anyhow!("bad {which} entry {field:?} in {}: {msg}", path.display()))?;
+    }
 
     // dRofus is optional per project: load and validate only when a
     // source is configured. `drofus_fields` declarations with *no* dRofus
@@ -295,6 +314,47 @@ mod tests {
         let drofus = registry.get("p1").unwrap().drofus.as_ref().expect("hydrated");
         assert_eq!(drofus.link_property, "Number");
         assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A bad namespace in a comparison field fails the boot with a message
+    /// naming the file, the field, and the known sources — replacing the
+    /// silent empty-diff no-op it used to become at read time. The unqualified
+    /// entry alongside it proves free-text names stay unvalidated.
+    #[test]
+    fn test_bad_comparison_namespace_fails_startup() {
+        let dir = temp_projects_dir("cmp-ns");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\ncomparison_key = \"Number\"\ncomparison_properties = [\"Area\", \"drofuss.NetArea\"]\n",
+        )
+        .unwrap();
+
+        let msg = match load_project_settings_dir(&dir, &MemStore::new()) {
+            Err(err) => format!("{err:#}"),
+            Ok(_) => panic!("expected startup failure for an unknown comparison namespace"),
+        };
+        assert!(msg.contains("unknown data source"), "names the problem: {msg}");
+        assert!(msg.contains("drofus"), "names the known sources: {msg}");
+        assert!(msg.contains("comparison_properties"), "names the setting: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The valid comparison shapes all boot: a known namespace, unqualified
+    /// free-text (which may match nothing yet), and no key at all.
+    #[test]
+    fn test_valid_comparison_fields_boot() {
+        let dir = temp_projects_dir("cmp-ok");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\ncomparison_key = \"drofus.RoomId\"\ncomparison_properties = [\"Area\", \"drofus.NetArea\", \"No Such Property\"]\n",
+        )
+        .unwrap();
+
+        let (registry, _default) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        assert_eq!(registry.get("p1").unwrap().comparison_key.as_deref(), Some("drofus.RoomId"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

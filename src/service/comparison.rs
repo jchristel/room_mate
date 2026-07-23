@@ -9,29 +9,36 @@
 //! - `rooms::assemble_rooms(.., Some(milestone))` already resolves a
 //!   milestone's pinned per-model snapshots into fully-joined rooms — called
 //!   once per milestone (baseline + each other), it gives every milestone's
-//!   room set with no new resolution logic. dRofus join inside it is already
-//!   optional, consistent with dRofus being irrelevant here.
+//!   room set with no new resolution logic. Because the (optional) dRofus
+//!   join, pinned per milestone, happens inside it, a `drofus.`-qualified
+//!   comparison field diffs the *pinned* dRofus values with no
+//!   comparison-side plumbing.
+//! - `rooms::resolve_presence` resolves each comparable field in the same
+//!   `source.property` vocabulary the `/rooms` filter uses — `Area` reads the
+//!   room, `drofus.NetArea` the joined record — so a name means the same
+//!   thing filtered and compared, and gives the Absent/Empty/Present
+//!   distinction: `Absent` on the compared side of a property the baseline
+//!   has is the "missing property" signal.
 //! - `contract::numeric_match` is the numeric-adaptive comparator the dRofus
 //!   QA path uses; property equality reuses it rather than growing a second one.
-//! - `contract::property_presence` gives the Absent/Empty/Present distinction:
-//!   `Absent` on the compared side of a property the baseline has is the
-//!   "missing property" signal.
 //!
 //! The room-matching key is its own concept: a **user-chosen** room property
-//! (`ProjectSettings::comparison_key`), deliberately NOT the dRofus
-//! `link_property`. dRofus is not required for milestone comparison at all, so
-//! when no key is configured this returns an explicit "not configured" result
-//! rather than silently falling back to dRofus or to room `id`.
+//! (`ProjectSettings::comparison_key`, possibly `drofus.`-qualified),
+//! deliberately NOT the dRofus `link_property`. dRofus data is *comparable*
+//! here, but never *required*: when no key is configured this returns an
+//! explicit "not configured" result rather than silently falling back to
+//! dRofus or to room `id` — that no-fallback rule predates joined-source
+//! comparison and survives it unchanged.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::contract::{lookup_property, numeric_match, property_presence, PropertyPresence};
+use crate::contract::{numeric_match, PropertyPresence};
 use crate::settings::BuiltinPropertyDef;
 use crate::state::AppState;
 
-use super::rooms::{assemble_rooms, RoomResponse, RoomScope};
+use super::rooms::{assemble_rooms, resolve_presence, source_joined, RoomResponse, RoomScope};
 use super::ServiceError;
 
 /// One comparable property whose value differs between the baseline room and
@@ -65,6 +72,14 @@ pub struct ChangedRoom {
     pub room_id: String,
     pub differences: Vec<PropertyDifference>,
     pub missing_properties: Vec<MissingProperty>,
+    /// Joined sources (e.g. `"drofus"`) named by the comparable-property set
+    /// whose record is missing *entirely* on the compared side, while the
+    /// baseline side has values to compare. One entry per source, replacing
+    /// what would otherwise be N identical `missing_properties` rows — a
+    /// failed join is one per-room fact, not a fact about each configured
+    /// field. A room whose only change is a lost join still appears here:
+    /// losing the join IS the change.
+    pub unjoined_sources: Vec<String>,
 }
 
 /// One comparison-key value shared by more than one room on a single side —
@@ -144,8 +159,10 @@ type KeyIndex<'a> = BTreeMap<String, &'a RoomResponse>;
 /// Index one milestone's rooms by their resolved comparison-key value, pulling
 /// out any value shared by more than one room as a duplicate (mirrors how
 /// `validation::compute_validation` guards ambiguous dRofus link values). The
-/// key is resolved the canonical/source way every other property name is —
-/// each room carries its own `source` (see `RoomResponse::source`).
+/// key resolves through `resolve_presence` — the same namespace vocabulary as
+/// the comparable properties — so a `drofus.`-qualified key (matching rooms
+/// across milestones by their dRofus identity) works exactly like a room
+/// property does.
 fn index_by_key<'a>(
     rooms: &'a [RoomResponse],
     key_prop: &str,
@@ -153,11 +170,12 @@ fn index_by_key<'a>(
 ) -> (KeyIndex<'a>, Vec<DuplicateKeyValue>) {
     let mut groups: BTreeMap<String, Vec<&RoomResponse>> = BTreeMap::new();
     for rr in rooms {
-        if let Some(value) = lookup_property(&rr.room, key_prop, &rr.source, builtin) {
+        // Only `Present` yields a usable key: a room with no value for it
+        // (absent and empty collapse together here) can't be matched across
+        // milestones — dropped, there is nothing to diff it against.
+        if let (_, PropertyPresence::Present(value)) = resolve_presence(rr, key_prop, builtin) {
             groups.entry(value).or_default().push(rr);
         }
-        // A room with no value for the key can't be matched across milestones —
-        // dropped here (there is nothing to diff it against on the other side).
     }
 
     let mut index = KeyIndex::new();
@@ -177,10 +195,17 @@ fn index_by_key<'a>(
 
 /// Two property values agree iff they match numerically (numeric-adaptive, the
 /// same tolerance the dRofus QA path uses) or, when either side isn't a number,
-/// as trimmed strings. Deliberately does NOT pull in the dRofus path's date and
-/// ASCII-narrowing rungs: those forgive artefacts of the dRofus CSV export, and
-/// milestone comparison is Revit-vs-Revit — both sides came through the same
-/// export, so any such artefact is symmetric and cancels.
+/// as trimmed strings. Deliberately does NOT pull in the dRofus QA path's date
+/// and ASCII-narrowing rungs: for an unqualified field both sides came through
+/// the same Revit export, so any such artefact is symmetric and cancels.
+///
+/// TODO(HANDOVER-comparison-sources.md step 4): that reasoning is weaker for a
+/// `drofus.`-qualified field — two dRofus exports can render the same date
+/// differently, which this comparator reports as a difference. Fixing it means
+/// a source-aware ladder keyed on `resolve_presence`'s returned namespace.
+/// `validation::field_values_agree` must NOT be reused as-is for that: it is
+/// asymmetric (narrows only its dRofus side, comparing dRofus *against*
+/// Revit), and a milestone diff of a dRofus field is dRofus-vs-dRofus.
 fn values_agree(a: &str, b: &str) -> bool {
     match numeric_match(a, b) {
         Some(equal) => equal,
@@ -193,7 +218,8 @@ fn values_agree(a: &str, b: &str) -> bool {
 /// the baseline room actually has (`Present`) is comparable. On the other side,
 /// `Absent` is a missing property (reported distinctly); `Empty` or a
 /// disagreeing `Present` is a value difference (baseline value vs the other's,
-/// empty for `Empty`).
+/// empty for `Empty`) — except when the whole joined source is missing on the
+/// other side, which collapses to one `unjoined_sources` entry (see below).
 fn diff_room(
     key: &str,
     baseline: &RoomResponse,
@@ -203,26 +229,38 @@ fn diff_room(
 ) -> Option<ChangedRoom> {
     let mut differences = Vec::new();
     let mut missing_properties = Vec::new();
+    let mut unjoined_sources: Vec<String> = Vec::new();
 
     for property in properties {
-        // "Only properties that exist on the baseline may be compared."
-        let PropertyPresence::Present(baseline_value) =
-            property_presence(&baseline.room, property, &baseline.source, builtin)
-        else {
+        // "Only properties that exist on the baseline may be compared." That
+        // rule is deliberately asymmetric and covers joined sources too: a
+        // baseline room with no dRofus record has nothing to compare, so a
+        // join *gained* on the other side goes unreported — exactly as a
+        // property gained on the other side always has.
+        let (_, base) = resolve_presence(baseline, property, builtin);
+        let PropertyPresence::Present(baseline_value) = base else {
             continue;
         };
 
-        match property_presence(&other.room, property, &other.source, builtin) {
-            PropertyPresence::Absent => missing_properties.push(MissingProperty {
+        match resolve_presence(other, property, builtin) {
+            // The whole source is unmatched on the other side: one per-room
+            // fact, recorded once — N identical missing-property rows would
+            // bury the actual signal (the room lost its join).
+            (Some(ns), PropertyPresence::Absent) if !source_joined(other, ns) => {
+                if !unjoined_sources.iter().any(|s| s == ns) {
+                    unjoined_sources.push(ns.to_string());
+                }
+            }
+            (_, PropertyPresence::Absent) => missing_properties.push(MissingProperty {
                 property: property.clone(),
                 baseline_value,
             }),
-            PropertyPresence::Empty => differences.push(PropertyDifference {
+            (_, PropertyPresence::Empty) => differences.push(PropertyDifference {
                 property: property.clone(),
                 baseline_value,
                 other_value: String::new(),
             }),
-            PropertyPresence::Present(other_value) => {
+            (_, PropertyPresence::Present(other_value)) => {
                 if !values_agree(&baseline_value, &other_value) {
                     differences.push(PropertyDifference {
                         property: property.clone(),
@@ -234,7 +272,10 @@ fn diff_room(
         }
     }
 
-    if differences.is_empty() && missing_properties.is_empty() {
+    // `unjoined_sources` alone keeps the room in the report: an otherwise
+    // unchanged room that lost its dRofus join has changed — that loss is the
+    // reportable fact, not a reason to filter the room out.
+    if differences.is_empty() && missing_properties.is_empty() && unjoined_sources.is_empty() {
         return None; // unchanged room — omitted from the report
     }
     Some(ChangedRoom {
@@ -242,6 +283,7 @@ fn diff_room(
         room_id: baseline.room.id.clone(),
         differences,
         missing_properties,
+        unjoined_sources,
     })
 }
 
@@ -363,6 +405,35 @@ mod tests {
             date: "2026-06-30".to_string(),
             drofus_snapshot: None,
             attachments: BTreeMap::from([(model_id.to_string(), taken_at.to_string())]),
+        }
+    }
+
+    /// `milestone` plus a dRofus snapshot pin — the joined-source tests need
+    /// each milestone to resolve its own dRofus data.
+    fn milestone_with_drofus(name: &str, model_id: &str, taken_at: &str, drofus_ts: &str) -> Milestone {
+        Milestone { drofus_snapshot: Some(drofus_ts.to_string()), ..milestone(name, model_id, taken_at) }
+    }
+
+    /// A *current* dRofus dataset: link property + one record per `(id,
+    /// fields)` entry. Attached to a bundle by the joined-source tests —
+    /// `make_bundle` itself stays dRofus-free, because comparison standing
+    /// alone without dRofus is a design property under regression guard.
+    fn drofus_data(link: &str, records: &[(&str, &[(&str, &str)])]) -> crate::drofus::DrofusData {
+        crate::drofus::DrofusData {
+            link_property: link.to_string(),
+            by_id: records
+                .iter()
+                .map(|(id, fields)| {
+                    (
+                        id.to_string(),
+                        crate::drofus::DrofusRecord {
+                            fields: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                        },
+                    )
+                })
+                .collect(),
+            reconciliation: BTreeMap::new(),
+            all_labels: vec![],
         }
     }
 
@@ -533,5 +604,188 @@ mod tests {
         assert_eq!(cmp.rooms_added, vec!["101".to_string()]);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `drofus.`-qualified comparable property diffs the *pinned* dRofus
+    /// snapshots, not the project's current dRofus — dRofus drift between
+    /// milestones is exactly the diff this feature exists to surface, and the
+    /// current dataset here carries a decoy value the report must not show.
+    #[test]
+    fn test_compare_drofus_property_uses_pinned_snapshots() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let d_base = "2026-06-01T09:00:00Z";
+        let d_later = "2026-07-01T09:00:00Z";
+        let mut bundle = make_bundle(
+            Some("Number"),
+            &["drofus.NetArea"],
+            vec![
+                milestone_with_drofus("Base", "m1", base_ts, d_base),
+                milestone_with_drofus("Later", "m1", later_ts, d_later),
+            ],
+        );
+        // The decoy: if the diff read the current dRofus it would see 99 on
+        // both sides and report nothing.
+        bundle.drofus = Some(drofus_data("Number", &[("101", &[("NetArea", "99")])]));
+        let (state, dir) = state_with(bundle, "drofus-pin");
+
+        state
+            .set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101")])]))
+            .unwrap();
+        state
+            .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])]))
+            .unwrap();
+        state.put_drofus("p1", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n").unwrap();
+        state.put_drofus("p1", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n").unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+
+        let cmp = &result.comparisons[0];
+        assert_eq!(cmp.changed_rooms.len(), 1);
+        let changed = &cmp.changed_rooms[0];
+        assert_eq!(changed.differences.len(), 1);
+        assert_eq!(changed.differences[0].property, "drofus.NetArea");
+        assert_eq!(changed.differences[0].baseline_value, "20", "the pinned value, not the current 99");
+        assert_eq!(changed.differences[0].other_value, "25");
+        assert!(changed.unjoined_sources.is_empty(), "both sides joined");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A room that loses its dRofus join between milestones reports ONE
+    /// `unjoined_sources` entry — not one `MissingProperty` row per configured
+    /// dRofus field — and still appears in `changed_rooms` even with no other
+    /// difference: losing the join IS the change.
+    #[test]
+    fn test_compare_unjoined_source_collapses_to_one_entry() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let mut bundle = make_bundle(
+            Some("Number"),
+            &["drofus.NetArea", "drofus.Dept"],
+            vec![milestone("Base", "m1", base_ts), milestone("Later", "m1", later_ts)],
+        );
+        // Link property (DKey) is distinct from the comparison key (Number):
+        // the baseline room carries a link value, the later one lost it.
+        bundle.drofus = Some(drofus_data("DKey", &[("d1", &[("NetArea", "20"), ("Dept", "Admin")])]));
+        let (state, dir) = state_with(bundle, "unjoined");
+
+        state
+            .set_snapshot(payload_at(
+                "m1",
+                base_ts,
+                vec![make_room("r1", &[("Number", "101"), ("DKey", "d1")])],
+            ))
+            .unwrap();
+        state
+            .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])]))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+
+        let cmp = &result.comparisons[0];
+        assert_eq!(cmp.changed_rooms.len(), 1, "the room appears despite no property difference");
+        let changed = &cmp.changed_rooms[0];
+        assert_eq!(changed.unjoined_sources, vec!["drofus".to_string()], "one entry, not one per field");
+        assert!(changed.missing_properties.is_empty(), "no per-property noise for an unjoined source");
+        assert!(changed.differences.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The baseline-enumeration rule covers joined sources: a baseline room
+    /// with no dRofus record has nothing to compare, so a join *gained* on the
+    /// other side goes unreported — the same deliberate asymmetry as a
+    /// property gained on the other side.
+    #[test]
+    fn test_compare_join_gained_on_other_side_unreported() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let mut bundle = make_bundle(
+            Some("Number"),
+            &["drofus.NetArea"],
+            vec![milestone("Base", "m1", base_ts), milestone("Later", "m1", later_ts)],
+        );
+        bundle.drofus = Some(drofus_data("DKey", &[("d1", &[("NetArea", "20")])]));
+        let (state, dir) = state_with(bundle, "join-gained");
+
+        // Baseline unjoined, later joined.
+        state
+            .set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101")])]))
+            .unwrap();
+        state
+            .set_snapshot(payload_at(
+                "m1",
+                later_ts,
+                vec![make_room("r1b", &[("Number", "101"), ("DKey", "d1")])],
+            ))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        assert!(result.comparisons[0].changed_rooms.is_empty(), "nothing on the baseline to compare");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A `drofus.`-qualified `comparison_key` matches rooms across milestones
+    /// by their joined dRofus identity — same vocabulary as the properties.
+    #[test]
+    fn test_compare_drofus_qualified_key_matches_rooms() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let mut bundle = make_bundle(
+            Some("drofus.Code"),
+            &["Area"],
+            vec![milestone("Base", "m1", base_ts), milestone("Later", "m1", later_ts)],
+        );
+        bundle.drofus = Some(drofus_data(
+            "Number",
+            &[("101", &[("Code", "A")]), ("102", &[("Code", "B")])],
+        ));
+        let (state, dir) = state_with(bundle, "drofus-key");
+
+        state
+            .set_snapshot(payload_at(
+                "m1",
+                base_ts,
+                vec![
+                    make_room("r1", &[("Number", "101"), ("Area", "10")]),
+                    make_room("r2", &[("Number", "102"), ("Area", "20")]),
+                ],
+            ))
+            .unwrap();
+        state
+            .set_snapshot(payload_at(
+                "m1",
+                later_ts,
+                vec![
+                    make_room("r1b", &[("Number", "101"), ("Area", "15")]),
+                    make_room("r2b", &[("Number", "102"), ("Area", "20")]),
+                ],
+            ))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+
+        let cmp = &result.comparisons[0];
+        assert!(cmp.rooms_added.is_empty() && cmp.rooms_removed.is_empty(), "both keys matched across");
+        assert_eq!(cmp.changed_rooms.len(), 1);
+        assert_eq!(cmp.changed_rooms[0].key, "A", "keyed by the joined dRofus field, not a room property");
+        assert_eq!(cmp.changed_rooms[0].differences[0].property, "Area");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// TODO-anchor for the deferred source-aware comparator (see the
+    /// `values_agree` doc comment): today the strict two-rung ladder applies
+    /// to every field, so an ASCII-narrowing artefact on a dRofus-valued field
+    /// IS reported as a difference. When step 4 of
+    /// HANDOVER-comparison-sources.md lands, this assertion flips for
+    /// `drofus.`-qualified fields only.
+    #[test]
+    fn test_values_agree_is_strict_regardless_of_source() {
+        assert!(!values_agree("Room – A", "Room ? A"), "no ASCII-narrowing rung today");
+        assert!(values_agree(" x ", "x"), "trimmed string equality");
+        assert!(values_agree("10", "10.0"), "numeric-adaptive rung");
     }
 }
