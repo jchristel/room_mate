@@ -23,6 +23,7 @@
 # policy files themselves follow the policy they define; Cargo.lock because
 # it is diffed often enough that a stable line ending is worth stating.
 Cargo.lock     text eol=lf
+LICENSE        text eol=lf
 .gitattributes text eol=lf
 .gitignore     text eol=lf
 
