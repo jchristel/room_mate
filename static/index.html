@@ -215,6 +215,7 @@
     <button class="ctl" id="addZone" title="Add a zone">+ zone</button>
     <button class="ctl" id="removeZone" title="Remove the last zone">− zone</button>
     <button class="ctl" id="linkToggle" title="Sync zoom/pan across all zones">Link views: off</button>
+    <button class="ctl on" id="labelsToggle" title="Show or hide room labels (SVG export follows)">Labels: on</button>
     <div class="search">
       <input id="searchInput" type="search" placeholder="Search rooms…" autocomplete="off" />
       <button class="ctl" id="fieldsToggle" title="Choose which fields to search">Fields ▾</button>
@@ -282,6 +283,14 @@ let zoneSeq = 0;
 
 // Global: sync the view transform across every zone when on (see commitView).
 let linkViews = false;
+
+// Global: render room labels (default on). Threads through paintLevel's
+// options rather than a CSS class on the zone SVG, because the SVG export
+// calls paintLevel directly and never sees zone-level classes — a CSS-only
+// toggle would be silently ignored by every exported file. Deliberately not
+// persisted: linkViews isn't either, and view prefs should persist together
+// or not at all (HANDOVER-ui-layout.md, Decision 4 "Persistence").
+let showRoomLabels = true;
 
 // Global room search (see the "search" section lower down): one query + one set
 // of enabled field keys, applied to every zone. `searchFields` empty means "not
@@ -681,7 +690,7 @@ function fittedBounds(rooms) {
 // collected into it so the live view can hide off-screen rooms on pan/zoom
 // (viewport culling). The SVG export passes none — an exported file needs every
 // room, and a detached node has no view to cull against.
-function paintLevel(svg, rooms, fitted, { colourPlan = null, errorRoomIds = null, showErrors = false, cullUnits = null, matchRoomIds = null, searchActive = false } = {}) {
+function paintLevel(svg, rooms, fitted, { colourPlan = null, errorRoomIds = null, showErrors = false, cullUnits = null, matchRoomIds = null, searchActive = false, showLabels = true } = {}) {
   const baseFont = Math.max(fitted.w, fitted.h) * 0.02;
 
   const g = document.createElementNS(SVG, "g");
@@ -740,7 +749,12 @@ function paintLevel(svg, rooms, fitted, { colourPlan = null, errorRoomIds = null
     if (units) units.set(room, { room, ...roomBBox(room), nodes, hidden: false });
   }
 
-  for (const room of rooms) {
+  // Labels off skips the pass entirely (omitting elements beats styling them
+  // away — an exported file then simply has no <text> nodes). Cull units are
+  // unaffected: the label is always the LAST node pushed, so dropping it only
+  // shortens the tail — applyHighlight's nodes[0] (the pass-1 room polygon)
+  // and cullZone's plain iteration both survive either way.
+  if (showLabels) for (const room of rooms) {
     if (!room.loops || room.loops.length === 0) continue;
     const label = addLabel(svg, room, baseFont);
     if (!label) continue;
@@ -778,6 +792,7 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
     cullUnits: zone.cullUnits,
     matchRoomIds: zone.searchMatchIds,
     searchActive: zone.searchActive,
+    showLabels: showRoomLabels,
   });
   cullZone(zone); // hide off-screen rooms for the current view straight away
 
@@ -1270,7 +1285,7 @@ function exportStyleBlock() {
 // Returns null for a level with no drawable rooms. Reuses `paintLevel`, so the
 // exported geometry is identical to what's on screen.
 const EXPORT_WIDTH_PX = 1600;
-function buildLevelSvgFile(payload, levelId, { withErrors = false, colourPlan = null, errorRoomIds = null } = {}) {
+function buildLevelSvgFile(payload, levelId, { withErrors = false, colourPlan = null, errorRoomIds = null, showLabels = true } = {}) {
   const rooms = roomsOnLevel(payload, levelId);
   const fitted = fittedBounds(rooms);
   if (!fitted) return null;
@@ -1295,7 +1310,7 @@ function buildLevelSvgFile(payload, levelId, { withErrors = false, colourPlan = 
   bg.setAttribute("fill", getComputedStyle(document.documentElement).getPropertyValue('--paper').trim());
   svg.appendChild(bg);
 
-  paintLevel(svg, rooms, fitted, { colourPlan, errorRoomIds, showErrors: withErrors });
+  paintLevel(svg, rooms, fitted, { colourPlan, errorRoomIds, showErrors: withErrors, showLabels });
 
   return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg);
 }
@@ -1338,6 +1353,7 @@ async function exportZoneLevels(zone) {
       withErrors,
       colourPlan: zone.activeColourPlan,
       errorRoomIds: zone.errorRoomIds,
+      showLabels: showRoomLabels, // export follows the header toggle
     });
     if (!svgText) continue; // level with no drawable rooms
     downloadSvg(svgText, svgFilename(zone, lvl.name, withErrors));
@@ -1410,6 +1426,21 @@ function ringAreaAbs(ring) {
     a += x1 * y2 - x2 * y1;
   }
   return Math.abs(a) / 2;
+}
+
+// Axis-aligned bbox of a footprint ring ([[x,y],…], model coords). Used to size
+// the tier label against the polygon it names. Note this OVERSTATES the usable
+// interior for L-shaped or concave dissolved footprints — hence the deliberately
+// conservative 0.7 width factor at the call site rather than addLabel()'s 0.9.
+function ringBox(ring) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of ring) {
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  return { w: x1 - x0, h: y1 - y0 };
 }
 
 function ringCentroid(ring) {
@@ -1485,14 +1516,29 @@ function renderAreasOverlay(zone) {
     }
     const big = grp.rings.reduce((a, b) => (b && ringAreaAbs(b) > ringAreaAbs(a || []) ? b : a), grp.rings[0]);
     if (big && big.length >= 3) {
-      const c = ringCentroid(big);
-      const label = document.createElementNS(SVG, "text");
-      label.setAttribute("class", "area-label");
-      label.setAttribute("x", c.x);
-      label.setAttribute("y", -c.y);
-      label.setAttribute("font-size", baseFont);
-      label.textContent = tierLabel(grp.path[depth]);
-      g.appendChild(label);
+      const text = tierLabel(grp.path[depth]);
+      // Fit the label to its ring, mirroring addLabel()'s room-label sizing:
+      // baseFont is the ceiling, the polygon's own bbox the constraint. 0.6 is
+      // the mono glyph aspect ratio; 0.7 (vs 0.9 for rooms) leaves margin for
+      // the concave footprints a bbox can't see.
+      const bb = ringBox(big);
+      const widthLimited = (bb.w * 0.7) / Math.max(text.length, 1) / 0.6;
+      const heightLimited = bb.h * 0.8;
+      const fontSize = Math.min(baseFont, widthLimited, heightLimited);
+      // Groups too small to carry legible text get no label at all — a
+      // sub-pixel speck is worse than nothing, and the summary panel already
+      // names every group. (Unlike room labels, where the same threshold was
+      // removed as a bug: a suppressed room label had no other surface.)
+      if (fontSize >= baseFont * 0.25) {
+        const c = ringCentroid(big);
+        const label = document.createElementNS(SVG, "text");
+        label.setAttribute("class", "area-label");
+        label.setAttribute("x", c.x);
+        label.setAttribute("y", -c.y);
+        label.setAttribute("font-size", fontSize);
+        label.textContent = text;
+        g.appendChild(label);
+      }
     }
   });
   svg.appendChild(g);
@@ -2007,6 +2053,19 @@ document.getElementById("linkToggle").addEventListener("click", (e) => {
   // On enabling, immediately snap every zone to the first zone's view so they
   // start aligned rather than only syncing on the next gesture.
   if (linkViews && zones.length) commitView(zones[0], zones[0].view);
+});
+
+document.getElementById("labelsToggle").addEventListener("click", (e) => {
+  showRoomLabels = !showRoomLabels;
+  e.target.textContent = `Labels: ${showRoomLabels ? "on" : "off"}`;
+  e.target.classList.toggle("on", showRoomLabels);
+  // refit:false — a display toggle must not snap zones back to fitted bounds
+  // and lose the user's pan/zoom. Zones with no data yet just skip.
+  for (const zone of zones) {
+    if (zone.currentPayload && zone.activeLevelId) {
+      renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
+    }
+  }
 });
 
 // ============================ boot ============================

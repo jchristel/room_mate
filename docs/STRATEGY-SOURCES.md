@@ -132,7 +132,7 @@ Revit.
   deliberately drops the per-polygon copy, keeping room geometry raw model-space
   points. Because it rides the envelope, the streaming path carries it on line 1
   with no per-room scan. Georeferencing Phase 1 — see
-  `docs/HANDOVER-georeferencing.md`.
+  `docs/Superseded/HANDOVER-georeferencing.md`.
 
 ## Why sources need reconciling, not just parsing
 
@@ -173,9 +173,12 @@ The two header rows are the join spec and must both be retained:
   data, and retained in full as `DrofusData.all_labels` regardless of
   whether row 2 mapped a given column (needed so [Server](STRATEGY-SERVER.md)'s
   coverage report can show an unmapped column as "not checked" rather than
-  omitting it silently). Row 2's other columns are the Revit param names
-  those fields correspond to, kept for reconciliation — now actually
-  retained and used (see Implemented above), not just parsed and discarded.
+  omitting it silently; its second consumer is `/rooms`' per-project
+  `drofus_labels` — see Server — which serves the full column set to tabular
+  clients that could otherwise only union per-room joined fields). Row 2's
+  other columns are the Revit param names those fields correspond to, kept
+  for reconciliation — now actually retained and used (see Implemented
+  above), not just parsed and discarded.
 
 The link is a direct value match and dRofus ids are unique, so the loader
 builds a flat `Map<String, DrofusRecord>` — no collision handling needed.
@@ -198,16 +201,25 @@ builds a flat `Map<String, DrofusRecord>` — no collision handling needed.
   property filter (see [Server](STRATEGY-SERVER.md)) namespaces a predicate's
   field as `<source>.<label>` — `drofus.NetArea>20` — where `<source>` is
   exactly a field name of `settings::Sources`, so "what goes before the dot"
-  has the same answer as the settings file. **This is the extension point a
-  second source touches:** one entry in `rooms::JOINED_SOURCES` and one arm in
-  `rooms::resolve_field`, nothing else. The namespace is reserved in the
-  grammar rather than inferred — an unknown prefix is a parse error naming the
-  known sources, never a silent fallback to a room property, so a raw property
-  literally named `Newsource.Field` can't quietly change meaning the day that
-  source is added. The filter runs on the *assembled* room (after the join)
-  precisely so a source's fields are reachable at all; consistent with
-  "unmatched key is a signal", a room whose link value matched no record fails
-  every predicate on that source, negative operators included.
+  has the same answer as the settings file. Milestone comparison's
+  `comparison_key` / `comparison_properties` (see Server) are the **second
+  consumer** of the same vocabulary — a name that filters correctly also
+  compares correctly, resolved through the same `rooms::split_namespace` /
+  `rooms::resolve_presence`, never a re-derivation. **This is the extension
+  point a second source touches:** one entry in `rooms::JOINED_SOURCES`, one
+  arm in `rooms::presence_of` (the shared read both filtering and comparison
+  collapse from), and one arm in `rooms::source_joined`, nothing else. The
+  namespace is reserved in the grammar rather than inferred — an unknown
+  prefix is a parse error naming the known sources (and, for the persisted
+  comparison settings, a loud settings-load/save rejection), never a silent
+  fallback to a room property, so a raw property literally named
+  `Newsource.Field` can't quietly change meaning the day that source is
+  added. The filter runs on the *assembled* room (after the join) precisely
+  so a source's fields are reachable at all; consistent with "unmatched key
+  is a signal", a room whose link value matched no record fails every
+  predicate on that source, negative operators included — and comparison
+  reports that unmatched state per room (`unjoined_sources`), not as one
+  missing value per configured field.
 
 ## Open items / things to watch
 

@@ -795,6 +795,30 @@ ids = ["12345", "67890"]
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The save path rejects a bad comparison namespace — verifying (not
+    /// assuming) that re-running `load_project_bundle` covers the new
+    /// namespace validation, so the API 422 really does come for free.
+    #[test]
+    fn test_save_rejects_bad_comparison_namespace() {
+        let dir = temp_dir("cmp-ns");
+        let state = file_backed_state(&dir);
+        save_project(&state, None, minimal_settings("p1")).unwrap();
+        let before = std::fs::read_to_string(dir.join("p1.toml")).unwrap();
+
+        let mut bad = minimal_settings("p1");
+        bad.comparison_key = Some("drofuss.NetArea".to_string());
+        match save_project(&state, Some("p1"), bad) {
+            Err(SettingsError::Invalid(msg)) => {
+                assert!(msg.contains("unknown data source"), "names the problem: {msg}");
+                assert!(msg.contains("drofus"), "names the known sources: {msg}");
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+        assert_eq!(std::fs::read_to_string(dir.join("p1.toml")).unwrap(), before, "file untouched");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     const UPLOAD_TOML: &str = "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n";
     const UPLOAD_CSV: &[u8] = b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n";
 

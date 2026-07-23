@@ -134,6 +134,22 @@ each module carrying its rationale in a header, all with unit tests.
   contributing room's `level_id` is remapped to it before serialization, so
   the level picker and room filtering agree on one id per real-world level.
   A dedicated per-model endpoint is still deferred.
+- **Per-project dRofus label set on `/rooms` (`drofus_labels`).** The
+  response carries each contributing project's dRofus column vocabulary —
+  `all_labels` (every row-1 CSV label, mapped or not) plus `reconciliation`
+  (label → the Revit property row 2 maps it to) — keyed by **project id**,
+  because the unscoped read merges every stored project and dRofus resolves
+  per project; a flat list would silently mean "some project's labels".
+  Sourced from the same `effective_drofus` the rooms were joined against, so
+  a milestone's pinned dRofus reports the *pinned* column set, never current
+  headers over pinned rows; a project with no dRofus has no entry (absent,
+  not empty, the `RoomResponse.drofus` discipline). Additive, no schema bump
+  (the viewer ignores unknown fields). Exists for tabular consumers — the
+  planned source-data grid (HANDOVER-ui-layout.md) and `comparison.html`'s
+  property datalist — which otherwise could only discover columns by unioning
+  per-room `fields`, making a column that matched no room in scope invisible:
+  precisely the column the coverage report shows as "not checked" rather than
+  omitting.
 - **Server-side property filter (`/rooms?filter=`).** Comma-separated
   predicates, all of which must hold: `?filter=Department=Cardiology,Area>20`
   (quote a value containing a comma). Operators `= != > >= < <= ~`, the last
@@ -444,6 +460,41 @@ each module carrying its rationale in a header, all with unit tests.
   potential; pairwise union today, `unary_union`/`rayon` held in reserve until
   measurement warrants (STRATEGY.md "Parallelism has a threshold").
 
+- **Milestone comparison (`POST /projects/{id}/comparison`,
+  `static/comparison.html`).** A star diff of N milestones against one chosen
+  baseline (never all-pairs): per compared milestone, the rooms added and
+  removed relative to the baseline, and — on rooms present in both — value
+  differences over a user-configured property set. Rooms are matched by
+  `comparison_key`, a **user-chosen** property persisted in project settings,
+  deliberately NOT the dRofus `link_property` and never a silent fallback to
+  it or to room id: no key configured is an explicit
+  `comparison_key_configured: false` result. Each side's rooms come from
+  `assemble_rooms(.., milestone)`, so pinned model snapshots, level dedup, and
+  the per-milestone pinned dRofus join all compose unchanged; a key value
+  shared by two rooms on one side is ambiguous and excluded
+  (`duplicate_key_values`), mirroring the dRofus duplicate-link guard. A read,
+  but POST-shaped for its list input.
+  **Comparable fields span joined sources**: `comparison_key` and
+  `comparison_properties` resolve through `service::rooms`' one namespace
+  vocabulary (`resolve_presence` — the same `split_namespace` /
+  `JOINED_SOURCES` the `/rooms?filter=` grammar uses), so `drofus.NetArea`
+  diffs the *pinned* dRofus values between milestones — dRofus drift, arguably
+  the more interesting diff than Revit-vs-Revit. A room whose dRofus join
+  exists on the baseline but not the compared side reports **one** per-room
+  `unjoined_sources` entry instead of N per-property missing rows (losing the
+  join is the change, and alone keeps the room in the report); a join *gained*
+  on the compared side goes unreported, the same deliberate baseline-side
+  enumeration asymmetry properties always had. The namespace half of both
+  settings is validated in `bootstrap::load_project_bundle` (loud boot *and*
+  save-path 422, per the shared pipeline) — a typo'd `drofuss.NetArea` used to
+  yield an empty diff indistinguishable from "no changes", the silent no-op
+  this closes; the property half stays unvalidated, free-text against rooms
+  that may not be loaded yet. Value equality is `numeric_match` + trimmed
+  strings for every source — the dRofus QA path's date/ASCII-narrowing rungs
+  are deliberately not pulled in (symmetric-artefact reasoning; a source-aware
+  ladder for `drofus.` fields is a recorded TODO at
+  `comparison::values_agree`).
+
 - **dRofus upload ingest (`POST /projects/{id}/drofus`) + snapshotted
   storage.** The previously-deferred dRofus-as-snapshotted-source (see
   [Sources](STRATEGY-SOURCES.md) for the source-model side). Raw `text/csv`
@@ -566,7 +617,7 @@ What cross-project operations actually need:
   comparable, but the general cross-project case still needs an explicit
   alignment. The transform is the enabler, deliberately shipped ahead of any
   comparison or map that consumes it (georeferencing Phase 1 — see
-  `docs/HANDOVER-georeferencing.md`); nothing numeric depends on it being present
+  `docs/Superseded/HANDOVER-georeferencing.md`); nothing numeric depends on it being present
   or correct.
 
 **When a top level *is* justified:** a real owning entity emerges — a portfolio,

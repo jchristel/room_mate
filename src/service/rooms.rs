@@ -10,7 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::classify::{classify_room, TierValue};
-use crate::contract::{elevation_match, lookup_property, numeric_match, Level, Room, RoomPayload, SUPPORTED_SCHEMA};
+use crate::contract::{
+    elevation_match, lookup_property, numeric_match, property_presence, Level, PropertyPresence, Room, RoomPayload,
+    SUPPORTED_SCHEMA,
+};
 use crate::drofus::{DrofusData, DrofusRecord};
 use crate::settings::{BuiltinPropertyDef, HierarchyTier};
 use crate::state::{AppState, ModelKey, ProjectSettings, SettingsRegistry};
@@ -149,6 +152,55 @@ pub fn building_tier_index(hierarchy: &[HierarchyTier]) -> Option<usize> {
 /// this module knows the vocabulary.
 const JOINED_SOURCES: &[&str] = &["drofus"];
 
+/// The three ways a field name splits against the namespace vocabulary.
+/// Returned by `split_namespace` so every consumer (filter parsing, comparison
+/// resolution, settings validation) applies the *same* split rule and only
+/// phrases the error differently — the error wording carries caller context
+/// (a filter names the predicate, a settings load names the file), so the
+/// message itself can't live here, but the classification must.
+pub enum NamespaceSplit<'a> {
+    /// `<known-source>.<property>` — a joined data source's field. `source` is
+    /// the `JOINED_SOURCES` entry itself (hence `'static`), so downstream
+    /// consumers can carry it without re-splitting.
+    Joined { source: &'static str, property: &'a str },
+    /// No namespace: the room's own property vocabulary (canonical names plus
+    /// the `$name`/`$id` intrinsics).
+    Unqualified(&'a str),
+    /// `<name>.<rest>` where `<name>` is not a known source — an error for the
+    /// caller to phrase in its own context, never a silent fallback to a room
+    /// property (see `Predicate::parse` for why).
+    UnknownSource(&'a str),
+}
+
+/// Split one field name against the `source.property` vocabulary. The single
+/// owner of the split rule: a dot after a recognised source name binds as a
+/// namespace; a dot after an unrecognised *single word* is an error; a dot
+/// inside a name containing spaces stays part of the property name, because a
+/// raw Revit property name is far likelier to contain a dot than to be an
+/// attempted namespace.
+pub fn split_namespace(field: &str) -> NamespaceSplit<'_> {
+    match field.split_once('.') {
+        Some((ns, rest)) => {
+            if let Some(source) = JOINED_SOURCES.iter().find(|s| **s == ns) {
+                NamespaceSplit::Joined { source, property: rest.trim() }
+            } else if !ns.contains(' ') {
+                NamespaceSplit::UnknownSource(ns)
+            } else {
+                NamespaceSplit::Unqualified(field)
+            }
+        }
+        None => NamespaceSplit::Unqualified(field),
+    }
+}
+
+/// The error text for a `NamespaceSplit::UnknownSource`, without caller
+/// context. Each consumer prefixes its own ("filter …", "comparison_key …")
+/// so the *vocabulary* half of the message can never drift between the two
+/// surfaces while the *noun* half stays accurate to each.
+pub fn unknown_source_message(ns: &str) -> String {
+    format!("unknown data source {ns:?} — known sources: {}", JOINED_SOURCES.join(", "))
+}
+
 /// A comparison operator in a room predicate. `Contains` (`~`) is the only
 /// fuzzy one — everything else is exact, numeric-tolerant where both sides
 /// parse as numbers (see `Predicate::holds`).
@@ -249,17 +301,14 @@ impl Predicate {
             return Err(format!("filter {expr:?}: the value is empty"));
         }
 
-        let (source, property) = match field.split_once('.') {
-            Some((ns, rest)) if JOINED_SOURCES.contains(&ns) => (Some(ns.to_string()), rest.trim()),
-            Some((ns, _)) if !ns.contains(' ') => {
-                return Err(format!(
-                    "filter {expr:?}: unknown data source {ns:?} — known sources: {}",
-                    JOINED_SOURCES.join(", ")
-                ));
+        // The split rule itself (including the dot-in-a-spaced-name subtlety)
+        // lives in `split_namespace`; only the error phrasing is ours.
+        let (source, property) = match split_namespace(field) {
+            NamespaceSplit::Joined { source, property } => (Some(source.to_string()), property),
+            NamespaceSplit::UnknownSource(ns) => {
+                return Err(format!("filter {expr:?}: {}", unknown_source_message(ns)));
             }
-            // A dot inside a name with spaces is far likelier to be part of a
-            // raw property name than an attempted namespace, so it stays one.
-            _ => (None, field),
+            NamespaceSplit::Unqualified(name) => (None, name),
         };
         if property.is_empty() {
             return Err(format!("filter {expr:?}: the field name is empty"));
@@ -299,36 +348,120 @@ impl Predicate {
     }
 }
 
-/// Resolve one predicate's field against an assembled room. The single place
-/// that knows the namespace vocabulary: a new joined source adds one arm here
-/// and an entry in `JOINED_SOURCES`, and nothing else in this module changes.
-///
-/// Returns `None` for absent *and* empty, exactly as `lookup_property` does —
-/// which is what makes "a room missing the field never matches" fall out of
-/// `RoomFilter::matches` for every operator rather than being special-cased per
-/// operator.
-fn resolve_field(room: &RoomResponse, predicate: &Predicate, builtin_defs: &[BuiltinPropertyDef]) -> Option<String> {
-    match predicate.source.as_deref() {
-        None => match predicate.property.as_str() {
-            "$name" => Some(room.room.name.clone()).filter(|s| !s.is_empty()),
-            "$id" => Some(room.room.id.clone()).filter(|s| !s.is_empty()),
-            canonical => lookup_property(&room.room, canonical, &room.source, builtin_defs),
+/// Resolve one already-split field against an assembled room to its
+/// three-state presence. The single place that knows the namespace vocabulary
+/// at read time: a new joined source adds one arm here and an entry in
+/// `JOINED_SOURCES`, and nothing else changes — filtering (`resolve_field`)
+/// and milestone comparison (`resolve_presence`) both funnel through this.
+fn presence_of(
+    room: &RoomResponse,
+    source: Option<&str>,
+    property: &str,
+    builtin_defs: &[BuiltinPropertyDef],
+) -> PropertyPresence {
+    /// A room's own `name`/`id` fields have no absent state — the struct
+    /// always carries them — so blank collapses to `Empty`, never `Absent`.
+    fn intrinsic(value: &str) -> PropertyPresence {
+        if value.is_empty() {
+            PropertyPresence::Empty
+        } else {
+            PropertyPresence::Present(value.to_string())
+        }
+    }
+
+    match source {
+        None => match property {
+            "$name" => intrinsic(&room.room.name),
+            "$id" => intrinsic(&room.room.id),
+            canonical => property_presence(&room.room, canonical, &room.source, builtin_defs),
         },
         // The joined record's own field labels, verbatim as
         // `get_drofus_snapshot` reports them — no canonical mapping, since
-        // those labels are the source's vocabulary, not Revit's.
-        Some("drofus") => room
-            .drofus
-            .as_ref()?
-            .fields
-            .get(&predicate.property)
-            .filter(|v| !v.is_empty())
-            .cloned(),
-        // Unreachable today: `Predicate::parse` rejects any other namespace.
-        // Kept total rather than `unreachable!()` so a source added to
-        // `JOINED_SOURCES` but not here degrades to "matches nothing" instead
-        // of panicking mid-request.
-        Some(_) => None,
+        // those labels are the source's vocabulary, not Revit's. A room with
+        // no joined record at all is `Absent` on every field of that source;
+        // callers that need to tell "source unjoined" from "field missing"
+        // ask `source_joined` (see `service::comparison`).
+        Some("drofus") => match room.drofus.as_ref() {
+            None => PropertyPresence::Absent,
+            Some(d) => match d.fields.get(property) {
+                None => PropertyPresence::Absent,
+                Some(v) if v.is_empty() => PropertyPresence::Empty,
+                Some(v) => PropertyPresence::Present(v.clone()),
+            },
+        },
+        // Unreachable today: `Predicate::parse` and the settings load both
+        // reject any other namespace. Kept total rather than `unreachable!()`
+        // so a source added to `JOINED_SOURCES` but not here degrades to
+        // "matches nothing" instead of panicking mid-request.
+        Some(_) => PropertyPresence::Absent,
+    }
+}
+
+/// Resolve one comparable/filterable field name against an assembled room, in
+/// the `source.property` vocabulary shared with the `/rooms` filter. "What can
+/// I write before the dot" must have one answer across filtering, comparison,
+/// and settings validation, or a name that filters correctly would silently
+/// diff as nothing — the bug this function exists to close (see
+/// HANDOVER-comparison-sources.md).
+///
+/// Returns the resolved namespace alongside the presence so callers can react
+/// per source (an unjoined source, a source-aware comparator) without
+/// re-splitting the string.
+pub fn resolve_presence(
+    room: &RoomResponse,
+    field: &str,
+    builtin: &[BuiltinPropertyDef],
+) -> (Option<&'static str>, PropertyPresence) {
+    match split_namespace(field) {
+        NamespaceSplit::Joined { source, property } => (Some(source), presence_of(room, Some(source), property, builtin)),
+        NamespaceSplit::Unqualified(name) => (None, presence_of(room, None, name, builtin)),
+        // Rejected at settings load and filter parse, so unreachable through
+        // either configured path — degrades to "nothing to compare" rather
+        // than panicking, same discipline as `presence_of`'s catch-all arm.
+        NamespaceSplit::UnknownSource(_) => (None, PropertyPresence::Absent),
+    }
+}
+
+/// Does this room carry a joined record for `source` at all? Distinguishes
+/// "the source never matched this room" (one per-room fact) from "the source
+/// matched but lacks this field" (a per-field fact) — `service::comparison`
+/// reports the former once per room rather than once per configured property.
+/// One arm per `JOINED_SOURCES` entry, co-located with the vocabulary.
+pub fn source_joined(room: &RoomResponse, source: &str) -> bool {
+    match source {
+        "drofus" => room.drofus.is_some(),
+        _ => false,
+    }
+}
+
+/// Resolve one predicate's field against an assembled room, collapsed for
+/// matching. Returns `None` for absent *and* empty, exactly as
+/// `lookup_property` does — which is what makes "a room missing the field
+/// never matches" fall out of `RoomFilter::matches` for every operator rather
+/// than being special-cased per operator.
+fn resolve_field(room: &RoomResponse, predicate: &Predicate, builtin_defs: &[BuiltinPropertyDef]) -> Option<String> {
+    match presence_of(room, predicate.source.as_deref(), &predicate.property, builtin_defs) {
+        PropertyPresence::Present(v) => Some(v),
+        PropertyPresence::Absent | PropertyPresence::Empty => None,
+    }
+}
+
+/// Validate the *namespace* half of one settings-configured comparison field
+/// (`comparison_key` / `comparison_properties`) — the only half checkable at
+/// load time. An unqualified name stays unvalidated: it is free-text that may
+/// legitimately match no currently-loaded room (an empty store still boots).
+/// A bad namespace, by contrast, can never resolve, and unvalidated it would
+/// yield an empty diff indistinguishable from "no changes" — the silent no-op
+/// this check turns into a loud load error (see CODING-CONVENTIONS.md §"Loud
+/// startup over silent no-op"). Called from `bootstrap::load_project_bundle`,
+/// which the settings-save path re-runs, so a save gets the same rejection.
+pub fn validate_comparison_field(field: &str) -> Result<(), String> {
+    match split_namespace(field) {
+        NamespaceSplit::UnknownSource(ns) => Err(unknown_source_message(ns)),
+        NamespaceSplit::Joined { source, property } if property.is_empty() => {
+            Err(format!("no property named after the {source:?} namespace — expected {source}.<field label>"))
+        }
+        NamespaceSplit::Joined { .. } | NamespaceSplit::Unqualified(_) => Ok(()),
     }
 }
 
@@ -428,6 +561,29 @@ pub struct RoomsResult {
     pub revision: String,
     pub levels: Vec<Level>,
     pub rooms: Vec<RoomResponse>,
+    /// Each contributing project's dRofus column vocabulary, keyed by project
+    /// id — **per project, not flat**, because the unscoped read merges every
+    /// stored project and dRofus resolves per project; a flat list would
+    /// silently mean "some project's labels" in that case. Sourced from the
+    /// same resolved dataset the rows were joined against (a milestone's
+    /// pinned dRofus included), so the column set always describes the data
+    /// actually on the response, never current headers over pinned rows. A
+    /// project with no dRofus simply has no entry. Exists so a tabular
+    /// consumer can render the *complete* column set — a dRofus column that
+    /// matched no room in scope is undiscoverable from the rooms alone, and
+    /// that is precisely the column the coverage report shows as "not
+    /// checked" rather than omitting (see STRATEGY-SOURCES.md).
+    pub drofus_labels: BTreeMap<String, DrofusLabels>,
+}
+
+/// One project's dRofus column vocabulary, as joined into this response.
+#[derive(Serialize)]
+pub struct DrofusLabels {
+    /// Every row-1 CSV label, mapped or not (`DrofusData::all_labels`).
+    pub all_labels: Vec<String>,
+    /// dRofus label → the Revit property row 2 maps it to — the mapped
+    /// subset, so a consumer can mark which columns have a Revit counterpart.
+    pub reconciliation: BTreeMap<String, String>,
 }
 
 /// A stable content revision for a `RoomsResult`, derived from the set of
@@ -530,9 +686,9 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
     let (scoped, milestone_drofus) = scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
     let revision = scoped_revision(&scoped);
     let level_remap = dedup_levels(&scoped);
-    let (levels, rooms) = assemble_scoped_rooms(&scoped, &level_remap, &milestone_drofus, scope);
+    let (levels, rooms, drofus_labels) = assemble_scoped_rooms(&scoped, &level_remap, &milestone_drofus, scope);
 
-    Ok(Some(RoomsResult { schema_version: SUPPORTED_SCHEMA, revision, levels, rooms }))
+    Ok(Some(RoomsResult { schema_version: SUPPORTED_SCHEMA, revision, levels, rooms, drofus_labels }))
 }
 
 /// Phase 1 — scope the stored payloads to the request. Drops any payload whose
@@ -685,12 +841,20 @@ fn dedup_levels(scoped: &[ScopedPayload<'_>]) -> BTreeMap<(String, String, Strin
 /// "contributed nothing" check, which now counts *post-filter* rooms — a model
 /// whose rooms all fail the filter contributes no levels either, the same rule
 /// the building filter already followed.
+///
+/// Also collects each project's dRofus label set (the third return value)
+/// from the *same* `effective_drofus` the rooms are joined against — carried
+/// out of this loop rather than re-resolved so a milestone view can never
+/// show current column headers over pinned data. Collected *before* the
+/// "contributed nothing" check: the labels describe the project's dataset,
+/// not its rooms, so a project whose rooms all fail a filter still reports
+/// its columns.
 fn assemble_scoped_rooms(
     scoped: &[ScopedPayload<'_>],
     level_remap: &BTreeMap<(String, String, String), String>,
     milestone_drofus: &MilestoneDrofus,
     scope: &RoomScope<'_>,
-) -> (Vec<Level>, Vec<RoomResponse>) {
+) -> (Vec<Level>, Vec<RoomResponse>, BTreeMap<String, DrofusLabels>) {
     let building = scope.building;
     let mut levels = Vec::new();
     // Keyed (project_id, canonical_id): canonical ids are model-local, so two
@@ -698,6 +862,7 @@ fn assemble_scoped_rooms(
     // project's level suppress another's.
     let mut emitted_level_ids: BTreeSet<(String, String)> = BTreeSet::new();
     let mut rooms: Vec<RoomResponse> = Vec::new();
+    let mut drofus_labels: BTreeMap<String, DrofusLabels> = BTreeMap::new();
 
     for (key, payload, bundle) in scoped {
         // Building tier index is resolved from this payload's own project
@@ -736,6 +901,17 @@ fn assemble_scoped_rooms(
             _ => bundle.drofus.as_ref(),
         };
 
+        // First model of a project wins; every model of one project resolves
+        // the same effective dRofus, so this is dedup, not precedence. A
+        // project with no dRofus gets no entry — absent, not empty, matching
+        // how `RoomResponse.drofus` treats an unmatched room.
+        if let Some(d) = effective_drofus {
+            drofus_labels.entry(key.project_id.clone()).or_insert_with(|| DrofusLabels {
+                all_labels: d.all_labels.clone(),
+                reconciliation: d.reconciliation.clone(),
+            });
+        }
+
         // Assemble first, filter second: a predicate may name a joined field,
         // which does not exist until `assemble_room` has run.
         let assembled: Vec<RoomResponse> = matching_rooms
@@ -772,7 +948,7 @@ fn assemble_scoped_rooms(
         rooms.extend(assembled);
     }
 
-    (levels, rooms)
+    (levels, rooms, drofus_labels)
 }
 
 #[cfg(test)]
@@ -1423,6 +1599,49 @@ mod tests {
         assert!(err.contains("drofus"), "the error must name the known sources, got {err:?}");
     }
 
+    /// The settings-side namespace check applies the same split rule as the
+    /// filter parser (both go through `split_namespace`): known namespaces and
+    /// unqualified names pass, an unknown namespace and an empty property
+    /// after the dot are rejected with a message naming the known sources.
+    #[test]
+    fn test_validate_comparison_field() {
+        assert!(validate_comparison_field("Area").is_ok());
+        assert!(validate_comparison_field("drofus.NetArea").is_ok());
+        // A dot inside a spaced name stays part of the property name — the
+        // same subtlety `Predicate::parse` applies, via the same helper.
+        assert!(validate_comparison_field("Room Ref. Number").is_ok());
+
+        let err = validate_comparison_field("drofuss.NetArea").expect_err("unknown namespace must be rejected");
+        assert!(err.contains("unknown data source") && err.contains("drofus"), "names the known sources: {err:?}");
+
+        let err = validate_comparison_field("drofus.").expect_err("empty property after the dot must be rejected");
+        assert!(err.contains("drofus"), "names the namespace: {err:?}");
+    }
+
+    /// `resolve_presence` spans both vocabularies: unqualified names resolve
+    /// against the room (canonical mapping included), `drofus.`-qualified ones
+    /// against the joined record, and an unjoined room is `Absent` on every
+    /// field of that source — with `source_joined` telling that state apart
+    /// from a joined-but-fieldless record.
+    #[test]
+    fn test_resolve_presence_spans_room_and_joined_vocabularies() {
+        let joined = response(
+            make_room("r1", "Room", &[("Area", "25")]),
+            Some(DrofusRecord { fields: std::collections::BTreeMap::from([("NetArea".to_string(), "20".to_string())]) }),
+        );
+        assert_eq!(resolve_presence(&joined, "Area", &[]), (None, PropertyPresence::Present("25".to_string())));
+        assert_eq!(
+            resolve_presence(&joined, "drofus.NetArea", &[]),
+            (Some("drofus"), PropertyPresence::Present("20".to_string()))
+        );
+        assert_eq!(resolve_presence(&joined, "drofus.Dept", &[]), (Some("drofus"), PropertyPresence::Absent));
+        assert!(source_joined(&joined, "drofus"));
+
+        let unjoined = response(make_room("r2", "Room", &[]), None);
+        assert_eq!(resolve_presence(&unjoined, "drofus.NetArea", &[]), (Some("drofus"), PropertyPresence::Absent));
+        assert!(!source_joined(&unjoined, "drofus"));
+    }
+
     /// The HTTP form splits on commas that aren't inside quotes.
     #[test]
     fn test_filter_parse_query_splits_on_unquoted_commas_only() {
@@ -1605,6 +1824,96 @@ mod tests {
 
         assert_eq!(result.rooms.len(), 1);
         assert_eq!(result.rooms[0].room.id, "r1");
+    }
+
+    /// The response carries each project's dRofus column vocabulary — every
+    /// row-1 label including one matching no room in scope (the column a
+    /// consumer could never discover by unioning per-room `fields`), plus the
+    /// row-2 reconciliation subset.
+    #[test]
+    fn test_rooms_result_carries_project_drofus_labels() {
+        let mut drofus = make_drofus_with_record("Number", "1", "NetArea", "20");
+        drofus.all_labels = vec!["NetArea".to_string(), "UnmatchedCol".to_string()];
+        drofus.reconciliation = BTreeMap::from([("NetArea".to_string(), "Area".to_string())]);
+        let bundle = ProjectSettings { drofus: Some(drofus), ..make_bundle("Number") };
+        let state = AppState::new(Box::new(MemStore::new()), single_project("p1", bundle), None);
+        // The room carries no link value, so NOTHING joins: the labels must
+        // come from the dataset, not from any room's joined fields.
+        state.set_snapshot(make_payload("p1", "m1", vec![], vec![make_room("r1", "Room", &[])])).unwrap();
+
+        let result = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
+
+        let labels = result.drofus_labels.get("p1").expect("one entry for the project");
+        assert_eq!(labels.all_labels, vec!["NetArea".to_string(), "UnmatchedCol".to_string()]);
+        assert_eq!(labels.reconciliation.get("NetArea").map(String::as_str), Some("Area"));
+    }
+
+    /// An unscoped merge spans projects, so the label sets are keyed per
+    /// project — a flat list would silently mean "some project's labels". A
+    /// project with no dRofus has no entry at all (absent, not empty).
+    #[test]
+    fn test_drofus_labels_keyed_per_project() {
+        let registry = std::collections::HashMap::from([
+            (
+                "p1".to_string(),
+                ProjectSettings { drofus: Some(make_drofus_with_record("Number", "1", "ColA", "x")), ..make_bundle("Number") },
+            ),
+            (
+                "p2".to_string(),
+                ProjectSettings { drofus: Some(make_drofus_with_record("Number", "1", "ColB", "y")), ..make_bundle("Number") },
+            ),
+            ("p3".to_string(), ProjectSettings { drofus: None, ..make_bundle("Number") }),
+        ]);
+        let state = AppState::new(Box::new(MemStore::new()), registry, None);
+        for p in ["p1", "p2", "p3"] {
+            state.set_snapshot(make_payload(p, "m1", vec![], vec![make_room("r1", "Room", &[])])).unwrap();
+        }
+
+        let result = assemble_rooms(&state, &scope(None, None)).unwrap().expect("store has data");
+
+        assert_eq!(result.drofus_labels.len(), 2, "one entry per dRofus-bearing project");
+        assert_eq!(result.drofus_labels["p1"].all_labels, vec!["ColA".to_string()]);
+        assert_eq!(result.drofus_labels["p2"].all_labels, vec!["ColB".to_string()]);
+        assert!(!result.drofus_labels.contains_key("p3"), "no dRofus, no entry");
+    }
+
+    /// Under a milestone with a pinned dRofus snapshot the label set comes
+    /// from the PINNED CSV, not the current dataset — otherwise a milestone
+    /// view would show current column headers over pinned rows.
+    #[test]
+    fn test_drofus_labels_follow_milestone_pin() {
+        let dir = std::env::temp_dir().join(format!("roommate-labels-pin-{}", std::process::id()));
+        let store = crate::storage::FsStore::new(dir.clone()).unwrap();
+
+        let model_ts = "2026-06-01T00:00:00Z";
+        let drofus_ts = "2026-06-01T09:00:00Z";
+        let mut pinned = make_payload("p1", "m1", vec![], vec![make_room("r1", "Room", &[("Number", "1")])]);
+        pinned.snapshot.taken_at = model_ts.to_string();
+
+        // Current dRofus's one column is CurrentCol; the pinned CSV's is NetArea.
+        let bundle = ProjectSettings {
+            drofus: Some(make_drofus_with_record("Number", "1", "CurrentCol", "99")),
+            milestones: vec![crate::settings::Milestone {
+                name: "Design Freeze".to_string(),
+                date: "2026-06-30".to_string(),
+                drofus_snapshot: Some(drofus_ts.to_string()),
+                attachments: std::collections::BTreeMap::from([("m1".to_string(), model_ts.to_string())]),
+            }],
+            ..make_bundle("Number")
+        };
+        let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
+        state.set_snapshot(pinned).unwrap();
+        state.put_drofus("p1", drofus_ts, &drofus_csv("20")).unwrap();
+
+        let at_milestone = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
+            .unwrap()
+            .expect("store has data");
+        assert_eq!(at_milestone.drofus_labels["p1"].all_labels, vec!["NetArea".to_string()], "pinned CSV's columns");
+
+        let latest = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
+        assert_eq!(latest.drofus_labels["p1"].all_labels, vec!["CurrentCol".to_string()], "current dataset's columns");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A `drofus.`-qualified predicate under a milestone matches the PINNED
