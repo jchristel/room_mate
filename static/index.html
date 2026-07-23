@@ -15,13 +15,21 @@
     color: var(--ink);
     font-family: var(--mono);
     display: grid;
-    grid-template-rows: auto 1fr;
+    /* header / zones / bottom region (results + source-data grid).
+       The bottom row is auto so an empty region costs no plan height.
+       `minmax(0, 1fr)` is load-bearing, not decoration: a grid item defaults
+       to `min-width: auto`, so the grid's very wide table (dozens of columns)
+       would otherwise stretch the single column to its intrinsic width and
+       drag `main` — and the plan canvas — out to several thousand pixels. */
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   header {
     display: flex;
+    flex-wrap: wrap; /* scope pickers joined the header; degrade by wrapping, not clipping */
     align-items: baseline;
-    gap: 1rem;
+    gap: 0.6rem 1rem;
     padding: 0.75rem 1.25rem;
     border-bottom: 1px solid var(--ink);
   }
@@ -35,6 +43,15 @@
   header .links { margin-left: auto; display: flex; gap: 1rem; align-items: baseline; }
   header .links a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
   header .links a:hover { text-decoration: underline; }
+
+  /* Global scope pickers: project / milestone / building — one scope for the
+     whole page (see "single-project viewer", HANDOVER-ui-layout Decision 1). */
+  header select.picker {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.25rem 0.4rem;
+  }
+  header select.picker.hidden { display: none; }
 
   /* App-wide controls: add/remove zone, link toggle. */
   header button.ctl {
@@ -81,8 +98,9 @@
     overflow: hidden;
   }
 
-  /* Per-zone toolbar: this zone's own project/building/milestone/colour/level
-     pickers plus its validation toggle and meta line. */
+  /* Per-zone toolbar — a caption strip: this zone's own colour/level pickers
+     (presentation) plus its validation toggle and meta line. Scope pickers
+     live in the header; a zone never chooses what data it shows. */
   .zone-toolbar {
     display: flex; align-items: center; flex-wrap: wrap;
     gap: 0.4rem; padding: 0.4rem 0.6rem;
@@ -144,31 +162,91 @@
   .empty code { background: #0001; padding: 0.1rem 0.4rem; }
   .hidden { display: none; }
 
-  .validation-panel {
-    position: absolute;
-    top: 0; right: 0; bottom: 0;
-    width: 300px;
-    max-width: 80%;
-    background: rgba(243, 239, 230, 0.97);
-    border-left: 1px solid var(--ink);
-    padding: 1rem 1.1rem;
-    overflow-y: auto;
-    font-size: 0.72rem;
+  /* --- bottom region: the results band (HANDOVER-ui-layout Decision 2) ---
+     Tabular/temporal output lives at the bottom of the page, not in overlays
+     covering the plan. Band 1 = results (QA, area figures): sometimes
+     visible, collapsed to a one-line strip by default — a fully hidden band
+     gets forgotten, an always-open one eats plan area. Each block's body has
+     a max height and scrolls internally so a long mismatch list can never
+     squeeze the plans; expanding a block never resizes them either (the
+     region is auto-height below a cap). Band 2 (the always-on source-data
+     grid) is the next step and slots in as a sibling block. */
+  /* ONE height for the whole region, user-draggable, now that band 2 (the
+     always-visible grid) gives it a persistent height to drag. Expanding a
+     band-1 block takes space from the GRID, never from the plans — the plans
+     must not resize because a QA run finished. Band 1 blocks are auto-height
+     (capped, scrolling internally); the grid flexes into whatever is left. */
+  #bottomRegion {
+    border-top: 1px solid var(--ink); background: var(--paper);
+    display: flex; flex-direction: column;
+    /* 20rem, not 16: the region hosts a results band over the grid now, and
+       16rem left too little for both once a results block was expanded. */
+    height: var(--bottom-h, 20rem); min-height: 0;
+    min-width: 0; /* see body's grid-template-columns: the grid must scroll, not stretch */
   }
-  .validation-panel.hidden { display: none; }
-  .validation-panel h2 {
-    font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
-    opacity: 0.6; margin: 0 0 0.75rem;
+  #bottomRegion.empty { height: auto; }
+  /* Drag handle: the region's whole top edge — resizes the region against
+     the plans. The second handle (#bandDivide) splits band 1 against band 2
+     *within* that height; the two never fight, because this one moves the
+     region's outer edge and that one moves an inner boundary. */
+  #regionDrag { flex: 0 0 4px; cursor: row-resize; background: transparent; }
+  #regionDrag:hover, #regionDrag.dragging { background: var(--accent); }
+
+  /* Band 1 as a real element, so the split between the results and the grid
+     has something to move. Content-sized by default (a collapsed strip costs
+     one line); once dragged it takes an explicit height and `.sized` wins. */
+  /* `--band1-max` is recomputed in JS as "region minus the grid's own
+     minimum", so band 1 can never starve the table — a percentage cap can't
+     express that, since the grid's floor depends on its toolbar and header. */
+  #band1 { display: flex; flex-direction: column; min-height: 0; flex: 0 1 auto; max-height: var(--band1-max, 65%); }
+  #band1.sized { flex: 0 0 var(--band1-h); }
+  #bandDivide {
+    flex: 0 0 5px; cursor: row-resize; background: var(--rule);
+    border-top: 1px solid var(--ink);
   }
-  .validation-panel section { margin-bottom: 1rem; }
-  .validation-panel section h3 { font-size: 0.68rem; margin: 0 0 0.35rem; }
-  .validation-panel ul { margin: 0; padding-left: 1.1rem; }
-  .validation-panel .mismatch { margin-bottom: 0.3rem; }
-  .validation-panel .ok { opacity: 0.6; }
-  .validation-panel button.refresh {
+  #bandDivide:hover, #bandDivide.dragging { background: var(--accent); }
+  #bandDivide.hidden { display: none; }
+
+  .result-band {
+    border-bottom: 1px solid var(--rule);
+    display: flex; flex-direction: column; min-height: 0;
+    flex: 0 0 auto;
+  }
+  /* An expanded block shares band 1's height with any sibling; a collapsed
+     one stays exactly its summary strip. `flex-basis: auto` (not 0) is
+     required: band 1 is content-sized until it is dragged, and a zero basis
+     would collapse that parent to nothing. */
+  .result-band.open { flex: 1 1 auto; }
+  .result-band.hidden { display: none; }
+  .band-head {
+    display: block; width: 100%; text-align: left; flex: 0 0 auto;
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em;
+    background: none; color: var(--ink); border: none;
+    padding: 0.35rem 1.25rem; cursor: pointer;
+  }
+  .band-head:hover { background: var(--fill); }
+  .band-head .issues { color: var(--accent); font-weight: 600; }
+  /* Flex inside the region's capped height, so expanded blocks divide it and
+     each scrolls internally rather than growing the page. */
+  .band-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0.2rem 1.25rem 0.7rem; font-size: 0.72rem; }
+  .band-body.hidden { display: none; }
+  .band-body section { margin-bottom: 1rem; }
+  .band-body section h3 { font-size: 0.68rem; margin: 0 0 0.35rem; }
+  .band-body ul { margin: 0; padding-left: 1.1rem; }
+  .band-body .mismatch { margin-bottom: 0.3rem; }
+  .band-body .ok { opacity: 0.6; }
+  /* QA entries are jump targets into the grid below. */
+  .band-body [data-room] { cursor: pointer; }
+  .band-body [data-room]:hover { color: var(--accent); }
+  .band-body button.refresh {
     font-family: var(--mono); font-size: 0.68rem; background: var(--paper);
     color: var(--ink); border: 1px solid var(--ink); padding: 0.25rem 0.5rem;
-    cursor: pointer; margin-bottom: 0.75rem;
+    cursor: pointer; margin: 0.2rem 0.5rem 0.6rem 0;
+  }
+  .band-body select.picker {
+    font-family: var(--mono); font-size: 0.68rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem; margin-bottom: 0.6rem;
   }
 
   /* --- hierarchy gross-area footprints: overlay + summary --- */
@@ -189,29 +267,95 @@
   .area-poly.faded { fill-opacity: 0.12; stroke-dasharray: 5 4; }
   .area-label { fill: var(--ink); text-anchor: middle; dominant-baseline: middle;
                 pointer-events: none; font-weight: 600; }
-  .areas-panel {
-    position: absolute; top: 0; right: 0; bottom: 0; width: 330px; max-width: 85%;
-    background: rgba(243, 239, 230, 0.97); border-left: 1px solid var(--ink);
-    padding: 1rem 1.1rem; overflow-y: auto; font-size: 0.72rem;
+  /* Areas results table (band 1). Table shape shared with the old overlay
+     panel; the note/total/swatch styling carried over. */
+  .band-body .note { opacity: 0.6; margin: 0 0 0.6rem; }
+  .band-body table { border-collapse: collapse; min-width: 34rem; }
+  .band-body th, .band-body td { text-align: right; padding: 0.22rem 0.5rem; border-bottom: 1px solid var(--rule); }
+  .band-body th:first-child, .band-body td:first-child,
+  .band-body th.lvl, .band-body td.lvl { text-align: left; }
+  .band-body thead th { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; }
+  .band-body tr.total td { font-weight: 600; border-top: 2px solid var(--ink); }
+  .band-body .swatch { display: inline-block; width: 0.6rem; height: 0.6rem; margin-right: 0.35rem; vertical-align: middle; }
+  .band-body .uncounted { opacity: 0.6; font-style: italic; }
+
+  /* --- bottom region, band 2: the source-data grid ---
+     Ambient, always visible, not dismissable: the tabular view of what the
+     plans show graphically. Takes whatever height band 1 leaves. */
+  /* `flex-basis: 0`, not auto: an auto basis resolves to the whole table's
+     content height (thousands of px), which would dominate the region's
+     shrink distribution and squeeze band 1 to nothing. A zero basis makes
+     the grid purely "whatever is left over". */
+  #gridBand { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #gridBand.hidden { display: none; }
+  #gridBar {
+    flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+    padding: 0.3rem 1.25rem; font-size: 0.7rem; letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--rule);
   }
-  .areas-panel.hidden { display: none; }
-  .areas-panel h2 {
-    font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
-    opacity: 0.6; margin: 0 0 0.6rem;
+  #gridBar label { cursor: pointer; }
+  #gridBar .count { margin-left: auto; color: var(--accent); font-size: 0.66rem; }
+  #gridBar button {
+    font-family: var(--mono); font-size: 0.66rem; background: var(--paper);
+    color: var(--ink); border: 1px solid var(--ink); padding: 0.15rem 0.4rem; cursor: pointer;
   }
-  .areas-panel .note { opacity: 0.6; margin: 0 0 0.6rem; }
-  .areas-panel table { width: 100%; border-collapse: collapse; }
-  .areas-panel th, .areas-panel td { text-align: right; padding: 0.22rem 0.3rem; border-bottom: 1px solid var(--rule); }
-  .areas-panel th:first-child, .areas-panel td:first-child { text-align: left; }
-  .areas-panel thead th { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; }
-  .areas-panel tr.total td { font-weight: 600; border-top: 2px solid var(--ink); }
-  .areas-panel .swatch { display: inline-block; width: 0.6rem; height: 0.6rem; margin-right: 0.35rem; vertical-align: middle; }
-  .areas-panel .uncounted { opacity: 0.6; font-style: italic; }
+  /* The scroll container for BOTH axes: rows scroll vertically (windowed —
+     only the visible slice is in the DOM), columns horizontally when model +
+     dRofus are shown together. */
+  #gridScroll { flex: 1 1 auto; overflow: auto; min-height: 0; min-width: 0; }
+  /* table-layout:fixed is load-bearing for windowing: content-derived widths
+     would jitter as rows swap in and out, since only the visible slice is
+     ever measured. */
+  #gridTable { border-collapse: collapse; table-layout: fixed; font-size: 0.68rem; }
+  #gridTable th, #gridTable td {
+    width: 8rem; max-width: 8rem; padding: 0.15rem 0.4rem; text-align: left;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-right: 1px solid var(--rule);
+  }
+  #gridTable td { border-bottom: 1px solid var(--rule); }
+  #gridTable thead th {
+    position: sticky; background: var(--paper); z-index: 2;
+    font-weight: 600; text-transform: uppercase; font-size: 0.6rem;
+    letter-spacing: 0.06em; cursor: pointer; user-select: none;
+  }
+  /* Two header rows: the source group spans its columns, names sit beneath.
+     The group label is pinned to the left of the *scroll viewport* rather
+     than centred in its span — a span 48 columns wide centres its label
+     thousands of pixels off-screen, so the group would be invisible exactly
+     when the table is wide enough to need it. */
+  #gridTable thead tr.group th { top: 0; text-align: left; cursor: default; border-bottom: 1px solid var(--ink); }
+  #gridTable thead tr.group th > span { position: sticky; left: 0.4rem; display: inline-block; }
+  #gridTable thead tr.names th { top: 1.35rem; border-bottom: 1px solid var(--ink); }
+  #gridTable thead tr.group th.src-model { color: var(--ink); }
+  #gridTable thead tr.group th.src-drofus { color: var(--accent); }
+  /* dRofus columns tinted as a block, so the "separate sub-object, never
+     merged" boundary is visible rather than implied. */
+  #gridTable .src-drofus { background: color-mix(in srgb, var(--accent) 7%, var(--paper)); }
+  /* A dRofus column with no Revit counterpart in row 2 of the CSV: shown,
+     visibly distinguished, never hidden (see field coverage). */
+  #gridTable thead th.unmapped { font-style: italic; opacity: 0.75; }
+  #gridTable thead th.sorted::after { content: " ▾"; color: var(--accent); }
+  #gridTable thead th.sorted.asc::after { content: " ▴"; }
+  #gridTable tbody tr:hover td { background: var(--fill); }
+  #gridTable tbody tr.target td { outline: 1px solid var(--accent); }
+  /* A cell the QA report disagrees on, marked in place — the (room, field)
+     address compute_validation already produces IS a (row, column) here. */
+  #gridTable td.err { color: var(--accent); font-weight: 600; background: color-mix(in srgb, var(--error) 45%, transparent); }
+  #gridTable tr.spacer td { padding: 0; border: none; }
+  #gridFilters input {
+    font-family: var(--mono); font-size: 0.62rem; width: 100%;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--rule); padding: 0.1rem 0.2rem;
+  }
+  #gridEmpty { padding: 0.6rem 1.25rem; font-size: 0.7rem; opacity: 0.6; }
 </style>
 </head>
 <body>
   <header>
     <h1>Room Plan</h1>
+    <select class="picker hidden" id="projectSelect" title="Project — the scope of everything on screen"></select>
+    <select class="picker hidden" id="milestoneSelect" title="Milestone — Latest or a pinned issue"></select>
+    <select class="picker hidden" id="buildingSelect" title="Building"></select>
     <button class="ctl" id="addZone" title="Add a zone">+ zone</button>
     <button class="ctl" id="removeZone" title="Remove the last zone">− zone</button>
     <button class="ctl" id="linkToggle" title="Sync zoom/pan across all zones">Link views: off</button>
@@ -228,20 +372,63 @@
   </header>
   <main id="zones"></main>
 
+  <!-- Bottom region, band 1: results. One instance per page, never per zone —
+       both blocks are scope-derived, and a region that multiplied with zone
+       count would stop being a stable place users can point at. -->
+  <footer id="bottomRegion">
+    <div id="regionDrag" title="Drag to resize the whole panel"></div>
+    <div id="band1">
+    <div class="result-band hidden" id="qaBand">
+      <button class="band-head" id="qaHead">▸ QA</button>
+      <div class="band-body hidden" id="qaBody">
+        <button class="refresh" id="qaRefresh">Refresh</button>
+        <button class="refresh" id="qaDownload">Download CSV</button>
+        <div id="qaContent"></div>
+      </div>
+    </div>
+    <div class="result-band hidden" id="areasBand">
+      <button class="band-head" id="areasHead">▸ Hierarchy areas</button>
+      <div class="band-body hidden" id="areasBody">
+        <select class="picker" id="areasBandTier" title="Tier for the figures below"></select>
+        <button class="refresh" id="areasDownload">Download CSV</button>
+        <div id="areasContent"></div>
+      </div>
+    </div>
+    </div><!-- /#band1 -->
+
+    <!-- The band 1 / band 2 split. Shown only when a band-1 block is actually
+         expanded, since there is nothing to redistribute between a collapsed
+         summary strip and the grid. -->
+    <div id="bandDivide" class="hidden" title="Drag to split space between the results and the table"></div>
+
+    <!-- Band 2: source data. Always visible (never a summary strip) — it is
+         the tabular view of the data itself, not the output of an action. -->
+    <div id="gridBand" class="hidden">
+      <div id="gridBar">
+        <strong>Rooms</strong>
+        <label><input type="checkbox" id="srcModel" checked /> Model</label>
+        <label><input type="checkbox" id="srcDrofus" checked /> dRofus</label>
+        <button id="gridClearFilters" title="Clear all column filters">Clear filters</button>
+        <button id="gridDownload">Download CSV</button>
+        <span class="count" id="gridCount"></span>
+      </div>
+      <div id="gridScroll"><table id="gridTable"></table></div>
+      <div id="gridEmpty" class="hidden"></div>
+    </div>
+  </footer>
+
   <!-- One zone's DOM. Cloned per panel by createZone(); every stateful node is
        reached via querySelector on the clone, never a document-wide id. -->
   <template id="zoneTemplate">
     <div class="zone">
+      <!-- Presentation only: scope (project/milestone/building) is global and
+           lives in the header — zones differ in level and colour, never data. -->
       <div class="zone-toolbar">
-        <select class="picker projectSelect hidden"></select>
-        <select class="picker milestoneSelect hidden"></select>
-        <select class="picker buildingSelect hidden"></select>
         <select class="picker colourSelect hidden"></select>
         <select class="picker levelSelect hidden"></select>
-        <button class="validation-toggle hidden"></button>
         <button class="export-svg hidden" title="Export every level as its own SVG file">Export SVGs</button>
-        <button class="areas-toggle hidden" title="Show hierarchy gross-area footprints">Areas</button>
-        <select class="picker areasTier hidden" title="Footprint tier"></select>
+        <button class="areas-toggle hidden" title="Show hierarchy footprints on this zone's plan">Areas</button>
+        <select class="picker areasTier hidden" title="Footprint tier (this zone's overlay)"></select>
         <span class="meta">waiting for data</span>
       </div>
       <div class="zone-canvas">
@@ -249,17 +436,6 @@
         <div class="empty">
           <strong>No rooms received yet</strong>
           <span>POST room JSON to <code>/rooms</code>, then this updates.</span>
-        </div>
-        <div class="validation-panel hidden">
-          <h2>Data Validation</h2>
-          <button class="refresh vRefresh">Refresh</button>
-          <button class="refresh vDownload">Download CSV</button>
-          <div class="vBody"></div>
-        </div>
-        <div class="areas-panel hidden">
-          <h2>Hierarchy areas</h2>
-          <button class="refresh aDownload">Download CSV</button>
-          <div class="aBody"></div>
         </div>
       </div>
     </div>
@@ -273,13 +449,46 @@ const SVG = "http://www.w3.org/2000/svg";
 const zonesEl = document.getElementById("zones");
 const zoneTemplate = document.getElementById("zoneTemplate");
 
-// Every zone is a self-contained viewer: its own SVG, view transform, scope
-// selection, poll cursor, colour plan, and validation state. What used to be a
-// module-level singleton (`view`, `currentProjectId`, `lastRevision`, …) is
-// now a field on the zone; the pure geometry/colour helpers below stay
-// module-level and take data in, data out.
+// A zone is a PRESENTATION of the one global scope: its own SVG, view
+// transform, level and colour selection. Scope (project/milestone/building),
+// the poll cursor, the payload, colour-plan config, and validation state are
+// module-level singletons — there is exactly one scope on screen, so zones
+// can never disagree about what data they show, only how they draw it
+// (HANDOVER-ui-layout Decision 1: the single-project viewer). Multiple zones
+// exist to show several LEVELS of one building at once.
 const zones = [];
 let zoneSeq = 0;
+
+// ---- global scope + data (one for the page, not per zone) ----
+let projectId = null;
+let buildingKey = null;
+let milestone = null;        // null = Latest
+let currentPayload = null;   // the one /rooms payload every zone renders from
+let lastRevision = null;     // poll change-detection cursor
+// Picker refresh guards (diff signatures so the 2s tick doesn't fight the user).
+let lastProjectIds = null;
+let lastBuildingsSignature = null;
+let lastMilestonesSignature = null;
+// One-shot guards: URL/localStorage restore runs once, then ticks re-default plainly.
+let seededProject = false;
+let seededScope = false;
+// Colour-plan config for the current project (fetched once per project change).
+// Which plan is APPLIED stays per zone — that is presentation.
+let colourPlans = [];
+let colourPlansProjectId = null;
+// Validation is project-scoped: one report, one error set, one results block
+// in the bottom band. Error highlighting on the plans follows the QA block's
+// expansion — page state, since the block it tracks is page-level.
+let currentValidation = null;
+let errorRoomIds = new Set();
+let showErrors = false;
+// Hierarchy-areas data is scope-derived, so one dataset serves every zone's
+// overlay AND the bottom band's figures. Per zone remain only the overlay
+// toggle (areasMode) and the overlay's tier (areasTier); the band's figures
+// have their own tier picker (areasBandTier) — overlay is presentation on one
+// zone's level, the figures are results over the whole scope.
+let areasData = null;
+let areasBandTier = 0;
 
 // Global: sync the view transform across every zone when on (see commitView).
 let linkViews = false;
@@ -298,6 +507,10 @@ let showRoomLabels = true;
 let searchQuery = "";
 const searchFields = new Set();
 let searchFieldsInitialised = false;
+// One payload -> one match set; zones share it and differ only in which level's
+// matches are visible.
+let searchMatchIds = null;
+let searchActive = false;
 
 async function fetchJson(url) {
   const res = await fetch(url, { cache: "no-store" });
@@ -786,12 +999,12 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
 
   zone.cullUnits = [];
   paintLevel(plan, rooms, zone.fitted, {
-    colourPlan: zone.activeColourPlan,
-    errorRoomIds: zone.errorRoomIds,
-    showErrors: zone.showErrors,
+    colourPlan: zone.activeColourPlan,   // presentation: per zone
+    errorRoomIds,                        // data-quality state: global
+    showErrors,                          // follows the QA block's expansion (global)
     cullUnits: zone.cullUnits,
-    matchRoomIds: zone.searchMatchIds,
-    searchActive: zone.searchActive,
+    matchRoomIds: searchMatchIds,        // one payload -> one match set
+    searchActive,
     showLabels: showRoomLabels,
   });
   cullZone(zone); // hide off-screen rooms for the current view straight away
@@ -858,36 +1071,54 @@ function buildLevelControl(zone, payload, levels) {
 }
 
 function selectLevel(zone, levelId) {
-  if (!zone.currentPayload) return;
+  if (!currentPayload) return;
   zone.activeLevelId = levelId;
-  renderLevel(zone, zone.currentPayload, levelId, { refit: true });
+  renderLevel(zone, currentPayload, levelId, { refit: true });
   updateMeta(zone);
-  if (zone.areasMode) renderAreasSummary(zone); // overlay follows via renderLevel
+  // The overlay follows via renderLevel; the bottom band's figures span all
+  // levels, so a level switch doesn't touch them.
 }
 
 function updateMeta(zone) {
-  if (!zone.currentPayload) return;
-  const lvls = levelsForPayload(zone.currentPayload);
+  if (!currentPayload) return;
+  const lvls = levelsForPayload(currentPayload);
   const active = lvls.find(l => l.id === zone.activeLevelId);
-  const n = roomsOnLevel(zone.currentPayload, zone.activeLevelId).length;
+  const n = roomsOnLevel(currentPayload, zone.activeLevelId).length;
   const lvlName = active ? active.name : "—";
-  // While a search is active, surface this zone's match count (over its whole
-  // payload, all levels — highlighting is visible only on the shown level).
-  const matches = zone.searchActive && zone.searchMatchIds
-    ? ` · ${zone.searchMatchIds.size} match${zone.searchMatchIds.size === 1 ? "" : "es"}`
+  // While a search is active, surface the match count (over the whole payload,
+  // all levels — highlighting is visible only on this zone's shown level).
+  const matches = searchActive && searchMatchIds
+    ? ` · ${searchMatchIds.size} match${searchMatchIds.size === 1 ? "" : "es"}`
     : "";
-  zone.els.meta.textContent = `${lvlName} · ${n} room${n === 1 ? "" : "s"} · v${zone.currentPayload.schema_version} · ${new Date().toLocaleTimeString()}${matches}`;
+  zone.els.meta.textContent = `${lvlName} · ${n} room${n === 1 ? "" : "s"} · v${currentPayload.schema_version} · ${new Date().toLocaleTimeString()}${matches}`;
   zone.els.meta.classList.remove("stale");
 }
 
-// Called only when new data arrives for a zone.
-function ingest(zone, payload) {
-  zone.currentPayload = payload;
+// Fan a freshly-changed payload out: the page-level half runs once (search
+// fields + match set are payload-derived, not zone-derived), then each zone
+// re-renders its own level from the shared payload.
+function ingestAll(payload) {
+  currentPayload = payload;
   // A new payload may add properties (a different project) — refresh the search
-  // field checklist, then recompute this zone's matches so the render below
-  // carries the highlight.
+  // field checklist, then recompute the match set so the renders below carry
+  // the highlight.
   refreshFieldsPanel();
-  computeZoneMatches(zone);
+  computeMatches();
+  for (const zone of zones) ingestZone(zone);
+  // The grid's column set is payload-derived (property keys + the response's
+  // dRofus labels), so it is rebuilt here rather than on every render.
+  gridColumns = buildGridColumns();
+  renderGrid();
+  // New room data means the footprints changed: refresh them (data + overlays
+  // + band figures) while any zone has the mode open. Fire-and-forget.
+  if (zones.some(z => z.areasMode)) loadAreas();
+}
+
+// Bring ONE zone up to date with the current global payload. Also the whole
+// init a newly-added zone needs (see the add-zone handler).
+function ingestZone(zone) {
+  const payload = currentPayload;
+  if (!payload) return;
   zone.els.empty.classList.add("hidden");
   zone.els.exportSvg.classList.remove("hidden"); // there's now something to export
   zone.els.areasToggle.classList.remove("hidden"); // footprints can be computed now
@@ -909,9 +1140,6 @@ function ingest(zone, payload) {
   const refit = !zone.fitted || zone.activeLevelId !== prevLevelId;
   if (zone.activeLevelId) renderLevel(zone, payload, zone.activeLevelId, { refit });
   updateMeta(zone);
-  // New room data means the footprints changed: refresh them (data + overlay +
-  // summary) while the mode is open. Fire-and-forget — ingest itself is sync.
-  if (zone.areasMode) loadAreas(zone);
 }
 
 // ============================ colour picker ============================
@@ -932,30 +1160,50 @@ function populateColourSelect(zone, plans) {
   sel.classList.toggle("hidden", plans.length === 0);
 }
 
-// Read this zone's project's colour plans from the settings API (the viewer's
-// one read-only use of /api/settings) and default the picker to the `active`
-// plan. "No colour" always overrides, so `active` is just the default.
-async function loadColourPlansForProject(zone, projectId) {
+// Reset one zone's picker to the loaded plan list, applying the `active`
+// default. Used on project change (every zone resets together) and to bring a
+// newly-added zone up to speed. "No colour" always overrides, so `active` is
+// just the default.
+function applyColourPlans(zone) {
+  populateColourSelect(zone, colourPlans);
+  const active = colourPlans.find(p => p.active) || null;
+  zone.activeColourPlan = active;
+  zone.els.colourSelect.value = active ? active.name : "";
+}
+
+// Read the project's colour plans from the settings API — the viewer's one
+// read-only use of /api/settings, once per project change (scope is global,
+// so this is one fetch for the page, not one per zone).
+async function loadColourPlans(pid) {
   try {
     // Resolving route (not the strict /api/settings/projects/{id} the editors
     // use): the viewer holds the *payload* project id, which is not a settings
     // project_id, so it needs the server's default-fallback to find the file
     // that carries this project's colour plans. See resolve_project_file.
-    const data = await fetchJson(`/api/settings/resolve/${encodeURIComponent(projectId)}`);
-    zone.colourPlans = (data.settings && data.settings.colour_plans) || [];
+    const data = await fetchJson(`/api/settings/resolve/${encodeURIComponent(pid)}`);
+    colourPlans = (data.settings && data.settings.colour_plans) || [];
   } catch (err) {
-    zone.colourPlans = [];
+    colourPlans = [];
   }
-  populateColourSelect(zone, zone.colourPlans);
-  const active = zone.colourPlans.find(p => p.active) || null;
-  zone.activeColourPlan = active;
-  zone.els.colourSelect.value = active ? active.name : "";
+  for (const zone of zones) applyColourPlans(zone);
 }
 
-// ============================ project/building/milestone pickers =========
+// ============================ scope pickers (header, global) =============
+//
+// One project/milestone/building selection for the whole page. Under the old
+// per-zone scope these were populated per zone and carried per-zone diff
+// signatures, a one-shot seed for zones[0] only, and a focus question ("whose
+// scope does the URL persist?"). Global scope deletes all of that: one set of
+// header <select>s, one signature each, no zones[0] special case.
 
-function populateProjectSelect(zone, projects) {
-  const sel = zone.els.projectSelect;
+const scopeEls = {
+  project: document.getElementById("projectSelect"),
+  milestone: document.getElementById("milestoneSelect"),
+  building: document.getElementById("buildingSelect"),
+};
+
+function populateProjectSelect(projects) {
+  const sel = scopeEls.project;
   const prevValue = sel.value;
   sel.replaceChildren();
   for (const p of projects) {
@@ -968,8 +1216,8 @@ function populateProjectSelect(zone, projects) {
   if (projects.some(p => p.id === prevValue)) sel.value = prevValue;
 }
 
-function populateBuildingSelect(zone, data) {
-  const sel = zone.els.buildingSelect;
+function populateBuildingSelect(data) {
+  const sel = scopeEls.building;
   const prevValue = sel.value;
   sel.replaceChildren();
   for (const b of data.buildings) {
@@ -984,8 +1232,8 @@ function populateBuildingSelect(zone, data) {
   if (data.buildings.some(b => b.key === prevValue)) sel.value = prevValue;
 }
 
-function populateMilestoneSelect(zone, data) {
-  const sel = zone.els.milestoneSelect;
+function populateMilestoneSelect(data) {
+  const sel = scopeEls.milestone;
   const prevValue = sel.value;
   sel.replaceChildren();
   const latest = document.createElement("option");
@@ -1002,139 +1250,131 @@ function populateMilestoneSelect(zone, data) {
   if (data.milestones.some(m => m.name === prevValue)) sel.value = prevValue;
 }
 
-// Fetch the known projects for one zone; auto-select if the zone's current
-// project (if any) no longer exists. Diffs against the zone's last-seen id
-// list so it doesn't fight an in-progress user selection every tick.
-async function loadProjects(zone, projects) {
-  // `tick` fetches /projects once and shares the list across every zone (the
-  // list is global, so one fetch per tick, not one per zone). Callers without a
-  // list — e.g. the add-zone handler bringing a new zone up to speed — pass none
-  // and we fetch our own.
-  if (!projects) {
-    try {
-      projects = await fetchJson("/projects");
-    } catch (err) {
-      return; // leave selection alone; poll() reports connection loss
-    }
-  }
-  const ids = projects.map(p => p.id).join(",");
-
-  // Colour plans depend only on the zone's *current* project, not on whether the
+// Refresh the global scope from the known-projects list; auto-select if the
+// current project no longer exists. Diffs against the last-seen id list so
+// the 2s tick doesn't fight an in-progress user selection.
+async function refreshScope(projects) {
+  // Colour plans depend only on the *current* project, not on whether the
   // project *list* changed — so load them before the early-return guard below.
   // Without this, the picker never appears in the steady state: the list is
-  // unchanged every tick, `loadProjects` returns early, and the load lower down
-  // is unreachable. The colourPlansProjectId guard keeps this to one fetch per
-  // project change.
-  if (zone.projectId && zone.colourPlansProjectId !== zone.projectId) {
-    zone.colourPlansProjectId = zone.projectId;
-    loadColourPlansForProject(zone, zone.projectId);
+  // unchanged every tick, so the code below the guard is unreachable. The
+  // colourPlansProjectId guard keeps this to one fetch per project change.
+  if (projectId && colourPlansProjectId !== projectId) {
+    colourPlansProjectId = projectId;
+    loadColourPlans(projectId);
   }
 
-  if (ids === zone.lastProjectIds) return;
-  zone.lastProjectIds = ids;
-  populateProjectSelect(zone, projects);
+  const ids = projects.map(p => p.id).join(",");
+  if (ids === lastProjectIds) return;
+  lastProjectIds = ids;
+  populateProjectSelect(projects);
 
-  if (!projects.some(p => p.id === zone.projectId)) {
-    // Restore the first zone's project from URL/localStorage on first resolve;
-    // additional zones (and later re-resolves) keep the plain projects[0]
-    // default. A seed the server no longer lists falls through to projects[0].
+  if (!projects.some(p => p.id === projectId)) {
+    // Restore the project from URL/localStorage on first resolve; later
+    // re-resolves keep the plain projects[0] default. A seed the server no
+    // longer lists falls through to projects[0].
     let fallback = projects.length ? projects[0].id : null;
-    if (zone === zones[0] && !zone._seeded && projects.length) {
-      zone._seeded = true; // one-shot, so a later project deletion re-defaults cleanly
+    if (!seededProject && projects.length) {
+      seededProject = true; // one-shot, so a later project deletion re-defaults cleanly
       const seed = seedProjectId();
       if (seed && projects.some(p => p.id === seed)) fallback = seed;
     }
-    zone.projectId = fallback;
+    projectId = fallback;
     // Sync the picker to the resolved/restored project. populateProjectSelect
-    // above runs before this block, so on a first-load restore it would otherwise
-    // leave the dropdown showing projects[0] while the zone renders the restored
-    // project — a confusing mismatch.
-    if (zone.projectId) zone.els.projectSelect.value = zone.projectId;
-    zone.lastBuildingsSignature = null;
-    zone.lastMilestonesSignature = null;
-    zone.milestone = null;
-    if (zone.projectId) {
-      loadValidation(zone, zone.projectId);
+    // above runs before this block, so on a first-load restore it would
+    // otherwise leave the dropdown showing projects[0] while the page renders
+    // the restored project — a confusing mismatch.
+    if (projectId) scopeEls.project.value = projectId;
+    lastBuildingsSignature = null;
+    lastMilestonesSignature = null;
+    milestone = null;
+    if (projectId) {
+      loadValidation(projectId);
       // Colour plans load via the guarded block above; a reset changes
-      // zone.projectId, so the guard re-fires on the next tick.
+      // projectId, so the guard re-fires on the next tick.
     }
   }
-  if (zone.projectId) {
-    await loadBuildingsForProject(zone, zone.projectId);
-    await loadMilestonesForProject(zone, zone.projectId);
+  if (projectId) {
+    await loadBuildings(projectId);
+    await loadMilestones(projectId);
 
-    // Restore the first zone's building/milestone from the URL once, after their
-    // option lists exist — and only if the freshly-loaded lists still contain
-    // them (stale scope falls away, same discipline as the project seed). A
-    // second one-shot flag so the 2s poll's picker refreshes never clobber a
-    // later manual change. building/milestone are URL-only (never localStorage).
-    if (zone === zones[0] && !zone._seededScope) {
-      zone._seededScope = true;
+    // Restore building/milestone from the URL once, after their option lists
+    // exist — and only if the freshly-loaded lists still contain them (stale
+    // scope falls away, same discipline as the project seed). A second
+    // one-shot flag so the 2s poll's picker refreshes never clobber a later
+    // manual change. building/milestone are URL-only (never localStorage).
+    if (!seededScope) {
+      seededScope = true;
       const hasOpt = (sel, v) => Array.from(sel.options).some(o => o.value === v);
       const b = urlParam("building");
-      if (b && hasOpt(zone.els.buildingSelect, b)) {
-        zone.buildingKey = b;
-        zone.els.buildingSelect.value = b;
-        zone.lastRevision = null;
+      if (b && hasOpt(scopeEls.building, b)) {
+        buildingKey = b;
+        scopeEls.building.value = b;
+        lastRevision = null;
       }
       const m = urlParam("milestone");
-      if (m && hasOpt(zone.els.milestoneSelect, m)) {
-        zone.milestone = m;
-        zone.els.milestoneSelect.value = m;
-        zone.lastRevision = null;
+      if (m && hasOpt(scopeEls.milestone, m)) {
+        milestone = m;
+        scopeEls.milestone.value = m;
+        lastRevision = null;
       }
 
-      // Seed cross-page persistence from a restored/deep-linked selection too, so
-      // the viewer matches settings/comparison (whose restore persists via their
-      // selectProject). Writes the project id to localStorage + URL and mirrors
-      // the actual current scope — a URL value, or the auto-selected building —
-      // back into the URL, replacing any stale scope the deep-link carried. This
-      // is why a bookmarked viewer link carries the project to the other pages.
-      persistSelection(zone.projectId, { building: zone.buildingKey, milestone: zone.milestone });
+      // Seed cross-page persistence from a restored/deep-linked selection too,
+      // so the viewer matches settings/comparison (whose restore persists via
+      // their selectProject). Writes the project id to localStorage + URL and
+      // mirrors the actual current scope — a URL value, or the auto-selected
+      // building — back into the URL, replacing any stale scope the deep-link
+      // carried. This is why a bookmarked viewer link carries the project to
+      // the other pages.
+      persistSelection(projectId, { building: buildingKey, milestone });
     }
   }
 }
 
-async function loadBuildingsForProject(zone, projectId) {
+async function loadBuildings(pid) {
   let data;
   try {
-    data = await fetchJson(`/projects/${encodeURIComponent(projectId)}/buildings`);
+    data = await fetchJson(`/projects/${encodeURIComponent(pid)}/buildings`);
   } catch (err) {
     return;
   }
   const signature = `${data.tier_configured}:${data.buildings.map(b => b.key).join(",")}`;
-  if (signature === zone.lastBuildingsSignature) return;
-  zone.lastBuildingsSignature = signature;
-  populateBuildingSelect(zone, data);
+  if (signature === lastBuildingsSignature) return;
+  lastBuildingsSignature = signature;
+  populateBuildingSelect(data);
 
-  if (!data.buildings.some(b => b.key === zone.buildingKey)) {
-    zone.buildingKey = data.buildings.length ? data.buildings[0].key : null;
+  if (!data.buildings.some(b => b.key === buildingKey)) {
+    buildingKey = data.buildings.length ? data.buildings[0].key : null;
   }
 }
 
-async function loadMilestonesForProject(zone, projectId) {
+async function loadMilestones(pid) {
   let data;
   try {
-    data = await fetchJson(`/projects/${encodeURIComponent(projectId)}/milestones`);
+    data = await fetchJson(`/projects/${encodeURIComponent(pid)}/milestones`);
   } catch (err) {
     return;
   }
   const signature = data.milestones.map(m => `${m.name}@${m.date}`).join(",");
-  if (signature === zone.lastMilestonesSignature) return;
-  zone.lastMilestonesSignature = signature;
-  populateMilestoneSelect(zone, data);
+  if (signature === lastMilestonesSignature) return;
+  lastMilestonesSignature = signature;
+  populateMilestoneSelect(data);
 
-  if (zone.milestone && !data.milestones.some(m => m.name === zone.milestone)) {
-    zone.milestone = null;
-    zone.els.milestoneSelect.value = "";
-    zone.lastRevision = null; // selection changed under us -> re-render next tick
+  if (milestone && !data.milestones.some(m => m.name === milestone)) {
+    milestone = null;
+    scopeEls.milestone.value = "";
+    lastRevision = null; // selection changed under us -> re-render next tick
   }
 }
 
-// ============================ validation panel (per zone) ============================
+// ============================ validation (QA band) ============================
 //
-// An on-demand health check, not part of the room poll. Fetched when the
-// zone's project changes, or via the panel's own Refresh button.
+// An on-demand health check, not part of the room poll. Fetched once when the
+// project changes, or via the band's Refresh button. Everything is
+// page-level: one report, one error set, ONE results block in the bottom
+// band whose collapsed strip doubles as the old header badge ("▸ QA · ⚠ 3").
+// Expanding the block turns on the plans' error highlighting (`showErrors`),
+// mirroring the old panel-open-shows-errors behaviour.
 
 function section(title, items, renderItem) {
   if (items.length === 0) return "";
@@ -1153,27 +1393,32 @@ function renderFieldCoverage(coverage) {
   ).join("")}</ul></section>`;
 }
 
-function renderValidation(zone, data) {
-  zone.currentValidation = data;
+// Update the globals from a fresh report and reflect it into the QA band.
+function renderValidation(data) {
+  currentValidation = data;
+  errorRoomIds = data.drofus_configured
+    ? new Set([
+        ...data.rooms_missing_link_value,
+        ...data.duplicate_link_values.flatMap(d => d.room_ids),
+        ...data.rooms_unmatched_in_drofus,
+        ...data.property_mismatches.map(m => m.room_id),
+        ...data.fields_absent_in_revit.map(m => m.room_id),
+        ...data.fields_empty_in_revit.map(m => m.room_id),
+      ])
+    : new Set();
 
+  const band = document.getElementById("qaBand");
   if (!data.drofus_configured) {
-    zone.els.validationToggle.classList.add("hidden");
-    zone.els.validationPanel.classList.add("hidden");
-    zone.errorRoomIds = new Set();
+    band.classList.add("hidden");
+    updateRegionEmpty();
+    setShowErrors(false);
     return;
   }
+  band.classList.remove("hidden");
+  updateRegionEmpty();
 
-  zone.errorRoomIds = new Set([
-    ...data.rooms_missing_link_value,
-    ...data.duplicate_link_values.flatMap(d => d.room_ids),
-    ...data.rooms_unmatched_in_drofus,
-    ...data.property_mismatches.map(m => m.room_id),
-    ...data.fields_absent_in_revit.map(m => m.room_id),
-    ...data.fields_empty_in_revit.map(m => m.room_id),
-  ]);
-  if (zone.showErrors && zone.currentPayload && zone.activeLevelId) {
-    renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
-  }
+  // Fresh error set: re-highlight open plans without disturbing pan/zoom.
+  if (showErrors) rerenderZones();
 
   // The server now tallies this (data.discrepancies.total); fall back to the
   // per-list sum for an older server that doesn't send the summary.
@@ -1182,35 +1427,58 @@ function renderValidation(zone, data) {
     + data.rooms_unmatched_in_drofus.length + data.property_mismatches.length
     + data.fields_absent_in_revit.length + data.fields_empty_in_revit.length);
 
-  const toggle = zone.els.validationToggle;
-  toggle.classList.remove("hidden");
-  toggle.textContent = issueCount ? `⚠ ${issueCount}` : "✓";
-  toggle.classList.toggle("issues", issueCount > 0);
+  const open = !document.getElementById("qaBody").classList.contains("hidden");
+  document.getElementById("qaHead").innerHTML =
+    `${open ? "▾" : "▸"} QA · ` + (issueCount ? `<span class="issues">⚠ ${issueCount}</span>` : "✓");
 
+  // Each entry names its room via `data-room`, which makes it a jump target
+  // into band 2 rather than a place to repeat the row's detail (see the
+  // delegated handler below). Cheap to allow for now, expensive to retrofit.
+  const at = (id) => ` data-room="${escapeHtml(id)}"`;
   const html = [
     `<p>${data.total_rooms} room(s) checked against link property <strong>${escapeHtml(data.link_property)}</strong>.</p>`,
-    section("Missing link value", data.rooms_missing_link_value, id => `<li>${escapeHtml(id)}</li>`),
+    section("Missing link value", data.rooms_missing_link_value, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
     section("Duplicate link values", data.duplicate_link_values,
-      d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(escapeHtml).join(", ")}</li>`),
-    section("Unmatched in dRofus", data.rooms_unmatched_in_drofus, id => `<li>${escapeHtml(id)}</li>`),
+      d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(id => `<span${at(id)}>${escapeHtml(id)}</span>`).join(", ")}</li>`),
+    section("Unmatched in dRofus", data.rooms_unmatched_in_drofus, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
     section("Property mismatches", data.property_mismatches, m =>
-      `<li class="mismatch">room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}: `
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}: `
       + `"${escapeHtml(m.room_value)}" vs dRofus "${escapeHtml(m.drofus_value)}"</li>`),
     section("Field absent in Revit", data.fields_absent_in_revit, m =>
-      `<li class="mismatch">room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
     section("Field empty in Revit", data.fields_empty_in_revit, m =>
-      `<li class="mismatch">room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
   ].join("");
 
-  zone.els.validationBody.innerHTML = (issueCount ? html : `<p class="ok">No issues found.</p>`)
-    + renderFieldCoverage(data.field_coverage);
+  document.getElementById("qaContent").innerHTML =
+    (issueCount ? html : `<p class="ok">No issues found.</p>`) + renderFieldCoverage(data.field_coverage);
+
+  // A fresh report re-addresses the grid's QA marks.
+  rebuildGridErrorIndex();
+  renderGrid();
 }
 
-async function loadValidation(zone, projectId) {
-  if (!projectId) return;
+// Error highlighting is page state tracking the QA block: set + re-render.
+function setShowErrors(on) {
+  if (showErrors === on) return;
+  showErrors = on;
+  rerenderZones();
+}
+
+// Re-render every zone's current level in place (refit:false — never disturb
+// pan/zoom for a presentation change).
+function rerenderZones() {
+  if (!currentPayload) return;
+  for (const zone of zones) {
+    if (zone.activeLevelId) renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
+  }
+}
+
+async function loadValidation(pid) {
+  if (!pid) return;
   try {
-    const data = await fetchJson(`/projects/${encodeURIComponent(projectId)}/validation`);
-    renderValidation(zone, data);
+    const data = await fetchJson(`/projects/${encodeURIComponent(pid)}/validation`);
+    renderValidation(data);
   } catch (err) {
     // transient fetch failure -- leave the last-known validation state alone
   }
@@ -1254,9 +1522,9 @@ function downloadCsv(filename, csvText) {
   URL.revokeObjectURL(url);
 }
 
-function downloadValidationCsv(zone) {
-  if (!zone.currentValidation || !zone.currentValidation.drofus_configured) return;
-  downloadCsv(`validation-${zone.projectId || "project"}.csv`, buildValidationCsv(zone.currentValidation));
+function downloadValidationCsv() {
+  if (!currentValidation || !currentValidation.drofus_configured) return;
+  downloadCsv(`validation-${projectId || "project"}.csv`, buildValidationCsv(currentValidation));
 }
 
 // ============================ SVG export ============================
@@ -1316,11 +1584,11 @@ function buildLevelSvgFile(payload, levelId, { withErrors = false, colourPlan = 
 }
 
 // A filesystem-safe, self-describing name: roomplan_<project>_<level>[_<milestone>][_errors].svg
-function svgFilename(zone, levelName, withErrors) {
+function svgFilename(levelName, withErrors) {
   const safe = (s, fallback) =>
     (s ? String(s) : "").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || fallback;
-  const parts = ["roomplan", safe(zone.projectId, "project"), safe(levelName, "level")];
-  if (zone.milestone) parts.push(safe(zone.milestone, "milestone"));
+  const parts = ["roomplan", safe(projectId, "project"), safe(levelName, "level")];
+  if (milestone) parts.push(safe(milestone, "milestone"));
   if (withErrors) parts.push("errors");
   return parts.join("_") + ".svg";
 }
@@ -1344,47 +1612,54 @@ function downloadSvg(svgText, filename) {
 // (`showErrors`), which is only on once validation is loaded — so an exported
 // "errors" file is never a silent empty highlight.
 async function exportZoneLevels(zone) {
-  if (!zone.currentPayload) return;
-  const levels = levelsForPayload(zone.currentPayload);
+  if (!currentPayload) return;
+  const levels = levelsForPayload(currentPayload);
   if (levels.length === 0) return;
-  const withErrors = zone.showErrors;
+  const withErrors = showErrors; // follows the QA band, like the on-screen plans
   for (const lvl of levels) {
-    const svgText = buildLevelSvgFile(zone.currentPayload, lvl.id, {
+    const svgText = buildLevelSvgFile(currentPayload, lvl.id, {
       withErrors,
-      colourPlan: zone.activeColourPlan,
-      errorRoomIds: zone.errorRoomIds,
+      colourPlan: zone.activeColourPlan, // per-zone presentation still applies
+      errorRoomIds,
       showLabels: showRoomLabels, // export follows the header toggle
     });
     if (!svgText) continue; // level with no drawable rooms
-    downloadSvg(svgText, svgFilename(zone, lvl.name, withErrors));
+    downloadSvg(svgText, svgFilename(lvl.name, withErrors));
     await new Promise((r) => setTimeout(r, 150));
   }
 }
 
 // ============================ hierarchy areas ============================
 
-function areasUrl(zone) {
+function areasUrl() {
   const params = new URLSearchParams();
-  if (zone.buildingKey) params.set("building", zone.buildingKey);
-  if (zone.milestone) params.set("milestone", zone.milestone);
+  if (buildingKey) params.set("building", buildingKey);
+  if (milestone) params.set("milestone", milestone);
   const qs = params.toString();
-  return `/projects/${encodeURIComponent(zone.projectId)}/areas${qs ? "?" + qs : ""}`;
+  return `/projects/${encodeURIComponent(projectId)}/areas${qs ? "?" + qs : ""}`;
 }
 
-// Fetch the dissolved footprints for this zone's scope, then refresh the tier
-// picker, overlay, and summary. On-demand (NOT on the 2s room poll): areas are
-// derived and heavier than a room fetch, and only needed while the mode is on —
-// re-fetched on toggle-on and whenever real new room data arrives (see ingest).
-async function loadAreas(zone) {
-  if (!zone.projectId) return;
+// Fetch the dissolved footprints for the global scope, then refresh this
+// zone's tier picker, overlay, and summary. On-demand (NOT on the 2s room
+// poll): areas are derived and heavier than a room fetch, and only needed
+// while the mode is on — re-fetched on toggle-on and whenever real new room
+// data arrives (see ingestZone). Per-zone because the mode, tier, and level
+// are presentation; two zones with areas on fetch twice, acceptably.
+async function loadAreas() {
+  if (!projectId) return;
   try {
-    zone.areasData = await fetchJson(areasUrl(zone));
+    areasData = await fetchJson(areasUrl());
   } catch (err) {
-    zone.areasData = null;
+    areasData = null;
   }
-  populateAreasTier(zone);
-  renderAreasOverlay(zone);
-  renderAreasSummary(zone);
+  // One dataset feeds every open overlay and the band's figures.
+  for (const zone of zones) {
+    if (!zone.areasMode) continue;
+    populateAreasTier(zone);
+    renderAreasOverlay(zone);
+  }
+  populateAreasBandTier();
+  renderAreasBand();
 }
 
 // Tier labels come from the group paths: path depth i carries that tier's label.
@@ -1397,7 +1672,7 @@ function tierNames(data) {
 
 function populateAreasTier(zone) {
   const sel = zone.els.areasTier;
-  const names = tierNames(zone.areasData);
+  const names = tierNames(areasData);
   sel.replaceChildren();
   names.forEach((name, depth) => {
     const opt = document.createElement("option");
@@ -1408,6 +1683,22 @@ function populateAreasTier(zone) {
   if (zone.areasTier >= names.length) zone.areasTier = 0;
   sel.value = String(zone.areasTier);
   sel.classList.toggle("hidden", !zone.areasMode || names.length === 0);
+}
+
+// The band's own tier picker: same option list, independent selection — the
+// figures need not follow any one zone's overlay tier.
+function populateAreasBandTier() {
+  const sel = document.getElementById("areasBandTier");
+  const names = tierNames(areasData);
+  sel.replaceChildren();
+  names.forEach((name, depth) => {
+    const opt = document.createElement("option");
+    opt.value = String(depth);
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (areasBandTier >= names.length) areasBandTier = 0;
+  sel.value = String(areasBandTier);
 }
 
 // Identity of a classification prefix — matches server area-groups to client
@@ -1476,12 +1767,11 @@ function roomNetArea(room) {
   return Math.max(0, area);
 }
 
-// Groups on the active level at the selected tier, in server order (so overlay
-// and summary agree on a group's colour index).
+// Groups on this zone's active level at its overlay tier, in server order.
 function activeAreaGroups(zone) {
-  if (!zone.areasData) return [];
+  if (!areasData) return [];
   const depth = zone.areasTier;
-  return zone.areasData.groups.filter(g => g.level_id === zone.activeLevelId && g.path.length === depth + 1);
+  return areasData.groups.filter(g => g.level_id === zone.activeLevelId && g.path.length === depth + 1);
 }
 
 // Draw the dissolved footprints for the active level at the selected tier, on
@@ -1493,7 +1783,7 @@ function renderAreasOverlay(zone) {
   const existing = svg.querySelector(".areas-overlay");
   if (existing) existing.remove();
   svg.classList.toggle("areas-active", zone.areasMode);
-  if (!zone.areasMode || !zone.areasData) return;
+  if (!zone.areasMode || !areasData) return;
 
   const groups = activeAreaGroups(zone);
   if (groups.length === 0) return;
@@ -1544,48 +1834,63 @@ function renderAreasOverlay(zone) {
   svg.appendChild(g);
 }
 
-// The summary panel: for the active level at the selected tier, each group's
-// dissolved FOOTPRINT area (server) beside its summed NET room area (client),
-// and the difference. Totals for the level, plus a cross-level total for the tier.
-function renderAreasSummary(zone) {
-  const body = zone.els.areasBody;
-  if (!zone.areasMode || !zone.areasData) { body.innerHTML = ""; return; }
+// The band's figures: EVERY level at the band's selected tier — each group's
+// dissolved FOOTPRINT area (server) beside its summed NET room area (client)
+// and the difference, with per-level subtotals and a grand total. All-levels
+// where the old overlay panel was active-level-only, because the band belongs
+// to the scope, not to any zone's level pick — the zone overlays remain the
+// per-level view.
+function renderAreasBand() {
+  const band = document.getElementById("areasBand");
+  const content = document.getElementById("areasContent");
+  const anyOpen = zones.some(z => z.areasMode);
+  band.classList.toggle("hidden", !anyOpen || !areasData);
+  updateRegionEmpty();
+  if (!anyOpen || !areasData) { content.innerHTML = ""; return; }
 
-  const depth = zone.areasTier;
-  const groups = activeAreaGroups(zone);
+  const depth = areasBandTier;
+  const levelName = new Map((areasData.levels || []).map(l => [l.id, l.name]));
+  const groups = areasData.groups.filter(g => g.path.length === depth + 1);
 
-  // Net room area per group on the active level, keyed by the same path prefix.
+  // Net room area per (level, path-prefix), same identity the CSV export uses.
   const net = new Map();
-  const rooms = zone.currentPayload ? roomsOnLevel(zone.currentPayload, zone.activeLevelId) : [];
-  for (const r of rooms) {
+  for (const r of (currentPayload ? currentPayload.rooms : [])) {
     if (!r.classification || r.classification.length < depth + 1) continue;
-    const key = pathKey(r.classification, depth);
+    const key = `${r.level_id}|${pathKey(r.classification, depth)}`;
     net.set(key, (net.get(key) || 0) + roomNetArea(r));
   }
 
   const fmt = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
-  let tF = 0, tN = 0;
-  const rows = groups.map((grp, i) => {
-    const key = pathKey(grp.path, depth);
-    const netA = net.get(key) || 0;
-    tF += grp.area; tN += netA;
-    const colour = qualitative("Set2", i);
-    const flag = grp.counted_upward ? "" : ` <span class="uncounted">(not counted up)</span>`;
-    return `<tr>
-      <td><span class="swatch" style="background:${colour}"></span>${escapeHtml(tierLabel(grp.path[depth]))}${flag}</td>
-      <td>${fmt(grp.area)}</td><td>${fmt(netA)}</td><td>${fmt(grp.area - netA)}</td></tr>`;
+  // Group rows by level, keeping server order within each level (colour index
+  // parity with the overlays, which use per-level server order too).
+  const byLevel = new Map();
+  for (const g of groups) {
+    if (!byLevel.has(g.level_id)) byLevel.set(g.level_id, []);
+    byLevel.get(g.level_id).push(g);
+  }
+
+  let grandF = 0, grandN = 0;
+  const rows = [...byLevel.entries()].map(([lvlId, lvlGroups]) => {
+    let tF = 0, tN = 0;
+    const lvl = escapeHtml(levelName.get(lvlId) || lvlId);
+    const body = lvlGroups.map((grp, i) => {
+      const netA = net.get(`${lvlId}|${pathKey(grp.path, depth)}`) || 0;
+      tF += grp.area; tN += netA;
+      const colour = qualitative("Set2", i);
+      const flag = grp.counted_upward ? "" : ` <span class="uncounted">(not counted up)</span>`;
+      return `<tr><td class="lvl">${i === 0 ? lvl : ""}</td>
+        <td><span class="swatch" style="background:${colour}"></span>${escapeHtml(tierLabel(grp.path[depth]))}${flag}</td>
+        <td>${fmt(grp.area)}</td><td>${fmt(netA)}</td><td>${fmt(grp.area - netA)}</td></tr>`;
+    }).join("");
+    grandF += tF; grandN += tN;
+    return body + `<tr class="total"><td class="lvl"></td><td>${lvl} total</td><td>${fmt(tF)}</td><td>${fmt(tN)}</td><td>${fmt(tF - tN)}</td></tr>`;
   }).join("");
 
-  const grand = zone.areasData.groups
-    .filter(g => g.path.length === depth + 1)
-    .reduce((s, g) => s + g.area, 0);
-
-  body.innerHTML = groups.length
-    ? `<p class="note">Active level — dissolved footprint vs summed net room area (model units²). Δ = wall zones + filled voids.</p>
-       <table><thead><tr><th>Group</th><th>Footprint</th><th>Net</th><th>Δ</th></tr></thead>
-       <tbody>${rows}<tr class="total"><td>Level total</td><td>${fmt(tF)}</td><td>${fmt(tN)}</td><td>${fmt(tF - tN)}</td></tr></tbody></table>
-       <p class="note">All levels, this tier: ${fmt(grand)} footprint.</p>`
-    : `<p class="note">No footprints for this level and tier.</p>`;
+  content.innerHTML = groups.length
+    ? `<p class="note">Dissolved footprint vs summed net room area (model units²), every level in scope. Δ = wall zones + filled voids.</p>
+       <table><thead><tr><th class="lvl">Level</th><th>Group</th><th>Footprint</th><th>Net</th><th>Δ</th></tr></thead>
+       <tbody>${rows}<tr class="total"><td class="lvl"></td><td>All levels</td><td>${fmt(grandF)}</td><td>${fmt(grandN)}</td><td>${fmt(grandF - grandN)}</td></tr></tbody></table>`
+    : `<p class="note">No footprints at this tier.</p>`;
 }
 
 // Export every group's footprint across ALL levels and tiers (not just the
@@ -1593,8 +1898,8 @@ function renderAreasSummary(zone) {
 // server footprint area, the client-summed net room area, their Δ, and whether
 // the group counts toward tiers above it. Reuses the same roomNetArea/pathKey
 // the summary uses, generalised past the active level/tier.
-function buildAreasCsv(zone) {
-  const data = zone.areasData;
+function buildAreasCsv() {
+  const data = areasData;
   if (!data || !data.groups || data.groups.length === 0) return "";
   const levelName = new Map((data.levels || []).map(l => [l.id, l.name]));
   const tiers = tierNames(data);
@@ -1602,7 +1907,7 @@ function buildAreasCsv(zone) {
   // Net room area per (level, depth, path-prefix) over every room, so each
   // group at any depth on any level can look up its summed net directly.
   const net = new Map();
-  for (const r of (zone.currentPayload ? zone.currentPayload.rooms : [])) {
+  for (const r of (currentPayload ? currentPayload.rooms : [])) {
     if (!r.classification) continue;
     for (let d = 0; d < r.classification.length; d++) {
       const key = `${r.level_id}|${d}|${pathKey(r.classification, d)}`;
@@ -1626,9 +1931,301 @@ function buildAreasCsv(zone) {
   return rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
 }
 
-function downloadAreasCsv(zone) {
-  if (!zone.areasData || !zone.areasData.groups || zone.areasData.groups.length === 0) return;
-  downloadCsv(`areas-${zone.projectId || "project"}.csv`, buildAreasCsv(zone));
+function downloadAreasCsv() {
+  if (!areasData || !areasData.groups || areasData.groups.length === 0) return;
+  downloadCsv(`areas-${projectId || "project"}.csv`, buildAreasCsv());
+}
+
+// ==================== bottom region, band 2: source-data grid ====================
+//
+// A read-only grid over the rooms of the CURRENT SCOPE — every level, not the
+// levels on screen. That is deliberate and worth restating, because a level
+// filter feels like it "should" follow the plans: with several zones showing
+// different levels there is no single answer, and it would make the grid's
+// contents depend on presentation state, reintroducing exactly the
+// scope/presentation blur the global-scope migration removed. Filtering by
+// level stays available as an ordinary column filter, driven by the user.
+//
+// Model-derived and dRofus-derived columns are grouped and visually separated
+// rather than interleaved: STRATEGY-SOURCES keeps dRofus a distinct
+// sub-object ("store raw, join late") precisely because the two have
+// different lifecycles, and an interleaved table would imply a single source
+// of truth the data model deliberately doesn't have.
+
+// An empty region must not reserve its dragged height — with nothing to show
+// that would just be a band of blank paper eating plan area.
+function updateRegionEmpty() {
+  const anyVisible = ["qaBand", "areasBand", "gridBand"]
+    .some(id => !document.getElementById(id).classList.contains("hidden"));
+  document.getElementById("bottomRegion").classList.toggle("empty", !anyVisible);
+  // A band appearing or disappearing can make the split meaningful or moot.
+  updateBandDivide();
+}
+
+const GRID_ROW_H = 20;      // px; fixed so a row's offset is index * height
+const GRID_OVERSCAN = 8;    // rows rendered beyond the viewport, to hide scroll seams
+
+let gridColumns = [];       // [{ key, label, source: "model"|"drofus", get(room), unmapped }]
+let gridRows = [];          // rooms after filter + sort (the windowed row list)
+let gridSort = { key: null, asc: true };
+const gridFilters = new Map(); // column key -> lowercased filter text
+let gridScrollTop = 0;
+// QA marks, at the finest address the report supports. `compute_validation`
+// keys its field-level findings by (room, field), which in this grid IS a
+// (row, column) address — so a mismatch is marked *on the disagreeing cell*
+// rather than only listed in band 1. Room-level findings (no link value,
+// unmatched, duplicate) have no column, so they mark the Id cell instead.
+let gridCellErrors = new Set(); // `${roomId} ${revitProperty}`
+let gridRoomErrors = new Set(); // roomId
+
+function rebuildGridErrorIndex() {
+  gridCellErrors = new Set();
+  gridRoomErrors = new Set();
+  const d = currentValidation;
+  if (!d || !d.drofus_configured) return;
+  for (const m of d.property_mismatches) gridCellErrors.add(`${m.room_id} ${m.field}`);
+  for (const m of d.fields_absent_in_revit) gridCellErrors.add(`${m.room_id} ${m.field}`);
+  for (const m of d.fields_empty_in_revit) gridCellErrors.add(`${m.room_id} ${m.field}`);
+  for (const id of d.rooms_missing_link_value) gridRoomErrors.add(id);
+  for (const id of d.rooms_unmatched_in_drofus) gridRoomErrors.add(id);
+  for (const dup of d.duplicate_link_values) for (const id of dup.room_ids) gridRoomErrors.add(id);
+}
+
+// Intrinsic columns first — the identity a reader scans by — then the room's
+// own property keys. `$level` resolves through the payload's level list, which
+// is why it isn't just another property.
+function buildGridColumns() {
+  const cols = [];
+  if (!currentPayload) return cols;
+
+  const levelName = new Map(levelsForPayload(currentPayload).map(l => [l.id, l.name]));
+  cols.push({ key: "$level", label: "Level", source: "model", get: r => levelName.get(r.level_id) || r.level_id || "" });
+  cols.push({ key: "$name", label: "Name", source: "model", get: r => r.name || "" });
+  cols.push({ key: "$id", label: "Id", source: "model", get: r => r.id || "" });
+
+  const propKeys = new Set();
+  for (const r of currentPayload.rooms) for (const k of Object.keys(r.properties || {})) propKeys.add(k);
+  for (const k of [...propKeys].sort()) {
+    cols.push({ key: `p:${k}`, label: k, source: "model", get: r => (r.properties?.[k]?.value) ?? "" });
+  }
+
+  // dRofus columns come from the response's own label set, NOT a union of the
+  // rooms' joined fields: a column that matched no room in scope would
+  // otherwise be invisible — precisely the case the coverage report goes out
+  // of its way to show as "not checked" rather than omit. `reconciliation`
+  // marks which columns have a Revit counterpart; the rest render as unmapped.
+  const labels = (currentPayload.drofus_labels || {})[projectId];
+  if (labels) {
+    const mapped = labels.reconciliation || {};
+    for (const label of labels.all_labels || []) {
+      cols.push({
+        key: `d:${label}`, label, source: "drofus",
+        unmapped: !(label in mapped),
+        // An unmatched room simply has no `drofus` key — empty cells, never an
+        // error (an unmatched link value is a signal, not a failure).
+        get: r => (r.drofus?.fields?.[label]) ?? "",
+      });
+    }
+  }
+  return cols;
+}
+
+function visibleGridColumns() {
+  const model = document.getElementById("srcModel").checked;
+  const drofus = document.getElementById("srcDrofus").checked;
+  return gridColumns.filter(c => (c.source === "model" ? model : drofus));
+}
+
+// Rooms after every active column filter, then the active sort. Sorting is
+// numeric when both sides parse, so "10" doesn't sort before "9".
+function computeGridRows() {
+  const cols = visibleGridColumns();
+  const active = cols.filter(c => gridFilters.get(c.key));
+  let rows = currentPayload ? currentPayload.rooms : [];
+  if (active.length) {
+    rows = rows.filter(r => active.every(c => String(c.get(r)).toLowerCase().includes(gridFilters.get(c.key))));
+  } else {
+    rows = rows.slice();
+  }
+
+  const sortCol = cols.find(c => c.key === gridSort.key);
+  if (sortCol) {
+    const dir = gridSort.asc ? 1 : -1;
+    rows.sort((a, b) => {
+      const x = sortCol.get(a), y = sortCol.get(b);
+      const nx = parseFloat(x), ny = parseFloat(y);
+      if (Number.isFinite(nx) && Number.isFinite(ny) && nx !== ny) return (nx - ny) * dir;
+      return String(x).localeCompare(String(y)) * dir;
+    });
+  }
+  gridRows = rows;
+}
+
+// Header: a group row (Model | dRofus, spanning their columns) over a names
+// row carrying sort, over a filter row.
+//
+// Rebuilt ONLY when the column set changes — a sort or filter keystroke just
+// restyles the existing cells. That matters for more than cost: re-rendering
+// the head would detach the filter <input> the user is typing into, losing
+// focus and caret mid-word.
+let gridHeadSig = null;
+function renderGridHead(cols) {
+  const table = document.getElementById("gridTable");
+  let thead = table.querySelector("thead");
+  if (!thead) { thead = document.createElement("thead"); table.appendChild(thead); }
+
+  const sig = cols.map(c => c.key).join("|");
+  if (sig === gridHeadSig) {
+    // Same columns: only the sort indicator can have changed.
+    for (const th of thead.querySelectorAll("tr.names th")) {
+      th.classList.toggle("sorted", th.dataset.key === gridSort.key);
+      th.classList.toggle("asc", th.dataset.key === gridSort.key && gridSort.asc);
+    }
+    return;
+  }
+  gridHeadSig = sig;
+
+  const groups = [];
+  for (const c of cols) {
+    const last = groups[groups.length - 1];
+    if (last && last.source === c.source) last.span++;
+    else groups.push({ source: c.source, span: 1 });
+  }
+
+  const groupRow = groups.map(g =>
+    `<th class="group-cell src-${g.source}" colspan="${g.span}"><span>${g.source === "model" ? "Model" : "dRofus"}</span></th>`
+  ).join("");
+
+  const nameRow = cols.map(c => {
+    const sorted = gridSort.key === c.key ? ` sorted${gridSort.asc ? " asc" : ""}` : "";
+    const unmapped = c.unmapped ? " unmapped" : "";
+    const title = c.unmapped ? ` title="${escapeHtml(c.label)} — no Revit property mapped (not QA-checked)"` : "";
+    return `<th class="src-${c.source}${sorted}${unmapped}" data-key="${escapeHtml(c.key)}"${title}>${escapeHtml(c.label)}</th>`;
+  }).join("");
+
+  const filterRow = cols.map(c =>
+    `<th class="src-${c.source}"><input data-key="${escapeHtml(c.key)}" value="${escapeHtml(gridFilters.get(c.key) || "")}" placeholder="filter" /></th>`
+  ).join("");
+
+  thead.innerHTML = `<tr class="group">${groupRow}</tr><tr class="names">${nameRow}</tr><tr id="gridFilters">${filterRow}</tr>`;
+}
+
+// Row windowing: only the visible slice is ever in the DOM, with two spacer
+// rows standing in for the rest of the scroll height. This is the
+// one-dimensional case of paintLevel's cull units — same idea (precompute
+// each item's extent, render only what's in view), applied to rows instead of
+// room bboxes, rather than a second pattern invented for the same problem.
+function renderGridBody(cols) {
+  const table = document.getElementById("gridTable");
+  let tbody = table.querySelector("tbody");
+  if (!tbody) { tbody = document.createElement("tbody"); table.appendChild(tbody); }
+
+  const scroll = document.getElementById("gridScroll");
+  const viewH = scroll.clientHeight || 200;
+  const first = Math.max(0, Math.floor(gridScrollTop / GRID_ROW_H) - GRID_OVERSCAN);
+  const count = Math.ceil(viewH / GRID_ROW_H) + GRID_OVERSCAN * 2;
+  const last = Math.min(gridRows.length, first + count);
+
+  const span = cols.length || 1;
+  const before = first * GRID_ROW_H;
+  const after = Math.max(0, (gridRows.length - last) * GRID_ROW_H);
+
+  const parts = [];
+  if (before > 0) parts.push(`<tr class="spacer"><td colspan="${span}" style="height:${before}px"></td></tr>`);
+  for (let i = first; i < last; i++) {
+    const room = gridRows[i];
+    const roomBad = gridRoomErrors.has(room.id);
+    const cells = cols.map(c => {
+      const v = String(c.get(room));
+      // A field-level finding marks its own cell; a room-level one (which has
+      // no column) marks the Id cell.
+      const bad = c.key.startsWith("p:")
+        ? gridCellErrors.has(`${room.id} ${c.key.slice(2)}`)
+        : (c.key === "$id" && roomBad);
+      return `<td class="src-${c.source}${bad ? " err" : ""}" title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
+    }).join("");
+    parts.push(`<tr data-room="${escapeHtml(room.id)}" style="height:${GRID_ROW_H}px">${cells}</tr>`);
+  }
+  if (after > 0) parts.push(`<tr class="spacer"><td colspan="${span}" style="height:${after}px"></td></tr>`);
+  tbody.innerHTML = parts.join("");
+}
+
+// Full grid refresh: columns -> rows -> head + windowed body. Called on new
+// data, a source toggle, a sort, or a filter change.
+function renderGrid() {
+  const band = document.getElementById("gridBand");
+  if (!currentPayload || !currentPayload.rooms || currentPayload.rooms.length === 0) {
+    band.classList.add("hidden");
+    updateRegionEmpty();
+    return;
+  }
+  band.classList.remove("hidden");
+  updateRegionEmpty();
+
+  const cols = visibleGridColumns();
+  computeGridRows();
+
+  const empty = document.getElementById("gridEmpty");
+  const scroll = document.getElementById("gridScroll");
+  if (cols.length === 0) {
+    scroll.classList.add("hidden");
+    empty.classList.remove("hidden");
+    empty.textContent = "No columns shown — enable Model or dRofus above.";
+  } else {
+    scroll.classList.remove("hidden");
+    empty.classList.add("hidden");
+    renderGridHead(cols);
+    renderGridBody(cols);
+  }
+
+  const total = currentPayload.rooms.length;
+  document.getElementById("gridCount").textContent =
+    gridRows.length === total ? `${total} rooms` : `${gridRows.length} of ${total} rooms`;
+}
+
+// Scroll: re-window only (columns and row set are unchanged), throttled to a
+// frame like cullZone's own scheduler.
+let gridRaf = 0;
+function onGridScroll() {
+  gridScrollTop = document.getElementById("gridScroll").scrollTop;
+  if (gridRaf) return;
+  gridRaf = requestAnimationFrame(() => {
+    gridRaf = 0;
+    const cols = visibleGridColumns();
+    if (cols.length) renderGridBody(cols);
+  });
+}
+
+// Scroll the grid to a room and mark it — the jump target band 1 needs so a
+// mismatch entry can point at its row instead of duplicating the detail.
+function gridScrollToRoom(roomId) {
+  const idx = gridRows.findIndex(r => r.id === roomId);
+  if (idx < 0) return false;
+  const scroll = document.getElementById("gridScroll");
+  scroll.scrollTop = Math.max(0, idx * GRID_ROW_H - scroll.clientHeight / 2);
+  onGridScroll();
+  requestAnimationFrame(() => {
+    const row = document.querySelector(`#gridTable tbody tr[data-room="${CSS.escape(roomId)}"]`);
+    if (row) row.classList.add("target");
+  });
+  return true;
+}
+
+// CSV of what is on screen: the visible columns in order, every filtered row
+// (not just the windowed slice), honouring the source toggle. Client-side,
+// the same "a CSV is a presentation reshuffle of data the browser already
+// has" line as the validation and areas exports.
+function buildGridCsv() {
+  const cols = visibleGridColumns();
+  if (cols.length === 0) return "";
+  const rows = [cols.map(c => (c.source === "drofus" ? `drofus.${c.label}` : c.label))];
+  for (const room of gridRows) rows.push(cols.map(c => c.get(room)));
+  return rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
+}
+
+function downloadGridCsv() {
+  if (!gridRows.length) return;
+  downloadCsv(`rooms-${projectId || "project"}.csv`, buildGridCsv());
 }
 
 // ============================ room search (global) ============================
@@ -1650,13 +2247,12 @@ const SEARCH_FIELD_LABELS = { "$name": "Name", "$id": "Id", "$classification": "
 function searchFieldLabel(key) { return SEARCH_FIELD_LABELS[key] || key; }
 
 // Every field the search can look at: the intrinsic/aggregate keys plus the
-// union of raw property keys across ALL zones' loaded rooms, so the checklist
-// lists everything available even if a given zone lacks a property.
+// union of raw property keys across the loaded payload (one payload for the
+// page — every zone shows the same scope).
 function availableSearchFields() {
   const props = new Set();
-  for (const z of zones)
-    for (const r of (z.currentPayload ? z.currentPayload.rooms : []))
-      for (const k of Object.keys(r.properties || {})) props.add(k);
+  for (const r of (currentPayload ? currentPayload.rooms : []))
+    for (const k of Object.keys(r.properties || {})) props.add(k);
   return ["$name", "$id", "$classification", "$drofus", ...[...props].sort()];
 }
 
@@ -1674,32 +2270,33 @@ function roomMatches(room, q, fields) {
   return false;
 }
 
-// Recompute one zone's match set over its WHOLE payload (level-independent, so a
-// level switch re-paints with the same set).
-function computeZoneMatches(zone) {
+// Recompute the match set over the WHOLE payload (level-independent, so a
+// level switch re-paints with the same set). One payload -> one match set,
+// shared by every zone; each zone only differs in which level's matches are
+// on screen.
+function computeMatches() {
   const q = searchQuery.trim().toLowerCase();
-  zone.searchActive = q.length > 0;
-  if (!q || !zone.currentPayload) { zone.searchMatchIds = null; return; }
+  searchActive = q.length > 0;
+  if (!q || !currentPayload) { searchMatchIds = null; return; }
   const ids = new Set();
-  for (const r of zone.currentPayload.rooms) if (roomMatches(r, q, searchFields)) ids.add(r.id);
-  zone.searchMatchIds = ids;
+  for (const r of currentPayload.rooms) if (roomMatches(r, q, searchFields)) ids.add(r.id);
+  searchMatchIds = ids;
 }
 
 // Fast path: toggle `.match`/`.dim` on the already-rendered nodes via the
 // cull-unit room->nodes map (nodes[0] = room polygon, rest = holes + label).
 function applyHighlight(zone) {
-  const active = zone.searchActive;
   for (const u of (zone.cullUnits || [])) {
-    const isMatch = active && zone.searchMatchIds && zone.searchMatchIds.has(u.room.id);
+    const isMatch = searchActive && searchMatchIds && searchMatchIds.has(u.room.id);
     u.nodes[0].classList.toggle("match", !!isMatch);
-    for (let i = 0; i < u.nodes.length; i++) u.nodes[i].classList.toggle("dim", active && !isMatch);
+    for (let i = 0; i < u.nodes.length; i++) u.nodes[i].classList.toggle("dim", searchActive && !isMatch);
   }
 }
 
-// Recompute + re-highlight every zone, and refresh each zone's match count.
+// Recompute once, then re-highlight every zone and refresh its match count.
 function applySearch() {
+  computeMatches();
   for (const z of zones) {
-    computeZoneMatches(z);
     applyHighlight(z);
     updateMeta(z);
   }
@@ -1763,37 +2360,50 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".search")) document.getElementById("fieldsPanel").classList.add("hidden");
 });
 
-// ============================ polling (per zone) ============================
+// ============================ polling (global) ============================
+//
+// One scope -> ONE fetch and ONE poll cursor per tick, fanned out to every
+// zone. This deletes the bug class where two zones on the same project could
+// drift a tick apart (each used to carry its own cursor and fetch).
 
-// Build this zone's /rooms URL from its project/building/milestone selection.
-function roomsUrl(zone) {
+// Build the /rooms URL from the global project/building/milestone selection.
+function roomsUrl() {
   const params = new URLSearchParams();
-  if (zone.projectId) params.set("project", zone.projectId);
-  if (zone.buildingKey) params.set("building", zone.buildingKey);
-  if (zone.projectId && zone.milestone) params.set("milestone", zone.milestone);
+  if (projectId) params.set("project", projectId);
+  if (buildingKey) params.set("building", buildingKey);
+  if (projectId && milestone) params.set("milestone", milestone);
   const qs = params.toString();
   return qs ? `/rooms?${qs}` : "/rooms";
 }
 
-async function poll(zone) {
+// Every zone's meta line reports poll-level states (waiting / connection lost)
+// identically — they share the one fetch.
+function metaAll(text) {
+  for (const zone of zones) {
+    zone.els.meta.textContent = text;
+    zone.els.meta.classList.add("stale");
+  }
+}
+
+async function poll() {
   try {
-    const res = await fetch(roomsUrl(zone), { cache: "no-store" });
-    if (res.status === 204) { zone.els.meta.textContent = "waiting for data"; zone.els.meta.classList.add("stale"); return; }
+    const res = await fetch(roomsUrl(), { cache: "no-store" });
+    if (res.status === 204) { metaAll("waiting for data"); return; }
     if (!res.ok) throw new Error(res.status);
     const payload = await res.json();
     // Change-detection compares the server's one-value content revision instead
     // of re-stringifying the whole payload every poll (see the `revision` field
     // in rooms.rs / HANDOVER-viewer-performance.md). A quiet system returns the
-    // same revision every tick, so `ingest` (full teardown + rebuild) never
+    // same revision every tick, so `ingestAll` (full teardown + rebuild) never
     // fires between real pushes. Fall back to a stringify only if an older
     // server omits the field, so the viewer still updates against one.
     const incoming = payload.revision ?? JSON.stringify(payload);
-    if (incoming !== zone.lastRevision) {
-      zone.lastRevision = incoming;
-      ingest(zone, payload); // re-fits + rebuilds level control only on real change
+    if (incoming !== lastRevision) {
+      lastRevision = incoming;
+      ingestAll(payload); // re-fits + rebuilds level controls only on real change
     }
   } catch (err) {
-    zone.els.meta.textContent = "connection lost"; zone.els.meta.classList.add("stale");
+    metaAll("connection lost");
   }
 }
 
@@ -1857,81 +2467,43 @@ function wireInteractions(zone) {
 
 // ============================ zone lifecycle ============================
 
+// Presentation-only controls: level, colour, validation visibility, export,
+// areas. Scope handlers live on the header pickers (see "header controls").
 function wireZoneControls(zone) {
   const e = zone.els;
   e.levelSelect.addEventListener("change", () => selectLevel(zone, e.levelSelect.value));
 
-  e.projectSelect.addEventListener("change", async () => {
-    zone.projectId = e.projectSelect.value;
-    zone.buildingKey = null;
-    zone.lastBuildingsSignature = null;
-    zone.milestone = null;
-    zone.lastMilestonesSignature = null;
-    await loadBuildingsForProject(zone, zone.projectId);
-    await loadMilestonesForProject(zone, zone.projectId);
-    zone.colourPlansProjectId = zone.projectId; // keep the refresh guard in sync
-    await loadColourPlansForProject(zone, zone.projectId);
-    loadValidation(zone, zone.projectId);
-    zone.lastRevision = null; // force the next poll tick to render immediately
-    // Persist only the first zone's scope; a second zone's picker must not
-    // overwrite the URL. building/milestone are null here (just reset), so the
-    // helper drops them from the URL — the pick carries project only until the
-    // user re-scopes.
-    if (zone === zones[0]) persistSelection(zone.projectId, { building: zone.buildingKey, milestone: zone.milestone });
-  });
-
-  e.buildingSelect.addEventListener("change", () => {
-    zone.buildingKey = e.buildingSelect.value;
-    zone.lastRevision = null;
-    if (zone === zones[0]) persistSelection(zone.projectId, { building: zone.buildingKey, milestone: zone.milestone });
-  });
-
-  e.milestoneSelect.addEventListener("change", () => {
-    zone.milestone = e.milestoneSelect.value || null; // "" = Latest
-    zone.lastRevision = null;
-    if (zone === zones[0]) persistSelection(zone.projectId, { building: zone.buildingKey, milestone: zone.milestone });
-  });
-
   e.colourSelect.addEventListener("change", () => {
     // Re-render the current level with refit:false so pan/zoom is preserved —
     // a pure presentation change. No /rooms refetch.
-    zone.activeColourPlan = e.colourSelect.value ? (zone.colourPlans.find(p => p.name === e.colourSelect.value) || null) : null;
-    if (zone.currentPayload && zone.activeLevelId) renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
+    zone.activeColourPlan = e.colourSelect.value ? (colourPlans.find(p => p.name === e.colourSelect.value) || null) : null;
+    if (currentPayload && zone.activeLevelId) renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
   });
 
-  e.validationToggle.addEventListener("click", () => {
-    e.validationPanel.classList.toggle("hidden");
-    zone.showErrors = !e.validationPanel.classList.contains("hidden");
-    if (zone.currentPayload && zone.activeLevelId) renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
-  });
-  e.validationRefresh.addEventListener("click", () => loadValidation(zone, zone.projectId));
-  e.validationDownload.addEventListener("click", () => downloadValidationCsv(zone));
   e.exportSvg.addEventListener("click", () => exportZoneLevels(zone));
 
   e.areasToggle.addEventListener("click", () => {
     zone.areasMode = !zone.areasMode;
     e.areasToggle.classList.toggle("on", zone.areasMode);
-    e.areasPanel.classList.toggle("hidden", !zone.areasMode);
     if (zone.areasMode) {
-      loadAreas(zone); // fetch + tier picker + overlay + summary
+      loadAreas(); // fetch (shared) + this overlay + the band's figures
     } else {
       e.areasTier.classList.add("hidden");
       renderAreasOverlay(zone); // removes the overlay + un-ghosts rooms
-      renderAreasSummary(zone); // clears the panel body
+      renderAreasBand();        // hides the band when no zone has areas open
     }
   });
   e.areasTier.addEventListener("change", () => {
     zone.areasTier = parseInt(e.areasTier.value, 10) || 0;
-    renderAreasOverlay(zone);
-    renderAreasSummary(zone);
+    renderAreasOverlay(zone); // this zone's overlay only; the band has its own tier
   });
-  e.areasDownload.addEventListener("click", () => downloadAreasCsv(zone));
 }
 
-// Build one zone: clone the template, wire its own state object, controls, and
-// interactions. `seed` (optional) clones scope from an existing zone so a
-// newly-added zone starts on the same project/building rather than blank.
-function createZone(seed) {
+// Build one zone: clone the template, wire its presentation state, controls,
+// and interactions. Zones carry NO scope and no poll/validation/colour-config
+// state — all global — so a new zone needs no seeding from its siblings: it
+// catches up from the globals (see the add-zone handler).
+function createZone() {
   const id = `zone-${zoneSeq++}`;
   const frag = zoneTemplate.content.cloneNode(true);
   const root = frag.querySelector(".zone");
@@ -1942,51 +2514,21 @@ function createZone(seed) {
     svg: q("svg.plan"),
     view: { x: 0, y: 0, w: 100, h: 100 },
     fitted: { x: 0, y: 0, w: 100, h: 100 },
-    lastRevision: null,
-    currentPayload: null,
     activeLevelId: null,
     cullUnits: null,   // per-room {bbox, nodes} for viewport culling on pan/zoom
     _cullRaf: 0,       // pending requestAnimationFrame id, throttles the cull
-    // scope selection (was the global currentProjectId etc.)
-    projectId: seed ? seed.projectId : null,
-    buildingKey: seed ? seed.buildingKey : null,
-    milestone: seed ? seed.milestone : null,
-    _seeded: false,       // one-shot guard: first-zone URL/localStorage project restore has run
-    _seededScope: false,  // one-shot guard: first-zone building/milestone URL restore has run
-    // per-zone poll bookkeeping
-    lastProjectIds: null,
-    lastBuildingsSignature: null,
-    lastMilestonesSignature: null,
-    // per-zone colour + validation state
-    colourPlans: [],
+    // presentation state — everything a zone still owns
     activeColourPlan: null,
-    colourPlansProjectId: null, // guard: which project's plans are loaded
-    currentValidation: null,
-    errorRoomIds: new Set(),
-    showErrors: false,
-    // per-zone hierarchy-areas state
-    areasMode: false,
-    areasData: null,   // last /areas result (all levels + tiers)
-    areasTier: 0,      // selected tier depth (0 = outermost, e.g. Building)
+    areasMode: false,  // this zone's footprint overlay on/off
+    areasTier: 0,      // this zone's overlay tier (0 = outermost, e.g. Building)
     els: {
-      projectSelect: q(".projectSelect"),
-      milestoneSelect: q(".milestoneSelect"),
-      buildingSelect: q(".buildingSelect"),
       colourSelect: q(".colourSelect"),
       levelSelect: q(".levelSelect"),
-      validationToggle: q(".validation-toggle"),
       exportSvg: q(".export-svg"),
       areasToggle: q(".areas-toggle"),
       areasTier: q(".areasTier"),
-      areasPanel: q(".areas-panel"),
-      areasBody: q(".aBody"),
-      areasDownload: q(".aDownload"),
       meta: q(".meta"),
       empty: q(".empty"),
-      validationPanel: q(".validation-panel"),
-      validationRefresh: q(".vRefresh"),
-      validationDownload: q(".vDownload"),
-      validationBody: q(".vBody"),
     },
   };
 
@@ -2012,36 +2554,60 @@ function setLayout() {
 
 // ============================ polling loop ============================
 
-// Each tick: for every zone, refresh its pickers (cheap, in-memory-derived —
-// also how a newly-pushed project/building shows up without a reload), then
-// fetch rooms scoped to that zone's selection.
+// Each tick: refresh the scope pickers (cheap, signature-gated — also how a
+// newly-pushed project shows up without a reload), then ONE scoped /rooms
+// fetch fanned out to every zone. Tick cost no longer scales with zone count.
 async function tick() {
-  // Fetch the global project list once, then fan out over zones concurrently.
-  // Previously this looped zones serially and re-fetched /projects per zone, so
-  // N zones cost N× the work back-to-back every tick; sharing the list and
-  // running zones in parallel keeps idle tick cost roughly flat in N.
   let projects = null;
   try {
     projects = await fetchJson("/projects");
   } catch (err) {
-    // Connection issue: skip the picker refresh (as a per-zone loadProjects
-    // would have on its own failed fetch) and let each zone's poll surface it.
+    // Connection issue: skip the picker refresh and let poll() surface it.
   }
-  await Promise.all(zones.map(async (zone) => {
-    if (projects) await loadProjects(zone, projects);
-    await poll(zone);
-  }));
+  if (projects) await refreshScope(projects);
+  await poll();
 }
 
 // ============================ header controls ============================
 
-document.getElementById("addZone").addEventListener("click", async () => {
-  const seed = zones.length ? zones[zones.length - 1] : null;
-  const zone = createZone(seed);
+scopeEls.project.addEventListener("change", async () => {
+  projectId = scopeEls.project.value;
+  buildingKey = null;
+  lastBuildingsSignature = null;
+  milestone = null;
+  lastMilestonesSignature = null;
+  await loadBuildings(projectId);
+  await loadMilestones(projectId);
+  colourPlansProjectId = projectId; // keep the refresh guard in sync
+  await loadColourPlans(projectId);
+  loadValidation(projectId);
+  lastRevision = null; // force the next poll tick to render immediately
+  // One scope on screen means the URL always mirrors it — the "which zone's
+  // scope does the URL carry" question is gone. building/milestone are null
+  // here (just reset), so the helper drops them from the URL.
+  persistSelection(projectId, { building: buildingKey, milestone });
+});
+
+scopeEls.building.addEventListener("change", () => {
+  buildingKey = scopeEls.building.value;
+  lastRevision = null;
+  persistSelection(projectId, { building: buildingKey, milestone });
+});
+
+scopeEls.milestone.addEventListener("change", () => {
+  milestone = scopeEls.milestone.value || null; // "" = Latest
+  lastRevision = null;
+  persistSelection(projectId, { building: buildingKey, milestone });
+});
+
+document.getElementById("addZone").addEventListener("click", () => {
+  const zone = createZone();
   setLayout();
-  // Bring the new zone up to speed immediately rather than waiting a full tick.
-  await loadProjects(zone);
-  await poll(zone);
+  // Catch the new zone up from the globals — no refetch needed: the payload
+  // and colour plans are already in memory, and QA/areas results live in the
+  // bottom band, which is page-level and already rendered.
+  applyColourPlans(zone);
+  ingestZone(zone);
 });
 
 document.getElementById("removeZone").addEventListener("click", removeZone);
@@ -2062,15 +2628,216 @@ document.getElementById("labelsToggle").addEventListener("click", (e) => {
   // refit:false — a display toggle must not snap zones back to fitted bounds
   // and lose the user's pan/zoom. Zones with no data yet just skip.
   for (const zone of zones) {
-    if (zone.currentPayload && zone.activeLevelId) {
-      renderLevel(zone, zone.currentPayload, zone.activeLevelId, { refit: false });
+    if (currentPayload && zone.activeLevelId) {
+      renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
     }
   }
 });
 
+// ============================ bottom-region controls ============================
+//
+// Each block collapses to its one-line summary strip. The QA strip carries the
+// count the old header badge did, so nothing was lost by moving the panel down.
+
+// Expand/collapse one block, returning the new open state.
+function toggleBand(bodyId, headId, label) {
+  const body = document.getElementById(bodyId);
+  const open = body.classList.toggle("hidden") === false;
+  const head = document.getElementById(headId);
+  head.innerHTML = (open ? "▾ " : "▸ ") + label();
+  // `.open` on the block is what lets an expanded block share band 1's height
+  // with a sibling while a collapsed one stays a single strip.
+  body.closest(".result-band").classList.toggle("open", open);
+  updateBandDivide();
+  // Expanding takes height from the grid, so its visible row count changed.
+  onGridScroll();
+  return open;
+}
+
+// The band 1 / band 2 divider is only meaningful when a band-1 block is
+// expanded AND the grid is present — otherwise there are not two things to
+// split. Also re-clamps a dragged height that no longer fits (e.g. after the
+// region itself was shrunk, or a block collapsed).
+function updateBandDivide() {
+  const band1 = document.getElementById("band1");
+  const divide = document.getElementById("bandDivide");
+  const anyOpen = !!band1.querySelector(".result-band.open:not(.hidden)");
+  const gridShown = !document.getElementById("gridBand").classList.contains("hidden");
+  divide.classList.toggle("hidden", !(anyOpen && gridShown));
+  if (!anyOpen) {
+    // Nothing expanded: drop any dragged height so collapsed strips don't
+    // hold on to space they no longer need.
+    band1.classList.remove("sized");
+  }
+  updateBand1Max();
+  if (band1.classList.contains("sized")) clampBand1();
+}
+
+// The floor the grid keeps when band 1 is dragged large: its own toolbar and
+// sticky header plus a couple of data rows. Measured rather than guessed, so
+// it stays right if the bar wraps to two lines on a narrow window.
+function gridMinHeight() {
+  const bar = document.getElementById("gridBar").offsetHeight || 30;
+  const head = document.querySelector("#gridTable thead")?.offsetHeight || 40;
+  return bar + head + GRID_ROW_H * 2;
+}
+
+// How much height band 1 may take: everything the region has, less the two
+// handles and the grid's own floor. Applies to BOTH the content-sized default
+// (via the `--band1-max` cap) and any dragged height, so a tall results table
+// can never squeeze the grid out of existence — which is what it did before
+// this cap existed.
+function band1Available() {
+  const region = document.getElementById("bottomRegion");
+  const handles = document.getElementById("regionDrag").offsetHeight
+    + document.getElementById("bandDivide").offsetHeight;
+  return Math.max(40, region.clientHeight - handles - gridMinHeight());
+}
+
+function updateBand1Max() {
+  document.getElementById("band1").style.setProperty("--band1-max", `${Math.round(band1Available())}px`);
+}
+
+// Re-clamp a dragged height after the region itself changed size.
+function clampBand1() {
+  const band1 = document.getElementById("band1");
+  const current = parseFloat(band1.style.getPropertyValue("--band1-h")) || band1.getBoundingClientRect().height;
+  band1.style.setProperty("--band1-h", `${Math.round(Math.max(40, Math.min(current, band1Available())))}px`);
+}
+
+document.getElementById("qaHead").addEventListener("click", () => {
+  const open = toggleBand("qaBody", "qaHead", () => {
+    const d = currentValidation;
+    if (!d) return "QA";
+    const n = d.discrepancies?.total ?? 0;
+    return "QA · " + (n ? `<span class="issues">⚠ ${n}</span>` : "✓");
+  });
+  // Expanding the results turns on the plans' error highlighting — the same
+  // coupling the old side panel had, now attached to a page-level block.
+  setShowErrors(open);
+});
+
+// The two bands inform each other: clicking a QA entry scrolls band 2 to that
+// room instead of the entry repeating the row's values. A room the current
+// filters exclude simply doesn't move the grid.
+document.getElementById("qaContent").addEventListener("click", (e) => {
+  const el = e.target.closest("[data-room]");
+  if (el) gridScrollToRoom(el.dataset.room);
+});
+
+document.getElementById("qaRefresh").addEventListener("click", () => loadValidation(projectId));
+document.getElementById("qaDownload").addEventListener("click", () => downloadValidationCsv());
+
+document.getElementById("areasHead").addEventListener("click", () => {
+  toggleBand("areasBody", "areasHead", () => "Hierarchy areas");
+});
+document.getElementById("areasBandTier").addEventListener("change", (e) => {
+  areasBandTier = parseInt(e.target.value, 10) || 0;
+  renderAreasBand(); // figures only; each zone's overlay keeps its own tier
+});
+document.getElementById("areasDownload").addEventListener("click", () => downloadAreasCsv());
+
+// ---- band 2: the grid ----
+document.getElementById("gridScroll").addEventListener("scroll", onGridScroll);
+for (const id of ["srcModel", "srcDrofus"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    gridScrollTop = 0;
+    document.getElementById("gridScroll").scrollTop = 0;
+    renderGrid();
+  });
+}
+// Sort and filter are delegated off <thead>, which is rebuilt on every render.
+document.getElementById("gridTable").addEventListener("click", (e) => {
+  const th = e.target.closest("thead tr.names th");
+  if (!th) return;
+  const key = th.dataset.key;
+  gridSort = gridSort.key === key ? { key, asc: !gridSort.asc } : { key, asc: true };
+  renderGrid();
+});
+document.getElementById("gridTable").addEventListener("input", debounce((e) => {
+  const input = e.target.closest("#gridFilters input");
+  if (!input) return;
+  const key = input.dataset.key;
+  const v = input.value.trim().toLowerCase();
+  if (v) gridFilters.set(key, v); else gridFilters.delete(key);
+  gridScrollTop = 0;
+  document.getElementById("gridScroll").scrollTop = 0;
+  renderGrid(); // the head survives (same columns), so focus/caret are kept
+}, 200));
+document.getElementById("gridClearFilters").addEventListener("click", () => {
+  gridFilters.clear();
+  renderGrid();
+});
+document.getElementById("gridDownload").addEventListener("click", () => downloadGridCsv());
+
+// ---- two drags: the region's outer edge, and the band 1 / band 2 split ----
+//
+// Shared plumbing: pointer capture, a `dragging` class, and a per-move
+// callback. Both handles resize by *pixels from the drag start* rather than
+// by tracking the cursor absolutely, so neither drifts if a clamp bites.
+function wireDragHandle(handle, onStart, onMove) {
+  let startY = 0, start = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    startY = e.clientY;
+    start = onStart();
+    handle.classList.add("dragging");
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!handle.classList.contains("dragging")) return;
+    onMove(start, e.clientY - startY);
+    onGridScroll(); // either drag changes the grid's visible row count
+  });
+  const stop = () => handle.classList.remove("dragging");
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
+}
+
+// The region's total height, against the plans. Dragging UP makes it taller.
+(() => {
+  const region = document.getElementById("bottomRegion");
+  wireDragHandle(
+    document.getElementById("regionDrag"),
+    () => region.getBoundingClientRect().height,
+    (startH, dy) => {
+      // Clamped so the region can neither vanish nor swallow the plans.
+      const h = Math.min(Math.max(startH - dy, 80), window.innerHeight * 0.75);
+      region.style.setProperty("--bottom-h", `${Math.round(h)}px`);
+      // A taller/shorter region changes what band 1 may take, both as a cap
+      // on the content-sized default and as a clamp on a dragged height.
+      updateBand1Max();
+      if (document.getElementById("band1").classList.contains("sized")) clampBand1();
+    }
+  );
+})();
+
+// The split between band 1 (results) and band 2 (the table), *within* the
+// region's height: dragging DOWN gives the results more and the table less.
+// The region total doesn't move, so the plans are untouched either way.
+(() => {
+  const band1 = document.getElementById("band1");
+  const region = document.getElementById("bottomRegion");
+  wireDragHandle(
+    document.getElementById("bandDivide"),
+    () => {
+      // First drag switches band 1 from content-sized to explicitly sized,
+      // starting at exactly its current height so nothing jumps.
+      const h = band1.getBoundingClientRect().height;
+      band1.style.setProperty("--band1-h", `${Math.round(h)}px`);
+      band1.classList.add("sized");
+      return h;
+    },
+    (startH, dy) => {
+      const h = Math.max(40, Math.min(startH + dy, band1Available()));
+      band1.style.setProperty("--band1-h", `${Math.round(h)}px`);
+    }
+  );
+})();
+
 // ============================ boot ============================
 
-createZone(null);
+createZone();
 setLayout();
 tick();
 setInterval(tick, 2000);

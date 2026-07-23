@@ -408,6 +408,14 @@ assumed.
 
 ### P6 — Scope migration
 
+> **Status: LANDED 2026-07-23.** Verified in the running app: header scope
+> pickers (one set); add-zone catches up from globals with zero refetch;
+> per-zone level independence; global project/milestone switches fan to all
+> zones from one poll; URL/localStorage persistence without the `zones[0]`
+> special case; search shares one match set; areas and validation follow the
+> global scope; picker auto-hide intact; no console errors. The open
+> question resolved cleanly — nothing else depended on per-zone scope.
+
 Handover H3 step 1. **Land it alone** — debugging a scope migration alongside
 anything else means debugging two unfamiliar things at once.
 
@@ -441,6 +449,25 @@ layer is where to look next.
 
 ### P7 — Bottom region shell, then migrate the panels
 
+> **Status: LANDED 2026-07-23** (steps 2–3 together — band 1 was a straight
+> move). `body` is now `auto 1fr auto`; band 1 holds a QA block and an areas
+> block, each collapsing to a summary strip, sharing one capped height budget
+> and scrolling internally. Both `.validation-panel` and `.areas-panel` are
+> gone from `.zone-canvas` — the hidden-coupling watch item surfaced nothing,
+> since both panels were absolutely positioned and read no canvas geometry.
+> Two deliberate outcomes beyond the brief: the QA strip absorbed the header
+> badge (so nothing was lost by moving the panel down), and the areas figures
+> now span **every level in scope** with their own tier picker, where the old
+> overlay panel was active-level-only — the band belongs to the scope, the
+> overlay to the zone.
+> **Deferred to P8, stated honestly:** the *fixed, user-draggable* total
+> height. Until band 2 exists there is nothing for a block to take space
+> *from*, so expanding still moves the plans within the cap; band 2 is what
+> gives the region a persistent height to drag.
+> **Not yet tried: side-by-side.** The plan says to test it with real data
+> before the grid makes it expensive to revisit — that test belongs at the
+> start of P8, when band 2 exists to be compared against.
+
 Handover H3 steps 2–3. These can land together if band 1 turns out to be a
 straight move.
 
@@ -472,6 +499,23 @@ straight move.
   expensive to retrofit.
 
 ### P8 — Source-data grid (band 2)
+
+> **Status: LANDED 2026-07-23.** Row windowing measured at **28 DOM rows
+> against 10,092 rows** on `big-plate`; grouped model/dRofus headers with a
+> per-source toggle; unmapped dRofus columns shown and marked; sort, per-column
+> filters, CSV export; cell-level QA marking at the (room, field) address plus
+> band-1 entries as jump targets.
+> **The two P7 carry-overs are closed:** the region's height is now
+> user-draggable, and expanding a band-1 block takes its space from the grid
+> with the plans measurably unchanged.
+> **Side-by-side was tested with real data and rejected**, as the handover
+> asked — on a 50-column project the grid needs ~4,700px against ~1,350px
+> available, so a 30% left column would cut visible columns 10 → 7 while the
+> areas table's 544px minimum wouldn't fit the column it was given.
+> One bug worth recording: the wide table initially stretched the whole page
+> grid to ~4,900px (a grid item's `min-width` defaults to `auto`), blanking
+> the plan canvas. Fixed with `minmax(0, 1fr)` on `body` plus `min-width: 0`
+> down the region chain.
 
 Handover H3 step 5. Largest piece after P6, and deliberately late: it benefits
 from scope already being global and from band 1 having established the region's
@@ -506,6 +550,21 @@ layout. P2 is its prerequisite.
   honouring the source toggle, no server endpoint.
 
 ### P9 — Source-aware `values_agree`
+
+> **Status: LANDED 2026-07-23, with one deliberate departure from the
+> handover.** The date rung is now applied to `drofus.`-qualified fields via
+> a shared, symmetric `contract::date_match` (extraction option 1, scoped to
+> the rung actually needed). **The ASCII-narrowing rung was NOT added, and
+> the handover's rationale for it does not hold**: that rung forgives
+> duHast's `encode_ascii` step, which narrows *Revit* strings before they
+> reach the server, whereas dRofus CSVs are uploaded raw and never pass
+> through it — so on a dRofus-vs-dRofus diff the artefact cannot arise, and
+> adding the rung would forgive genuine differences with nothing to blame.
+> Verified: `ascii_narrowed` exists only in `validation.rs`, and the dRofus
+> upload path does no narrowing. Also settled: `qa = "exact"` is honoured,
+> `qa = "ignore"` is not. 185 lib tests pass (6 added).
+> With this, `HANDOVER-comparison-sources.md` is fully actioned and moves to
+> `Superseded/`.
 
 Handover H2 step 4. Sequenced last of the functional work because the handover
 itself rates deferral a legitimate ship, and P1 leaves it a clean follow-up: the

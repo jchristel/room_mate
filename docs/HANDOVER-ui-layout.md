@@ -1,14 +1,32 @@
 # RoomMate — Handover: UI layout restructure
 
-> **Status (2026-07-23): sequencing step 4 has LANDED** (see
-> PLAN-handover-actioning.md P2), with one correction to the text below: the
-> label set rides `RoomsResult` **keyed by project id** (`drofus_labels`),
-> not flat — this doc's claim that the response "is already project-scoped"
-> is wrong for the unscoped merge, where dRofus resolves per project inside
-> the loop. Everything else in this document remains unbuilt.
+> **Status (2026-07-23): sequencing steps 1, 4 and 6 have LANDED** (see
+> PLAN-handover-actioning.md P6, P2, P3).
+> **Step 1 (scope migration / Decision 1)**: project/milestone/building are
+> global header state; zones carry level + colour + areas only; one poll,
+> one colour-plan read, one validation state; `persistSelection` lost its
+> `zones[0]` special case — the open question ("does anything else depend on
+> per-zone scope?") resolved cleanly, nothing did.
+> **Step 4** landed with one correction: the label set rides `RoomsResult`
+> **keyed by project id** (`drofus_labels`), not flat — the claim below that
+> the response "is already project-scoped" is wrong for the unscoped merge.
+> **Step 6** is the labels toggle, threaded through `paintLevel` so export
+> honours it.
+> **Steps 2, 3 and 5 have LANDED too** (plan items P7, P8): the bottom region
+> exists with band 1 (QA + areas blocks) over band 2 (the source-data grid);
+> both overlay panels are gone from `.zone-canvas`. Both P7 carry-overs are
+> closed — the region's total height is user-draggable, and expanding a
+> band-1 block takes space from the grid with the plans measurably unchanged.
+> **Side-by-side was tried with real data and rejected**, as this doc asks:
+> on a 50-column project it would cut visible grid columns 10 → 7 and leave
+> the areas table narrower than its own minimum. Stacked stands.
+> **Every sequencing step in this document is now built.** What remains is
+> Decision 3, the right-hand **inspector** — still blocked on room
+> click-selection, which nothing here provides, exactly as recorded below.
 
-Design settled, **nothing built** apart from the server-side step above. This
-document exists so the work can be picked up cold. Companion to [Browser](STRATEGY-BROWSER.md), which describes
+Design settled; steps 1, 4 and 6 built (see status above), the bottom
+region and grid not yet. This document exists so the remaining work can be
+picked up cold. Companion to [Browser](STRATEGY-BROWSER.md), which describes
 the viewer as it stands today; when this lands, that doc absorbs the outcome
 and this one moves to `Superseded/`.
 

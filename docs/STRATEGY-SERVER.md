@@ -491,9 +491,25 @@ each module carrying its rationale in a header, all with unit tests.
   this closes; the property half stays unvalidated, free-text against rooms
   that may not be loaded yet. Value equality is `numeric_match` + trimmed
   strings for every source — the dRofus QA path's date/ASCII-narrowing rungs
-  are deliberately not pulled in (symmetric-artefact reasoning; a source-aware
-  ladder for `drofus.` fields is a recorded TODO at
-  `comparison::values_agree`).
+  are chosen **per source**, because what counts as an artefact depends on
+  the pipeline each side came through. An unqualified field is Revit-vs-Revit
+  through the same export, so encoding/formatting artefacts are symmetric and
+  cancel: numeric-adaptive, then trimmed string. A `drofus.`-qualified field
+  is dRofus-vs-dRofus and gains a **date** rung ahead of those when the column
+  is declared `type = "date"` — dRofus returns dates as *formatted text*, so
+  two snapshots can render one instant differently if the export's format
+  changed, which is a real difference this would otherwise report as a
+  change. The shared, **symmetric** `contract::date_match` serves both this
+  and the QA path; `validation::field_values_agree` is deliberately
+  asymmetric (it narrows only its dRofus side) and is **not** reusable for a
+  same-source diff. **The ASCII-narrowing rung is deliberately not applied
+  to comparison at all** — it forgives duHast's `encode_ascii` step, which
+  narrows *Revit* strings before they reach the server, while dRofus CSVs are
+  uploaded raw and never pass through it; on a dRofus-vs-dRofus diff that
+  artefact cannot arise, so the rung would only forgive genuine differences.
+  `qa = "exact"` is honoured (it says *how* to compare a column);
+  `qa = "ignore"` is not (it says whether the QA pass checks one, and
+  comparison has its own explicit property list).
 
 - **dRofus upload ingest (`POST /projects/{id}/drofus`) + snapshotted
   storage.** The previously-deferred dRofus-as-snapshotted-source (see

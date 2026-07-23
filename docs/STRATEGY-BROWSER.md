@@ -11,11 +11,23 @@ side should shape future server endpoints.
 
 - **SVG floor-plan rendering.** Draws room outlines per level from the
   `/rooms` payload.
-- **Header scope pickers: project, building, level.** Three `<select>`s in the
-  header row, right of "Room Plan" — project and building (see
-  [Server](STRATEGY-SERVER.md)'s `/projects`/`/projects/{id}/buildings`), and
-  the level picker moved here from its former floating panel over the canvas.
-  Building and level auto-hide when they have ≤1 option and auto-select when
+- **Global scope pickers: project, milestone, building — the single-project
+  viewer.** One set of header `<select>`s carrying the scope of the whole
+  page (see [Server](STRATEGY-SERVER.md)'s `/projects` /
+  `/projects/{id}/buildings` / `/projects/{id}/milestones`); the level picker
+  is per-zone (see the zones bullet below — zones differ in level and colour,
+  never data). Scope was per-zone for a while under the multizone viewer;
+  HANDOVER-ui-layout.md Decision 1 deliberately reversed that: cross-project
+  side-by-side display was an emergent capability nobody used, and making
+  scope global deleted the entire focus model (no `activeZoneId`, no
+  active-zone border, no "whose scope does the URL persist" question) and
+  collapsed polling, the colour-plan read, and validation state to one each.
+  **Poll once, fan out:** each 2s tick issues one scoped `/rooms` fetch
+  against one revision cursor and distributes the payload to every zone —
+  deleting the bug class where two zones on the same project could drift a
+  tick apart. A future multi-project comparator gets its own page (the
+  `comparison.html` precedent), not a mode flag here.
+  Building auto-hides when it has ≤1 option and auto-selects when
   there's exactly one real choice, so the common single-building dev case
   shows no picker at all. **Project is the exception: it's shown whenever any
   project exists, single option included** (hidden only at zero, where there's
@@ -31,11 +43,12 @@ side should shape future server endpoints.
   are distinct by `(code, name)`) renders as "Name (CODE)" so the two options
   are distinguishable; a same-name entry with no code stays the bare name,
   its code-bearing twin carrying the visible distinction.
-- **Scoped polling.** `poll()` builds `/rooms`'s URL from the current
-  project/building selection every tick; project/building pickers themselves
-  refresh on the same 2s cadence (gated by a shallow id-list diff so they
-  don't fight an in-progress selection), which is also how a newly-pushed
-  project or building shows up without a page reload.
+- **Scoped polling — once per page.** `poll()` builds `/rooms`'s URL from the
+  global project/building/milestone selection every tick and fans the payload
+  out to every zone (`ingestAll`); the scope pickers refresh on the same 2s
+  cadence (gated by a shallow id-list diff so they don't fight an in-progress
+  selection), which is also how a newly-pushed project shows up without a
+  page reload.
 - **Room labels: configurable, always-rendered, correctly layered.** `addLabel`
   renders `room.label` (the server-resolved, ordered field list — see
   [Server](STRATEGY-SERVER.md)'s `room_label` setting) instead of hardcoding
@@ -53,9 +66,80 @@ side should shape future server endpoints.
   per-room interleaved loop let a later room's opaque polygon paint over an
   earlier room's label whenever their screen-space boxes were anywhere
   close, which got worse on bigger plans with more rooms.
-- **Data validation panel: badge, highlighting, CSV export.** A header badge
-  (`⚠ N`, `✓`, or hidden when dRofus isn't configured) toggles a right-anchored
-  side panel listing [Server](STRATEGY-SERVER.md)'s six dRofus health checks
+- **Bottom region, band 1: results.** Tabular output lives in a page-level
+  region below the plans, not in overlays covering them (HANDOVER-ui-layout
+  Decision 2). It holds one block per computed result — QA and hierarchy
+  areas — each collapsed to a one-line summary strip by default (`▸ QA · ⚠ 3`)
+  and expanding on click: a fully hidden band gets forgotten, an always-open
+  one eats plan area. **One instance per page, never per zone** — both blocks
+  are scope-derived, and a region that multiplied with zone count would stop
+  being a stable place users can point at. The region carries **one height
+  budget** that expanded blocks divide between them, each scrolling
+  internally, so a long mismatch list can never squeeze its sibling to
+  nothing. **Expanding a band-1 block takes space from the grid, never from
+  the plans** (measured: plans unchanged while the grid yields the
+  difference); only an explicit drag resizes the plans. An empty region
+  reserves no height at all.
+  **Two drag handles, because there are two independent questions.** The
+  region's top edge sets its *total* height against the plans; a divider
+  between band 1 and band 2 splits that total between the results and the
+  table, leaving the plans untouched. The divider appears only when a band-1
+  block is actually expanded — there is nothing to redistribute between a
+  collapsed summary strip and the grid — and releases any dragged height when
+  the last block collapses. Band 1 is capped at "the region minus the grid's
+  own minimum" (its toolbar, sticky header and two rows, measured rather than
+  guessed), which is what stops a tall results table starving the grid; a
+  percentage cap can't express that, since the floor depends on the grid's
+  own chrome.
+- **Bottom region, band 2: the source-data grid.** A read-only table over the
+  rooms of the current scope — **every level, not the levels on screen**.
+  That is deliberate and worth restating because a level filter feels like it
+  "should" follow the plans: with several zones on different levels there is
+  no single answer, and it would make the grid's contents depend on
+  presentation state, reintroducing exactly the scope/presentation blur the
+  global-scope migration removed. Filtering by level stays available as an
+  ordinary per-column filter, driven by the user.
+  Model-derived and dRofus-derived columns are **grouped and tinted, never
+  interleaved** — [Sources](STRATEGY-SOURCES.md) keeps dRofus a distinct
+  sub-object ("store raw, join late") precisely because the two have
+  different lifecycles, and a flat table would imply a single source of truth
+  the data model deliberately doesn't have. A per-source toggle shows either
+  or both. dRofus columns come from the response's own `drofus_labels` set,
+  **not** a union of the rooms' joined fields, so a column that matched no
+  room in scope still appears (and one with no Revit counterpart in row 2 of
+  the CSV renders visibly *unmapped* rather than being hidden — the same
+  honesty the coverage report applies). An unmatched room simply has empty
+  dRofus cells, never an error.
+  **Row windowing from the start**, because the row count is the design
+  constraint: `big-plate` is 5,046 rooms on a *single* level and the grid
+  spans every level in scope. Only the visible slice is ever in the DOM, with
+  two spacer rows standing in for the rest of the scroll height — measured at
+  **28 rows in the DOM against 10,092 rows of data**. This is the
+  one-dimensional case of `paintLevel`'s cull units (precompute each item's
+  extent, render only what is in view) rather than a second pattern invented
+  for the same problem; `table-layout: fixed` is load-bearing, since
+  content-derived widths would jitter as rows swap in and out.
+  Sorting (numeric when both sides parse) and per-column filters are
+  client-side; the header is rebuilt only when the *column set* changes, so a
+  filter keystroke never detaches the input being typed into. CSV export
+  follows the existing precedent — visible columns, every filtered row,
+  client-side, no server endpoint.
+  **The two bands inform each other.** `compute_validation` keys its
+  field-level findings by (room, field), which in this grid *is* a (row,
+  column) address — so a mismatch is marked on the disagreeing cell in place,
+  not only listed above; room-level findings (no link value, unmatched,
+  duplicate) have no column and mark the Id cell instead. Clicking a band-1
+  entry scrolls band 2 to that room rather than repeating its values.
+  **Stacked, not side by side — settled with real data**, as the handover
+  asked. On a 50-column project the grid needs ~4,700px and has ~1,350px;
+  giving band 1 a 30% left column would cut visible columns from 10 to 7,
+  while the areas table's 544px minimum wouldn't fit the column it was given
+  — two horizontal scrollbars and a worse grid. Band 2 is the scarcer
+  resource, and stacking protects it.
+- **Data validation in band 1: summary strip, highlighting, CSV export.** The
+  block's collapsed strip carries what the old header badge did (`⚠ N`, `✓`,
+  hidden entirely when dRofus isn't configured); expanding it lists
+  [Server](STRATEGY-SERVER.md)'s six dRofus health checks
   (missing/duplicate link values, unmatched-in-dRofus, property mismatches,
   and the two Revit-side presence checks, `fields_absent_in_revit` /
   `fields_empty_in_revit`), plus an always-shown, non-error **field
@@ -64,12 +148,13 @@ side should shape future server endpoints.
   from the issue sections specifically so it survives the "No issues found"
   collapse instead of disappearing with it, and it stays out of the badge
   count — it's a config reference, not a data-quality problem. Fetched only
-  when the project selection changes or via the panel's own Refresh button —
+  when the project selection changes or via the block's own Refresh button —
   deliberately not on the 2s room poll, since this is an on-demand check, not
   something to watch update live. Two things layered on top, both entirely
   client-side: (1) rooms with any issue (across all six checks) get a
   distinct fill (`.room.error`, a new `--error` CSS variable) *only while the
-  panel is open* — `showErrors` toggles with the panel's visibility and
+  block is expanded* — `showErrors` is page state tracking that expansion
+  (it was per-zone panel visibility before the region existed) and
   triggers a `refit: false` re-render, so opening/closing it never disturbs
   the current pan/zoom. (2) A "Download CSV" button builds a `room_id,error`
   CSV directly from the already-fetched report (one row per issue, so a room
@@ -198,12 +283,18 @@ side should shape future server endpoints.
   far you zoom (the overlay isn't re-rendered on pan/zoom); making labels
   zoom-responsive means driving `renderAreasOverlay` from the pan/zoom path
   with a view-derived `baseFont`, throttled the way `cullZone` is — deferred
-  pending need. A summary
-  panel puts each group's dissolved **footprint** area beside its summed **net**
-  room area (computed client-side by shoelace over each room's loops) and their
-  **Δ** = wall zones + filled voids, with a per-level total and a cross-level
-  total for the tier — the two numbers answer different questions, and their
-  difference is itself legible. All client-side, the same "axum stays a pure JSON
+  pending need. The **figures live in the bottom region's band 1**, not beside
+  the plan: one table for the page covering **every level in scope**, each
+  group's dissolved **footprint** area beside its summed **net** room area
+  (computed client-side by shoelace over each room's loops) and their **Δ** =
+  wall zones + filled voids, with per-level subtotals and an all-levels total
+  — the two numbers answer different questions, and their difference is itself
+  legible. The split is the region model's: the **overlay** is presentation on
+  one zone's level (so its tier picker stays per-zone), while the **figures**
+  are a result over the whole scope (so the band carries its own tier picker,
+  and can show Department figures while a zone's overlay draws Building). The
+  `/areas` fetch is shared — one dataset feeds every open overlay and the
+  table. All client-side, the same "axum stays a pure JSON
   API" line as the colour maths and CSV export: the server ships coordinates and
   areas, the browser draws and tabulates. Fetched **on demand** (on toggle, and
   refreshed when new room data arrives) rather than on the 2s room poll, since
@@ -274,11 +365,12 @@ side should shape future server endpoints.
   not a navigation, so it adds no Back-button history). localStorage stores
   **only the project id** (the one selection every page shares); the viewer's
   building/milestone are viewer-specific and per-project, so they ride the **URL
-  only** and never seed the other pages. The viewer persists only its **first
-  zone** (`zones[0]`) — restoring N independent zone scopes from one URL isn't
-  worth the complexity — and its restore also seeds localStorage (parity with the
-  editors, whose restore persists via `selectProject`), so a bookmarked viewer
-  link carries the project onward. Deliberately kept a small URL/localStorage fix,
+  only** and never seed the other pages. Under global scope the URL simply
+  mirrors *the* selection — the old "persist only `zones[0]`" special case
+  (and the question it papered over) fell away with per-zone scope — and the
+  viewer's restore also seeds localStorage (parity with the editors, whose
+  restore persists via `selectProject`), so a bookmarked viewer link carries
+  the project onward. Deliberately kept a small URL/localStorage fix,
   not a router or framework — the STRATEGY trigger for that ("writing the same
   state into several DOM places and watching them drift") isn't met.
 
