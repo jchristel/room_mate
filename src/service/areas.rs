@@ -70,13 +70,6 @@ const COLLINEAR_EPS_FT: f64 = 1e-6;
 /// either is ever tuned per model.
 const MAX_WALL_FT: f64 = 1.5;
 
-/// Join angle (radians) for the buffer offsets. `LineJoin::Miter` keeps corners
-/// sharp up to this angle instead of bevelling them; room boundaries are
-/// rectilinear, so a near-maximal miter angle preserves the square 90° wall
-/// corners a close would otherwise round or cut. i_overlay clamps to <0.99π, so
-/// this is effectively "miter everything".
-const MITER_ANGLE_RAD: f64 = std::f64::consts::PI;
-
 /// Build a `geo` polygon from a room's **outer** loop only. Interior loops
 /// (the room's own holes — a column or shaft) are dropped here by construction:
 /// the footprint is the outline you'd trace around the room, so a room's own
@@ -117,7 +110,7 @@ fn footprint_of_rooms<'a>(rooms: impl Iterator<Item = &'a Room>) -> MultiPolygon
     close_and_clean(&acc)
 }
 
-/// Morphological close: dilate by `r`, then erode by `r`, with miter joins.
+/// Morphological close: dilate by `r`, then erode by `r`.
 ///
 /// This is the single operation that makes the aggregation modelling-agnostic.
 /// Dilating grows every polygon outward by `r`; two rooms separated by a gap ≤
@@ -129,21 +122,34 @@ fn footprint_of_rooms<'a>(rooms: impl Iterator<Item = &'a Room>) -> MultiPolygon
 /// do not. `r = MAX_WALL_FT/2`, so `MAX_WALL_FT` is exactly the widest wall that
 /// gets filled.
 ///
-/// Idempotent on already-closed geometry, which is why running it at every tier
-/// (below) does not compound: a tier only ever adds the bands newly enclosed at
-/// that tier, and leaves lower tiers' boundaries where they were.
+/// **Bevel joins, not miter.** A miter join extends a convex corner to a sharp
+/// point that the erode does not always clean up, leaving a spike — visible as a
+/// triangular flag where two department footprints meet. Bevel never spikes: it
+/// cuts each corner with a short chord. That cut is then repaired by unioning the
+/// original geometry back (see [`close_and_clean`]), so the net result is sharp
+/// corners with no spikes — which miter could not give.
 fn morphological_close(mp: &MultiPolygon<f64>, r: f64) -> MultiPolygon<f64> {
     if r <= 0.0 || mp.0.is_empty() {
         return mp.clone();
     }
     // LineJoin isn't Clone in i_overlay, so build the style fresh for each pass.
-    let dilated = mp.buffer_with_style(BufferStyle::new(r).line_join(LineJoin::Miter(MITER_ANGLE_RAD)));
-    dilated.buffer_with_style(BufferStyle::new(-r).line_join(LineJoin::Miter(MITER_ANGLE_RAD)))
+    let dilated = mp.buffer_with_style(BufferStyle::new(r).line_join(LineJoin::Bevel));
+    dilated.buffer_with_style(BufferStyle::new(-r).line_join(LineJoin::Bevel))
 }
 
-/// Close wall-width gaps/bands, then drop redundant collinear vertices from every
-/// surviving ring — exterior **and** interior. Interior rings are genuine voids
-/// (wider than a wall) and are kept, so the footprint area excludes them.
+/// Close wall-width gaps/bands, **restore the original corners**, then drop
+/// redundant collinear vertices from every surviving ring (exterior AND
+/// interior). Interior rings are genuine voids (wider than a wall) and are kept,
+/// so the footprint area excludes them.
+///
+/// The close bevels every corner (geo's dilate/erode is not perfectly corner-
+/// preserving), which shows as chipped corners and triangular flags where two
+/// department footprints meet. Unioning the *original* geometry back in repairs
+/// that for free: a real corner sticks out past the bevel, so the union restores
+/// it sharp — while the filled wall bands, which the original does not contain,
+/// survive untouched. This is a standard close-then-restore and is why bevel (not
+/// miter) joins are safe: bevel only ever cuts corners, and the cut is repaired
+/// here.
 ///
 /// Applied after *every* union, bottom tier and upward. Running the close per
 /// tier is what fills a wall at the tier that first encloses both its sides — a
@@ -152,15 +158,150 @@ fn morphological_close(mp: &MultiPolygon<f64>, r: f64) -> MultiPolygon<f64> {
 /// genuinely wide void is never filled at any tier.
 fn close_and_clean(mp: &MultiPolygon<f64>) -> MultiPolygon<f64> {
     let closed = morphological_close(mp, MAX_WALL_FT / 2.0);
+    // Restore the sharp original corners the close chipped, without disturbing
+    // the filled walls (the original doesn't cover them) or the open voids (a
+    // void is a hole in both `closed` and `mp`, so it stays a hole in the union).
+    // Union-back repairs corners that sit on a room; the wall-band ENDS (where a
+    // filled wall meets the outer boundary — not a room corner) are then sharpened
+    // by `sharpen_bevels`, and `dedup_collinear` drops the redundant points both
+    // steps leave behind.
+    let restored = closed.union(mp);
+    // Directions the input actually had — the reference for the de-bevel. Any
+    // output edge at a direction outside this set is a chord the close invented.
+    let dirs = edge_dirs(mp);
+    let clean = |ring: &LineString<f64>| dedup_collinear(&sharpen_bevels(ring, &dirs));
     MultiPolygon::new(
-        closed
+        restored
             .iter()
-            .map(|p| {
-                let holes = p.interiors().iter().map(dedup_collinear).collect();
-                Polygon::new(dedup_collinear(p.exterior()), holes)
-            })
+            .map(|p| Polygon::new(clean(p.exterior()), p.interiors().iter().map(clean).collect()))
             .collect(),
     )
+}
+
+/// Angular tolerance (radians, ~1.1°) for calling two edge directions "the same".
+/// Absorbs float noise and a real model's slight non-orthogonality, while a 45°
+/// chamfer (0.785 rad off any axis) is nowhere near a real direction.
+const DIR_TOL_RAD: f64 = 0.02;
+
+/// The set of edge *directions* (line orientations, mod π) present in a geometry.
+/// This is the reference for what counts as a real edge: an edge direction the
+/// input never had is one the close invented. Deduplicated within `DIR_TOL_RAD`
+/// so the list stays tiny (two entries for an axis-aligned building, a few more
+/// for one with angled wings).
+fn edge_dirs(mp: &MultiPolygon<f64>) -> Vec<f64> {
+    let mut dirs: Vec<f64> = Vec::new();
+    let mut add = |a: f64| {
+        if !dirs.iter().any(|&d| angular_diff(a, d) <= DIR_TOL_RAD) {
+            dirs.push(a);
+        }
+    };
+    for poly in mp.iter() {
+        for ring in std::iter::once(poly.exterior()).chain(poly.interiors()) {
+            let pts = &ring.0;
+            for w in pts.windows(2) {
+                if let Some(a) = dir_angle(w[0], w[1]) {
+                    add(a);
+                }
+            }
+        }
+    }
+    dirs
+}
+
+/// Line orientation of an edge as an angle in `[0, π)` (direction is unsigned —
+/// `p→q` and `q→p` are the same line). `None` for a zero-length edge.
+fn dir_angle(p: Coord<f64>, q: Coord<f64>) -> Option<f64> {
+    let (dx, dy) = (q.x - p.x, q.y - p.y);
+    if dx.hypot(dy) < 1e-6 {
+        return None;
+    }
+    Some(dy.atan2(dx).rem_euclid(std::f64::consts::PI))
+}
+
+/// Smallest angle between two orientations in `[0, π)`.
+fn angular_diff(a: f64, b: f64) -> f64 {
+    let d = (a - b).abs() % std::f64::consts::PI;
+    d.min(std::f64::consts::PI - d)
+}
+
+/// Remove the diagonal chords the close cuts across corners — the "mitre"
+/// artifacts — restoring the sharp corner in their place.
+///
+/// The rule is the user's own, made exact: **an output edge whose direction was
+/// not in the input is an artifact.** The close cuts a corner with a chord at a
+/// direction (usually 45°) that no wall had. So an edge whose orientation is not
+/// in `dirs` (the directions present in the pre-close geometry) is replaced by
+/// the intersection of its two neighbours — the corner they define — at any
+/// chamfer size. A genuinely angled wall (a rotated pool, a splayed wing) keeps
+/// its direction *because that direction is in `dirs`*, so it is never touched.
+/// This is why the test references the starting polygon and not a fixed idea of
+/// "axis-aligned": a building drawn on the diagonal is handled the same way.
+///
+/// Iterated to a fixpoint so chained chamfers at a complex junction resolve one
+/// corner per pass. Operates on one closed ring.
+fn sharpen_bevels(ring: &LineString<f64>, dirs: &[f64]) -> LineString<f64> {
+    let raw = &ring.0;
+    let closed = raw.len() >= 2 && raw.first() == raw.last();
+    let mut pts: Vec<Coord<f64>> = if closed { raw[..raw.len() - 1].to_vec() } else { raw.to_vec() };
+
+    let same = |p: &Coord<f64>, q: &Coord<f64>| (p.x - q.x).abs() <= COLLINEAR_EPS_FT && (p.y - q.y).abs() <= COLLINEAR_EPS_FT;
+    let is_real_dir = |p: Coord<f64>, q: Coord<f64>| match dir_angle(p, q) {
+        Some(a) => dirs.iter().any(|&d| angular_diff(a, d) <= DIR_TOL_RAD),
+        None => true, // degenerate edge — nothing to sharpen
+    };
+
+    for _ in 0..8 {
+        let n = pts.len();
+        if n < 4 {
+            break;
+        }
+        let mut out = pts.clone();
+        let mut changed = false;
+        for i in 0..n {
+            let (a, b, c, d) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n], pts[(i + 2) % n]);
+            if is_real_dir(b, c) {
+                continue; // a direction the input had — keep it
+            }
+            if let Some(x) = line_intersection(a, b, c, d) {
+                out[i] = x;
+                out[(i + 1) % n] = x; // collapse the chord onto the corner it cut
+                changed = true;
+            }
+        }
+        // Drop consecutive duplicates (the collapsed pairs and any exact repeats).
+        let mut deduped: Vec<Coord<f64>> = Vec::with_capacity(out.len());
+        for p in out {
+            if deduped.last().is_none_or(|q| !same(q, &p)) {
+                deduped.push(p);
+            }
+        }
+        while deduped.len() >= 2 && same(&deduped[0], &deduped[deduped.len() - 1]) {
+            deduped.pop();
+        }
+        pts = deduped;
+        if !changed {
+            break;
+        }
+    }
+
+    if pts.len() < 3 {
+        return ring.clone();
+    }
+    pts.push(pts[0]); // re-close
+    LineString::from(pts)
+}
+
+/// Intersection of the infinite lines through `(a,b)` and `(c,d)`. `None` when
+/// they are parallel.
+fn line_intersection(a: Coord<f64>, b: Coord<f64>, c: Coord<f64>, d: Coord<f64>) -> Option<Coord<f64>> {
+    let (rx, ry) = (b.x - a.x, b.y - a.y);
+    let (sx, sy) = (d.x - c.x, d.y - c.y);
+    let denom = rx * sy - ry * sx;
+    if denom.abs() < 1e-9 {
+        return None;
+    }
+    let t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / denom;
+    Some(Coord { x: a.x + t * rx, y: a.y + t * ry })
 }
 
 /// Dissolve already-closed child footprints into one parent footprint: union
@@ -716,16 +857,38 @@ mod tests {
         assert!(!group(&g, "L1", &[tv("Building", "B1"), tv("Dept", "Outdoor")]).counted_upward);
     }
 
-    /// A single plain room → one solid island, no holes, its own area. (Exact
-    /// vertex count is no longer asserted: the close bevels corners by a sub-inch
-    /// amount, so a rectangle comes back with a few extra points — irrelevant to
-    /// the area, which `dedup_collinear` and `approx_area` both tolerate.)
+    /// Distinct exterior vertices of a single-polygon footprint (closing point
+    /// dropped) as rounded coords, for corner-count assertions.
+    fn corner_count(poly: &Polygon<f64>) -> usize {
+        let pts = &poly.exterior().0;
+        pts[..pts.len().saturating_sub(1)].len()
+    }
+
+    /// A single plain room → one solid island, no holes, its own area, and —
+    /// because the close's corner bevels are repaired by the union-back — **exactly
+    /// four corners**, not the chipped octagon the bare close produces. This is
+    /// the regression guard for the corner-artifact fix.
     #[test]
     fn test_single_room_outer_ring() {
         let fp = group_footprint(&[room("r", &[&rect(0.0, 0.0, 10.0, 8.0)])]);
         assert_eq!(fp.0.len(), 1, "one room -> one polygon");
         assert!(fp.0[0].interiors().is_empty(), "no holes");
+        assert_eq!(corner_count(&fp.0[0]), 4, "corners restored sharp, no bevel chips");
         approx_area(footprint_area(&fp), 80.0);
+    }
+
+    /// Two edge-to-edge rooms dissolve to a clean rectangle — four corners, no
+    /// bevel chips at the two outer corners of the merged block. The union-back
+    /// repairs what the close would otherwise chip.
+    #[test]
+    fn test_dissolved_block_has_sharp_corners() {
+        let fp = group_footprint(&[
+            room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
+            room("b", &[&rect(10.0, 0.0, 20.0, 10.0)]),
+        ]);
+        assert_eq!(fp.0.len(), 1);
+        assert_eq!(corner_count(&fp.0[0]), 4, "merged 20x10 block has exactly four corners");
+        approx_area(footprint_area(&fp), 200.0);
     }
 
     /// A room with its own interior hole (a column): the hole is dropped at the
@@ -815,6 +978,35 @@ mod tests {
         let distinct = &out.0[..out.0.len() - 1];
         assert_eq!(distinct.len(), 4, "the collinear midpoint is dropped, real corners kept");
         assert!(out.0.first() == out.0.last(), "ring stays closed");
+    }
+
+    /// `sharpen_bevels` directly, keyed to the input's edge directions.
+    #[test]
+    fn test_sharpen_bevels_removes_only_invented_directions() {
+        use std::f64::consts::PI;
+        let axis = [0.0, PI / 2.0]; // an axis-aligned input: only H and V directions
+
+        // A LARGE 45° chamfer (4 ft chord) cut across the top-right 90° corner —
+        // exactly the artifact, and far bigger than any length cap would catch.
+        let beveled = LineString::from(vec![
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 6.0), // up the right edge, stops 4 ft short
+            (6.0, 10.0), // 45° chamfer across the corner
+            (0.0, 10.0),
+            (0.0, 0.0),
+        ]);
+        let out = sharpen_bevels(&beveled, &axis);
+        let d = &out.0[..out.0.len() - 1];
+        assert_eq!(d.len(), 4, "the 45° chord collapses to one sharp corner, any size");
+        assert!(d.iter().any(|c| (c.x - 10.0).abs() < 1e-6 && (c.y - 10.0).abs() < 1e-6), "corner restored at (10,10)");
+
+        // The SAME diagonal chord, but now the input genuinely had that direction
+        // (a splayed / rotated building): it must be kept, not sharpened.
+        let diag_dir = dir_angle(Coord { x: 10.0, y: 6.0 }, Coord { x: 6.0, y: 10.0 }).unwrap();
+        let dirs_with_diag = [0.0, PI / 2.0, diag_dir];
+        let out = sharpen_bevels(&beveled, &dirs_with_diag);
+        assert_eq!(out.0[..out.0.len() - 1].len(), 5, "a real diagonal wall (direction in the input) is preserved");
     }
 
     /// Two rooms meant to abut, but whose shared edge coordinates disagree by
