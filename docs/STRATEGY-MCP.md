@@ -2,7 +2,7 @@
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Server](STRATEGY-SERVER.md) ·
-[Browser](STRATEGY-BROWSER.md)
+[Browser](STRATEGY-BROWSER.md) · [Authored](STRATEGY-AUTHORED.md)
 
 A second front door onto the same stored room/dRofus data: an MCP (Model
 Context Protocol) server, so any MCP-aware client (Claude Desktop, Claude

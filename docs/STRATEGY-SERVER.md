@@ -2,7 +2,7 @@
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Browser](STRATEGY-BROWSER.md) ·
-[MCP](STRATEGY-MCP.md)
+[MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md)
 
 The Rust/axum process: what it stores, how it derives data at read time, and
 how it's configured. Code is a library crate (`lib.rs`) split across `src/`

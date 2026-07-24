@@ -1,9 +1,10 @@
 # Roommate — Architecture & Strategy
 
 Notes capturing the design decisions behind the Revit → Rust → browser room
-viewer. Written as a reference to come back to, not a spec. Split across five
-docs along the pipeline's own boundaries, so each can be read (and changed)
-without pulling in the others:
+viewer. Written as a reference to come back to, not a spec. Split along the
+pipeline's own boundaries, so each can be read (and changed) without pulling in
+the others — five docs describing what ships today, plus one forward-looking
+design doc for data the user authors:
 
 - **This doc** — the pipeline overview, the core split principle that governs
   all three layers, and the current wire contract they all share.
@@ -17,6 +18,12 @@ without pulling in the others:
   UI growth path, endpoint design from the fetch side.
 - **[MCP](STRATEGY-MCP.md)** — the stdio MCP server: a second, tool-based
   front door onto the same read-side logic the server exposes over HTTP.
+- **[Authored](STRATEGY-AUTHORED.md)** — *design settled, not built.* How
+  data the user authors — manual room connections, uploaded documents and their
+  extracted text — and its hierarchy scopes will be stored, pinned by
+  milestones, and served. An application of the upload-envelope and
+  snapshot-store patterns to input that cannot be re-derived; read it before
+  building any of that.
 
 A change that touches more than one layer (the v5 property rework did all
 three) should update every doc it touches — that's the cost of the split, and
@@ -205,3 +212,10 @@ nowhere to put a `taken_at`, so it travels as a `?taken_at=` query param,
 resolved through the same `ensure_taken_at` / `validate_snapshot_id` pair,
 omittable, and echoed back (`snapshot_taken_at` / `snapshot_id_generated`)
 like every other ingest.
+
+Rooms and dRofus are the two upload types that ship today. The same envelope is
+designed to carry **user-authored** kinds next — manually drawn room
+connections and uploaded documents — each a snapshotted stream under the
+existing store, milestone-pinnable exactly as `drofus_snapshot` already is.
+That generalization (storage layout, hierarchy scopes, the read-time join) is
+worked out in [Authored](STRATEGY-AUTHORED.md); it is design, not yet built.
