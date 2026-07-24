@@ -17,8 +17,9 @@ use tower_http::{cors::CorsLayer, decompression::RequestDecompressionLayer, serv
 use roommate::bootstrap::build_state;
 use roommate::handlers::{
     compare_project_milestones, get_drofus_latest, get_drofus_snapshots, get_model_latest_snapshot,
-    get_project_areas, get_project_buildings, get_project_milestones, get_project_snapshots,
-    get_project_validation, get_projects, get_rooms, ingest_rooms, ingest_rooms_stream,
+    get_project_adjacency, get_project_areas, get_project_buildings, get_project_milestones,
+    get_project_snapshots, get_project_validation, get_projects, get_rooms, ingest_rooms,
+    ingest_rooms_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_drofus_check, http_get_project, http_get_project_resolved,
@@ -90,6 +91,12 @@ async fn main() -> anyhow::Result<()> {
         // Hierarchy gross-area footprints: dissolved per-tier polygons + areas,
         // scoped by ?building=/?milestone= like /rooms. See service::areas.
         .route("/projects/{id}/areas", get(get_project_areas))
+        // Room-to-room adjacency: shared-wall graph for one level's rooms,
+        // scoped like /rooms plus a tunable ?wall_max= (the wall tolerance,
+        // which is what spans Revit's two room-boundary regimes). Fetched on a
+        // room SELECTION change, not the 2s poll -- its own trigger and its own
+        // consumer, which is why it is not part of /rooms. See service::adjacency.
+        .route("/projects/{id}/adjacency", get(get_project_adjacency))
         // Milestone comparison: a baseline-vs-each-other diff of rooms and a
         // user-defined property set. POST (not GET) for its list body — see
         // `handlers::compare_project_milestones`.

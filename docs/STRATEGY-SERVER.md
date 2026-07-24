@@ -460,6 +460,46 @@ each module carrying its rationale in a header, all with unit tests.
   potential; pairwise union today, `unary_union`/`rayon` held in reserve until
   measurement warrants (STRATEGY.md "Parallelism has a threshold").
 
+- **Room adjacency graph (`GET /projects/{id}/adjacency`).** The *second*
+  geometry-processing service. Which rooms share a wall, and how much wall —
+  node/edge out, so the browser draws a graph rather than deriving one. Scoped
+  by `?building=`/`?milestone=` like `/rooms` and `/areas`, 204 on an empty
+  store, single-level by decision (`level_id` sits on the **edge** anyway, so a
+  future cross-level edge needs no type change). Deliberately **no `?filter=`**:
+  a filtered room set would silently drop neighbours, and a graph that omits
+  what a room touches is worse than no graph. `service::adjacency`.
+  **The interesting part is the tolerance, and why it is a request parameter.**
+  Revit's `SpatialElementBoundaryLocation` decides where a room's boundary sits,
+  and both settings occur in real models: at **wall centreline** neighbours tile
+  edge-to-edge and the gap between them is *zero*; at **finish face** they float
+  inside their walls and the gap is the wall thickness. Nothing on the wire says
+  which — the extractor does not send that setting — so the algorithm handles
+  both and `?wall_max=` (decimal feet, default 1.5 ft) is what spans them: at or
+  near 0 for centreline, just over the thickest partition for finish face. Hence
+  **zero is a valid tolerance**, the acceptance band is closed at both ends, and
+  a `COINCIDENT_EPS_FT` folds in the export noise that stops "coincident" edges
+  being bit-identical. An out-of-range, negative, non-finite or unparseable value
+  is **400 with a message** (`ServiceError::Invalid`, the read-path convention —
+  422 is the *ingest* status here), never a silent clamp.
+  Two things the naive algorithm gets wrong and this one does not: a room
+  narrower than the tolerance (a shaft, a riser) would let its neighbours match
+  straight *through* it, so an accepted pair is rejected when a third room
+  contains the midpoint of the gap; and a Revit boundary is split at every
+  bounding element, so one wall arrives as several collinear segments and a naive
+  sum counts it two or three times — overlaps are merged per shared wall instead.
+  The `revision` is **derived, not recomputed**: `assemble_rooms` already returns
+  the snapshot-set revision, so it is hashed together with the effective
+  `wall_max`. That is what makes a tolerance change register as new content, so
+  the viewer's slider does not appear frozen.
+  **This is the first service where the Rust-side performance argument stopped
+  being theoretical.** The naive O(n²) pairing was left in place until measured
+  (STRATEGY.md's discipline), measured at ~22s on a 5,000-room level, and then
+  given a uniform bounding-box grid — the exact fix the "measure first" note
+  reserves — dropping it to ~2.5s, of which ~2.3s is the shared `assemble_rooms`
+  the endpoint calls first. Rayon was still not reached for: the grid removed the
+  quadratic term, and threading a near-linear pass would trade determinism for
+  little (STRATEGY.md "Parallelism has a threshold").
+
 - **Milestone comparison (`POST /projects/{id}/comparison`,
   `static/comparison.html`).** A star diff of N milestones against one chosen
   baseline (never all-pairs): per compared milestone, the rooms added and

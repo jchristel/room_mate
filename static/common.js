@@ -8,6 +8,51 @@
 // index.html keeps its own `fetchJson` (a GET-only variant with a different
 // error message) and does not use these.
 
+// ---------------------------------------------------------------------------
+// Palette (shared by the plan renderer in index.html and the adjacency graph in
+// graph.js).
+//
+// These live here rather than inline in index.html for one reason: two views
+// that disagree about what colour a department is are worse than either being
+// arbitrary. The plan's hierarchy colour plan and the graph's node colouring
+// MUST sample the same stops from the same function — a copy would drift the
+// first time a scheme changed. See HANDOVER-adjacency.md "Prerequisites".
+//
+// Literal hex stops, no d3/npm: the browser layer stays a zero-build vanilla
+// page. index.html keeps the colour-plan maths that reads these (sampleScheme,
+// lighten) — those are plan-specific, and only the shared vocabulary moved.
+// ---------------------------------------------------------------------------
+
+// A few ColorBrewer schemes. Sequential/diverging ones are sampled at t∈[0,1]
+// by index.html's `sampleScheme`; the categorical ones (Set2, Paired) are
+// indexed by `qualitative` below.
+const SCHEMES = {
+  RdBu: ["#ca0020", "#f4a582", "#f7f7f7", "#92c5de", "#0571b0"],
+  RdYlGn: ["#d7191c", "#fdae61", "#ffffbf", "#a6d96a", "#1a9641"],
+  Greens: ["#edf8e9", "#bae4b3", "#74c476", "#31a354", "#006d2c"],
+  Blues: ["#eff3ff", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"],
+  Set2: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f", "#e5c494", "#b3b3b3"],
+  Paired: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99", "#b15928"],
+};
+
+function hexToRgb(h) {
+  const n = parseInt(h.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function rgbToHex(r, g, b) {
+  const c = v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+
+// The k-th distinct hue of a categorical scheme, wrapping. Callers pass a
+// stable index (the position of a tier value in a sorted key list), so the same
+// department gets the same colour in the plan overlay and in the graph.
+function qualitative(scheme, k) {
+  const stops = SCHEMES[scheme] || SCHEMES.Set2;
+  return stops[k % stops.length];
+}
+
 // GET JSON with no-store caching; throws the server's error text (falling back
 // to "<url> -> <status>") on a non-2xx so callers surface it verbatim.
 async function apiGet(url) {
