@@ -266,9 +266,11 @@ side should shape future server endpoints.
   [Server](STRATEGY-SERVER.md)) on top of the current level, rooms ghosted
   beneath, with a tier picker (Building / Department / …) to choose which tier's
   footprints show. The overlay reuses the render path's transforms and the
-  categorical `Set2` palette; footprints are hole-free, so each group is a plain
-  `<polygon>` per island (no even-odd path) — a small simplification the
-  "discard holes" server decision buys the front end. A Case-A excluded group
+  categorical `Set2` palette; each island is a `<path>` of its exterior ring plus
+  any interior void rings, drawn `fill-rule="evenodd"` so a genuine courtyard or
+  atrium reads as an open hole — matching the server area, which excludes it (the
+  void-closure rule: walls fill, real voids stay open — see
+  [Server](STRATEGY-SERVER.md)). A Case-A excluded group
   (`counted_upward: false`) reads dashed + faint rather than vanishing. Tier
   labels are fitted per group (`ringBox` against the group's largest ring,
   mirroring `addLabel`'s room-label sizing but with a more conservative 0.7

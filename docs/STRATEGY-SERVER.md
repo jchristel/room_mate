@@ -437,28 +437,40 @@ each module carrying its rationale in a header, all with unit tests.
   `assemble_rooms` for the scoped, already-classified room set, so `?building=` /
   `?milestone=` scoping and classification come for free. **Islands** (disconnected
   exterior rings — separate wings of one group) are always kept: the result is a
-  `MultiPolygon` at every tier. **Holes are discarded at every tier, not just the
-  bottom** — unioning two hole-free child footprints can enclose a courtyard that
-  belongs to no room, and "enclosed open space counts as area" must hold
-  everywhere, so the strip runs after every union (this deliberately corrects the
-  design note that said stripping once suffices). Each tier's area is the
-  *measured* area of its own dissolved polygon, never a sum of children (which
-  would mishandle shared wall zones and filled voids) — so parent area ≠ Σ child
-  areas by design. **Exclusions** (`[[hierarchy_exclusions]]` in project settings,
+  `MultiPolygon` at every tier. **Each union is morphologically closed** (dilate by
+  `MAX_WALL_FT/2`, erode back, via `geo`'s miter-join `Buffer`) before it is
+  measured. This one step makes the metric robust to how the model is drawn: it
+  **bridges gaps between rooms**, so *finish-face* rooms (which float inside their
+  walls and would otherwise union into disjoint islands — Σ net area, no walls)
+  dissolve exactly like *centreline* rooms that tile edge-to-edge; it **fills wall
+  bands** up to `MAX_WALL_FT`; and it **leaves genuine voids open** — a courtyard
+  wider than a wall survives as an interior ring, its area excluded. Running the
+  close at every tier fills each wall once, at the level whose union first encloses
+  both its sides (siblings at their shared parent, different parents only at the
+  common ancestor), so areas are **additive**. This **reverses an earlier
+  decision** ("enclosed space counts, strip every hole") made under an unverified
+  centreline assumption; plan screenshots showed the real models are face-of-wall,
+  where the old rule silently produced disjoint islands and wrongly filled
+  courtyards — see handover-hierarchical-void-closure.md. Each tier's area is the
+  *measured* area of its own closed polygon, never a sum of children.
+  **Exclusions** (`[[hierarchy_exclusions]]` in project settings,
   on `ProjectSettings` since the server uses them — unlike client-only colour
   plans) come in two kinds whose match implies the pipeline stage: a `group`
   match withholds a resolved group from its parent's dissolve (Case A, stage 2 —
   drops from that tier and above, still reported with `counted_upward: false`); a
   `rooms` match drops rooms before any union (Case B, stage 1 — gone from every
   tier including their own group). The number is named an **aggregated room
-  footprint** (wall-zone/void-inclusive), *not* net area or a standards gross.
-  One computation feeds both asks — the plan-view overlay (rings) and the summary
-  table (areas) — so there is no second pipeline. The response carries hole-free
-  exterior rings, so the browser needs only `<polygon>`, no even-odd fill dance.
-  New geometry dependency: `geo` (`BooleanOps::union`, `MultiPolygon`), the first
-  crate that makes the Rust-side geometry-performance argument real rather than
-  potential; pairwise union today, `unary_union`/`rayon` held in reserve until
-  measurement warrants (STRATEGY.md "Parallelism has a threshold").
+  footprint** (room area + enclosed wall bands − genuine voids), *not* net area or
+  a standards gross. One computation feeds both asks — the plan-view overlay
+  (footprint polygons) and the summary table (areas) — so there is no second
+  pipeline. The response carries each island as an exterior ring plus any interior
+  void rings, so the browser renders an even-odd path and a courtyard reads as open,
+  matching the area. Geometry dependency: `geo` (`BooleanOps::union`, `Buffer`,
+  `MultiPolygon`) — the `Buffer` is `geo` 0.33's native offset over `i_overlay`
+  (miter joins, negative distance), no new crate; the first service where the
+  Rust-side geometry argument is real. Pairwise union today, `unary_union`/`rayon`
+  held in reserve until measurement warrants (STRATEGY.md "Parallelism has a
+  threshold").
 
 - **Room adjacency graph (`GET /projects/{id}/adjacency`).** The *second*
   geometry-processing service. Which rooms share a wall, and how much wall —
