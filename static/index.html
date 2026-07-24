@@ -1777,7 +1777,20 @@ function pathKey(path, depth) { return path.slice(0, depth + 1).map(tierSig).joi
 function tierLabel(t) { return t.undefined ? `undefined ${t.tier}` : (t.name || t.code || t.tier); }
 
 // A footprint ring is [[x,y],…] in model coords; flip Y for the SVG's Y-down space.
-function ringPointsAttr(ring) { return ring.map(([x, y]) => `${x},${-y}`).join(" "); }
+// SVG path `d` for a footprint polygon: its exterior ring plus any interior
+// rings (voids), each a closed subpath. Rendered with fill-rule:evenodd so the
+// interior rings cut holes. Y is flipped (model Y-up -> SVG Y-down) like every
+// other geometry the viewer draws.
+function ringSubpath(ring) {
+  return "M" + ring.map(([x, y]) => `${x},${-y}`).join("L") + "Z";
+}
+function footprintPathD(poly) {
+  let d = ringSubpath(poly.exterior);
+  for (const hole of (poly.holes || [])) {
+    if (hole && hole.length >= 3) d += ringSubpath(hole);
+  }
+  return d;
+}
 
 function ringAreaAbs(ring) {
   let a = 0;
@@ -1864,16 +1877,22 @@ function renderAreasOverlay(zone) {
 
   groups.forEach((grp, i) => {
     const colour = qualitative("Set2", i);
-    for (const ring of grp.rings) {
-      if (!ring || ring.length < 3) continue;
-      const poly = document.createElementNS(SVG, "polygon");
-      poly.setAttribute("points", ringPointsAttr(ring));
-      poly.setAttribute("class", grp.counted_upward ? "area-poly" : "area-poly faded");
-      poly.style.fill = colour;
-      poly.style.stroke = colour;
-      g.appendChild(poly);
+    for (const poly of grp.polygons) {
+      if (!poly.exterior || poly.exterior.length < 3) continue;
+      // Exterior plus any interior rings (genuine voids) as ONE even-odd path,
+      // so a courtyard reads as a hole cut from the footprint — matching the
+      // area, which excludes it. A plain <polygon> per ring can't express that.
+      const path = document.createElementNS(SVG, "path");
+      path.setAttribute("d", footprintPathD(poly));
+      path.setAttribute("fill-rule", "evenodd");
+      path.setAttribute("class", grp.counted_upward ? "area-poly" : "area-poly faded");
+      path.style.fill = colour;
+      path.style.stroke = colour;
+      g.appendChild(path);
     }
-    const big = grp.rings.reduce((a, b) => (b && ringAreaAbs(b) > ringAreaAbs(a || []) ? b : a), grp.rings[0]);
+    // Label goes on the largest exterior ring across the group's islands.
+    const exteriors = grp.polygons.map(p => p.exterior).filter(r => r && r.length >= 3);
+    const big = exteriors.reduce((a, b) => (ringAreaAbs(b) > ringAreaAbs(a || []) ? b : a), exteriors[0]);
     if (big && big.length >= 3) {
       const text = tierLabel(grp.path[depth]);
       // Fit the label to its ring, mirroring addLabel()'s room-label sizing:
@@ -1956,7 +1975,7 @@ function renderAreasBand() {
   }).join("");
 
   content.innerHTML = groups.length
-    ? `<p class="note">Dissolved footprint vs summed net room area (model units²), every level in scope. Δ = wall zones + filled voids.</p>
+    ? `<p class="note">Dissolved footprint vs summed net room area (model units²), every level in scope. Δ = enclosed wall bands + filled room voids (columns); open courtyards are excluded from the footprint.</p>
        <table><thead><tr><th class="lvl">Level</th><th>Group</th><th>Footprint</th><th>Net</th><th>Δ</th></tr></thead>
        <tbody>${rows}<tr class="total"><td class="lvl"></td><td>All levels</td><td>${fmt(grandF)}</td><td>${fmt(grandN)}</td><td>${fmt(grandF - grandN)}</td></tr></tbody></table>`
     : `<p class="note">No footprints at this tier.</p>`;
