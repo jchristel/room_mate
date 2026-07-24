@@ -37,14 +37,16 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   **stderr only**: stdout is the JSON-RPC stream, and anything else written
   there (an errant `println!`, a stdout-default `tracing_subscriber`)
   silently corrupts the protocol.
-- **Twelve tools: one per existing read route, two settings reads, and one
+- **Fifteen tools: one per existing read route, two settings reads, and one
   forwarded upload.**
   `list_projects`, `list_buildings`, `get_rooms` (project/building/milestone/
   property filters optional — see the property-filter bullet below),
   `get_validation`, `list_snapshots`,
-  `get_latest_snapshot`, `list_milestones`, `list_drofus_snapshots`, and
-  `get_drofus_snapshot` mirror the nine HTTP read routes (snapshot-history,
-  milestone, and dRofus-upload endpoints: see [Server](STRATEGY-SERVER.md);
+  `get_latest_snapshot`, `list_milestones`, `compare_milestones`,
+  `get_hierarchy_areas`, `get_adjacency`, `list_drofus_snapshots`, and
+  `get_drofus_snapshot` mirror the twelve HTTP read routes (snapshot-history,
+  milestone, geometry and dRofus-upload endpoints: see
+  [Server](STRATEGY-SERVER.md);
   `get_latest_snapshot` and `get_drofus_snapshot` map the service's `None` —
   HTTP's 404 — to a short plain-text answer, same convention as `get_rooms`'
   empty-store case).
@@ -173,7 +175,11 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
 - **New `service/` capabilities are a tool away, not a rewrite.** Per the
   handover doc's whole premise: shortest path, F&E, drawings each become one
   `service/` file, one HTTP route, and (optionally) one `#[tool]` method
-  here — none of the three touches the others.
+  here — none of the three touches the others. `get_adjacency` is the most
+  recent worked example, added alongside `service::adjacency` and its HTTP route
+  in the same move and sharing even the tolerance validation (`resolve_wall_max`
+  lives in the service), so the two front doors cannot disagree on what a valid
+  `wall_max` is.
 - **No resources or prompts exposed**, only tools — matches the handover
   doc's "read side ... as tools" scope. Worth revisiting if an MCP client
   wants to browse stored snapshots as resources rather than calling a tool

@@ -145,6 +145,12 @@
      plan or error); non-matches fade so matches stand out. `.dim` is opacity so
      it works regardless of an inline colour-plan fill. */
   .room.match { stroke: var(--accent); stroke-width: 3; }
+  /* Click-selection (HANDOVER-ui-layout Decision 3): ONE room at a time for the
+     whole page. Deliberately louder than `.match` and dashed, so a selected room
+     is still distinguishable when it is also a search match — the two states are
+     independent and routinely co-occur. Stroke only, never fill: a colour plan
+     fill must survive being selected. */
+  .room.selected { stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3; }
   .dim { opacity: 0.15; }
   .hole { fill: var(--paper); stroke: var(--ink); stroke-width: 1;
           stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
@@ -248,6 +254,24 @@
     background: var(--paper); color: var(--ink);
     border: 1px solid var(--ink); padding: 0.2rem 0.4rem; margin-bottom: 0.6rem;
   }
+
+  /* --- adjacency graph (band 1, canvas) ---
+     The body is the one band body that does NOT scroll: its content is a
+     canvas that must fill whatever height the band is given, not a document
+     that grows. The bar is fixed, the canvas takes the rest. */
+  #adjBody { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0.4rem; }
+  #adjBar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 0.9rem;
+    flex-wrap: wrap; margin-bottom: 0.4rem;
+  }
+  #adjBar label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; letter-spacing: 0.04em; }
+  #adjBar select.picker { margin-bottom: 0; }
+  #adjBar input[type="range"] { width: 8rem; accent-color: var(--accent); }
+  #adjBar .count { font-size: 0.66rem; color: var(--accent); letter-spacing: 0.06em; }
+  #adjBar #adjMeta { margin-left: auto; }
+  /* A minimum so a collapsed-to-nothing band never renders a 3px canvas; the
+     region's own drag handle is how the user gives the graph real room. */
+  #adjCanvas { flex: 1 1 auto; min-height: 200px; width: 100%; display: block; }
 
   /* --- hierarchy gross-area footprints: overlay + summary --- */
   .zone-toolbar button.areas-toggle {
@@ -394,6 +418,38 @@
         <div id="areasContent"></div>
       </div>
     </div>
+    <!-- Adjacency graph. A band-1 block like the other two, for the same
+         reason: it is a page-level result derived from the scope (plus the one
+         page selection), not a per-zone presentation. Lives here rather than in
+         a right-hand column because that column is reserved for the room
+         inspector (HANDOVER-ui-layout Decision 3). -->
+    <div class="result-band hidden" id="adjBand">
+      <button class="band-head" id="adjHead">▸ Adjacency</button>
+      <div class="band-body hidden" id="adjBody">
+        <div id="adjBar">
+          <label>Depth
+            <select class="picker" id="adjDepth" title="How many walls out from the selected room">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+            </select>
+          </label>
+          <label>Colour <select class="picker" id="adjTier" title="Classification tier driving node colour"></select></label>
+          <!-- The wall tolerance, in mm because that is what a UK/EU hospital
+               job is drawn in; the wire value is feet, converted at this edge.
+               A TUNING INSTRUMENT, not a settled preference: once real models
+               establish a working value it should be baked in as the server
+               default and this control reconsidered. -->
+          <label id="adjWallLabel" title="Largest gap still counted as a shared wall. 0 suits a model whose room boundaries sit on wall centrelines; the wall thickness suits one using finish faces.">
+            Wall gap
+            <input type="range" id="adjWall" min="0" max="900" step="10" />
+            <span id="adjWallOut" class="count"></span>
+          </label>
+          <span class="count" id="adjMeta"></span>
+        </div>
+        <canvas id="adjCanvas"></canvas>
+      </div>
+    </div>
     </div><!-- /#band1 -->
 
     <!-- The band 1 / band 2 split. Shown only when a band-1 block is actually
@@ -444,6 +500,10 @@
 <!-- Shared selection-persistence helpers (seedProjectId / persistSelection),
      the same file settings.html and comparison.html load. -->
 <script src="common.js"></script>
+<!-- The adjacency graph's canvas renderer. Its own file, not another few
+     hundred lines of index.html: it is the page's second renderer (canvas, not
+     SVG) and the file boundary is where the concern boundary is. -->
+<script src="graph.js"></script>
 <script>
 const SVG = "http://www.w3.org/2000/svg";
 const zonesEl = document.getElementById("zones");
@@ -511,6 +571,22 @@ let searchFieldsInitialised = false;
 // matches are visible.
 let searchMatchIds = null;
 let searchActive = false;
+
+// ---- room selection: PAGE state, not zone state (HANDOVER-ui-layout Decision 3)
+// One selected room at a time regardless of which zone the click landed in. The
+// same room can legitimately appear in two zones showing the same level, so the
+// highlight is applied in EVERY zone that draws it, while `selectedZoneId`
+// records where the click came from. That id is a *label* (the graph panel names
+// it), not `activeZoneId` focus machinery — selection is explicit, never
+// inferred from where the user last interacted, which is what made the old focus
+// model expensive.
+let selectedRoomId = null;
+let selectedZoneId = null;
+// Anything that wants to react to a selection change registers here. The
+// adjacency graph is the only listener today; keeping it a list means the
+// future room inspector (the other half of Decision 3) adds itself rather than
+// editing `selectRoom`.
+const selectionListeners = [];
 
 async function fetchJson(url) {
   const res = await fetch(url, { cache: "no-store" });
@@ -623,25 +699,10 @@ const MISMATCH_COLOUR = "#d73027";  // red:   outside tolerance
 // the green→red near/far ramp (the RdYlGn scheme has no blue of its own).
 const FUTURE_COLOUR = "#2c7fb8";
 
-// A few ColorBrewer schemes as literal hex stops — no d3/npm, the browser
-// layer stays a zero-build vanilla page. Sampled at t∈[0,1] by `sampleScheme`.
-const SCHEMES = {
-  RdBu: ["#ca0020", "#f4a582", "#f7f7f7", "#92c5de", "#0571b0"],
-  RdYlGn: ["#d7191c", "#fdae61", "#ffffbf", "#a6d96a", "#1a9641"],
-  Greens: ["#edf8e9", "#bae4b3", "#74c476", "#31a354", "#006d2c"],
-  Blues: ["#eff3ff", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"],
-  Set2: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f", "#e5c494", "#b3b3b3"],
-  Paired: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99", "#b15928"],
-};
-
-function hexToRgb(h) {
-  const n = parseInt(h.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-function rgbToHex(r, g, b) {
-  const c = v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
-  return `#${c(r)}${c(g)}${c(b)}`;
-}
+// `SCHEMES`, `hexToRgb`, `rgbToHex` and `qualitative` now live in common.js —
+// the graph mode colours its nodes by department and must sample the exact same
+// stops the hierarchy colour plan does. They are plain globals loaded ahead of
+// this script; the plan-specific maths below still reads them unchanged.
 function sampleScheme(name, t) {
   const stops = SCHEMES[name] || SCHEMES.RdBu; // unknown scheme -> a safe default
   t = Math.max(0, Math.min(1, t));
@@ -660,10 +721,6 @@ function numericProp(room, name) {
   return Number.isFinite(n) ? n : null;
 }
 
-function qualitative(scheme, k) {
-  const stops = SCHEMES[scheme] || SCHEMES.Set2;
-  return stops[k % stops.length];
-}
 function lighten(hex, t) {
   const [r, g, b] = hexToRgb(hex);
   return rgbToHex(r + (255 - r) * t, g + (255 - g) * t, b + (255 - b) * t);
@@ -1008,6 +1065,11 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
     showLabels: showRoomLabels,
   });
   cullZone(zone); // hide off-screen rooms for the current view straight away
+  // `paintLevel` built fresh nodes, so the selection class is gone with the old
+  // ones. Re-applied here rather than threaded through paintLevel's options
+  // because the SVG export shares that function and must never carry a
+  // selection stroke into a saved file.
+  applySelection(zone);
 
   // Re-add the areas overlay on top: renderLevel is the single choke point every
   // re-render (poll, colour, validation, level switch) passes through, so this
@@ -1112,6 +1174,13 @@ function ingestAll(payload) {
   // New room data means the footprints changed: refresh them (data + overlays
   // + band figures) while any zone has the mode open. Fire-and-forget.
   if (zones.some(z => z.areasMode)) loadAreas();
+
+  // The adjacency block has something to graph once rooms exist. Same on-demand
+  // lifecycle as the areas fetch: the strip appears, but nothing is computed
+  // until the user opens it.
+  document.getElementById("adjBand").classList.remove("hidden");
+  updateRegionEmpty();
+  loadAdjacency(); // no-op while collapsed; refreshes the graph when open
 }
 
 // Bring ONE zone up to date with the current global payload. Also the whole
@@ -1936,6 +2005,125 @@ function downloadAreasCsv() {
   downloadCsv(`areas-${projectId || "project"}.csv`, buildAreasCsv());
 }
 
+// ================= bottom region, band 1: adjacency graph =================
+//
+// The room-adjacency graph: pick a room, see what it shares a wall with, and
+// what those touch. Rendered on a <canvas> by graph.js (see that file's header
+// for why canvas here and SVG on the plan).
+//
+// Fetched on a SELECTION change, not on the 2s room poll — a different trigger
+// and a different consumer, which is exactly the test STRATEGY-BROWSER sets for
+// "does this earn its own endpoint". It also refreshes when real new room data
+// arrives, the same on-demand lifecycle `loadAreas` follows.
+
+let adjData = null;         // the /adjacency response for the current scope
+let adjRevision = null;     // change-detection cursor, same idea as the room poll
+let adjGraph = null;        // the canvas controller (created lazily, on first open)
+// Wall tolerance as the user sees it: MILLIMETRES. The wire value is decimal
+// feet (Revit's internal unit), converted at this edge only.
+let adjWallMm = Math.round(1.5 * 304.8); // the server default, restated for the slider
+const FT_TO_MM = 304.8;
+
+function adjacencyUrl() {
+  const params = new URLSearchParams();
+  if (buildingKey) params.set("building", buildingKey);
+  if (milestone) params.set("milestone", milestone);
+  // Sent every time, including 0: zero is a real tolerance (the wall-centreline
+  // case), not "unset". Rounded because a float with 14 decimals in a URL is
+  // noise, and the server's revision hashes the value it received.
+  params.set("wall_max", (adjWallMm / FT_TO_MM).toFixed(4));
+  return `/projects/${encodeURIComponent(projectId)}/adjacency?${params}`;
+}
+
+// Create the canvas controller on first use. Deferred because a canvas measures
+// zero while its band is collapsed, and sizing it then would bake in a useless
+// backing store.
+function ensureGraph() {
+  if (adjGraph) return adjGraph;
+  adjGraph = createRoomGraph(document.getElementById("adjCanvas"), {
+    // A click on a graph node sets the PAGE selection, which re-centres the
+    // graph and highlights the room on every plan showing it. The graph does
+    // not own the selection, it just reads and writes it — which is what makes
+    // plan->graph and graph->plan the same one-way flow twice, rather than two
+    // views trying to stay in sync.
+    onSelect: (roomId) => selectRoom(roomId, null),
+  });
+  return adjGraph;
+}
+
+function adjBandOpen() {
+  return !document.getElementById("adjBody").classList.contains("hidden");
+}
+
+async function loadAdjacency({ force = false } = {}) {
+  if (!projectId || !adjBandOpen()) return;
+  try {
+    const next = await fetchJson(adjacencyUrl());
+    // One server-computed revision instead of re-comparing the payload — and it
+    // hashes `wall_max` alongside the snapshot set, so a slider change counts as
+    // new content and the graph never looks frozen after a drag.
+    if (!force && next.revision === adjRevision && adjData) return;
+    adjRevision = next.revision;
+    adjData = next;
+  } catch (err) {
+    // A 400 here is a caller fault (an out-of-range tolerance) and a 204 is an
+    // empty store; neither is worth a modal. Clear and let the canvas say so.
+    adjData = null;
+    adjRevision = null;
+  }
+  renderAdjacency();
+}
+
+function renderAdjacency() {
+  const g = ensureGraph();
+  g.setData(adjData);
+  populateAdjTier();
+  g.setFocus(selectedRoomId);
+  updateAdjMeta();
+}
+
+// Tier options come from the nodes' own classification paths, mirroring the
+// areas overlay's tier picker — same vocabulary, same control, so the two
+// results read as parts of one page.
+function populateAdjTier() {
+  const sel = document.getElementById("adjTier");
+  const names = adjGraph ? adjGraph.tierNames() : [];
+  const prev = sel.value;
+  sel.replaceChildren();
+  names.forEach((name, depth) => {
+    const opt = document.createElement("option");
+    opt.value = String(depth);
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  sel.classList.toggle("hidden", names.length === 0);
+  sel.parentElement.classList.toggle("hidden", names.length === 0);
+  if (prev && names[+prev] !== undefined) sel.value = prev;
+}
+
+function updateAdjMeta() {
+  const meta = document.getElementById("adjMeta");
+  if (!selectedRoomId) { meta.textContent = "no room selected"; return; }
+  const name = currentPayload?.rooms.find(r => r.id === selectedRoomId)?.name || selectedRoomId;
+  const shown = adjGraph ? adjGraph.shownCount() : 0;
+  const degree = adjData ? adjData.edges.filter(e => e.a === selectedRoomId || e.b === selectedRoomId).length : 0;
+  // Naming the zone the selection came from is Decision 3's rule: the same room
+  // can appear in two zones, so the result says where the click landed. A
+  // label, not focus machinery.
+  const from = selectedZoneId ? ` · from ${selectedZoneId}` : "";
+  meta.textContent = `${name} · ${degree} adjacent · ${shown} shown${from}`;
+}
+
+function setAdjWallMm(mm) {
+  adjWallMm = mm;
+  document.getElementById("adjWallOut").textContent = `${mm} mm`;
+}
+
+// A continuous drag would otherwise fire a graph recompute per frame and hammer
+// the server; the readout still updates live, only the fetch waits for the drag
+// to settle.
+const debouncedLoadAdjacency = debounce(() => loadAdjacency({ force: true }), 150);
+
 // ==================== bottom region, band 2: source-data grid ====================
 //
 // A read-only grid over the rooms of the CURRENT SCOPE — every level, not the
@@ -1955,7 +2143,7 @@ function downloadAreasCsv() {
 // An empty region must not reserve its dragged height — with nothing to show
 // that would just be a band of blank paper eating plan area.
 function updateRegionEmpty() {
-  const anyVisible = ["qaBand", "areasBand", "gridBand"]
+  const anyVisible = ["qaBand", "areasBand", "adjBand", "gridBand"]
     .some(id => !document.getElementById(id).classList.contains("hidden"));
   document.getElementById("bottomRegion").classList.toggle("empty", !anyVisible);
   // A band appearing or disappearing can make the split meaningful or moot.
@@ -2293,6 +2481,49 @@ function applyHighlight(zone) {
   }
 }
 
+// ============================ room selection ============================
+//
+// The other consumer of the cull-unit room->nodes map, and deliberately built
+// the same way as `applyHighlight` above: toggling a class on already-rendered
+// nodes, never a re-render. Selecting a room must not disturb pan/zoom, must not
+// re-paint 5,000 polygons, and must survive a level switch or a poll re-render
+// (renderLevel re-applies it after painting).
+//
+// Built as its own step because two features need it: the adjacency graph
+// (which centres on the selection) and the future room inspector
+// (HANDOVER-ui-layout Decision 3, still unbuilt). Neither owns it.
+
+// Toggle `.selected` on one zone's room polygons. nodes[0] is the outer polygon
+// — holes and the label are excluded on purpose, since the outline is what
+// carries the selection stroke.
+function applySelection(zone) {
+  for (const u of (zone.cullUnits || []))
+    u.nodes[0].classList.toggle("selected", !!selectedRoomId && u.room.id === selectedRoomId);
+}
+
+// Set (or clear, with a null id) the page selection and notify every listener.
+// `zoneId` records which zone the click came from; it is null for a selection
+// that did not originate on a plan (e.g. a graph node click), where "which zone"
+// has no answer.
+function selectRoom(roomId, zoneId = null) {
+  if (roomId === selectedRoomId && zoneId === selectedZoneId) return;
+  selectedRoomId = roomId || null;
+  selectedZoneId = selectedRoomId ? zoneId : null;
+  for (const z of zones) applySelection(z);
+  for (const fn of selectionListeners) fn(selectedRoomId);
+}
+
+// The room a plan click landed on, or null for empty space / the grid. Resolved
+// by scanning the zone's cull units rather than stamping an id attribute onto
+// every polygon: `paintLevel` is shared verbatim with the SVG export, and an
+// export has no business carrying selection plumbing. One linear scan per click
+// is free at any room count a click rate can reach.
+function roomAtNode(zone, node) {
+  if (!node) return null;
+  const unit = (zone.cullUnits || []).find(u => u.nodes.includes(node));
+  return unit ? unit.room : null;
+}
+
 // Recompute once, then re-highlight every zone and refresh its match count.
 function applySearch() {
   computeMatches();
@@ -2429,18 +2660,41 @@ function commitView(originZone, v) {
 
 // Attach pan/zoom to one zone's SVG. Each handler computes the new transform
 // against THAT zone's view, then routes it through commitView.
+// Pointer travel (CSS px) below which a press-release counts as a click rather
+// than a pan. A real pan moves far more; a click on a trackpad or a shaky mouse
+// still drifts a pixel or two, so zero would make selection feel broken.
+const CLICK_SLOP_PX = 4;
+
 function wireInteractions(zone) {
   const svg = zone.svg;
   let dragging = false, last = null;
+  // Click-vs-pan: the node under the pointer at press time, and whether the
+  // pointer has since travelled far enough to be a drag. `downNode` is captured
+  // on pointerdown because `setPointerCapture` retargets every later event to
+  // the <svg> itself — by pointerup the room polygon is no longer `e.target`.
+  let downNode = null, downAt = null, movedFar = false;
 
   svg.addEventListener("pointerdown", e => {
     dragging = true; last = { x: e.clientX, y: e.clientY };
+    downNode = e.target; downAt = { x: e.clientX, y: e.clientY }; movedFar = false;
     svg.setPointerCapture(e.pointerId);
   });
-  svg.addEventListener("pointerup", () => { dragging = false; });
+
+  svg.addEventListener("pointerup", () => {
+    dragging = false;
+    if (!movedFar) {
+      // A click on empty space (the grid, or the bare canvas) clears the
+      // selection — the same gesture that sets it should be able to unset it.
+      const room = roomAtNode(zone, downNode);
+      selectRoom(room ? room.id : null, room ? zone.id : null);
+    }
+    downNode = null;
+  });
 
   svg.addEventListener("pointermove", e => {
     if (!dragging) return;
+    if (!movedFar && downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > CLICK_SLOP_PX)
+      movedFar = true;
     const rect = svg.getBoundingClientRect();
     const v = { ...zone.view };
     v.x -= (e.clientX - last.x) / rect.width * v.w;
@@ -2582,6 +2836,11 @@ scopeEls.project.addEventListener("change", async () => {
   await loadColourPlans(projectId);
   loadValidation(projectId);
   lastRevision = null; // force the next poll tick to render immediately
+  // A room id is only meaningful inside its project, so a scope change drops
+  // the selection rather than carrying a stale one into the new project's data.
+  selectRoom(null);
+  adjData = null;
+  adjRevision = null;
   // One scope on screen means the URL always mirrors it — the "which zone's
   // scope does the URL carry" question is gone. building/milestone are null
   // here (just reset), so the helper drops them from the URL.
@@ -2737,6 +2996,46 @@ document.getElementById("areasBandTier").addEventListener("change", (e) => {
 });
 document.getElementById("areasDownload").addEventListener("click", () => downloadAreasCsv());
 
+// ---- band 1: the adjacency graph ----
+document.getElementById("adjHead").addEventListener("click", () => {
+  const open = toggleBand("adjBody", "adjHead", () => "Adjacency");
+  if (!open) return;
+  // The canvas measured zero while collapsed, so size it now that it has a box,
+  // then fetch. Both must happen in this order or the first paint is blurred
+  // into a 1x1 backing store.
+  ensureGraph().resize();
+  loadAdjacency({ force: true });
+});
+
+document.getElementById("adjDepth").addEventListener("change", (e) => {
+  // Depth is a client-side re-layout over data already held — no refetch: the
+  // endpoint returns the whole level's graph and the cap is a readability
+  // control, not a query.
+  ensureGraph().setDepth(parseInt(e.target.value, 10) || 2);
+  updateAdjMeta();
+});
+
+document.getElementById("adjTier").addEventListener("change", (e) => {
+  ensureGraph().setTierDepth(parseInt(e.target.value, 10) || 0);
+});
+
+document.getElementById("adjWall").addEventListener("input", (e) => {
+  setAdjWallMm(parseInt(e.target.value, 10) || 0);
+  debouncedLoadAdjacency();
+});
+
+// The one place plan-side and graph-side selection meet: whatever set the
+// selection, the graph re-centres. Registered rather than called from
+// `selectRoom` so the future room inspector adds itself the same way.
+selectionListeners.push(() => {
+  updateAdjMeta();
+  if (!adjBandOpen()) return;
+  // Data already in hand covers this room unless the scope changed, so
+  // re-centring is a re-layout, not a fetch.
+  if (adjData) { ensureGraph().setFocus(selectedRoomId); updateAdjMeta(); }
+  else loadAdjacency({ force: true });
+});
+
 // ---- band 2: the grid ----
 document.getElementById("gridScroll").addEventListener("scroll", onGridScroll);
 for (const id of ["srcModel", "srcDrofus"]) {
@@ -2788,6 +3087,10 @@ function wireDragHandle(handle, onStart, onMove) {
     if (!handle.classList.contains("dragging")) return;
     onMove(start, e.clientY - startY);
     onGridScroll(); // either drag changes the grid's visible row count
+    // ...and either drag changes the canvas's box. Unlike an SVG, a canvas does
+    // not reflow: its backing store must be resized explicitly or the graph
+    // stays at its old size, stretched.
+    if (adjGraph && adjBandOpen()) adjGraph.resize();
   });
   const stop = () => handle.classList.remove("dragging");
   handle.addEventListener("pointerup", stop);
@@ -2835,10 +3138,25 @@ function wireDragHandle(handle, onStart, onMove) {
   );
 })();
 
+// A window resize changes the canvas's box without any drag. Same reasoning as
+// the drag handler: canvas has no reflow.
+window.addEventListener("resize", () => {
+  if (adjGraph && adjBandOpen()) adjGraph.resize();
+});
+
 // ============================ boot ============================
 
 createZone();
 setLayout();
+// Seed the wall-tolerance slider from the same default the server uses, so the
+// control opens showing what the endpoint would do if asked nothing. The value
+// is read back out afterwards because the input snaps to its own `step`, and a
+// readout that disagreed with the thumb by a few mm would be its own small lie.
+(() => {
+  const slider = document.getElementById("adjWall");
+  slider.value = String(adjWallMm);
+  setAdjWallMm(parseInt(slider.value, 10) || 0);
+})();
 tick();
 setInterval(tick, 2000);
 </script>

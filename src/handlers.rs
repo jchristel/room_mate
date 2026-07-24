@@ -22,6 +22,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio_util::io::StreamReader;
 
 use crate::contract::{ModelToShared, Room, RoomPayload, StreamEnvelope, SUPPORTED_SCHEMA};
+use crate::service::adjacency;
 use crate::service::areas;
 use crate::service::comparison::{self, ComparisonResponse};
 use crate::service::drofus::{DrofusSnapshotInfo, DrofusSnapshotList};
@@ -466,6 +467,64 @@ pub async fn get_project_areas(
     }
 }
 
+/// Scoping for `GET /projects/{id}/adjacency`: the same `?building=` /
+/// `?milestone=` vocabulary as `/rooms` and `/areas`, plus the tunable wall
+/// tolerance.
+///
+/// `wall_max` is `Option<String>`, not `Option<f64>`, on purpose. Taken as a
+/// float, axum's own `Query` deserialization rejects `?wall_max=abc` *before*
+/// this handler runs, with its own wording and no idea that zero is meaningful
+/// or that five feet is the ceiling. Parsing it here means every bad tolerance —
+/// unparseable, negative, absurd — comes back through one path with one voice,
+/// and the range rules stay in `service::adjacency` where both front doors read
+/// them.
+#[derive(Deserialize)]
+pub struct AdjacencyQuery {
+    #[serde(default)]
+    pub building: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<String>,
+    #[serde(default)]
+    pub wall_max: Option<String>,
+}
+
+/// Room-to-room adjacency graph for one project — see
+/// `service::adjacency::assemble_adjacency`. 204 when nothing has ever been
+/// posted (mirrors `/rooms` and `/areas`); a scope matching nothing is 200 with
+/// empty `nodes`/`edges`.
+///
+/// A bad `wall_max` is **400**, not 422: in this codebase 422 is the ingest
+/// status (a schema mismatch, a malformed `taken_at`), while a caller-fault read
+/// parameter travels as `ServiceError::Invalid` and maps to 400 — exactly how
+/// `/rooms` already answers a malformed `?filter=`. Loud over a silent clamp
+/// either way; only the number differs.
+pub async fn get_project_adjacency(
+    State(state): State<Shared>,
+    Path(project_id): Path<String>,
+    Query(query): Query<AdjacencyQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let wall_max = match query.wall_max.as_deref() {
+        None | Some("") => None,
+        Some(raw) => Some(raw.parse::<f64>().map_err(|_| {
+            map_service_error(ServiceError::Invalid(format!("wall_max {raw:?} is not a number")))
+        })?),
+    };
+
+    let result = adjacency::assemble_adjacency(
+        &state,
+        &project_id,
+        query.building.as_deref(),
+        query.milestone.as_deref(),
+        wall_max,
+    )
+    .map_err(map_service_error)?;
+
+    match result {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(Json(result).into_response()),
+    }
+}
+
 /// The baseline milestone plus the milestones to compare against it. A POST
 /// body rather than query params because the compared set is a list (repeated
 /// query keys don't deserialize cleanly, and milestone names can contain any
@@ -549,6 +608,83 @@ mod tests {
 
         let response = get_rooms(State(state), Query(unscoped_query())).await.expect("204 is not an error");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    fn adjacency_query(wall_max: Option<&str>) -> AdjacencyQuery {
+        AdjacencyQuery { building: None, milestone: None, wall_max: wall_max.map(str::to_string) }
+    }
+
+    /// Adjacency mirrors `/rooms` and `/areas` on the empty store: 204, and
+    /// body-less, so the same poll-shaped client handling works for all three.
+    #[tokio::test]
+    async fn test_get_adjacency_returns_204_when_store_empty() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let response = get_project_adjacency(State(state), Path("p1".to_string()), Query(adjacency_query(None)))
+            .await
+            .expect("204 is not an error");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    /// **400, not 422.** This is the one behaviour that lives purely at the HTTP
+    /// seam, and it is the status the handover originally got wrong: in this
+    /// codebase 422 is the *ingest* status (a schema mismatch, a malformed
+    /// `taken_at`), while a caller-fault read parameter travels as
+    /// `ServiceError::Invalid` and maps to 400 — exactly how `/rooms` answers a
+    /// malformed `?filter=`. The message goes back verbatim, because "which
+    /// value, and why" is the useful part.
+    #[tokio::test]
+    async fn test_get_adjacency_rejects_out_of_range_wall_max_with_400() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let (status, message) =
+            get_project_adjacency(State(state), Path("p1".to_string()), Query(adjacency_query(Some("99"))))
+                .await
+                .expect_err("99 ft is not a wall");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("99"), "the message names the offending value: {message}");
+    }
+
+    /// An unparseable tolerance is rejected here rather than by axum's own
+    /// `Query` deserialization — which is the entire reason the field is typed
+    /// `Option<String>`. Taken as `Option<f64>` this request would never reach
+    /// the handler, and the client would get axum's wording instead of a message
+    /// that knows what a wall tolerance is.
+    #[tokio::test]
+    async fn test_get_adjacency_rejects_unparseable_wall_max_here() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let (status, message) =
+            get_project_adjacency(State(state), Path("p1".to_string()), Query(adjacency_query(Some("abc"))))
+                .await
+                .expect_err("not a number");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("abc"), "the message quotes what was sent: {message}");
+    }
+
+    /// Zero is a *valid* tolerance — the wall-centreline case, and the more
+    /// common of the two boundary regimes. It must reach the service, not be
+    /// rejected as "non-positive" or silently treated as "unset" (which would
+    /// substitute the 1.5 ft default and quietly answer a different question).
+    #[tokio::test]
+    async fn test_get_adjacency_accepts_zero_wall_max() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        state
+            .set_snapshot(RoomPayload {
+                schema_version: SUPPORTED_SCHEMA,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                model_to_shared: None,
+                levels: vec![Level { id: "1".to_string(), name: "L".to_string(), elevation: 0.0 }],
+                rooms: vec![make_room("r1", "Room 1")],
+            })
+            .unwrap();
+
+        let response = get_project_adjacency(State(state), Path("p1".to_string()), Query(adjacency_query(Some("0"))))
+            .await
+            .expect("zero is a real tolerance");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     /// The query-string seam: a predicate's own `=` must survive

@@ -300,6 +300,37 @@ side should shape future server endpoints.
   refreshed when new room data arrives) rather than on the 2s room poll, since
   areas are derived and heavier than a room fetch — the endpoint-vs-poll lifecycle
   call the "Endpoints follow fetch lifecycle" section describes.
+- **Room click-selection (page state) + the adjacency graph (band 1, canvas).**
+  Clicking a room selects it: **one selection for the page**, not per zone
+  (HANDOVER-ui-layout Decision 3), applied in every zone that draws that room
+  while `selectedZoneId` records where the click landed — a label, not
+  `activeZoneId` machinery. It rides the same cull-unit room→nodes map the search
+  highlight uses, so selecting is a class toggle on already-rendered nodes, never
+  a re-render, and a 4px slop distinguishes a click from a pan. This was the
+  thing blocking Decision 3's inspector; the inspector now registers on
+  `selectionListeners` rather than editing `selectRoom`.
+  On top of it, the **adjacency graph**: a third band-1 block over
+  `GET /projects/{id}/adjacency` (see [Server](STRATEGY-SERVER.md)) showing what
+  the selected room shares a wall with, and what those touch. **This is the first
+  renderer in the project to leave SVG, and the reason is worth stating
+  precisely: the trigger is continuous animation, NOT element count.** A depth-2
+  graph is tens of nodes — three orders of magnitude inside SVG's comfort zone —
+  but the layout settles over a run of frames, and SVG is retained-mode with no
+  render loop. So the plan stays SVG and the graph takes canvas, in its own file
+  (`static/graph.js`), and the page deliberately runs two renderers. The costs
+  are paid explicitly: hit-testing is a nearest-node scan, the palette is read
+  once from the resolved `:root` properties (the same trick `exportStyleBlock`
+  uses, so it cannot fork `tokens.css`), the backing store is sized by
+  `devicePixelRatio`, and there is **no export** — "Export SVGs" is a plan
+  feature and raster export stays out of scope. The simulation solves **angle
+  only**, each node pinned to the radius of its hop count: ring position *is* the
+  message, and a set of 1-D problems settles without a cooling schedule. It stops
+  when settled rather than repainting a static picture forever. Node colour
+  reuses `qualitative`, which moved to `common.js` for exactly this reason — two
+  views disagreeing about a department's colour is worse than either being
+  arbitrary. The wall-tolerance slider is debounced (0–900mm, mm readout, feet on
+  the wire) and is a **tuning instrument, not a preference**: see Server for why
+  the tolerance is a request parameter at all.
 - **Settings page (`settings.html`).** A sibling static page, linked from the
   viewer's header, over [Server](STRATEGY-SERVER.md)'s `/api/settings` routes:
   a project-file list on the left (a file that fails to parse still gets a
@@ -428,8 +459,9 @@ Goal is a richer browser tool run locally (not a desktop app). The strategy:
 
 As capabilities are added, give each its own **purpose-shaped endpoint** rather
 than overloading `/rooms`. When processing arrives, `/rooms` stays raw geometry
-and new endpoints (`/adjacencies`, `/levels/{id}/analysis`, etc.) carry the
-derived data. Small endpoints mean any future frontend composes them freely, and
+and new endpoints (`/projects/{id}/adjacency` — now shipped, singular and
+project-scoped to match the `/areas` precedent — `/levels/{id}/analysis`, etc.)
+carry the derived data. Small endpoints mean any future frontend composes them freely, and
 no presentation assumption gets baked into the data layer.
 
 The principle is **not** "one endpoint per data type" — it is "one endpoint per
@@ -444,7 +476,11 @@ that it shouldn't sit in the default payload?*
   race between them — cost, no benefit. Levels stay inside the payload.
 - **Yes → own endpoint.** Derived/computed data that is recomputed on a
   different trigger, sized differently, or consumed by a different part of the
-  UI: an adjacency graph, per-level analysis fetched only when a level is
+  UI. The adjacency graph is now the worked example rather than the hypothetical:
+  it is fetched when the room *selection* changes (and when the tolerance slider
+  settles), not on the 2s poll, and it feeds a canvas rather than the SVG plan —
+  both halves of the test, so it earned `/projects/{id}/adjacency`. Still
+  hypothetical: per-level analysis fetched only when a level is
   selected, full detail on one room for a properties panel. `/projects` and
   `/projects/{id}/buildings` are a shipped example: they're fetched on a
   different schedule (a picker changing) than the room render, by a different

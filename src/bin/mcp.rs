@@ -1,6 +1,6 @@
 //! roommate's MCP server: exposes the read side (`list_projects`,
 //! `list_buildings`, `get_rooms`, `get_validation`, `get_hierarchy_areas`,
-//! `list_snapshots`, `get_latest_snapshot`, `list_milestones`,
+//! `get_adjacency`, `list_snapshots`, `get_latest_snapshot`, `list_milestones`,
 //! `list_drofus_snapshots`, `get_drofus_snapshot`) as MCP tools over stdio, one
 //! per existing HTTP read route. Each tool is a thin adapter over `roommate::service` -- parse
 //! params, call one service function, serialize the result -- exactly like
@@ -39,7 +39,7 @@ use rmcp::{
 
 use roommate::bootstrap::build_state;
 use roommate::service::{
-    areas, comparison, drofus, milestones, projects, rooms, snapshots, validation, ServiceError,
+    adjacency, areas, comparison, drofus, milestones, projects, rooms, snapshots, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -83,6 +83,27 @@ struct GetRoomsParams {
     /// Omit for no filter.
     #[serde(default)]
     filter: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct AdjacencyParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Opaque building key from `list_buildings`. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`: build the graph from the
+    /// snapshots that milestone pins instead of each model's latest. Omit for
+    /// latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Largest gap between two room boundaries, in decimal feet, still counted
+    /// as a shared wall. Omit for the server default (1.5 ft). Use 0 for a
+    /// model whose room boundaries sit on wall centrelines (neighbours touch
+    /// exactly); use roughly the wall thickness for a model whose boundaries
+    /// sit at finish faces. Must be between 0 and 5.
+    #[serde(default)]
+    wall_max: Option<f64>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -297,6 +318,29 @@ impl RoommateMcp {
     fn get_hierarchy_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<CallToolResult, McpError> {
         let result = areas::assemble_areas(&self.state, &p.project_id, p.building.as_deref(), p.milestone.as_deref())
             .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Room-to-room adjacency graph for one project -- see
+    /// `service::adjacency::assemble_adjacency`. Shares the exact read logic
+    /// the HTTP `GET /projects/{id}/adjacency` uses, including the tolerance
+    /// validation, so the two front doors cannot disagree on what a valid
+    /// `wall_max` is.
+    #[tool(description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and joined dRofus record) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, not door connectivity (the extractor collects no doors). The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor.")]
+    fn get_adjacency(&self, Parameters(p): Parameters<AdjacencyParams>) -> Result<CallToolResult, McpError> {
+        let result = adjacency::assemble_adjacency(
+            &self.state,
+            &p.project_id,
+            p.building.as_deref(),
+            p.milestone.as_deref(),
+            p.wall_max,
+        )
+        .map_err(to_mcp_error)?;
         match result {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no snapshots have been pushed to this server yet",
