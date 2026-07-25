@@ -96,9 +96,13 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   mutating tool doesn't break the read-only stance, it routes around the
   split-brain problem: it reads a dRofus CSV from an absolute file path and
   POSTs it to the running HTTP server's `/projects/{id}/drofus`
-  (`--server-url`, defaulting to the `DEFAULT_HTTP_ADDR` const both binaries
-  share so they can't drift), so the HTTP server stays the single writer and
-  hot-swaps its own registry. The HTTP server must be running — a connect
+  (`--server-url`, defaulting to `default_http_addr()` — the host and port
+  constants both binaries share, so their idea of *where the server lives by
+  default* can't drift), so the HTTP server stays the single writer and
+  hot-swaps its own registry. Note the default tracks the server's **default**
+  port, not its actual one: the server takes `--port` (and `$PORT`) and nothing
+  here can observe that choice, so a relocated server needs `--server-url`
+  passed explicitly. The HTTP server must be running — a connect
   failure answers a clear "start it and retry", and a non-2xx passes the
   server's rejection text through verbatim (the server is the real
   validator). This adds `reqwest` (no default features — loopback plain

@@ -29,10 +29,31 @@
 //!                 agnostic core (reads shared with the MCP binary) + the
 //!                 `/api/settings` Axum adapters; saves hot-swap the registry.
 
-/// Where the HTTP server binds by default. Shared with `bin/mcp.rs`'s
-/// `--server-url` default (its `upload_drofus` tool forwards over HTTP to
-/// this address) so the two binaries can't drift on where the server lives.
-pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:5151";
+/// The interface the HTTP server binds to. **Loopback on purpose, and not
+/// configurable**: the server has no authentication of any kind, and the
+/// settings API can write project files, so binding a routable interface would
+/// expose that to the network. Serving beyond localhost is a deliberate
+/// decision with prerequisites, not a flag.
+pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
+
+/// Default port for the HTTP server, overridable with `--port` (or the `PORT`
+/// environment variable — see `main.rs`). A *default*, not a constant the code
+/// depends on: it exists so the common case needs no flag, and so `bin/mcp.rs`
+/// has something to point `--server-url` at.
+pub const DEFAULT_HTTP_PORT: u16 = 5151;
+
+/// The default bind address, `host:port`.
+///
+/// A function rather than a third constant. Writing `"127.0.0.1:5151"` out
+/// again beside the two values it is made of would be the same physical fact in
+/// two places, free to drift — the exact shape of bug `[areas]
+/// max_wall_thickness` was introduced to remove (see
+/// STRATEGY-AREA-CALCULATION.md). Rust cannot concatenate a `&str` and an
+/// integer in a `const` without a macro, so it formats at the one call site
+/// that needs the joined form.
+pub fn default_http_addr() -> String {
+    format!("{DEFAULT_HTTP_HOST}:{DEFAULT_HTTP_PORT}")
+}
 
 pub mod bootstrap;
 pub mod classify;

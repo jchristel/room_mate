@@ -5,7 +5,8 @@
       "name": "roommate",
       "runtimeExecutable": "cargo",
       "runtimeArgs": ["run", "--bin", "roommate", "--", "--server-settings", "settings/server.toml", "--project-settings", "settings/projects"],
-      "port": 5151
+      "port": 5151,
+      "autoPort": false
     }
   ]
 }
