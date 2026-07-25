@@ -255,7 +255,7 @@ pub enum MeasurementStandard {
 /// so it rides the upload envelope. Which measurement standard applies is
 /// **contractual**, and the width above which a gap stops being a wall and
 /// becomes a void is a **project judgement** — neither is discoverable from the
-/// model, so both live here. See HANDOVER-areas-boundary-location.md Decision 2.
+/// model, so both live here. See Superseded/HANDOVER-areas-boundary-location.md Decision 2.
 ///
 /// `max_wall_thickness` is deliberately **one quantity with two consumers**:
 /// `service::areas` sizes its wall zone by it and `service::adjacency` uses it

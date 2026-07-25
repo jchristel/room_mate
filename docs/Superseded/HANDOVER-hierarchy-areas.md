@@ -11,7 +11,7 @@ re-litigating them. Written to sit beside the existing HANDOVER-*.md docs; fold
 the parts that ship into STRATEGY-SERVER.md / STRATEGY-BROWSER.md as they land,
 per the split-doc discipline in STRATEGY.md.
 
-Read [STRATEGY.md](STRATEGY.md) and [CODING-CONVENTIONS.md](CODING-CONVENTIONS.md)
+Read [STRATEGY.md](../STRATEGY.md) and [CODING-CONVENTIONS.md](../CODING-CONVENTIONS.md)
 first — this doc assumes both.
 
 ---

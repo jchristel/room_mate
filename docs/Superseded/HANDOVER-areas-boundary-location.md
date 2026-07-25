@@ -1,5 +1,13 @@
 # HANDOVER — Area aggregation: declare the boundary location, then partition the wall zone
 
+> **Superseded — the live document is
+> [STRATEGY-AREA-CALCULATION.md](../STRATEGY-AREA-CALCULATION.md).** All three
+> decisions here are built and merged, and the design they settled now lives in
+> that strategy doc along with the remaining open items. Keep reading this one
+> for *how the decisions were reached* — the artifacts that forced them, the four
+> things the implementation learned that the brief did not know, and the measured
+> before/after. Do not treat its "not started" language as current.
+
 **Status: all three decisions built and verified against House A.** One item
 open, and it is not in this repository: the Revit extractor lives elsewhere, so
 nothing yet *sends* `room_boundary` — the server accepts, resolves, uses and
@@ -162,7 +170,7 @@ recommended destination rather than more arbitration.
 setting). Asking a human to re-assert it in TOML duplicates an authoritative fact
 and invites getting it wrong.
 
-The precedent is exact: **`model_to_shared`** (see [STRATEGY.md](STRATEGY.md),
+The precedent is exact: **`model_to_shared`** (see [STRATEGY.md](../STRATEGY.md),
 "The upload envelope") is a document-level `ProjectLocation` fact the producer
 stamps once per model, `Option`-al, and adding it **did not bump the schema**.
 Do the same:
@@ -285,7 +293,7 @@ question — see references.
 
 ## Test harness — "test all House A floor plans" (explicitly requested)
 
-> **Built: [`scripts/check_areas.py`](../scripts/check_areas.py).** All five
+> **Built: [`scripts/check_areas.py`](../../scripts/check_areas.py).** All five
 > checks below, plus a sixth the brief did not ask for and that turned out to be
 > the cheapest of the lot — **tier additivity**, which is pure arithmetic on
 > numbers the response already carries, no geometry at all. Checks 1 and 5 are
@@ -325,7 +333,7 @@ on LEVEL 01.
 > every lead in it turned out to be a real paper, and the details are filled in
 > below. Two of them say something the brief did not anticipate, marked **⚠**.
 > The full comparison of this implementation against the literature lives in
-> [STRATEGY-AREA-CALCULATION.md](STRATEGY-AREA-CALCULATION.md); this is the
+> [STRATEGY-AREA-CALCULATION.md](../STRATEGY-AREA-CALCULATION.md); this is the
 > bibliography.
 
 **Space-boundary attribution (BIM/energy) — the closest existing field.**
@@ -623,15 +631,15 @@ until (2) is built. On a centreline project it can be set today.
 
 ## Docs to update on landing
 
-- **[STRATEGY.md](STRATEGY.md)** — `room_boundary` in "The upload envelope",
+- **[STRATEGY.md](../STRATEGY.md)** — `room_boundary` in "The upload envelope",
   beside `model_to_shared`.
-- **[STRATEGY-SERVER.md](STRATEGY-SERVER.md)** — rewrite the `/areas` bullet for
+- **[STRATEGY-SERVER.md](../STRATEGY-SERVER.md)** — rewrite the `/areas` bullet for
   the partition; record the declared-regime settings and the standard echo.
-- **[STRATEGY-SOURCES.md](STRATEGY-SOURCES.md)** — the extractor now reads one
+- **[STRATEGY-SOURCES.md](../STRATEGY-SOURCES.md)** — the extractor now reads one
   document-level setting.
-- **[STRATEGY-BROWSER.md](STRATEGY-BROWSER.md)** — only if the wire shape moves;
+- **[STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md)** — only if the wire shape moves;
   the even-odd overlay should survive unchanged.
 - **[handover-hierarchical-void-closure.md](handover-hierarchical-void-closure.md)**
   — add a line pointing here: its erode-to-empty classifier is superseded by the
   combinatorial assignment, for the same reason its weld pass was.
-- **[docs/README.md](README.md)** — Open handovers row.
+- **[docs/README.md](../README.md)** — Open handovers row.

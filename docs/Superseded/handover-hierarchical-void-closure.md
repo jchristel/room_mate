@@ -4,7 +4,7 @@
 
 > **Superseded again, in part — and that replacement has now landed.** See
 > [HANDOVER-areas-boundary-location.md](HANDOVER-areas-boundary-location.md) and
-> [STRATEGY-SERVER.md](STRATEGY-SERVER.md)'s `/areas` entry. The close described
+> [STRATEGY-SERVER.md](../STRATEGY-SERVER.md)'s `/areas` entry. The close described
 > below produced corner and overlap artifacts on real face-of-wall data; the
 > boundary regime is now **declared on the upload envelope** rather than
 > inferred, and the per-tier close has been replaced by a per-level **wall
