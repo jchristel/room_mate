@@ -35,6 +35,21 @@ Revit.
   `"revit"`) — the key the mapping above resolves against. A plain string, not
   a closed Rust enum: adding a source is a settings-file change, not a
   recompile.
+- **`room_boundary`: the extractor now reads one *document* setting.** Until
+  this, the extractor read only elements. It now also reports the document's
+  `SpatialElementBoundaryLocation` — whether room boundaries sit on wall
+  centrelines or finish faces — as an optional envelope field, per model. This
+  stays inside "keep the extractor dumb on purpose" (STRATEGY.md): reading a
+  document option is *extraction*, not computation, and it is the second
+  document-level fact to ride the envelope after `model_to_shared`. Why it has
+  to come from the source rather than be configured: the source **already knows
+  it authoritatively**, and a project can legitimately mix both regimes because
+  each linked model carries its own setting — so a project-level declaration
+  could only ever be a fallback, which is exactly what `[areas]
+  boundary_location` is. Consumed by `service::areas` (which sizes its wall zone
+  by it) and `service::adjacency` (which defaults its gap tolerance from it); an
+  extractor that does not send it is a normal state, not a defect. See
+  [Server](STRATEGY-SERVER.md).
 - **dRofus loader + join.** Two-header-row CSV read into a keyed map
   (`by_id: BTreeMap<String, DrofusRecord>`); joined onto rooms at `/rooms`
   response assembly as a separate `drofus` sub-object, leaving the stored

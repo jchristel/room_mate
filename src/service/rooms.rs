@@ -11,8 +11,8 @@ use serde::Serialize;
 
 use crate::classify::{classify_room, TierValue};
 use crate::contract::{
-    elevation_match, lookup_property, numeric_match, property_presence, Level, PropertyPresence, Room, RoomPayload,
-    SUPPORTED_SCHEMA,
+    elevation_match, lookup_property, numeric_match, property_presence, Level, PropertyPresence, Room, RoomBoundary,
+    RoomPayload, SUPPORTED_SCHEMA,
 };
 use crate::drofus::{DrofusData, DrofusRecord};
 use crate::settings::{BuiltinPropertyDef, HierarchyTier};
@@ -574,6 +574,28 @@ pub struct RoomsResult {
     /// that is precisely the column the coverage report shows as "not
     /// checked" rather than omitting (see STRATEGY-SOURCES.md).
     pub drofus_labels: BTreeMap<String, DrofusLabels>,
+
+    /// The boundary regime in force on each **canonical** level in this
+    /// response, keyed by the same level ids `levels` carries.
+    ///
+    /// Per level rather than per model or per project, because that is the
+    /// granularity every consumer actually needs and the only one that stays
+    /// honest at both ends. The regime is a *model* fact
+    /// (`contract::RoomBoundary`) — a project can mix both, since each linked
+    /// model carries its own document setting — but level dedup deliberately
+    /// merges "the same" architectural level across those models, so one level
+    /// can be fed by several models at once. When they disagree, **finish face
+    /// wins**: it is the regime that still needs a gap bridged, and sizing for
+    /// the narrower one would leave those rooms as disjoint islands. A model
+    /// declaring nothing resolves through its project's `[areas]
+    /// boundary_location` and then to finish face, so an undeclared model also
+    /// keeps the wider reading — the conservative direction in both cases.
+    ///
+    /// `service::areas` sizes its per-level wall zone from this, and
+    /// `service::adjacency` derives its default `wall_max`. On the wire because
+    /// an area figure whose regime is unstated is exactly the ambiguity this
+    /// whole change exists to remove.
+    pub boundary_by_level: BTreeMap<String, RoomBoundary>,
 }
 
 /// One project's dRofus column vocabulary, as joined into this response.
@@ -686,9 +708,17 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
     let (scoped, milestone_drofus) = scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
     let revision = scoped_revision(&scoped);
     let level_remap = dedup_levels(&scoped);
-    let (levels, rooms, drofus_labels) = assemble_scoped_rooms(&scoped, &level_remap, &milestone_drofus, scope);
+    let AssembledRooms { levels, rooms, drofus_labels, boundary_by_level } =
+        assemble_scoped_rooms(&scoped, &level_remap, &milestone_drofus, scope);
 
-    Ok(Some(RoomsResult { schema_version: SUPPORTED_SCHEMA, revision, levels, rooms, drofus_labels }))
+    Ok(Some(RoomsResult {
+        schema_version: SUPPORTED_SCHEMA,
+        revision,
+        levels,
+        rooms,
+        drofus_labels,
+        boundary_by_level,
+    }))
 }
 
 /// Phase 1 — scope the stored payloads to the request. Drops any payload whose
@@ -854,7 +884,7 @@ fn assemble_scoped_rooms(
     level_remap: &BTreeMap<(String, String, String), String>,
     milestone_drofus: &MilestoneDrofus,
     scope: &RoomScope<'_>,
-) -> (Vec<Level>, Vec<RoomResponse>, BTreeMap<String, DrofusLabels>) {
+) -> AssembledRooms {
     let building = scope.building;
     let mut levels = Vec::new();
     // Keyed (project_id, canonical_id): canonical ids are model-local, so two
@@ -863,6 +893,7 @@ fn assemble_scoped_rooms(
     let mut emitted_level_ids: BTreeSet<(String, String)> = BTreeSet::new();
     let mut rooms: Vec<RoomResponse> = Vec::new();
     let mut drofus_labels: BTreeMap<String, DrofusLabels> = BTreeMap::new();
+    let mut boundary_by_level: BTreeMap<String, RoomBoundary> = BTreeMap::new();
 
     for (key, payload, bundle) in scoped {
         // Building tier index is resolved from this payload's own project
@@ -934,11 +965,25 @@ fn assemble_scoped_rooms(
             continue; // this model contributed nothing to the requested scope
         }
 
+        // The regime this model was drawn to: what its envelope declared, else
+        // the project's `[areas]` fallback, else finish face.
+        let model_boundary = bundle.areas.resolve_boundary(payload.room_boundary);
+
         for level in &payload.levels {
             let canonical_id = level_remap
                 .get(&(key.project_id.clone(), key.model_id.clone(), level.id.clone()))
                 .cloned()
                 .unwrap_or_else(|| level.id.clone());
+
+            // Widen, never narrow: a level fed by two models keeps finish face
+            // if either says so (see `RoomsResult::boundary_by_level`). Written
+            // as a max over the two rather than a first-wins insert precisely
+            // because model iteration order must not decide this.
+            boundary_by_level
+                .entry(canonical_id.clone())
+                .and_modify(|b| *b = widest_boundary(*b, model_boundary))
+                .or_insert(model_boundary);
+
             if emitted_level_ids.insert((key.project_id.clone(), canonical_id.clone())) {
                 let mut level = level.clone();
                 level.id = canonical_id;
@@ -948,7 +993,29 @@ fn assemble_scoped_rooms(
         rooms.extend(assembled);
     }
 
-    (levels, rooms, drofus_labels)
+    AssembledRooms { levels, rooms, drofus_labels, boundary_by_level }
+}
+
+/// The regime that needs the *more* work done of the two — finish face, whose
+/// rooms are still separated by their walls. See
+/// `RoomsResult::boundary_by_level` for why a disagreement resolves this way
+/// and not the other.
+fn widest_boundary(a: RoomBoundary, b: RoomBoundary) -> RoomBoundary {
+    match (a, b) {
+        (RoomBoundary::Centreline, RoomBoundary::Centreline) => RoomBoundary::Centreline,
+        _ => RoomBoundary::FinishFace,
+    }
+}
+
+/// Phase 3's four outputs. A named struct rather than a 4-tuple: the two maps
+/// are both `BTreeMap<String, _>` keyed on different things (project id vs
+/// level id), and a positional tuple is one refactor away from swapping them
+/// silently.
+struct AssembledRooms {
+    levels: Vec<Level>,
+    rooms: Vec<RoomResponse>,
+    drofus_labels: BTreeMap<String, DrofusLabels>,
+    boundary_by_level: BTreeMap<String, RoomBoundary>,
 }
 
 #[cfg(test)]
@@ -1025,6 +1092,7 @@ mod tests {
             milestones: vec![],
             comparison_key: None,
             comparison_properties: vec![],
+            areas: Default::default(),
             hierarchy_exclusions: vec![],        }
     }
 
@@ -1067,6 +1135,7 @@ mod tests {
             model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels,
             rooms,
         }
@@ -1122,6 +1191,7 @@ mod tests {
             model: Model { id: "modelA".to_string(), name: "A".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![Level { id: "lvlA".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
             rooms: vec![room_a],
         };
@@ -1131,6 +1201,7 @@ mod tests {
             model: Model { id: "modelB".to_string(), name: "B".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:01Z".to_string() },
             model_to_shared: None,
+            room_boundary: None,
             // Same name, elevation drifted by float noise well within tolerance.
             levels: vec![Level { id: "lvlB".to_string(), name: "Level 1".to_string(), elevation: 0.000000001 }],
             rooms: vec![room_b],
@@ -1148,6 +1219,106 @@ mod tests {
         assert_eq!(result.rooms.len(), 2);
         for room in &result.rooms {
             assert_eq!(room.room.level_id, canonical_id);
+        }
+    }
+
+    /// The boundary regime is resolved **per canonical level**, and a level fed
+    /// by two linked models that disagree keeps **finish face**.
+    ///
+    /// This is the case the whole per-level shape exists for: level dedup
+    /// merges "the same" floor across linked models, so one level really can be
+    /// fed by a centreline model and a finish-face one at once. Sizing that
+    /// level for centreline would leave the finish-face rooms as disjoint
+    /// islands, so the wider regime has to win — and it must win regardless of
+    /// which model the store happens to iterate first, which is what the second
+    /// level here (the same pair, declared the other way round) pins down.
+    #[test]
+    fn test_boundary_by_level_resolves_per_level_and_widens_on_disagreement() {
+        let level = |id: &str, name: &str, elev: f64| Level {
+            id: id.to_string(),
+            name: name.to_string(),
+            elevation: elev,
+        };
+        let room_on = |id: &str, level_id: &str| {
+            let mut r = make_room(id, id, &[]);
+            r.level_id = level_id.to_string();
+            r
+        };
+        let payload = |model: &str, ts: &str, boundary: Option<RoomBoundary>, levels: Vec<Level>, rooms: Vec<Room>| {
+            RoomPayload {
+                schema_version: 5,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: model.to_string(), name: model.to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: ts.to_string() },
+                model_to_shared: None,
+                room_boundary: boundary,
+                levels,
+                rooms,
+            }
+        };
+
+        // Level 1 is shared by both models (same name+elevation, model-local
+        // ids), one centreline and one finish face. Level 2 belongs to the
+        // centreline model alone.
+        let state = AppState::new(Box::new(MemStore::new()), single_project("p1", make_bundle("Number")), None);
+        state
+            .set_snapshot(payload(
+                "centreline-model",
+                "2026-01-01T00:00:00Z",
+                Some(RoomBoundary::Centreline),
+                vec![level("a1", "Level 1", 0.0), level("a2", "Level 2", 10.0)],
+                vec![room_on("r1", "a1"), room_on("r2", "a2")],
+            ))
+            .unwrap();
+        state
+            .set_snapshot(payload(
+                "finish-face-model",
+                "2026-01-01T00:00:01Z",
+                Some(RoomBoundary::FinishFace),
+                vec![level("b1", "Level 1", 0.0)],
+                vec![room_on("r3", "b1")],
+            ))
+            .unwrap();
+
+        let result = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
+        let by_name = |name: &str| {
+            let id = &result.levels.iter().find(|l| l.name == name).expect("level present").id;
+            result.boundary_by_level[id]
+        };
+        assert_eq!(by_name("Level 1"), RoomBoundary::FinishFace, "the mixed level widens");
+        assert_eq!(by_name("Level 2"), RoomBoundary::Centreline, "the single-model level keeps its own regime");
+        assert_eq!(result.boundary_by_level.len(), result.levels.len(), "every level in scope is covered");
+    }
+
+    /// A model that declares nothing resolves through its project's `[areas]`
+    /// fallback — and, with no fallback either, to finish face, which is the
+    /// behaviour that predates the field entirely.
+    #[test]
+    fn test_boundary_by_level_falls_back_to_project_policy() {
+        let undeclared = |project: &str| RoomPayload {
+            schema_version: 5,
+            project: Project { id: project.to_string(), name: "P".to_string() },
+            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            model_to_shared: None,
+            room_boundary: None,
+            levels: vec![Level { id: "L1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
+            rooms: vec![make_room("r1", "Room", &[])],
+        };
+
+        let with_policy = |boundary: Option<RoomBoundary>| ProjectSettings {
+            areas: crate::settings::AreaPolicy { boundary_location: boundary, ..Default::default() },
+            ..make_bundle("Number")
+        };
+
+        for (fallback, expected) in [
+            (Some(RoomBoundary::Centreline), RoomBoundary::Centreline),
+            (None, RoomBoundary::FinishFace),
+        ] {
+            let state = AppState::new(Box::new(MemStore::new()), single_project("p1", with_policy(fallback)), None);
+            state.set_snapshot(undeclared("p1")).unwrap();
+            let result = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
+            assert_eq!(result.boundary_by_level["L1"], expected, "fallback {fallback:?}");
         }
     }
 
@@ -1204,6 +1375,7 @@ mod tests {
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
             rooms: vec![make_room("r1", "Room A", &[])],
         };

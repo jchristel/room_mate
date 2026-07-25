@@ -438,6 +438,7 @@ mod tests {
             model: Model { id: model.into(), name: "M".into(), source: "revit".into() },
             snapshot: Snapshot { taken_at: ts.into() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![],
             rooms: vec![],
         }

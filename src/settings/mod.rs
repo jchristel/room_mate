@@ -113,6 +113,13 @@ pub struct Settings {
     #[serde(default)]
     pub sources: Sources,
 
+    /// Area-measurement **policy** for this project (see `AreaPolicy`).
+    /// Defaulted, so a project file predating it behaves exactly as before.
+    /// `skip_serializing_if` keeps an all-default policy out of the written
+    /// file — nothing is gained by stamping the defaults into every project.
+    #[serde(default, skip_serializing_if = "AreaPolicy::is_default")]
+    pub areas: AreaPolicy,
+
     /// Ordered classification tiers, outermost first. Empty if the section is
     /// omitted (a project with no classification defined).
     #[serde(default)]
@@ -202,6 +209,171 @@ pub struct Settings {
 
 fn default_room_label() -> Vec<String> {
     vec!["$name".to_string(), "$id".to_string()]
+}
+
+/// A recognised area-measurement standard. Closed enum on purpose: the whole
+/// point of declaring the standard is that a reader knows what the number
+/// means, and a free-text field that accepts `"IMPS3"` defeats that silently.
+/// An unknown value therefore fails the boot at TOML parse time, with serde
+/// naming the accepted spellings — the "loud startup over silent no-op" rule.
+///
+/// The server **computes nothing** from this: it is carried and echoed on
+/// `/areas` so an area figure never travels without its definition, which is
+/// precisely what measurement standards exist to prevent. Adding a standard is
+/// one variant here; the list is short because these are the ones a UK/EU
+/// healthcare job actually cites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum MeasurementStandard {
+    /// IPMS 1 — the whole building envelope, external walls included.
+    #[serde(rename = "IPMS1")]
+    Ipms1,
+    /// IPMS 2 — measured to the internal dominant face, by component.
+    #[serde(rename = "IPMS2")]
+    Ipms2,
+    /// IPMS 3 — exclusive occupier area, to the internal dominant face.
+    #[serde(rename = "IPMS3")]
+    Ipms3,
+    /// DIN 277 — the German gross/net floor-area standard.
+    #[serde(rename = "DIN277")]
+    Din277,
+    /// SIA 416 — the Swiss equivalent.
+    #[serde(rename = "SIA416")]
+    Sia416,
+    /// BOMA — the North American office standard.
+    #[serde(rename = "BOMA")]
+    Boma,
+    /// RICS *Code of Measuring Practice* (GIA/NIA family).
+    #[serde(rename = "RICS")]
+    Rics,
+}
+
+/// Area-measurement **policy**: the two facts about area aggregation that Revit
+/// does not know and should not be asked.
+///
+/// The split against `contract::RoomBoundary` is the load-bearing part. Which
+/// boundary regime a model was drawn to is a *model fact* Revit already holds,
+/// so it rides the upload envelope. Which measurement standard applies is
+/// **contractual**, and the width above which a gap stops being a wall and
+/// becomes a void is a **project judgement** — neither is discoverable from the
+/// model, so both live here. See HANDOVER-areas-boundary-location.md Decision 2.
+///
+/// `max_wall_thickness` is deliberately **one quantity with two consumers**:
+/// `service::areas` sizes its wall zone by it and `service::adjacency` uses it
+/// as the default gap tolerance. Those were previously two separate constants
+/// (`areas::MAX_WALL_FT` and `adjacency::WALL_MAX_FT`) holding the same physical
+/// number in two modules — a live drift risk this type removes.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct AreaPolicy {
+    /// What the reported area figure *means*. `None` (the default) is an honest
+    /// "undeclared" and is echoed as such — not silently presented as any
+    /// particular standard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_standard: Option<MeasurementStandard>,
+
+    /// Feet. The widest gap between finish-face rooms still counted as a wall;
+    /// anything wider is a genuine void (a courtyard, atrium, lightwell) and
+    /// stays open. Must be positive and finite — it describes a real partition,
+    /// and a zero-thickness wall is not a thing.
+    ///
+    /// **Zero is not how you say "centreline".** That is the *regime*, declared
+    /// per model on the envelope, and it collapses the effective gap to zero
+    /// (see `wall_gap_ft`). Conflating the two would make a project-wide policy
+    /// value override a per-model fact — the exact mistake Decision 1 exists to
+    /// prevent. `adjacency`'s `?wall_max=0` request parameter is a different
+    /// thing again: a caller asking one question, not a project declaring policy.
+    #[serde(default = "AreaPolicy::default_max_wall_thickness")]
+    pub max_wall_thickness: f64,
+
+    /// **Fallback only** for models whose extractor predates
+    /// `contract::RoomBoundary` on the envelope. A declared envelope value
+    /// always wins — this can never override a model that states its own regime,
+    /// because the model is the authority. `None` (the default) falls through to
+    /// finish face, which is the conservative reading: a close still runs, which
+    /// is exactly today's behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_location: Option<crate::contract::RoomBoundary>,
+}
+
+impl Default for AreaPolicy {
+    fn default() -> Self {
+        Self {
+            measurement_standard: None,
+            max_wall_thickness: Self::DEFAULT_MAX_WALL_THICKNESS_FT,
+            boundary_location: None,
+        }
+    }
+}
+
+impl AreaPolicy {
+    /// ~1.5 ft (~450mm): clears a thick partition without reaching across the
+    /// narrowest real void. The value `areas::MAX_WALL_FT` and
+    /// `adjacency::WALL_MAX_FT` both independently carried before they became
+    /// one declared quantity, so an un-migrated project behaves exactly as it
+    /// did.
+    pub const DEFAULT_MAX_WALL_THICKNESS_FT: f64 = 1.5;
+
+    /// Hard ceiling on the declared thickness, and on a requested
+    /// `?wall_max=`. Beyond ~5 ft a "wall" spans a corridor, and the answer
+    /// stops being about walls at all. Rejected loudly rather than clamped.
+    pub const MAX_WALL_THICKNESS_LIMIT_FT: f64 = 5.0;
+
+    fn default_max_wall_thickness() -> f64 {
+        Self::DEFAULT_MAX_WALL_THICKNESS_FT
+    }
+
+    /// Whether this policy is entirely defaults — the `skip_serializing_if`
+    /// predicate, so an untouched project file gains no `[areas]` block.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Startup-loud checks. A thickness that is non-finite, non-positive or
+    /// absurd can never describe a wall, and left unchecked it would silently
+    /// produce either no wall zone at all or one that swallows courtyards.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.max_wall_thickness.is_finite() {
+            anyhow::bail!("[areas] max_wall_thickness must be a finite number");
+        }
+        if self.max_wall_thickness <= 0.0 {
+            anyhow::bail!(
+                "[areas] max_wall_thickness must be positive (got {}); a centreline model is \
+                 declared by its boundary regime, not by a zero wall thickness",
+                self.max_wall_thickness
+            );
+        }
+        if self.max_wall_thickness > Self::MAX_WALL_THICKNESS_LIMIT_FT {
+            anyhow::bail!(
+                "[areas] max_wall_thickness {} ft exceeds the {} ft limit; a gap that wide \
+                 bridges rooms, not walls",
+                self.max_wall_thickness,
+                Self::MAX_WALL_THICKNESS_LIMIT_FT
+            );
+        }
+        Ok(())
+    }
+
+    /// The regime in force for one model: what the model declared, else this
+    /// project's fallback, else finish face. Three levels, most authoritative
+    /// first — the model knows, the project guesses, the server assumes the
+    /// case that still needs work done.
+    pub fn resolve_boundary(&self, declared: Option<crate::contract::RoomBoundary>) -> crate::contract::RoomBoundary {
+        declared
+            .or(self.boundary_location)
+            .unwrap_or(crate::contract::RoomBoundary::FinishFace)
+    }
+
+    /// The gap this regime implies, in feet — the one number `areas` closes by
+    /// and `adjacency` defaults to. Centreline rooms already touch, so there is
+    /// nothing to bridge and nothing to fill: zero, not a small number. That
+    /// zero is the whole payoff of Decision 1 — at radius zero the morphological
+    /// close is the identity, so bevels, chamfers, spikes and sibling overlaps
+    /// cannot arise at all rather than merely being smaller.
+    pub fn wall_gap_ft(&self, boundary: crate::contract::RoomBoundary) -> f64 {
+        match boundary {
+            crate::contract::RoomBoundary::Centreline => 0.0,
+            crate::contract::RoomBoundary::FinishFace => self.max_wall_thickness,
+        }
+    }
 }
 
 /// One dRofus column's declared type/format, and optionally a QA override.
@@ -680,5 +852,110 @@ mod tests {
         let mut good_drofus = milestone("M", "2026-06-30");
         good_drofus.drofus_snapshot = Some("2026-06-29T17:00:00Z".to_string());
         assert!(good_drofus.validate().is_ok());
+    }
+
+    /// The default policy is exactly today's behaviour: the 1.5 ft ceiling both
+    /// geometry services previously hardcoded, no declared standard, and no
+    /// regime fallback — so an un-migrated project file changes nothing.
+    #[test]
+    fn test_area_policy_default_preserves_todays_behaviour() {
+        let policy = AreaPolicy::default();
+        assert_eq!(policy.max_wall_thickness, AreaPolicy::DEFAULT_MAX_WALL_THICKNESS_FT);
+        assert_eq!(policy.measurement_standard, None);
+        assert_eq!(policy.boundary_location, None);
+        assert!(policy.validate().is_ok());
+        assert!(policy.is_default(), "an untouched policy writes no [areas] block");
+    }
+
+    /// A thickness that cannot describe a wall fails the boot with a message
+    /// naming the problem. Zero gets its own wording: it is the mistake a reader
+    /// is most likely to make (reaching for it to mean "centreline"), and the
+    /// message has to say where that actually gets declared.
+    #[test]
+    fn test_area_policy_rejects_unusable_thickness() {
+        let with = |t: f64| AreaPolicy { max_wall_thickness: t, ..Default::default() };
+
+        let msg = format!("{:#}", with(0.0).validate().unwrap_err());
+        assert!(msg.contains("positive"), "{msg}");
+        assert!(msg.contains("boundary regime"), "points at the right knob: {msg}");
+
+        assert!(with(-1.0).validate().is_err(), "negative");
+        assert!(with(f64::NAN).validate().is_err(), "non-finite");
+        assert!(with(f64::INFINITY).validate().is_err(), "non-finite");
+
+        let msg = format!("{:#}", with(6.0).validate().unwrap_err());
+        assert!(msg.contains("limit"), "{msg}");
+
+        // The band is closed at the limit itself, and an ordinary value passes.
+        assert!(with(AreaPolicy::MAX_WALL_THICKNESS_LIMIT_FT).validate().is_ok());
+        assert!(with(0.5).validate().is_ok());
+    }
+
+    /// Regime resolution is three levels, most authoritative first: the model's
+    /// own declaration beats the project fallback, which beats finish face. The
+    /// first of those is the load-bearing one — a project fallback that could
+    /// override a model that states its own regime would defeat Decision 1.
+    #[test]
+    fn test_area_policy_resolve_boundary_precedence() {
+        use crate::contract::RoomBoundary::{Centreline, FinishFace};
+
+        let no_fallback = AreaPolicy::default();
+        assert_eq!(no_fallback.resolve_boundary(None), FinishFace, "conservative default");
+        assert_eq!(no_fallback.resolve_boundary(Some(Centreline)), Centreline);
+
+        let fallback_centreline = AreaPolicy { boundary_location: Some(Centreline), ..Default::default() };
+        assert_eq!(fallback_centreline.resolve_boundary(None), Centreline, "fallback applies when undeclared");
+        assert_eq!(
+            fallback_centreline.resolve_boundary(Some(FinishFace)),
+            FinishFace,
+            "the model always wins over the project's guess"
+        );
+    }
+
+    /// The gap a regime implies: exactly zero for centreline (nothing to
+    /// bridge — this is what deletes the artifact class, so it must not be a
+    /// small number), the declared thickness for finish face.
+    #[test]
+    fn test_area_policy_wall_gap_per_regime() {
+        use crate::contract::RoomBoundary::{Centreline, FinishFace};
+        let policy = AreaPolicy { max_wall_thickness: 0.4, ..Default::default() };
+        assert_eq!(policy.wall_gap_ft(Centreline), 0.0);
+        assert_eq!(policy.wall_gap_ft(FinishFace), 0.4);
+    }
+
+    /// The `[areas]` block round-trips through TOML in a position TOML accepts
+    /// — the serialize-side footgun (CODING-CONVENTIONS): a table emitted in
+    /// the wrong place swallows the scalars that follow it.
+    #[test]
+    fn test_area_policy_round_trips_through_toml() {
+        let toml_in = r#"
+project_id = "p1"
+
+[areas]
+measurement_standard = "IPMS3"
+max_wall_thickness = 0.5
+boundary_location = "finish_face"
+"#;
+        let settings: Settings = toml::from_str(toml_in).unwrap();
+        assert_eq!(settings.areas.measurement_standard, Some(MeasurementStandard::Ipms3));
+        assert_eq!(settings.areas.max_wall_thickness, 0.5);
+        assert_eq!(settings.areas.boundary_location, Some(crate::contract::RoomBoundary::FinishFace));
+
+        let written = toml::to_string_pretty(&settings).unwrap();
+        let reparsed: Settings = toml::from_str(&written).unwrap();
+        assert_eq!(reparsed.areas, settings.areas, "survives a write→read cycle");
+        assert_eq!(reparsed.project_id, "p1", "the table did not swallow a scalar");
+    }
+
+    /// An unrecognised standard is rejected at parse time, and the error names
+    /// the accepted spellings — the whole point of declaring a standard is that
+    /// the reader knows what the number means, so `"IMPS3"` must not be carried
+    /// silently. No hand-rolled check: serde's own message is the specific one.
+    #[test]
+    fn test_unknown_measurement_standard_is_rejected() {
+        let err = toml::from_str::<Settings>("project_id = \"p1\"\n\n[areas]\nmeasurement_standard = \"IMPS3\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("IPMS3"), "the message names the accepted spellings: {err}");
     }
 }
