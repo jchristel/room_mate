@@ -531,6 +531,16 @@ serving a different consumer (a hierarchy browser) than the room render.
   (5,046 rooms/level): a deep zoomed-in pan went from **~595 ms/frame (~2 fps)** to
   **4–15 ms/frame** (only the ~12–40 on-screen rooms drawn), verified to restore
   every room on zoom-out and to leave the export at full room count.
+  A **debug kill switch** (`CULL_ENABLED`, a module-level `let` beside
+  `MATCH_COLOUR`) turns the hide/show off so this can be re-measured rather than
+  taken on faith whenever the renderer changes — see
+  [HANDOVER-culling-disable-switch.md](HANDOVER-culling-disable-switch.md). It is
+  console-only and unpersisted on purpose, so nobody leaves it off and files the
+  slowness as a bug, and it suppresses hide/show **only**: cull units are still
+  collected, because `roomAtNode` (click-to-select), `applySelection` and
+  `applyHighlight` all walk them. Re-measured 2026-07-25 with it:
+  **16.5 ms/frame on vs 912 ms/frame off** — culling still earns its place, so
+  the "delete it if it has been made redundant" branch stays unexercised.
 - **Fitted-view cost at very high room counts — still open.** Culling helps only
   when geometry is off-screen; a *fitted* view of a 5,000-room level still paints
   everything (~0.5 s+/frame), so the remaining lever there is level-of-detail

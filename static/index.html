@@ -746,6 +746,33 @@ const NO_DATA_COLOUR = "#c9c2b0";
 // stops (ColorBrewer RdYlGn extremes): within tolerance vs. not.
 const MATCH_COLOUR = "#1a9850";     // green: |A−B| within tolerance
 const MISMATCH_COLOUR = "#d73027";  // red:   outside tolerance
+
+// ---- Viewport culling kill switch -------------------------------------------
+// `true` (default) = normal behaviour: off-screen rooms are hidden on pan/zoom.
+// `false` = every room stays in the render tree regardless of the view.
+//
+// A switch rather than deleted code, so culling's value can be re-measured
+// whenever the renderer changes instead of being taken on faith. Expect deep
+// zoomed-in panning on the 10k-room `big-plate` fixture to collapse from a few
+// ms/frame to hundreds when this is false — that delta IS the feature's value,
+// and if it ever stops appearing, culling has been made redundant by something
+// else and should be deleted rather than left switched on.
+//
+// Only informative for the ZOOMED-IN case. A fitted view paints everything
+// anyway (nothing is off-screen to cull), so this flag will not move it — see
+// STRATEGY-BROWSER.md's level-of-detail item for that one.
+//
+// Deliberately not persisted (no localStorage, no URL): a reload always returns
+// to the default, so nobody can leave it off and file the slowness as a bug.
+// These are classic <script> tags, not modules, so this binding is reachable
+// from the devtools console:  CULL_ENABLED = false; zones.forEach(cullZone)
+//
+// NOTE: this suppresses hide/show ONLY. Cull *units* are still collected,
+// because three other features walk `zone.cullUnits` — `roomAtNode`
+// (click-to-select), `applySelection` and `applyHighlight`. Disabling culling by
+// not collecting them would break room selection and search, which looks nothing
+// like a culling change. See HANDOVER-culling-disable-switch.md §2.
+let CULL_ENABLED = true;
 // date-range: a date after near_date is "future" — a fixed blue, separate from
 // the green→red near/far ramp (the RdYlGn scheme has no blue of its own).
 const FUTURE_COLOUR = "#2c7fb8";
@@ -972,6 +999,22 @@ function roomBBox(room) {
 function cullZone(zone) {
   const units = zone.cullUnits;
   if (!units || units.length === 0) return;
+
+  // Kill switch (see CULL_ENABLED). Restore anything a previous pass hid, then
+  // do nothing. The restore loop is the load-bearing half: flipping the flag
+  // mid-session must not strand rooms with display:none from the last enabled
+  // pass. Guarded here rather than at the two call sites so every current and
+  // future caller is covered by one branch.
+  if (!CULL_ENABLED) {
+    for (const u of units) {
+      if (u.hidden) {
+        for (const n of u.nodes) n.style.display = "";
+        u.hidden = false;
+      }
+    }
+    return;
+  }
+
   const v = zone.view;
   const mx = v.w * 0.2, my = v.h * 0.2; // keep a 20%-of-view margin loaded
   const x0 = v.x - mx, y0 = v.y - my, x1 = v.x + v.w + mx, y1 = v.y + v.h + my;

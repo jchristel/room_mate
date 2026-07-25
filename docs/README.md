@@ -26,6 +26,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 | Document | Status |
 |---|---|
+| [Viewport culling kill switch](HANDOVER-culling-disable-switch.md) | Built (console-only `CULL_ENABLED`) and the measurement run done: **16.5 ms/frame with culling vs 912 ms without** on `big-plate`, so culling stays. Kept open as the place to record the next re-measurement |
 | [UI layout restructure](HANDOVER-ui-layout.md) | Every sequencing step built; only Decision 3 (the room inspector) remains — **no longer blocked**: room click-selection landed with the adjacency graph |
 | [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; awaiting validation against a real Revit model (which boundary regime, and the wall tolerance that works) |
 | [Areas: boundary location + wall-zone partition](HANDOVER-areas-boundary-location.md) | All three decisions built: `room_boundary` on the envelope, `[areas]` project policy, and the wall-zone partition replacing per-group closing. One item open — the extractor itself lives outside this repo, so nothing yet *sends* `room_boundary`. Read before touching `service::areas` |
