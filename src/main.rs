@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use axum::{
     extract::DefaultBodyLimit,
     routing::{get, post},
@@ -25,7 +26,7 @@ use roommate::settings_api::{
     http_create_project, http_drofus_check, http_get_project, http_get_project_resolved,
     http_list_projects, http_update_project, http_upload_drofus,
 };
-use roommate::DEFAULT_HTTP_ADDR;
+use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
 /// Cap on the buffered `/rooms` body -- applies to the DECOMPRESSED size, since
 /// `RequestDecompressionLayer` inflates before this limit is checked. FFE
@@ -50,6 +51,26 @@ struct Args {
     /// HANDOVER-per-project-settings.md.
     #[arg(long)]
     project_settings: PathBuf,
+
+    /// TCP port to listen on. Defaults to `DEFAULT_HTTP_PORT` (5151).
+    ///
+    /// Also read from the **`PORT` environment variable**, which is what lets a
+    /// harness that assigns ports (the `.claude/launch.json` preview runner,
+    /// most PaaS runtimes) place the server without editing a command line. The
+    /// flag wins over the variable; clap's `--help` shows which one supplied the
+    /// value, so a surprising port is diagnosable rather than mysterious.
+    ///
+    /// Two things do **not** follow the port automatically, and both are worth
+    /// knowing before moving it: `bin/mcp.rs` defaults `--server-url` to the
+    /// *default* port, so an MCP server talking to a relocated HTTP server needs
+    /// that flag passed explicitly; and any external producer (the pyRevit
+    /// pusher) posts to whatever URL it was configured with. That is the reason
+    /// the checked-in launch config pins the port instead of letting the harness
+    /// assign one — now a choice rather than a constraint.
+    ///
+    /// The host is deliberately not configurable — see `DEFAULT_HTTP_HOST`.
+    #[arg(long, env = "PORT", default_value_t = DEFAULT_HTTP_PORT)]
+    port: u16,
 }
 
 #[tokio::main]
@@ -137,10 +158,62 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr = DEFAULT_HTTP_ADDR;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let addr = format!("{DEFAULT_HTTP_HOST}:{}", args.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| {
+        format!("could not bind {addr} — is another roommate already listening on port {}?", args.port)
+    })?;
     tracing::info!("viewer on http://{addr}  (POST room JSON to http://{addr}/rooms)");
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(extra: &[&str]) -> Args {
+        let mut argv = vec!["roommate", "--server-settings", "s.toml", "--project-settings", "p"];
+        argv.extend_from_slice(extra);
+        Args::parse_from(argv)
+    }
+
+    /// Omitting `--port` keeps the historic 5151, so every existing command
+    /// line, script and launch config behaves exactly as before this flag
+    /// existed. The whole point of the change is that the port stopped being
+    /// *fixed*, not that it moved.
+    #[test]
+    fn test_port_defaults_to_the_historic_value() {
+        assert_eq!(parse(&[]).port, DEFAULT_HTTP_PORT);
+        assert_eq!(DEFAULT_HTTP_PORT, 5151, "moving this silently relocates every default install");
+    }
+
+    /// `--port` is honoured, including 0 — which asks the OS for an ephemeral
+    /// port and is the one value a range check would have been tempted to
+    /// reject. It is genuinely useful (parallel test servers), and unlike
+    /// `[areas] max_wall_thickness`, a zero here means something to the OS
+    /// rather than contradicting a declared fact.
+    #[test]
+    fn test_port_flag_is_honoured() {
+        assert_eq!(parse(&["--port", "8080"]).port, 8080);
+        assert_eq!(parse(&["--port", "0"]).port, 0);
+        assert_eq!(parse(&["--port", "65535"]).port, 65535);
+    }
+
+    /// A port outside `u16` is rejected by parsing rather than truncated —
+    /// clap's own error, so `--port 70000` cannot quietly become 4464.
+    #[test]
+    fn test_out_of_range_port_is_rejected() {
+        let argv = ["roommate", "--server-settings", "s.toml", "--project-settings", "p", "--port", "70000"];
+        assert!(Args::try_parse_from(argv).is_err());
+    }
+
+    /// The bind address is loopback plus the chosen port, and the host is not
+    /// reachable from a flag — see `DEFAULT_HTTP_HOST` for why that is a
+    /// security decision rather than an oversight.
+    #[test]
+    fn test_bind_address_is_loopback_plus_chosen_port() {
+        assert_eq!(format!("{DEFAULT_HTTP_HOST}:{}", parse(&["--port", "9000"]).port), "127.0.0.1:9000");
+        assert_eq!(roommate::default_http_addr(), format!("127.0.0.1:{DEFAULT_HTTP_PORT}"));
+    }
 }

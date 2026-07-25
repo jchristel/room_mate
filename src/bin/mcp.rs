@@ -14,7 +14,7 @@
 //! The one mutating tool, `upload_drofus`, doesn't break that rule: it never
 //! writes this process's state or the store — it reads a CSV file and
 //! *forwards it over HTTP* to the running server (`--server-url`, default the
-//! shared `DEFAULT_HTTP_ADDR`), which stays the single writer and hot-swaps
+//! shared default address), which stays the single writer and hot-swaps
 //! its own registry. The `reqwest` dependency this adds is an HTTP *client*;
 //! the "no transport crate leaks into the other binary" rule is about server
 //! frameworks (`mcp.rs` still never imports `axum`), and `main.rs` still
@@ -43,7 +43,7 @@ use roommate::service::{
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
-use roommate::DEFAULT_HTTP_ADDR;
+use roommate::default_http_addr;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct ProjectIdParams {
@@ -516,7 +516,13 @@ struct Args {
     /// Base URL of the running roommate HTTP server, used only by the
     /// `upload_drofus` tool (which forwards uploads to it). Defaults to the
     /// address the server binary binds by default.
-    #[arg(long, default_value_t = format!("http://{DEFAULT_HTTP_ADDR}"))]
+    ///
+    /// It tracks the server's *default* port, not its actual one: the server
+    /// takes `--port` (and `$PORT`), and nothing here can observe that choice.
+    /// Move the server and this flag has to move with it — deliberately loud
+    /// rather than a second env lookup that would silently disagree with
+    /// whatever the server actually did.
+    #[arg(long, default_value_t = format!("http://{}", default_http_addr()))]
     server_url: String,
 }
 
