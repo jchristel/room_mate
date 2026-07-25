@@ -1,6 +1,6 @@
 project_id = "House A"
 is_default = false
-hierarchy = []
+comparison_properties = []
 builtin_properties = []
 room_label = [
     "$name",
@@ -11,3 +11,7 @@ drofus_fields = []
 colour_plans = []
 
 [sources]
+
+[[hierarchy]]
+name = "Department"
+name_property = "Department"
