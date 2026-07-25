@@ -38,7 +38,7 @@
 //! standards-based gross. Label it accordingly.
 
 use geo::algorithm::buffer::{BufferStyle, LineJoin};
-use geo::{Area, BooleanOps, Buffer, Coord, LineString, MultiPolygon, Polygon};
+use geo::{Area, BooleanOps, BoundingRect, Buffer, Coord, LineString, MultiPolygon, Polygon};
 use serde::Serialize;
 
 use crate::classify::TierValue;
@@ -94,20 +94,24 @@ fn loop_to_linestring(l: &Loop) -> LineString<f64> {
 /// of one department, too far apart to bridge) are all kept; genuine courtyards
 /// survive as interior rings.
 pub fn group_footprint(rooms: &[Room]) -> MultiPolygon<f64> {
-    footprint_of_rooms(rooms.iter())
+    let base = union_of_rooms(rooms.iter());
+    let dirs = edge_dirs(&base);
+    // No sibling context here (single-group helper): nothing to clip against.
+    close_clip_clean(&base, &MultiPolygon::new(vec![]), &dirs)
 }
 
-fn footprint_of_rooms<'a>(rooms: impl Iterator<Item = &'a Room>) -> MultiPolygon<f64> {
-    // Pairwise union into an accumulator. Fine for the room counts per group;
-    // if profiling later shows it matters, geo's unary_union over the whole set
-    // is the drop-in replacement (measure first — STRATEGY.md).
+/// Union a set of rooms' outer polygons. Pairwise into an accumulator — fine for
+/// the room counts per group; if profiling later shows it matters, geo's
+/// `unary_union` over the whole set is the drop-in replacement (measure first —
+/// STRATEGY.md).
+fn union_of_rooms<'a>(rooms: impl Iterator<Item = &'a Room>) -> MultiPolygon<f64> {
     let mut acc: MultiPolygon<f64> = MultiPolygon::new(vec![]);
     for room in rooms {
         if let Some(poly) = room_outer_polygon(room) {
             acc = acc.union(&MultiPolygon::new(vec![poly]));
         }
     }
-    close_and_clean(&acc)
+    acc
 }
 
 /// Morphological close: dilate by `r`, then erode by `r`.
@@ -156,20 +160,28 @@ fn morphological_close(mp: &MultiPolygon<f64>, r: f64) -> MultiPolygon<f64> {
 /// courtyard bounded by several groups closes only when they dissolve into one,
 /// a wall between two departments only at their common ancestor — while a
 /// genuinely wide void is never filled at any tier.
-fn close_and_clean(mp: &MultiPolygon<f64>) -> MultiPolygon<f64> {
-    let closed = morphological_close(mp, MAX_WALL_FT / 2.0);
+/// `dirs` is the level's full set of real edge directions (see [`edge_dirs`]) —
+/// passed in rather than derived from `base`, because clipping against `foreign`
+/// introduces edges along those rooms' boundaries, which are real geometry and
+/// must not be mistaken for chords the close invented.
+fn close_clip_clean(base: &MultiPolygon<f64>, foreign: &MultiPolygon<f64>, dirs: &[f64]) -> MultiPolygon<f64> {
+    let closed = morphological_close(base, MAX_WALL_FT / 2.0);
     // Restore the sharp original corners the close chipped, without disturbing
     // the filled walls (the original doesn't cover them) or the open voids (a
-    // void is a hole in both `closed` and `mp`, so it stays a hole in the union).
-    // Union-back repairs corners that sit on a room; the wall-band ENDS (where a
-    // filled wall meets the outer boundary — not a room corner) are then sharpened
-    // by `sharpen_bevels`, and `dedup_collinear` drops the redundant points both
-    // steps leave behind.
-    let restored = closed.union(mp);
-    // Directions the input actually had — the reference for the de-bevel. Any
-    // output edge at a direction outside this set is a chord the close invented.
-    let dirs = edge_dirs(mp);
-    let clean = |ring: &LineString<f64>| dedup_collinear(&sharpen_bevels(ring, &dirs));
+    // void is a hole in both `closed` and `base`, so it stays a hole in the union).
+    let mut restored = closed.union(base);
+    // **Clip away other groups' rooms.** The close dilates by `r`, which is wider
+    // than a partition, so at a concave junction the erode cannot fully retract
+    // and the footprint keeps a sliver *inside a neighbouring group's room*. Two
+    // neighbours each doing that is a genuine overlap — measured at 1–5.5 ft² per
+    // pair on real data, with both groups counting the same area. Subtracting the
+    // rooms that belong to other groups removes exactly those illegitimate claims
+    // and nothing else: own rooms are not in `foreign`, and a filled wall band is
+    // not a room, so the wall-ownership rule up the hierarchy is untouched.
+    if !foreign.0.is_empty() {
+        restored = restored.difference(foreign);
+    }
+    let clean = |ring: &LineString<f64>| dedup_collinear(&sharpen_bevels(ring, dirs));
     MultiPolygon::new(
         restored
             .iter()
@@ -262,7 +274,7 @@ fn sharpen_bevels(ring: &LineString<f64>, dirs: &[f64]) -> LineString<f64> {
             if is_real_dir(b, c) {
                 continue; // a direction the input had — keep it
             }
-            if let Some(x) = line_intersection(a, b, c, d) {
+            if let Some(x) = corner_of_chamfer(a, b, c, d) {
                 out[i] = x;
                 out[(i + 1) % n] = x; // collapse the chord onto the corner it cut
                 changed = true;
@@ -291,28 +303,60 @@ fn sharpen_bevels(ring: &LineString<f64>, dirs: &[f64]) -> LineString<f64> {
     LineString::from(pts)
 }
 
-/// Intersection of the infinite lines through `(a,b)` and `(c,d)`. `None` when
-/// they are parallel.
-fn line_intersection(a: Coord<f64>, b: Coord<f64>, c: Coord<f64>, d: Coord<f64>) -> Option<Coord<f64>> {
+/// The corner that a chamfer chord `b→c` cut off, given its flanking edges
+/// `a→b` and `c→d` — or `None` when this is demonstrably *not* a cut corner.
+///
+/// The guards are the important part, and their absence caused a real bug: two
+/// near-parallel flanking edges intersect at near-infinity, which turned a
+/// chamfer into a **million-foot spike** that inflated one department's area
+/// 200-fold and overlapped every other footprint. A chamfer we cannot sharpen
+/// safely must be left as-is; a runaway vertex is far worse than a visible bevel.
+///
+/// Three conditions, all necessary:
+/// - the flanking edges are not parallel (`denom` non-degenerate);
+/// - the intersection lies **forward of `b`** along `a→b` (`t > 1`) and **before
+///   `d`** along `c→d` (`u < 1`) — i.e. both flanks genuinely reach it without
+///   reversing, which is what "this chord cut a corner" means geometrically. `u`
+///   is bounded at `d`, not at `c`: a chamfer's corner often falls *along* the
+///   following edge rather than behind its start, and rejecting those left visible
+///   chamfers at diagonal-to-orthogonal junctions;
+/// - it is **near the chord**: within `max(2·chord, MAX_WALL_FT)` of both ends.
+///   A real 90° chamfer puts its corner ~0.71·chord away, so this is generous,
+///   while a near-parallel pair lands orders of magnitude outside it.
+fn corner_of_chamfer(a: Coord<f64>, b: Coord<f64>, c: Coord<f64>, d: Coord<f64>) -> Option<Coord<f64>> {
     let (rx, ry) = (b.x - a.x, b.y - a.y);
     let (sx, sy) = (d.x - c.x, d.y - c.y);
     let denom = rx * sy - ry * sx;
     if denom.abs() < 1e-9 {
+        return None; // parallel flanking edges — no corner to restore
+    }
+    let (qx, qy) = (c.x - a.x, c.y - a.y);
+    let t = (qx * sy - qy * sx) / denom;
+    let u = (qx * ry - qy * rx) / denom;
+    // Must extend a->b past b, and land before d along c->d (so the surviving
+    // X->d edge keeps that flank's direction). Small tolerances so a corner
+    // sitting essentially on b or d still qualifies.
+    if t < 0.999 || u > 0.999 {
         return None;
     }
-    let t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / denom;
-    Some(Coord { x: a.x + t * rx, y: a.y + t * ry })
+    let x = Coord { x: a.x + t * rx, y: a.y + t * ry };
+    let dist = |p: Coord<f64>, q: Coord<f64>| (p.x - q.x).hypot(p.y - q.y);
+    let limit = (2.0 * dist(b, c)).max(MAX_WALL_FT);
+    if dist(x, b) > limit || dist(x, c) > limit {
+        return None; // corner is implausibly far — refuse rather than spike
+    }
+    Some(x)
 }
 
 /// Dissolve already-closed child footprints into one parent footprint: union
-/// them, then re-close (walls between children fill here; a courtyard bounded by
-/// several children first encloses here — see `close_and_clean`).
-fn dissolve_footprints(children: &[&MultiPolygon<f64>]) -> MultiPolygon<f64> {
+/// them, then re-close and re-clip (walls between children fill here; a courtyard
+/// bounded by several children first encloses here — see [`close_clip_clean`]).
+fn dissolve_footprints(children: &[&MultiPolygon<f64>], foreign: &MultiPolygon<f64>, dirs: &[f64]) -> MultiPolygon<f64> {
     let mut acc: MultiPolygon<f64> = MultiPolygon::new(vec![]);
     for child in children {
         acc = acc.union(*child);
     }
-    close_and_clean(&acc)
+    close_clip_clean(&acc, foreign, dirs)
 }
 
 /// Measured area of a footprint — the area of the actual dissolved polygon, holes
@@ -377,11 +421,110 @@ pub fn hierarchy_area_groups(rooms: &[ClassifiedRoom], exclusions: &[HierarchyEx
     out
 }
 
+/// Every room on one level as a polygon paired with its classification path — the
+/// reference a group's footprint is clipped against so it cannot claim area that
+/// belongs to another group's rooms (see [`close_clip_clean`]).
+struct LevelRooms<'a> {
+    items: Vec<(&'a [TierValue], Polygon<f64>)>,
+}
+
+impl<'a> LevelRooms<'a> {
+    fn new(rooms: &[&'a ClassifiedRoom<'a>]) -> Self {
+        let items = rooms
+            .iter()
+            .filter_map(|cr| room_outer_polygon(cr.room).map(|p| (cr.path, p)))
+            .collect();
+        Self { items }
+    }
+
+    /// Union of the rooms **not** under `prefix` that lie within a wall's reach of
+    /// `base`. The reach filter is not an approximation: the close can only move a
+    /// boundary by `MAX_WALL_FT/2`, so a room further out than `MAX_WALL_FT` can
+    /// never be claimed — skipping it is exact, and keeps the subtrahend small
+    /// (one union over a handful of neighbours instead of the whole level).
+    fn foreign_near(&self, prefix: &[TierValue], base: &MultiPolygon<f64>) -> MultiPolygon<f64> {
+        let Some(r) = base.bounding_rect() else {
+            return MultiPolygon::new(vec![]);
+        };
+        let (x0, y0) = (r.min().x - MAX_WALL_FT, r.min().y - MAX_WALL_FT);
+        let (x1, y1) = (r.max().x + MAX_WALL_FT, r.max().y + MAX_WALL_FT);
+        let mut acc: MultiPolygon<f64> = MultiPolygon::new(vec![]);
+        for (path, poly) in &self.items {
+            if path.len() >= prefix.len() && path_eq(&path[..prefix.len()], prefix) {
+                continue; // this group's own room (or one of its descendants')
+            }
+            let Some(b) = poly.bounding_rect() else { continue };
+            if b.max().x < x0 || b.min().x > x1 || b.max().y < y0 || b.min().y > y1 {
+                continue; // out of the close's reach
+            }
+            acc = acc.union(&MultiPolygon::new(vec![poly.clone()]));
+        }
+        acc
+    }
+
+    /// Real edge directions across the whole level — the de-bevel's reference for
+    /// "a direction the input actually had". Level-wide (not per group) because a
+    /// clip introduces edges from a neighbour's rooms, which are equally real.
+    fn dirs(&self) -> Vec<f64> {
+        let all = MultiPolygon::new(self.items.iter().map(|(_, p)| p.clone()).collect());
+        edge_dirs(&all)
+    }
+}
+
+/// Withdraw from **both** siblings any area they each claim.
+///
+/// The room-level clip ([`LevelRooms::foreign_near`]) stops a group swallowing a
+/// neighbour's *room*, but two groups can still both fill part of the *wall band*
+/// between them: the close dilates by more than a partition's width, so at a
+/// concave junction each side keeps a sliver past the wall's middle. That is a
+/// genuine double-count (measured at 0.5–5.5 ft² per pair on real data).
+///
+/// The resolution follows the rule the design already states: a wall between two
+/// different groups belongs to **neither** — it is filled at their common
+/// ancestor, whose own union-and-close covers it. So contested area is removed
+/// from both, symmetrically. Intersections are all computed *before* any
+/// subtraction, so the outcome does not depend on group order.
+fn resolve_sibling_overlaps(groups: &mut [(Vec<TierValue>, MultiPolygon<f64>)]) {
+    let n = groups.len();
+    if n < 2 {
+        return;
+    }
+    let boxes: Vec<_> = groups.iter().map(|(_, fp)| fp.bounding_rect()).collect();
+    let mut contested: Vec<MultiPolygon<f64>> = vec![MultiPolygon::new(vec![]); n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            // Bounding-box reject first: most sibling pairs are nowhere near each
+            // other, and this keeps the pass off the expensive boolean path.
+            match (boxes[i], boxes[j]) {
+                (Some(a), Some(b)) => {
+                    if a.max().x < b.min().x || b.max().x < a.min().x || a.max().y < b.min().y || b.max().y < a.min().y {
+                        continue;
+                    }
+                }
+                _ => continue,
+            }
+            let inter = groups[i].1.intersection(&groups[j].1);
+            if inter.0.is_empty() {
+                continue;
+            }
+            contested[i] = contested[i].union(&inter);
+            contested[j] = contested[j].union(&inter);
+        }
+    }
+    for (g, c) in groups.iter_mut().zip(contested) {
+        if !c.0.is_empty() {
+            g.1 = g.1.difference(&c);
+        }
+    }
+}
+
 fn level_groups(level_id: &str, rooms: &[&ClassifiedRoom], exclusions: &[HierarchyExclusion]) -> Vec<AreaGroup> {
     let num_tiers = rooms.iter().map(|r| r.path.len()).max().unwrap_or(0);
     if num_tiers == 0 {
         return Vec::new(); // no hierarchy configured -> no groups
     }
+    let level = LevelRooms::new(rooms);
+    let dirs = level.dirs();
 
     // Stage 1: gather rooms into bottom-tier groups by full-path key (first-seen
     // order), then build each group's footprint. `classify_room` guarantees a
@@ -397,10 +540,15 @@ fn level_groups(level_id: &str, rooms: &[&ClassifiedRoom], exclusions: &[Hierarc
         }
     }
 
-    let current: Vec<(Vec<TierValue>, MultiPolygon<f64>)> = bottom
+    let mut current: Vec<(Vec<TierValue>, MultiPolygon<f64>)> = bottom
         .into_iter()
-        .map(|(path, rs)| (path, footprint_of_rooms(rs.into_iter())))
+        .map(|(path, rs)| {
+            let base = union_of_rooms(rs.into_iter());
+            let foreign = level.foreign_near(&path, &base);
+            (path, close_clip_clean(&base, &foreign, &dirs))
+        })
         .collect();
+    resolve_sibling_overlaps(&mut current);
 
     let mut results: Vec<AreaGroup> =
         current.iter().map(|(path, fp)| emit(level_id, path.clone(), fp, exclusions)).collect();
@@ -411,7 +559,6 @@ fn level_groups(level_id: &str, rooms: &[&ClassifiedRoom], exclusions: &[Hierarc
     // the excluded group drops out of that tier and every tier above (its own
     // footprint was already emitted). The union stays a dumb "dissolve these
     // inputs" loop; the withhold is decided here, at the insertion point.
-    let mut current = current;
     for depth in (0..num_tiers - 1).rev() {
         let mut parents: Vec<(Vec<TierValue>, Vec<&MultiPolygon<f64>>)> = Vec::new();
         for (path, fp) in &current {
@@ -424,10 +571,20 @@ fn level_groups(level_id: &str, rooms: &[&ClassifiedRoom], exclusions: &[Hierarc
                 None => parents.push((prefix.to_vec(), vec![fp])),
             }
         }
-        let next: Vec<(Vec<TierValue>, MultiPolygon<f64>)> = parents
+        let mut next: Vec<(Vec<TierValue>, MultiPolygon<f64>)> = parents
             .into_iter()
-            .map(|(path, fps)| (path, dissolve_footprints(&fps)))
+            .map(|(path, fps)| {
+                // A parent owns its whole subtree, so `foreign` shrinks as we go
+                // up: only rooms outside this prefix are clipped away.
+                let mut base: MultiPolygon<f64> = MultiPolygon::new(vec![]);
+                for fp in &fps {
+                    base = base.union(*fp);
+                }
+                let foreign = level.foreign_near(&path, &base);
+                (path, dissolve_footprints(&fps, &foreign, &dirs))
+            })
             .collect();
+        resolve_sibling_overlaps(&mut next);
         results.extend(next.iter().map(|(path, fp)| emit(level_id, path.clone(), fp, exclusions)));
         current = next;
     }
@@ -743,6 +900,65 @@ mod tests {
         assert_eq!(building_grp.footprint.0[0].interiors().len(), 1, "the courtyard survives as a hole");
     }
 
+    /// **Regression: sibling departments must not overlap.** At a concave junction
+    /// the close dilates wider than the partition, so the erode cannot fully
+    /// retract and each department kept a sliver *inside its neighbour's room* —
+    /// measured at 1–5.5 ft² per pair on real data, with both groups counting the
+    /// same area. `foreign_near` clips those claims away. Asserted as a real
+    /// polygon intersection, not a bbox test (concave footprints' bboxes overlap
+    /// legitimately).
+    #[test]
+    fn test_sibling_footprints_do_not_overlap() {
+        // Dept A is an L wrapping Dept B's room, all face-of-wall (0.4 ft walls),
+        // which puts a concave junction right where the artifact appeared.
+        let path_a = vec![tv("Building", "B1"), tv("Dept", "A")];
+        let path_b = vec![tv("Building", "B1"), tv("Dept", "B")];
+        let rooms = vec![
+            (croom("a_bottom", "L1", rect(0.0, 0.0, 30.0, 10.0)), path_a.clone()),
+            (croom("a_left", "L1", rect(0.0, 10.4, 10.0, 30.0)), path_a.clone()),
+            (croom("b_notch", "L1", rect(10.4, 10.4, 30.0, 30.0)), path_b.clone()),
+        ];
+        let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
+        let g = hierarchy_area_groups(&cls, &[]);
+
+        let fa = &group(&g, "L1", &path_a).footprint;
+        let fb = &group(&g, "L1", &path_b).footprint;
+        let overlap = fa.intersection(fb).unsigned_area();
+        assert!(overlap < 0.01, "sibling footprints must be disjoint, overlapped {overlap} ft²");
+
+        // And the parent still fills the wall between them: it exceeds the two
+        // children (which no longer double-count it) rather than equalling them.
+        let building = group(&g, "L1", &[tv("Building", "B1")]).area;
+        let sum = group(&g, "L1", &path_a).area + group(&g, "L1", &path_b).area;
+        assert!(building > sum + 1.0, "parent fills the inter-dept wall: {building} vs {sum}");
+    }
+
+    /// A group's footprint must never swallow a neighbouring group's room, even
+    /// when that room sits in a notch narrower than the close would bridge.
+    #[test]
+    fn test_footprint_does_not_claim_a_neighbours_room() {
+        let path_a = vec![tv("Building", "B1"), tv("Dept", "A")];
+        let path_b = vec![tv("Building", "B1"), tv("Dept", "B")];
+        // B is a narrow 1 ft riser between two A rooms — narrower than MAX_WALL_FT,
+        // exactly the case where A's close bridges straight across it.
+        let rooms = vec![
+            (croom("a1", "L1", rect(0.0, 0.0, 10.0, 10.0)), path_a.clone()),
+            (croom("riser", "L1", rect(10.0, 0.0, 11.0, 10.0)), path_b.clone()),
+            (croom("a2", "L1", rect(11.0, 0.0, 21.0, 10.0)), path_a.clone()),
+        ];
+        let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
+        let g = hierarchy_area_groups(&cls, &[]);
+
+        let fa = &group(&g, "L1", &path_a).footprint;
+        let riser = Polygon::new(
+            LineString::from(rect(10.0, 0.0, 11.0, 10.0).iter().map(|&(x, y)| (x, y)).collect::<Vec<_>>()),
+            vec![],
+        );
+        let stolen = fa.intersection(&MultiPolygon::new(vec![riser])).unsigned_area();
+        assert!(stolen < 0.01, "A must not claim B's riser, took {stolen} ft²");
+        approx_area(group(&g, "L1", &path_a).area, 200.0); // its own two rooms only
+    }
+
     /// The same department on two levels forms two independent bottom groups and
     /// two independent building footprints — the pipeline never unions floors.
     #[test]
@@ -1007,6 +1223,69 @@ mod tests {
         let dirs_with_diag = [0.0, PI / 2.0, diag_dir];
         let out = sharpen_bevels(&beveled, &dirs_with_diag);
         assert_eq!(out.0[..out.0.len() - 1].len(), 5, "a real diagonal wall (direction in the input) is preserved");
+    }
+
+    /// **Regression: the million-foot spike.** A short odd-angled edge whose two
+    /// flanking edges are near-PARALLEL has its "corner" at near-infinity. Without
+    /// the guards in `corner_of_chamfer` this produced a vertex over 1,000,000 ft
+    /// away on House A's Outdoor department, inflating its area 200-fold and
+    /// overlapping every other footprint. The de-bevel must decline instead: a
+    /// visible chamfer beats a runaway vertex.
+    #[test]
+    fn test_sharpen_bevels_never_spikes_on_near_parallel_flanks() {
+        use std::f64::consts::PI;
+        let axis = [0.0, PI / 2.0];
+        // Flanks (0,0)->(20,0) and (20.05,10)->(0,10.02): near-parallel, so their
+        // intersection is thousands of feet away. The joining edge is diagonal
+        // (an "invented" direction), which is what invites the sharpen.
+        let ring = LineString::from(vec![
+            (0.0, 0.0),
+            (20.0, 0.0),      // b : end of flank 1
+            (20.05, 10.0),    // c : start of flank 2 (near-parallel to flank 1)
+            (0.0, 10.02),
+            (0.0, 0.0),
+        ]);
+        let out = sharpen_bevels(&ring, &axis);
+        let far = out.0.iter().any(|p| p.x.abs() > 1_000.0 || p.y.abs() > 1_000.0);
+        assert!(!far, "must not invent a distant vertex: {:?}", out.0);
+        // Area must stay in the same ballpark as the input (~200 ft²), not explode.
+        let area = Polygon::new(out.clone(), vec![]).unsigned_area();
+        assert!(area < 400.0, "area must not blow up, got {area}");
+    }
+
+    /// End-to-end guard on the same failure mode: every footprint vertex stays
+    /// within a wall's reach of the rooms' own bounding box, at every tier. This
+    /// is the invariant the spike violated by a factor of ~12,000.
+    #[test]
+    fn test_footprints_stay_within_room_bounds() {
+        // A group mixing axis-aligned rooms with a genuinely angled one (the House
+        // A shape that triggered the bug: an angled deck beside square rooms).
+        let angled = vec![(30.0, 0.0), (52.0, 13.0), (48.0, 20.0), (26.0, 7.0)];
+        let rooms = vec![
+            room("sq1", &[&rect(0.0, 0.0, 10.0, 10.0)]),
+            room("sq2", &[&rect(10.5, 0.0, 20.0, 10.0)]),
+            room("deck", &[&angled]),
+        ];
+        let fp = group_footprint(&rooms);
+
+        // Input bounds.
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for r in &rooms {
+            for p in &r.loops[0].points {
+                x0 = x0.min(p.x); y0 = y0.min(p.y); x1 = x1.max(p.x); y1 = y1.max(p.y);
+            }
+        }
+        let slack = MAX_WALL_FT;
+        for poly in fp.iter() {
+            for ring in std::iter::once(poly.exterior()).chain(poly.interiors()) {
+                for c in &ring.0 {
+                    assert!(
+                        c.x >= x0 - slack && c.x <= x1 + slack && c.y >= y0 - slack && c.y <= y1 + slack,
+                        "vertex {c:?} escaped the room bounds ({x0},{y0})..({x1},{y1})"
+                    );
+                }
+            }
+        }
     }
 
     /// Two rooms meant to abut, but whose shared edge coordinates disagree by
