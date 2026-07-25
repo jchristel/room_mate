@@ -190,7 +190,15 @@
     height: var(--bottom-h, 20rem); min-height: 0;
     min-width: 0; /* see body's grid-template-columns: the grid must scroll, not stretch */
   }
+  /* Two shrink states, both dropping the dragged height so a folded region
+     doesn't hold a band of blank paper over the plans (see updateRegionHeight):
+     - `.empty`  — nothing to show at all: the footer collapses to ~0, its
+        content crushed by the greedy `1fr` zones row against min-height:0.
+     - `.strips` — everything collapsed to its one-line strip (band-1 blocks
+        closed, band 2 folded to its bar): the strips must stay visible at the
+        bottom, so min-content stops that same `1fr` row from crushing them. */
   #bottomRegion.empty { height: auto; }
+  #bottomRegion.strips { height: auto; min-height: min-content; }
   /* Drag handle: the region's whole top edge — resizes the region against
      the plans. The second handle (#bandDivide) splits band 1 against band 2
      *within* that height; the two never fight, because this one moves the
@@ -323,6 +331,19 @@
     font-family: var(--mono); font-size: 0.66rem; background: var(--paper);
     color: var(--ink); border: 1px solid var(--ink); padding: 0.15rem 0.4rem; cursor: pointer;
   }
+  /* The collapse toggle reads as the bar's label, not a button — matching the
+     band-1 blocks' ▾/▸ heads rather than the Clear/Download controls beside it. */
+  #gridBar button.grid-collapse {
+    font-weight: 700; letter-spacing: 0.06em; font-size: 0.7rem;
+    background: none; border: none; padding: 0;
+  }
+  #gridBar button.grid-collapse:hover { color: var(--accent); }
+  /* Collapsed: the band is just its bar. The table and empty-note fold away
+     and the band stops flex-filling, so band 1 (or, via the region shrinking
+     to its strips, the plans) reclaims the space. */
+  #gridBand.collapsed { flex: 0 0 auto; }
+  #gridBand.collapsed #gridScroll,
+  #gridBand.collapsed #gridEmpty { display: none; }
   /* The scroll container for BOTH axes: rows scroll vertically (windowed —
      only the visible slice is in the DOM), columns horizontally when model +
      dRofus are shown together. */
@@ -461,7 +482,10 @@
          the tabular view of the data itself, not the output of an action. -->
     <div id="gridBand" class="hidden">
       <div id="gridBar">
-        <strong>Rooms</strong>
+        <!-- The Rooms label doubles as a collapse toggle, the same ▾/▸
+             affordance the band-1 blocks carry — folding band 2 down to its
+             bar when the plans matter more than the table. -->
+        <button class="grid-collapse" id="gridHead" title="Collapse the table">▾ Rooms</button>
         <label><input type="checkbox" id="srcModel" checked /> Model</label>
         <label><input type="checkbox" id="srcDrofus" checked /> dRofus</label>
         <button id="gridClearFilters" title="Clear all column filters">Clear filters</button>
@@ -1179,7 +1203,7 @@ function ingestAll(payload) {
   // lifecycle as the areas fetch: the strip appears, but nothing is computed
   // until the user opens it.
   document.getElementById("adjBand").classList.remove("hidden");
-  updateRegionEmpty();
+  updateRegionHeight();
   loadAdjacency(); // no-op while collapsed; refreshes the graph when open
 }
 
@@ -1479,12 +1503,12 @@ function renderValidation(data) {
   const band = document.getElementById("qaBand");
   if (!data.drofus_configured) {
     band.classList.add("hidden");
-    updateRegionEmpty();
+    updateRegionHeight();
     setShowErrors(false);
     return;
   }
   band.classList.remove("hidden");
-  updateRegionEmpty();
+  updateRegionHeight();
 
   // Fresh error set: re-highlight open plans without disturbing pan/zoom.
   if (showErrors) rerenderZones();
@@ -1933,7 +1957,7 @@ function renderAreasBand() {
   const content = document.getElementById("areasContent");
   const anyOpen = zones.some(z => z.areasMode);
   band.classList.toggle("hidden", !anyOpen || !areasData);
-  updateRegionEmpty();
+  updateRegionHeight();
   if (!anyOpen || !areasData) { content.innerHTML = ""; return; }
 
   const depth = areasBandTier;
@@ -2159,13 +2183,27 @@ const debouncedLoadAdjacency = debounce(() => loadAdjacency({ force: true }), 15
 // different lifecycles, and an interleaved table would imply a single source
 // of truth the data model deliberately doesn't have.
 
-// An empty region must not reserve its dragged height — with nothing to show
-// that would just be a band of blank paper eating plan area.
-function updateRegionEmpty() {
-  const anyVisible = ["qaBand", "areasBand", "adjBand", "gridBand"]
-    .some(id => !document.getElementById(id).classList.contains("hidden"));
-  document.getElementById("bottomRegion").classList.toggle("empty", !anyVisible);
-  // A band appearing or disappearing can make the split meaningful or moot.
+// The region reserves its dragged height only when some child actually
+// flex-fills it: the grid expanded, or a band-1 block open. Otherwise it drops
+// to auto height in one of two shapes, so a folded panel gives the space back
+// to the plans instead of holding blank paper:
+//   - `.strips` — something is still shown as a one-line strip (the folded grid
+//     bar, or a collapsed band-1 head): reserve just those strips at the bottom.
+//   - `.empty`  — nothing shown at all (no data): collapse to nothing.
+function updateRegionHeight() {
+  const band1 = document.getElementById("band1");
+  const gridVisible = !document.getElementById("gridBand").classList.contains("hidden");
+  const gridExpanded = gridVisible && !gridCollapsed;
+  const anyBandOpen = !!band1.querySelector(".result-band.open:not(.hidden)");
+  const reserves = gridExpanded || anyBandOpen;
+  // A strip is present when the grid is folded (its bar) or a band-1 block is
+  // visible but collapsed. If a block is open, `reserves` already wins.
+  const anyStrip = gridVisible || !!band1.querySelector(".result-band:not(.hidden)");
+  const region = document.getElementById("bottomRegion");
+  region.classList.toggle("strips", !reserves && anyStrip);
+  region.classList.toggle("empty", !reserves && !anyStrip);
+  // A band appearing/disappearing, or the grid folding, can make the split
+  // meaningful or moot.
   updateBandDivide();
 }
 
@@ -2177,6 +2215,10 @@ let gridRows = [];          // rooms after filter + sort (the windowed row list)
 let gridSort = { key: null, asc: true };
 const gridFilters = new Map(); // column key -> lowercased filter text
 let gridScrollTop = 0;
+// Band 2 folds to its bar the way the band-1 blocks do. In-memory only, like
+// linkViews and the region height — view state persistence is deferred as one
+// decision (HANDOVER-ui-layout Decision 4, "Persistence"), not per control.
+let gridCollapsed = false;
 // QA marks, at the finest address the report supports. `compute_validation`
 // keys its field-level findings by (room, field), which in this grid IS a
 // (row, column) address — so a mismatch is marked *on the disagreeing cell*
@@ -2363,11 +2405,11 @@ function renderGrid() {
   const band = document.getElementById("gridBand");
   if (!currentPayload || !currentPayload.rooms || currentPayload.rooms.length === 0) {
     band.classList.add("hidden");
-    updateRegionEmpty();
+    updateRegionHeight();
     return;
   }
   band.classList.remove("hidden");
-  updateRegionEmpty();
+  updateRegionHeight();
 
   const cols = visibleGridColumns();
   computeGridRows();
@@ -2408,6 +2450,7 @@ function onGridScroll() {
 function gridScrollToRoom(roomId) {
   const idx = gridRows.findIndex(r => r.id === roomId);
   if (idx < 0) return false;
+  if (gridCollapsed) toggleGrid(); // unfold — a jump target is pointless hidden
   const scroll = document.getElementById("gridScroll");
   scroll.scrollTop = Math.max(0, idx * GRID_ROW_H - scroll.clientHeight / 2);
   onGridScroll();
@@ -2926,7 +2969,10 @@ function toggleBand(bodyId, headId, label) {
   // `.open` on the block is what lets an expanded block share band 1's height
   // with a sibling while a collapsed one stays a single strip.
   body.closest(".result-band").classList.toggle("open", open);
-  updateBandDivide();
+  // Opening a block may be the only thing now flex-filling the region (e.g.
+  // with the grid folded), so re-evaluate its reserved height, not just the
+  // divider. updateRegionHeight() calls updateBandDivide() itself.
+  updateRegionHeight();
   // Expanding takes height from the grid, so its visible row count changed.
   onGridScroll();
   return open;
@@ -2940,7 +2986,10 @@ function updateBandDivide() {
   const band1 = document.getElementById("band1");
   const divide = document.getElementById("bandDivide");
   const anyOpen = !!band1.querySelector(".result-band.open:not(.hidden)");
-  const gridShown = !document.getElementById("gridBand").classList.contains("hidden");
+  // A folded grid is only its bar — there is nothing to split against, so the
+  // divider hides even though the grid is technically still "shown".
+  const gridShown =
+    !document.getElementById("gridBand").classList.contains("hidden") && !gridCollapsed;
   divide.classList.toggle("hidden", !(anyOpen && gridShown));
   if (!anyOpen) {
     // Nothing expanded: drop any dragged height so collapsed strips don't
@@ -2956,6 +3005,8 @@ function updateBandDivide() {
 // it stays right if the bar wraps to two lines on a narrow window.
 function gridMinHeight() {
   const bar = document.getElementById("gridBar").offsetHeight || 30;
+  // Folded, the grid reserves only its bar — so band 1 can take the rest.
+  if (gridCollapsed) return bar;
   const head = document.querySelector("#gridTable thead")?.offsetHeight || 40;
   return bar + head + GRID_ROW_H * 2;
 }
@@ -3056,6 +3107,18 @@ selectionListeners.push(() => {
 });
 
 // ---- band 2: the grid ----
+// Fold band 2 down to its bar, the same affordance the band-1 blocks carry.
+// The region then shrinks to its strips unless a band-1 block is still holding
+// it open (see updateRegionHeight), giving the plans the space back.
+function toggleGrid() {
+  gridCollapsed = !gridCollapsed;
+  document.getElementById("gridBand").classList.toggle("collapsed", gridCollapsed);
+  document.getElementById("gridHead").textContent = (gridCollapsed ? "▸ " : "▾ ") + "Rooms";
+  updateRegionHeight(); // re-evaluates reserved height + the band divider
+  onGridScroll();      // an expanded grid's visible row count changed
+}
+document.getElementById("gridHead").addEventListener("click", toggleGrid);
+
 document.getElementById("gridScroll").addEventListener("scroll", onGridScroll);
 for (const id of ["srcModel", "srcDrofus"]) {
   document.getElementById(id).addEventListener("change", () => {
