@@ -2,6 +2,15 @@
 
 ## Reconciliation note (added after review + implementation)
 
+> **Superseded again, in part** — see
+> [HANDOVER-areas-boundary-location.md](HANDOVER-areas-boundary-location.md).
+> The close described below produced corner and overlap artifacts on real
+> face-of-wall data; the boundary regime is now **declared on the upload
+> envelope** rather than inferred, and the per-tier close is to be replaced by a
+> combinatorial assignment of wall-zone components. The erode-to-empty classifier
+> goes the same way the weld pass did, for the same reason.
+
+
 **A version of this was built — but not the pipeline below.** Reviewed against
 the codebase, two of this document's premises did not survive contact:
 
