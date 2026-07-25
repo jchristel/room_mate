@@ -27,6 +27,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 |---|---|
 | [UI layout restructure](HANDOVER-ui-layout.md) | Every sequencing step built; only Decision 3 (the room inspector) remains — **no longer blocked**: room click-selection landed with the adjacency graph |
 | [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; awaiting validation against a real Revit model (which boundary regime, and the wall tolerance that works) |
+| [Areas: boundary location + wall-zone partition](HANDOVER-areas-boundary-location.md) | Decisions settled; artifact fixes landed on `areas-spike-guards`, the declared boundary regime and partition reformulation not started. Read before touching `service::areas` |
 
 Handoff documents whose work has fully landed live in
 [Superseded](Superseded/) — most recently `HANDOVER-comparison-sources.md`
