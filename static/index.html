@@ -81,12 +81,76 @@
 
   /* The zone grid. The 1px gap over a dark background is the hairline rule
      between zones. Column count is set on `main` from the zone count. */
+  /* Zones + inspector. `minmax(0, 1fr)` on the zones column for the same reason
+     `body` carries it: a grid item's min-width defaults to `auto`, so one long
+     unwrapped property value in the inspector would otherwise stretch this row
+     and drag the plan canvas out with it — the bug the band-2 table already hit
+     once. The inspector column is `auto`, so a hidden inspector costs nothing. */
+  #mainRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 0;
+    min-width: 0;
+  }
+
   main {
     display: grid;
     gap: 1px;
     background: var(--ink);
     min-height: 0;
+    min-width: 0;
   }
+
+  /* ---- room inspector (HANDOVER-ui-layout Decision 3) ----------------------
+     ONE per page, never one per zone: selection is page state, so a per-zone
+     inspector would sit empty in every zone but one. A layout participant that
+     reflows the plans, NOT an absolutely-positioned overlay inside
+     `.zone-canvas` — that was how `.validation-panel`/`.areas-panel` worked, and
+     getting them out of there was the point of the bottom-region work. */
+  #inspector {
+    width: 22rem;
+    max-width: 40vw;          /* never let the panel crowd out the plan */
+    background: var(--paper);
+    border-left: 1px solid var(--ink);
+    overflow-y: auto;
+    min-height: 0;
+    font-size: 0.7rem;
+  }
+  #inspector.hidden { display: none; }
+  #inspector .insp-head {
+    position: sticky; top: 0; background: var(--paper);
+    border-bottom: 1px solid var(--ink);
+    padding: 0.5rem 0.7rem;
+  }
+  #inspector .insp-title { font-weight: 600; letter-spacing: 0.06em; word-break: break-word; }
+  #inspector .insp-sub { color: var(--accent); font-size: 0.64rem; letter-spacing: 0.06em; margin-top: 0.15rem; }
+  #inspector .insp-controls { display: flex; flex-wrap: wrap; gap: 0.35rem 0.6rem; align-items: center; margin-top: 0.45rem; }
+  #inspector .insp-controls input[type="search"] {
+    flex: 1 1 7rem; min-width: 0;
+    font-family: var(--mono); font-size: 0.66rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--rule); padding: 0.2rem 0.3rem;
+  }
+  #inspector .insp-controls label { display: flex; align-items: center; gap: 0.25rem; font-size: 0.64rem; white-space: nowrap; }
+  #inspector .insp-count { color: var(--accent); font-size: 0.62rem; letter-spacing: 0.06em; }
+  #inspector h4 {
+    margin: 0; padding: 0.4rem 0.7rem 0.2rem;
+    font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  /* Model vs dRofus stay visually distinct: STRATEGY-SOURCES keeps dRofus a
+     separate sub-object with its own lifecycle, and band 2 already tints its
+     columns as a block. The inspector must not be the place that blurs it. */
+  #inspector .insp-rows.src-drofus { background: var(--drofus-tint, rgba(0, 0, 0, 0.03)); }
+  #inspector .insp-row {
+    display: grid; grid-template-columns: 45% 1fr; gap: 0.4rem;
+    padding: 0.18rem 0.7rem; align-items: start;
+  }
+  #inspector .insp-row:nth-child(odd) { background: rgba(0, 0, 0, 0.02); }
+  #inspector .insp-k { color: var(--accent); word-break: break-word; }
+  #inspector .insp-v { word-break: break-word; white-space: pre-wrap; }
+  #inspector .insp-v.empty { opacity: 0.45; font-style: italic; }
+  #inspector .insp-note { padding: 0.3rem 0.7rem 0.6rem; opacity: 0.6; font-style: italic; }
 
   .zone {
     position: relative;
@@ -440,7 +504,15 @@
       <a href="/settings.html">settings</a>
     </div>
   </header>
-  <main id="zones"></main>
+  <!-- The middle band is two columns: the zones, and the right-hand inspector
+       (HANDOVER-ui-layout Decision 3). A wrapper rather than columns on <main>
+       itself, because `main` IS the zone container and its
+       `grid-template-columns` is rewritten from JS on every zone add/remove —
+       any static column here would be overwritten. -->
+  <div id="mainRow">
+    <main id="zones"></main>
+    <aside id="inspector" class="hidden" aria-label="Selected room"></aside>
+  </div>
 
   <!-- Bottom region, band 1: results. One instance per page, never per zone —
        both blocks are scope-derived, and a region that multiplied with zone
@@ -1265,6 +1337,10 @@ function ingestAll(payload) {
   // dRofus labels), so it is rebuilt here rather than on every render.
   gridColumns = buildGridColumns();
   renderGrid();
+  // The inspector reads the selected room OUT of this payload, so a new push (or
+  // a scope change that drops the room from scope) has to re-render it — a
+  // selection-only listener would leave stale values on screen.
+  renderInspector();
   // New room data means the footprints changed: refresh them (data + overlays
   // + band figures) while any zone has the mode open. Fire-and-forget.
   if (zones.some(z => z.areasMode)) loadAreas();
@@ -2656,6 +2732,169 @@ function roomAtNode(zone, node) {
   return unit ? unit.room : null;
 }
 
+// ======================= room inspector (right column) =======================
+//
+// HANDOVER-ui-layout Decision 3, and the third consumer of the selection layer
+// after the graph and the plan highlight. Deliberately a *listener plus a
+// renderer*: it never calls into `selectRoom`, never introduces an
+// `activeZoneId`, and never re-renders a zone — a selection change stays a class
+// toggle. Read-only, same stance as the band-2 grid.
+//
+// See HANDOVER-room-inspector.md for the measurements behind the filtering.
+
+// A room's 45 properties (House A) are not 45 useful ones: 19 of them hold no
+// real value on ANY room. Revit emits the literal string "None" for an unset
+// parameter, so an emptiness test that only checks for "" hides nothing at all —
+// that single detail is what makes the hide-empty default worth having.
+function isEmptyPropValue(v) {
+  const s = (v ?? "").trim();
+  return s === "" || s.toLowerCase() === "none";
+}
+
+let inspHideEmpty = true;   // default ON: 45 -> 26 on House A, no config needed
+let inspFilter = "";        // substring match on property NAME
+
+// Deliberately not persisted — `linkViews`, the labels toggle and the search
+// field picker are all unpersisted too, and HANDOVER-ui-layout Decision 4 made
+// "persist every view pref or none" a standing decision. The durable version of
+// "which properties matter" is `room_label` in project settings, server-side.
+
+function inspRow(parent, key, rawValue) {
+  const empty = isEmptyPropValue(rawValue);
+  const row = document.createElement("div");
+  row.className = "insp-row";
+  const k = document.createElement("div");
+  k.className = "insp-k";
+  k.textContent = key;
+  const v = document.createElement("div");
+  v.className = "insp-v" + (empty ? " empty" : "");
+  v.textContent = empty ? "—" : rawValue;
+  row.append(k, v);
+  parent.appendChild(row);
+}
+
+function inspSection(host, title, entries, { source = null } = {}) {
+  if (!entries.length) return 0;
+  const h = document.createElement("h4");
+  h.textContent = title;
+  host.appendChild(h);
+  const rows = document.createElement("div");
+  rows.className = "insp-rows" + (source ? ` src-${source}` : "");
+  for (const [k, v] of entries) inspRow(rows, k, v);
+  host.appendChild(rows);
+  return entries.length;
+}
+
+// Apply the filters to a [key, value] list. Name filter first (it is what the
+// user typed), then hide-empty.
+//
+// `hideEmpty: false` exempts a section from the emptiness filter. Classification
+// uses it: hide-empty exists for the 45 model properties, and applying it to a
+// two-row tier path deleted the whole section for every `sample-project` room —
+// whose tiers are all resolved-but-`undefined`. "This room is unclassified" is a
+// fact worth showing (the areas service treats the undefined bucket as a real
+// group), not an empty value to suppress.
+function inspApplyFilters(entries, { hideEmpty = true } = {}) {
+  const q = inspFilter.trim().toLowerCase();
+  return entries.filter(([k, v]) =>
+    (!q || k.toLowerCase().includes(q)) && (!(hideEmpty && inspHideEmpty) || !isEmptyPropValue(v)));
+}
+
+function renderInspector() {
+  const host = document.getElementById("inspector");
+  if (!host) return;
+
+  if (!selectedRoomId) {           // no selection -> the column costs no width
+    host.classList.add("hidden");
+    host.replaceChildren();
+    return;
+  }
+  const room = currentPayload?.rooms.find(r => r.id === selectedRoomId);
+  if (!room) {                     // selected room not in the current scope
+    host.classList.remove("hidden");
+    host.replaceChildren();
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent = `Room ${selectedRoomId} is not in the current scope.`;
+    host.appendChild(note);
+    return;
+  }
+
+  host.classList.remove("hidden");
+  host.replaceChildren();
+
+  // ---- header: identity + the controls -------------------------------------
+  const head = document.createElement("div");
+  head.className = "insp-head";
+  const title = document.createElement("div");
+  title.className = "insp-title";
+  title.textContent = room.name || room.id;
+  const sub = document.createElement("div");
+  sub.className = "insp-sub";
+  const levelName = (currentPayload.levels || []).find(l => l.id === room.level_id)?.name || room.level_id;
+  // `selectedZoneId` is a LABEL, not focus state: the same room can appear in
+  // two zones on the same level, so naming where the click came from is the
+  // whole reason that id exists.
+  sub.textContent = `${room.id} · ${levelName}` + (selectedZoneId ? ` · from ${selectedZoneId}` : "");
+  head.append(title, sub);
+
+  const controls = document.createElement("div");
+  controls.className = "insp-controls";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.placeholder = "Filter properties…";
+  search.value = inspFilter;
+  // Kept across selection changes on purpose: the common use is comparing one
+  // field across rooms by clicking each in turn.
+  search.addEventListener("input", (e) => { inspFilter = e.target.value; renderInspector(); });
+  const hideLabel = document.createElement("label");
+  const hideCb = document.createElement("input");
+  hideCb.type = "checkbox";
+  hideCb.checked = inspHideEmpty;
+  hideCb.addEventListener("change", (e) => { inspHideEmpty = e.target.checked; renderInspector(); });
+  hideLabel.append(hideCb, document.createTextNode("Hide empty"));
+  controls.append(search, hideLabel);
+  head.appendChild(controls);
+  host.appendChild(head);
+
+  // ---- classification ------------------------------------------------------
+  // An `undefined` tier is named explicitly rather than shown as an empty value:
+  // it means "the classifier ran and this room fell in the undefined bucket",
+  // which is a different statement from "no data".
+  const cls = (room.classification || []).map(t => [t.tier, t.undefined ? "(undefined)" : (t.name || t.code || "")]);
+  inspSection(host, "Classification", inspApplyFilters(cls, { hideEmpty: false }));
+
+  // ---- model properties ----------------------------------------------------
+  const all = Object.entries(room.properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  all.sort((a, b) => a[0].localeCompare(b[0]));
+  const shown = inspApplyFilters(all);
+  inspSection(host, "Model", shown, { source: "model" });
+
+  // ---- dRofus --------------------------------------------------------------
+  // Absent is a real, common state (an unmatched room, or no dRofus at all) and
+  // says something different from "matched but blank" — so it is named, never
+  // rendered as an empty section.
+  const labels = (currentPayload.drofus_labels || {})[projectId] || null;
+  if (room.drofus) {
+    const dr = Object.entries(room.drofus.fields || {});
+    dr.sort((a, b) => a[0].localeCompare(b[0]));
+    inspSection(host, "dRofus", inspApplyFilters(dr), { source: "drofus" });
+  } else if (labels) {
+    const h = document.createElement("h4");
+    h.textContent = "dRofus";
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent = "Not joined — this room matched no dRofus record.";
+    host.append(h, note);
+  }
+
+  // ---- what the filters removed, never silently ----------------------------
+  const count = document.createElement("div");
+  count.className = "insp-note insp-count";
+  count.textContent = `${shown.length} of ${all.length} model properties shown`;
+  host.appendChild(count);
+}
+
 // Recompute once, then re-highlight every zone and refresh its match count.
 function applySearch() {
   computeMatches();
@@ -3198,6 +3437,10 @@ document.getElementById("adjWall").addEventListener("input", (e) => {
 // The one place plan-side and graph-side selection meet: whatever set the
 // selection, the graph re-centres. Registered rather than called from
 // `selectRoom` so the future room inspector adds itself the same way.
+// The inspector is a plain listener — exactly what `selectionListeners` was
+// left open for (see its declaration).
+selectionListeners.push(renderInspector);
+
 selectionListeners.push(() => {
   updateAdjMeta();
   if (!adjBandOpen()) return;

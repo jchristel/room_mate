@@ -27,7 +27,8 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | Document | Status |
 |---|---|
 | [Viewport culling kill switch](HANDOVER-culling-disable-switch.md) | Built (console-only `CULL_ENABLED`) and the measurement run done: **16.5 ms/frame with culling vs 912 ms without** on `big-plate`, so culling stays. Kept open as the place to record the next re-measurement |
-| [UI layout restructure](HANDOVER-ui-layout.md) | Every sequencing step built; only Decision 3 (the room inspector) remains — **no longer blocked**: room click-selection landed with the adjacency graph |
+| [Room inspector](HANDOVER-room-inspector.md) | Built: right-hand panel showing the selected room, with a hide-empty default (45 → ~22 properties on House A) and a name filter. Delivers HANDOVER-ui-layout Decision 3. Step 6 (checkbox property picker) left unbuilt as an option |
+| [UI layout restructure](HANDOVER-ui-layout.md) | **Every decision now built**, Decision 3 included — ready to move to `Superseded/` once STRATEGY-BROWSER absorbs its outcome |
 | [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; one validation item left. **Its stated blocker is now stale** — it says "every fixture in the repo is generated centreline", but House A is real finish-face data, so the run it asks for is doable today: confirm no corridor-bridging and no bridging through a thin service room, and record the tolerance that worked |
 
 Handoff documents whose work has fully landed live in
