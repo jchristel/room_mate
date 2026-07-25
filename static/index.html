@@ -232,6 +232,20 @@
      would collapse that parent to nothing. */
   .result-band.open { flex: 1 1 auto; }
   .result-band.hidden { display: none; }
+  /* A block dragged against its immediate neighbour (the .band-split between
+     them) gets an explicit starting height instead of an equal automatic
+     share. `1 1`, not `0 0`: the pair must still yield under real space
+     pressure (region shrunk, a third block opened) rather than spilling out
+     of band 1 — the squeeze then shows up as internal scrolling, the same way
+     an un-sized open block already behaves. */
+  .result-band.open.sized { flex: 1 1 var(--band-h); }
+  /* The split between two adjacent band-1 blocks — #bandDivide's role
+     (band 1 vs band 2) generalized to a pair sharing band 1's own height.
+     Hidden unless BOTH neighbours are open: a collapsed block is a fixed
+     strip, nothing to trade height with. */
+  .band-split { flex: 0 0 5px; cursor: row-resize; background: var(--rule); }
+  .band-split:hover, .band-split.dragging { background: var(--accent); }
+  .band-split.hidden { display: none; }
   .band-head {
     display: block; width: 100%; text-align: left; flex: 0 0 auto;
     font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em;
@@ -264,11 +278,22 @@
   }
 
   /* --- adjacency graph (band 1, canvas) ---
-     The body is the one band body that does NOT scroll: its content is a
-     canvas that must fill whatever height the band is given, not a document
-     that grows. The bar is fixed, the canvas takes the rest. */
-  #adjBody { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0.4rem; }
+     The canvas fills whatever height the band is given, same as before — but
+     that height can now drop below the canvas's own floor (its min-height
+     plus the bar), whether from the region being dragged small or from the
+     new split against a neighbouring block. Scroll rather than clip: the
+     canvas keeps its full min-height and the body scrolls to reach the rest,
+     so a small band loses convenience, not visibility, of the graph. */
+  #adjBody { display: flex; flex-direction: column; overflow-y: auto; padding-bottom: 0.4rem; }
+  /* `.band-body.hidden` (0,2,0) loses to the `#adjBody` rule above (1,0,0) —
+     the collapsed band kept its canvas flex-visible, holding the bottom
+     region open. Qualify with the id (1,1,0) so hidden always wins here. */
+  #adjBody.hidden { display: none; }
+  /* Sticky, not static: once the body scrolls, the depth/colour/wall-gap
+     controls must stay reachable rather than scrolling out of view with the
+     canvas — the same reasoning as the grid's sticky column headers. */
   #adjBar {
+    position: sticky; top: 0; background: var(--paper); z-index: 1;
     flex: 0 0 auto; display: flex; align-items: center; gap: 0.9rem;
     flex-wrap: wrap; margin-bottom: 0.4rem;
   }
@@ -431,6 +456,7 @@
         <div id="qaContent"></div>
       </div>
     </div>
+    <div class="band-split hidden" id="qaAreasSplit" title="Drag to split space between QA and Hierarchy areas"></div>
     <div class="result-band hidden" id="areasBand">
       <button class="band-head" id="areasHead">▸ Hierarchy areas</button>
       <div class="band-body hidden" id="areasBody">
@@ -439,6 +465,7 @@
         <div id="areasContent"></div>
       </div>
     </div>
+    <div class="band-split hidden" id="areasAdjSplit" title="Drag to split space between Hierarchy areas and Adjacency"></div>
     <!-- Adjacency graph. A band-1 block like the other two, for the same
          reason: it is a page-level result derived from the scope (plus the one
          page selection), not a per-zone presentation. Lives here rather than in
@@ -2998,6 +3025,37 @@ function updateBandDivide() {
   }
   updateBand1Max();
   if (band1.classList.contains("sized")) clampBand1();
+  updateBandSplits();
+}
+
+function bandOpen(id) {
+  const el = document.getElementById(id);
+  return el.classList.contains("open") && !el.classList.contains("hidden");
+}
+
+// The splits *within* band 1, one per adjacent pair of result-bands. Each is
+// visible only when both its neighbours are open — with one closed there is
+// only a fixed strip on that side, nothing to trade height with.
+const BAND_SPLITS = [
+  { id: "qaAreasSplit", a: "qaBand", b: "areasBand" },
+  { id: "areasAdjSplit", a: "areasBand", b: "adjBand" },
+];
+
+function updateBandSplits() {
+  for (const { id, a, b } of BAND_SPLITS) {
+    const bothOpen = bandOpen(a) && bandOpen(b);
+    document.getElementById(id).classList.toggle("hidden", !bothOpen);
+    // A split appearing/disappearing means the set of blocks sharing band 1's
+    // height just changed, so any dragged proportion between this pair no
+    // longer means what it did — drop it rather than carry a stale split.
+    if (!bothOpen) {
+      for (const bandId of [a, b]) {
+        const band = document.getElementById(bandId);
+        band.classList.remove("sized");
+        band.style.removeProperty("--band-h");
+      }
+    }
+  }
 }
 
 // The floor the grid keeps when band 1 is dragged large: its own toolbar and
@@ -3219,6 +3277,35 @@ function wireDragHandle(handle, onStart, onMove) {
     }
   );
 })();
+
+// The split *within* band 1 between two adjacent blocks — trading height
+// between just that pair, leaving a third open block (and band 2) untouched.
+// Same mechanic as #bandDivide, generalized: both sides switch to an explicit
+// height at drag start, so their combined space is fixed and only the
+// division between them moves.
+function wireBandSplit(splitId, aId, bId) {
+  const a = document.getElementById(aId);
+  const b = document.getElementById(bId);
+  wireDragHandle(
+    document.getElementById(splitId),
+    () => {
+      const ha = a.getBoundingClientRect().height;
+      const hb = b.getBoundingClientRect().height;
+      a.style.setProperty("--band-h", `${Math.round(ha)}px`);
+      b.style.setProperty("--band-h", `${Math.round(hb)}px`);
+      a.classList.add("sized");
+      b.classList.add("sized");
+      return [ha, hb];
+    },
+    ([ha, hb], dy) => {
+      const total = ha + hb;
+      const newA = Math.max(40, Math.min(total - 40, ha + dy));
+      a.style.setProperty("--band-h", `${Math.round(newA)}px`);
+      b.style.setProperty("--band-h", `${Math.round(total - newA)}px`);
+    }
+  );
+}
+for (const { id, a, b } of BAND_SPLITS) wireBandSplit(id, a, b);
 
 // A window resize changes the canvas's box without any drag. Same reasoning as
 // the drag handler: canvas has no reflow.
