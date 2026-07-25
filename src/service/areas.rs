@@ -1,49 +1,151 @@
 //! Hierarchy area footprints — the first geometry-processing service.
 //!
-//! Per hierarchy group, per level: union the group's room polygons, then
-//! **morphologically close** the result (dilate by `MAX_WALL_FT/2`, erode back)
-//! before measuring it. The close is the load-bearing step and does three jobs
-//! at once:
+//! **Read `docs/STRATEGY-AREA-CALCULATION.md` before changing anything here.**
+//! This module is the one place in the pipeline where the *definition* of the
+//! output is contested rather than read off the model — what a wall belongs to
+//! is a convention, and reasonable standards disagree. Two prior designs were
+//! reversed over exactly that. What follows is how the current one works; that
+//! document is why it is the one chosen, and how it relates to IPMS 3 and
+//! DIN 277.
 //!
-//! - **Bridges gaps between rooms**, so rooms modelled to *finish face* (which
-//!   float inside their walls and union into disjoint islands) dissolve into one
-//!   footprint exactly as *centreline* rooms (which tile edge-to-edge) already
-//!   did. The service no longer cares which way the model was drawn, or that a
-//!   real model mixes both.
-//! - **Fills wall bands** — the enclosed slivers between rooms — up to
-//!   `MAX_WALL_FT`, so the footprint includes the wall zones it should.
-//! - **Leaves real voids open.** A courtyard, atrium or lightwell wider than
-//!   `MAX_WALL_FT` survives as an interior ring, and its area is *excluded* —
-//!   no parent claims open space it does not enclose with rooms.
+//! Per hierarchy group, per level: the group's rooms, plus the wall bands the
+//! group encloses on its own. Two exact pieces, unioned — never one arbitrated
+//! blob.
 //!
-//! Because the close runs at every tier, each wall is filled once, at the level
-//! whose union first encloses both of its sides: walls between siblings fill at
-//! their shared parent, walls between different parents fill only at the common
-//! ancestor. Areas stay additive up the hierarchy (parent = Σ children + the
-//! newly-enclosed wall bands), with genuine voids never counted.
+//! ## The wall zone, built once per level
 //!
-//! **History / reversed decision:** an earlier version stripped *every* interior
-//! ring, so enclosed open space always counted as area, and it only dissolved
-//! rooms that shared an edge (centreline). Real models here turned out to be
-//! face-of-wall, where that version silently produced disjoint islands (Σ net
-//! room area, no walls) and, on the fixtures where it did union, wrongly filled
-//! courtyards. The close-based rule replaces both behaviours — see
-//! handover-hierarchical-void-closure.md and its reconciliation note.
+//! Everything rests on one object, computed once for the whole level:
+//!
+//! ```text
+//! wall_zone = (close(all rooms, gap/2) ∪ all rooms) − all rooms
+//! ```
+//!
+//!
+//! It is the set of gaps that are narrow enough to be walls, and **nothing
+//! else**: it contains no room (they are subtracted), and no void wider than
+//! `gap`, because a morphological close at radius `gap/2` provably cannot fill
+//! one. That single sentence replaces two mechanisms the earlier version
+//! needed — a room-clip pass to stop a group swallowing a neighbour's room, and
+//! a width classifier to tell a wall from a courtyard. Both are now true by
+//! construction.
+//!
+//! A group's own share is then whatever the group's rooms close over,
+//! **intersected with that ceiling**:
+//!
+//! ```text
+//! fill(P)      = close(rooms under P, gap/2) ∩ wall_zone
+//! footprint(P) = rooms under P ∪ fill(P)
+//! ```
+//!
+//! ## Why this gets the ownership rule right for free
+//!
+//! The design's rule is *a wall between two groups belongs to neither; it fills
+//! at their common ancestor*. That falls out of the formula rather than being
+//! enforced on top of it. Take the band between room `a` of group A and room `b`
+//! of group B. Dilating A's rooms by `gap/2` reaches into the band, but the
+//! erode pulls straight back out again — nothing merged across it, because A is
+//! only on one side. So `fill(A)` does not contain it, and neither does
+//! `fill(B)`. Their common ancestor holds both `a` and `b`, its close merges
+//! across the band, and it claims the band exactly once.
+//!
+//! Both halves of that are standard morphology, and it is worth naming them,
+//! because the operator's textbook properties are doing the work here rather
+//! than anything invented. Writing `φ` for the close:
+//!
+//! - **`φ` is increasing** (`X ⊆ Y ⟹ φ(X) ⊆ φ(Y)`). Applied to
+//!   `rooms under P ⊆ rooms under parent`, that gives `fill(P) ⊆ fill(parent)` —
+//!   the nesting that makes areas additive,
+//!   `parent = Σ children + the bands the parent is the first to enclose`.
+//! - **`φ` does not distribute over union**: `φ(X ∪ Y) ⊇ φ(X) ∪ φ(Y)`, and the
+//!   containment is strict exactly where a gap between `X` and `Y` closes. That
+//!   strict part **is** the wall between two groups. The ownership rule is not a
+//!   policy layered on the geometry; it is where those two sets differ.
+//!
+//! (Serra 1982; Soille. Note that closing *is* idempotent, `φ(φ(X)) = φ(X)` —
+//! an earlier version of this module and its handover both claimed otherwise.
+//! Non-distribution over union is the property that was actually meant, and it
+//! is the stronger statement. See `wall_zone` for where the *approximation*
+//! departs from the operator.)
+//!
+//! ## The one place it needs help: wall junctions
+//!
+//! Where four rooms meet at a `+` junction, the little square of wall at the
+//! centre is bounded by all four. If two of them belong to A and two to B, and
+//! the wall is thin enough that each pair's diagonal closes, **both** A and B
+//! fill that square. That is a genuine double count, not float noise — and the
+//! design rule already answers it: bounded by two groups, so it belongs to
+//! neither. [`resolve_sibling_overlaps`] withdraws it from both, symmetrically,
+//! and the common ancestor picks it up, which keeps additivity exact. It is a
+//! junction-sized correction inside the wall band, not the whole-footprint
+//! arbitration the earlier version needed.
+//!
+//! ## Centreline models do none of this
+//!
+//! When the level's declared regime is centreline (see `contract::RoomBoundary`
+//! and `settings::AreaPolicy`), `gap` is **zero**: rooms already tile
+//! edge-to-edge with the walls inside them, so there is nothing to bridge and
+//! nothing to fill. The wall zone is empty, no close runs, and a footprint is
+//! the plain union of its rooms. Bevels, chamfers, spikes and sibling overlaps
+//! cannot arise, because the operation that produces them never executes. That
+//! is the payoff of declaring the regime rather than guessing it — see
+//! HANDOVER-areas-boundary-location.md.
+//!
+//! **History / reversed decisions.** An earlier version stripped *every*
+//! interior ring, so enclosed open space always counted as area, and it only
+//! dissolved rooms that shared an edge (centreline); real models turned out to
+//! be face-of-wall, where it silently produced disjoint islands. The close-based
+//! rule replaced it. That rule in turn ran the close **per group per tier**,
+//! independently over overlapping neighbourhoods, then unioned the results —
+//! and since `φ(X) ∪ φ(Y) ⊊ φ(X ∪ Y)`, that is simply a different (smaller)
+//! set than closing the union, with the difference landing in the shared walls.
+//! Every artifact (bevelled corners, 45° chamfers, a million-foot spike,
+//! sibling overlaps) then had to be arbitrated after the fact. The wall zone
+//! replaces the arbitration with a partition: we were using an area operator to
+//! answer a topology question. See handover-hierarchical-void-closure.md and its
+//! reconciliation note.
+//!
+//! ## Cost, measured rather than assumed
+//!
+//! The reformulation trades **one large boolean pass per level** (the wall zone:
+//! a close, a union and a difference over every room on the floor) for the
+//! per-group clip and full-footprint overlap resolution it deletes. Measured on
+//! `/areas`, warm, before → after:
+//!
+//! | project | groups × levels | before | after |
+//! |---|---|---|---|
+//! | `big-plate` | 132 groups, 2 levels | 6.0 s | **1.12 s** |
+//! | `sample-project` | 10 groups, 7 levels | 0.43 s | 0.71 s |
+//! | `House A` | 12 groups, 3 levels | 0.35 s | 0.35 s |
+//!
+//! So it is dramatically cheaper where there is grouping to amortise it against,
+//! and ~0.3 s dearer on a project with barely one group per level, where the
+//! level-wide pass is a fixed cost with almost nothing to spread it over. That is
+//! the honest shape of the trade, and it is the right way round: the expensive
+//! case is the one that was unusable. Do not "fix" the small regression by
+//! special-casing a single-group level to reuse the level close — that was tried
+//! and measured, and it changed neither number, because the cost is the boolean
+//! difference over the room set, not the close.
 //!
 //! Transport-agnostic like every `service` module: it imports `geo` and
 //! `crate::contract`, never `axum`/`rmcp`.
 //!
 //! The number this produces is an **aggregated room footprint** — room area plus
 //! enclosed wall bands, minus genuine voids — NOT net room area and NOT a
-//! standards-based gross. Label it accordingly.
+//! standards-based gross. Which standard the project claims is declared
+//! separately (`[areas] measurement_standard`) and echoed on the response, so
+//! the figure never travels without its definition.
+
+use std::collections::BTreeMap;
 
 use geo::algorithm::buffer::{BufferStyle, LineJoin};
-use geo::{Area, BooleanOps, BoundingRect, Buffer, Coord, LineString, MultiPolygon, Polygon};
+use geo::{
+    Area, BooleanOps, BoundingRect, Buffer, Coord, Distance, Euclidean, LineString, MultiPolygon, Polygon,
+};
 use serde::Serialize;
 
 use crate::classify::TierValue;
-use crate::contract::{Level, Loop, Room, SUPPORTED_SCHEMA};
-use crate::settings::HierarchyExclusion;
+use crate::contract::{Level, Loop, Room, RoomBoundary, SUPPORTED_SCHEMA};
+use crate::settings::{AreaPolicy, HierarchyExclusion, MeasurementStandard};
 use crate::state::AppState;
 
 use super::rooms::{assemble_rooms, RoomScope};
@@ -56,19 +158,47 @@ use super::ServiceError;
 /// vertices, never real geometry.
 const COLLINEAR_EPS_FT: f64 = 1e-6;
 
-/// The widest wall (or gap between face-of-wall rooms) that gets closed into the
-/// footprint, in model units — feet. This is the single knob that makes the
-/// aggregation robust to how the model is drawn: rooms modelled to **wall
-/// centreline** tile edge-to-edge (gap 0), rooms modelled to **finish face**
-/// float inside their walls (a gap of roughly the wall thickness), and a real
-/// model is often a mix of both. A morphological close at radius `MAX_WALL_FT/2`
-/// bridges any gap up to this width and fills any enclosed band up to it, while
-/// leaving anything wider — a genuine courtyard, atrium or lightwell — open. So
-/// the value must clear the thickest partition without reaching across the
-/// narrowest real void. ~1.5 ft (~450mm) is the same physical quantity the
-/// adjacency service exposes as `WALL_MAX_FT`; the two should move together if
-/// either is ever tuned per model.
-const MAX_WALL_FT: f64 = 1.5;
+/// The wall gap in force on each level of one request, in model units — feet.
+///
+/// Per level, not per request, because the boundary regime is a *model* fact and
+/// level dedup can put two models on one level (see
+/// `rooms::RoomsResult::boundary_by_level`). A centreline level resolves to
+/// **zero** — not a small number — and that zero is what switches the whole
+/// close pipeline off for it.
+///
+/// The number itself used to be `MAX_WALL_FT`, a constant here, alongside an
+/// identical `WALL_MAX_FT` in `adjacency` — the same physical quantity declared
+/// twice, free to drift. It is now declared once per project as `[areas]
+/// max_wall_thickness` and resolved through the regime.
+pub struct LevelGaps {
+    by_level: BTreeMap<String, f64>,
+    /// Used for a level the map does not name — a level that contributed no
+    /// rooms, or a caller (the unit tests) that only cares about one regime.
+    default_ft: f64,
+}
+
+impl LevelGaps {
+    /// One gap for every level — the form the geometry tests use, where the
+    /// regime under test is the point and the level ids are incidental.
+    pub fn uniform(gap_ft: f64) -> Self {
+        Self { by_level: BTreeMap::new(), default_ft: gap_ft }
+    }
+
+    /// Resolve each level's gap from the project's policy and the regime that
+    /// level's contributing models declared.
+    pub fn from_policy(policy: &AreaPolicy, boundary_by_level: &BTreeMap<String, RoomBoundary>) -> Self {
+        Self {
+            by_level: boundary_by_level.iter().map(|(id, b)| (id.clone(), policy.wall_gap_ft(*b))).collect(),
+            // An unnamed level has no declared regime to read, so it falls to
+            // the same conservative reading an undeclared model gets.
+            default_ft: policy.wall_gap_ft(RoomBoundary::FinishFace),
+        }
+    }
+
+    fn for_level(&self, level_id: &str) -> f64 {
+        self.by_level.get(level_id).copied().unwrap_or(self.default_ft)
+    }
+}
 
 /// Build a `geo` polygon from a room's **outer** loop only. Interior loops
 /// (the room's own holes — a column or shaft) are dropped here by construction:
@@ -87,17 +217,88 @@ fn loop_to_linestring(l: &Loop) -> LineString<f64> {
     LineString::from(l.points.iter().map(|p| Coord { x: p.x, y: p.y }).collect::<Vec<_>>())
 }
 
-/// The group footprint for one set of rooms (one hierarchy group on one level).
-/// Union every room's outer loop, then [`close_and_clean`] the result: close
-/// wall-width gaps and bands into the footprint while leaving genuine voids open.
-/// The result is a `MultiPolygon`: disconnected islands (e.g. two separate wings
-/// of one department, too far apart to bridge) are all kept; genuine courtyards
-/// survive as interior rings.
-pub fn group_footprint(rooms: &[Room]) -> MultiPolygon<f64> {
+/// The footprint of one isolated set of rooms at one gap — the single-group
+/// case, where the group *is* the level so its own rooms are the only thing
+/// bounding the wall zone. Used by the geometry tests and by any caller with no
+/// hierarchy context; [`level_groups`] does not go through it, because a real
+/// level's wall zone is bounded by every group's rooms at once.
+///
+/// The result is a `MultiPolygon`: disconnected islands (two wings of one
+/// department, too far apart to bridge) are all kept, and genuine courtyards
+/// survive as interior rings whose area is excluded.
+pub fn group_footprint(rooms: &[Room], gap_ft: f64) -> MultiPolygon<f64> {
     let base = union_of_rooms(rooms.iter());
     let dirs = edge_dirs(&base);
-    // No sibling context here (single-group helper): nothing to clip against.
-    close_clip_clean(&base, &MultiPolygon::new(vec![]), &dirs)
+    let zone = wall_zone(&base, gap_ft);
+    clean_rings(&base.union(&zone), &dirs, gap_ft)
+}
+
+/// The level's wall zone: every gap narrow enough to be a wall, and nothing
+/// else. See the module header — this is the object the whole pipeline rests on.
+///
+/// Three things are load-bearing about the expression:
+///
+/// - **`closed ∪ all` before the subtraction.** Bevel joins only ever *cut*
+///   corners, so `close` is not reliably extensive here and a convex corner can
+///   come back chipped. Unioning the original rooms in first means the outer
+///   boundary is the rooms' own exact boundary wherever it faces open space —
+///   which is why the finished footprints have no chipped corners to repair.
+/// - **`− all`.** What remains contains no room. A group's fill is a subset of
+///   this, so a group's footprint can never reach inside a neighbour's room —
+///   the failing case (a riser narrower than the close radius, swallowed whole)
+///   that previously needed a dedicated clip pass against other groups' rooms.
+/// - **The gap ceiling is the close's own reach.** A close at radius `gap/2`
+///   cannot bridge anything wider than `gap`, so a courtyard, atrium or
+///   lightwell is simply never in this set. No width test, no erode-to-empty
+///   classifier: "wider than a wall stays open" is arithmetic, not a rule.
+///
+/// `gap_ft <= 0` (a centreline level) short-circuits to empty: rooms already
+/// tile, so there is no gap to classify and no close to run.
+///
+/// **Deliberately not de-belled here**, though an earlier draft was, and the
+/// reason is worth keeping: a wall band is a long thin sliver, so its two long
+/// sides are *parallel*, and [`corner_of_chamfer`]'s parallel-flank guard —
+/// which exists because near-parallel flanks intersect at near-infinity and
+/// produced a million-foot spike — correctly refuses to sharpen a chamfer at the
+/// end of one. Measured on House A, sharpening the zone left five invented edge
+/// directions where sharpening only the finished footprints leaves two. The
+/// chords are cut by this close, but they are only *sharpenable* once the band
+/// has been unioned onto its group's rooms and the flanks are room edges meeting
+/// at a real corner. So the de-bevel runs on the emitted geometry, once per
+/// group per tier — which costs what the old pipeline cost, and is the one part
+/// of it that was never the problem.
+fn wall_zone(all_rooms: &MultiPolygon<f64>, gap_ft: f64) -> MultiPolygon<f64> {
+    if gap_ft <= 0.0 || all_rooms.0.is_empty() {
+        return MultiPolygon::new(vec![]);
+    }
+    let closed = morphological_close(all_rooms, gap_ft / 2.0);
+    closed.union(all_rooms).difference(all_rooms)
+}
+
+/// Drop the close's invented corner chords, then drop redundant collinear
+/// vertices, on every ring of every polygon (exterior and interiors alike).
+///
+/// **Sharpen first, dedup second — do not reverse this**, and the reason is a
+/// measured trap rather than a preference. Sharpening needs each flank of a
+/// chamfer to be one whole edge, and the boolean ops that build a footprint
+/// plant T-vertices that split flanks in two, so running `dedup_collinear`
+/// *first* looks like an obvious improvement: on the synthetic `showcase`
+/// fixture it removes all fourteen surviving 1.06 ft (= `gap/2 · √2`) chamfers.
+/// On real House A data the same change is destructive — it lets
+/// [`sharpen_bevels`] reconstruct a "corner" across genuine geometry, producing
+/// a **20.8 ft invented diagonal**, dropping one department to 0.72× its rooms'
+/// area, and reintroducing a 2.5 ft² sibling overlap. Cosmetic chamfers on a
+/// generated fixture are not worth real area loss on a real model, so the
+/// residual stays. If this is revisited, the fix is to make the sharpener robust
+/// to split flanks (walk past collinear neighbours to find the true flank), not
+/// to pre-simplify the ring underneath it.
+fn clean_rings(mp: &MultiPolygon<f64>, dirs: &[f64], scale_ft: f64) -> MultiPolygon<f64> {
+    let clean = |ring: &LineString<f64>| dedup_collinear(&sharpen_bevels(ring, dirs, scale_ft));
+    MultiPolygon::new(
+        mp.iter()
+            .map(|p| Polygon::new(clean(p.exterior()), p.interiors().iter().map(clean).collect()))
+            .collect(),
+    )
 }
 
 /// Union a set of rooms' outer polygons. Pairwise into an accumulator — fine for
@@ -123,8 +324,8 @@ fn union_of_rooms<'a>(rooms: impl Iterator<Item = &'a Room>) -> MultiPolygon<f64
 /// was, but the merged/closed regions stay filled — the definition of a close.
 /// A void wider than `2r` shrinks under the dilate but never closes, so it
 /// survives the erode as an interior ring: real courtyards stay open, wall bands
-/// do not. `r = MAX_WALL_FT/2`, so `MAX_WALL_FT` is exactly the widest wall that
-/// gets filled.
+/// do not. Callers pass `r = gap/2`, so the level's wall gap is exactly the
+/// widest wall that gets filled.
 ///
 /// **Bevel joins, not miter.** A miter join extends a convex corner to a sharp
 /// point that the erode does not always clean up, leaving a spike — visible as a
@@ -139,55 +340,6 @@ fn morphological_close(mp: &MultiPolygon<f64>, r: f64) -> MultiPolygon<f64> {
     // LineJoin isn't Clone in i_overlay, so build the style fresh for each pass.
     let dilated = mp.buffer_with_style(BufferStyle::new(r).line_join(LineJoin::Bevel));
     dilated.buffer_with_style(BufferStyle::new(-r).line_join(LineJoin::Bevel))
-}
-
-/// Close wall-width gaps/bands, **restore the original corners**, then drop
-/// redundant collinear vertices from every surviving ring (exterior AND
-/// interior). Interior rings are genuine voids (wider than a wall) and are kept,
-/// so the footprint area excludes them.
-///
-/// The close bevels every corner (geo's dilate/erode is not perfectly corner-
-/// preserving), which shows as chipped corners and triangular flags where two
-/// department footprints meet. Unioning the *original* geometry back in repairs
-/// that for free: a real corner sticks out past the bevel, so the union restores
-/// it sharp — while the filled wall bands, which the original does not contain,
-/// survive untouched. This is a standard close-then-restore and is why bevel (not
-/// miter) joins are safe: bevel only ever cuts corners, and the cut is repaired
-/// here.
-///
-/// Applied after *every* union, bottom tier and upward. Running the close per
-/// tier is what fills a wall at the tier that first encloses both its sides — a
-/// courtyard bounded by several groups closes only when they dissolve into one,
-/// a wall between two departments only at their common ancestor — while a
-/// genuinely wide void is never filled at any tier.
-/// `dirs` is the level's full set of real edge directions (see [`edge_dirs`]) —
-/// passed in rather than derived from `base`, because clipping against `foreign`
-/// introduces edges along those rooms' boundaries, which are real geometry and
-/// must not be mistaken for chords the close invented.
-fn close_clip_clean(base: &MultiPolygon<f64>, foreign: &MultiPolygon<f64>, dirs: &[f64]) -> MultiPolygon<f64> {
-    let closed = morphological_close(base, MAX_WALL_FT / 2.0);
-    // Restore the sharp original corners the close chipped, without disturbing
-    // the filled walls (the original doesn't cover them) or the open voids (a
-    // void is a hole in both `closed` and `base`, so it stays a hole in the union).
-    let mut restored = closed.union(base);
-    // **Clip away other groups' rooms.** The close dilates by `r`, which is wider
-    // than a partition, so at a concave junction the erode cannot fully retract
-    // and the footprint keeps a sliver *inside a neighbouring group's room*. Two
-    // neighbours each doing that is a genuine overlap — measured at 1–5.5 ft² per
-    // pair on real data, with both groups counting the same area. Subtracting the
-    // rooms that belong to other groups removes exactly those illegitimate claims
-    // and nothing else: own rooms are not in `foreign`, and a filled wall band is
-    // not a room, so the wall-ownership rule up the hierarchy is untouched.
-    if !foreign.0.is_empty() {
-        restored = restored.difference(foreign);
-    }
-    let clean = |ring: &LineString<f64>| dedup_collinear(&sharpen_bevels(ring, dirs));
-    MultiPolygon::new(
-        restored
-            .iter()
-            .map(|p| Polygon::new(clean(p.exterior()), p.interiors().iter().map(clean).collect()))
-            .collect(),
-    )
 }
 
 /// Angular tolerance (radians, ~1.1°) for calling two edge directions "the same".
@@ -251,7 +403,7 @@ fn angular_diff(a: f64, b: f64) -> f64 {
 ///
 /// Iterated to a fixpoint so chained chamfers at a complex junction resolve one
 /// corner per pass. Operates on one closed ring.
-fn sharpen_bevels(ring: &LineString<f64>, dirs: &[f64]) -> LineString<f64> {
+fn sharpen_bevels(ring: &LineString<f64>, dirs: &[f64], scale_ft: f64) -> LineString<f64> {
     let raw = &ring.0;
     let closed = raw.len() >= 2 && raw.first() == raw.last();
     let mut pts: Vec<Coord<f64>> = if closed { raw[..raw.len() - 1].to_vec() } else { raw.to_vec() };
@@ -274,7 +426,7 @@ fn sharpen_bevels(ring: &LineString<f64>, dirs: &[f64]) -> LineString<f64> {
             if is_real_dir(b, c) {
                 continue; // a direction the input had — keep it
             }
-            if let Some(x) = corner_of_chamfer(a, b, c, d) {
+            if let Some(x) = corner_of_chamfer(a, b, c, d, scale_ft) {
                 out[i] = x;
                 out[(i + 1) % n] = x; // collapse the chord onto the corner it cut
                 changed = true;
@@ -320,10 +472,12 @@ fn sharpen_bevels(ring: &LineString<f64>, dirs: &[f64]) -> LineString<f64> {
 ///   is bounded at `d`, not at `c`: a chamfer's corner often falls *along* the
 ///   following edge rather than behind its start, and rejecting those left visible
 ///   chamfers at diagonal-to-orthogonal junctions;
-/// - it is **near the chord**: within `max(2·chord, MAX_WALL_FT)` of both ends.
+/// - it is **near the chord**: within `max(2·chord, scale_ft)` of both ends, where
+///   `scale_ft` is the level's wall gap — the largest distance the close could
+///   have moved anything.
 ///   A real 90° chamfer puts its corner ~0.71·chord away, so this is generous,
 ///   while a near-parallel pair lands orders of magnitude outside it.
-fn corner_of_chamfer(a: Coord<f64>, b: Coord<f64>, c: Coord<f64>, d: Coord<f64>) -> Option<Coord<f64>> {
+fn corner_of_chamfer(a: Coord<f64>, b: Coord<f64>, c: Coord<f64>, d: Coord<f64>, scale_ft: f64) -> Option<Coord<f64>> {
     let (rx, ry) = (b.x - a.x, b.y - a.y);
     let (sx, sy) = (d.x - c.x, d.y - c.y);
     let denom = rx * sy - ry * sx;
@@ -341,22 +495,11 @@ fn corner_of_chamfer(a: Coord<f64>, b: Coord<f64>, c: Coord<f64>, d: Coord<f64>)
     }
     let x = Coord { x: a.x + t * rx, y: a.y + t * ry };
     let dist = |p: Coord<f64>, q: Coord<f64>| (p.x - q.x).hypot(p.y - q.y);
-    let limit = (2.0 * dist(b, c)).max(MAX_WALL_FT);
+    let limit = (2.0 * dist(b, c)).max(scale_ft);
     if dist(x, b) > limit || dist(x, c) > limit {
         return None; // corner is implausibly far — refuse rather than spike
     }
     Some(x)
-}
-
-/// Dissolve already-closed child footprints into one parent footprint: union
-/// them, then re-close and re-clip (walls between children fill here; a courtyard
-/// bounded by several children first encloses here — see [`close_clip_clean`]).
-fn dissolve_footprints(children: &[&MultiPolygon<f64>], foreign: &MultiPolygon<f64>, dirs: &[f64]) -> MultiPolygon<f64> {
-    let mut acc: MultiPolygon<f64> = MultiPolygon::new(vec![]);
-    for child in children {
-        acc = acc.union(*child);
-    }
-    close_clip_clean(&acc, foreign, dirs)
 }
 
 /// Measured area of a footprint — the area of the actual dissolved polygon, holes
@@ -392,16 +535,23 @@ pub struct AreaGroup {
     pub counted_upward: bool,
 }
 
-/// The Phase-2 pipeline: per-level, per-tier dissolved footprints for a set of
-/// classified rooms. Rooms are partitioned by level first (footprints never
-/// union across floors — a per-level decision), then each level runs the
-/// two-stage pipeline: build each bottom-tier group's footprint from its rooms,
-/// then dissolve child footprints into parents tier by tier up to the top. Every
-/// tier's area is measured from that tier's own dissolved polygon, never summed
-/// from children. Returns bottom-tier groups first, then each tier above.
-pub fn hierarchy_area_groups(rooms: &[ClassifiedRoom], exclusions: &[HierarchyExclusion]) -> Vec<AreaGroup> {
-    // Stage 1 exclusion (Case B): drop excluded rooms before they become
-    // geometry, so they vanish from every tier including their bottom group.
+/// The Phase-2 pipeline: per-level, per-tier footprints for a set of classified
+/// rooms. Rooms are partitioned by level first (footprints never union across
+/// floors — a per-level decision), then each level builds its wall zone once and
+/// hands every tier its share of it. Every tier's area is measured from that
+/// tier's own polygon, never summed from children. Returns bottom-tier groups
+/// first, then each tier above.
+///
+/// `gaps` supplies the wall gap per level, which is where the declared boundary
+/// regime enters the geometry — see [`LevelGaps`].
+pub fn hierarchy_area_groups(
+    rooms: &[ClassifiedRoom],
+    exclusions: &[HierarchyExclusion],
+    gaps: &LevelGaps,
+) -> Vec<AreaGroup> {
+    // Case-B exclusion: drop excluded rooms before they become geometry, so they
+    // vanish from every tier including their own bottom group — and, since the
+    // wall zone is built from the survivors, so do the walls only they bounded.
     // Partition the survivors by level, first-seen order for determinism.
     let mut by_level: Vec<(String, Vec<&ClassifiedRoom>)> = Vec::new();
     for cr in rooms {
@@ -416,74 +566,29 @@ pub fn hierarchy_area_groups(rooms: &[ClassifiedRoom], exclusions: &[HierarchyEx
 
     let mut out = Vec::new();
     for (level_id, level_rooms) in &by_level {
-        out.extend(level_groups(level_id, level_rooms, exclusions));
+        out.extend(level_groups(level_id, level_rooms, exclusions, gaps.for_level(level_id)));
     }
     out
 }
 
-/// Every room on one level as a polygon paired with its classification path — the
-/// reference a group's footprint is clipped against so it cannot claim area that
-/// belongs to another group's rooms (see [`close_clip_clean`]).
-struct LevelRooms<'a> {
-    items: Vec<(&'a [TierValue], Polygon<f64>)>,
-}
-
-impl<'a> LevelRooms<'a> {
-    fn new(rooms: &[&'a ClassifiedRoom<'a>]) -> Self {
-        let items = rooms
-            .iter()
-            .filter_map(|cr| room_outer_polygon(cr.room).map(|p| (cr.path, p)))
-            .collect();
-        Self { items }
-    }
-
-    /// Union of the rooms **not** under `prefix` that lie within a wall's reach of
-    /// `base`. The reach filter is not an approximation: the close can only move a
-    /// boundary by `MAX_WALL_FT/2`, so a room further out than `MAX_WALL_FT` can
-    /// never be claimed — skipping it is exact, and keeps the subtrahend small
-    /// (one union over a handful of neighbours instead of the whole level).
-    fn foreign_near(&self, prefix: &[TierValue], base: &MultiPolygon<f64>) -> MultiPolygon<f64> {
-        let Some(r) = base.bounding_rect() else {
-            return MultiPolygon::new(vec![]);
-        };
-        let (x0, y0) = (r.min().x - MAX_WALL_FT, r.min().y - MAX_WALL_FT);
-        let (x1, y1) = (r.max().x + MAX_WALL_FT, r.max().y + MAX_WALL_FT);
-        let mut acc: MultiPolygon<f64> = MultiPolygon::new(vec![]);
-        for (path, poly) in &self.items {
-            if path.len() >= prefix.len() && path_eq(&path[..prefix.len()], prefix) {
-                continue; // this group's own room (or one of its descendants')
-            }
-            let Some(b) = poly.bounding_rect() else { continue };
-            if b.max().x < x0 || b.min().x > x1 || b.max().y < y0 || b.min().y > y1 {
-                continue; // out of the close's reach
-            }
-            acc = acc.union(&MultiPolygon::new(vec![poly.clone()]));
-        }
-        acc
-    }
-
-    /// Real edge directions across the whole level — the de-bevel's reference for
-    /// "a direction the input actually had". Level-wide (not per group) because a
-    /// clip introduces edges from a neighbour's rooms, which are equally real.
-    fn dirs(&self) -> Vec<f64> {
-        let all = MultiPolygon::new(self.items.iter().map(|(_, p)| p.clone()).collect());
-        edge_dirs(&all)
-    }
-}
-
-/// Withdraw from **both** siblings any area they each claim.
+/// Withdraw from **both** claimants any area they each claim, at one tier.
 ///
-/// The room-level clip ([`LevelRooms::foreign_near`]) stops a group swallowing a
-/// neighbour's *room*, but two groups can still both fill part of the *wall band*
-/// between them: the close dilates by more than a partition's width, so at a
-/// concave junction each side keeps a sliver past the wall's middle. That is a
-/// genuine double-count (measured at 0.5–5.5 ft² per pair on real data).
+/// This is not arbitration papering over an overlap the design did not expect —
+/// it is the design's own rule applied to the one shape that still needs it. At a
+/// wall junction where four rooms meet, the small square at the centre is bounded
+/// by all four; if two belong to A and two to B, each pair's diagonal is short
+/// enough to close and both groups fill the square. Bounded by two groups means
+/// it belongs to neither, so it comes out of both, and their common ancestor —
+/// whose close merges all four rooms — claims it exactly once. That is what keeps
+/// `parent = Σ children + newly-enclosed bands` exact rather than approximate.
 ///
-/// The resolution follows the rule the design already states: a wall between two
-/// different groups belongs to **neither** — it is filled at their common
-/// ancestor, whose own union-and-close covers it. So contested area is removed
-/// from both, symmetrically. Intersections are all computed *before* any
-/// subtraction, so the outcome does not depend on group order.
+/// Everything else that used to land here is gone: a group's fill is a subset of
+/// the wall zone, which contains no rooms, so a footprint can no longer reach
+/// into a neighbour's room, and the close no longer bulges past the level's own
+/// outer boundary. What remains is junction-sized.
+///
+/// Intersections are all computed *before* any subtraction, so the outcome does
+/// not depend on group order.
 fn resolve_sibling_overlaps(groups: &mut [(Vec<TierValue>, MultiPolygon<f64>)]) {
     let n = groups.len();
     if n < 2 {
@@ -518,75 +623,124 @@ fn resolve_sibling_overlaps(groups: &mut [(Vec<TierValue>, MultiPolygon<f64>)]) 
     }
 }
 
-fn level_groups(level_id: &str, rooms: &[&ClassifiedRoom], exclusions: &[HierarchyExclusion]) -> Vec<AreaGroup> {
+/// One bottom-tier group on one level: its full classification path, the union
+/// of its rooms, and the depth (if any) at which a Case-A exclusion withholds it.
+struct BottomGroup {
+    path: Vec<TierValue>,
+    rooms: MultiPolygon<f64>,
+    /// `Some(k)` when an exclusion names the tier at index `k` of this path. The
+    /// group at `path[..=k]` is still reported, but contributes to no tier above
+    /// it — it participates at depth `d` only for `d >= k`.
+    excluded_at: Option<usize>,
+}
+
+/// The depth at which a Case-A (`group`) exclusion withholds this path, if any —
+/// the shallowest tier whose resolved value an exclusion names. Shallowest
+/// because withholding at tier `k` already removes the group from every tier
+/// above `k`, so a second, deeper match would change nothing.
+fn excluded_depth(path: &[TierValue], exclusions: &[HierarchyExclusion]) -> Option<usize> {
+    (0..path.len()).find(|&k| is_group_excluded(&path[..=k], exclusions))
+}
+
+/// One level's whole pipeline. Kept in one function on purpose: the wall zone,
+/// the per-depth fills and the roll-up are three views of one construction, and
+/// the invariant that makes it correct — each depth's footprints are disjoint and
+/// nested inside their parent's — is only checkable by reading them together.
+fn level_groups(
+    level_id: &str,
+    rooms: &[&ClassifiedRoom],
+    exclusions: &[HierarchyExclusion],
+    gap_ft: f64,
+) -> Vec<AreaGroup> {
     let num_tiers = rooms.iter().map(|r| r.path.len()).max().unwrap_or(0);
     if num_tiers == 0 {
         return Vec::new(); // no hierarchy configured -> no groups
     }
-    let level = LevelRooms::new(rooms);
-    let dirs = level.dirs();
 
-    // Stage 1: gather rooms into bottom-tier groups by full-path key (first-seen
-    // order), then build each group's footprint. `classify_room` guarantees a
-    // uniform-depth path, so `path.len() == num_tiers` for every room.
-    let mut bottom: Vec<(Vec<TierValue>, Vec<&Room>)> = Vec::new();
+    // Gather rooms into bottom-tier groups by full-path key (first-seen order).
+    // `classify_room` guarantees a uniform-depth path, so `path.len() ==
+    // num_tiers` for every room; anything shorter is not a group we can place.
+    let mut grouped: Vec<(Vec<TierValue>, Vec<&Room>)> = Vec::new();
     for cr in rooms {
         if cr.path.len() != num_tiers {
             continue;
         }
-        match bottom.iter_mut().find(|(p, _)| path_eq(p, cr.path)) {
+        match grouped.iter_mut().find(|(p, _)| path_eq(p, cr.path)) {
             Some((_, v)) => v.push(cr.room),
-            None => bottom.push((cr.path.to_vec(), vec![cr.room])),
+            None => grouped.push((cr.path.to_vec(), vec![cr.room])),
         }
     }
 
-    let mut current: Vec<(Vec<TierValue>, MultiPolygon<f64>)> = bottom
+    let bottom: Vec<BottomGroup> = grouped
         .into_iter()
-        .map(|(path, rs)| {
-            let base = union_of_rooms(rs.into_iter());
-            let foreign = level.foreign_near(&path, &base);
-            (path, close_clip_clean(&base, &foreign, &dirs))
+        .map(|(path, rs)| BottomGroup {
+            rooms: union_of_rooms(rs.into_iter()),
+            excluded_at: excluded_depth(&path, exclusions),
+            path,
         })
         .collect();
-    resolve_sibling_overlaps(&mut current);
 
-    let mut results: Vec<AreaGroup> =
-        current.iter().map(|(path, fp)| emit(level_id, path.clone(), fp, exclusions)).collect();
+    // The level's own geometry: every surviving room, and the wall zone those
+    // rooms enclose. Both computed exactly once — that is the whole point of the
+    // reformulation. `dirs` comes from the rooms, never from the closed result,
+    // because a direction the *rooms* never had is by definition one the close
+    // invented.
+    let mut all_rooms: MultiPolygon<f64> = MultiPolygon::new(vec![]);
+    for g in &bottom {
+        all_rooms = all_rooms.union(&g.rooms);
+    }
+    let dirs = edge_dirs(&all_rooms);
+    let zone = wall_zone(&all_rooms, gap_ft);
 
-    // Stage 2: dissolve upward. For each parent depth, group the tier below by
-    // its path prefix and union each group's footprints — but a Case-A
-    // (`group`) exclusion WITHHOLDS a child node from its parent's dissolve, so
-    // the excluded group drops out of that tier and every tier above (its own
-    // footprint was already emitted). The union stays a dumb "dissolve these
-    // inputs" loop; the withhold is decided here, at the insertion point.
-    for depth in (0..num_tiers - 1).rev() {
-        let mut parents: Vec<(Vec<TierValue>, Vec<&MultiPolygon<f64>>)> = Vec::new();
-        for (path, fp) in &current {
-            if is_group_excluded(path, exclusions) {
-                continue; // withheld from its parent (and thus every tier above)
+    // Walk the tiers deepest-first so the output keeps its established order
+    // (bottom-tier groups first, then each tier above). Each depth is computed
+    // from the **bottom groups directly**, never from the tier below it.
+    //
+    // Not because closing is non-idempotent — it is idempotent, `φ(φ(X)) = φ(X)`
+    // (see the module header). The reason is that `geo`'s bevel-join offset is
+    // not a true closing: it is not even extensive, since a bevel only ever cuts
+    // a corner. So `approx(approx(X))` really does drift where `φ(φ(X))` would
+    // not, and re-closing an already-closed footprint compounds the corner error
+    // once per tier. Closing the raw rooms once per prefix keeps every tier at
+    // exactly one approximation deep.
+    let mut results: Vec<AreaGroup> = Vec::new();
+    for depth in (0..num_tiers).rev() {
+        // Group the participating bottom groups by their prefix at this depth.
+        let mut prefixes: Vec<(Vec<TierValue>, MultiPolygon<f64>)> = Vec::new();
+        for g in &bottom {
+            // A Case-A exclusion at tier k withholds this group from every tier
+            // above k. It still appears at k itself — its own area is real.
+            if g.excluded_at.is_some_and(|k| depth < k) {
+                continue;
             }
-            let prefix = &path[..=depth];
-            match parents.iter_mut().find(|(p, _)| path_eq(p, prefix)) {
-                Some((_, v)) => v.push(fp),
-                None => parents.push((prefix.to_vec(), vec![fp])),
+            let prefix = &g.path[..=depth];
+            match prefixes.iter_mut().find(|(p, _)| path_eq(p, prefix)) {
+                Some((_, acc)) => *acc = acc.union(&g.rooms),
+                None => prefixes.push((prefix.to_vec(), g.rooms.clone())),
             }
         }
-        let mut next: Vec<(Vec<TierValue>, MultiPolygon<f64>)> = parents
+
+        // Each prefix's share of the wall zone: the bands its own rooms close
+        // over. A band with this prefix's rooms on one side only is not among
+        // them — that band belongs to an ancestor, which is the ownership rule
+        // falling out of the arithmetic rather than being imposed on it.
+        let mut footprints: Vec<(Vec<TierValue>, MultiPolygon<f64>)> = prefixes
             .into_iter()
-            .map(|(path, fps)| {
-                // A parent owns its whole subtree, so `foreign` shrinks as we go
-                // up: only rooms outside this prefix are clipped away.
-                let mut base: MultiPolygon<f64> = MultiPolygon::new(vec![]);
-                for fp in &fps {
-                    base = base.union(*fp);
-                }
-                let foreign = level.foreign_near(&path, &base);
-                (path, dissolve_footprints(&fps, &foreign, &dirs))
+            .map(|(path, own_rooms)| {
+                let fill = if gap_ft > 0.0 {
+                    morphological_close(&own_rooms, gap_ft / 2.0).intersection(&zone)
+                } else {
+                    MultiPolygon::new(vec![])
+                };
+                (path, own_rooms.union(&fill))
             })
             .collect();
-        resolve_sibling_overlaps(&mut next);
-        results.extend(next.iter().map(|(path, fp)| emit(level_id, path.clone(), fp, exclusions)));
-        current = next;
+        resolve_sibling_overlaps(&mut footprints);
+
+        results.extend(footprints.into_iter().map(|(path, fp)| {
+            let cleaned = clean_rings(&fp, &dirs, gap_ft);
+            emit(level_id, path, &cleaned, exclusions)
+        }));
     }
 
     results
@@ -635,6 +789,27 @@ fn is_group_excluded(path: &[TierValue], exclusions: &[HierarchyExclusion]) -> b
 #[derive(Serialize)]
 pub struct AreasResult {
     pub schema_version: u32,
+
+    /// The measurement standard this project declares (`[areas]
+    /// measurement_standard`), or `null` when it declares none.
+    ///
+    /// Echoed rather than merely stored because **an area figure without its
+    /// definition is precisely what measurement standards exist to prevent**. A
+    /// consumer showing these numbers can now say what they mean, and `null` is
+    /// an honest "undeclared" rather than a silent implication that some
+    /// particular standard applies.
+    pub measurement_standard: Option<MeasurementStandard>,
+
+    /// The wall gap actually applied to each level, in feet, keyed by level id —
+    /// the resolved product of the project's `max_wall_thickness` and each
+    /// level's declared boundary regime. `0` means the level was treated as
+    /// centreline and no close ran at all.
+    ///
+    /// This is the number that decides how much wall each footprint contains, so
+    /// it belongs beside the areas rather than being reconstructible only by
+    /// cross-referencing settings against `/rooms`.
+    pub wall_gap_by_level: BTreeMap<String, f64>,
+
     /// The scoped level set (same shape `/rooms` returns) so the viewer can draw
     /// each level's footprints on that level's plan.
     pub levels: Vec<Level>,
@@ -698,13 +873,105 @@ fn polygons_of(mp: &MultiPolygon<f64>) -> Vec<FootprintPolygon> {
         .collect()
 }
 
+/// Fraction of a level's room pairs that must tile edge-to-edge before the level
+/// reads as centreline. Well below half on purpose: this is a *diagnostic*
+/// threshold, and the two regimes are far apart in practice (a centreline model
+/// is ~100% coincident, a finish-face one ~0%), so anything near the middle is
+/// itself worth reporting rather than a boundary case to tune.
+const COINCIDENT_SHARE_FOR_CENTRELINE: f64 = 0.25;
+
+/// Sampling ceiling for the contradiction check. It runs on every `/areas`
+/// request, so it must stay O(1) in room count — a few dozen nearest-neighbour
+/// probes is plenty to tell "rooms touch" from "rooms float inside their walls",
+/// and a wrong regime is a whole-model property, never a per-room one.
+const REGIME_SAMPLE_ROOMS: usize = 40;
+
+/// Warn when a level's **declared** regime disagrees with the gaps its rooms
+/// actually have.
+///
+/// "Signal, not error", deliberately. A model declaring finish face whose rooms
+/// tile edge-to-edge — or the reverse — is almost certainly a mis-set document
+/// option or a stale project fallback, and it will quietly produce footprints
+/// that are wrong by roughly the wall area of the whole floor. But the server
+/// cannot know which of the two is the mistake, and refusing to answer would
+/// take away the very view that makes the problem visible. So: compute, log, and
+/// let the number be inspected.
+///
+/// The measurement is the same one that found House A's 0.317 ft gaps: for a
+/// bounded sample of rooms, the distance to the nearest other room on the level.
+/// A level reading as centreline is one where most of those distances are zero.
+fn warn_on_regime_contradiction(
+    project: &str,
+    rooms: &[ClassifiedRoom],
+    boundary_by_level: &BTreeMap<String, RoomBoundary>,
+) {
+    let mut by_level: BTreeMap<&str, Vec<Polygon<f64>>> = BTreeMap::new();
+    for cr in rooms {
+        if let Some(poly) = room_outer_polygon(cr.room) {
+            by_level.entry(cr.room.level_id.as_str()).or_default().push(poly);
+        }
+    }
+
+    for (level_id, polys) in by_level {
+        let Some(declared) = boundary_by_level.get(level_id) else { continue };
+        let Some(share) = coincident_share(&polys) else { continue };
+        let measured = if share >= COINCIDENT_SHARE_FOR_CENTRELINE {
+            RoomBoundary::Centreline
+        } else {
+            RoomBoundary::FinishFace
+        };
+        if measured != *declared {
+            tracing::warn!(
+                "project '{project}', level '{level_id}': rooms are declared {declared:?} but measure as \
+                 {measured:?} ({:.0}% of sampled neighbouring rooms touch exactly). Footprints will be off by \
+                 roughly the floor's wall area — check the model's Area & Volume Computations setting, or the \
+                 project's [areas] boundary_location fallback.",
+                share * 100.0
+            );
+        }
+    }
+}
+
+/// Share of sampled rooms whose nearest neighbour on the level is *touching*
+/// (gap within float noise). `None` when there are too few rooms to say
+/// anything — a level with one room has no gaps to measure, and guessing from
+/// nothing is worse than staying quiet.
+fn coincident_share(polys: &[Polygon<f64>]) -> Option<f64> {
+    if polys.len() < 2 {
+        return None;
+    }
+    // Stride rather than take the first N: rooms arrive in model order, which on
+    // a real export is spatially clustered, so the head of the list can be one
+    // wing of one floor.
+    let stride = polys.len().div_ceil(REGIME_SAMPLE_ROOMS).max(1);
+    let mut sampled = 0usize;
+    let mut touching = 0usize;
+    for (i, poly) in polys.iter().enumerate().step_by(stride) {
+        let nearest = polys
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, other)| Euclidean.distance(poly, other))
+            .fold(f64::INFINITY, f64::min);
+        if !nearest.is_finite() {
+            continue;
+        }
+        sampled += 1;
+        if nearest <= COLLINEAR_EPS_FT {
+            touching += 1;
+        }
+    }
+    (sampled > 0).then(|| touching as f64 / sampled as f64)
+}
+
 /// Assemble the areas result for one project, scoped like `/rooms`. Reuses
 /// `assemble_rooms` for the scoped, classified room set (respecting
 /// project/building/milestone exactly as `/rooms` does — a milestone view reuses
 /// its pinned snapshots), so grouping runs off the same classification the room
 /// render already resolved. Exclusions come from the project's resolved bundle
-/// (server-used config, unlike client-only colour plans). `Ok(None)` when
-/// nothing has ever been pushed (the handler's 204), mirroring `assemble_rooms`.
+/// (server-used config, unlike client-only colour plans), as does the `[areas]`
+/// policy that sizes the wall zone. `Ok(None)` when nothing has ever been pushed
+/// (the handler's 204), mirroring `assemble_rooms`.
 pub fn assemble_areas(
     state: &AppState,
     project: &str,
@@ -716,11 +983,10 @@ pub fn assemble_areas(
         return Ok(None);
     };
 
-    let exclusions = state
-        .settings()
-        .settings_for(project)
-        .map(|b| b.hierarchy_exclusions.clone())
-        .unwrap_or_default();
+    let registry = state.settings();
+    let bundle = registry.settings_for(project);
+    let exclusions = bundle.map(|b| b.hierarchy_exclusions.clone()).unwrap_or_default();
+    let policy = bundle.map(|b| b.areas.clone()).unwrap_or_default();
 
     let classified: Vec<ClassifiedRoom> = rooms
         .rooms
@@ -728,12 +994,28 @@ pub fn assemble_areas(
         .map(|r| ClassifiedRoom { room: &r.room, path: &r.classification })
         .collect();
 
-    let groups = hierarchy_area_groups(&classified, &exclusions)
+    // Diagnostic only, and deliberately not a rejection: a declared regime that
+    // the geometry contradicts is a signal worth surfacing, not grounds for
+    // refusing to answer. See `warn_on_regime_contradiction`.
+    warn_on_regime_contradiction(project, &classified, &rooms.boundary_by_level);
+
+    let gaps = LevelGaps::from_policy(&policy, &rooms.boundary_by_level);
+    let groups = hierarchy_area_groups(&classified, &exclusions, &gaps)
         .into_iter()
         .map(AreaGroupResponse::from)
         .collect();
 
-    Ok(Some(AreasResult { schema_version: SUPPORTED_SCHEMA, levels: rooms.levels, groups }))
+    Ok(Some(AreasResult {
+        schema_version: SUPPORTED_SCHEMA,
+        measurement_standard: policy.measurement_standard,
+        wall_gap_by_level: rooms
+            .boundary_by_level
+            .iter()
+            .map(|(id, b)| (id.clone(), policy.wall_gap_ft(*b)))
+            .collect(),
+        levels: rooms.levels,
+        groups,
+    }))
 }
 
 /// Two classification prefixes name the same group when their resolved values
@@ -791,6 +1073,12 @@ fn dedup_collinear(ring: &LineString<f64>) -> LineString<f64> {
 mod tests {
     use super::*;
     use crate::contract::Point2D;
+
+    /// The finish-face wall gap these geometry tests run at — the project
+    /// default. Named locally so a test reads as "at the default gap" rather
+    /// than repeating where the number is declared. The centreline regime is
+    /// exercised by passing `0.0` explicitly, which is the point of it.
+    const WALL_FT: f64 = AreaPolicy::DEFAULT_MAX_WALL_THICKNESS_FT;
 
     /// Build a room from one or more loops of `(x, y)` corners. First loop is the
     /// outer boundary; any further loops are the room's own holes.
@@ -860,7 +1148,7 @@ mod tests {
             (croom("b1", "L1", rect(20.0, 0.0, 30.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "B")]),
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
-        let g = hierarchy_area_groups(&cls, &[]);
+        let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT));
 
         approx_area(group(&g, "L1", &[tv("Building", "B1"), tv("Dept", "A")]).area, 200.0);
         approx_area(group(&g, "L1", &[tv("Building", "B1"), tv("Dept", "B")]).area, 100.0);
@@ -885,7 +1173,7 @@ mod tests {
             (croom("right", "L1", rect(20.0, 10.0, 30.0, 20.0)), path_b.clone()),
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
-        let g = hierarchy_area_groups(&cls, &[]);
+        let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT));
 
         let a = group(&g, "L1", &path_a).area; // C-shape, open on the right
         let b = group(&g, "L1", &path_b).area; // the bar
@@ -900,12 +1188,13 @@ mod tests {
         assert_eq!(building_grp.footprint.0[0].interiors().len(), 1, "the courtyard survives as a hole");
     }
 
-    /// **Regression: sibling departments must not overlap.** At a concave junction
-    /// the close dilates wider than the partition, so the erode cannot fully
-    /// retract and each department kept a sliver *inside its neighbour's room* —
-    /// measured at 1–5.5 ft² per pair on real data, with both groups counting the
-    /// same area. `foreign_near` clips those claims away. Asserted as a real
-    /// polygon intersection, not a bbox test (concave footprints' bboxes overlap
+    /// **Regression: sibling departments must not overlap.** At a concave
+    /// junction the close dilates wider than the partition, so the erode could not
+    /// fully retract and each department kept a sliver *inside its neighbour's
+    /// room* — measured at 1–5.5 ft² per pair on real data, with both groups
+    /// counting the same area. The wall zone makes that unreachable: a fill is a
+    /// subset of a set that contains no rooms at all. Asserted as a real polygon
+    /// intersection, not a bbox test (concave footprints' bboxes overlap
     /// legitimately).
     #[test]
     fn test_sibling_footprints_do_not_overlap() {
@@ -919,7 +1208,7 @@ mod tests {
             (croom("b_notch", "L1", rect(10.4, 10.4, 30.0, 30.0)), path_b.clone()),
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
-        let g = hierarchy_area_groups(&cls, &[]);
+        let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT));
 
         let fa = &group(&g, "L1", &path_a).footprint;
         let fb = &group(&g, "L1", &path_b).footprint;
@@ -933,13 +1222,152 @@ mod tests {
         assert!(building > sum + 1.0, "parent fills the inter-dept wall: {building} vs {sum}");
     }
 
+    /// **Additivity is exact, by construction.** A parent equals the sum of its
+    /// children plus exactly the bands it is the first tier to enclose — no
+    /// double-counted wall, no area lost between tiers.
+    ///
+    /// This is the property the whole reformulation exists to deliver, and it is
+    /// asserted to a hair (0.05 ft²) rather than the loose tolerance the other
+    /// geometry tests use, because "roughly additive" is precisely what the
+    /// per-group close gave and what was not good enough. The layout is chosen to
+    /// make every ownership case appear at once: two departments each with two
+    /// rooms, walls within a department (fill at the department), a wall between
+    /// them (fill at the building), and a `+` junction in the middle (contested
+    /// by both departments, so withdrawn from each and claimed by the building).
+    #[test]
+    fn test_tier_areas_are_exactly_additive() {
+        let w = 0.4; // finish-face wall between every pair of rooms
+        let path_a = vec![tv("Building", "B1"), tv("Dept", "A")];
+        let path_b = vec![tv("Building", "B1"), tv("Dept", "B")];
+        // A 2x2 of 10x10 rooms with a wall between each: A is the left column,
+        // B the right, so the vertical wall is inter-department and the two
+        // horizontal ones are intra-department. They cross in the middle.
+        let x1 = 10.0 + w;
+        let y1 = 10.0 + w;
+        let rooms = [
+            (croom("a_bl", "L1", rect(0.0, 0.0, 10.0, 10.0)), path_a.clone()),
+            (croom("a_tl", "L1", rect(0.0, y1, 10.0, y1 + 10.0)), path_a.clone()),
+            (croom("b_br", "L1", rect(x1, 0.0, x1 + 10.0, 10.0)), path_b.clone()),
+            (croom("b_tr", "L1", rect(x1, y1, x1 + 10.0, y1 + 10.0)), path_b.clone()),
+        ];
+        let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
+        let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT));
+
+        let a = group(&g, "L1", &path_a);
+        let b = group(&g, "L1", &path_b);
+        let building = group(&g, "L1", &[tv("Building", "B1")]);
+
+        // Each department is its two rooms plus the horizontal wall between them.
+        approx_area(a.area, 200.0 + 10.0 * w);
+        approx_area(b.area, 200.0 + 10.0 * w);
+
+        // The newly-enclosed area at the building tier is whatever the building's
+        // polygon holds beyond its two children's — measured, not assumed.
+        let children = a.footprint.union(&b.footprint);
+        let newly_enclosed = building.footprint.difference(&children).unsigned_area();
+        assert!(
+            (building.area - (a.area + b.area + newly_enclosed)).abs() < 0.05,
+            "parent {} != children {} + {} + newly enclosed {}",
+            building.area,
+            a.area,
+            b.area,
+            newly_enclosed
+        );
+        // And that newly-enclosed part is real: the inter-department wall plus
+        // the junction square the two departments each had to give up.
+        assert!(newly_enclosed > 10.0 * w, "the building claims the wall between the departments");
+    }
+
+    /// **Both regimes describe the same building, and they agree on it** — the
+    /// same 30×10 plate drawn two ways measures 300 ft² either way. That is the
+    /// claim of Decision 1, and this test is what would catch a regression in it.
+    ///
+    /// The departments *do not* agree, and that is correct rather than a
+    /// shortfall worth tolerating: a centreline room's boundary sits in the
+    /// middle of its walls, so the room polygon already contains half of every
+    /// wall bounding it. A finish-face room contains none, and the wall is then
+    /// attributed by the ownership rule — to the department when both sides are
+    /// its own, to the building when they are not. So a department loses exactly
+    /// half of each wall it shares with another department when the same building
+    /// is redrawn to finish face. It reappears one tier up, which is why the
+    /// totals still match. Anyone comparing two projects across regimes needs to
+    /// know this, so it is asserted rather than left as an approximation.
+    ///
+    /// It also pins the payoff: at gap 0 no close runs, so the centreline answer
+    /// is exact to the bit, not merely close.
+    #[test]
+    fn test_centreline_and_finish_face_agree_on_the_same_building() {
+        let w = 0.4; // the real wall thickness
+        let h = w / 2.0;
+        let ceiling = 0.5; // the project's declared max_wall_thickness, > w
+        let path_a = vec![tv("Building", "B1"), tv("Dept", "A")];
+        let path_b = vec![tv("Building", "B1"), tv("Dept", "B")];
+
+        // Centreline: three rooms tiling a 30x10 plate, boundaries on the wall
+        // centrelines. Measured at gap 0 — the regime needs no close.
+        let centreline = [
+            (croom("r1", "L1", rect(0.0, 0.0, 10.0, 10.0)), path_a.clone()),
+            (croom("r2", "L1", rect(10.0, 0.0, 20.0, 10.0)), path_a.clone()),
+            (croom("r3", "L1", rect(20.0, 0.0, 30.0, 10.0)), path_b.clone()),
+        ];
+        // Finish face: the same plate, each internal boundary pulled back by half
+        // a wall on each side, so a `w`-wide gap sits where the centreline was.
+        let finish_face = [
+            (croom("r1", "L1", rect(0.0, 0.0, 10.0 - h, 10.0)), path_a.clone()),
+            (croom("r2", "L1", rect(10.0 + h, 0.0, 20.0 - h, 10.0)), path_a.clone()),
+            (croom("r3", "L1", rect(20.0 + h, 0.0, 30.0, 10.0)), path_b.clone()),
+        ];
+
+        let measure = |rooms: &[(Room, Vec<TierValue>)], gap: f64| {
+            let cls: Vec<ClassifiedRoom> =
+                rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
+            let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(gap));
+            (
+                group(&g, "L1", &path_a).area,
+                group(&g, "L1", &path_b).area,
+                group(&g, "L1", &[tv("Building", "B1")]).area,
+            )
+        };
+
+        let (ca, cb, cbuild) = measure(&centreline, 0.0);
+        let (fa, fb, fbuild) = measure(&finish_face, ceiling);
+
+        // Centreline is exact: no close ran, so these are plain room unions.
+        assert!((ca - 200.0).abs() < 1e-9, "centreline Dept A is exact, got {ca}");
+        assert!((cb - 100.0).abs() < 1e-9, "centreline Dept B is exact, got {cb}");
+        assert!((cbuild - 300.0).abs() < 1e-9, "centreline building is exact, got {cbuild}");
+
+        // The building agrees between regimes — the whole point.
+        approx_area(fbuild, cbuild);
+
+        // Each department loses exactly the half of the A|B wall its centreline
+        // room used to contain, and the building picks both halves up.
+        let half_shared_wall = h * 10.0;
+        approx_area(fa, ca - half_shared_wall);
+        approx_area(fb, cb - half_shared_wall);
+        // Tolerance 0.3 ft², not the 0.05 the additivity test uses, and the
+        // difference is the honest one: that test compares *measured* polygons
+        // against each other, where the construction is exact, while this
+        // compares against the analytic ideal — which the close cannot quite
+        // reach. Where the wall band meets the plate's open outer edge, the
+        // bevelled erode cuts a ~r²/2 triangle off each corner of the fill. Four
+        // such corners here, ~0.1 ft² total. That is the residual the handover
+        // accepts by confining artifacts to the single outer boundary; it does
+        // not grow with the number of groups or tiers, which is what mattered.
+        assert!(
+            (fbuild - (fa + fb + w * 10.0)).abs() < 0.3,
+            "the building is its departments plus the whole wall between them: {fbuild} vs {fa} + {fb} + {}",
+            w * 10.0
+        );
+    }
+
     /// A group's footprint must never swallow a neighbouring group's room, even
     /// when that room sits in a notch narrower than the close would bridge.
     #[test]
     fn test_footprint_does_not_claim_a_neighbours_room() {
         let path_a = vec![tv("Building", "B1"), tv("Dept", "A")];
         let path_b = vec![tv("Building", "B1"), tv("Dept", "B")];
-        // B is a narrow 1 ft riser between two A rooms — narrower than MAX_WALL_FT,
+        // B is a narrow 1 ft riser between two A rooms — narrower than WALL_FT,
         // exactly the case where A's close bridges straight across it.
         let rooms = vec![
             (croom("a1", "L1", rect(0.0, 0.0, 10.0, 10.0)), path_a.clone()),
@@ -947,7 +1375,7 @@ mod tests {
             (croom("a2", "L1", rect(11.0, 0.0, 21.0, 10.0)), path_a.clone()),
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
-        let g = hierarchy_area_groups(&cls, &[]);
+        let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT));
 
         let fa = &group(&g, "L1", &path_a).footprint;
         let riser = Polygon::new(
@@ -969,7 +1397,7 @@ mod tests {
             (croom("l2", "L2", rect(0.0, 0.0, 10.0, 20.0)), path.clone()),
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
-        let g = hierarchy_area_groups(&cls, &[]);
+        let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT));
 
         approx_area(group(&g, "L1", &path).area, 100.0);
         approx_area(group(&g, "L2", &path).area, 200.0);
@@ -987,7 +1415,7 @@ mod tests {
             (croom("unk", "L1", rect(10.0, 0.0, 20.0, 10.0)), vec![tv("Building", "B1"), undef("Dept")]),
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
-        let g = hierarchy_area_groups(&cls, &[]);
+        let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT));
 
         approx_area(group(&g, "L1", &[tv("Building", "B1"), undef("Dept")]).area, 100.0);
         approx_area(group(&g, "L1", &[tv("Building", "B1")]).area, 200.0);
@@ -998,7 +1426,7 @@ mod tests {
     fn test_no_hierarchy_yields_no_groups() {
         let r = croom("r", "L1", rect(0.0, 0.0, 10.0, 10.0));
         let cls = vec![ClassifiedRoom { room: &r, path: &[] }];
-        assert!(hierarchy_area_groups(&cls, &[]).is_empty());
+        assert!(hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT)).is_empty());
     }
 
     // ---- Phase 3: exclusions ----
@@ -1016,7 +1444,7 @@ mod tests {
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
         let excl = vec![HierarchyExclusion::Group { tier: "Dept".to_string(), value: "Outdoor".to_string() }];
-        let g = hierarchy_area_groups(&cls, &excl);
+        let g = hierarchy_area_groups(&cls, &excl, &LevelGaps::uniform(WALL_FT));
 
         // Building excludes Outdoor: 100, not 100 + 200.
         approx_area(group(&g, "L1", &[tv("Building", "B1")]).area, 100.0);
@@ -1042,7 +1470,7 @@ mod tests {
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
         let excl = vec![HierarchyExclusion::Rooms { ids: vec!["drop".to_string()] }];
-        let g = hierarchy_area_groups(&cls, &excl);
+        let g = hierarchy_area_groups(&cls, &excl, &LevelGaps::uniform(WALL_FT));
 
         // Bottom group and building both shrink to just the kept room.
         approx_area(group(&g, "L1", &path_a).area, 100.0);
@@ -1063,7 +1491,7 @@ mod tests {
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
         let excl = vec![HierarchyExclusion::Group { tier: "Dept".to_string(), value: "Outdoor".to_string() }];
-        let g = hierarchy_area_groups(&cls, &excl);
+        let g = hierarchy_area_groups(&cls, &excl, &LevelGaps::uniform(WALL_FT));
 
         // Building = Inside subtree only.
         approx_area(group(&g, "L1", &[tv("Building", "B1")]).area, 100.0);
@@ -1071,6 +1499,94 @@ mod tests {
         approx_area(group(&g, "L1", &[tv("Building", "B1"), tv("Dept", "Outdoor")]).area, 200.0);
         approx_area(group(&g, "L1", &outdoor("S2")).area, 200.0);
         assert!(!group(&g, "L1", &[tv("Building", "B1"), tv("Dept", "Outdoor")]).counted_upward);
+    }
+
+    /// **Every emitted ring is simple** — no edge of a ring crosses another edge
+    /// of the same ring.
+    ///
+    /// One of the two invariants the diagnostic harness checks against a live
+    /// server (`scripts/check_areas.py`), kept here as well because it is cheap,
+    /// and because a self-intersecting ring is the shape a spike makes on its way
+    /// out: `unsigned_area` on a bow-tie quietly reports the difference of its two
+    /// lobes, so a broken ring can look like a plausible number right up until
+    /// someone renders it. Checked by brute-force segment crossing rather than
+    /// with a validity predicate, so it tests the geometry and not `geo`'s
+    /// opinion of it.
+    #[test]
+    fn test_emitted_rings_are_simple() {
+        // A layout with every artifact-prone feature at once: finish-face walls,
+        // a concave L, a narrow riser belonging to a third group, a diagonal
+        // wing, and a courtyard.
+        let w = 0.4;
+        let b = |d: &str| vec![tv("Building", "B1"), tv("Dept", d)];
+        let rooms = [
+            (croom("a1", "L1", rect(0.0, 0.0, 20.0, 10.0)), b("A")),
+            (croom("a2", "L1", rect(0.0, 10.0 + w, 10.0, 30.0)), b("A")),
+            (croom("riser", "L1", rect(10.0 + w, 10.0 + w, 11.4 + w, 30.0)), b("C")),
+            (croom("b1", "L1", rect(11.8 + w, 10.0 + w, 20.0, 30.0)), b("B")),
+            // A diagonal wing: a real non-axis direction the de-bevel must keep.
+            (
+                croom("wing", "L1", vec![(20.0 + w, 0.0), (34.0 + w, 0.0), (28.0 + w, 12.0), (20.0 + w, 12.0)]),
+                b("B"),
+            ),
+        ];
+        let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
+
+        // Both regimes, because they exercise different code: one runs the close,
+        // the other must not.
+        for gap in [0.0, 0.5, WALL_FT] {
+            let groups = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(gap));
+            assert!(!groups.is_empty(), "gap {gap}: something must be emitted");
+            for g in &groups {
+                for poly in g.footprint.iter() {
+                    for ring in std::iter::once(poly.exterior()).chain(poly.interiors()) {
+                        assert!(
+                            ring_is_simple(ring),
+                            "gap {gap}, group {:?}: ring self-intersects",
+                            g.path.last().and_then(|t| t.name.clone())
+                        );
+                    }
+                    assert!(
+                        poly.exterior().0.len() >= 4,
+                        "gap {gap}: a ring collapsed to fewer than three distinct points"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Brute-force "does any pair of non-adjacent edges of this closed ring
+    /// cross". O(n²) and fine at test sizes.
+    fn ring_is_simple(ring: &LineString<f64>) -> bool {
+        let p = &ring.0;
+        if p.len() < 4 {
+            return true;
+        }
+        let n = p.len() - 1; // edge count on a closed ring
+        let cross = |o: Coord<f64>, a: Coord<f64>, b: Coord<f64>| {
+            (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        };
+        // Proper crossing only: rings legitimately touch at shared endpoints, and
+        // a collinear overlap is what `dedup_collinear` is for, not a crossing.
+        let crosses = |i: usize, j: usize| {
+            let (a, b, c, d) = (p[i], p[i + 1], p[j], p[j + 1]);
+            let (d1, d2) = (cross(a, b, c), cross(a, b, d));
+            let (d3, d4) = (cross(c, d, a), cross(c, d, b));
+            (d1 > 0.0) != (d2 > 0.0) && (d1 != 0.0 && d2 != 0.0)
+                && (d3 > 0.0) != (d4 > 0.0) && (d3 != 0.0 && d4 != 0.0)
+        };
+        for i in 0..n {
+            // Skip the previous, same and next edge — those share an endpoint.
+            for j in (i + 2)..n {
+                if i == 0 && j == n - 1 {
+                    continue; // first and last edge share the closing vertex
+                }
+                if crosses(i, j) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     /// Distinct exterior vertices of a single-polygon footprint (closing point
@@ -1086,7 +1602,7 @@ mod tests {
     /// the regression guard for the corner-artifact fix.
     #[test]
     fn test_single_room_outer_ring() {
-        let fp = group_footprint(&[room("r", &[&rect(0.0, 0.0, 10.0, 8.0)])]);
+        let fp = group_footprint(&[room("r", &[&rect(0.0, 0.0, 10.0, 8.0)])], WALL_FT);
         assert_eq!(fp.0.len(), 1, "one room -> one polygon");
         assert!(fp.0[0].interiors().is_empty(), "no holes");
         assert_eq!(corner_count(&fp.0[0]), 4, "corners restored sharp, no bevel chips");
@@ -1101,7 +1617,7 @@ mod tests {
         let fp = group_footprint(&[
             room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
             room("b", &[&rect(10.0, 0.0, 20.0, 10.0)]),
-        ]);
+        ], WALL_FT);
         assert_eq!(fp.0.len(), 1);
         assert_eq!(corner_count(&fp.0[0]), 4, "merged 20x10 block has exactly four corners");
         approx_area(footprint_area(&fp), 200.0);
@@ -1115,20 +1631,20 @@ mod tests {
     fn test_room_hole_is_ignored() {
         let outer = rect(0.0, 0.0, 10.0, 10.0);
         let hole = rect(3.0, 3.0, 7.0, 7.0);
-        let fp = group_footprint(&[room("r", &[&outer, &hole])]);
+        let fp = group_footprint(&[room("r", &[&outer, &hole])], WALL_FT);
         assert_eq!(fp.0.len(), 1);
         assert!(fp.0[0].interiors().is_empty());
         approx_area(footprint_area(&fp), 100.0); // hole filled, not 100 - 16
     }
 
-    /// Two rooms far apart (gap ≫ `MAX_WALL_FT`) → two islands survive. The close
+    /// Two rooms far apart (gap ≫ `WALL_FT`) → two islands survive. The close
     /// bridges walls, never a corridor-width gap.
     #[test]
     fn test_two_disjoint_clusters_keep_two_islands() {
         let fp = group_footprint(&[
             room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
             room("b", &[&rect(20.0, 0.0, 30.0, 10.0)]), // 10 ft gap
-        ]);
+        ], WALL_FT);
         assert_eq!(fp.0.len(), 2, "a 10 ft gap is not a wall — islands stay separate");
         approx_area(footprint_area(&fp), 200.0);
     }
@@ -1139,7 +1655,7 @@ mod tests {
         let fp = group_footprint(&[
             room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
             room("b", &[&rect(10.0, 0.0, 20.0, 10.0)]),
-        ]);
+        ], WALL_FT);
         assert_eq!(fp.0.len(), 1, "adjacent rooms merge into one polygon");
         assert!(fp.0[0].interiors().is_empty(), "no enclosed sliver");
         approx_area(footprint_area(&fp), 200.0);
@@ -1154,7 +1670,7 @@ mod tests {
         let fp = group_footprint(&[
             room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
             room("b", &[&rect(10.5, 0.0, 20.5, 10.0)]), // 0.5 ft wall gap
-        ]);
+        ], WALL_FT);
         assert_eq!(fp.0.len(), 1, "a wall-width gap bridges into one footprint");
         assert!(fp.0[0].interiors().is_empty(), "the wall band is filled, not a hole");
         approx_area(footprint_area(&fp), 205.0); // 100 + 100 + 0.5*10 wall
@@ -1167,7 +1683,7 @@ mod tests {
         let storage = rect(0.0, 10.0, 15.0, 20.0); // top-left
         let hall = rect(15.0, 10.0, 24.0, 20.0); // top-right
         let stair = rect(0.0, 0.0, 24.0, 10.0); // full-width bottom
-        let fp = group_footprint(&[room("storage", &[&storage]), room("hall", &[&hall]), room("stair", &[&stair])]);
+        let fp = group_footprint(&[room("storage", &[&storage]), room("hall", &[&hall]), room("stair", &[&stair])], WALL_FT);
 
         assert_eq!(fp.0.len(), 1, "three connected rooms -> one polygon");
         assert!(fp.0[0].interiors().is_empty());
@@ -1212,7 +1728,7 @@ mod tests {
             (0.0, 10.0),
             (0.0, 0.0),
         ]);
-        let out = sharpen_bevels(&beveled, &axis);
+        let out = sharpen_bevels(&beveled, &axis, WALL_FT);
         let d = &out.0[..out.0.len() - 1];
         assert_eq!(d.len(), 4, "the 45° chord collapses to one sharp corner, any size");
         assert!(d.iter().any(|c| (c.x - 10.0).abs() < 1e-6 && (c.y - 10.0).abs() < 1e-6), "corner restored at (10,10)");
@@ -1221,7 +1737,7 @@ mod tests {
         // (a splayed / rotated building): it must be kept, not sharpened.
         let diag_dir = dir_angle(Coord { x: 10.0, y: 6.0 }, Coord { x: 6.0, y: 10.0 }).unwrap();
         let dirs_with_diag = [0.0, PI / 2.0, diag_dir];
-        let out = sharpen_bevels(&beveled, &dirs_with_diag);
+        let out = sharpen_bevels(&beveled, &dirs_with_diag, WALL_FT);
         assert_eq!(out.0[..out.0.len() - 1].len(), 5, "a real diagonal wall (direction in the input) is preserved");
     }
 
@@ -1245,7 +1761,7 @@ mod tests {
             (0.0, 10.02),
             (0.0, 0.0),
         ]);
-        let out = sharpen_bevels(&ring, &axis);
+        let out = sharpen_bevels(&ring, &axis, WALL_FT);
         let far = out.0.iter().any(|p| p.x.abs() > 1_000.0 || p.y.abs() > 1_000.0);
         assert!(!far, "must not invent a distant vertex: {:?}", out.0);
         // Area must stay in the same ballpark as the input (~200 ft²), not explode.
@@ -1266,7 +1782,7 @@ mod tests {
             room("sq2", &[&rect(10.5, 0.0, 20.0, 10.0)]),
             room("deck", &[&angled]),
         ];
-        let fp = group_footprint(&rooms);
+        let fp = group_footprint(&rooms, WALL_FT);
 
         // Input bounds.
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
@@ -1275,7 +1791,7 @@ mod tests {
                 x0 = x0.min(p.x); y0 = y0.min(p.y); x1 = x1.max(p.x); y1 = y1.max(p.y);
             }
         }
-        let slack = MAX_WALL_FT;
+        let slack = WALL_FT;
         for poly in fp.iter() {
             for ring in std::iter::once(poly.exterior()).chain(poly.interiors()) {
                 for c in &ring.0 {
@@ -1298,7 +1814,7 @@ mod tests {
         let a = rect(0.0, 0.0, 10.0, 10.0);
         // b's left edge is a hair off from a's right edge (x = 10 ± 1e-9).
         let b = vec![(10.0 + 1e-9, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0 - 1e-9, 10.0)];
-        let fp = group_footprint(&[room("a", &[&a]), room("b", &[&b])]);
+        let fp = group_footprint(&[room("a", &[&a]), room("b", &[&b])], WALL_FT);
         assert_eq!(fp.0.len(), 1, "noise-level mismatch must not split into two islands");
         approx_area(footprint_area(&fp), 200.0);
     }
@@ -1314,7 +1830,7 @@ mod tests {
             room("top", &[&rect(0.0, 20.0, 30.0, 30.0)]),
             room("left", &[&rect(0.0, 10.0, 10.0, 20.0)]),
             room("right", &[&rect(20.0, 10.0, 30.0, 20.0)]),
-        ]);
+        ], WALL_FT);
         assert_eq!(fp.0.len(), 1, "the frame dissolves to one outer ring");
         assert_eq!(fp.0[0].interiors().len(), 1, "the 10 ft courtyard survives as an open hole");
         approx_area(footprint_area(&fp), 800.0); // 30*30 minus the 10x10 courtyard
@@ -1333,7 +1849,7 @@ mod tests {
             room("top", &[&rect(0.0, 20.0, 30.0, 30.0)]),
             room("left", &[&rect(0.0, 10.5, 10.0, 19.5)]), // 0.5 gap top & bottom
             room("right", &[&rect(20.0, 10.5, 30.0, 19.5)]),
-        ]);
+        ], WALL_FT);
         assert_eq!(fp.0.len(), 1, "corner wall gaps bridge into one frame");
         assert_eq!(fp.0[0].interiors().len(), 1, "the courtyard stays open");
         let bare_bars = 300.0 + 300.0 + 90.0 + 90.0; // 780, no corner walls
@@ -1368,6 +1884,7 @@ mod tests {
                 milestones: vec![],
                 comparison_key: None,
                 comparison_properties: vec![],
+                areas: Default::default(),
                 hierarchy_exclusions: exclusions,
             }
         }
@@ -1395,6 +1912,7 @@ mod tests {
                 model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
                 snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
                 model_to_shared: None,
+                room_boundary: None,
                 levels: vec![Level { id: "L1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
                 rooms,
             };

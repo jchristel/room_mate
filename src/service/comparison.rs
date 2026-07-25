@@ -513,6 +513,7 @@ mod tests {
             milestones,
             comparison_key: comparison_key.map(|s| s.to_string()),
             comparison_properties: comparison_properties.iter().map(|s| s.to_string()).collect(),
+            areas: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
@@ -524,6 +525,7 @@ mod tests {
             model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: taken_at.to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![Level { id: "1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
             rooms,
         }

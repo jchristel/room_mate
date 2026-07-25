@@ -2,13 +2,31 @@
 
 ## Reconciliation note (added after review + implementation)
 
-> **Superseded again, in part** — see
-> [HANDOVER-areas-boundary-location.md](HANDOVER-areas-boundary-location.md).
-> The close described below produced corner and overlap artifacts on real
-> face-of-wall data; the boundary regime is now **declared on the upload
-> envelope** rather than inferred, and the per-tier close is to be replaced by a
-> combinatorial assignment of wall-zone components. The erode-to-empty classifier
-> goes the same way the weld pass did, for the same reason.
+> **Superseded again, in part — and that replacement has now landed.** See
+> [HANDOVER-areas-boundary-location.md](HANDOVER-areas-boundary-location.md) and
+> [STRATEGY-SERVER.md](STRATEGY-SERVER.md)'s `/areas` entry. The close described
+> below produced corner and overlap artifacts on real face-of-wall data; the
+> boundary regime is now **declared on the upload envelope** rather than
+> inferred, and the per-tier close has been replaced by a per-level **wall
+> zone** — `(close(all rooms) ∪ all rooms) − all rooms` — that every tier
+> intersects its own close against.
+>
+> Two things in this document are answered by that, rather than merely
+> superseded:
+>
+> - **The erode-to-empty void classifier is not needed at all**, and for a
+>   sharper reason than the weld pass was dropped. A close at radius `gap/2`
+>   cannot fill a gap wider than `gap`, so an over-wide void is never in the wall
+>   zone in the first place. "Wider than a wall stays open" stopped being a rule
+>   to implement and became arithmetic.
+> - **Open question 2** ("is `max_wall_thickness` one global value, or does it
+>   vary by building / by level?") is now answered: it is declared **per project**
+>   (`[areas] max_wall_thickness`), and the *effective* gap varies **per level**,
+>   because the boundary regime it is combined with is a per-model fact and level
+>   dedup can put two models on one level. A centreline level resolves to zero.
+> - **Test 6 (additivity)** was the right instinct and is now exact by
+>   construction rather than something to guard: `service::areas`'
+>   `test_tier_areas_are_exactly_additive` asserts it to 0.05 ft².
 
 
 **A version of this was built — but not the pipeline below.** Reviewed against

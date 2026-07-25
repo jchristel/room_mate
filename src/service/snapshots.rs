@@ -103,6 +103,7 @@ mod tests {
             model: Model { id: model_id.to_string(), name: model_name.to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: ts.to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![],
             rooms: vec![],
         }
@@ -118,6 +119,7 @@ mod tests {
             milestones: vec![],
             comparison_key: None,
             comparison_properties: vec![],
+            areas: Default::default(),
             hierarchy_exclusions: vec![],        }
     }
 

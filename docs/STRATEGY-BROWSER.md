@@ -302,6 +302,18 @@ side should shape future server endpoints.
   refreshed when new room data arrives) rather than on the 2s room poll, since
   areas are derived and heavier than a room fetch — the endpoint-vs-poll lifecycle
   call the "Endpoints follow fetch lifecycle" section describes.
+  **The wall-zone rewrite** (see [Server](STRATEGY-SERVER.md)) left the
+  `polygons`/`holes` wire shape untouched, so the even-odd overlay needed no
+  change at all — the intended outcome, and the reason that shape was worth
+  pinning down before the geometry underneath it moved. The response *gained*
+  two fields the overlay currently ignores: `measurement_standard` and
+  `wall_gap_by_level`. They are worth surfacing in the band-1 areas block when
+  someone next touches it, because an area figure without its definition is
+  exactly what a measurement standard exists to prevent, and a reader has no
+  other way to tell a centreline level (walls already inside the rooms) from a
+  finish-face one (walls filled to a declared thickness). Deliberately not done
+  here: it is a UI decision about where a per-level fact belongs in a
+  scope-level table, not a mechanical follow-on from the server change.
 - **Room click-selection (page state) + the adjacency graph (band 1, canvas).**
   Clicking a room selects it: **one selection for the page**, not per zone
   (HANDOVER-ui-layout Decision 3), applied in every zone that draws that room

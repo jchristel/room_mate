@@ -208,6 +208,36 @@ impl ModelToShared {
     }
 }
 
+/// Where a model's room boundaries sit relative to their walls — Revit's
+/// `SpatialElementBoundaryLocation`, forwarded verbatim.
+///
+/// This is a **model fact, not a project policy**: Revit already knows it, and
+/// asking a human to re-assert it in TOML duplicates an authoritative value and
+/// invites getting it wrong. It rides the envelope per *model* rather than per
+/// project because a project legitimately mixes both — each linked model
+/// carries its own document setting.
+///
+/// It exists because `service::areas` otherwise has to *guess* which regime it
+/// is looking at, and sizes its morphological close for the worst case. Every
+/// footprint artifact chased so far — bevelled corners, 45° chamfers, the
+/// million-foot spike, sibling overlaps — is downstream of that guess. Declaring
+/// the regime does not merely improve the tolerance: on a centreline model the
+/// close radius collapses to zero and the entire artifact class cannot arise.
+/// See HANDOVER-areas-boundary-location.md Decision 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomBoundary {
+    /// Neighbouring rooms tile edge-to-edge: their shared boundaries are
+    /// coincident and the gap between them is zero up to float noise. Nothing
+    /// needs bridging, and the walls are already inside the room polygons.
+    Centreline,
+    /// Rooms float inside their walls, so neighbours across a partition are
+    /// separated by roughly its thickness. The gap is real and positive, and
+    /// bridging it needs a declared thickness ceiling (`[areas]`
+    /// `max_wall_thickness`).
+    FinishFace,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomPayload {
     pub schema_version: u32,
@@ -228,6 +258,16 @@ pub struct RoomPayload {
     /// pre-georeference payload valid and unchanged in meaning (no schema bump).
     #[serde(default)]
     pub model_to_shared: Option<ModelToShared>,
+
+    /// Which boundary regime this model was drawn to (see `RoomBoundary`).
+    /// Absent on any payload from an extractor predating the field, which is
+    /// the normal case for a while yet — `#[serde(default)]` keeps every such
+    /// payload valid and unchanged in meaning, so no schema bump, exactly as
+    /// `model_to_shared` did. An absent value falls back to the project's
+    /// `[areas] boundary_location`, and failing that to the conservative
+    /// finish-face reading (a close still runs), which is today's behaviour.
+    #[serde(default)]
+    pub room_boundary: Option<RoomBoundary>,
 
     pub levels: Vec<Level>,
     pub rooms: Vec<Room>,
@@ -250,6 +290,9 @@ pub struct StreamEnvelope {
     /// streamed push carries identical envelope metadata; only `rooms` differ).
     #[serde(default)]
     pub model_to_shared: Option<ModelToShared>,
+    /// Boundary regime, in lockstep with `RoomPayload` for the same reason.
+    #[serde(default)]
+    pub room_boundary: Option<RoomBoundary>,
     pub levels: Vec<Level>,
 }
 
@@ -270,6 +313,12 @@ pub struct StreamEnvelope {
 /// (HANDOVER-georeferencing.md Phase 1): same reasoning — it defaults to
 /// `None`, so a pre-georeference payload stays valid and means exactly what it
 /// did (an un-placed model, rendered via auto-fit).
+///
+/// Still 5 after the optional `room_boundary` envelope field
+/// (HANDOVER-areas-boundary-location.md Decision 1) joined it, on the same
+/// `model_to_shared` precedent: absent it defaults to `None`, and a payload
+/// that omits it means exactly what it did before — a model whose regime the
+/// server infers from project policy rather than reads.
 pub const SUPPORTED_SCHEMA: u32 = 5;
 
 /// Resolve a *canonical* property name (e.g. "Area") to the source-specific
@@ -582,6 +631,61 @@ mod tests {
         // A 2× scale on both axes: det = 4, not rigid.
         let scaled = ModelToShared { matrix: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] };
         assert!(!scaled.is_rigid(1e-6));
+    }
+
+    /// `room_boundary` follows `model_to_shared`'s contract exactly: absent it
+    /// defaults to `None` (an extractor predating the field — still valid v5,
+    /// unchanged in meaning), present it parses the snake_case wire spellings
+    /// and survives a round-trip. Both variants are exercised because the
+    /// centreline one is the case that collapses the close radius to zero.
+    #[test]
+    fn test_room_boundary_round_trips_and_defaults_to_none() {
+        let base = serde_json::json!({
+            "schema_version": 5,
+            "project":  { "id": "p1", "name": "Hospital Job" },
+            "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
+            "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
+            "levels": [],
+            "rooms": []
+        });
+
+        // Absent → None: every pre-declaration payload stays valid.
+        let without: RoomPayload = serde_json::from_value(base.clone()).unwrap();
+        assert!(without.room_boundary.is_none());
+
+        for (wire, expected) in [
+            ("centreline", RoomBoundary::Centreline),
+            ("finish_face", RoomBoundary::FinishFace),
+        ] {
+            let mut with = base.clone();
+            with["room_boundary"] = serde_json::json!(wire);
+            let payload: RoomPayload = serde_json::from_value(with).unwrap();
+            assert_eq!(payload.room_boundary, Some(expected));
+
+            let reparsed: RoomPayload =
+                serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
+            assert_eq!(reparsed.room_boundary, Some(expected), "survives a round-trip");
+        }
+    }
+
+    /// The streamed envelope carries `room_boundary` in lockstep with the
+    /// buffered payload — the two ingest paths must store identical envelope
+    /// facts, or which route a producer picked would change the geometry the
+    /// areas service computes.
+    #[test]
+    fn test_stream_envelope_carries_room_boundary() {
+        let mut json = serde_json::json!({
+            "schema_version": 5,
+            "project":  { "id": "p1", "name": "Hospital Job" },
+            "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
+            "levels": []
+        });
+        let envelope: StreamEnvelope = serde_json::from_value(json.clone()).unwrap();
+        assert!(envelope.room_boundary.is_none());
+
+        json["room_boundary"] = serde_json::json!("finish_face");
+        let envelope: StreamEnvelope = serde_json::from_value(json).unwrap();
+        assert_eq!(envelope.room_boundary, Some(RoomBoundary::FinishFace));
     }
 
     /// A `StreamEnvelope` (line 1 of a `/rooms/stream` push) deserializes with

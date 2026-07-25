@@ -10,6 +10,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | [Architecture & Strategy](STRATEGY.md) | Index and overview of the design decisions |
 | [Browser](STRATEGY-BROWSER.md) | Browser front-end strategy |
 | [Server](STRATEGY-SERVER.md) | Rust server strategy |
+| [Area calculation](STRATEGY-AREA-CALCULATION.md) | How rooms become per-tier areas: boundary regimes, the wall zone, what a wall belongs to, and the relationship to IPMS 3 / DIN 277 |
 | [Sources](STRATEGY-SOURCES.md) | Data sources strategy |
 | [MCP](STRATEGY-MCP.md) | Model Context Protocol integration strategy |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data & documents — connections, PDFs, hierarchy scopes _(design settled, not built)_ |
@@ -27,7 +28,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 |---|---|
 | [UI layout restructure](HANDOVER-ui-layout.md) | Every sequencing step built; only Decision 3 (the room inspector) remains — **no longer blocked**: room click-selection landed with the adjacency graph |
 | [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; awaiting validation against a real Revit model (which boundary regime, and the wall tolerance that works) |
-| [Areas: boundary location + wall-zone partition](HANDOVER-areas-boundary-location.md) | Decisions settled; artifact fixes landed on `areas-spike-guards`, the declared boundary regime and partition reformulation not started. Read before touching `service::areas` |
+| [Areas: boundary location + wall-zone partition](HANDOVER-areas-boundary-location.md) | All three decisions built: `room_boundary` on the envelope, `[areas]` project policy, and the wall-zone partition replacing per-group closing. One item open — the extractor itself lives outside this repo, so nothing yet *sends* `room_boundary`. Read before touching `service::areas` |
 
 Handoff documents whose work has fully landed live in
 [Superseded](Superseded/) — most recently `HANDOVER-comparison-sources.md`

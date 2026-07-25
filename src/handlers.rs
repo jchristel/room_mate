@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio_util::io::StreamReader;
 
-use crate::contract::{ModelToShared, Room, RoomPayload, StreamEnvelope, SUPPORTED_SCHEMA};
+use crate::contract::{ModelToShared, Room, RoomBoundary, RoomPayload, StreamEnvelope, SUPPORTED_SCHEMA};
 use crate::service::adjacency;
 use crate::service::areas;
 use crate::service::comparison::{self, ComparisonResponse};
@@ -144,6 +144,7 @@ pub async fn ingest_rooms(
 
     let count = payload.rooms.len();
     let snapshot_taken_at = payload.snapshot.taken_at.clone();
+    let room_boundary = resolved_boundary(&state, &payload.project.id, payload.room_boundary);
     tracing::info!("received {} room(s)", count);
 
     // Persist. A storage failure (unwritable disk, etc.) is a real server error,
@@ -161,6 +162,7 @@ pub async fn ingest_rooms(
         room_count: count,
         snapshot_taken_at,
         snapshot_id_generated,
+        room_boundary,
     }))
 }
 
@@ -180,6 +182,28 @@ pub struct IngestResponse {
     /// `taken_at` (as the Revit one always does) therefore sees `false` here
     /// on every successful push.
     pub snapshot_id_generated: bool,
+
+    /// The boundary regime the server **resolved** for this model — what the
+    /// envelope declared, or, when it declared nothing, what the project's
+    /// `[areas] boundary_location` supplied, or finish face.
+    ///
+    /// Echoed for the same reason `snapshot_taken_at` is: a producer that left
+    /// the field off should be able to see what the server assumed on its
+    /// behalf, rather than discovering it later in a footprint that came out
+    /// the wrong size. The *resolved* value, not the declared one, precisely
+    /// because the interesting case is the one the producer did not state.
+    pub room_boundary: RoomBoundary,
+}
+
+/// The regime resolved for one push. An unregistered project cannot reach here
+/// (ingest 422s first — see `validate_ingest`), so the `unwrap_or_default`
+/// policy is a formality that keeps this total rather than a real fallback.
+fn resolved_boundary(state: &Shared, project_id: &str, declared: Option<RoomBoundary>) -> RoomBoundary {
+    state
+        .settings()
+        .settings_for(project_id)
+        .map(|b| b.areas.resolve_boundary(declared))
+        .unwrap_or(RoomBoundary::FinishFace)
 }
 
 /// Streaming ingest for very large models (NDJSON, see HANDOVER-streaming.md).
@@ -247,12 +271,14 @@ pub async fn ingest_rooms_stream(
     tracing::info!("streamed {} room(s)", count);
 
     let snapshot_taken_at = envelope.snapshot.taken_at.clone();
+    let room_boundary = resolved_boundary(&state, &envelope.project.id, envelope.room_boundary);
     let payload = RoomPayload {
         schema_version: envelope.schema_version,
         project: envelope.project,
         model: envelope.model,
         snapshot: envelope.snapshot,
         model_to_shared: envelope.model_to_shared,
+        room_boundary: envelope.room_boundary,
         levels: envelope.levels,
         rooms,
     };
@@ -265,7 +291,13 @@ pub async fn ingest_rooms_stream(
         )
     })?;
 
-    Ok(Json(IngestResponse { accepted: true, room_count: count, snapshot_taken_at, snapshot_id_generated }))
+    Ok(Json(IngestResponse {
+        accepted: true,
+        room_count: count,
+        snapshot_taken_at,
+        snapshot_id_generated,
+        room_boundary,
+    }))
 }
 
 /// `ServiceError` -> `(StatusCode, String)`, the same message-carrying error
@@ -583,6 +615,7 @@ mod tests {
             milestones: vec![],
             comparison_key: None,
             comparison_properties: vec![],
+            areas: Default::default(),
             hierarchy_exclusions: vec![],        }
     }
 
@@ -676,6 +709,7 @@ mod tests {
                 model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
                 snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
                 model_to_shared: None,
+                room_boundary: None,
                 levels: vec![Level { id: "1".to_string(), name: "L".to_string(), elevation: 0.0 }],
                 rooms: vec![make_room("r1", "Room 1")],
             })
@@ -727,6 +761,7 @@ mod tests {
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
             rooms: vec![make_room("r1", "Room A")],
         };
@@ -766,6 +801,7 @@ mod tests {
                 model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
                 snapshot: Snapshot { taken_at: taken_at.to_string() },
                 model_to_shared: None,
+                room_boundary: None,
                 levels: vec![],
                 rooms: vec![],
             };
@@ -792,6 +828,7 @@ mod tests {
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: good_ts.to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![],
             rooms: vec![],
         };
@@ -812,12 +849,16 @@ mod tests {
             room_count: 26,
             snapshot_taken_at: "2026-07-15T11:18:58.186000Z".to_string(),
             snapshot_id_generated: false,
+            room_boundary: RoomBoundary::FinishFace,
         })
         .unwrap();
 
         assert!(json.contains(r#""snapshot_id_generated":false"#), "unexpected wire shape: {json}");
         assert!(json.contains(r#""snapshot_taken_at":"2026-07-15T11:18:58.186000Z""#));
         assert!(json.contains(r#""room_count":26"#));
+        // The snake_case spellings are the producer-facing contract too: an
+        // extractor sends `"room_boundary": "finish_face"` and reads it back.
+        assert!(json.contains(r#""room_boundary":"finish_face""#), "unexpected wire shape: {json}");
     }
 
     /// A blank (or omitted -- serde defaults it to blank) snapshot id is no
@@ -831,6 +872,7 @@ mod tests {
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "".to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![],
             rooms: vec![make_room("r1", "Room A")],
         };
@@ -856,6 +898,7 @@ mod tests {
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
             model_to_shared: None,
+            room_boundary: None,
             levels: vec![],
             rooms: vec![make_room("r1", "Room A")],
         };
@@ -879,6 +922,7 @@ mod tests {
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
             model_to_shared: Some(ModelToShared { matrix }),
+            room_boundary: None,
             levels: vec![],
             rooms: vec![make_room("r1", "Room A")],
         };
@@ -902,6 +946,7 @@ mod tests {
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
             model_to_shared: Some(ModelToShared { matrix: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] }),
+            room_boundary: None,
             levels: vec![],
             rooms: vec![make_room("r1", "Room A")],
         };
@@ -909,5 +954,45 @@ mod tests {
 
         let response = ingest_rooms(State(state), Json(payload)).await.expect("accepted despite det drift");
         assert!(response.0.accepted);
+    }
+
+    /// A declared `room_boundary` rides the envelope through **both** ingest
+    /// routes and lands on the stored snapshot. The streamed half is the one
+    /// worth testing: it rebuilds a `RoomPayload` field by field from the
+    /// envelope line, so a forgotten field there is a silent regime downgrade
+    /// on exactly the large models most likely to use that route.
+    #[tokio::test]
+    async fn test_ingest_stores_room_boundary_on_both_routes() {
+        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let buffered = RoomPayload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            model: Model { id: "buffered".to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            model_to_shared: None,
+            room_boundary: Some(RoomBoundary::FinishFace),
+            levels: vec![],
+            rooms: vec![make_room("r1", "Room A")],
+        };
+        let _ = ingest_rooms(State(state.clone() as Shared), Json(buffered)).await.expect("accepted");
+
+        let body = concat!(
+            r#"{"schema_version":5,"project":{"id":"p1","name":"P"},"model":{"id":"streamed","name":"M","source":"revit"},"#,
+            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"room_boundary":"centreline","levels":[]}"#,
+            "\n",
+            r#"{"id":"r1","name":"Room A","level_id":"1","loops":[]}"#,
+            "\n",
+        );
+        let _ = ingest_rooms_stream(State(state.clone() as Shared), Body::from(body))
+            .await
+            .expect("accepted");
+
+        let stored = state.all_snapshots().unwrap();
+        let of = |model: &str| {
+            stored.iter().find(|(k, _)| k.model_id == model).expect("stored").1.room_boundary
+        };
+        assert_eq!(of("buffered"), Some(RoomBoundary::FinishFace));
+        assert_eq!(of("streamed"), Some(RoomBoundary::Centreline), "the stream path carries it too");
     }
 }
