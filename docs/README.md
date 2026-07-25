@@ -27,9 +27,14 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | Document | Status |
 |---|---|
 | [UI layout restructure](HANDOVER-ui-layout.md) | Every sequencing step built; only Decision 3 (the room inspector) remains — **no longer blocked**: room click-selection landed with the adjacency graph |
-| [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; awaiting validation against a real Revit model (which boundary regime, and the wall tolerance that works) |
-| [Areas: boundary location + wall-zone partition](HANDOVER-areas-boundary-location.md) | All three decisions built: `room_boundary` on the envelope, `[areas]` project policy, and the wall-zone partition replacing per-group closing. One item open — the extractor itself lives outside this repo, so nothing yet *sends* `room_boundary`. Read before touching `service::areas` |
+| [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; one validation item left. **Its stated blocker is now stale** — it says "every fixture in the repo is generated centreline", but House A is real finish-face data, so the run it asks for is doable today: confirm no corridor-bridging and no bridging through a thin service room, and record the tolerance that worked |
 
 Handoff documents whose work has fully landed live in
-[Superseded](Superseded/) — most recently `HANDOVER-comparison-sources.md`
-and `HANDOVER-area-label-sizing.md`.
+[Superseded](Superseded/) — most recently
+`HANDOVER-areas-boundary-location.md` and
+`handover-hierarchical-void-closure.md`.
+
+Area calculation no longer has a handover: its design moved into
+[Area calculation](STRATEGY-AREA-CALCULATION.md), which is the live document and
+carries the remaining open items in its "Open" section. The handover stays in
+`Superseded/` as the record of how the decisions were reached.

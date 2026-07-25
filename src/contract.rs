@@ -223,7 +223,7 @@ impl ModelToShared {
 /// million-foot spike, sibling overlaps — is downstream of that guess. Declaring
 /// the regime does not merely improve the tolerance: on a centreline model the
 /// close radius collapses to zero and the entire artifact class cannot arise.
-/// See HANDOVER-areas-boundary-location.md Decision 1.
+/// See Superseded/HANDOVER-areas-boundary-location.md Decision 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomBoundary {
@@ -315,7 +315,7 @@ pub struct StreamEnvelope {
 /// did (an un-placed model, rendered via auto-fit).
 ///
 /// Still 5 after the optional `room_boundary` envelope field
-/// (HANDOVER-areas-boundary-location.md Decision 1) joined it, on the same
+/// (Superseded/HANDOVER-areas-boundary-location.md Decision 1) joined it, on the same
 /// `model_to_shared` precedent: absent it defaults to `None`, and a payload
 /// that omits it means exactly what it did before — a model whose regime the
 /// server infers from project policy rather than reads.

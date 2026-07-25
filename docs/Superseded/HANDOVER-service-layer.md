@@ -2,7 +2,7 @@
 
 For: Claude Code (desktop). A working brief for splitting transport from domain
 logic so new capabilities (MCP tools, shortest path, F&E, drawings) attach
-cheaply. Read alongside [STRATEGY-SERVER.md](STRATEGY-SERVER.md) — this doc is
+cheaply. Read alongside [STRATEGY-SERVER.md](../STRATEGY-SERVER.md) — this doc is
 the *how*; that doc is the *why the server is shaped this way*.
 
 ## Goal in one sentence

@@ -15,7 +15,7 @@ algorithm second.
 - The regime it depends on rides the upload envelope (see [STRATEGY.md](STRATEGY.md)
   "The upload envelope") and its policy lives in project settings.
 - Design history and the measured before/after:
-  [HANDOVER-areas-boundary-location.md](HANDOVER-areas-boundary-location.md).
+  [HANDOVER-areas-boundary-location.md](Superseded/HANDOVER-areas-boundary-location.md).
 
 ---
 
