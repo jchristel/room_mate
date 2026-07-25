@@ -106,6 +106,15 @@ pub struct ProjectSettings {
     /// `Settings::comparison_properties`). Read by `service::comparison`.
     pub comparison_properties: Vec<String>,
 
+    /// This project's area-measurement policy (see `settings::AreaPolicy`):
+    /// the declared standard, the wall-thickness ceiling, and the boundary-
+    /// regime fallback for models whose extractor predates the envelope field.
+    /// Server-used like `hierarchy_exclusions`, not client-only like
+    /// `colour_plans`, so it belongs in the resolved bundle — `service::areas`
+    /// sizes its wall zone from it and `service::adjacency` takes its default
+    /// gap tolerance from the same value.
+    pub areas: crate::settings::AreaPolicy,
+
     /// Footprint exclusions for the hierarchy-areas feature. Unlike
     /// `colour_plans` (client-only, never in this bundle), exclusions are used by
     /// the SERVER when it computes footprints in `service::areas`, so they belong

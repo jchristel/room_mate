@@ -107,6 +107,16 @@ pub fn load_settings(path: &PathBuf) -> anyhow::Result<Settings> {
     // `validate_drofus_fields` which runs later in `bootstrap` — this belongs
     // here alongside the other settings-only validators.
     super::validate_colour_plans(&settings.colour_plans)?;
+    // The area policy is settings-only (no dRofus labels, no storage), so it
+    // validates here alongside the other load-time checks. An unknown
+    // `measurement_standard` has already failed above, inside the TOML parse —
+    // serde rejects an unrecognised enum variant and names the accepted ones,
+    // which is the specific message this rule wants and no hand-rolled check
+    // would improve on.
+    settings
+        .areas
+        .validate()
+        .with_context(|| format!("bad [areas] policy in {}", path.display()))?;
     Ok(settings)
 }
 
@@ -249,6 +259,39 @@ date = "2026-07-30"
 
         let msg = format!("{:#}", load_settings(&settings_path).unwrap_err());
         assert!(msg.contains("duplicate milestone name"), "message names the problem: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An unusable `[areas] max_wall_thickness` fails the boot naming the file
+    /// — the "loud startup over silent no-op" rule. Left unchecked it would
+    /// silently produce either no wall zone at all or one wide enough to
+    /// swallow courtyards, neither of which looks like an error at read time.
+    #[test]
+    fn test_bad_area_policy_fails_load_settings() {
+        let dir = std::env::temp_dir().join(format!("roommate-areas-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings_path = dir.join("settings.toml");
+        std::fs::write(&settings_path, "project_id = \"p1\"\n\n[areas]\nmax_wall_thickness = 0.0\n").unwrap();
+
+        let msg = format!("{:#}", load_settings(&settings_path).unwrap_err());
+        assert!(msg.contains("max_wall_thickness"), "names the setting: {msg}");
+        assert!(msg.contains("settings.toml"), "names the file: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A settings file with no `[areas]` block loads and gets the defaults —
+    /// every project file predating the policy keeps behaving exactly as it did.
+    #[test]
+    fn test_settings_without_areas_block_gets_defaults() {
+        let dir = std::env::temp_dir().join(format!("roommate-areas-default-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings_path = dir.join("settings.toml");
+        std::fs::write(&settings_path, "project_id = \"p1\"\n").unwrap();
+
+        let settings = load_settings(&settings_path).unwrap();
+        assert!(settings.areas.is_default());
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -47,27 +47,28 @@ use geo::{Area, Centroid, Contains, Coord, LineString, Point, Polygon};
 use serde::Serialize;
 
 use crate::classify::TierValue;
-use crate::contract::{Level, Point2D, Room, SUPPORTED_SCHEMA};
+use crate::contract::{Level, Point2D, Room, RoomBoundary, SUPPORTED_SCHEMA};
 use crate::drofus::DrofusRecord;
+use crate::settings::AreaPolicy;
 use crate::state::AppState;
 
-use super::rooms::{assemble_rooms, RoomScope};
+use super::rooms::{assemble_rooms, RoomScope, RoomsResult};
 use super::ServiceError;
 
-/// Default largest gap (model units — decimal feet) still counted as a shared
-/// wall, used when a request names no `wall_max`. ~1.5 ft (~450mm) clears a
-/// thick hospital partition without reaching across a corridor. It is a
-/// *default*, never a floor: on a centreline model the honest value is at or
-/// near zero, and the request parameter exists precisely so that costs a slider
-/// drag rather than a recompile. Validate it against a real model before baking
-/// anything else in.
-pub const WALL_MAX_FT: f64 = 1.5;
-
-/// Hard ceiling on a requested `wall_max`. Beyond ~5 ft the query stops being a
+/// Hard ceiling on a requested `wall_max`, re-exported from the one place the
+/// quantity is now declared. Beyond ~5 ft the query stops being a
 /// wall-thickness question and starts bridging whole rooms, so it is rejected
 /// loudly rather than clamped silently — a request that would wire the entire
 /// building together is a mistake worth surfacing.
-pub const WALL_MAX_LIMIT_FT: f64 = 5.0;
+///
+/// This module used to carry its own `WALL_MAX_FT` default alongside
+/// `areas::MAX_WALL_FT` — the **same physical quantity in two constants**,
+/// which is a drift risk, not a duplication of convenience. Both are gone: the
+/// number is declared once per project as `[areas] max_wall_thickness`
+/// (`settings::AreaPolicy`) and read here as the request default. The remaining
+/// constant is the *range guard*, which is about what a caller may ask for
+/// rather than about any one project's walls.
+pub const WALL_MAX_LIMIT_FT: f64 = AreaPolicy::MAX_WALL_THICKNESS_LIMIT_FT;
 
 /// Float-noise allowance added to `wall_max` when testing the gap. Its whole job
 /// is to make a slider value of `0` still match a *centreline* model, whose
@@ -589,8 +590,30 @@ fn level_edges(level_id: &str, prepared: &[Prepared<'_>], wall_max: f64) -> Vec<
 /// non-finite, negative, and anything past [`WALL_MAX_LIMIT_FT`]. Loud over a
 /// silent clamp: a tolerance that would wire the whole building together is a
 /// mistake the caller should hear about.
-pub fn resolve_wall_max(requested: Option<f64>) -> Result<f64, ServiceError> {
-    let Some(v) = requested else { return Ok(WALL_MAX_FT) };
+///
+/// `default_ft` is what an absent request resolves to — the project's declared
+/// wall thickness, narrowed to zero when every contributing model declares the
+/// centreline regime (see `assemble_adjacency`). Passed in rather than read
+/// from a constant so this function has no opinion about where the number came
+/// from, which is also what lets the tests exercise both regimes directly.
+///
+/// Note that a *requested* zero and a *declared-centreline* zero are different
+/// facts arriving at the same number: the first is a caller asking a question,
+/// the second is the project stating one. Only the first travels through
+/// `requested`; that is why `AreaPolicy::max_wall_thickness` may not be zero
+/// while this parameter may.
+pub fn resolve_wall_max(requested: Option<f64>, default_ft: f64) -> Result<f64, ServiceError> {
+    Ok(check_wall_max(requested)?.unwrap_or(default_ft))
+}
+
+/// The range guard on its own, returning the request unchanged. Split out
+/// because `assemble_adjacency` cannot know its default until the rooms are
+/// assembled (the default depends on which regime the contributing models
+/// declare), and a caller-fault tolerance should cost a rejection, not a
+/// multi-second room merge first. `resolve_wall_max` is this plus the default,
+/// kept so the common one-call form still exists.
+pub fn check_wall_max(requested: Option<f64>) -> Result<Option<f64>, ServiceError> {
+    let Some(v) = requested else { return Ok(None) };
     if !v.is_finite() {
         return Err(ServiceError::Invalid("wall_max must be a finite number".to_string()));
     }
@@ -602,7 +625,22 @@ pub fn resolve_wall_max(requested: Option<f64>) -> Result<f64, ServiceError> {
             "wall_max {v} ft exceeds the {WALL_MAX_LIMIT_FT} ft limit; a gap that wide bridges rooms, not walls"
         )));
     }
-    Ok(v)
+    Ok(Some(v))
+}
+
+/// The tolerance an *unrequested* `wall_max` resolves to: the project's
+/// declared wall thickness, or zero when every level in scope is centreline.
+///
+/// "Every level", not "any level": one finish-face level in a mixed scope still
+/// needs its walls spanned, and running that level at zero would report its
+/// rooms as touching nothing at all — a graph that lies by omission, which is
+/// worse than a graph that over-connects. A scope with no levels (nothing
+/// matched) falls to the declared thickness; there is no evidence for the
+/// narrower reading, so it is not taken.
+fn default_wall_max(policy: &AreaPolicy, rooms: &RoomsResult) -> f64 {
+    let all_centreline = !rooms.boundary_by_level.is_empty()
+        && rooms.boundary_by_level.values().all(|b| *b == RoomBoundary::Centreline);
+    policy.wall_gap_ft(if all_centreline { RoomBoundary::Centreline } else { RoomBoundary::FinishFace })
 }
 
 /// Content revision for an adjacency response: the scoped room revision (which
@@ -657,12 +695,29 @@ pub fn assemble_adjacency(
     milestone: Option<&str>,
     wall_max: Option<f64>,
 ) -> Result<Option<AdjacencyResult>, ServiceError> {
-    let wall_max = resolve_wall_max(wall_max)?;
+    // Guard the request before doing any work — a bad tolerance should not cost
+    // a full room merge first.
+    let requested = check_wall_max(wall_max)?;
+    let policy = state
+        .settings()
+        .settings_for(project)
+        .map(|b| b.areas.clone())
+        .unwrap_or_default();
 
     let scope = RoomScope { project: Some(project), building, milestone, ..Default::default() };
     let Some(rooms) = assemble_rooms(state, &scope)? else {
         return Ok(None);
     };
+
+    // With no explicit request, the default is the project's declared wall
+    // thickness — narrowed to zero when *every* contributing model declares the
+    // centreline regime, where neighbours already touch and any positive
+    // tolerance only invites bridging. This is the payoff of the declared
+    // regime on this endpoint: the slider's honest starting point is now
+    // derived rather than guessed. A model that declares nothing resolves to
+    // finish face, so a single undeclared model keeps the wider default — the
+    // conservative direction.
+    let wall_max = requested.unwrap_or_else(|| default_wall_max(&policy, &rooms));
 
     let nodes: Vec<AdjacencyNode> = rooms
         .rooms
@@ -694,6 +749,12 @@ pub fn assemble_adjacency(
 mod tests {
     use super::*;
     use crate::contract::Loop;
+
+    /// The wall gap a project that declares no `[areas]` policy runs at — the
+    /// stand-in these tests use wherever they mean "the default tolerance".
+    /// Named locally so the tests read as "the default" rather than repeating
+    /// where the number now lives.
+    const DEFAULT_WALL_FT: f64 = AreaPolicy::DEFAULT_MAX_WALL_THICKNESS_FT;
 
     /// Build a room from one or more loops of `(x, y)` corners — same helper
     /// shape `areas.rs`'s tests use, so the two geometry modules read alike.
@@ -782,7 +843,7 @@ mod tests {
             room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
             room("b", &[&rect(10.0, 10.0, 20.0, 20.0)]),
         ];
-        assert!(edges_of(&rooms, WALL_MAX_FT).is_empty(), "a corner touch is not a shared wall");
+        assert!(edges_of(&rooms, DEFAULT_WALL_FT).is_empty(), "a corner touch is not a shared wall");
     }
 
     /// A short shared stretch — a door reveal, a jog in a wall — stays below the
@@ -813,7 +874,7 @@ mod tests {
             room("corridor", &[&rect(10.0, 0.0, 18.0, 10.0)]),
             room("east", &[&rect(18.0, 0.0, 28.0, 10.0)]),
         ];
-        let e = edges_of(&rooms, WALL_MAX_FT);
+        let e = edges_of(&rooms, DEFAULT_WALL_FT);
         assert!(find(&e, "west", "corridor").is_some());
         assert!(find(&e, "corridor", "east").is_some());
         assert!(find(&e, "west", "east").is_none(), "an 8 ft corridor is not a wall");
@@ -830,7 +891,7 @@ mod tests {
             room("shaft", &[&rect(10.0, 0.0, 10.8, 10.0)]), // 0.8 ft wide
             room("b", &[&rect(10.8, 0.0, 20.0, 10.0)]),
         ];
-        let e = edges_of(&rooms, WALL_MAX_FT); // 1.5 ft — wide enough to span the shaft
+        let e = edges_of(&rooms, DEFAULT_WALL_FT); // 1.5 ft — wide enough to span the shaft
         assert!(find(&e, "a", "shaft").is_some(), "each neighbour still touches the shaft");
         assert!(find(&e, "shaft", "b").is_some());
         assert!(find(&e, "a", "b").is_none(), "must not match through the shaft");
@@ -892,7 +953,7 @@ mod tests {
             room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
             room("ghost", &[&[(5.0, 5.0)]]),
         ];
-        let e = edges_of(&rooms, WALL_MAX_FT);
+        let e = edges_of(&rooms, DEFAULT_WALL_FT);
         assert!(e.is_empty(), "an unplaced room touches nothing");
     }
 
@@ -983,16 +1044,16 @@ mod tests {
 
     #[test]
     fn test_resolve_wall_max_accepts_zero_and_defaults() {
-        approx(resolve_wall_max(None).unwrap(), WALL_MAX_FT);
-        approx(resolve_wall_max(Some(0.0)).unwrap(), 0.0); // the centreline case
-        approx(resolve_wall_max(Some(1.2)).unwrap(), 1.2);
-        approx(resolve_wall_max(Some(WALL_MAX_LIMIT_FT)).unwrap(), WALL_MAX_LIMIT_FT);
+        approx(resolve_wall_max(None, DEFAULT_WALL_FT).unwrap(), DEFAULT_WALL_FT);
+        approx(resolve_wall_max(Some(0.0), DEFAULT_WALL_FT).unwrap(), 0.0); // the centreline case
+        approx(resolve_wall_max(Some(1.2), DEFAULT_WALL_FT).unwrap(), 1.2);
+        approx(resolve_wall_max(Some(WALL_MAX_LIMIT_FT), DEFAULT_WALL_FT).unwrap(), WALL_MAX_LIMIT_FT);
     }
 
     #[test]
     fn test_resolve_wall_max_rejects_loudly() {
         for bad in [-0.1, f64::NAN, f64::INFINITY, WALL_MAX_LIMIT_FT + 0.1] {
-            match resolve_wall_max(Some(bad)) {
+            match resolve_wall_max(Some(bad), DEFAULT_WALL_FT) {
                 Err(ServiceError::Invalid(msg)) => assert!(!msg.is_empty(), "the message is the useful part"),
                 other => panic!("expected Invalid for {bad}, got {other:?}", other = other.map(|_| "Ok")),
             }
@@ -1028,6 +1089,7 @@ mod tests {
                 milestones: vec![],
                 comparison_key: None,
                 comparison_properties: vec![],
+                areas: Default::default(),
                 hierarchy_exclusions: vec![],
             }
         }
@@ -1042,6 +1104,7 @@ mod tests {
                     model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
                     snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
                     model_to_shared: None,
+                    room_boundary: None,
                     levels: vec![Level { id: "L1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
                     rooms,
                 })
@@ -1082,6 +1145,52 @@ mod tests {
             let get = |w: f64| assemble_adjacency(&state, "p1", None, None, Some(w)).unwrap().unwrap().revision;
             assert_eq!(get(1.5), get(1.5), "idle requests are byte-identical");
             assert_ne!(get(1.5), get(0.5), "a tolerance change is a new revision");
+        }
+
+        /// With no `?wall_max=`, the default now comes from the **declared
+        /// regime** rather than a hardcoded constant: zero when every level in
+        /// scope is centreline, the project's declared thickness otherwise. An
+        /// explicit request still overrides both — the slider is a question the
+        /// caller is asking, not a policy the project is stating.
+        #[test]
+        fn test_default_wall_max_follows_the_declared_regime() {
+            let with_boundary = |declared: Option<RoomBoundary>, thickness: f64| {
+                let bundle = ProjectSettings {
+                    areas: AreaPolicy { max_wall_thickness: thickness, ..Default::default() },
+                    ..bundle()
+                };
+                let state = AppState::new(
+                    Box::new(MemStore::new()),
+                    HashMap::from([("p1".to_string(), bundle)]),
+                    None,
+                );
+                state
+                    .set_snapshot(RoomPayload {
+                        schema_version: 5,
+                        project: Project { id: "p1".to_string(), name: "P".to_string() },
+                        model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                        snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                        model_to_shared: None,
+                        room_boundary: declared,
+                        levels: vec![Level { id: "L1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
+                        rooms: vec![room("a", &[&rect(0.0, 0.0, 10.0, 10.0)])],
+                    })
+                    .unwrap();
+                state
+            };
+
+            let centreline = with_boundary(Some(RoomBoundary::Centreline), 0.4);
+            approx(assemble_adjacency(&centreline, "p1", None, None, None).unwrap().unwrap().wall_max, 0.0);
+
+            let finish_face = with_boundary(Some(RoomBoundary::FinishFace), 0.4);
+            approx(assemble_adjacency(&finish_face, "p1", None, None, None).unwrap().unwrap().wall_max, 0.4);
+
+            // Undeclared reads as finish face — the conservative direction.
+            let undeclared = with_boundary(None, 0.4);
+            approx(assemble_adjacency(&undeclared, "p1", None, None, None).unwrap().unwrap().wall_max, 0.4);
+
+            // And an explicit request wins over any of it.
+            approx(assemble_adjacency(&centreline, "p1", None, None, Some(1.0)).unwrap().unwrap().wall_max, 1.0);
         }
 
         /// An out-of-range tolerance is a caller fault carrying a message, not a

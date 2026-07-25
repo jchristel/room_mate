@@ -425,52 +425,88 @@ each module carrying its rationale in a header, all with unit tests.
   (`ColourMode` on `kind`, `Colouring` on `style`), which round-trip through
   toml exactly like `DrofusSource` — verified by `test_settings_toml_round_trip`.
 
-- **Hierarchy gross-area footprints (`GET /projects/{id}/areas`).** The first
-  endpoint that does real geometry, not property lookup: it unions room outlines
-  into a dissolved footprint per hierarchy group, per level. `service::areas`
-  (transport-agnostic, over the `geo` crate) runs a two-stage pipeline per level
-  — build each **bottom-tier** group's footprint from its rooms' outer loops
-  (union → keep exterior rings only, discarding interior holes → dedup collinear
-  vertices), then dissolve child footprints into parents tier by tier up to the
-  top. Grouping reuses `classify_room`'s resolved path verbatim (the `undefined`
-  bucket is a real group, not a dropped room); the endpoint reuses
-  `assemble_rooms` for the scoped, already-classified room set, so `?building=` /
-  `?milestone=` scoping and classification come for free. **Islands** (disconnected
-  exterior rings — separate wings of one group) are always kept: the result is a
-  `MultiPolygon` at every tier. **Each union is morphologically closed** (dilate by
-  `MAX_WALL_FT/2`, erode back, via `geo`'s miter-join `Buffer`) before it is
-  measured. This one step makes the metric robust to how the model is drawn: it
-  **bridges gaps between rooms**, so *finish-face* rooms (which float inside their
-  walls and would otherwise union into disjoint islands — Σ net area, no walls)
-  dissolve exactly like *centreline* rooms that tile edge-to-edge; it **fills wall
-  bands** up to `MAX_WALL_FT`; and it **leaves genuine voids open** — a courtyard
-  wider than a wall survives as an interior ring, its area excluded. Running the
-  close at every tier fills each wall once, at the level whose union first encloses
-  both its sides (siblings at their shared parent, different parents only at the
-  common ancestor), so areas are **additive**. This **reverses an earlier
-  decision** ("enclosed space counts, strip every hole") made under an unverified
-  centreline assumption; plan screenshots showed the real models are face-of-wall,
-  where the old rule silently produced disjoint islands and wrongly filled
-  courtyards — see handover-hierarchical-void-closure.md. Each tier's area is the
-  *measured* area of its own closed polygon, never a sum of children.
-  **Exclusions** (`[[hierarchy_exclusions]]` in project settings,
-  on `ProjectSettings` since the server uses them — unlike client-only colour
-  plans) come in two kinds whose match implies the pipeline stage: a `group`
-  match withholds a resolved group from its parent's dissolve (Case A, stage 2 —
-  drops from that tier and above, still reported with `counted_upward: false`); a
-  `rooms` match drops rooms before any union (Case B, stage 1 — gone from every
-  tier including their own group). The number is named an **aggregated room
-  footprint** (room area + enclosed wall bands − genuine voids), *not* net area or
-  a standards gross. One computation feeds both asks — the plan-view overlay
-  (footprint polygons) and the summary table (areas) — so there is no second
-  pipeline. The response carries each island as an exterior ring plus any interior
-  void rings, so the browser renders an even-odd path and a courtyard reads as open,
-  matching the area. Geometry dependency: `geo` (`BooleanOps::union`, `Buffer`,
-  `MultiPolygon`) — the `Buffer` is `geo` 0.33's native offset over `i_overlay`
-  (miter joins, negative distance), no new crate; the first service where the
-  Rust-side geometry argument is real. Pairwise union today, `unary_union`/`rayon`
-  held in reserve until measurement warrants (STRATEGY.md "Parallelism has a
-  threshold").
+- **Area policy (`[areas]` in project settings) — the two facts Revit does not
+  know.** The opposite of colour plans: the server *uses* every field, so it
+  lives on `ProjectSettings` beside `hierarchy_exclusions`, not in the
+  client-only bucket. `measurement_standard` (IPMS1/2/3, DIN277, SIA416, BOMA,
+  RICS) says what the reported number **means** — contractual, not derivable
+  from any model — and the server computes nothing from it, only carries and
+  echoes it. `max_wall_thickness` (feet) is the width above which a gap stops
+  being a wall and becomes a void: a project judgement, and now the **single**
+  declaration of a quantity that used to be a constant in each of two modules.
+  `boundary_location` is a **fallback only**, for models whose extractor predates
+  the envelope's `room_boundary`; a model that declares its own regime always
+  wins, because the model is the authority and a project-wide guess must never
+  override a per-model fact.
+
+  Boot validation is loud and specific: an unknown standard fails in the TOML
+  parse with serde naming the accepted spellings, and a non-finite, non-positive
+  or absurd thickness fails with a message. **Zero is rejected**, deliberately
+  and against the first draft of the design — it is the value a reader reaches
+  for to mean "centreline", and conflating the two would let project policy
+  override a model fact. The centreline case is expressed by the *regime*, which
+  resolves the effective gap to zero on its own. (`adjacency`'s `?wall_max=0`
+  request parameter is a third thing again: a caller asking a question, and still
+  valid.) The whole block is defaulted and `skip_serializing_if`-elided, so a
+  project file predating it behaves exactly as it did and gains no `[areas]`
+  section on its next save.
+
+- **Hierarchy area footprints (`GET /projects/{id}/areas`).** The first endpoint
+  that does real geometry rather than property lookup: a footprint per hierarchy
+  group, per level. **Its design has its own document —
+  [Area calculation](STRATEGY-AREA-CALCULATION.md)** — because it is the one
+  place in the pipeline where the *definition of the output* is contested rather
+  than read off the model, and two prior designs were reversed over exactly that.
+  Read it before touching `service::areas`. In brief:
+
+  Each level builds a **wall zone** once —
+  `(close(all rooms, gap/2) ∪ all rooms) − all rooms`, the set of gaps narrow
+  enough to be walls and nothing else — and each tier takes
+  `footprint(P) = rooms under P ∪ (close(rooms under P, gap/2) ∩ wall_zone)`.
+  Because the zone contains no room, a footprint cannot reach into a neighbour's
+  room; because a close at radius `gap/2` cannot bridge more than `gap`, a
+  courtyard is never in the zone and needs no width test. The ownership rule —
+  *a wall between two groups belongs to neither and fills at their common
+  ancestor* — is not enforced on top of this: it is the strict part of
+  `φ(X ∪ Y) ⊇ φ(X) ∪ φ(Y)`, and `φ` being increasing is what makes areas
+  **exactly additive** (`parent = Σ children + newly enclosed`, asserted to
+  0.05 ft²). Wall junctions are the one shape needing a withdrawal pass, which is
+  the same rule applied to a square bounded by four rooms.
+
+  **`gap` comes from the declared boundary regime, per level.** Centreline
+  resolves to **zero** — rooms already tile, so no close runs and the whole
+  artifact class is unreachable; finish face resolves to the project's
+  `[areas] max_wall_thickness`. The regime is a model fact off the upload
+  envelope (`room_boundary`, see [STRATEGY.md](STRATEGY.md)), resolved per level
+  because level dedup can put two linked models on one level, and a disagreement
+  widens to finish face. A declared regime contradicting the measured room gaps
+  is **logged, never fatal**.
+
+  Grouping reuses `classify_room`'s resolved path verbatim (the `undefined`
+  bucket is a real group); the endpoint reuses `assemble_rooms`, so
+  `?building=` / `?milestone=` scoping comes for free. Islands are kept —
+  `MultiPolygon` at every tier. **Exclusions** (`[[hierarchy_exclusions]]`, on
+  `ProjectSettings` since the server uses them): a `group` match withholds a
+  group from every tier above it (still reported, `counted_upward: false`); a
+  `rooms` match drops rooms before any geometry, and so drops the walls only they
+  bounded, since the zone is built from the survivors.
+
+  The number is an **aggregated room footprint** (room area + enclosed wall bands
+  − genuine voids), not net area and not a standards gross — and on a
+  finish-face model it is a **house convention** rather than IPMS 3 or DIN 277
+  (STRATEGY-AREA-CALCULATION §6 has the wall-by-wall comparison and the caveat on
+  setting `measurement_standard`). The standard and the per-level gap are
+  **echoed on the response** (`measurement_standard`, `wall_gap_by_level`). One
+  computation feeds both the plan overlay and the summary table; each island
+  ships as an exterior ring plus interior void rings, so the browser's even-odd
+  path makes a courtyard read as open.
+
+  Geometry dependency: `geo` (`BooleanOps`, `Buffer`, `MultiPolygon`) — bevel
+  joins, negative distance, no new crate. Measured before/after on `/areas`:
+  `big-plate` (132 groups) 6.0 s → **1.12 s**; `sample-project` (10 groups over 7
+  levels) 0.43 s → 0.71 s, since a level with barely one group has nothing to
+  amortise the level-wide pass against. `scripts/check_areas.py` is the committed
+  diagnostic, six checks across **every** level.
 
 - **Room adjacency graph (`GET /projects/{id}/adjacency`).** The *second*
   geometry-processing service. Which rooms share a wall, and how much wall —
@@ -484,10 +520,20 @@ each module carrying its rationale in a header, all with unit tests.
   Revit's `SpatialElementBoundaryLocation` decides where a room's boundary sits,
   and both settings occur in real models: at **wall centreline** neighbours tile
   edge-to-edge and the gap between them is *zero*; at **finish face** they float
-  inside their walls and the gap is the wall thickness. Nothing on the wire says
-  which — the extractor does not send that setting — so the algorithm handles
-  both and `?wall_max=` (decimal feet, default 1.5 ft) is what spans them: at or
-  near 0 for centreline, just over the thickest partition for finish face. Hence
+  inside their walls and the gap is the wall thickness. The algorithm handles
+  both, and `?wall_max=` (decimal feet) is what spans them: at or near 0 for
+  centreline, just over the thickest partition for finish face. **The default is
+  now derived rather than guessed** — the envelope's `room_boundary` says which
+  regime each model was drawn to, so an unrequested tolerance resolves to the
+  project's `[areas] max_wall_thickness`, or to **zero** when every level in
+  scope is centreline. ("Every", not "any": one finish-face level in a mixed
+  scope still needs its walls spanned, and running it at zero would report its
+  rooms as touching nothing.) That declared thickness is the same quantity
+  `service::areas` sizes its wall zone by — it used to be two constants,
+  `adjacency::WALL_MAX_FT` and `areas::MAX_WALL_FT`, holding one physical number
+  in two modules and free to drift; both are gone. An explicit request still
+  overrides everything, because the slider is a question a caller is asking, not
+  a policy a project is stating. Hence
   **zero is a valid tolerance**, the acceptance band is closed at both ends, and
   a `COINCIDENT_EPS_FT` folds in the export noise that stops "coincident" edges
   being bit-identical. An out-of-range, negative, non-finite or unparseable value

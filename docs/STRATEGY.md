@@ -3,7 +3,7 @@
 Notes capturing the design decisions behind the Revit → Rust → browser room
 viewer. Written as a reference to come back to, not a spec. Split along the
 pipeline's own boundaries, so each can be read (and changed) without pulling in
-the others — five docs describing what ships today, plus one forward-looking
+the others — six docs describing what ships today, plus one forward-looking
 design doc for data the user authors:
 
 - **This doc** — the pipeline overview, the core split principle that governs
@@ -14,6 +14,12 @@ design doc for data the user authors:
   property names across sources.
 - **[Server](STRATEGY-SERVER.md)** — the Rust/axum process: data model,
   storage, classification, settings.
+- **[Area calculation](STRATEGY-AREA-CALCULATION.md)** — how a room set becomes
+  a per-tier area figure: the two boundary regimes, the wall zone, what a wall
+  belongs to, and how the result relates (and does not relate) to IPMS 3 and
+  DIN 277. Its own doc because it is the one place where the *definition of the
+  output* is contested rather than read off the model — two designs were
+  reversed over exactly that. Read it before quoting an area to anyone external.
 - **[Browser](STRATEGY-BROWSER.md)** — the SVG viewer: rendering strategy,
   UI growth path, endpoint design from the fetch side.
 - **[MCP](STRATEGY-MCP.md)** — the stdio MCP server: a second, tool-based
@@ -126,6 +132,7 @@ Two related notes:
   "model":    { "id": "<revit-guid>", "name": "Project1-ARCH", "source": "revit" },
   "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
   "model_to_shared": { "matrix": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] },
+  "room_boundary": "finish_face",
   "levels": [
     { "id": "311", "name": "Level 0", "elevation": 0.0 }
   ],
@@ -157,8 +164,9 @@ store key; ids are immutable, names are display-only — see
 when its link key matched, and a `classification` path — both derived at
 response assembly, never stored (see Server and Sources respectively).
 
-`model_to_shared` is the optional per-model placement transform — see [The
-upload envelope](#the-upload-envelope) below.
+`model_to_shared` is the optional per-model placement transform and
+`room_boundary` the optional per-model boundary regime — see [The upload
+envelope](#the-upload-envelope) below.
 
 ### The upload envelope
 
@@ -201,6 +209,31 @@ producer reads it once per model from `ActiveProjectLocation` and stamps it on
 the envelope. This is Phase 1 of the georeferencing track; Phases 2–3 (the
 `survey_registered` opt-in and the map underlay) build on it — see
 `docs/Superseded/HANDOVER-georeferencing.md`.
+
+**`room_boundary` — the per-model boundary regime (optional).** Revit's
+`SpatialElementBoundaryLocation` decides where a room's boundary sits, and both
+settings occur in real models: at **`centreline`** neighbouring rooms tile
+edge-to-edge with the walls inside them, at **`finish_face`** rooms float inside
+their walls and neighbours are separated by roughly a partition's thickness.
+Nothing on the wire used to say which, so `service::areas` had to *guess*, and
+sized its morphological close for the worst case — which is what produced
+bevelled corners, 45° chamfers, a million-foot spike and overlapping sibling
+footprints. Every one of those is downstream of the guess: on a centreline model
+the correct close radius is **zero**, so declaring the regime does not merely
+improve a tolerance, it deletes the whole artifact class for that half of the
+world.
+
+Like `model_to_shared` this is a **document-level fact stamped once per model**,
+and per model rather than per project precisely because a project legitimately
+mixes both — each linked model carries its own document setting. Also like it:
+optional and defaulted, so every pre-declaration payload stays valid and means
+what it always did, and **no schema bump**. An absent value falls back to the
+project's `[areas] boundary_location` and then to finish face (the conservative
+reading — a close still runs). The ingest response echoes the *resolved* regime
+(`room_boundary`), so a producer that sent nothing can see what the server
+assumed on its behalf. What the number then *means* — the measurement standard
+and the wall-thickness ceiling — is project policy, not a model fact, and lives
+in settings; see [Server](STRATEGY-SERVER.md).
 
 The **dRofus CSV upload** (`POST /projects/{id}/drofus` — see
 [Sources](STRATEGY-SOURCES.md) and [Server](STRATEGY-SERVER.md)) is the

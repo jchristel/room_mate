@@ -84,6 +84,7 @@ mod tests {
             milestones,
             comparison_key: None,
             comparison_properties: vec![],
+            areas: Default::default(),
             hierarchy_exclusions: vec![],        }
     }
 
