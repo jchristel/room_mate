@@ -231,15 +231,16 @@ fn values_agree(a: &str, b: &str, source: Option<&str>, field_cfg: Option<&Drofu
         // Same pattern on BOTH sides: this is one dRofus snapshot against
         // another, so `revit_format` (the Revit side of a QA comparison) has
         // no meaning here.
+        // Falling out of this `if` means one of two things — the column is not
+        // declared a date, or it is and a side failed to parse. Both land on the
+        // string rungs below, the same "declaration is a hint, not truth"
+        // contract as QA.
         if let Some(fmt) = field_cfg
             .filter(|f| f.field_type == FieldType::Date)
             .and_then(|f| f.format.as_deref())
+            && let Some(same_instant) = date_match(a, b, fmt, fmt)
         {
-            if let Some(same_instant) = date_match(a, b, fmt, fmt) {
-                return same_instant;
-            }
-            // Either side failed to parse: fall through to the string rungs,
-            // the same "declaration is a hint, not truth" contract as QA.
+            return same_instant;
         }
     }
 

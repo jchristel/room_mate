@@ -63,10 +63,10 @@ pub fn get_drofus_snapshot(
         return Ok(None);
     }
     let resolved = match taken_at {
-        Some(id) => match state.get_drofus(project_id, id).map_err(ServiceError::Internal)? {
-            Some(bytes) => Some((id.to_string(), bytes)),
-            None => None,
-        },
+        Some(id) => state
+            .get_drofus(project_id, id)
+            .map_err(ServiceError::Internal)?
+            .map(|bytes| (id.to_string(), bytes)),
         None => state.get_latest_drofus(project_id).map_err(ServiceError::Internal)?,
     };
     let Some((taken_at, bytes)) = resolved else {

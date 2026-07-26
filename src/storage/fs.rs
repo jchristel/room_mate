@@ -92,9 +92,9 @@ impl FsStore {
             let path = entry?.path();
             // Only snapshot files count; skips anything non-`.json` in the dir.
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                // Keep the lexically-largest path. `map_or(true, …)` seeds the
-                // first match (None → take it), then compares subsequent paths.
-                if newest.as_ref().map_or(true, |n| path > *n) {
+                // Keep the lexically-largest path. `is_none_or` seeds the first
+                // match (None → take it), then compares subsequent paths.
+                if newest.as_ref().is_none_or(|n| path > *n) {
                     newest = Some(path);
                 }
             }
@@ -117,10 +117,11 @@ impl FsStore {
             bytes[16] = b':';
         }
         // A "+hh-mm" numeric-offset tail (e.g. "+00-00"): its '-' was a ':'.
-        if let Some(plus) = bytes.iter().rposition(|&b| b == b'+') {
-            if plus + 5 == bytes.len() - 1 && bytes[plus + 3] == b'-' {
-                bytes[plus + 3] = b':';
-            }
+        if let Some(plus) = bytes.iter().rposition(|&b| b == b'+')
+            && plus + 5 == bytes.len() - 1
+            && bytes[plus + 3] == b'-'
+        {
+            bytes[plus + 3] = b':';
         }
         String::from_utf8(bytes).unwrap_or_else(|_| stem.to_string())
     }
@@ -282,10 +283,10 @@ impl SnapshotStore for FsStore {
                 .with_context(|| format!("could not read model dir: {}", dir.display()))?
             {
                 let path = entry?.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        on_disk.push(name.to_string());
-                    }
+                if path.extension().and_then(|e| e.to_str()) == Some("json")
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    on_disk.push(name.to_string());
                 }
             }
         }
@@ -366,10 +367,10 @@ impl SnapshotStore for FsStore {
                 .with_context(|| format!("could not read dRofus dir: {}", dir.display()))?
             {
                 let path = entry?.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("csv") {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        on_disk.push(name.to_string());
-                    }
+                if path.extension().and_then(|e| e.to_str()) == Some("csv")
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    on_disk.push(name.to_string());
                 }
             }
         }

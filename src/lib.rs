@@ -9,25 +9,25 @@
 //! the top:
 //!
 //! - `contract`  — the JSON contract shared with the Revit extractor + the
-//!                 cross-tier property lookup both consumers use.
+//!   cross-tier property lookup both consumers use.
 //! - `settings`  — startup TOML config (sources, test seed, hierarchy defn).
 //! - `drofus`    — reference-data loader + join dataset.
 //! - `classify`  — room → full-depth classification path.
 //! - `state`     — shared app state: settings registry + the snapshot store
-//!                 behind its trait, plus the startup seed.
+//!   behind its trait, plus the startup seed.
 //! - `storage`   — the `SnapshotStore` trait and its two impls (`FsStore`
-//!                 on disk, `MemStore` volatile).
+//!   on disk, `MemStore` volatile).
 //! - `bootstrap` — settings file path -> running `Shared` state, reused by
-//!                 both binaries' `main()`.
+//!   both binaries' `main()`.
 //! - `handlers`  — thin Axum adapters: the `/rooms` push (plus the streaming
-//!                 `/rooms/stream` push for large models) and the read-side
-//!                 routes, which call into `service`.
+//!   `/rooms/stream` push for large models) and the read-side routes, which
+//!   call into `service`.
 //! - `service`   — transport-agnostic derive/assemble logic (dRofus join,
-//!                 classification, validation), shared by `handlers` and the
-//!                 MCP binary. See HANDOVER-service-layer.md.
-//! - `settings_api` — read/save API behind the settings UI: transport-
-//!                 agnostic core (reads shared with the MCP binary) + the
-//!                 `/api/settings` Axum adapters; saves hot-swap the registry.
+//!   classification, validation), shared by `handlers` and the MCP binary.
+//!   See HANDOVER-service-layer.md.
+//! - `settings_api` — read/save API behind the settings UI: transport-agnostic
+//!   core (reads shared with the MCP binary) + the `/api/settings` Axum
+//!   adapters; saves hot-swap the registry.
 
 /// The interface the HTTP server binds to. **Loopback on purpose, and not
 /// configurable**: the server has no authentication of any kind, and the

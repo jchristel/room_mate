@@ -95,10 +95,10 @@ pub fn load_drofus_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result<Dr
     for col in 1..labels.len() {
         if let Some(label) = labels.get(col) {
             all_labels.push(label.to_string());
-            if let Some(revit_name) = revit_names.get(col) {
-                if !revit_name.is_empty() {
-                    reconciliation.insert(label.to_string(), revit_name.to_string());
-                }
+            if let Some(revit_name) = revit_names.get(col)
+                && !revit_name.is_empty()
+            {
+                reconciliation.insert(label.to_string(), revit_name.to_string());
             }
         }
     }

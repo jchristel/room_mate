@@ -13,7 +13,7 @@
 //! to any one project) stayed behind in their own `ServerConfig` file.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -36,7 +36,7 @@ use crate::storage::{FsStore, MemStore, SnapshotStore};
 /// the settings API's save both run exactly this, so a file the UI accepts
 /// can never fail the next boot.
 pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Result<(String, bool, ProjectSettings)> {
-    let settings = load_settings(&path.to_path_buf()).with_context(|| format!("bad settings file: {}", path.display()))?;
+    let settings = load_settings(path).with_context(|| format!("bad settings file: {}", path.display()))?;
 
     // Comparison fields: the namespace half is checkable right here, and a bad
     // one left unchecked yields an empty milestone diff indistinguishable from
@@ -173,7 +173,7 @@ pub fn load_project_settings_dir(
     Ok((registry, default_bundle.map(|(_, b)| b)))
 }
 
-pub fn build_state(server_settings: &PathBuf, projects_dir: &PathBuf) -> anyhow::Result<Shared> {
+pub fn build_state(server_settings: &Path, projects_dir: &Path) -> anyhow::Result<Shared> {
     let ServerConfig { storage, test_data } = load_server_config(server_settings)
         .with_context(|| format!("bad server settings file: {}", server_settings.display()))?;
     tracing::info!("server settings loaded from {}", server_settings.display());
@@ -202,7 +202,7 @@ pub fn build_state(server_settings: &PathBuf, projects_dir: &PathBuf) -> anyhow:
     }
 
     let state: Shared = Arc::new(
-        AppState::new(store, project_settings, default_settings).with_projects_dir(projects_dir.clone()),
+        AppState::new(store, project_settings, default_settings).with_projects_dir(projects_dir.to_path_buf()),
     );
 
     seed_if_test(&state, test_data.as_ref())?;
