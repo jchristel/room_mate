@@ -585,7 +585,9 @@ fn level_edges(level_id: &str, prepared: &[Prepared<'_>], wall_max: f64) -> Vec<
 
 // ============================== endpoint side ==============================
 
-/// Resolve a requested tolerance, or fail with caller-addressable text.
+/// Validate a *requested* tolerance, returning it unchanged, or fail with
+/// caller-addressable text. `Ok(None)` means nothing was asked for — the caller
+/// then applies its own default (see `default_wall_max`).
 ///
 /// Lives in the service, not the adapters, so the HTTP handler and the MCP tool
 /// cannot drift on what a valid tolerance is — each maps `ServiceError::Invalid`
@@ -598,27 +600,20 @@ fn level_edges(level_id: &str, prepared: &[Prepared<'_>], wall_max: f64) -> Vec<
 /// silent clamp: a tolerance that would wire the whole building together is a
 /// mistake the caller should hear about.
 ///
-/// `default_ft` is what an absent request resolves to — the project's declared
-/// wall thickness, narrowed to zero when every contributing model declares the
-/// centreline regime (see `assemble_adjacency`). Passed in rather than read
-/// from a constant so this function has no opinion about where the number came
-/// from, which is also what lets the tests exercise both regimes directly.
+/// **The guard is separate from the default on purpose**, and returns
+/// `Option<f64>` rather than resolving one: `assemble_adjacency` cannot know its
+/// default until the rooms are assembled, because it depends on which regime the
+/// contributing models declare — and a caller-fault tolerance should cost a
+/// rejection, not a multi-second room merge first. A `resolve_wall_max` wrapper
+/// (this plus a passed-in default) used to sit here for the one-call form; it
+/// ended up with no caller once the guard moved ahead of the merge, so it is
+/// gone rather than kept warm.
 ///
 /// Note that a *requested* zero and a *declared-centreline* zero are different
 /// facts arriving at the same number: the first is a caller asking a question,
 /// the second is the project stating one. Only the first travels through
 /// `requested`; that is why `AreaPolicy::max_wall_thickness` may not be zero
 /// while this parameter may.
-pub fn resolve_wall_max(requested: Option<f64>, default_ft: f64) -> Result<f64, ServiceError> {
-    Ok(check_wall_max(requested)?.unwrap_or(default_ft))
-}
-
-/// The range guard on its own, returning the request unchanged. Split out
-/// because `assemble_adjacency` cannot know its default until the rooms are
-/// assembled (the default depends on which regime the contributing models
-/// declare), and a caller-fault tolerance should cost a rejection, not a
-/// multi-second room merge first. `resolve_wall_max` is this plus the default,
-/// kept so the common one-call form still exists.
 pub fn check_wall_max(requested: Option<f64>) -> Result<Option<f64>, ServiceError> {
     let Some(v) = requested else { return Ok(None) };
     if !v.is_finite() {
@@ -1049,18 +1044,28 @@ mod tests {
 
     // ---- tolerance validation ----
 
+    /// A valid request passes through untouched, and **zero passes** — it is the
+    /// centreline setting, not a degenerate one, and rejecting it as
+    /// "non-positive" would break the more common of the two boundary regimes.
+    /// An absent request is `None`, not a resolved default: what an unrequested
+    /// tolerance becomes is `default_wall_max`'s job (tested separately), and
+    /// keeping the two apart is what lets the guard run before the room merge.
     #[test]
-    fn test_resolve_wall_max_accepts_zero_and_defaults() {
-        approx(resolve_wall_max(None, DEFAULT_WALL_FT).unwrap(), DEFAULT_WALL_FT);
-        approx(resolve_wall_max(Some(0.0), DEFAULT_WALL_FT).unwrap(), 0.0); // the centreline case
-        approx(resolve_wall_max(Some(1.2), DEFAULT_WALL_FT).unwrap(), 1.2);
-        approx(resolve_wall_max(Some(WALL_MAX_LIMIT_FT), DEFAULT_WALL_FT).unwrap(), WALL_MAX_LIMIT_FT);
+    fn test_check_wall_max_passes_valid_requests_including_zero() {
+        assert!(check_wall_max(None).unwrap().is_none(), "no request is not a default");
+        approx(check_wall_max(Some(0.0)).unwrap().unwrap(), 0.0); // the centreline case
+        approx(check_wall_max(Some(1.2)).unwrap().unwrap(), 1.2);
+        approx(check_wall_max(Some(DEFAULT_WALL_FT)).unwrap().unwrap(), DEFAULT_WALL_FT);
+        approx(check_wall_max(Some(WALL_MAX_LIMIT_FT)).unwrap().unwrap(), WALL_MAX_LIMIT_FT);
     }
 
+    /// Loud over a silent clamp, and the message is the part that matters: a
+    /// caller who sent a tolerance that would wire the whole building together
+    /// has to be able to tell that from a graph that legitimately found nothing.
     #[test]
-    fn test_resolve_wall_max_rejects_loudly() {
+    fn test_check_wall_max_rejects_loudly() {
         for bad in [-0.1, f64::NAN, f64::INFINITY, WALL_MAX_LIMIT_FT + 0.1] {
-            match resolve_wall_max(Some(bad), DEFAULT_WALL_FT) {
+            match check_wall_max(Some(bad)) {
                 Err(ServiceError::Invalid(msg)) => assert!(!msg.is_empty(), "the message is the useful part"),
                 other => panic!("expected Invalid for {bad}, got {other:?}", other = other.map(|_| "Ok")),
             }
