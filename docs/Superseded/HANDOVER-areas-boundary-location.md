@@ -8,13 +8,15 @@
 > things the implementation learned that the brief did not know, and the measured
 > before/after. Do not treat its "not started" language as current.
 
-**Status: all three decisions built and verified against House A.** One item
-open: nothing yet *sends* `room_boundary`. (When this was written the Revit
-extractor was in another repository; it now lives in `extractor/pyRevit/`, so
-the field is addressable here — see the root README) — the server accepts, resolves, uses and
-echoes it, and every model currently resolves through the project fallback. See
-the Definition of Done for what was measured. Written as a brief and kept as
-one: the reasoning above the DoD is still the reasoning, not a retrospective.
+**Status: all three decisions built and verified against House A**, and the one
+item this brief left open — nothing *sent* `room_boundary` — is now closed too:
+the extractor stamps it (`extractor/pyRevit/`). When this was written the Revit
+extractor was in another repository, which is why the brief treats the producer
+half as unreachable; read that language as history. What remains open is not the
+field but a *model*: nothing on hand is drawn to centreline, so that path is
+still exercised only by unit tests. See the Definition of Done for what was
+measured. Written as a brief and kept as one: the reasoning above the DoD is
+still the reasoning, not a retrospective.
 
 **Four things the implementation learned that this brief did not know.** They
 are recorded inline at the relevant sections too, but they are the parts worth
@@ -487,13 +489,16 @@ until (2) is built. On a centreline project it can be set today.
 - [x] `room_boundary` optional field on the model envelope
       (`contract::RoomBoundary`, `"centreline"` | `"finish_face"`); no schema
       bump; every existing payload still valid and unchanged in meaning.
-- [ ] **Extractor stamps it once per document — not done. No longer blocked:**
-      when this was written the extractor lived in another repository; it is now
-      `extractor/pyRevit/`, and `post_rooms.py`'s `build_envelope` already stamps
-      `model_to_shared` the same way, so `room_boundary` is one field beside it. The server half is complete, so this is one field on the
-      producer's envelope whenever that repo is next touched; until then every
-      model resolves through the project fallback, which is the designed-for
-      state, not a broken one. The wire spelling is fixed by
+- [x] **Extractor stamps it once per document.** Blocked when this was written
+      (the extractor lived in another repository), done once it moved to
+      `extractor/pyRevit/`: `room_mate.py` reads Area and Volume Computations
+      per document and stamps the envelope beside `model_to_shared`, and
+      `post_rooms.py`'s `build_envelope` forwards it on both push paths. Revit's
+      four `SpatialElementBoundaryLocation` values collapse to the contract's
+      two (`BOUNDARY_LOCATION_TO_WIRE`) — only "do neighbours tile or is there a
+      gap" matters here. A failed or unmapped read omits the field and still
+      pushes, so the project fallback stays the designed-for state rather than a
+      failure mode. The wire spelling is fixed by
       `test_ingest_response_wire_keys`.
 - [x] Ingest accepts absence silently (normal case) and echoes the **resolved**
       value on `IngestResponse.room_boundary` — resolved, not declared, because
@@ -614,13 +619,14 @@ until (2) is built. On a centreline project it can be set today.
 
 **Still open**
 
-- [ ] The extractor field (above). No longer outside this repo — see `extractor/pyRevit/post_rooms.py`.
 - [ ] **No model has yet been read in the `centreline` regime end to end.** Every
       fixture and every real model on hand resolves to finish face, so the
       zero-gap path is covered by unit tests and by nothing else. The first
       genuinely centreline export is worth running the harness against, because
       that path skips the close entirely and its failure mode would be silence,
-      not an artifact.
+      not an artifact. Now that the extractor declares the regime, that export
+      only has to *exist* — it no longer needs a settings override to be read as
+      centreline.
 - [ ] Pick and declare a `measurement_standard` for the real projects. The
       machinery is there and every response currently says `null`, which is
       honest but not useful. The standards worth reading before choosing are

@@ -24,6 +24,10 @@
 import copy
 import datetime
 
+# The only direct Revit API use in this script. duHast exports elements; the
+# room boundary location is a document *setting*, which it has no collector for.
+from Autodesk.Revit.DB import AreaVolumeSettings, SpatialElementType
+
 from duHast.Revit.Rooms.Export.to_data_room import get_all_room_data
 from duHast.Revit.Levels.Export.to_data_level_building import get_all_level_data
 from duHast.Revit.Common.Geometry.geometry import get_coordinate_system_translation_and_rotation
@@ -33,7 +37,12 @@ from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 from duHast.pyRevit.UI.doc_selector import pick_document
 
-from post_rooms import post_payload_stream, fetch_projects, coordinate_system_to_affine
+from post_rooms import (
+    post_payload_stream,
+    fetch_projects,
+    coordinate_system_to_affine,
+    boundary_location_to_room_boundary,
+)
 
 
 def choose_project(forms):
@@ -234,6 +243,39 @@ def export_and_post_model(selected_doc, project, return_value, pb):
         return_value.append_message(
             "{}: could not read shared-coordinate transform ({}); "
             "pushing without a georeference".format(selected_doc.Title, e)
+        )
+
+    # Which boundary regime this model was drawn to
+    # (Superseded/HANDOVER-areas-boundary-location.md Decision 1). Read ONCE per
+    # document from Area and Volume Computations, and stamped on the envelope
+    # alongside the transform above -- a document setting, so each linked model
+    # reports its own, which is why the field is per model and a project-level
+    # declaration could only ever be a fallback. Reading a document option is
+    # extraction, not computation (STRATEGY.md "Keep the extractor dumb on
+    # purpose"): what the regime then MEANS for a wall zone is the server's.
+    #
+    # Advisory and optional, exactly like the transform: if the setting can't be
+    # read, or is one the contract has no regime for, say nothing and still push
+    # -- the server falls back to the project's `[areas] boundary_location`,
+    # which is what every push did before this field was sent. Both misses are
+    # reported rather than swallowed, because "the regime was guessed" is the
+    # thing this field exists to stop being silent.
+    try:
+        location = AreaVolumeSettings.GetAreaVolumeSettings(
+            selected_doc
+        ).GetSpatialElementBoundaryLocation(SpatialElementType.Room)
+        room_boundary = boundary_location_to_room_boundary(location)
+        if room_boundary is None:
+            return_value.append_message(
+                "{}: room boundary location '{}' has no contract regime; "
+                "pushing without a declared boundary".format(selected_doc.Title, location)
+            )
+        else:
+            envelope["room_boundary"] = room_boundary
+    except Exception as e:
+        return_value.append_message(
+            "{}: could not read the room boundary location ({}); "
+            "pushing without a declared boundary".format(selected_doc.Title, e)
         )
 
     # a large export takes a while -- honour a cancel clicked

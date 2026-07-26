@@ -33,10 +33,12 @@ on the wrong version is rejected loudly rather than silently misparsed.
 
 That is the reason the extractor lives in this repo rather than beside the other
 Revit tooling: a contract change becomes one commit instead of two repos
-drifting. The cost of *not* having it here is already on record — `room_boundary`
-was added to the upload envelope and the server accepts, resolves and echoes it,
-but **nothing sends it yet**, so every model still falls back to a guessed
-boundary regime. See [Area calculation](docs/STRATEGY-AREA-CALCULATION.md).
+drifting. The cost of *not* having it here is on record — `room_boundary` was
+added to the upload envelope, and the server accepted, resolved and echoed it,
+while nothing sent it: for as long as the two halves sat apart, every model fell
+back to a *guessed* boundary regime. Closing that was a handful of lines on the
+producer once both halves were in one place. See
+[Area calculation](docs/STRATEGY-AREA-CALCULATION.md).
 
 Two constraints follow from where the extractor runs:
 

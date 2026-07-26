@@ -55,7 +55,10 @@ designs did, and every artifact they produced — bevelled corners, 45° chamfer
 a 1,052,070 ft spike, overlapping siblings — was downstream of that guess.
 
 So the regime is **declared, not inferred**: `room_boundary` on the upload
-envelope, per model, resolved per *level* (level dedup can put two models on one
+envelope, per model — the extractor reads the document's Area and Volume
+Computations setting once per model and stamps it
+(`extractor/pyRevit/room_mate.py`; Revit's four boundary locations collapse to
+these two, since only "is there a gap" matters here) — resolved per *level* (level dedup can put two models on one
 level; a disagreement widens to finish face). A centreline level runs at gap
 **zero** — the close is never invoked, and the artifact class cannot arise
 because the operation that produces it does not execute.
@@ -206,14 +209,12 @@ with citations in the handover's References section:
 
 ## 8. Open
 
-- **Nothing sends `room_boundary` yet**, so every model resolves through the
-  project fallback — a designed-for state, not a broken one. This was previously
-  blocked on the extractor being in another repository; it now lives in
-  `extractor/pyRevit/`, where `post_rooms.py`'s `build_envelope` already stamps
-  the sibling `model_to_shared`. Adding it is one field beside that one, and it
-  is the change that turns the boundary regime from a guess into a fact.
 - **No model has been read in the centreline regime end to end.** That path skips
   the close entirely, so its failure mode is silence rather than an artifact.
+  The extractor now *declares* the regime (`extractor/pyRevit/room_mate.py` reads
+  Area and Volume Computations per document; see §2), so reaching this path no
+  longer needs a project-settings override — it needs a centreline model. Every
+  fixture and every model on hand is finish face.
 - **IPMS 3 redistribution for finish-face projects** (§6). Constructible from
   what is already here: the bands A and B jointly enclose but neither encloses
   alone are `close(rooms(A) ∪ rooms(B)) ∩ zone − fill(A) − fill(B)`, one extra

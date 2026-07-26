@@ -260,9 +260,11 @@ pub struct RoomPayload {
     pub model_to_shared: Option<ModelToShared>,
 
     /// Which boundary regime this model was drawn to (see `RoomBoundary`).
-    /// Absent on any payload from an extractor predating the field, which is
-    /// the normal case for a while yet — `#[serde(default)]` keeps every such
-    /// payload valid and unchanged in meaning, so no schema bump, exactly as
+    /// Absent on any payload from an extractor predating the field — the Revit
+    /// one now sends it, but a stored snapshot from before it did, or a future
+    /// producer that cannot read the setting, still won't carry one —
+    /// `#[serde(default)]` keeps every such payload valid and unchanged in
+    /// meaning, so no schema bump, exactly as
     /// `model_to_shared` did. An absent value falls back to the project's
     /// `[areas] boundary_location`, and failing that to the conservative
     /// finish-face reading (a close still runs), which is today's behaviour.
