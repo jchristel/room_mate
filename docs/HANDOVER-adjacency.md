@@ -38,7 +38,7 @@ definition of done, and each landed on its own.
 *Landed.* Before this, the viewer had **no room selection at all**: rooms carried
 a hover `<title>` ([index.html:1008](static/index.html:1008)) and nothing more.
 That was the exact prerequisite blocking the right-hand inspector —
-[HANDOVER-ui-layout.md](HANDOVER-ui-layout.md) Decision 3 records it as "not
+[HANDOVER-ui-layout.md](Superseded/HANDOVER-ui-layout.md) Decision 3 records it as "not
 buildable yet: the viewer has hover `<title>` tooltips, not click selection".
 **That block is now lifted**; the inspector is buildable whenever someone wants
 it.

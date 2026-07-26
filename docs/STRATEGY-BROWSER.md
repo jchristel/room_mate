@@ -347,7 +347,15 @@ side should shape future server endpoints.
   which `service::areas` treats as a real group. Model and dRofus stay visually
   separate per [Sources](STRATEGY-SOURCES.md), and an unmatched room is told it
   is *not joined* rather than shown an empty section. Read-only, and unpersisted
-  like every other view preference. See HANDOVER-room-inspector.md.
+  like every other view preference.
+  **A third mechanism — a checkbox property picker modelled on the search field
+  panel — was specified and deliberately not built**, because the two above
+  covered the cases it was for and unused UI is worse than none. If users do
+  start re-picking the same columns every session, the durable answer is
+  extending `room_label` in project settings (server-side, per project,
+  shareable) rather than adding `localStorage` here. See
+  [Superseded/HANDOVER-room-inspector.md](Superseded/HANDOVER-room-inspector.md)
+  §5.3 for that design if it is ever wanted.
   On top of it, the **adjacency graph**: a third band-1 block over
   `GET /projects/{id}/adjacency` (see [Server](STRATEGY-SERVER.md)) showing what
   the selected room shares a wall with, and what those touch. **This is the first
@@ -559,7 +567,7 @@ serving a different consumer (a hierarchy browser) than the room render.
   A **debug kill switch** (`CULL_ENABLED`, a module-level `let` beside
   `MATCH_COLOUR`) turns the hide/show off so this can be re-measured rather than
   taken on faith whenever the renderer changes — see
-  [HANDOVER-culling-disable-switch.md](HANDOVER-culling-disable-switch.md). It is
+  [HANDOVER-culling-disable-switch.md](Superseded/HANDOVER-culling-disable-switch.md). It is
   console-only and unpersisted on purpose, so nobody leaves it off and files the
   slowness as a bug, and it suppresses hide/show **only**: cull units are still
   collected, because `roomAtNode` (click-to-select), `applySelection` and

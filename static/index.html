@@ -45,7 +45,7 @@
   header .links a:hover { text-decoration: underline; }
 
   /* Global scope pickers: project / milestone / building — one scope for the
-     whole page (see "single-project viewer", HANDOVER-ui-layout Decision 1). */
+     whole page (see "single-project viewer", Superseded/HANDOVER-ui-layout Decision 1). */
   header select.picker {
     font-family: var(--mono); font-size: 0.72rem;
     background: var(--paper); color: var(--ink);
@@ -101,7 +101,7 @@
     min-width: 0;
   }
 
-  /* ---- room inspector (HANDOVER-ui-layout Decision 3) ----------------------
+  /* ---- room inspector (Superseded/HANDOVER-ui-layout Decision 3) ----------------------
      ONE per page, never one per zone: selection is page state, so a per-zone
      inspector would sit empty in every zone but one. A layout participant that
      reflows the plans, NOT an absolutely-positioned overlay inside
@@ -209,7 +209,7 @@
      plan or error); non-matches fade so matches stand out. `.dim` is opacity so
      it works regardless of an inline colour-plan fill. */
   .room.match { stroke: var(--accent); stroke-width: 3; }
-  /* Click-selection (HANDOVER-ui-layout Decision 3): ONE room at a time for the
+  /* Click-selection (Superseded/HANDOVER-ui-layout Decision 3): ONE room at a time for the
      whole page. Deliberately louder than `.match` and dashed, so a selected room
      is still distinguishable when it is also a search match — the two states are
      independent and routinely co-occur. Stroke only, never fill: a colour plan
@@ -232,7 +232,7 @@
   .empty code { background: #0001; padding: 0.1rem 0.4rem; }
   .hidden { display: none; }
 
-  /* --- bottom region: the results band (HANDOVER-ui-layout Decision 2) ---
+  /* --- bottom region: the results band (Superseded/HANDOVER-ui-layout Decision 2) ---
      Tabular/temporal output lives at the bottom of the page, not in overlays
      covering the plan. Band 1 = results (QA, area figures): sometimes
      visible, collapsed to a one-line strip by default — a fully hidden band
@@ -505,7 +505,7 @@
     </div>
   </header>
   <!-- The middle band is two columns: the zones, and the right-hand inspector
-       (HANDOVER-ui-layout Decision 3). A wrapper rather than columns on <main>
+       (Superseded/HANDOVER-ui-layout Decision 3). A wrapper rather than columns on <main>
        itself, because `main` IS the zone container and its
        `grid-template-columns` is rewritten from JS on every zone add/remove —
        any static column here would be overwritten. -->
@@ -542,7 +542,7 @@
          reason: it is a page-level result derived from the scope (plus the one
          page selection), not a per-zone presentation. Lives here rather than in
          a right-hand column because that column is reserved for the room
-         inspector (HANDOVER-ui-layout Decision 3). -->
+         inspector (Superseded/HANDOVER-ui-layout Decision 3). -->
     <div class="result-band hidden" id="adjBand">
       <button class="band-head" id="adjHead">▸ Adjacency</button>
       <div class="band-body hidden" id="adjBody">
@@ -637,7 +637,7 @@ const zoneTemplate = document.getElementById("zoneTemplate");
 // the poll cursor, the payload, colour-plan config, and validation state are
 // module-level singletons — there is exactly one scope on screen, so zones
 // can never disagree about what data they show, only how they draw it
-// (HANDOVER-ui-layout Decision 1: the single-project viewer). Multiple zones
+// (Superseded/HANDOVER-ui-layout Decision 1: the single-project viewer). Multiple zones
 // exist to show several LEVELS of one building at once.
 const zones = [];
 let zoneSeq = 0;
@@ -681,7 +681,7 @@ let linkViews = false;
 // calls paintLevel directly and never sees zone-level classes — a CSS-only
 // toggle would be silently ignored by every exported file. Deliberately not
 // persisted: linkViews isn't either, and view prefs should persist together
-// or not at all (HANDOVER-ui-layout.md, Decision 4 "Persistence").
+// or not at all (Superseded/HANDOVER-ui-layout.md, Decision 4 "Persistence").
 let showRoomLabels = true;
 
 // Global room search (see the "search" section lower down): one query + one set
@@ -695,7 +695,7 @@ let searchFieldsInitialised = false;
 let searchMatchIds = null;
 let searchActive = false;
 
-// ---- room selection: PAGE state, not zone state (HANDOVER-ui-layout Decision 3)
+// ---- room selection: PAGE state, not zone state (Superseded/HANDOVER-ui-layout Decision 3)
 // One selected room at a time regardless of which zone the click landed in. The
 // same room can legitimately appear in two zones showing the same level, so the
 // highlight is applied in EVERY zone that draws it, while `selectedZoneId`
@@ -705,10 +705,10 @@ let searchActive = false;
 // model expensive.
 let selectedRoomId = null;
 let selectedZoneId = null;
-// Anything that wants to react to a selection change registers here. The
-// adjacency graph is the only listener today; keeping it a list means the
-// future room inspector (the other half of Decision 3) adds itself rather than
-// editing `selectRoom`.
+// Anything that wants to react to a selection change registers here. Two
+// listeners today — the adjacency graph and the room inspector — and both
+// registered themselves rather than editing `selectRoom`, which is what the
+// list was for.
 const selectionListeners = [];
 
 async function fetchJson(url) {
@@ -843,7 +843,7 @@ const MISMATCH_COLOUR = "#d73027";  // red:   outside tolerance
 // because three other features walk `zone.cullUnits` — `roomAtNode`
 // (click-to-select), `applySelection` and `applyHighlight`. Disabling culling by
 // not collecting them would break room selection and search, which looks nothing
-// like a culling change. See HANDOVER-culling-disable-switch.md §2.
+// like a culling change. See Superseded/HANDOVER-culling-disable-switch.md §2.
 let CULL_ENABLED = true;
 // date-range: a date after near_date is "future" — a fixed blue, separate from
 // the green→red near/far ramp (the RdYlGn scheme has no blue of its own).
@@ -2363,7 +2363,7 @@ const gridFilters = new Map(); // column key -> lowercased filter text
 let gridScrollTop = 0;
 // Band 2 folds to its bar the way the band-1 blocks do. In-memory only, like
 // linkViews and the region height — view state persistence is deferred as one
-// decision (HANDOVER-ui-layout Decision 4, "Persistence"), not per control.
+// decision (Superseded/HANDOVER-ui-layout Decision 4, "Persistence"), not per control.
 let gridCollapsed = false;
 // QA marks, at the finest address the report supports. `compute_validation`
 // keys its field-level findings by (room, field), which in this grid IS a
@@ -2698,8 +2698,8 @@ function applyHighlight(zone) {
 // (renderLevel re-applies it after painting).
 //
 // Built as its own step because two features need it: the adjacency graph
-// (which centres on the selection) and the future room inspector
-// (HANDOVER-ui-layout Decision 3, still unbuilt). Neither owns it.
+// (which centres on the selection) and the room inspector
+// (Superseded/HANDOVER-ui-layout Decision 3). Neither owns it.
 
 // Toggle `.selected` on one zone's room polygons. nodes[0] is the outer polygon
 // — holes and the label are excluded on purpose, since the outline is what
@@ -2734,13 +2734,13 @@ function roomAtNode(zone, node) {
 
 // ======================= room inspector (right column) =======================
 //
-// HANDOVER-ui-layout Decision 3, and the third consumer of the selection layer
+// Superseded/HANDOVER-ui-layout Decision 3, and the third consumer of the selection layer
 // after the graph and the plan highlight. Deliberately a *listener plus a
 // renderer*: it never calls into `selectRoom`, never introduces an
 // `activeZoneId`, and never re-renders a zone — a selection change stays a class
 // toggle. Read-only, same stance as the band-2 grid.
 //
-// See HANDOVER-room-inspector.md for the measurements behind the filtering.
+// See Superseded/HANDOVER-room-inspector.md for the measurements behind the filtering.
 
 // A room's 45 properties (House A) are not 45 useful ones: 19 of them hold no
 // real value on ANY room. Revit emits the literal string "None" for an unset
@@ -2755,7 +2755,7 @@ let inspHideEmpty = true;   // default ON: 45 -> 26 on House A, no config needed
 let inspFilter = "";        // substring match on property NAME
 
 // Deliberately not persisted — `linkViews`, the labels toggle and the search
-// field picker are all unpersisted too, and HANDOVER-ui-layout Decision 4 made
+// field picker are all unpersisted too, and Superseded/HANDOVER-ui-layout Decision 4 made
 // "persist every view pref or none" a standing decision. The durable version of
 // "which properties matter" is `room_label` in project settings, server-side.
 
@@ -3436,7 +3436,7 @@ document.getElementById("adjWall").addEventListener("input", (e) => {
 
 // The one place plan-side and graph-side selection meet: whatever set the
 // selection, the graph re-centres. Registered rather than called from
-// `selectRoom` so the future room inspector adds itself the same way.
+// `selectRoom` so the room inspector adds itself the same way.
 // The inspector is a plain listener — exactly what `selectionListeners` was
 // left open for (see its declaration).
 selectionListeners.push(renderInspector);

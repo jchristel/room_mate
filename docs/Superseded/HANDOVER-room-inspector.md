@@ -1,5 +1,12 @@
 # HANDOVER — the right-hand room inspector
 
+> **Superseded — built.** Steps 1–5 shipped; see
+> [STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) for the live description.
+> **Step 6, the checkbox property picker, was deliberately not built** —
+> hide-empty plus the name filter covered the cases it was for, so it is
+> recorded here as an option rather than shipped as speculative UI. That is
+> the one thing in this document still worth acting on, if the need appears.
+
 **Status: steps 1–5 built and verified** (§7). The panel, the sections, the
 hide-empty default and the type-to-filter box are in. **Step 6 — the checkbox
 picker — is not built**; hide-empty plus the filter box turned out to cover the
@@ -173,7 +180,7 @@ Group rather than one flat list, in this order:
 4. **dRofus** — the joined record, or *"not joined"*.
 
 Model and dRofus are visually separated because
-[Sources](STRATEGY-SOURCES.md) keeps dRofus a distinct sub-object with its own
+[Sources](../STRATEGY-SOURCES.md) keeps dRofus a distinct sub-object with its own
 lifecycle and provenance — band 2 already honours this with grouped column
 headers and a per-source tint, and the inspector must not be the one place that
 blurs it.
@@ -225,7 +232,7 @@ Driven against the live viewer. Results in the right-hand column.
 | 8 | Filter box | `finish` → 2 rows; no match → `0 of 45`, stated not silently blank; survives selection change |
 | 9 | 2s poll | Title, visibility and `.selected` outline all survive |
 | 10 | SVG export | 4 polygons, no `insp-` markup — untouched |
-| 11 | Project switch with a room selected | Selection cleared upstream ([:3212](../static/index.html:3212)), panel hides cleanly |
+| 11 | Project switch with a room selected | Selection cleared upstream ([:3212](../../static/index.html:3212)), panel hides cleanly |
 
 The original plan, for reference:
 
@@ -244,7 +251,7 @@ The original plan, for reference:
 
 ## 9. Docs to update on landing
 
-- **[STRATEGY-BROWSER.md](STRATEGY-BROWSER.md)** — add the inspector to
+- **[STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md)** — add the inspector to
   Implemented; it is the third consumer of the selection layer.
 - **[HANDOVER-ui-layout.md](HANDOVER-ui-layout.md)** — Decision 3 done. **That
   retires the document**, so it moves to `Superseded/` and Browser absorbs its
