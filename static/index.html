@@ -149,7 +149,12 @@
   #inspector .insp-row:nth-child(odd) { background: rgba(0, 0, 0, 0.02); }
   #inspector .insp-k { color: var(--accent); word-break: break-word; }
   #inspector .insp-v { word-break: break-word; white-space: pre-wrap; }
-  #inspector .insp-v.empty { opacity: 0.45; font-style: italic; }
+  /* `insp-empty`, NOT a bare `empty`: the zone's no-data overlay owns `.empty`
+     globally as `position: absolute; inset: 0`. A row carrying that class picked
+     the positioning up, and with no positioned ancestor it resolved against the
+     viewport — an invisible full-page shield over the plans that swallowed every
+     click, drag and wheel. */
+  #inspector .insp-v.insp-empty { opacity: 0.45; font-style: italic; }
   #inspector .insp-note { padding: 0.3rem 0.7rem 0.6rem; opacity: 0.6; font-style: italic; }
 
   .zone {
@@ -223,13 +228,29 @@
            dominant-baseline: middle; pointer-events: none; }
   .label .tag { fill: var(--accent); letter-spacing: 0.05em; }
 
-  .empty {
+  /* Scoped to the zone canvas that owns it, NOT a bare `.empty`. Unscoped, this
+     rule reached anything anywhere that happened to use so generic a word: the
+     inspector's empty-value rows picked up `position: absolute; inset: 0`, and
+     with no positioned ancestor they sized against the viewport — an invisible
+     full-page shield over the plans that ate every click, drag and wheel.
+     (`#bottomRegion.empty` is a different state on a different element, already
+     scoped by its id.)
+
+     `:not(.hidden)` is load-bearing, not decoration: scoping raised this rule's
+     specificity above the `.hidden` utility that switches the overlay off, which
+     left it displayed over every plan — the same shield bug wearing a different
+     hat. Stated here rather than fought with `!important`. */
+  .zone-canvas .empty:not(.hidden) {
     position: absolute; inset: 0; display: grid; place-content: center;
     text-align: center; gap: 0.4rem; color: var(--ink); padding: 1rem;
+    /* It is a message, not a control — nothing in it is clickable. Without this
+       it covers the canvas it sits on and eats pan, zoom and click, which is the
+       same shield this file has now been bitten by twice. */
+    pointer-events: none;
   }
-  .empty strong { font-weight: 600; letter-spacing: 0.05em; }
-  .empty span { font-size: 0.72rem; opacity: 0.6; }
-  .empty code { background: #0001; padding: 0.1rem 0.4rem; }
+  .zone-canvas .empty strong { font-weight: 600; letter-spacing: 0.05em; }
+  .zone-canvas .empty span { font-size: 0.72rem; opacity: 0.6; }
+  .zone-canvas .empty code { background: #0001; padding: 0.1rem 0.4rem; }
   .hidden { display: none; }
 
   /* --- bottom region: the results band (Superseded/HANDOVER-ui-layout Decision 2) ---
@@ -383,9 +404,26 @@
   svg.plan.areas-active .room,
   svg.plan.areas-active .hole { opacity: 0.16; }
   svg.plan.areas-active .label { opacity: 0.22; }
-  .area-poly { fill-opacity: 0.32; stroke-width: 2; vector-effect: non-scaling-stroke; }
+  /* The selection is page state and must read in EVERY zone showing it — ghosted
+     to 0.16 under a footprint it was there but invisible, so a room selected
+     with areas on looked like nothing had happened. */
+  svg.plan.areas-active .room.selected { opacity: 1; }
+  /* Footprints ARE hit targets — they are what an areas-on plan is showing, and
+     `areaAtNode` resolves a click on one to its group. This was briefly
+     `pointer-events: none` to stop the overlay swallowing room clicks: a hit on
+     it made `roomAtNode` return null, which the pointerup handler reads as
+     "clicked empty space", so an areas-on zone silently CLEARED the page
+     selection — including one made in another zone. The click now means
+     something instead of being disabled. */
+  .area-poly { fill-opacity: 0.32; stroke: var(--area-colour); stroke-width: 2;
+               vector-effect: non-scaling-stroke; cursor: pointer; }
   /* A group withheld from tiers above (Case-A exclusion) reads as dashed + faint. */
   .area-poly.faded { fill-opacity: 0.12; stroke-dasharray: 5 4; }
+  /* Same visual language as `.room.selected` — dashed accent, stroke only, so a
+     selected footprint keeps its group colour and its counted/uncounted read.
+     AFTER `.faded` on purpose: equal specificity, so source order decides, and a
+     selected uncounted group must still show it is selected. */
+  .area-poly.selected { stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3; fill-opacity: 0.42; }
   .area-label { fill: var(--ink); text-anchor: middle; dominant-baseline: middle;
                 pointer-events: none; font-weight: 600; }
   /* Areas results table (band 1). Table shape shared with the old overlay
@@ -612,6 +650,9 @@
       </div>
       <div class="zone-canvas">
         <svg class="plan" xmlns="http://www.w3.org/2000/svg"></svg>
+        <!-- The `waiting` state of setZoneEmpty(), spelled out here so it paints
+             before any JS runs. That function rewrites this content for the
+             `scope` and `level` states — keep the two in step. -->
         <div class="empty">
           <strong>No rooms received yet</strong>
           <span>POST room JSON to <code>/rooms</code>, then this updates.</span>
@@ -695,20 +736,34 @@ let searchFieldsInitialised = false;
 let searchMatchIds = null;
 let searchActive = false;
 
-// ---- room selection: PAGE state, not zone state (Superseded/HANDOVER-ui-layout Decision 3)
-// One selected room at a time regardless of which zone the click landed in. The
+// ---- selection: PAGE state, not zone state (Superseded/HANDOVER-ui-layout Decision 3)
+// One selected THING at a time regardless of which zone the click landed in. The
 // same room can legitimately appear in two zones showing the same level, so the
-// highlight is applied in EVERY zone that draws it, while `selectedZoneId`
-// records where the click came from. That id is a *label* (the graph panel names
-// it), not `activeZoneId` focus machinery — selection is explicit, never
+// highlight is applied in EVERY zone that draws it, while `zoneId` records where
+// the click came from. That id is a *label* (the graph panel and the inspector
+// name it), not `activeZoneId` focus machinery — selection is explicit, never
 // inferred from where the user last interacted, which is what made the old focus
 // model expensive.
-let selectedRoomId = null;
-let selectedZoneId = null;
-// Anything that wants to react to a selection change registers here. Two
-// listeners today — the adjacency graph and the room inspector — and both
-// registered themselves rather than editing `selectRoom`, which is what the
-// list was for.
+//
+// `kind` is what makes this more than a room id. The plan draws two selectable
+// things already (rooms, and the hierarchy footprints on top of them) and the
+// pipeline anticipates a third (FFE — see STRATEGY.md "Any future upload"). One
+// tagged shape means a new kind is a renderer registration plus a hit test, not
+// another parallel id and another `if` in every consumer.
+let selection = null;   // { kind: "room" | "area", id, zoneId } | null
+
+// The selected ROOM id, or null when the selection is something else. Every
+// room-only consumer (the plan outline, the adjacency graph, the grid jump)
+// reads this rather than `selection.id`, so an area selection can never be
+// mistaken for a room id — feeding one to the graph would hunt for a node that
+// does not exist.
+function roomSelection() { return selection && selection.kind === "room" ? selection.id : null; }
+
+// Anything that wants to react to a selection change registers here. Listeners
+// receive the whole `selection` object (or null), so a kind-blind listener must
+// filter — see the adjacency one at the bottom of the file. Both current
+// listeners registered themselves rather than editing `select`, which is what
+// the list was for.
 const selectionListeners = [];
 
 async function fetchJson(url) {
@@ -1201,10 +1256,58 @@ function paintLevel(svg, rooms, fitted, { colourPlan = null, errorRoomIds = null
   if (cullUnits) for (const u of units.values()) cullUnits.push(u);
 }
 
+// The canvas overlay says one of three DIFFERENT things, and collapsing them
+// into the one "No rooms received yet" message was the confusion worth fixing:
+// only `waiting` is a setup step the user acts on. The other two describe data
+// that arrived perfectly well, and until now showed as a blank canvas saying
+// nothing at all — indistinguishable from a broken render.
+//
+//   waiting — nothing pushed yet. The initial state, in the template markup so
+//             it paints before any JS runs.
+//   scope   — a payload with no levels: the project/building/milestone pick
+//             matched nothing. Fixed at the header pickers, not on the zone.
+//   level   — this level has no rooms. The model is fine; the level is empty,
+//             and the level picker already says "(0 rm)" next to its name.
+function setZoneEmpty(zone, state, levelName = "") {
+  const el = zone.els.empty;
+  el.classList.toggle("hidden", !state);
+  if (!state) return;
+
+  const title = document.createElement("strong");
+  const detail = document.createElement("span");
+  if (state === "waiting") {
+    title.textContent = "No rooms received yet";
+    const code = document.createElement("code");
+    code.textContent = "/rooms";
+    detail.append("POST room JSON to ", code, ", then this updates.");
+  } else if (state === "scope") {
+    title.textContent = "No rooms in this scope";
+    detail.textContent = "The data has no levels to draw — check the project, building and milestone pickers.";
+  } else {
+    // Named rather than "this level": with three zones open, which one is empty
+    // is the question, and the panel is the only place that answers it.
+    title.textContent = `${levelName || "This level"} has no rooms`;
+    detail.textContent = "The model arrived; this level is empty. Pick another level above.";
+  }
+  el.replaceChildren(title, detail);
+}
+
 function renderLevel(zone, payload, levelId, { refit = true } = {}) {
   const plan = zone.svg;
+  // These two lines are ONE operation and must stay adjacent: `cullUnits` is the
+  // index of what is currently in `plan`, so emptying the plan without emptying
+  // the index leaves units pointing at detached nodes. Every early return below
+  // used to skip the reset — switching to a level with no rooms (House A's LEVEL
+  // 02) left the previous level's 14 units live against 0 drawn polygons, so
+  // `roomAtNode` could resolve a click to a room that is not on screen and
+  // `cullZone` spent its passes toggling `display` on nodes in no document.
   plan.replaceChildren();
+  zone.cullUnits = [];
   const rooms = roomsOnLevel(payload, levelId);
+  // Set from the one place that knows, and in BOTH directions — a level with
+  // rooms must clear a message left by the last one.
+  const levelName = (payload.levels || []).find(l => l.id === levelId)?.name || levelId;
+  setZoneEmpty(zone, rooms.length === 0 ? "level" : null, levelName);
 
   if (rooms.length === 0) {
     if (refit) { zone.view = { ...zone.fitted }; setViewBox(zone); }
@@ -1220,8 +1323,7 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
   }
   if (!zone.fitted) return; // no established frame yet (unbounded first render)
 
-  zone.cullUnits = [];
-  paintLevel(plan, rooms, zone.fitted, {
+  paintLevel(plan, rooms, zone.fitted, {   // repopulates the array reset above
     colourPlan: zone.activeColourPlan,   // presentation: per zone
     errorRoomIds,                        // data-quality state: global
     showErrors,                          // follows the QA block's expansion (global)
@@ -1358,7 +1460,6 @@ function ingestAll(payload) {
 function ingestZone(zone) {
   const payload = currentPayload;
   if (!payload) return;
-  zone.els.empty.classList.add("hidden");
   zone.els.exportSvg.classList.remove("hidden"); // there's now something to export
   zone.els.areasToggle.classList.remove("hidden"); // footprints can be computed now
 
@@ -1377,7 +1478,12 @@ function ingestZone(zone) {
   // grid/label sizing reads it. Explicit level switches still refit via
   // selectLevel.
   const refit = !zone.fitted || zone.activeLevelId !== prevLevelId;
+  // renderLevel owns the overlay whenever there is a level to render. With no
+  // levels at all it never runs, so the scope message is set here — otherwise a
+  // payload that matched nothing leaves the stale "waiting" message claiming
+  // nothing was ever pushed.
   if (zone.activeLevelId) renderLevel(zone, payload, zone.activeLevelId, { refit });
+  else setZoneEmpty(zone, "scope");
   updateMeta(zone);
 }
 
@@ -1946,6 +2052,12 @@ function tierSig(t) { return `${t.code == null ? "" : t.code}|${t.name == null ?
 function pathKey(path, depth) { return path.slice(0, depth + 1).map(tierSig).join("/"); }
 function tierLabel(t) { return t.undefined ? `undefined ${t.tier}` : (t.name || t.code || t.tier); }
 
+// Selection identity for one area group: (level, full path prefix), which is
+// what makes a group a group server-side. Deliberately NOT the array index —
+// a group must stay selected across the overlay rebuilds that a tier change,
+// level switch or poll re-render all trigger, and index survives none of them.
+function areaKey(grp) { return `${grp.level_id}|${pathKey(grp.path, grp.path.length - 1)}`; }
+
 // A footprint ring is [[x,y],…] in model coords; flip Y for the SVG's Y-down space.
 // SVG path `d` for a footprint polygon: its exterior ring plus any interior
 // rings (voids), each a closed subpath. Rendered with fill-rule:evenodd so the
@@ -2056,8 +2168,14 @@ function renderAreasOverlay(zone) {
       path.setAttribute("d", footprintPathD(poly));
       path.setAttribute("fill-rule", "evenodd");
       path.setAttribute("class", grp.counted_upward ? "area-poly" : "area-poly faded");
+      path.dataset.areaKey = areaKey(grp);   // hit test + re-applied selection
       path.style.fill = colour;
-      path.style.stroke = colour;
+      // The stroke goes through a custom property, NOT `style.stroke`: an inline
+      // stroke outranks every stylesheet rule, so `.area-poly.selected` could
+      // never repaint the outline and a selected footprint kept its group colour.
+      // The fill stays inline — it should keep that colour, selected or not, so
+      // the band's swatches still name the same group.
+      path.style.setProperty("--area-colour", colour);
       g.appendChild(path);
     }
     // Label goes on the largest exterior ring across the group's islands.
@@ -2090,6 +2208,11 @@ function renderAreasOverlay(zone) {
     }
   });
   svg.appendChild(g);
+  // The overlay is rebuilt on every render, tier change and level switch, so a
+  // selected footprint loses its class with the old nodes. Re-applied HERE, not
+  // by the callers: this is the one function that rebuilds it, and renderLevel's
+  // own applySelection call runs before this one (rooms are painted first).
+  applySelection(zone);
 }
 
 // The band's figures: EVERY level at the band's selected tier — each group's
@@ -2267,7 +2390,7 @@ function renderAdjacency() {
   const g = ensureGraph();
   g.setData(adjData);
   populateAdjTier();
-  g.setFocus(selectedRoomId);
+  g.setFocus(roomSelection());   // rooms only: an area id names no graph node
   updateAdjMeta();
 }
 
@@ -2292,14 +2415,17 @@ function populateAdjTier() {
 
 function updateAdjMeta() {
   const meta = document.getElementById("adjMeta");
-  if (!selectedRoomId) { meta.textContent = "no room selected"; return; }
-  const name = currentPayload?.rooms.find(r => r.id === selectedRoomId)?.name || selectedRoomId;
+  // Adjacency is a room relation, so a non-room selection reads the same as no
+  // selection here rather than being reported as something the graph can show.
+  const roomId = roomSelection();
+  if (!roomId) { meta.textContent = "no room selected"; return; }
+  const name = currentPayload?.rooms.find(r => r.id === roomId)?.name || roomId;
   const shown = adjGraph ? adjGraph.shownCount() : 0;
-  const degree = adjData ? adjData.edges.filter(e => e.a === selectedRoomId || e.b === selectedRoomId).length : 0;
+  const degree = adjData ? adjData.edges.filter(e => e.a === roomId || e.b === roomId).length : 0;
   // Naming the zone the selection came from is Decision 3's rule: the same room
   // can appear in two zones, so the result says where the click landed. A
   // label, not focus machinery.
-  const from = selectedZoneId ? ` · from ${selectedZoneId}` : "";
+  const from = selection && selection.zoneId ? ` · from ${selection.zoneId}` : "";
   meta.textContent = `${name} · ${degree} adjacent · ${shown} shown${from}`;
 }
 
@@ -2689,36 +2815,58 @@ function applyHighlight(zone) {
   }
 }
 
-// ============================ room selection ============================
+// ============================ selection ============================
 //
 // The other consumer of the cull-unit room->nodes map, and deliberately built
 // the same way as `applyHighlight` above: toggling a class on already-rendered
-// nodes, never a re-render. Selecting a room must not disturb pan/zoom, must not
+// nodes, never a re-render. Selecting must not disturb pan/zoom, must not
 // re-paint 5,000 polygons, and must survive a level switch or a poll re-render
 // (renderLevel re-applies it after painting).
 //
 // Built as its own step because two features need it: the adjacency graph
-// (which centres on the selection) and the room inspector
+// (which centres on the selection) and the inspector
 // (Superseded/HANDOVER-ui-layout Decision 3). Neither owns it.
 
-// Toggle `.selected` on one zone's room polygons. nodes[0] is the outer polygon
-// — holes and the label are excluded on purpose, since the outline is what
-// carries the selection stroke.
+// Toggle `.selected` on whatever the selection names, in one zone. Rooms come
+// from the cull units (nodes[0] is the outer polygon — holes and the label are
+// excluded on purpose, since the outline is what carries the selection stroke);
+// footprints come from the areas overlay, which stamps its own key.
+//
+// Both loops run every time rather than branching on kind: the class must come
+// OFF the other kind's nodes when the selection moves between kinds, and a
+// linear pass over a level's nodes is free at any rate a click can reach.
 function applySelection(zone) {
+  const roomId = roomSelection();
   for (const u of (zone.cullUnits || []))
-    u.nodes[0].classList.toggle("selected", !!selectedRoomId && u.room.id === selectedRoomId);
+    u.nodes[0].classList.toggle("selected", !!roomId && u.room.id === roomId);
+
+  const areaId = selection && selection.kind === "area" ? selection.id : null;
+  for (const p of zone.svg.querySelectorAll(".area-poly"))
+    p.classList.toggle("selected", !!areaId && p.dataset.areaKey === areaId);
 }
 
-// Set (or clear, with a null id) the page selection and notify every listener.
+// Set (or clear, with null) the page selection and notify every listener.
 // `zoneId` records which zone the click came from; it is null for a selection
 // that did not originate on a plan (e.g. a graph node click), where "which zone"
 // has no answer.
-function selectRoom(roomId, zoneId = null) {
-  if (roomId === selectedRoomId && zoneId === selectedZoneId) return;
-  selectedRoomId = roomId || null;
-  selectedZoneId = selectedRoomId ? zoneId : null;
+function select(next) {
+  const same = next && selection
+    ? next.kind === selection.kind && next.id === selection.id && next.zoneId === selection.zoneId
+    : next === selection;
+  if (same) return;
+  selection = next || null;
   for (const z of zones) applySelection(z);
-  for (const fn of selectionListeners) fn(selectedRoomId);
+  for (const fn of selectionListeners) fn(selection);
+}
+
+// Kind-specific entry points. `selectRoom` keeps its signature because callers
+// that can only ever mean a room (the graph's node click, the project-switch
+// clear) should not have to spell the shape out.
+function selectRoom(roomId, zoneId = null) {
+  select(roomId ? { kind: "room", id: roomId, zoneId } : null);
+}
+function selectArea(areaId, zoneId = null) {
+  select(areaId ? { kind: "area", id: areaId, zoneId } : null);
 }
 
 // The room a plan click landed on, or null for empty space / the grid. Resolved
@@ -2732,13 +2880,31 @@ function roomAtNode(zone, node) {
   return unit ? unit.room : null;
 }
 
-// ======================= room inspector (right column) =======================
+// The footprint a plan click landed on, or null. Unlike rooms this DOES read an
+// attribute off the node, and can: the overlay is built by `renderAreasOverlay`
+// alone and the SVG export never goes through it (the export paints its own
+// document with `paintLevel`), so the stamp cannot leak into an exported file.
+// That is exactly the risk `roomAtNode` scans to avoid — `paintLevel` IS shared
+// with the export.
+function areaAtNode(zone, node) {
+  if (!node || !node.classList || !node.classList.contains("area-poly")) return null;
+  const key = node.dataset.areaKey;
+  return (areasData ? areasData.groups : []).find(g => areaKey(g) === key) || null;
+}
+
+// ========================= inspector (right column) =========================
 //
 // Superseded/HANDOVER-ui-layout Decision 3, and the third consumer of the selection layer
 // after the graph and the plan highlight. Deliberately a *listener plus a
-// renderer*: it never calls into `selectRoom`, never introduces an
-// `activeZoneId`, and never re-renders a zone — a selection change stays a class
-// toggle. Read-only, same stance as the band-2 grid.
+// renderer*: it never calls into `select`, never introduces an `activeZoneId`,
+// and never re-renders a zone — a selection change stays a class toggle.
+// Read-only, same stance as the band-2 grid.
+//
+// It renders whatever KIND is selected rather than assuming a room: one
+// dispatcher (`INSPECTORS`) over one shared header, with a renderer per kind.
+// The plan already draws two selectable things and the pipeline anticipates a
+// third, so "show the properties of the selected thing" is the panel's job —
+// "show the properties of the selected room" was the narrower special case.
 //
 // See Superseded/HANDOVER-room-inspector.md for the measurements behind the filtering.
 
@@ -2767,7 +2933,7 @@ function inspRow(parent, key, rawValue) {
   k.className = "insp-k";
   k.textContent = key;
   const v = document.createElement("div");
-  v.className = "insp-v" + (empty ? " empty" : "");
+  v.className = "insp-v" + (empty ? " insp-empty" : "");
   v.textContent = empty ? "—" : rawValue;
   row.append(k, v);
   parent.appendChild(row);
@@ -2800,43 +2966,128 @@ function inspApplyFilters(entries, { hideEmpty = true } = {}) {
     (!q || k.toLowerCase().includes(q)) && (!(hideEmpty && inspHideEmpty) || !isEmptyPropValue(v)));
 }
 
+// One renderer per selectable kind. Adding a kind (FFE is the one the pipeline
+// already anticipates) is a line here plus a hit test in the pointerup handler —
+// not another branch inside a room-shaped function. An unknown kind is NAMED in
+// the panel rather than silently rendering nothing: a blank panel reads as a bug
+// in the selection, which is exactly what it would be hiding.
+const INSPECTORS = {
+  room: renderRoomInspector,
+  area: renderAreaInspector,
+};
+
+// The header every kind shares: a title, a sub-line, and the zone the click came
+// from. `kind` is spelled out for anything that is not a room, because "which of
+// the two things under the pointer did I just select" is the question the panel
+// has to answer first once the plan draws both.
+function inspHead(host, { kind, title, sub }) {
+  const head = document.createElement("div");
+  head.className = "insp-head";
+  const t = document.createElement("div");
+  t.className = "insp-title";
+  t.textContent = title;
+  const s = document.createElement("div");
+  s.className = "insp-sub";
+  // `selection.zoneId` is a LABEL, not focus state: the same room can appear in
+  // two zones on the same level, so naming where the click came from is the
+  // whole reason that id exists.
+  const from = selection && selection.zoneId ? ` · from ${selection.zoneId}` : "";
+  s.textContent = (kind === "room" ? "" : `${kind.toUpperCase()} · `) + sub + from;
+  head.append(t, s);
+  host.appendChild(head);
+  return head;
+}
+
 function renderInspector() {
   const host = document.getElementById("inspector");
   if (!host) return;
 
-  if (!selectedRoomId) {           // no selection -> the column costs no width
+  if (!selection) {                // no selection -> the column costs no width
     host.classList.add("hidden");
     host.replaceChildren();
-    return;
-  }
-  const room = currentPayload?.rooms.find(r => r.id === selectedRoomId);
-  if (!room) {                     // selected room not in the current scope
-    host.classList.remove("hidden");
-    host.replaceChildren();
-    const note = document.createElement("div");
-    note.className = "insp-note";
-    note.textContent = `Room ${selectedRoomId} is not in the current scope.`;
-    host.appendChild(note);
     return;
   }
 
   host.classList.remove("hidden");
   host.replaceChildren();
 
+  const render = INSPECTORS[selection.kind];
+  if (!render) {
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent = `No inspector for a "${selection.kind}" selection.`;
+    host.appendChild(note);
+    return;
+  }
+  render(host);
+}
+
+// ---- the area (hierarchy footprint) inspector -------------------------------
+//
+// Answers "what is this one footprint", the same question the room renderer
+// answers for a room. Every figure is already client-side — the group from
+// `/areas`, the net room area summed with the SAME roomNetArea + pathKey
+// identity the band and the CSV use, so the three can never disagree. No server
+// work, and deliberately no duplication of the band: the band compares groups,
+// this describes one.
+function renderAreaInspector(host) {
+  const grp = (areasData ? areasData.groups : []).find(g => areaKey(g) === selection.id);
+  if (!grp) {
+    // Real and reachable: the tier picker moved, the level changed, or the scope
+    // was re-fetched without this group. Named, never a blank panel.
+    inspHead(host, { kind: "area", title: "Footprint", sub: "no longer in scope" });
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent = "This footprint is not in the current areas data — the tier or scope changed.";
+    host.appendChild(note);
+    return;
+  }
+
+  const depth = grp.path.length - 1;
+  const levelName = (areasData.levels || []).find(l => l.id === grp.level_id)?.name || grp.level_id;
+  inspHead(host, { kind: "area", title: tierLabel(grp.path[depth]), sub: `${grp.path[depth].tier} · ${levelName}` });
+
+  // Member rooms by the same (level, path-prefix) identity the band groups on.
+  const members = (currentPayload ? currentPayload.rooms : []).filter(r =>
+    r.level_id === grp.level_id &&
+    r.classification && r.classification.length >= depth + 1 &&
+    pathKey(r.classification, depth) === pathKey(grp.path, depth));
+  const net = members.reduce((a, r) => a + roomNetArea(r), 0);
+  const fmt = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+
+  inspSection(host, "Hierarchy", grp.path.map(t => [t.tier, t.undefined ? "(undefined)" : (t.name || t.code || "")]));
+
+  // Δ is the point of showing both: it is the enclosed wall bands and filled
+  // room voids, i.e. what a dissolved footprint counts that summed rooms do not.
+  inspSection(host, "Areas", [
+    ["Footprint (gross)", fmt(grp.area)],
+    ["Net room area", fmt(net)],
+    ["Δ (walls + voids)", fmt(grp.area - net)],
+    ["Counts upward", grp.counted_upward ? "yes" : "no — withheld from tiers above"],
+    ["Islands", String(grp.polygons.length)],
+    ["Rooms", String(members.length)],
+  ]);
+
+  const note = document.createElement("div");
+  note.className = "insp-note";
+  note.textContent = "Model units². Footprint from the server's dissolve; net summed client-side from room loops.";
+  host.appendChild(note);
+}
+
+// ---- the room inspector -----------------------------------------------------
+function renderRoomInspector(host) {
+  const room = currentPayload?.rooms.find(r => r.id === selection.id);
+  if (!room) {                     // selected room not in the current scope
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent = `Room ${selection.id} is not in the current scope.`;
+    host.appendChild(note);
+    return;
+  }
+
   // ---- header: identity + the controls -------------------------------------
-  const head = document.createElement("div");
-  head.className = "insp-head";
-  const title = document.createElement("div");
-  title.className = "insp-title";
-  title.textContent = room.name || room.id;
-  const sub = document.createElement("div");
-  sub.className = "insp-sub";
   const levelName = (currentPayload.levels || []).find(l => l.id === room.level_id)?.name || room.level_id;
-  // `selectedZoneId` is a LABEL, not focus state: the same room can appear in
-  // two zones on the same level, so naming where the click came from is the
-  // whole reason that id exists.
-  sub.textContent = `${room.id} · ${levelName}` + (selectedZoneId ? ` · from ${selectedZoneId}` : "");
-  head.append(title, sub);
+  const head = inspHead(host, { kind: "room", title: room.name || room.id, sub: `${room.id} · ${levelName}` });
 
   const controls = document.createElement("div");
   controls.className = "insp-controls";
@@ -2854,8 +3105,10 @@ function renderInspector() {
   hideCb.addEventListener("change", (e) => { inspHideEmpty = e.target.checked; renderInspector(); });
   hideLabel.append(hideCb, document.createTextNode("Hide empty"));
   controls.append(search, hideLabel);
+  // Into the shared header, which `inspHead` already put on the page. The filter
+  // and hide-empty controls stay ROOM-ONLY: they exist for the 45 model
+  // properties, and an area's dozen derived figures have nothing to filter.
   head.appendChild(controls);
-  host.appendChild(head);
 
   // ---- classification ------------------------------------------------------
   // An `undefined` tier is named explicitly rather than shown as an empty value:
@@ -3056,8 +3309,17 @@ function wireInteractions(zone) {
     if (!movedFar) {
       // A click on empty space (the grid, or the bare canvas) clears the
       // selection — the same gesture that sets it should be able to unset it.
+      //
+      // Rooms first, then footprints. With areas off only the first can match;
+      // with areas on the overlay is what the pointer actually hits, because it
+      // draws on top and the rooms below it are ghosted to 0.16 — clicking what
+      // you can see is the rule. Selecting a room under a footprint means
+      // turning that zone's Areas off, which is per-zone, so a second zone can
+      // hold the room view at the same time.
       const room = roomAtNode(zone, downNode);
-      selectRoom(room ? room.id : null, room ? zone.id : null);
+      const area = room ? null : areaAtNode(zone, downNode);
+      if (room) selectRoom(room.id, zone.id);
+      else selectArea(area ? areaKey(area) : null, area ? zone.id : null);
     }
     downNode = null;
   });
@@ -3116,6 +3378,11 @@ function wireZoneControls(zone) {
       e.areasTier.classList.add("hidden");
       renderAreasOverlay(zone); // removes the overlay + un-ghosts rooms
       renderAreasBand();        // hides the band when no zone has areas open
+      // A footprint selection outlives the overlay it was made on only while
+      // some zone can still draw it. With the last one closed it has nothing to
+      // point at, so it is cleared rather than left as a panel describing
+      // something no longer on screen.
+      if (selection && selection.kind === "area" && !zones.some(z => z.areasMode)) select(null);
     }
   });
   e.areasTier.addEventListener("change", () => {
@@ -3436,7 +3703,7 @@ document.getElementById("adjWall").addEventListener("input", (e) => {
 
 // The one place plan-side and graph-side selection meet: whatever set the
 // selection, the graph re-centres. Registered rather than called from
-// `selectRoom` so the room inspector adds itself the same way.
+// `select` so the inspector adds itself the same way.
 // The inspector is a plain listener — exactly what `selectionListeners` was
 // left open for (see its declaration).
 selectionListeners.push(renderInspector);
@@ -3444,9 +3711,12 @@ selectionListeners.push(renderInspector);
 selectionListeners.push(() => {
   updateAdjMeta();
   if (!adjBandOpen()) return;
-  // Data already in hand covers this room unless the scope changed, so
-  // re-centring is a re-layout, not a fetch.
-  if (adjData) { ensureGraph().setFocus(selectedRoomId); updateAdjMeta(); }
+  // `roomSelection()`, not `selection.id`: adjacency is a room relation, so
+  // selecting a footprint clears the graph's focus rather than sending it
+  // hunting for a node id that was never a room. A fetch on a non-room
+  // selection would be worse still — it would be a request for nothing.
+  const roomId = roomSelection();
+  if (adjData || !roomId) { ensureGraph().setFocus(roomId); updateAdjMeta(); }
   else loadAdjacency({ force: true });
 });
 
