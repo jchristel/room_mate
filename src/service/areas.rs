@@ -330,9 +330,12 @@ fn union_of_rooms<'a>(rooms: impl Iterator<Item = &'a Room>) -> MultiPolygon<f64
 /// **Bevel joins, not miter.** A miter join extends a convex corner to a sharp
 /// point that the erode does not always clean up, leaving a spike — visible as a
 /// triangular flag where two department footprints meet. Bevel never spikes: it
-/// cuts each corner with a short chord. That cut is then repaired by unioning the
-/// original geometry back (see [`close_and_clean`]), so the net result is sharp
-/// corners with no spikes — which miter could not give.
+/// cuts each corner with a short chord. That cut is then repaired downstream —
+/// [`wall_zone`] unions the original rooms back before subtracting them, and
+/// [`clean_rings`] sharpens whatever chords survive onto the emitted footprints —
+/// so the net result is sharp corners with no spikes, which miter could not give.
+/// (This used to name a `close_and_clean` helper; the wall-zone reformulation
+/// split that work across those two, and the repair is no longer one function.)
 fn morphological_close(mp: &MultiPolygon<f64>, r: f64) -> MultiPolygon<f64> {
     if r <= 0.0 || mp.0.is_empty() {
         return mp.clone();

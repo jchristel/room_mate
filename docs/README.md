@@ -20,7 +20,15 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | Document | Description |
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
-| [Plan: handover actioning](PLAN-handover-actioning.md) | Review of the open handovers against strategy, priorities, and the ordered plan (with per-item landed status) |
+| [Plan: handover actioning](PLAN-handover-actioning.md) | **Closed — P1 through P10 all landed**, and all three handovers it reviews are in `Superseded/`. Kept as the record of how the UI restructure was sequenced and what was deliberately not built; it is history, not a work list |
+
+> **Reading either document above: do not trust their `file.rs:NNN` deep
+> links.** Both pin line numbers, and the files have moved underneath them —
+> spot-checked 2026-07-26, most now land on unrelated code (e.g.
+> `areas.rs:270` was cited as "`/areas` has no `revision` field" and is now
+> `wall_zone`). The *file* and the *symbol name* in the surrounding prose are
+> still right; search for the symbol rather than jumping to the line. New
+> cross-references should name the symbol, not the line.
 
 ## Open handovers
 

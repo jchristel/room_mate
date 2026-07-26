@@ -181,9 +181,9 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   `service/` file, one HTTP route, and (optionally) one `#[tool]` method
   here — none of the three touches the others. `get_adjacency` is the most
   recent worked example, added alongside `service::adjacency` and its HTTP route
-  in the same move and sharing even the tolerance validation (`resolve_wall_max`
-  lives in the service), so the two front doors cannot disagree on what a valid
-  `wall_max` is.
+  in the same move and sharing even the tolerance validation (`check_wall_max`
+  lives in the service, and both front doors call it before any room merge), so
+  the two cannot disagree on what a valid `wall_max` is.
 - **No resources or prompts exposed**, only tools — matches the handover
   doc's "read side ... as tools" scope. Worth revisiting if an MCP client
   wants to browse stored snapshots as resources rather than calling a tool
