@@ -53,6 +53,25 @@ function qualitative(scheme, k) {
   return stops[k % stops.length];
 }
 
+// ---------------------------------------------------------------------------
+// Classification-path vocabulary (shared by the areas overlay and band in
+// index.html and the adjacency graph in graph.js).
+//
+// Here for the same reason the palette is: two views that disagree about which
+// rooms form one group are worse than either being arbitrary. The areas overlay
+// stamps `areaKey(group)` on a footprint, the graph aggregates the room graph to
+// the same key, and a footprint clicked on the plan therefore names a graph node
+// without a second request. A copy of these three lines would drift the first
+// time the tuple changed, and the drift would be invisible — a selection that
+// silently matches nothing.
+// ---------------------------------------------------------------------------
+
+// Identity of a classification prefix — matches server area-groups to client
+// rooms by the same (code,name,undefined) tuple everything else resolves.
+function tierSig(t) { return `${t.code == null ? "" : t.code}|${t.name == null ? "" : t.name}|${t.undefined ? "U" : ""}`; }
+function pathKey(path, depth) { return path.slice(0, depth + 1).map(tierSig).join("/"); }
+function tierLabel(t) { return t.undefined ? `undefined ${t.tier}` : (t.name || t.code || t.tier); }
+
 // GET JSON with no-store caching; throws the server's error text (falling back
 // to "<url> -> <status>") on a non-2xx so callers surface it verbatim.
 async function apiGet(url) {
