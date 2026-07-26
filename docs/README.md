@@ -28,7 +28,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 | Document | Status |
 |---|---|
-| [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; **one validation item left**, and its stated blocker is stale. It says "every fixture in the repo is generated centreline" — but House A is real finish-face data, so the run it asks for is doable today: confirm no corridor-bridging and no bridging through a thin service room, and record the tolerance that worked so the default can be baked in |
+| [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested. **Two false-positive checks left** — that the graph does not link rooms across a corridor, or through a thin service room — and they need a hospital-scale finish-face export this repo does not have. House A cannot settle them: a `wall_max` sweep on it saturates at 1.5 ft, so there is nothing at corridor distance to wrongly bridge. The item's other three asks are done or moved to [Area calculation](STRATEGY-AREA-CALCULATION.md) |
 
 Handoff documents whose work has fully landed live in
 [Superseded](Superseded/) — most recently `HANDOVER-ui-layout.md` (every
