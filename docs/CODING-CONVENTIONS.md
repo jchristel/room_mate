@@ -49,13 +49,20 @@ naming specifically:
 ## Long functions
 - A long function is a bigger smell than a long module. The `too_many_lines`
   clippy lint (in `Cargo.toml`, `warn` — fires >100 lines) surfaces them.
-  **Nothing runs it for you:** `.github/workflows/rust.yml` is `cargo build` +
-  `cargo test` only, so clippy is a local habit, not a gate. It currently
-  reports 25 lib warnings (collapsible `if`s, `useless_vec` in tests,
-  overindented doc lists, one `&PathBuf`-should-be-`&Path`) and one
-  `too_many_lines` hit — a test, `settings_api::tests::test_settings_toml_round_trip`
-  at 118 lines. Either clear them or add `cargo clippy` to CI; a warn-level
-  lint nobody reads is decoration.
+- **Clippy is a CI gate**: `.github/workflows/rust.yml` runs
+  `cargo clippy --all-targets -- -D warnings` alongside build and test, so the
+  tree is warning-free and stays that way. `--all-targets` because most of this
+  crate's lines are inline test modules, and they drifted just as far as the lib
+  did while nothing was watching.
+- **`-D warnings` does not make `too_many_lines` a hard limit.** The escape
+  hatch stays exactly what it always was — `#[allow(clippy::too_many_lines)]`
+  **with a reason** — and an explicit allow compiles clean under `-D warnings`.
+  A long-but-cohesive function is still permitted; it just has to say so out
+  loud. `settings_api::tests::test_settings_toml_round_trip` (118 lines) is the
+  worked example: it asserts that the *whole* `Settings` shape round-trips
+  through TOML at once, so splitting it per section would test each against a
+  separately built document and lose the value-before-table ordering property
+  (see the TOML footgun below) that only bites when sections are interleaved.
 - Extract helpers only at **seams that improve clarity** — a natural phase
   boundary with a nameable input/output — never mechanically to hit the line
   count. `assemble_rooms` (scope → dedup levels → assemble) and
