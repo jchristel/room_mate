@@ -206,9 +206,12 @@ with citations in the handover's References section:
 
 ## 8. Open
 
-- **Nothing sends `room_boundary` yet** — the Revit extractor is in another
-  repository. Every model currently resolves through the project fallback, which
-  is a designed-for state, not a broken one.
+- **Nothing sends `room_boundary` yet**, so every model resolves through the
+  project fallback — a designed-for state, not a broken one. This was previously
+  blocked on the extractor being in another repository; it now lives in
+  `extractor/pyRevit/`, where `post_rooms.py`'s `build_envelope` already stamps
+  the sibling `model_to_shared`. Adding it is one field beside that one, and it
+  is the change that turns the boundary regime from a guess into a fact.
 - **No model has been read in the centreline regime end to end.** That path skips
   the close entirely, so its failure mode is silence rather than an artifact.
 - **IPMS 3 redistribution for finish-face projects** (§6). Constructible from

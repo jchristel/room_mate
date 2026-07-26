@@ -9,8 +9,9 @@
 > before/after. Do not treat its "not started" language as current.
 
 **Status: all three decisions built and verified against House A.** One item
-open, and it is not in this repository: the Revit extractor lives elsewhere, so
-nothing yet *sends* `room_boundary` — the server accepts, resolves, uses and
+open: nothing yet *sends* `room_boundary`. (When this was written the Revit
+extractor was in another repository; it now lives in `extractor/pyRevit/`, so
+the field is addressable here — see the root README) — the server accepts, resolves, uses and
 echoes it, and every model currently resolves through the project fallback. See
 the Definition of Done for what was measured. Written as a brief and kept as
 one: the reasoning above the DoD is still the reasoning, not a retrospective.
@@ -486,9 +487,10 @@ until (2) is built. On a centreline project it can be set today.
 - [x] `room_boundary` optional field on the model envelope
       (`contract::RoomBoundary`, `"centreline"` | `"finish_face"`); no schema
       bump; every existing payload still valid and unchanged in meaning.
-- [ ] **Extractor stamps it once per document — not done, and not doable here:
-      the extractor is not in this repository.** `scripts/` holds only fixture
-      generators. The server half is complete, so this is one field on the
+- [ ] **Extractor stamps it once per document — not done. No longer blocked:**
+      when this was written the extractor lived in another repository; it is now
+      `extractor/pyRevit/`, and `post_rooms.py`'s `build_envelope` already stamps
+      `model_to_shared` the same way, so `room_boundary` is one field beside it. The server half is complete, so this is one field on the
       producer's envelope whenever that repo is next touched; until then every
       model resolves through the project fallback, which is the designed-for
       state, not a broken one. The wire spelling is fixed by
@@ -612,7 +614,7 @@ until (2) is built. On a centreline project it can be set today.
 
 **Still open**
 
-- [ ] The extractor field (above) — outside this repo.
+- [ ] The extractor field (above). No longer outside this repo — see `extractor/pyRevit/post_rooms.py`.
 - [ ] **No model has yet been read in the `centreline` regime end to end.** Every
       fixture and every real model on hand resolves to finish face, so the
       zero-gap path is covered by unit tests and by nothing else. The first
