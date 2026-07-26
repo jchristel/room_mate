@@ -630,6 +630,90 @@ which constrains the types today:
 
 ---
 
+## Amendments (after the brief, 2026-07-26)
+
+Three viewer changes, none of which touched the service. Recorded here rather
+than edited into the brief above, which stays the reasoning as it was written.
+
+### 1. Rings use the whole circle — a layout bug, not a preference
+
+The brief said "edge weight → line thickness **or spring length**" and left the
+force model open. The first implementation sprang every node toward the circular
+mean of its neighbours one ring in — **including ring 1, whose only inward
+neighbour is the focus.** The focus sits at the centre, where an angle is
+meaningless (it is stored as `0`), so every ring-1 node was pulled toward angle 0
+and the whole graph folded into a fan on the right-hand side, held apart only by a
+repulsion capped at what a label needs. Deeper rings inherited the fold from their
+parents. The rings were four times longer than the picture drawn on them.
+
+The fix is two-part, and both parts are load-bearing:
+
+- **Ring 1 is attracted to nothing.** There is nothing at the centre to sit
+  beside. Its spacing target is `2π/n` — even over the full circle — which is
+  also the seeded state, so ring 1 opens correct and stays there.
+- **Deeper rings keep the parent spring**, because "sits next to its neighbour" is
+  real information there. Their spread force degrades to a collision guard
+  (`2π/n` capped at the angle a label needs), and they fill the circle by
+  inheriting their parents' spread rather than by a force of their own — so a
+  room's children still read as its children.
+
+Nodes are also seeded in **plan order** (their real bearing from the focus) at
+even angles, so a ring's cyclic order matches how the rooms sit around it on the
+floor. The angles are even and not the bearings themselves: two rooms in the same
+direction would seed on top of each other, and two nodes at an identical angle
+cannot be separated by the spread force — it pushes both the same way.
+
+The spread force also became **O(n log n)**: each ring is sorted by angle and each
+node pushed off its two angular neighbours, instead of the old all-pairs pass.
+That is what makes the next item affordable.
+
+### 2. Depth goes as deep as the graph does
+
+The control offered 1/2/3. Depth is a client-side ring cap over data already
+held — the endpoint always returns the whole scope — so there was never a reason
+for it to stop at 3. It now offers up to 8 and **All** (unbounded BFS). **2
+remains the default**, which is what the brief's readability guarantee actually
+asked for; "never the default view" is not "never available".
+
+Rings are now scaled to the deepest ring **present**, not to the cap requested: a
+room whose graph runs out after two hops should not be drawn inside the innermost
+third of the panel because the control happens to say 6.
+
+Measured on `big-plate` (10,092 nodes / 19,840 edges on the wire): "All" from a
+room on the 5,046-room synthetic level lays out 5,022 nodes in ~25 ms, draws in
+~5 ms, and settles.
+
+### 3. Areas are focusable, not just rooms
+
+`/adjacency` is and stays a **room** graph — a shared wall is a fact about two
+room boundaries, and no other granularity exists in the geometry. But the plan has
+two selectable things, and a footprint used to clear the graph's focus.
+
+A footprint now focuses the same graph **aggregated to that footprint's tier**:
+one node per `(level, path prefix)` group, and one edge per pair of groups
+carrying the **sum** of the room edges between them (a wall inside one group is
+not a relationship between groups — it is what the group's own footprint already
+dissolved). Group identity is `level|pathKey(path, tier)`, byte-identical to
+`areaKey` in `index.html`, which is why `tierSig` / `pathKey` / `tierLabel` moved
+to `common.js` — the same move `qualitative` made in the prerequisites, for the
+same reason: two views disagreeing about what a group *is* would be worse than
+either being arbitrary, and the disagreement would show up as a selection that
+silently matches nothing.
+
+The aggregation is client-side deliberately. It is a relabelling of a payload the
+client already holds, so a second endpoint would re-derive the same geometry to
+answer a question a `Map` can answer by summing — and switching granularity stays
+a re-layout rather than a refetch. The granularity therefore has **no control of
+its own**: it is a property of what the user selected, which is why the panel
+hands `graph.js` a kinded focus (`{ kind, id, depth }`) instead of a room id.
+
+Verified against `showcase` (3 tiers) and `big-plate`: focusing a Department
+group reports its adjacent groups with the summed wall length, clicking a group
+node selects the matching footprint on the plan, and selecting a room returns the
+view to room granularity.
+
+---
+
 ## Docs to update on landing
 
 Per [STRATEGY.md](STRATEGY.md), a change touching more than one layer updates

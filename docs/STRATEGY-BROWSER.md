@@ -372,7 +372,17 @@ side should shape future server endpoints.
   feature and raster export stays out of scope. The simulation solves **angle
   only**, each node pinned to the radius of its hop count: ring position *is* the
   message, and a set of 1-D problems settles without a cooling schedule. It stops
-  when settled rather than repainting a static picture forever. Node colour
+  when settled rather than repainting a static picture forever. **Each ring uses
+  the whole circle**: ring 1 has no inward angle to be sprung toward (the focus
+  is at the centre), so its nodes are spaced `2π/n`, and deeper rings keep the
+  parent spring but fill the circle by inheriting their parents' spread — see
+  [HANDOVER-adjacency.md](HANDOVER-adjacency.md) "Amendments" for the bug that
+  taught this. It follows **either** selectable thing on the plan: a room is a
+  node, and a hierarchy footprint focuses the same graph aggregated to that
+  footprint's tier — one node per area group, with the shared walls between two
+  groups summed. That aggregation is client-side because it is a relabelling of a
+  payload already held (group by `pathKey`, sum `shared_length`), so switching
+  granularity is a re-layout and not a second endpoint. Node colour
   reuses `qualitative`, which moved to `common.js` for exactly this reason — two
   views disagreeing about a department's colour is worse than either being
   arbitrary. The wall-tolerance slider is debounced (0–900mm, mm readout, feet on

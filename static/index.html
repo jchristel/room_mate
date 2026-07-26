@@ -585,11 +585,21 @@
       <button class="band-head" id="adjHead">▸ Adjacency</button>
       <div class="band-body hidden" id="adjBody">
         <div id="adjBar">
+          <!-- Depth is a client-side ring cap over data already held, so the
+               list can run as deep as the graph does. 2 stays the DEFAULT
+               (the readability guarantee — the whole level is a hairball), but
+               "All" is a legitimate question and there is no reason the control
+               stopped at 3. -->
           <label>Depth
-            <select class="picker" id="adjDepth" title="How many walls out from the selected room">
+            <select class="picker" id="adjDepth" title="How many walls out from the selected room or area; All follows the graph as far as it reaches">
               <option value="1">1</option>
               <option value="2" selected>2</option>
               <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="8">8</option>
+              <option value="all">All</option>
             </select>
           </label>
           <label>Colour <select class="picker" id="adjTier" title="Classification tier driving node colour"></select></label>
@@ -2046,11 +2056,10 @@ function populateAreasBandTier() {
   sel.value = String(areasBandTier);
 }
 
-// Identity of a classification prefix — matches server area-groups to client
-// rooms by the same (code,name,undefined) tuple everything else resolves.
-function tierSig(t) { return `${t.code == null ? "" : t.code}|${t.name == null ? "" : t.name}|${t.undefined ? "U" : ""}`; }
-function pathKey(path, depth) { return path.slice(0, depth + 1).map(tierSig).join("/"); }
-function tierLabel(t) { return t.undefined ? `undefined ${t.tier}` : (t.name || t.code || t.tier); }
+// `tierSig` / `pathKey` / `tierLabel` live in common.js: the adjacency graph
+// aggregates the room graph to a hierarchy tier and must build byte-identical
+// group keys, so the vocabulary is shared rather than copied (same move the
+// palette made — see common.js).
 
 // Selection identity for one area group: (level, full path prefix), which is
 // what makes a group a group server-side. Deliberately NOT the array index —
@@ -2319,9 +2328,16 @@ function downloadAreasCsv() {
 
 // ================= bottom region, band 1: adjacency graph =================
 //
-// The room-adjacency graph: pick a room, see what it shares a wall with, and
-// what those touch. Rendered on a <canvas> by graph.js (see that file's header
-// for why canvas here and SVG on the plan).
+// The adjacency graph: pick a room, see what it shares a wall with, and what
+// those touch. Rendered on a <canvas> by graph.js (see that file's header for
+// why canvas here and SVG on the plan).
+//
+// It follows EITHER selectable thing on the plan. A room names a node directly;
+// a hierarchy footprint names a group of rooms, and graph.js aggregates the room
+// graph to that footprint's tier — same nodes, collapsed by classification
+// prefix, with the shared walls between two groups summed. That is why the panel
+// hands the graph a kinded focus rather than a room id: the granularity is a
+// property of what the user selected, not a separate control.
 //
 // Fetched on a SELECTION change, not on the 2s room poll — a different trigger
 // and a different consumer, which is exactly the test STRATEGY-BROWSER sets for
@@ -2354,13 +2370,34 @@ function ensureGraph() {
   if (adjGraph) return adjGraph;
   adjGraph = createRoomGraph(document.getElementById("adjCanvas"), {
     // A click on a graph node sets the PAGE selection, which re-centres the
-    // graph and highlights the room on every plan showing it. The graph does
-    // not own the selection, it just reads and writes it — which is what makes
-    // plan->graph and graph->plan the same one-way flow twice, rather than two
-    // views trying to stay in sync.
-    onSelect: (roomId) => selectRoom(roomId, null),
+    // graph and highlights the room (or the footprint) on every plan showing it.
+    // The graph does not own the selection, it just reads and writes it — which
+    // is what makes plan->graph and graph->plan the same one-way flow twice,
+    // rather than two views trying to stay in sync.
+    //
+    // The kind travels with the id because the selection is kinded: a group id
+    // handed to `selectRoom` would name nothing, and would then be silently
+    // dropped by `roomSelection()`.
+    onSelect: (id, kind) => (kind === "area" ? selectArea(id, null) : selectRoom(id, null)),
   });
   return adjGraph;
+}
+
+// The graph's focus, derived from the one page selection.
+//
+// A room is itself a node. An area is a GROUP of nodes, so the graph also needs
+// the tier depth to aggregate to — which is the group's own path depth. It is
+// resolved from the areas result when that is loaded, and otherwise from the
+// tier the graph is already aggregated to: a click on a graph node means the
+// group is one the graph itself derived, and those can outrun `/areas` (which
+// drops hierarchy-excluded rooms and is fetched by its own band).
+function graphFocus() {
+  if (!selection) return null;
+  if (selection.kind === "room") return { kind: "room", id: selection.id };
+  const grp = (areasData ? areasData.groups : []).find(g => areaKey(g) === selection.id);
+  const depth = grp ? grp.path.length - 1 : (adjGraph ? adjGraph.groupDepth() : null);
+  if (depth == null) return null; // nothing to aggregate to: the canvas says so
+  return { kind: "area", id: selection.id, depth };
 }
 
 function adjBandOpen() {
@@ -2390,7 +2427,7 @@ function renderAdjacency() {
   const g = ensureGraph();
   g.setData(adjData);
   populateAdjTier();
-  g.setFocus(roomSelection());   // rooms only: an area id names no graph node
+  g.setFocus(graphFocus());
   updateAdjMeta();
 }
 
@@ -2415,18 +2452,32 @@ function populateAdjTier() {
 
 function updateAdjMeta() {
   const meta = document.getElementById("adjMeta");
-  // Adjacency is a room relation, so a non-room selection reads the same as no
-  // selection here rather than being reported as something the graph can show.
-  const roomId = roomSelection();
-  if (!roomId) { meta.textContent = "no room selected"; return; }
-  const name = currentPayload?.rooms.find(r => r.id === roomId)?.name || roomId;
+  const focus = graphFocus();
+  if (!focus) { meta.textContent = "no room or area selected"; return; }
+  const name = focus.kind === "area" ? areaFocusLabel(focus.id) : focusRoomName(focus.id);
+  // Both counts come from the graph, not from `adjData`: once the view is
+  // aggregated the degree is a count of GROUPS, which the raw room edges cannot
+  // answer. Zero while the band is collapsed, which is also when this line is
+  // hidden — the graph is not built until the panel has a box to measure.
   const shown = adjGraph ? adjGraph.shownCount() : 0;
-  const degree = adjData ? adjData.edges.filter(e => e.a === roomId || e.b === roomId).length : 0;
+  const degree = adjGraph ? adjGraph.focusDegree() : 0;
   // Naming the zone the selection came from is Decision 3's rule: the same room
   // can appear in two zones, so the result says where the click landed. A
   // label, not focus machinery.
   const from = selection && selection.zoneId ? ` · from ${selection.zoneId}` : "";
   meta.textContent = `${name} · ${degree} adjacent · ${shown} shown${from}`;
+}
+
+function focusRoomName(roomId) {
+  return currentPayload?.rooms.find(r => r.id === roomId)?.name || roomId;
+}
+
+// The full tier path, not just the leaf: two departments under different parents
+// can carry the same leaf label, and the meta line is the one place with room to
+// disambiguate them (the node label on the canvas has not).
+function areaFocusLabel(id) {
+  const grp = (areasData ? areasData.groups : []).find(g => areaKey(g) === id);
+  return grp ? grp.path.map(tierLabel).join(" / ") : id;
 }
 
 function setAdjWallMm(mm) {
@@ -3687,8 +3738,9 @@ document.getElementById("adjHead").addEventListener("click", () => {
 document.getElementById("adjDepth").addEventListener("change", (e) => {
   // Depth is a client-side re-layout over data already held — no refetch: the
   // endpoint returns the whole level's graph and the cap is a readability
-  // control, not a query.
-  ensureGraph().setDepth(parseInt(e.target.value, 10) || 2);
+  // control, not a query. "All" is therefore free: it asks the layout for every
+  // ring the data reaches, not the server for more data.
+  ensureGraph().setDepth(e.target.value === "all" ? Infinity : (parseInt(e.target.value, 10) || 2));
   updateAdjMeta();
 });
 
@@ -3711,12 +3763,12 @@ selectionListeners.push(renderInspector);
 selectionListeners.push(() => {
   updateAdjMeta();
   if (!adjBandOpen()) return;
-  // `roomSelection()`, not `selection.id`: adjacency is a room relation, so
-  // selecting a footprint clears the graph's focus rather than sending it
-  // hunting for a node id that was never a room. A fetch on a non-room
-  // selection would be worse still — it would be a request for nothing.
-  const roomId = roomSelection();
-  if (adjData || !roomId) { ensureGraph().setFocus(roomId); updateAdjMeta(); }
+  // A room and an area are both focusable (see `graphFocus`), and both are
+  // answered by the same request — the payload is one room graph either way, so
+  // a granularity change is a re-layout and never a refetch. Only a selection
+  // the graph cannot resolve at all clears the focus instead of fetching.
+  const focus = graphFocus();
+  if (adjData || !focus) { ensureGraph().setFocus(focus); updateAdjMeta(); }
   else loadAdjacency({ force: true });
 });
 
