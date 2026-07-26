@@ -218,6 +218,23 @@ with citations in the handover's References section:
   withdrawal that already exists. It is a `measurement_standard`-driven step
   *after* the partition; additivity and the wall zone are untouched.
 - **DIN 277 KGF as its own reported figure** (§6).
+- **No project has declared a `measurement_standard`.** Every `/areas` response
+  says `null`, which is honest but not useful — the machinery exists and nobody
+  has used it. The question to answer *first* is not "which standard do we
+  like" but the one §6 raises: the convention this code implements (a wall
+  between two groups belongs to neither and fills at the common ancestor) is a
+  **house convention** matching neither IPMS 3 nor DIN 277, so declaring a
+  standard on a finish-face project would be a claim the numbers do not support.
+  Centreline projects are the exception and can be marked IPMS 3 today.
+- **No project has chosen a `max_wall_thickness` against a real model** — every
+  one runs on the 1.5 ft default, which was inherited from the constant it
+  replaced rather than measured. This is now **one value driving two services**
+  (`areas` sizes its wall zone by it, `adjacency` defaults its gap tolerance from
+  it), so it is probably the highest-leverage open item here. House A measures
+  0.317 ft wall gaps, so 0.5 ft is the obvious candidate for it — but see
+  [HANDOVER-adjacency.md](HANDOVER-adjacency.md), because raising the value is
+  what risks adjacency false positives, and that is where the consequences of
+  getting it wrong show up first.
 - **Residual chamfers**: 3 on House A, 2 on `sample-project`, 14 on the synthetic
   `showcase`, all ≤1.06 ft and cosmetic. Two fixes were tried and reverted with
   measurements; see the handover DoD. Try short-edge elimination or a miter limit

@@ -265,6 +265,17 @@ locks that the index changed only the speed, not the answer.
 
 ### Tolerances
 
+> **Superseded in one respect, 2026-07-26 — `WALL_MAX_FT` no longer exists.**
+> This section and "Tunable wall tolerance" below still describe it as a
+> constant in this module; it was removed when the same physical quantity turned
+> out to be declared twice (here and as `areas::MAX_WALL_FT`). It is now
+> `[areas] max_wall_thickness`, declared per project, and an unrequested
+> `wall_max` resolves from it **through the declared boundary regime** — zero
+> when every level in scope is centreline, which is what this brief wanted a
+> slider for. `WALL_MAX_LIMIT_FT`, the 5 ft range guard on a *request*, is still
+> here and still a constant. The other three tolerances below are unchanged.
+> See [STRATEGY-AREA-CALCULATION.md](STRATEGY-AREA-CALCULATION.md).
+
 Four constants, all in **model units (decimal feet)**, all requiring a doc
 comment giving the reasoning:
 
@@ -558,16 +569,64 @@ which constrains the types today:
       graph-originated click; the debounced slider refetches with a new
       `wall_max` and a new revision; the graph paints with real classification
       tiers and the shared Set2 palette, and the simulation stops when settled.
-- [ ] **Still open — needs a genuine Revit export.** Every fixture in the repo
-      is generated **centreline** (rooms tile edge-to-edge, gap 0), so the
-      centreline regime is exercised on real-ish data but the **finish-face**
-      regime is only covered by unit tests. The remaining validation is one real
-      model: record **which boundary regime it uses**, confirm no
-      corridor-bridging and no bridging through a thin service room at a realistic
-      tolerance, and record the value that worked so the default can be baked in
-      and the slider reconsidered. (Observed so far: on the centreline fixtures a
-      `wall_max` sweep 0 → 5 ft moves the edge count only slightly — 10,497 →
-      10,518 on `sample-project` — as expected when neighbours already touch.)
+- [ ] **Still open — two false-positive checks, and they need a model this repo
+      does not have.** Narrowed 2026-07-26; three of this item's original four
+      asks are done or have moved, so only the empirical half is left.
+
+      **Done or moved elsewhere:**
+
+      - *Which boundary regime the model uses* — no longer a per-model discovery.
+        It is declared on the upload envelope (`room_boundary`), resolved per
+        level, and echoed on `/areas`. See
+        [STRATEGY-AREA-CALCULATION.md](STRATEGY-AREA-CALCULATION.md) §2.
+      - *Record the value that worked so the default can be baked in* — the
+        default is no longer a constant in this module. `WALL_MAX_FT` is gone;
+        the number is `[areas] max_wall_thickness`, declared per project and
+        shared with `service::areas`, and an unrequested `wall_max` now resolves
+        from it **through the declared regime** (zero when every level in scope
+        is centreline). Choosing that value is tracked in the area doc's Open
+        section, not here — but the *consequence* of choosing it too high is
+        exactly what the two checks below test, so they belong together.
+
+      **Genuinely still open, and specific to adjacency:** confirm at a realistic
+      tolerance that the graph does **not** report
+
+      1. two rooms merely *facing each other across a corridor* as adjacent, and
+      2. two rooms bridged *through* a thin service room (a riser or shaft
+         narrower than the tolerance) sitting between them.
+
+      Neither has an `areas` analogue, and that asymmetry is the point:
+      `service::areas` rules both out *structurally* — a close at `gap/2`
+      provably cannot fill a gap wider than `gap`, and the wall zone contains no
+      rooms — whereas adjacency answers both with a segment-pair test plus a
+      midpoint-in-third-room occlusion check, which is covered by unit tests and
+      nothing else.
+
+      **House A cannot settle either, despite being real finish-face data**, and
+      it is worth recording why so the next person does not spend an afternoon
+      finding out. It is a 26-room detached house: no double-loaded corridor, no
+      duct riser. A `wall_max` sweep on it saturates —
+
+      | `wall_max` (ft) | 0 | 0.5 | 1.5 | 3 | 5 |
+      |---|---|---|---|---|---|
+      | edges | 34 | 47 | 51 | 51 | 51 |
+
+      — so **no pair of rooms sits 1.5–5 ft apart**. There is nothing at corridor
+      distance to wrongly bridge even deliberately, and a clean run would be
+      clean because the hazard is absent, not because the algorithm handled it.
+      That is a test that cannot fail, which is worth no confidence.
+
+      What is worth doing now, and does not need a new model: an adjacency
+      diagnostic in the shape of `scripts/check_areas.py` — for each reported
+      edge, measure the true gap between the two room polygons and flag any
+      exceeding a plausible wall, plus any with a third room's polygon between
+      them. Run against House A it gives a real finish-face regression baseline
+      and evidence for setting `max_wall_thickness`; it just does not tick items
+      1 and 2, which want a hospital-scale finish-face export.
+
+      (Earlier observation, still true: on the centreline fixtures a `wall_max`
+      sweep 0 → 5 ft moves the edge count only slightly — 10,497 → 10,518 on
+      `sample-project` — as expected when neighbours already touch.)
 
 ---
 
