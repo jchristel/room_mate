@@ -323,6 +323,39 @@ side should shape future server endpoints.
   a re-render, and a 4px slop distinguishes a click from a pan. This was the
   thing blocking Decision 3's inspector; the inspector now registers on
   `selectionListeners` rather than editing `selectRoom`.
+- **Room inspector (right column) — implemented.** The third region of
+  HANDOVER-ui-layout's model (*top: what am I looking at; right: what is this
+  thing; bottom: what am I doing to it*), and the last of its decisions to be
+  built. `#mainRow` wraps `<main id="zones">` and `<aside id="inspector">` at
+  `minmax(0, 1fr) auto` — a wrapper because `main` *is* the zone container and JS
+  rewrites its columns on every zone add/remove, so the column the handover
+  believed was reserved never existed. A layout participant that reflows the
+  plans, never an overlay inside `.zone-canvas` — that pattern is what the
+  bottom-region work removed. Hidden with no selection, so it costs no width.
+  One per page: selection is page state, and `selectedZoneId` is shown as a
+  label so a room visible in two zones says which click produced it.
+  **The property count is the real design problem, and it is worse than it
+  looks**: a House A room carries 45 properties, and **19 of them hold no real
+  value on any room** — the Revit extractor emits the literal string `"None"`
+  for an unset parameter, so an emptiness test checking only for `""` hides
+  nothing. A *Hide empty* toggle that treats blank and `"None"` alike is on by
+  default and takes 45 → ~22 with no configuration; a name-filter box handles the
+  rest. Both report *"n of m shown"* so nothing is silently dropped. Hide-empty
+  is deliberately **not** applied to the classification tiers: on
+  `sample-project` every room resolves to `[undefined]`, and suppressing that
+  would hide the fact that the classifier ran and produced the undefined bucket,
+  which `service::areas` treats as a real group. Model and dRofus stay visually
+  separate per [Sources](STRATEGY-SOURCES.md), and an unmatched room is told it
+  is *not joined* rather than shown an empty section. Read-only, and unpersisted
+  like every other view preference.
+  **A third mechanism — a checkbox property picker modelled on the search field
+  panel — was specified and deliberately not built**, because the two above
+  covered the cases it was for and unused UI is worse than none. If users do
+  start re-picking the same columns every session, the durable answer is
+  extending `room_label` in project settings (server-side, per project,
+  shareable) rather than adding `localStorage` here. See
+  [Superseded/HANDOVER-room-inspector.md](Superseded/HANDOVER-room-inspector.md)
+  §5.3 for that design if it is ever wanted.
   On top of it, the **adjacency graph**: a third band-1 block over
   `GET /projects/{id}/adjacency` (see [Server](STRATEGY-SERVER.md)) showing what
   the selected room shares a wall with, and what those touch. **This is the first
@@ -534,7 +567,7 @@ serving a different consumer (a hierarchy browser) than the room render.
   A **debug kill switch** (`CULL_ENABLED`, a module-level `let` beside
   `MATCH_COLOUR`) turns the hide/show off so this can be re-measured rather than
   taken on faith whenever the renderer changes — see
-  [HANDOVER-culling-disable-switch.md](HANDOVER-culling-disable-switch.md). It is
+  [HANDOVER-culling-disable-switch.md](Superseded/HANDOVER-culling-disable-switch.md). It is
   console-only and unpersisted on purpose, so nobody leaves it off and files the
   slowness as a bug, and it suppresses hide/show **only**: cull units are still
   collected, because `roomAtNode` (click-to-select), `applySelection` and

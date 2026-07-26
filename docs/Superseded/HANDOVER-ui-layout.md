@@ -1,5 +1,17 @@
 # RoomMate — Handover: UI layout restructure
 
+> **Superseded — every decision in this document is built.** Decision 3, the
+> right-hand inspector, was the last one and landed with
+> [HANDOVER-room-inspector.md](HANDOVER-room-inspector.md).
+> [STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) is the live description of the
+> layout; this stays as the record of *why* the three regions mean what they
+> mean. Its own header always said it would move here when the work landed.
+>
+> One correction worth carrying forward: the claim that the layout work left a
+> zero-width inspector column reserved was never true — `<main id="zones">` IS
+> the zone container and JS rewrites its columns on every zone add/remove, so
+> the inspector needed a new `#mainRow` wrapper rather than a reserved slot.
+
 > **Status (2026-07-23): sequencing steps 1, 4 and 6 have LANDED** (see
 > PLAN-handover-actioning.md P6, P2, P3).
 > **Step 1 (scope migration / Decision 1)**: project/milestone/building are
@@ -26,7 +38,7 @@
 
 Design settled; steps 1, 4 and 6 built (see status above), the bottom
 region and grid not yet. This document exists so the remaining work can be
-picked up cold. Companion to [Browser](STRATEGY-BROWSER.md), which describes
+picked up cold. Companion to [Browser](../STRATEGY-BROWSER.md), which describes
 the viewer as it stands today; when this lands, that doc absorbs the outcome
 and this one moves to `Superseded/`.
 
@@ -187,7 +199,7 @@ page**, not a mode flag on this one. The reasoning:
   task with distinct UI" here is a new page.
 - **A comparator diverges from a viewer over time.** Real cross-project
   comparison wants synced views, difference highlighting, and a shared
-  coordinate frame — and [Server](STRATEGY-SERVER.md) is explicit that
+  coordinate frame — and [Server](../STRATEGY-SERVER.md) is explicit that
   cross-project geometry comparison needs an alignment transform that does not
   exist yet. That is substantial future work a single-project viewer will
   never share. Binding them into one page means every comparison feature has
@@ -332,7 +344,7 @@ Its defining control is a **per-source column toggle**: show model-derived
 columns, dRofus-derived columns, or both.
 
 This is not a UI convenience layered on top of the data — it is the existing
-data model surfacing honestly. [Sources](STRATEGY-SOURCES.md) records that
+data model surfacing honestly. [Sources](../STRATEGY-SOURCES.md) records that
 dRofus data is deliberately kept as a **separate sub-object, never merged into
 `properties`** ("store raw, join late"), precisely because the two have
 different lifecycles and provenance. The grid should preserve that separation
@@ -504,7 +516,7 @@ unambiguous meaning.
 
 ### A note on level-of-detail
 
-[Browser](STRATEGY-BROWSER.md) records an open performance item: a *fitted*
+[Browser](../STRATEGY-BROWSER.md) records an open performance item: a *fitted*
 view of a 5,000-room level still paints everything (~0.5 s+/frame), and the
 remaining lever is level-of-detail — **"drop labels / merge rooms when the
 whole plate is on screen."** Once `paintLevel` takes a `showLabels` flag, the
@@ -563,4 +575,4 @@ decisions most likely to be quietly reversed mid-implementation. One is
 - **The future multi-project comparator** is out of scope here. When it comes,
   the reusable pieces are `paintLevel` (already a pure painter, reads no zone
   state) and the zone/pan/cull machinery. Its blocker is the cross-project
-  alignment transform described in [Server](STRATEGY-SERVER.md), not UI.
+  alignment transform described in [Server](../STRATEGY-SERVER.md), not UI.

@@ -24,16 +24,27 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 ## Open handovers
 
+**One.** Everything else has landed and moved to [Superseded](Superseded/).
+
 | Document | Status |
 |---|---|
-| [Viewport culling kill switch](HANDOVER-culling-disable-switch.md) | Built (console-only `CULL_ENABLED`) and the measurement run done: **16.5 ms/frame with culling vs 912 ms without** on `big-plate`, so culling stays. Kept open as the place to record the next re-measurement |
-| [UI layout restructure](HANDOVER-ui-layout.md) | Every sequencing step built; only Decision 3 (the room inspector) remains — **no longer blocked**: room click-selection landed with the adjacency graph |
-| [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; one validation item left. **Its stated blocker is now stale** — it says "every fixture in the repo is generated centreline", but House A is real finish-face data, so the run it asks for is doable today: confirm no corridor-bridging and no bridging through a thin service room, and record the tolerance that worked |
+| [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested; **one validation item left**, and its stated blocker is stale. It says "every fixture in the repo is generated centreline" — but House A is real finish-face data, so the run it asks for is doable today: confirm no corridor-bridging and no bridging through a thin service room, and record the tolerance that worked so the default can be baked in |
 
 Handoff documents whose work has fully landed live in
-[Superseded](Superseded/) — most recently
-`HANDOVER-areas-boundary-location.md` and
-`handover-hierarchical-void-closure.md`.
+[Superseded](Superseded/) — most recently `HANDOVER-ui-layout.md` (every
+decision built, the inspector last), `HANDOVER-room-inspector.md` and
+`HANDOVER-culling-disable-switch.md`.
+
+Two of those are worth knowing about even though they are superseded, because
+each leaves something recorded rather than pending:
+
+- **[Room inspector](Superseded/HANDOVER-room-inspector.md)** — step 6, a
+  checkbox property picker, was deliberately not built. Hide-empty plus the name
+  filter covered the cases it was for. Act on it only if the need shows up.
+- **[Viewport culling kill switch](Superseded/HANDOVER-culling-disable-switch.md)**
+  — the switch is permanent (`CULL_ENABLED` in `index.html`) and that document is
+  the method for re-measuring whenever the renderer changes. Last run:
+  **16.5 ms/frame with culling, 912 ms without.**
 
 Area calculation no longer has a handover: its design moved into
 [Area calculation](STRATEGY-AREA-CALCULATION.md), which is the live document and

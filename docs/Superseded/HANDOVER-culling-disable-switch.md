@@ -1,5 +1,12 @@
 # HANDOVER — Viewport culling disable switch
 
+> **Superseded — built, and the question it asked is answered:** culling is
+> worth keeping, by a wide margin (**16.5 ms/frame with it, 912 ms without**,
+> `big-plate`, 2026-07-25). The switch itself is permanent and lives in
+> `index.html` as `CULL_ENABLED`; [STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md)
+> carries the live pointer. This stays as the method and the result — re-run
+> §5 and append here whenever the renderer changes.
+
 **Status: implemented (flag + guard, console-only), and the test run below has
 been done.** Verdict up front, since that is what this document exists to
 produce: **culling is still worth it by a wide margin** — a zoomed-in pan on
