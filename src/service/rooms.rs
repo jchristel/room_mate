@@ -458,7 +458,7 @@ fn resolve_field(room: &RoomResponse, predicate: &Predicate, builtin_defs: &[Bui
 pub fn validate_comparison_field(field: &str) -> Result<(), String> {
     match split_namespace(field) {
         NamespaceSplit::UnknownSource(ns) => Err(unknown_source_message(ns)),
-        NamespaceSplit::Joined { source, property } if property.is_empty() => {
+        NamespaceSplit::Joined { source, property: "" } => {
             Err(format!("no property named after the {source:?} namespace — expected {source}.<field label>"))
         }
         NamespaceSplit::Joined { .. } | NamespaceSplit::Unqualified(_) => Ok(()),

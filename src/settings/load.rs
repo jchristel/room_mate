@@ -9,7 +9,7 @@ use anyhow::Context;
 
 use super::{DrofusSource, ServerConfig, Settings};
 
-pub fn load_server_config(path: &PathBuf) -> anyhow::Result<ServerConfig> {
+pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("could not read server settings file: {}", path.display()))?;
     let mut config: ServerConfig = toml::from_str(&raw).context("failed to parse server settings TOML")?;
@@ -42,7 +42,7 @@ fn resolve_relative_to(path: &mut PathBuf, settings_dir: Option<&Path>) {
     }
 }
 
-pub fn load_settings(path: &PathBuf) -> anyhow::Result<Settings> {
+pub fn load_settings(path: &Path) -> anyhow::Result<Settings> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("could not read settings file: {}", path.display()))?;
     let mut settings: Settings = toml::from_str(&raw).context("failed to parse settings TOML")?;
@@ -63,13 +63,13 @@ pub fn load_settings(path: &PathBuf) -> anyhow::Result<Settings> {
     // A present-but-blank name is a mistake, not a way to say "no name":
     // omitting the key is. Caught here rather than tolerated, since the
     // alternative is every consumer rendering an empty label.
-    if let Some(name) = &settings.name {
-        if name.trim().is_empty() {
-            anyhow::bail!(
-                "settings file {} has an empty name — omit the key to display the project under its id",
-                path.display()
-            );
-        }
+    if let Some(name) = &settings.name
+        && name.trim().is_empty()
+    {
+        anyhow::bail!(
+            "settings file {} has an empty name — omit the key to display the project under its id",
+            path.display()
+        );
     }
 
     // Fail fast on unkeyable or duplicate-named tiers — better a startup error

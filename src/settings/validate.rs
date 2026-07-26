@@ -125,13 +125,13 @@ fn validate_bands(plan: &str, bands: &[Band]) -> anyhow::Result<()> {
     // A single band must be non-empty: `[lo, hi)` with `lo >= hi` covers
     // nothing (a copy-paste or swapped-bounds mistake).
     for band in bands {
-        if let (Some(lo), Some(hi)) = (band.lo, band.hi) {
-            if lo >= hi {
-                anyhow::bail!(
-                    "colour plan '{}' has an empty/reversed band [{}, {}) — lo must be < hi",
-                    plan, lo, hi
-                );
-            }
+        if let (Some(lo), Some(hi)) = (band.lo, band.hi)
+            && lo >= hi
+        {
+            anyhow::bail!(
+                "colour plan '{}' has an empty/reversed band [{}, {}) — lo must be < hi",
+                plan, lo, hi
+            );
         }
     }
     for pair in bands.windows(2) {

@@ -228,7 +228,7 @@ pub async fn ingest_rooms_stream(
 ) -> Result<Json<IngestResponse>, (StatusCode, String)> {
     let stream = body
         .into_data_stream()
-        .map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+        .map(|r| r.map_err(std::io::Error::other));
     let reader = StreamReader::new(stream);
     let mut lines = reader.lines();
 

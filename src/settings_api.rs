@@ -143,10 +143,10 @@ pub fn list_project_files(projects_dir: &Path) -> Result<Vec<ProjectFileSummary>
 /// Returns the file name alongside so the UI can show where the project lives.
 pub fn get_project_file(projects_dir: &Path, project_id: &str) -> Result<(String, Settings), SettingsError> {
     for path in settings_files(projects_dir)? {
-        if let Ok(settings) = read_raw(&path) {
-            if settings.project_id == project_id {
-                return Ok((file_name(&path), settings));
-            }
+        if let Ok(settings) = read_raw(&path)
+            && settings.project_id == project_id
+        {
+            return Ok((file_name(&path), settings));
         }
     }
     Err(SettingsError::NotFound(format!("no settings file declares project_id '{project_id}'")))
@@ -169,10 +169,10 @@ pub fn resolve_project_file(projects_dir: &Path, project_id: &str) -> Result<(St
         return Ok(found);
     }
     for path in settings_files(projects_dir)? {
-        if let Ok(settings) = read_raw(&path) {
-            if settings.is_default {
-                return Ok((file_name(&path), settings));
-            }
+        if let Ok(settings) = read_raw(&path)
+            && settings.is_default
+        {
+            return Ok((file_name(&path), settings));
         }
     }
     Err(SettingsError::NotFound(format!(
@@ -258,14 +258,14 @@ pub fn save_project(state: &AppState, existing_id: Option<&str>, settings: Setti
             if path == target {
                 continue;
             }
-            if let Ok(other) = read_raw(&path) {
-                if other.is_default {
-                    return Err(SettingsError::Invalid(format!(
-                        "another settings file already sets is_default = true: {} ('{}')",
-                        file_name(&path),
-                        other.project_id
-                    )));
-                }
+            if let Ok(other) = read_raw(&path)
+                && other.is_default
+            {
+                return Err(SettingsError::Invalid(format!(
+                    "another settings file already sets is_default = true: {} ('{}')",
+                    file_name(&path),
+                    other.project_id
+                )));
             }
         }
     }
@@ -551,6 +551,16 @@ mod tests {
     /// A `Settings` value survives serialize-to-TOML → parse — proves the new
     /// `Serialize` derives and toml's table ordering handle the full shape
     /// (values, tables, arrays-of-tables interleaved in struct order).
+    ///
+    /// Long by necessity, not by neglect, which is why it takes the `#[allow]`
+    /// the conventions reserve for a cohesive function rather than being split:
+    /// what it asserts is that the **whole** shape round-trips at once, so its
+    /// length is a function of how many fields `Settings` has. Splitting it into
+    /// per-section tests would test each section against a *separately built*
+    /// document and lose the property that actually matters — the TOML
+    /// value-before-table ordering footgun (CODING-CONVENTIONS.md) only bites
+    /// when the sections are interleaved in one file.
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn test_settings_toml_round_trip() {
         let source: Settings = toml::from_str(

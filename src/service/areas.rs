@@ -1145,7 +1145,7 @@ mod tests {
     #[test]
     fn test_two_tier_dissolve_areas() {
         // DeptA = two adjacent rooms (area 200); DeptB = one room (area 100).
-        let rooms = vec![
+        let rooms = [
             (croom("a1", "L1", rect(0.0, 0.0, 10.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "A")]),
             (croom("a2", "L1", rect(10.0, 0.0, 20.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "A")]),
             (croom("b1", "L1", rect(20.0, 0.0, 30.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "B")]),
@@ -1169,7 +1169,7 @@ mod tests {
         // Dept B = the right bar. Together they ring a 10x10 courtyard.
         let path_a = vec![tv("Building", "B1"), tv("Dept", "A")];
         let path_b = vec![tv("Building", "B1"), tv("Dept", "B")];
-        let rooms = vec![
+        let rooms = [
             (croom("bottom", "L1", rect(0.0, 0.0, 30.0, 10.0)), path_a.clone()),
             (croom("left", "L1", rect(0.0, 10.0, 10.0, 20.0)), path_a.clone()),
             (croom("top", "L1", rect(0.0, 20.0, 30.0, 30.0)), path_a.clone()),
@@ -1205,7 +1205,7 @@ mod tests {
         // which puts a concave junction right where the artifact appeared.
         let path_a = vec![tv("Building", "B1"), tv("Dept", "A")];
         let path_b = vec![tv("Building", "B1"), tv("Dept", "B")];
-        let rooms = vec![
+        let rooms = [
             (croom("a_bottom", "L1", rect(0.0, 0.0, 30.0, 10.0)), path_a.clone()),
             (croom("a_left", "L1", rect(0.0, 10.4, 10.0, 30.0)), path_a.clone()),
             (croom("b_notch", "L1", rect(10.4, 10.4, 30.0, 30.0)), path_b.clone()),
@@ -1372,7 +1372,7 @@ mod tests {
         let path_b = vec![tv("Building", "B1"), tv("Dept", "B")];
         // B is a narrow 1 ft riser between two A rooms — narrower than WALL_FT,
         // exactly the case where A's close bridges straight across it.
-        let rooms = vec![
+        let rooms = [
             (croom("a1", "L1", rect(0.0, 0.0, 10.0, 10.0)), path_a.clone()),
             (croom("riser", "L1", rect(10.0, 0.0, 11.0, 10.0)), path_b.clone()),
             (croom("a2", "L1", rect(11.0, 0.0, 21.0, 10.0)), path_a.clone()),
@@ -1395,7 +1395,7 @@ mod tests {
     #[test]
     fn test_per_level_groups_are_independent() {
         let path = vec![tv("Building", "B1"), tv("Dept", "A")];
-        let rooms = vec![
+        let rooms = [
             (croom("l1", "L1", rect(0.0, 0.0, 10.0, 10.0)), path.clone()),
             (croom("l2", "L2", rect(0.0, 0.0, 10.0, 20.0)), path.clone()),
         ];
@@ -1413,7 +1413,7 @@ mod tests {
     /// dissolves and reports area like any other.
     #[test]
     fn test_undefined_bucket_is_a_real_group() {
-        let rooms = vec![
+        let rooms = [
             (croom("known", "L1", rect(0.0, 0.0, 10.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "A")]),
             (croom("unk", "L1", rect(10.0, 0.0, 20.0, 10.0)), vec![tv("Building", "B1"), undef("Dept")]),
         ];
@@ -1441,7 +1441,7 @@ mod tests {
     fn test_exclude_group_withholds_from_parent_but_keeps_group() {
         let path_in = vec![tv("Building", "B1"), tv("Dept", "Inside")];
         let path_out = vec![tv("Building", "B1"), tv("Dept", "Outdoor")];
-        let rooms = vec![
+        let rooms = [
             (croom("i1", "L1", rect(0.0, 0.0, 10.0, 10.0)), path_in.clone()),
             (croom("o1", "L1", rect(10.0, 0.0, 30.0, 10.0)), path_out.clone()),
         ];
@@ -1467,7 +1467,7 @@ mod tests {
     #[test]
     fn test_exclude_rooms_drops_from_every_tier() {
         let path_a = vec![tv("Building", "B1"), tv("Dept", "A")];
-        let rooms = vec![
+        let rooms = [
             (croom("keep", "L1", rect(0.0, 0.0, 10.0, 10.0)), path_a.clone()),
             (croom("drop", "L1", rect(10.0, 0.0, 20.0, 10.0)), path_a.clone()),
         ];
@@ -1488,7 +1488,7 @@ mod tests {
         // 3 tiers: Building / Dept / Sub. Exclude Dept = "Outdoor".
         let inside = |sub: &str| vec![tv("Building", "B1"), tv("Dept", "Inside"), tv("Sub", sub)];
         let outdoor = |sub: &str| vec![tv("Building", "B1"), tv("Dept", "Outdoor"), tv("Sub", sub)];
-        let rooms = vec![
+        let rooms = [
             (croom("i", "L1", rect(0.0, 0.0, 10.0, 10.0)), inside("S1")),
             (croom("o", "L1", rect(10.0, 0.0, 30.0, 10.0)), outdoor("S2")),
         ];

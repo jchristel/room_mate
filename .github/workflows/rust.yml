@@ -20,3 +20,20 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    # Lints, gated. `--all-targets` so test code is covered too (most of this
+    # crate's lines are inline `#[cfg(test)] mod tests`, and they drifted just
+    # as far as the lib did before this ran).
+    #
+    # `-D warnings` deliberately, and it does NOT contradict Cargo.toml's
+    # "`too_many_lines` is warn, never deny". The escape hatch that comment
+    # describes is `#[allow(clippy::too_many_lines)]` **with a reason**, and an
+    # explicit allow still compiles cleanly under `-D warnings` -- so a
+    # long-but-cohesive function is still permitted, it just has to say so out
+    # loud instead of adding one more line to a warning count nobody reads.
+    # That was the actual failure mode: the lint was configured, ran locally,
+    # and had accumulated 35 unread warnings.
+    #
+    # Note this runs on ubuntu while the primary dev machine is Windows. Keep
+    # any future path/line-ending-sensitive lint in mind; nothing today is.
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
