@@ -48,7 +48,11 @@ Revit.
   could only ever be a fallback, which is exactly what `[areas]
   boundary_location` is. Consumed by `service::areas` (which sizes its wall zone
   by it) and `service::adjacency` (which defaults its gap tolerance from it); an
-  extractor that does not send it is a normal state, not a defect. See
+  extractor that does not send it is a normal state, not a defect. Produced in
+  `extractor/pyRevit/` (`room_mate.py` reads it per document, `post_rooms.py`
+  maps it to the wire): Revit's four boundary locations collapse to the
+  contract's two, because the only thing downstream cares about is whether
+  neighbouring rooms tile or are separated by a real gap. See
   [Server](STRATEGY-SERVER.md).
 - **dRofus loader + join.** Two-header-row CSV read into a keyed map
   (`by_id: BTreeMap<String, DrofusRecord>`); joined onto rooms at `/rooms`

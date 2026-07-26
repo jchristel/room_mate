@@ -54,6 +54,26 @@ SOURCE = "revit"
 LEVEL_LIST_KEY = "building level"
 ROOM_LIST_KEY = "room"
 
+# Revit's document-level room boundary location (Area and Volume Computations)
+# mapped onto the two regimes the contract knows (contract.rs `RoomBoundary`).
+# Keyed by the *name* of `SpatialElementBoundaryLocation` rather than the enum
+# itself so this module stays free of the Revit assembly: room_mate.py reads the
+# setting, this decides what it means on the wire.
+#
+# The server's distinction is only "do neighbouring rooms tile, or is there a
+# real gap between them". Both centre variants put both rooms' boundaries on the
+# same line, so the gap is zero and there is nothing to bridge; both face
+# variants leave the wall -- or its core -- standing between them, so the gap is
+# real and positive. Which face it is doesn't change the regime, only how wide
+# the gap is, and how wide a gap still counts as a wall is project policy
+# (`[areas] max_wall_thickness`), not a producer fact.
+BOUNDARY_LOCATION_TO_WIRE = {
+    "Center": "centreline",
+    "CoreCenter": "centreline",
+    "Finish": "finish_face",
+    "CoreBoundary": "finish_face",
+}
+
 
 def duhast_objects_to_plain(json_data):
     """Serialize duHast data objects (default=serialize_utf), then parse back
@@ -123,6 +143,19 @@ def coordinate_system_to_affine(rotation, translation):
         float(rotation[1][0]), float(rotation[1][1]),
         float(translation[0]), float(translation[1]),
     ]
+
+
+def boundary_location_to_room_boundary(location):
+    """Map a `SpatialElementBoundaryLocation` (the enum, or its name) onto the
+    contract's `room_boundary` -- `"centreline"` or `"finish_face"` -- or None
+    when the value isn't one this knows.
+
+    None means "say nothing", never "guess". An absent `room_boundary` is a
+    designed-for state: the server falls back to the project's `[areas]
+    boundary_location` and then to finish face. Inventing a regime here would
+    instead size the server's wall zone off a value nobody declared, and the
+    whole point of the field is that the regime stops being a guess."""
+    return BOUNDARY_LOCATION_TO_WIRE.get(str(location))
 
 
 def properties_to_map(instance_properties):
@@ -201,6 +234,17 @@ def build_envelope(rooms_source, levels_source):
     model_to_shared = rooms_source.get("model_to_shared")
     if model_to_shared is not None:
         envelope["model_to_shared"] = model_to_shared
+
+    # The boundary regime this model was drawn to (contract.rs `RoomBoundary`),
+    # read once per document by room_mate.py and forwarded verbatim for the same
+    # reason as the transform above: a model-level fact, so there is nothing to
+    # reconcile across rooms and the streaming path carries it with no per-room
+    # scan. Optional on the same terms -- absent, the server falls back to the
+    # project's `[areas] boundary_location` and then to finish face, which is
+    # exactly what every push did before this field was sent.
+    room_boundary = rooms_source.get("room_boundary")
+    if room_boundary is not None:
+        envelope["room_boundary"] = room_boundary
 
     return envelope
 
