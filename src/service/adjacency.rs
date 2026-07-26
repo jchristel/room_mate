@@ -23,13 +23,20 @@
 //! - **finish face** — rooms float inside their walls; the gap is roughly the
 //!   wall thickness.
 //!
-//! Nothing on the wire says which one you are looking at, so the algorithm
-//! handles both and `wall_max` is what spans them: at or near `0` for a
-//! centreline model, just over the thickest partition for a finish-face one.
-//! That is the real reason it is a per-request parameter rather than a
-//! constant — the right value is a property of the model, not of the code.
-//! Hence the acceptance band is **closed at zero**: `0` is a valid tolerance,
-//! not a degenerate one.
+//! The algorithm handles both, and `wall_max` is what spans them: at or near
+//! `0` for a centreline model, just over the thickest partition for a
+//! finish-face one. That is the real reason it is a per-request parameter
+//! rather than a constant — the right value is a property of the model, not of
+//! the code. Hence the acceptance band is **closed at zero**: `0` is a valid
+//! tolerance, not a degenerate one.
+//!
+//! **The regime is no longer a guess.** An earlier version of this header said
+//! nothing on the wire declared it; `contract::RoomBoundary` now rides the
+//! upload envelope, so an *unrequested* `wall_max` resolves from the project's
+//! `[areas] max_wall_thickness` through the declared regime — zero when every
+//! level in scope is centreline (see `default_wall_max`). What stayed a
+//! request parameter is the *question a caller asks*, which is a different
+//! thing from the fact a model states.
 //!
 //! **On length** (CODING-CONVENTIONS "Module structure & length"): this file
 //! runs past the ~500 non-test-line split trigger, but its real code is in the

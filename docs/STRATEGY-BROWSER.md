@@ -625,11 +625,14 @@ serving a different consumer (a hierarchy browser) than the room render.
 - **Coordinates and units.** Revit internal units are decimal feet, Y-up; SVG
   is Y-down — handled by flipping Y when building geometry. Absolute units do
   not matter while the viewer auto-fits, but they will once dimensions, a scale
-  bar, or north-alignment are added. The **placement** half of that is already
-  on the wire: a model may carry a `model_to_shared` affine on its envelope (see
-  [Index](STRATEGY.md) "The upload envelope") mapping its room points into the
-  project's shared/real-world frame. The renderer ignores it today (auto-fit
-  needs no absolute placement), but north-alignment, a real-world scale bar, and
+  bar, or north-alignment are added. The **placement** half of that is captured
+  but **not yet reachable from here**: a model may carry a `model_to_shared`
+  affine on its *upload* envelope (see [Index](STRATEGY.md) "The upload
+  envelope"), and the server validates and stores it — but no read endpoint
+  serves it, so the renderer does not merely ignore it, it cannot see it. The
+  first step for any consumer below is therefore a server change (surface the
+  per-model transform on `/rooms`, alongside the `boundary_by_level` precedent),
+  not a browser one. Once it is served, north-alignment, a real-world scale bar, and
   the georeferencing map underlay (Phase 3 — `docs/Superseded/HANDOVER-georeferencing.md`)
   are exactly the features that consume it. Composing it correctly is a
   browser-side job — the existing Y-flip *plus* the `model_to_shared` matrix

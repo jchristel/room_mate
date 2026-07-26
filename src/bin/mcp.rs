@@ -1,11 +1,15 @@
-//! roommate's MCP server: exposes the read side (`list_projects`,
-//! `list_buildings`, `get_rooms`, `get_validation`, `get_hierarchy_areas`,
-//! `get_adjacency`, `list_snapshots`, `get_latest_snapshot`, `list_milestones`,
-//! `list_drofus_snapshots`, `get_drofus_snapshot`) as MCP tools over stdio, one
-//! per existing HTTP read route. Each tool is a thin adapter over `roommate::service` -- parse
-//! params, call one service function, serialize the result -- exactly like
-//! the Axum handlers in `roommate::handlers`, just a second transport over
-//! the same domain layer. See HANDOVER-service-layer.md.
+//! roommate's MCP server: exposes the read side as MCP tools over stdio, one
+//! per existing HTTP read route -- `list_projects`, `list_buildings`,
+//! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
+//! `list_snapshots`, `get_latest_snapshot`, `list_milestones`,
+//! `compare_milestones`, `list_drofus_snapshots`, `get_drofus_snapshot` --
+//! plus two settings *reads* off `settings_api`'s transport-agnostic core
+//! (`list_project_settings`, `get_project_settings`) and the one forwarded
+//! mutation (`upload_drofus`, below). Fifteen in total; keep this list and
+//! STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
+//! `roommate::service` -- parse params, call one service function, serialize
+//! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
+//! second transport over the same domain layer. See HANDOVER-service-layer.md.
 //!
 //! Ingest (`POST /rooms`) has no MCP equivalent here: an MCP client asking an
 //! LLM to push a full room snapshot isn't a realistic flow, and the HTTP
@@ -98,10 +102,13 @@ struct AdjacencyParams {
     #[serde(default)]
     milestone: Option<String>,
     /// Largest gap between two room boundaries, in decimal feet, still counted
-    /// as a shared wall. Omit for the server default (1.5 ft). Use 0 for a
-    /// model whose room boundaries sit on wall centrelines (neighbours touch
-    /// exactly); use roughly the wall thickness for a model whose boundaries
-    /// sit at finish faces. Must be between 0 and 5.
+    /// as a shared wall. **Omit it unless you have a reason not to:** the
+    /// server then derives the tolerance from the project's declared
+    /// `[areas] max_wall_thickness` and the boundary regime the models
+    /// declared — zero when every level in scope is drawn to wall centrelines
+    /// (neighbours touch exactly), the declared thickness otherwise. The
+    /// response echoes the value actually applied. Pass one only to probe a
+    /// different tolerance than the project declares; must be between 0 and 5.
     #[serde(default)]
     wall_max: Option<f64>,
 }
@@ -314,7 +321,7 @@ impl RoommateMcp {
     /// `service::areas::assemble_areas`. Shares the exact read logic the HTTP
     /// `GET /projects/{id}/areas` uses; `None` (nothing pushed) mirrors
     /// `get_rooms`' empty-store message.
-    #[tool(description = "Compute per-level, per-tier dissolved area footprints for one project, optionally scoped by building key and milestone name. Each group carries its resolved classification path, its measured footprint area (an aggregated ROOM FOOTPRINT — room area PLUS the enclosed wall bands between rooms, MINUS any genuine void like a courtyard or atrium; NOT net area and NOT a standards gross), whether it counts toward tiers above it (a settings exclusion can withhold a group), and its footprint polygons (each an exterior ring plus any interior rings for open voids). Rooms are dissolved with a morphological close so the result is the same whether the model is drawn to wall centreline or finish face; a void wider than a wall stays open and is excluded from the area.")]
+    #[tool(description = "Compute per-level, per-tier dissolved area footprints for one project, optionally scoped by building key and milestone name. Each group carries its resolved classification path, its measured footprint area (an aggregated ROOM FOOTPRINT — room area PLUS the enclosed wall bands between rooms, MINUS any genuine void like a courtyard or atrium; NOT net area and NOT a standards gross), whether it counts toward tiers above it (a settings exclusion can withhold a group), and its footprint polygons (each an exterior ring plus any interior rings for open voids). How much wall a footprint contains follows the boundary regime each model declared: a finish-face level fills the gaps between its rooms up to the project's declared max_wall_thickness, while a centreline level already has its walls inside the room polygons and is dissolved with no fill at all. The response echoes the gap applied per level (wall_gap_by_level) and the project's declared measurement_standard, which may be null — the figure is a house convention, not a standards gross, so read measurement_standard before quoting it. A void wider than a wall stays open and is excluded from the area.")]
     fn get_hierarchy_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<CallToolResult, McpError> {
         let result = areas::assemble_areas(&self.state, &p.project_id, p.building.as_deref(), p.milestone.as_deref())
             .map_err(to_mcp_error)?;

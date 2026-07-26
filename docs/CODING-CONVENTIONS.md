@@ -18,6 +18,26 @@ write it" that sits underneath.
 - A type's inherent `impl { fn validate() }` stays *with the type*; only
   standalone free functions move to a sibling file (see `settings/`).
 
+**Where the codebase actually stands (measured 2026-07-26).** Eight modules are
+past the ~500 real-line trigger — `service/areas.rs` (1,072), `service/rooms.rs`
+(1,021), `settings/mod.rs` (804), `service/adjacency.rs` (748), `handlers.rs`
+(586), `bin/mcp.rs` (551), `settings_api.rs` (531), `contract.rs` (519). That is
+not automatically a defect: the trigger is "worth a second look", not a limit.
+But only `adjacency.rs` writes down *why* it declined to split, and a rule
+nothing is measured against stops being a rule. Two of the eight are worth
+naming specifically:
+
+- **`settings/mod.rs` at 804 lines is the one that reads as unfinished.** The
+  `settings/` split was done — and is cited above as the worked example — yet
+  `mod.rs` kept the bulk rather than becoming the thin re-export the pattern
+  describes. The types are already grouped by concern in the file (area policy,
+  dRofus field config, hierarchy, milestones, colour plans), so the seams exist.
+- **`areas.rs` and `rooms.rs` are cohesive by argument, not by accident** — one
+  geometry pipeline and one assembly pipeline respectively, each with an
+  invariant only checkable by reading the parts together. If they stay whole,
+  say so in the header the way `adjacency.rs` does, so the next reader knows it
+  was decided rather than deferred.
+
 ## Tests
 - Unit tests live **inline** as `#[cfg(test)] mod tests` at the bottom of the
   file they exercise — not in a separate `tests/` tree. They move with their
@@ -29,6 +49,13 @@ write it" that sits underneath.
 ## Long functions
 - A long function is a bigger smell than a long module. The `too_many_lines`
   clippy lint (in `Cargo.toml`, `warn` — fires >100 lines) surfaces them.
+  **Nothing runs it for you:** `.github/workflows/rust.yml` is `cargo build` +
+  `cargo test` only, so clippy is a local habit, not a gate. It currently
+  reports 25 lib warnings (collapsible `if`s, `useless_vec` in tests,
+  overindented doc lists, one `&PathBuf`-should-be-`&Path`) and one
+  `too_many_lines` hit — a test, `settings_api::tests::test_settings_toml_round_trip`
+  at 118 lines. Either clear them or add `cargo clippy` to CI; a warn-level
+  lint nobody reads is decoration.
 - Extract helpers only at **seams that improve clarity** — a natural phase
   boundary with a nameable input/output — never mechanically to hit the line
   count. `assemble_rooms` (scope → dedup levels → assemble) and
@@ -39,6 +66,21 @@ write it" that sits underneath.
 - Factor a repeated or gnarly type into a `type` alias with a doc comment
   (`ScopedPayload`, `LinkValueIndex`) — it reads better *and* silences clippy's
   `type_complexity`.
+
+## `static/` has no conventions yet — and that is now the open question
+These rules are Rust-only. `PLAN-handover-actioning.md`'s P10 flagged that gap
+and deliberately left it a question rather than answering it by accretion, when
+`index.html` was 2,020 lines. It is now **3,941** (~3,260 of them one inline
+`<script>`), and two extractions have happened since without a rule prompting
+them — `common.js` (the palette and the classification-path vocabulary, moved
+because two views disagreeing about a group's identity is worse than either
+being arbitrary) and `graph.js` (moved because the concern boundary is a
+different renderer). Both were pulled by a *specific* argument, which is the
+honest pattern so far: **extract when two consumers must agree, or when the
+boundary is a genuinely different concern — not to hit a line count.** The
+zero-build vanilla constraint (STRATEGY-BROWSER) is what makes anything more
+aggressive expensive. If a rule is ever written down, that is the one the code
+already follows.
 
 ## Dependency direction is the seam
 - `service/` is transport-agnostic: it never imports `axum`, `rmcp`, or
