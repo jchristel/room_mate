@@ -388,6 +388,35 @@ side should shape future server endpoints.
   arbitrary. The wall-tolerance slider is debounced (0–900mm, mm readout, feet on
   the wire) and is a **tuning instrument, not a preference**: see Server for why
   the tolerance is a request parameter at all.
+  **The default is the server's, and the viewer does not restate it.**
+  `adjWallMm` starts `null`, which makes `adjacencyUrl()` **omit `wall_max`
+  entirely** — omission is how the viewer *asks for* the derived default (the
+  project's declared `[areas] max_wall_thickness`, narrowed to zero where every
+  level in scope is centreline). The response echoes what was applied, and
+  `syncWallFromServer` moves the thumb and readout to it *without* taking
+  ownership, so the request stays unqualified and a settings change still reaches
+  the viewer. The first drag assigns a number, and from then on the tolerance is
+  sent explicitly — including `0`, which is a real tolerance and precisely why
+  "unchosen" needed its own representation rather than reusing zero. A project
+  switch drops back to `null`: the tolerance is a property of the project, so a
+  value probed on one must not become a silent override on the next.
+  This replaced a hardcoded `1.5 ft` that was sent on every request, which meant
+  the derived default was **never** the one applied — the same
+  one-quantity-two-declarations bug `[areas] max_wall_thickness` was created to
+  delete (it replaced `areas::MAX_WALL_FT` + `adjacency::WALL_MAX_FT`),
+  reappearing across the wire. It was not cosmetic: measured on `showcase`
+  declaring `max_wall_thickness = 0.5`, the old viewer asked for 1.5 ft and drew
+  **189** edges where the project's own declared thickness gives **75**.
+  Verified live for both regimes' plumbing: unqualified request →
+  `152 mm · project default`; drag → `?wall_max=1.3123` and a bare `400 mm`;
+  project switch → back to `457 mm · project default`. Two deliberate details:
+  the readout carries the server's exact figure while the thumb can only land on
+  a `step` multiple (1.5 ft is 457.2mm, the thumb goes to 460) and is clamped to
+  the 0–900mm range a project may legitimately exceed — **the text is the honest
+  one**; and the `· project default` suffix exists because a bare `0 mm` on a
+  centreline project reads as a broken control rather than the correct answer it
+  is. One physical quantity, one declaration — see
+  [Area calculation](STRATEGY-AREA-CALCULATION.md).
 - **Settings page (`settings.html`).** A sibling static page, linked from the
   viewer's header, over [Server](STRATEGY-SERVER.md)'s `/api/settings` routes:
   a project-file list on the left (a file that fails to parse still gets a

@@ -605,10 +605,12 @@
           <label>Colour <select class="picker" id="adjTier" title="Classification tier driving node colour"></select></label>
           <!-- The wall tolerance, in mm because that is what a UK/EU hospital
                job is drawn in; the wire value is feet, converted at this edge.
-               A TUNING INSTRUMENT, not a settled preference: once real models
-               establish a working value it should be baked in as the server
-               default and this control reconsidered. -->
-          <label id="adjWallLabel" title="Largest gap still counted as a shared wall. 0 suits a model whose room boundaries sit on wall centrelines; the wall thickness suits one using finish faces.">
+               A TUNING INSTRUMENT, not a settled preference: it opens showing
+               the tolerance the SERVER derived for this project (the declared
+               [areas] max_wall_thickness, or zero where every level in scope is
+               centreline) and only overrides it once dragged. See the
+               `adjWallMm` / `syncWallFromServer` pair below. -->
+          <label id="adjWallLabel" title="Largest gap still counted as a shared wall. Opens at the project's declared value — 0 where rooms are drawn to wall centrelines (neighbours touch exactly), the wall thickness where they are drawn to finish faces. Drag only to probe a different tolerance.">
             Wall gap
             <input type="range" id="adjWall" min="0" max="900" step="10" />
             <span id="adjWallOut" class="count"></span>
@@ -2349,17 +2351,36 @@ let adjRevision = null;     // change-detection cursor, same idea as the room po
 let adjGraph = null;        // the canvas controller (created lazily, on first open)
 // Wall tolerance as the user sees it: MILLIMETRES. The wire value is decimal
 // feet (Revit's internal unit), converted at this edge only.
-let adjWallMm = Math.round(1.5 * 304.8); // the server default, restated for the slider
+//
+// `null` means THE USER HAS NOT CHOSEN ONE, and that is the normal resting
+// state: the request then omits `wall_max` entirely, and the server derives it
+// from the project's declared `[areas] max_wall_thickness` through the boundary
+// regime the models declared — zero when every level in scope is centreline,
+// where neighbours already touch and any positive tolerance only invites
+// bridging. The response echoes what it applied, and that is what moves the
+// slider (`syncWallFromServer`).
+//
+// This used to be seeded from a hardcoded 1.5 ft and sent on every request, so
+// the derived default was never the one applied: a project declaring 0.5 ft was
+// silently overridden by its own viewer, and a centreline project opened at a
+// tolerance guaranteed to over-connect. That is the same one-quantity-two-
+// declarations bug `[areas] max_wall_thickness` exists to delete (it replaced
+// `areas::MAX_WALL_FT` + `adjacency::WALL_MAX_FT`), reappearing across the wire
+// — so the number is declared once, in project settings, and read from there.
+let adjWallMm = null;
 const FT_TO_MM = 304.8;
 
 function adjacencyUrl() {
   const params = new URLSearchParams();
   if (buildingKey) params.set("building", buildingKey);
   if (milestone) params.set("milestone", milestone);
-  // Sent every time, including 0: zero is a real tolerance (the wall-centreline
-  // case), not "unset". Rounded because a float with 14 decimals in a URL is
-  // noise, and the server's revision hashes the value it received.
-  params.set("wall_max", (adjWallMm / FT_TO_MM).toFixed(4));
+  // Omitted while unchosen: omission is how the viewer ASKS FOR the server's
+  // derived default rather than restating it. Once chosen it is sent every
+  // time, including 0 — zero is a real tolerance (the wall-centreline case),
+  // not "unset", which is precisely why "unset" needed its own representation.
+  // Rounded because a float with 14 decimals in a URL is noise, and the
+  // server's revision hashes the value it received.
+  if (adjWallMm != null) params.set("wall_max", (adjWallMm / FT_TO_MM).toFixed(4));
   return `/projects/${encodeURIComponent(projectId)}/adjacency?${params}`;
 }
 
@@ -2408,6 +2429,10 @@ async function loadAdjacency({ force = false } = {}) {
   if (!projectId || !adjBandOpen()) return;
   try {
     const next = await fetchJson(adjacencyUrl());
+    // Before the revision check, and deliberately: the echoed tolerance is worth
+    // showing even on a response that changes nothing else, and an unchanged
+    // revision makes this a no-op anyway.
+    syncWallFromServer(next.wall_max);
     // One server-computed revision instead of re-comparing the payload — and it
     // hashes `wall_max` alongside the snapshot set, so a slider change counts as
     // new content and the graph never looks frozen after a drag.
@@ -2480,9 +2505,33 @@ function areaFocusLabel(id) {
   return grp ? grp.path.map(tierLabel).join(" / ") : id;
 }
 
+// The user picking a tolerance. Assigning a number is what takes ownership of
+// the control: from here `adjacencyUrl()` sends it explicitly, and the server's
+// derived default no longer applies until the scope changes.
 function setAdjWallMm(mm) {
   adjWallMm = mm;
   document.getElementById("adjWallOut").textContent = `${mm} mm`;
+}
+
+// Reflect the tolerance the server reports it actually applied, WITHOUT taking
+// ownership: `adjWallMm` stays null, so the next request still omits `wall_max`
+// and a change to the project's `[areas] max_wall_thickness` still reaches the
+// viewer. Once the user has chosen, this does nothing — the slider must never
+// jump under the cursor.
+//
+// The readout carries the server's exact figure and the thumb only approximates
+// it, which is the honest way round: the input can land only on a `step`
+// multiple (1.5 ft is 457.2mm, and the thumb goes to 460), and a project may
+// legitimately declare a thickness past the slider's 900mm range, which is
+// clamped for the thumb but still reported truthfully in the text.
+function syncWallFromServer(ft) {
+  if (adjWallMm != null || typeof ft !== "number" || !isFinite(ft)) return;
+  const mm = Math.round(ft * FT_TO_MM);
+  const slider = document.getElementById("adjWall");
+  slider.value = String(Math.min(Math.max(mm, Number(slider.min)), Number(slider.max)));
+  // Labelled, because "0 mm" on a centreline project reads as a broken control
+  // rather than the correct answer it is.
+  document.getElementById("adjWallOut").textContent = `${mm} mm · project default`;
 }
 
 // A continuous drag would otherwise fire a graph recompute per frame and hammer
@@ -3530,6 +3579,12 @@ scopeEls.project.addEventListener("change", async () => {
   selectRoom(null);
   adjData = null;
   adjRevision = null;
+  // The tolerance is a property of the project (its declared wall thickness and
+  // the regime its models were drawn to), so a value probed on one project must
+  // not silently become an explicit override on the next — drop back to "let the
+  // server decide", same reasoning as dropping the selection above.
+  adjWallMm = null;
+  document.getElementById("adjWallOut").textContent = "—";
   // One scope on screen means the URL always mirrors it — the "which zone's
   // scope does the URL carry" question is gone. building/milestone are null
   // here (just reset), so the helper drops them from the URL.
@@ -3925,15 +3980,13 @@ window.addEventListener("resize", () => {
 
 createZone();
 setLayout();
-// Seed the wall-tolerance slider from the same default the server uses, so the
-// control opens showing what the endpoint would do if asked nothing. The value
-// is read back out afterwards because the input snaps to its own `step`, and a
-// readout that disagreed with the thumb by a few mm would be its own small lie.
-(() => {
-  const slider = document.getElementById("adjWall");
-  slider.value = String(adjWallMm);
-  setAdjWallMm(parseInt(slider.value, 10) || 0);
-})();
+// The wall-tolerance slider is deliberately NOT seeded here. There is no honest
+// value to seed it with before a response: the default is per project and per
+// boundary regime, and the last thing that stood here was a hardcoded 1.5 ft
+// that then overrode whatever the project declared. It fills in from the first
+// `/adjacency` response instead (`syncWallFromServer`) — until then the band is
+// collapsed and there is no graph for a tolerance to apply to.
+document.getElementById("adjWallOut").textContent = "—";
 tick();
 setInterval(tick, 2000);
 </script>
