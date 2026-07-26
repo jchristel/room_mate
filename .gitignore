@@ -26,5 +26,13 @@ target
 !src/bin/
 
 data/*
-.mcp.json
 /scripts/__pycache__
+
+# NOT ignored, deliberately: `.mcp.json` (the Claude Code MCP registration for
+# bin/mcp.rs) is tracked. It used to be listed here, which silently contradicted
+# docs/mcp-host-setup.md's "committed at the crate root, so opening Claude Code
+# in the roommate directory picks it up automatically" -- a fresh clone simply
+# got no roommate tools. It is safe to track because it holds no secret and no
+# machine-specific path: it invokes `cargo run -q --bin mcp` with settings paths
+# relative to the crate root. Keep it that way; an absolute path belongs in the
+# host's own config (that doc's Claude Desktop section), never in this file.
