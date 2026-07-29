@@ -12,11 +12,12 @@ use crate::state::AppState;
 /// One milestone as the picker sees it. `attached_models` is a *count* of
 /// model pins, not the pin map itself — the dropdown only labels options, and
 /// the settings UI (which edits the pins) reads the full map through the
-/// settings API instead. `drofus_snapshot` is the exception: it's a single
-/// scalar, not a map, and surfacing it here is what lets a consumer (notably
-/// the MCP `list_milestones` tool) see *whether and what* dRofus a milestone
-/// pins without a second `get_project_settings` call. Absent when the
-/// milestone joins the current dRofus (no pin).
+/// settings API instead. `drofus_snapshot` is the exception: it surfaces the
+/// milestone's "drofus"-named `reference_snapshots` pin (if any) as a single
+/// scalar, which is what lets a consumer (notably the MCP `list_milestones`
+/// tool) see *whether and what* dRofus a milestone pins without a second
+/// `get_project_settings` call. Absent when the milestone joins the current
+/// dRofus (no pin).
 #[derive(Serialize)]
 pub struct MilestoneSummary {
     pub name: String,
@@ -48,7 +49,7 @@ pub fn list_milestones(state: &AppState, project_id: &str) -> Result<MilestonesR
             name: m.name.clone(),
             date: m.date.clone(),
             attached_models: m.attachments.len(),
-            drofus_snapshot: m.drofus_snapshot.clone(),
+            drofus_snapshot: m.reference_snapshots.get("drofus").cloned(),
         })
         .collect();
     // Both accepted date shapes (`YYYY-MM-DD`, RFC3339) start with the
@@ -69,18 +70,17 @@ mod tests {
         Milestone {
             name: name.to_string(),
             date: date.to_string(),
-            drofus_snapshot: None,
+            reference_snapshots: BTreeMap::new(),
             attachments: BTreeMap::from([("m1".to_string(), "2026-01-01T00:00:00Z".to_string())]),
         }
     }
 
     fn make_bundle(milestones: Vec<Milestone>) -> ProjectSettings {
         ProjectSettings {
-            drofus: None,
+            reference: BTreeMap::new(),
             hierarchy: vec![],
             builtin_properties: vec![],
             room_label: vec!["$name".to_string()],
-            drofus_fields: vec![],
             milestones,
             comparison_key: None,
             comparison_properties: vec![],
@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn test_list_milestones_newest_first() {
         let mut pinned = make_milestone("Design Freeze", "2026-06-30");
-        pinned.drofus_snapshot = Some("2026-06-29T17:00:00Z".to_string());
+        pinned.reference_snapshots.insert("drofus".to_string(), "2026-06-29T17:00:00Z".to_string());
         let bundle = make_bundle(vec![make_milestone("Concept", "2026-03-01"), pinned]);
         let registry = std::collections::HashMap::from([("p1".to_string(), bundle)]);
         let state = AppState::new(Box::new(MemStore::new()), registry, None);

@@ -2,7 +2,8 @@
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Server](STRATEGY-SERVER.md) ·
-[MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md)
+[MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md) ·
+[Security](STRATEGY-SECURITY.md)
 
 The SVG viewer: how it renders, how it's expected to grow, and how the fetch
 side should shape future server endpoints.

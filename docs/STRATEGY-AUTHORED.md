@@ -10,7 +10,9 @@ elsewhere; where a decision is genuinely new it is called out as such. The
 existing docs it leans on: [Index](STRATEGY.md) (the upload envelope),
 [Server](STRATEGY-SERVER.md) (`SnapshotStore`, manifest, milestones),
 [Sources](STRATEGY-SOURCES.md) (the dRofus upload precedent),
-[Browser](STRATEGY-BROWSER.md), [MCP](STRATEGY-MCP.md).
+[Browser](STRATEGY-BROWSER.md), [MCP](STRATEGY-MCP.md),
+[Security](STRATEGY-SECURITY.md) (the trust boundary this data crosses once
+authored content is user-submitted, not just machine-pushed).
 
 ## The problem this answers
 

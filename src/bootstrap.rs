@@ -1,8 +1,9 @@
 //! Settings file paths -> a running `Shared` state. The one place that knows
 //! how to turn a server-settings file plus a directory of per-project
 //! settings files into a live `AppState`: load each project's settings, load
-//! its dRofus data, validate its `drofus_fields` against it, register it
-//! under its project id, pick the storage backend, and seed dev/test data.
+//! each of its configured reference sources' data, validate their declared
+//! fields against it, register it under its project id, pick the storage
+//! backend, and seed dev/test data.
 //! Shared verbatim by both binaries (`main.rs`'s HTTP server and
 //! `bin/mcp.rs`'s MCP server) so they can't drift on this wiring -- a change
 //! to how the store backend is chosen, for instance, only has one call site
@@ -18,23 +19,23 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::drofus::{load_drofus_from_bytes, load_drofus_from_path};
+use crate::drofus::{load_reference_from_bytes, load_reference_from_path};
 use crate::service::rooms::validate_comparison_field;
 use crate::settings::{
-    load_server_config, load_settings, validate_drofus_field_shapes, validate_drofus_fields,
-    DrofusSource, ServerConfig,
+    load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields,
+    ReferenceOrigin, ServerConfig,
 };
-use crate::state::{seed_if_test, AppState, ProjectSettings, Shared};
+use crate::state::{seed_if_test, AppState, ProjectReferenceSource, ProjectSettings, Shared};
 use crate::storage::{FsStore, MemStore, SnapshotStore};
 
 /// Load and fully validate ONE project settings file into its runtime
-/// bundle: parse TOML, load the dRofus data when configured (a `file` source
-/// reads its CSV path; an `upload` source hydrates the latest stored CSV from
-/// the snapshot store — which is why the store is a parameter), validate the
-/// `drofus_fields` declarations against it. This is the single validation
-/// pipeline for a project file — startup (`load_project_settings_dir`) and
-/// the settings API's save both run exactly this, so a file the UI accepts
-/// can never fail the next boot.
+/// bundle: parse TOML, load each configured reference source's data (a
+/// `file` source reads its CSV path; an `upload` source hydrates the latest
+/// stored CSV from the snapshot store — which is why the store is a
+/// parameter), validate each source's declared fields against it. This is
+/// the single validation pipeline for a project file — startup
+/// (`load_project_settings_dir`) and the settings API's save both run
+/// exactly this, so a file the UI accepts can never fail the next boot.
 pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Result<(String, bool, ProjectSettings)> {
     let settings = load_settings(path).with_context(|| format!("bad settings file: {}", path.display()))?;
 
@@ -46,77 +47,104 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
     // this function is also what gives the settings-save path the same
     // rejection for free. Unqualified names stay unvalidated — free-text room
     // properties may legitimately match nothing yet.
+    //
+    // Validated against THIS project's own configured source names, not a
+    // global cross-project union: a comparison is always scoped to one
+    // project (`compare_milestones(state, project, ..)`), so a
+    // `comparison_key` naming a source only some OTHER project configures
+    // could never resolve here anyway — the tighter, project-local check is
+    // both simpler (no chicken-and-egg with the rest of the directory still
+    // loading) and the semantically correct one. Contrast the live `/rooms`
+    // filter (`handlers::get_rooms`), which spans projects unscoped and so
+    // must use the registry-wide union instead (see
+    // `SettingsRegistry::known_reference_sources`).
+    let known_here: std::collections::BTreeSet<String> = settings.sources.reference.keys().cloned().collect();
     for (which, field) in settings
         .comparison_key
         .iter()
         .map(|f| ("comparison_key", f))
         .chain(settings.comparison_properties.iter().map(|f| ("comparison_properties", f)))
     {
-        validate_comparison_field(field)
+        validate_comparison_field(field, &known_here)
             .map_err(|msg| anyhow::anyhow!("bad {which} entry {field:?} in {}: {msg}", path.display()))?;
     }
 
-    // dRofus is optional per project: load and validate only when a
-    // source is configured. `drofus_fields` declarations with *no* dRofus
-    // source are a config mistake (they describe columns of a source that
-    // isn't there) — fail loudly, same discipline as
-    // `validate_drofus_fields`' unknown-label check.
-    let drofus = match &settings.sources.drofus {
-        Some(DrofusSource::File { path: csv_path }) => {
-            let drofus = load_drofus_from_path(csv_path)
-                .with_context(|| format!("bad dRofus source in {}", path.display()))?;
+    // A source name that collides with a room's own wire field would
+    // silently overwrite it: `RoomResponse.reference` (service::rooms) is
+    // `#[serde(flatten)]`ed onto the response precisely so today's one
+    // source ("drofus") costs no wire change, but that means a source
+    // literally named "id" or "properties" would shadow the room's real
+    // field on every response instead of adding one. Checked here, not in
+    // `load_settings`, because the reserved vocabulary is `service::rooms`'s
+    // to define and settings must not depend on service.
+    const RESERVED_REFERENCE_NAMES: &[&str] =
+        &["id", "name", "level_id", "loops", "properties", "classification", "label"];
+    for name in settings.sources.reference.keys() {
+        if RESERVED_REFERENCE_NAMES.contains(&name.as_str()) {
+            anyhow::bail!(
+                "{}: [sources.reference.{name}] uses a reserved name — it would shadow the room's own '{name}' field on every /rooms response",
+                path.display()
+            );
+        }
+    }
 
-            // Can't validate this inside `load_settings`: the dRofus CSV (and its
-            // label set) isn't loaded until the line above, one step later.
-            validate_drofus_fields(&settings.drofus_fields, &drofus.all_labels)
-                .with_context(|| format!("bad drofus_fields in {}", path.display()))?;
-            Some(drofus)
-        }
-        Some(DrofusSource::Upload) => match store.get_latest_drofus(&settings.project_id)? {
-            Some((taken_at, bytes)) => {
-                // A stored CSV that fails to parse fails the boot loudly —
-                // same discipline as a rotted `file` CSV. The upload endpoint
-                // validates before storing, so this is only reachable by
-                // hand-editing the store.
-                let drofus = load_drofus_from_bytes(&bytes).with_context(|| {
-                    format!(
-                        "bad stored dRofus upload {} for project '{}' (referenced by {})",
-                        taken_at,
-                        settings.project_id,
-                        path.display()
-                    )
-                })?;
-                validate_drofus_fields(&settings.drofus_fields, &drofus.all_labels)
-                    .with_context(|| format!("bad drofus_fields in {}", path.display()))?;
-                Some(drofus)
+    // Every configured reference source is loaded and validated the same way:
+    // a `file` source reads its CSV path; an `upload` source hydrates the
+    // latest stored CSV for that (project, source) pair from the snapshot
+    // store (which is why the store is a parameter) — absent upload data is a
+    // legitimate "not configured yet" state, not a startup error. Each
+    // source's `fields` list lives on its own settings entry
+    // (`[sources.reference.<name>].fields`), so there is no way to declare
+    // fields with no source to attach them to.
+    let mut reference = std::collections::BTreeMap::new();
+    for (name, source_cfg) in &settings.sources.reference {
+        let data = match &source_cfg.origin {
+            ReferenceOrigin::File { path: csv_path } => {
+                let data = load_reference_from_path(csv_path)
+                    .with_context(|| format!("bad '{name}' reference source in {}", path.display()))?;
+
+                // Can't validate this inside `load_settings`: the CSV (and its
+                // label set) isn't loaded until the line above, one step later.
+                validate_reference_fields(&source_cfg.fields, &data.all_labels)
+                    .with_context(|| format!("bad '{name}' fields in {}", path.display()))?;
+                Some(data)
             }
-            // No upload yet: a legitimate "not configured yet" state, not an
-            // error. The label set is unknowable, so only the label-free half
-            // of the field validation can run.
-            None => {
-                validate_drofus_field_shapes(&settings.drofus_fields)
-                    .with_context(|| format!("bad drofus_fields in {}", path.display()))?;
-                None
-            }
-        },
-        None => {
-            if !settings.drofus_fields.is_empty() {
-                anyhow::bail!(
-                    "{} declares drofus_fields but no [sources.drofus] — \
-                     remove the declarations or configure the source",
-                    path.display()
-                );
-            }
-            None
-        }
-    };
+            ReferenceOrigin::Upload => match store.get_latest_drofus(&settings.project_id, name)? {
+                Some((taken_at, bytes)) => {
+                    // A stored CSV that fails to parse fails the boot loudly —
+                    // same discipline as a rotted `file` CSV. The upload endpoint
+                    // validates before storing, so this is only reachable by
+                    // hand-editing the store.
+                    let data = load_reference_from_bytes(&bytes).with_context(|| {
+                        format!(
+                            "bad stored '{name}' upload {} for project '{}' (referenced by {})",
+                            taken_at,
+                            settings.project_id,
+                            path.display()
+                        )
+                    })?;
+                    validate_reference_fields(&source_cfg.fields, &data.all_labels)
+                        .with_context(|| format!("bad '{name}' fields in {}", path.display()))?;
+                    Some(data)
+                }
+                // No upload yet: a legitimate "not configured yet" state, not an
+                // error. The label set is unknowable, so only the label-free half
+                // of the field validation can run.
+                None => {
+                    validate_reference_field_shapes(&source_cfg.fields)
+                        .with_context(|| format!("bad '{name}' fields in {}", path.display()))?;
+                    None
+                }
+            },
+        };
+        reference.insert(name.clone(), ProjectReferenceSource { data, fields: source_cfg.fields.clone() });
+    }
 
     let bundle = ProjectSettings {
-        drofus,
+        reference,
         hierarchy: settings.hierarchy,
         builtin_properties: settings.builtin_properties,
         room_label: settings.room_label,
-        drofus_fields: settings.drofus_fields,
         milestones: settings.milestones,
         comparison_key: settings.comparison_key,
         comparison_properties: settings.comparison_properties,
@@ -220,8 +248,8 @@ mod tests {
         dir
     }
 
-    /// A project with no `[sources]` at all registers with `drofus: None` —
-    /// the state `compute_project_validation` reports as
+    /// A project with no `[sources]` at all registers with an empty
+    /// `reference` map — the state `compute_project_validation` reports as
     /// `drofus_configured: false`.
     #[test]
     fn test_project_without_sources_registers_with_no_drofus() {
@@ -229,48 +257,34 @@ mod tests {
         std::fs::write(dir.join("p1.toml"), "project_id = \"p1\"\n").unwrap();
 
         let (registry, _default) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
-        assert!(registry.get("p1").unwrap().drofus.is_none());
+        assert!(registry.get("p1").unwrap().reference.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// `drofus_fields` declarations without a dRofus source are a config
-    /// mistake — declarations for a source that isn't there — and must fail
-    /// startup loudly, not be silently carried along.
-    #[test]
-    fn test_drofus_fields_without_source_fails_startup() {
-        let dir = temp_projects_dir("fields-no-source");
-        std::fs::write(
-            dir.join("p1.toml"),
-            "project_id = \"p1\"\n\n[[drofus_fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
-        )
-        .unwrap();
-
-        let msg = match load_project_settings_dir(&dir, &MemStore::new()) {
-            Err(err) => format!("{err:#}"),
-            Ok(_) => panic!("expected startup failure for drofus_fields without a source"),
-        };
-        assert!(msg.contains("drofus_fields"), "message names the problem: {msg}");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
+    // A `drofus_fields`-without-a-source config mistake (the old
+    // `test_drofus_fields_without_source_fails_startup`) is now structurally
+    // unrepresentable: a source's fields live under its own
+    // `[sources.reference.<name>]` entry, so there is no longer a way to
+    // declare fields with no source to attach them to.
 
     /// An `upload`-sourced project with no upload yet registers with
     /// `drofus: None` — a legitimate not-configured-yet state — and its
-    /// `drofus_fields` are accepted on their label-free shape checks alone.
+    /// fields are accepted on their label-free shape checks alone.
     #[test]
     fn test_upload_source_with_empty_store_registers_without_drofus() {
         let dir = temp_projects_dir("upload-empty");
         std::fs::write(
             dir.join("p1.toml"),
-            "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n\n[[drofus_fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
         )
         .unwrap();
 
         let (registry, _default) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
         let bundle = registry.get("p1").unwrap();
-        assert!(bundle.drofus.is_none());
-        assert_eq!(bundle.drofus_fields.len(), 1, "field declarations carried along for later");
+        let drofus_source = &bundle.reference["drofus"];
+        assert!(drofus_source.data.is_none());
+        assert_eq!(drofus_source.fields.len(), 1, "field declarations carried along for later");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -282,7 +296,7 @@ mod tests {
         let dir = temp_projects_dir("upload-shape");
         std::fs::write(
             dir.join("p1.toml"),
-            "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n\n[[drofus_fields]]\nlabel = \"Updated\"\ntype = \"date\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"Updated\"\ntype = \"date\"\n",
         )
         .unwrap();
 
@@ -296,23 +310,23 @@ mod tests {
     }
 
     /// An `upload`-sourced project with a stored CSV hydrates it as its
-    /// dRofus data, and `drofus_fields` labels are validated against it.
+    /// dRofus data, and its fields' labels are validated against it.
     #[test]
     fn test_upload_source_hydrates_latest_stored_csv() {
         let dir = temp_projects_dir("upload-hydrate");
         std::fs::write(
             dir.join("p1.toml"),
-            "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n\n[[drofus_fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
         )
         .unwrap();
 
         let store = MemStore::new();
         store
-            .put_drofus("p1", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
+            .put_drofus("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
             .unwrap();
 
         let (registry, _default) = load_project_settings_dir(&dir, &store).unwrap();
-        let drofus = registry.get("p1").unwrap().drofus.as_ref().expect("hydrated");
+        let drofus = registry.get("p1").unwrap().reference["drofus"].data.as_ref().expect("hydrated");
         assert_eq!(drofus.link_property, "Number");
         assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
 
@@ -350,7 +364,11 @@ mod tests {
         let dir = temp_projects_dir("cmp-ok");
         std::fs::write(
             dir.join("p1.toml"),
-            "project_id = \"p1\"\ncomparison_key = \"drofus.RoomId\"\ncomparison_properties = [\"Area\", \"drofus.NetArea\", \"No Such Property\"]\n",
+            // `drofus.`-qualified fields validate only against sources THIS
+            // project actually configures (see the comment on the
+            // `known_here` computation in `load_project_bundle`), so the
+            // fixture must declare the source, not just reference it.
+            "project_id = \"p1\"\ncomparison_key = \"drofus.RoomId\"\ncomparison_properties = [\"Area\", \"drofus.NetArea\", \"No Such Property\"]\n\n[sources.reference.drofus]\ntype = \"upload\"\n",
         )
         .unwrap();
 
@@ -360,27 +378,82 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A stored CSV whose labels don't cover the declared `drofus_fields`
-    /// fails the load loudly — same discipline as a `file` source.
+    /// A stored CSV whose labels don't cover the declared fields fails the
+    /// load loudly — same discipline as a `file` source.
     #[test]
     fn test_upload_source_label_mismatch_fails_loudly() {
         let dir = temp_projects_dir("upload-mismatch");
         std::fs::write(
             dir.join("p1.toml"),
-            "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n\n[[drofus_fields]]\nlabel = \"NoSuchColumn\"\nqa = \"exact\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NoSuchColumn\"\nqa = \"exact\"\n",
         )
         .unwrap();
 
         let store = MemStore::new();
         store
-            .put_drofus("p1", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
+            .put_drofus("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
             .unwrap();
 
         let msg = match load_project_settings_dir(&dir, &store) {
             Err(err) => format!("{err:#}"),
-            Ok(_) => panic!("expected failure: drofus_fields label not in stored CSV"),
+            Ok(_) => panic!("expected failure: field label not in stored CSV"),
         };
         assert!(msg.contains("NoSuchColumn"), "message names the label: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A reference source named after one of `RoomResponse`'s own wire fields
+    /// fails the boot loudly rather than silently shadowing that field once
+    /// `#[serde(flatten)]` spreads it onto every `/rooms` response.
+    #[test]
+    fn test_reserved_reference_source_name_fails_startup() {
+        let dir = temp_projects_dir("reserved-name");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n[sources.reference.properties]\ntype = \"upload\"\n",
+        )
+        .unwrap();
+
+        let msg = match load_project_settings_dir(&dir, &MemStore::new()) {
+            Err(err) => format!("{err:#}"),
+            Ok(_) => panic!("expected startup failure for a reserved source name"),
+        };
+        assert!(msg.contains("reserved") && msg.contains("properties"), "names the problem: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two configured reference sources on one project both load into
+    /// `ProjectSettings.reference`, independently of each other — the
+    /// end-to-end proof that `load_project_bundle` no longer special-cases
+    /// "drofus" as the only loadable source name.
+    #[test]
+    fn test_two_reference_sources_both_load_independently() {
+        let dir = temp_projects_dir("two-sources");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n\
+             [sources.reference.drofus]\ntype = \"upload\"\n\n\
+             [[sources.reference.drofus.fields]]\nlabel = \"NetArea\"\ntype = \"numeric\"\n\n\
+             [sources.reference.doors]\ntype = \"upload\"\n\n\
+             [[sources.reference.doors.fields]]\nlabel = \"Mark\"\n",
+        )
+        .unwrap();
+
+        let store = MemStore::new();
+        store.put_drofus("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n").unwrap();
+        store.put_drofus("p1", "doors", "2026-01-01T10:00:00Z", b"DoorId,Mark\nMark,Mark\nD1,101A\n").unwrap();
+
+        let (registry, _default) = load_project_settings_dir(&dir, &store).unwrap();
+        let bundle = registry.get("p1").unwrap();
+
+        assert_eq!(bundle.reference.len(), 2, "both sources registered, not just \"drofus\"");
+        let drofus = bundle.reference["drofus"].data.as_ref().expect("drofus hydrated");
+        assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
+        let doors = bundle.reference["doors"].data.as_ref().expect("doors hydrated");
+        assert_eq!(doors.by_id["D1"].fields.get("Mark"), Some(&"101A".to_string()));
+        assert_eq!(bundle.reference["doors"].fields[0].label, "Mark");
 
         std::fs::remove_dir_all(&dir).ok();
     }

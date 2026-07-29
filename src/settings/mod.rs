@@ -5,20 +5,21 @@
 //! fast on bad config — better a loud startup error than a surprise on the first
 //! request. See `settings-infrastructure-handoff.md`.
 //!
-//! `DrofusSource` lives here (not in `drofus`) because it's part of the settings
-//! contract; the `#[serde(tag = "type")]` enum is the seam that makes the future
-//! file→API swap a loader-only change. `HierarchyTier` lives here too, as the
-//! classification *definition*; `classify` consumes it but doesn't own its shape.
+//! `ReferenceOrigin` lives here (not in `drofus`) because it's part of the
+//! settings contract; the `#[serde(tag = "type")]` enum is the seam that makes
+//! the future file→API swap a loader-only change. `HierarchyTier` lives here
+//! too, as the classification *definition*; `classify` consumes it but
+//! doesn't own its shape.
 //!
 //! Split across three files by concern, re-exported here so the public paths
-//! (`crate::settings::Settings`, `::load_settings`, `::validate_drofus_fields`,
+//! (`crate::settings::Settings`, `::load_settings`, `::validate_reference_fields`,
 //! …) never move:
 //! - **this file** — the config/domain types and their inherent `validate()`
 //!   methods (part of each type's own API);
 //! - **`validate`** — the standalone validation *functions* over those types;
 //! - **`load`** — the TOML loaders and settings-file-relative path resolution.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -27,7 +28,7 @@ mod load;
 mod validate;
 
 pub use load::{load_server_config, load_settings};
-pub use validate::{validate_colour_plans, validate_drofus_field_shapes, validate_drofus_fields};
+pub use validate::{validate_colour_plans, validate_reference_field_shapes, validate_reference_fields};
 
 /// One project's settings, parsed once at startup from its own TOML file
 /// (one of N files in the `--project-settings` directory — see
@@ -106,10 +107,11 @@ pub struct Settings {
     #[serde(default)]
     pub comparison_properties: Vec<String>,
 
-    /// External sources joined onto this project's rooms. Defaulted so a
-    /// project with no external sources at all is legal config — a project
-    /// not using dRofus is normal, and the validation endpoint already
-    /// reports it as `drofus_configured: false` rather than an error.
+    /// Reference sources joined onto this project's rooms, keyed by name (the
+    /// join namespace — see `Sources`). Defaulted so a project with no
+    /// external sources at all is legal config — a project not using dRofus
+    /// is normal, and the validation endpoint already reports it as
+    /// `drofus_configured: false` rather than an error.
     #[serde(default)]
     pub sources: Sources,
 
@@ -157,25 +159,6 @@ pub struct Settings {
     /// hot-reload — for free. Empty if omitted.
     #[serde(default)]
     pub milestones: Vec<Milestone>,
-
-    /// Per-column declarations for dRofus CSV fields: what *type* of data a
-    /// column holds, and, optionally, how QA comparison should treat it. One
-    /// declaration per column, not two separate lists — "what is this
-    /// column" shouldn't be answered in two places that can drift apart.
-    /// `type` is read by any consumer that needs to know a column's shape:
-    /// QA's date comparison parses a `Date`-declared column's values with the
-    /// declared `format` and compares the parsed instants, so two renderings
-    /// of the same moment no longer count as a mismatch (numeric-adaptive
-    /// comparison still infers numeric-ness at compare time without needing a
-    /// declaration). `qa` is the QA-specific override this used to be alone:
-    /// `Exact` forces string comparison even when both sides parse as numbers
-    /// or dates; `Ignore` excludes the field from comparison *and* the
-    /// coverage report entirely — for a column that's mapped (present in the
-    /// dRofus CSV's row 2) but expected to always differ. Empty if omitted,
-    /// which is the default behavior for every column: treated as a string,
-    /// numeric-adaptive comparison if both sides happen to parse as a number.
-    #[serde(default)]
-    pub drofus_fields: Vec<DrofusFieldConfig>,
 
     /// User-authored colour plans for the viewer: named, persisted colouring
     /// configs the user switches between. Lives in settings (not storage) for
@@ -376,11 +359,24 @@ impl AreaPolicy {
     }
 }
 
-/// One dRofus column's declared type/format, and optionally a QA override.
-/// `label` matches row 1 of the dRofus CSV (the same key
-/// `DrofusData::reconciliation`/`all_labels` use).
+/// One reference-source column's declared type/format, and optionally a QA
+/// override. `label` matches row 1 of the source's CSV (the same key
+/// `DrofusData::reconciliation`/`all_labels` use) — one declaration per
+/// column, not two separate lists, so "what is this column" is answered in
+/// one place. `type` is read by any consumer that needs to know a column's
+/// shape: QA's date comparison parses a `Date`-declared column's values with
+/// the declared `format` and compares the parsed instants, so two renderings
+/// of the same moment no longer count as a mismatch (numeric-adaptive
+/// comparison still infers numeric-ness at compare time without needing a
+/// declaration). `qa` is the QA-specific override: `Exact` forces string
+/// comparison even when both sides parse as numbers or dates; `Ignore`
+/// excludes the field from comparison *and* the coverage report entirely —
+/// for a column that's mapped (present in the source's row 2) but expected to
+/// always differ. Belongs to the `ReferenceSourceConfig` that declares it —
+/// each source owns its own field list, since a second source's columns are
+/// unrelated to the first's.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DrofusFieldConfig {
+pub struct ReferenceFieldConfig {
     pub label: String,
 
     /// What kind of data this column holds. Defaults to `String` (today's
@@ -415,9 +411,9 @@ pub struct DrofusFieldConfig {
     pub qa: Option<CompareMode>,
 }
 
-/// The kind of data a dRofus column holds. Not a closed set forever -- more
-/// variants join as consumers need them (e.g. a `Numeric { unit }` case,
-/// once real unit conversion rather than adaptive rounding is needed).
+/// The kind of data a reference-source column holds. Not a closed set forever
+/// -- more variants join as consumers need them (e.g. a `Numeric { unit }`
+/// case, once real unit conversion rather than adaptive rounding is needed).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldType {
@@ -455,7 +451,8 @@ pub enum CompareMode {
 ///
 /// Scalar fields (`name`, `active`) are declared before `mode` (a sub-table)
 /// so the TOML serializer emits them ahead of the `[colour_plans.mode]` table
-/// — the same footgun documented for `Milestone.drofus_snapshot`.
+/// — the same footgun `Milestone`'s field order (scalars before
+/// `reference_snapshots`/`attachments`) guards against.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ColourPlan {
     /// User-facing label shown in the viewer's colour picker.
@@ -467,11 +464,11 @@ pub struct ColourPlan {
     pub active: bool,
     /// The colouring strategy. Internally tagged on `kind` so the wire shape is
     /// self-describing and the browser switches on one field — the same tagged
-    /// representation `DrofusSource` uses.
+    /// representation `ReferenceOrigin` uses.
     pub mode: ColourMode,
 }
 
-/// The colouring strategies. Internally tagged on `kind` (like `DrofusSource`'s
+/// The colouring strategies. Internally tagged on `kind` (like `ReferenceOrigin`'s
 /// `type`), so the browser branches on `mode.kind`. Every variant is a *struct*
 /// variant, not a newtype/tuple: internally-tagged serde enums can't carry a
 /// newtype variant that wraps a sequence, and struct variants keep the JSON/TOML
@@ -502,7 +499,7 @@ pub enum ColourMode {
     /// are; `scheme` names a bundled diverging palette. `format` is the
     /// strftime pattern the room's date strings are in — the *same* pattern the
     /// dRofus date column uses (Revit room dates originate from dRofus), so an
-    /// author reuses the `drofus_fields` `format` rather than inventing one;
+    /// author reuses that reference field's `format` rather than inventing one;
     /// omitted means the browser falls back to native ISO-8601 parsing, and an
     /// unparseable value just renders "no data" grey. Validated as a real
     /// strftime pattern at load when present (see `validate_colour_plans`).
@@ -617,22 +614,48 @@ pub struct Storage {
     pub root: PathBuf,
 }
 
-/// External data sources joined onto the Revit snapshot. Every source is
-/// optional: which sources a project uses is that project's choice, and an
-/// absent source degrades to "not configured" downstream (e.g.
-/// `ValidationResponse.drofus_configured: false`), never an error.
+/// External reference sources joined onto the Revit snapshot, keyed by name —
+/// the key IS the join namespace a `/rooms` filter or `comparison_key` writes
+/// before the dot (`drofus.NetArea`; see `service::rooms::split_namespace`).
+/// Every source is optional: an empty map is legal config (a project not
+/// using any reference data is normal), and an absent source degrades to "not
+/// configured" downstream (e.g. `ValidationResponse.drofus_configured:
+/// false`), never an error.
+///
+/// **Currently means "reference sources for *rooms*"** — see
+/// `docs/STRATEGY-SOURCES.md`'s "Design notes on the join" for the axis
+/// boundary: a non-room entity (e.g. a door schedule) needs that entity to
+/// exist first, not just another key here.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Sources {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drofus: Option<DrofusSource>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reference: BTreeMap<String, ReferenceSourceConfig>,
 }
 
-/// dRofus source. `#[serde(tag = "type")]` lets the TOML `type` field pick the
-/// variant — adding an `Api` variant later is a loader-only change; all
-/// consumers of `AppState` stay untouched.
+/// One reference source's full configuration: where its data comes from
+/// (`origin`) and its per-column type/QA declarations (`fields`). `origin` is
+/// `#[serde(flatten)]`ed so its `type` tag sits at the same TOML level as
+/// `fields` — `[sources.reference.drofus] type = "upload"` — rather than
+/// nesting under a second table.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ReferenceSourceConfig {
+    #[serde(flatten)]
+    pub origin: ReferenceOrigin,
+
+    /// Per-column declarations for this source's fields. See
+    /// `ReferenceFieldConfig`. Empty if omitted, which is the default
+    /// behavior for every column: treated as a string, numeric-adaptive
+    /// comparison if both sides happen to parse as a number.
+    #[serde(default)]
+    pub fields: Vec<ReferenceFieldConfig>,
+}
+
+/// A reference source's data origin. `#[serde(tag = "type")]` lets the TOML
+/// `type` field pick the variant — adding an `Api` variant later is a
+/// loader-only change; all consumers of `AppState` stay untouched.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum DrofusSource {
+pub enum ReferenceOrigin {
     /// Load from a local file path, once at startup.
     File { path: PathBuf },
     /// Data arrives via `POST /projects/{id}/drofus` uploads, stored as
@@ -656,10 +679,10 @@ pub struct TestData {
 /// pinned to it (`attachments`: model id → snapshot `taken_at`). The *name*
 /// is the milestone's identity — unique per project, and what
 /// `/rooms?milestone=` matches on; the date is display/ordering metadata.
-/// A milestone can also pin one dRofus snapshot (`drofus_snapshot`), so the
-/// milestone view joins the reference data as it stood at the milestone
-/// rather than the project's current dRofus — the slot that was reserved for
-/// "future sources" now that dRofus is an uploaded, snapshotted source.
+/// A milestone can also pin reference-source snapshots (`reference_snapshots`,
+/// source name → `taken_at`), so the milestone view joins each source's
+/// reference data as it stood at the milestone rather than the project's
+/// current data — dRofus is the first (and today, only) entry.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Milestone {
     /// Identity: unique per project, non-empty (validated at load).
@@ -667,25 +690,23 @@ pub struct Milestone {
     /// Display/order date: `YYYY-MM-DD` or a full RFC3339 date-time
     /// (validated at load).
     pub date: String,
-    /// Optional dRofus snapshot pinned to this milestone: the `taken_at` id of
-    /// one uploaded dRofus CSV in the store, joined onto this milestone's rooms
-    /// instead of the project's current dRofus. `None` (the common case, and
-    /// every milestone authored before this field existed) keeps the pre-
-    /// pinning behaviour — the milestone view joins the *current* dRofus.
-    /// dRofus is project-scoped, so this is a single id, not a per-model map
-    /// like `attachments`. Like an `attachments` pin, whether the snapshot
-    /// still *exists* is a read-time concern (skip + warn, fall back to
-    /// current); only its *shape* (a valid RFC3339-UTC snapshot id) is
-    /// validated here. Declared before `attachments` so the TOML serializer
-    /// emits it as a scalar ahead of the `[milestones.attachments]` sub-table.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drofus_snapshot: Option<String>,
+    /// Optional reference-source snapshots pinned to this milestone: source
+    /// name → the `taken_at` id of one uploaded CSV in the store, joined onto
+    /// this milestone's rooms instead of that source's current data. A source
+    /// with no entry (the common case, and every milestone authored before
+    /// this field existed) keeps the pre-pinning behaviour — the milestone
+    /// view joins that source's *current* data. Like an `attachments` pin,
+    /// whether a pinned snapshot still *exists* is a read-time concern (skip +
+    /// warn, fall back to current); only its *shape* (a valid RFC3339-UTC
+    /// snapshot id) is validated here.
+    #[serde(default)]
+    pub reference_snapshots: BTreeMap<String, String>,
     /// Explicit pins: model id → snapshot id (`taken_at`). A model with no
     /// entry simply doesn't appear in this milestone's view. Whether a pinned
     /// snapshot still *exists* is a read-time concern (skip + warn), not
     /// validated here — settings can't see storage.
     #[serde(default)]
-    pub attachments: std::collections::BTreeMap<String, String>,
+    pub attachments: BTreeMap<String, String>,
 }
 
 impl Milestone {
@@ -714,9 +735,10 @@ impl Milestone {
         }
         // Same rule as an attachments pin: a valid RFC3339-UTC snapshot id.
         // Existence is not checkable here (settings can't see storage).
-        if let Some(id) = &self.drofus_snapshot {
-            crate::contract::validate_snapshot_id(id)
-                .map_err(|e| anyhow::anyhow!("milestone '{}', drofus_snapshot: {}", self.name, e))?;
+        for (source, id) in &self.reference_snapshots {
+            crate::contract::validate_snapshot_id(id).map_err(|e| {
+                anyhow::anyhow!("milestone '{}', reference_snapshots.{}: {}", self.name, source, e)
+            })?;
         }
         Ok(())
     }
@@ -767,7 +789,7 @@ impl HierarchyTier {
 /// Matching a group reuses the resolved tier value everything else classifies
 /// against — no second matching vocabulary; `value` matches the tier's resolved
 /// code OR name. Internally tagged on `match`, the same self-describing shape
-/// `DrofusSource`/`ColourMode` use.
+/// `ReferenceOrigin`/`ColourMode` use.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "match", rename_all = "lowercase")]
 pub enum HierarchyExclusion {
@@ -820,7 +842,7 @@ mod tests {
         Milestone {
             name: name.to_string(),
             date: date.to_string(),
-            drofus_snapshot: None,
+            reference_snapshots: Default::default(),
             attachments: Default::default(),
         }
     }
@@ -844,13 +866,13 @@ mod tests {
         good_pin.attachments.insert("model-1".to_string(), "2026-06-29T10:00:00.123456Z".to_string());
         assert!(good_pin.validate().is_ok());
 
-        // A dRofus pin follows the same snapshot-id rule as an attachment.
+        // A reference-source pin follows the same snapshot-id rule as an attachment.
         let mut bad_drofus = milestone("M", "2026-06-30");
-        bad_drofus.drofus_snapshot = Some("not-a-snapshot-id".to_string());
-        assert!(bad_drofus.validate().is_err(), "drofus_snapshot must be a valid snapshot id");
+        bad_drofus.reference_snapshots.insert("drofus".to_string(), "not-a-snapshot-id".to_string());
+        assert!(bad_drofus.validate().is_err(), "reference_snapshots entry must be a valid snapshot id");
 
         let mut good_drofus = milestone("M", "2026-06-30");
-        good_drofus.drofus_snapshot = Some("2026-06-29T17:00:00Z".to_string());
+        good_drofus.reference_snapshots.insert("drofus".to_string(), "2026-06-29T17:00:00Z".to_string());
         assert!(good_drofus.validate().is_ok());
     }
 

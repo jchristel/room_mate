@@ -25,12 +25,12 @@ use roommate::bootstrap::build_state;
 use roommate::handlers::{
     compare_project_milestones, get_drofus_latest, get_drofus_snapshots, get_model_latest_snapshot,
     get_project_adjacency, get_project_areas, get_project_buildings, get_project_milestones,
-    get_project_snapshots, get_project_validation, get_projects, get_rooms, ingest_rooms,
-    ingest_rooms_stream,
+    get_project_snapshots, get_project_validation, get_projects, get_reference_latest,
+    get_reference_snapshots, get_rooms, ingest_rooms, ingest_rooms_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_drofus_check, http_get_project, http_get_project_resolved,
-    http_list_projects, http_update_project, http_upload_drofus,
+    http_list_projects, http_update_project, http_upload_drofus, http_upload_reference,
 };
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
@@ -161,13 +161,24 @@ fn build_router(state: roommate::state::Shared) -> Router {
         )
         // dRofus upload ingest + its read side: uploaded CSVs are timestamped
         // project-scoped snapshots in the store (see settings_api's
-        // `upload_drofus` for the validate-before-store pipeline).
+        // `upload_drofus` for the validate-before-store pipeline). Kept as
+        // the "drofus" alias of the `/reference/{source}` routes below —
+        // `static/settings.html` calls this path today, unchanged.
         .route(
             "/projects/{id}/drofus",
             post(http_upload_drofus).layer(DefaultBodyLimit::max(DROFUS_BODY_LIMIT_BYTES)),
         )
         .route("/projects/{id}/drofus/snapshots", get(get_drofus_snapshots))
         .route("/projects/{id}/drofus/latest", get(get_drofus_latest))
+        // The source-generalized form: any reference source a project
+        // configures with an `upload` origin, not just "drofus". Same body
+        // limit and validate-before-store pipeline, one more path segment.
+        .route(
+            "/projects/{id}/reference/{source}",
+            post(http_upload_reference).layer(DefaultBodyLimit::max(DROFUS_BODY_LIMIT_BYTES)),
+        )
+        .route("/projects/{id}/reference/{source}/snapshots", get(get_reference_snapshots))
+        .route("/projects/{id}/reference/{source}/latest", get(get_reference_latest))
         // Settings read/save API behind static/settings.html — see
         // `settings_api`'s module doc for the save pipeline and trust model.
         .route("/api/settings/projects", get(http_list_projects).post(http_create_project))

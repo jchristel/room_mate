@@ -2,7 +2,8 @@
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Server](STRATEGY-SERVER.md) · [Browser](STRATEGY-BROWSER.md) ·
-[MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md)
+[MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md) ·
+[Security](STRATEGY-SECURITY.md)
 
 Everything that supplies raw data into the pipeline: the Revit/pyRevit
 producer, and dRofus (external reference data, today's only other source).
@@ -239,6 +240,18 @@ builds a flat `Map<String, DrofusRecord>` — no collision handling needed.
   predicate on that source, negative operators included — and comparison
   reports that unmatched state per room (`unjoined_sources`), not as one
   missing value per configured field.
+- **`[sources.reference.*]` currently means "reference sources *for
+  rooms*."** The join, filter, and comparison machinery above all resolve
+  onto an assembled *room* — nothing in this module joins onto any other
+  entity. A door schedule needs a *doors entity* first, not just another
+  entry under this table: it joins by a door key onto a door, not a room,
+  and no door entity exists yet (`/rooms` assembles rooms and nothing else).
+  Adding `[sources.reference.doors]` today would parse and load, then
+  silently no-op — configured but joined nowhere. This table generalizes
+  cleanly to *more room-keyed sources* (the extension point above); it does
+  **not** generalize to *sources keyed on a different entity* without that
+  entity existing first. See `docs/HANDOVER-reference-sources.md` for the
+  full two-axis breakdown.
 
 ## Open items / things to watch
 

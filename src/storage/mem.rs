@@ -12,15 +12,19 @@ use super::SnapshotStore;
 use crate::contract::RoomPayload;
 use crate::state::ModelKey;
 
+/// (project id, source name) -> (taken_at, bytes) — factored out purely to
+/// keep `MemStore`'s field declaration under clippy's type-complexity limit.
+type DrofusByProjectSource = BTreeMap<(String, String), (String, Vec<u8>)>;
+
 /// In-memory store: the pre-persistence behaviour, kept for tests and for a
 /// `[storage]`-less config. Latest-only per model (no history) — history is a
 /// disk affordance, not worth reproducing in the volatile store.
 #[derive(Default)]
 pub struct MemStore {
     latest: Mutex<BTreeMap<ModelKey, RoomPayload>>,
-    /// Latest uploaded dRofus CSV per project id: `(taken_at, bytes)`.
-    /// Latest-only like `latest` — history is a disk affordance.
-    drofus: Mutex<BTreeMap<String, (String, Vec<u8>)>>,
+    /// Latest uploaded CSV per (project id, source name): `(taken_at,
+    /// bytes)`. Latest-only like `latest` — history is a disk affordance.
+    drofus: Mutex<DrofusByProjectSource>,
 }
 
 impl MemStore {
@@ -78,38 +82,38 @@ impl SnapshotStore for MemStore {
             .cloned())
     }
 
-    fn put_drofus(&self, project_id: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
+    fn put_drofus(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
         // Latest-only: replacement is the normal upsert (same stance as
         // `put`), so the duplicate-skip rule doesn't apply here.
         self.drofus
             .lock()
             .unwrap()
-            .insert(project_id.to_string(), (taken_at.to_string(), csv.to_vec()));
+            .insert((project_id.to_string(), source.to_string()), (taken_at.to_string(), csv.to_vec()));
         Ok(true)
     }
 
-    fn list_drofus_snapshot_ids(&self, project_id: &str) -> Result<Vec<String>> {
+    fn list_drofus_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>> {
         Ok(self
             .drofus
             .lock()
             .unwrap()
-            .get(project_id)
+            .get(&(project_id.to_string(), source.to_string()))
             .map(|(id, _)| vec![id.clone()])
             .unwrap_or_default())
     }
 
-    fn get_drofus(&self, project_id: &str, taken_at: &str) -> Result<Option<Vec<u8>>> {
+    fn get_drofus(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>> {
         Ok(self
             .drofus
             .lock()
             .unwrap()
-            .get(project_id)
+            .get(&(project_id.to_string(), source.to_string()))
             .filter(|(id, _)| id == taken_at)
             .map(|(_, bytes)| bytes.clone()))
     }
 
-    fn get_latest_drofus(&self, project_id: &str) -> Result<Option<(String, Vec<u8>)>> {
-        Ok(self.drofus.lock().unwrap().get(project_id).cloned())
+    fn get_latest_drofus(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>> {
+        Ok(self.drofus.lock().unwrap().get(&(project_id.to_string(), source.to_string())).cloned())
     }
 }
 
@@ -147,16 +151,16 @@ mod tests {
     #[test]
     fn test_mem_store_drofus_latest_only() {
         let store = MemStore::new();
-        assert!(store.get_latest_drofus("p").unwrap().is_none());
+        assert!(store.get_latest_drofus("p", "drofus").unwrap().is_none());
 
-        store.put_drofus("p", "2026-01-01T10:00:00Z", b"one").unwrap();
-        store.put_drofus("p", "2026-01-02T10:00:00Z", b"two").unwrap();
+        store.put_drofus("p", "drofus", "2026-01-01T10:00:00Z", b"one").unwrap();
+        store.put_drofus("p", "drofus", "2026-01-02T10:00:00Z", b"two").unwrap();
 
-        assert_eq!(store.list_drofus_snapshot_ids("p").unwrap(), vec!["2026-01-02T10:00:00Z".to_string()]);
-        let (id, bytes) = store.get_latest_drofus("p").unwrap().unwrap();
+        assert_eq!(store.list_drofus_snapshot_ids("p", "drofus").unwrap(), vec!["2026-01-02T10:00:00Z".to_string()]);
+        let (id, bytes) = store.get_latest_drofus("p", "drofus").unwrap().unwrap();
         assert_eq!(id, "2026-01-02T10:00:00Z");
         assert_eq!(bytes, b"two");
-        assert!(store.get_drofus("p", "2026-01-01T10:00:00Z").unwrap().is_none());
-        assert_eq!(store.get_drofus("p", "2026-01-02T10:00:00Z").unwrap().unwrap(), b"two");
+        assert!(store.get_drofus("p", "drofus", "2026-01-01T10:00:00Z").unwrap().is_none());
+        assert_eq!(store.get_drofus("p", "drofus", "2026-01-02T10:00:00Z").unwrap().unwrap(), b"two");
     }
 }

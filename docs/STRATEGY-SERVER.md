@@ -2,7 +2,8 @@
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Browser](STRATEGY-BROWSER.md) ·
-[MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md)
+[MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md) ·
+[Security](STRATEGY-SECURITY.md)
 
 The Rust/axum process: what it stores, how it derives data at read time, and
 how it's configured. Code is a library crate (`lib.rs`) split across `src/`
@@ -261,7 +262,10 @@ each module carrying its rationale in a header, all with unit tests.
   HTTP-only — the MCP binary reuses the core's *read* functions but never
   writes (see [MCP](STRATEGY-MCP.md): separate process, so its write could
   not hot-swap this process's registry). Access control is the `127.0.0.1`
-  bind, same trust model as ingest.
+  bind, same trust model as ingest — see [Security](STRATEGY-SECURITY.md) for
+  what changes once that bind widens to a LAN interface, including the
+  settings-backup and rate-limiting invariants that keep this route's
+  hostile-reachable write recoverable and bounded.
 
 - **Data validation report (`GET /projects/{id}/validation`).** First real
   use of the pipeline surfaced a need to audit data quality, not just render

@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::{load_project_bundle, load_project_settings_dir};
 use crate::contract::{ensure_taken_at, validate_snapshot_id, Snapshot};
-use crate::drofus::{load_drofus_from_bytes, load_drofus_from_path};
-use crate::settings::{validate_drofus_fields, DrofusSource, Settings};
+use crate::drofus::{load_reference_from_bytes, load_reference_from_path};
+use crate::settings::{validate_reference_fields, ReferenceOrigin, Settings};
 use crate::state::{is_path_safe_component, AppState, SettingsRegistry, Shared};
 
 /// One project-settings file as the UI's list sees it. A file that fails to
@@ -122,7 +122,7 @@ pub fn list_project_files(projects_dir: &Path) -> Result<Vec<ProjectFileSummary>
                 project_id: Some(settings.project_id),
                 name: settings.name,
                 is_default: settings.is_default,
-                drofus_configured: settings.sources.drofus.is_some(),
+                drofus_configured: settings.sources.reference.contains_key("drofus"),
                 error: None,
             }),
             Err(e) => out.push(ProjectFileSummary {
@@ -192,7 +192,7 @@ pub fn check_drofus(projects_dir: &Path, path: &str) -> Result<DrofusCheckResult
     if resolved.is_relative() {
         resolved = projects_dir.join(resolved);
     }
-    let data = load_drofus_from_path(&resolved).map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
+    let data = load_reference_from_path(&resolved).map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
     Ok(DrofusCheckResult {
         record_count: data.by_id.len(),
         link_property: data.link_property,
@@ -336,17 +336,18 @@ pub struct DrofusUploadResult {
     pub snapshot_id_generated: bool,
 }
 
-/// Store one uploaded dRofus CSV against a project and hot-swap it into the
-/// running registry.
+/// Store one uploaded CSV against a project's named reference source and
+/// hot-swap it into the running registry.
 ///
-/// Ordering is load-bearing: the CSV is parsed and validated against the
-/// project's `drofus_fields` BEFORE anything is stored — a stored CSV is
+/// Ordering is load-bearing: the CSV is parsed and validated against that
+/// source's declared fields BEFORE anything is stored — a stored CSV is
 /// hydrated at every boot, so accepting a bad one here would fail the next
 /// startup of both binaries. Everything runs under `SAVE_LOCK` so an upload
 /// can never race a settings save's own scan-then-swap.
 pub fn upload_drofus(
     state: &AppState,
     project_id: &str,
+    source: &str,
     taken_at: Option<&str>,
     csv: &[u8],
 ) -> Result<DrofusUploadResult, SettingsError> {
@@ -360,34 +361,34 @@ pub fn upload_drofus(
     validate_snapshot_id(&snapshot.taken_at).map_err(SettingsError::Invalid)?;
 
     // The target project must exist and declare the upload source — an
-    // upload against a `file`-sourced (or source-less) project would store
+    // upload against a `file`-sourced (or unconfigured) source would store
     // data nothing ever reads.
     let (_, settings) = get_project_file(&projects_dir, project_id)?;
-    match settings.sources.drofus {
-        Some(DrofusSource::Upload) => {}
+    let reference_source = settings.sources.reference.get(source);
+    match reference_source.map(|s| &s.origin) {
+        Some(ReferenceOrigin::Upload) => {}
         _ => {
             return Err(SettingsError::Invalid(format!(
-                "project '{project_id}' does not declare [sources.drofus] type = \"upload\" — \
-                 set the dRofus source to \"upload\" in its settings first"
+                "project '{project_id}' does not declare [sources.reference.{source}] type = \"upload\" — \
+                 set that source's type to \"upload\" in its settings first"
             )));
         }
     }
 
     // Parse + validate before storing (see the doc comment).
-    let data = load_drofus_from_bytes(csv).map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
-    validate_drofus_fields(&settings.drofus_fields, &data.all_labels)
-        .map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
+    let data = load_reference_from_bytes(csv).map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
+    let fields = reference_source.map(|s| s.fields.clone()).unwrap_or_default();
+    validate_reference_fields(&fields, &data.all_labels).map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
 
-    let stored = state
-        .put_drofus(project_id, &snapshot.taken_at, csv)
-        .map_err(SettingsError::Internal)?;
+    let stored = state.put_drofus(project_id, source, &snapshot.taken_at, csv).map_err(SettingsError::Internal)?;
 
     // Rebuild + swap so the upload is live without a restart. The bundle
     // re-hydrates from the store's *latest* — a backfilled older `taken_at`
     // correctly does not displace a newer one.
     reload_and_swap(state, &projects_dir)?;
     tracing::info!(
-        "dRofus upload applied: {} @ {} ({} record(s))",
+        "'{}' upload applied: {} @ {} ({} record(s))",
+        source,
         project_id,
         snapshot.taken_at,
         data.by_id.len()
@@ -516,14 +517,32 @@ pub struct DrofusUploadQuery {
 
 /// `POST /projects/{id}/drofus` — raw `text/csv` body (buffered `Bytes`: real
 /// dRofus exports are a few MB of CSV, not the >100 MB FFE case that forced
-/// `/rooms/stream` to stream).
+/// `/rooms/stream` to stream). Kept as the "drofus" alias of
+/// `http_upload_reference` below — the route `static/settings.html` already
+/// calls, unchanged, so widening the upload path to any configured source
+/// name didn't have to move it.
 pub async fn http_upload_drofus(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
     Query(query): Query<DrofusUploadQuery>,
     body: axum::body::Bytes,
 ) -> Result<Json<DrofusUploadResult>, (StatusCode, String)> {
-    upload_drofus(&state, &project_id, query.taken_at.as_deref(), &body)
+    upload_drofus(&state, &project_id, "drofus", query.taken_at.as_deref(), &body)
+        .map(Json)
+        .map_err(to_http)
+}
+
+/// `POST /projects/{id}/reference/{source}` — the source-generalized upload
+/// route: same raw `text/csv` body and `?taken_at=` convention as
+/// `http_upload_drofus`, for any reference source the project configures
+/// with an `upload` origin, not just "drofus".
+pub async fn http_upload_reference(
+    State(state): State<Shared>,
+    UrlPath((project_id, source)): UrlPath<(String, String)>,
+    Query(query): Query<DrofusUploadQuery>,
+    body: axum::body::Bytes,
+) -> Result<Json<DrofusUploadResult>, (StatusCode, String)> {
+    upload_drofus(&state, &project_id, &source, query.taken_at.as_deref(), &body)
         .map(Json)
         .map_err(to_http)
 }
@@ -573,7 +592,7 @@ room_label = ["$name", "Area"]
 comparison_key = "Number"
 comparison_properties = ["Area", "Department"]
 
-[sources.drofus]
+[sources.reference.drofus]
 type = "file"
 path = "drofus.csv"
 
@@ -591,7 +610,7 @@ date = "2026-06-30"
 [milestones.attachments]
 "model-guid" = "2026-06-29T10:00:00Z"
 
-[[drofus_fields]]
+[[sources.reference.drofus.fields]]
 label = "LastSync"
 type = "date"
 format = "%Y-%m-%d"
@@ -649,13 +668,13 @@ ids = ["12345", "67890"]
         assert_eq!(reparsed.room_label, vec!["$name".to_string(), "Area".to_string()]);
         // Comparison settings survive the round-trip — both are declared before
         // any table field, so the TOML serializer emits them as top-level
-        // key/values rather than folding them into `[sources.drofus]`.
+        // key/values rather than folding them into `[sources]`.
         assert_eq!(reparsed.comparison_key.as_deref(), Some("Number"));
         assert_eq!(reparsed.comparison_properties, vec!["Area".to_string(), "Department".to_string()]);
-        assert!(matches!(reparsed.sources.drofus, Some(DrofusSource::File { .. })));
+        assert!(matches!(reparsed.sources.reference.get("drofus").map(|s| &s.origin), Some(ReferenceOrigin::File { .. })));
         assert_eq!(reparsed.hierarchy.len(), 1);
         assert_eq!(reparsed.builtin_properties.len(), 1);
-        assert_eq!(reparsed.drofus_fields.len(), 1);
+        assert_eq!(reparsed.sources.reference["drofus"].fields.len(), 1);
         assert_eq!(reparsed.milestones.len(), 1);
         assert_eq!(reparsed.milestones[0].name, "Design Freeze");
         assert_eq!(reparsed.milestones[0].attachments["model-guid"], "2026-06-29T10:00:00Z");
@@ -777,7 +796,7 @@ ids = ["12345", "67890"]
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// An invalid candidate (here: drofus_fields without a source — the same
+    /// An invalid candidate (here: a `date` field with no `format` — the same
     /// startup-loud rule) leaves the existing file byte-identical on disk and
     /// the registry unswapped.
     #[test]
@@ -788,11 +807,11 @@ ids = ["12345", "67890"]
         let before = std::fs::read_to_string(dir.join("p1.toml")).unwrap();
 
         let bad: Settings = toml::from_str(
-            "project_id = \"p1\"\n\n[[drofus_fields]]\nlabel = \"X\"\nqa = \"exact\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"X\"\ntype = \"date\"\n",
         )
         .unwrap();
         match save_project(&state, Some("p1"), bad) {
-            Err(SettingsError::Invalid(msg)) => assert!(msg.contains("drofus_fields")),
+            Err(SettingsError::Invalid(msg)) => assert!(msg.contains("format")),
             other => panic!("expected Invalid, got {other:?}"),
         }
 
@@ -829,7 +848,7 @@ ids = ["12345", "67890"]
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    const UPLOAD_TOML: &str = "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n";
+    const UPLOAD_TOML: &str = "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n";
     const UPLOAD_CSV: &[u8] = b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n";
 
     /// Upload happy path: supplied `taken_at` echoed, minted when absent, and
@@ -840,7 +859,7 @@ ids = ["12345", "67890"]
         std::fs::write(dir.join("p1.toml"), UPLOAD_TOML).unwrap();
         let state = file_backed_state(&dir);
 
-        let res = upload_drofus(&state, "p1", Some("2026-01-01T10:00:00Z"), UPLOAD_CSV).unwrap();
+        let res = upload_drofus(&state, "p1", "drofus", Some("2026-01-01T10:00:00Z"), UPLOAD_CSV).unwrap();
         assert!(res.accepted && res.stored);
         assert!(!res.snapshot_id_generated);
         assert_eq!(res.snapshot_taken_at, "2026-01-01T10:00:00Z");
@@ -850,11 +869,11 @@ ids = ["12345", "67890"]
 
         // Hot-swap: the running registry now joins the uploaded data.
         let registry = state.settings();
-        let drofus = registry.settings_for("p1").unwrap().drofus.as_ref().expect("hydrated live");
+        let drofus = registry.settings_for("p1").unwrap().reference["drofus"].data.as_ref().expect("hydrated live");
         assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
 
         // Omitted taken_at: minted server-side and reported as such.
-        let minted = upload_drofus(&state, "p1", None, UPLOAD_CSV).unwrap();
+        let minted = upload_drofus(&state, "p1", "drofus", None, UPLOAD_CSV).unwrap();
         assert!(minted.snapshot_id_generated);
         assert!(crate::contract::validate_snapshot_id(&minted.snapshot_taken_at).is_ok());
 
@@ -869,7 +888,7 @@ ids = ["12345", "67890"]
         let dir = temp_dir("up-reject");
         std::fs::write(
             dir.join("p1.toml"),
-            "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n\n[[drofus_fields]]\nlabel = \"NoSuchColumn\"\nqa = \"exact\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NoSuchColumn\"\nqa = \"exact\"\n",
         )
         .unwrap();
         std::fs::write(dir.join("p2.toml"), "project_id = \"p2\"\n").unwrap();
@@ -877,27 +896,27 @@ ids = ["12345", "67890"]
 
         // Non-UTC offset — the same 422 rule rooms ingest applies.
         assert!(matches!(
-            upload_drofus(&state, "p1", Some("2026-01-01T10:00:00+10:00"), UPLOAD_CSV),
+            upload_drofus(&state, "p1", "drofus", Some("2026-01-01T10:00:00+10:00"), UPLOAD_CSV),
             Err(SettingsError::Invalid(_))
         ));
         // Unknown project.
-        assert!(matches!(upload_drofus(&state, "ghost", None, UPLOAD_CSV), Err(SettingsError::NotFound(_))));
+        assert!(matches!(upload_drofus(&state, "ghost", "drofus", None, UPLOAD_CSV), Err(SettingsError::NotFound(_))));
         // Registered, but not upload-sourced — told to set the source first.
-        match upload_drofus(&state, "p2", None, UPLOAD_CSV) {
+        match upload_drofus(&state, "p2", "drofus", None, UPLOAD_CSV) {
             Err(SettingsError::Invalid(msg)) => assert!(msg.contains("upload")),
             other => panic!("expected Invalid, got {other:?}"),
         }
         // Unparseable CSV (no row 2).
-        assert!(matches!(upload_drofus(&state, "p1", None, b"OnlyOneRow\n"), Err(SettingsError::Invalid(_))));
+        assert!(matches!(upload_drofus(&state, "p1", "drofus", None, b"OnlyOneRow\n"), Err(SettingsError::Invalid(_))));
         // Parseable CSV that doesn't carry the declared drofus_fields label.
-        match upload_drofus(&state, "p1", None, UPLOAD_CSV) {
+        match upload_drofus(&state, "p1", "drofus", None, UPLOAD_CSV) {
             Err(SettingsError::Invalid(msg)) => assert!(msg.contains("NoSuchColumn")),
             other => panic!("expected Invalid, got {other:?}"),
         }
 
         // None of the failures stored anything.
-        assert!(state.list_drofus_snapshot_ids("p1").unwrap().is_empty());
-        assert!(state.list_drofus_snapshot_ids("p2").unwrap().is_empty());
+        assert!(state.list_drofus_snapshot_ids("p1", "drofus").unwrap().is_empty());
+        assert!(state.list_drofus_snapshot_ids("p2", "drofus").unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -917,13 +936,13 @@ ids = ["12345", "67890"]
         )
         .with_projects_dir(dir.to_path_buf());
 
-        upload_drofus(&state, "p1", Some("2026-01-02T10:00:00Z"), b"DrofusRoomId,NetArea\nNumber,Area\n1,99.9\n").unwrap();
-        upload_drofus(&state, "p1", Some("2026-01-01T10:00:00Z"), UPLOAD_CSV).unwrap();
+        upload_drofus(&state, "p1", "drofus", Some("2026-01-02T10:00:00Z"), b"DrofusRoomId,NetArea\nNumber,Area\n1,99.9\n").unwrap();
+        upload_drofus(&state, "p1", "drofus", Some("2026-01-01T10:00:00Z"), UPLOAD_CSV).unwrap();
 
         // Both stored, newer still the live one.
-        assert_eq!(state.list_drofus_snapshot_ids("p1").unwrap().len(), 2);
+        assert_eq!(state.list_drofus_snapshot_ids("p1", "drofus").unwrap().len(), 2);
         let registry = state.settings();
-        let drofus = registry.settings_for("p1").unwrap().drofus.as_ref().unwrap();
+        let drofus = registry.settings_for("p1").unwrap().reference["drofus"].data.as_ref().unwrap();
         assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"99.9".to_string()));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -941,16 +960,16 @@ ids = ["12345", "67890"]
 
         // Before any upload: accepted (labels unknowable, shapes checked).
         let pre: Settings = toml::from_str(
-            "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n\n[[drofus_fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
         )
         .unwrap();
         save_project(&state, None, pre).unwrap();
 
-        upload_drofus(&state, "p1", Some("2026-01-01T10:00:00Z"), UPLOAD_CSV).unwrap();
+        upload_drofus(&state, "p1", "drofus", Some("2026-01-01T10:00:00Z"), UPLOAD_CSV).unwrap();
 
         // After the upload, a label the stored CSV doesn't have is rejected.
         let bad: Settings = toml::from_str(
-            "project_id = \"p1\"\n\n[sources.drofus]\ntype = \"upload\"\n\n[[drofus_fields]]\nlabel = \"NoSuchColumn\"\nqa = \"exact\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NoSuchColumn\"\nqa = \"exact\"\n",
         )
         .unwrap();
         match save_project(&state, Some("p1"), bad) {

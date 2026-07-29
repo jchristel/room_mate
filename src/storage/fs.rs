@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::{DROFUS_DIR, ProjectManifest, SnapshotStore};
+use super::{REFERENCE_DIR, ProjectManifest, SnapshotStore};
 use crate::contract::RoomPayload;
 use crate::state::ModelKey;
 
@@ -42,13 +42,13 @@ impl FsStore {
         self.project_dir(project_id).join(model_id)
     }
 
-    fn drofus_dir(&self, project_id: &str) -> PathBuf {
-        self.project_dir(project_id).join(DROFUS_DIR)
+    fn reference_dir(&self, project_id: &str, source: &str) -> PathBuf {
+        self.project_dir(project_id).join(REFERENCE_DIR).join(source)
     }
 
-    /// dRofus CSV filename from a snapshot id — same `:` sanitisation as
-    /// `snapshot_filename` (so lexical-max-is-newest holds for `.csv` files
-    /// exactly as for `.json`), different extension.
+    /// Reference-source CSV filename from a snapshot id — same `:`
+    /// sanitisation as `snapshot_filename` (so lexical-max-is-newest holds
+    /// for `.csv` files exactly as for `.json`), different extension.
     fn drofus_filename(taken_at: &str) -> String {
         format!("{}.csv", taken_at.replace(':', "-"))
     }
@@ -228,8 +228,8 @@ impl SnapshotStore for FsStore {
                     Some(id) => id.to_string(),
                     None => continue,
                 };
-                if model_id == DROFUS_DIR {
-                    continue; // reserved dRofus upload dir, never a model
+                if model_id == REFERENCE_DIR {
+                    continue; // reserved reference-source upload dir, never a model
                 }
                 if !manifest.models.contains_key(&model_id) {
                     tracing::warn!(
@@ -327,44 +327,50 @@ impl SnapshotStore for FsStore {
         Ok(Some(Self::read_payload(&path)?))
     }
 
-    fn put_drofus(&self, project_id: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
+    fn put_drofus(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
         // Same upsert shape as `put`: ensure the dir, index the id in the
         // manifest, then write the file — skipping (never overwriting) a
         // duplicate `taken_at`.
-        let dir = self.drofus_dir(project_id);
+        let dir = self.reference_dir(project_id, source);
         fs::create_dir_all(&dir)
-            .with_context(|| format!("could not create dRofus dir: {}", dir.display()))?;
+            .with_context(|| format!("could not create reference-source dir: {}", dir.display()))?;
 
         let mut manifest = self.read_manifest(project_id)?;
-        if !manifest.drofus_snapshots.iter().any(|id| id == taken_at) {
-            manifest.drofus_snapshots.push(taken_at.to_string());
-            manifest.drofus_snapshots.sort();
+        let snapshots = manifest.reference_snapshots.entry(source.to_string()).or_default();
+        if !snapshots.iter().any(|id| id == taken_at) {
+            snapshots.push(taken_at.to_string());
+            snapshots.sort();
         }
         self.write_manifest(project_id, &manifest)?;
 
         let file = dir.join(Self::drofus_filename(taken_at));
         if file.exists() {
-            tracing::warn!("dRofus snapshot already exists, skipping: {}", file.display());
+            tracing::warn!("reference-source snapshot already exists, skipping: {}", file.display());
             return Ok(false);
         }
         fs::write(&file, csv)
-            .with_context(|| format!("could not write dRofus snapshot: {}", file.display()))?;
+            .with_context(|| format!("could not write reference-source snapshot: {}", file.display()))?;
 
-        tracing::info!("stored dRofus snapshot {} @ {}", project_id, taken_at);
+        tracing::info!("stored reference-source snapshot {}/{} @ {}", project_id, source, taken_at);
         Ok(true)
     }
 
-    fn list_drofus_snapshot_ids(&self, project_id: &str) -> Result<Vec<String>> {
+    fn list_drofus_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>> {
         // Same manifest-vs-directory reconciliation as `list_snapshot_ids`:
         // the manifest is the index, the files are the record, filesystem
         // wins on disagreement, both directions warned.
-        let indexed = self.read_manifest(project_id)?.drofus_snapshots;
+        let indexed = self
+            .read_manifest(project_id)?
+            .reference_snapshots
+            .get(source)
+            .cloned()
+            .unwrap_or_default();
 
-        let dir = self.drofus_dir(project_id);
+        let dir = self.reference_dir(project_id, source);
         let mut on_disk: Vec<String> = Vec::new();
         if dir.exists() {
             for entry in fs::read_dir(&dir)
-                .with_context(|| format!("could not read dRofus dir: {}", dir.display()))?
+                .with_context(|| format!("could not read reference-source dir: {}", dir.display()))?
             {
                 let path = entry?.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("csv")
@@ -383,8 +389,8 @@ impl SnapshotStore for FsStore {
                 ids.push(id);
             } else {
                 tracing::warn!(
-                    "manifest lists dRofus snapshot {:?} for {} but no file exists — dropping it (filesystem wins)",
-                    id, project_id
+                    "manifest lists reference-source snapshot {:?} for {}/{} but no file exists — dropping it (filesystem wins)",
+                    id, project_id, source
                 );
             }
         }
@@ -392,8 +398,8 @@ impl SnapshotStore for FsStore {
             let stem = filename.strip_suffix(".csv").unwrap_or(&filename);
             let id = Self::id_from_file_stem(stem);
             tracing::warn!(
-                "dRofus file {}/{}/{} is missing from project.toml — including it as {:?} (filesystem wins)",
-                project_id, DROFUS_DIR, filename, id
+                "reference-source file {}/{}/{}/{} is missing from project.toml — including it as {:?} (filesystem wins)",
+                project_id, REFERENCE_DIR, source, filename, id
             );
             ids.push(id);
         }
@@ -401,24 +407,24 @@ impl SnapshotStore for FsStore {
         Ok(ids)
     }
 
-    fn get_drofus(&self, project_id: &str, taken_at: &str) -> Result<Option<Vec<u8>>> {
-        let path = self.drofus_dir(project_id).join(Self::drofus_filename(taken_at));
+    fn get_drofus(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>> {
+        let path = self.reference_dir(project_id, source).join(Self::drofus_filename(taken_at));
         if !path.exists() {
             return Ok(None);
         }
         Ok(Some(fs::read(&path)
-            .with_context(|| format!("could not read dRofus snapshot: {}", path.display()))?))
+            .with_context(|| format!("could not read reference-source snapshot: {}", path.display()))?))
     }
 
-    fn get_latest_drofus(&self, project_id: &str) -> Result<Option<(String, Vec<u8>)>> {
+    fn get_latest_drofus(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>> {
         // Latest = last of the reconciled ascending list (RFC3339-UTC ids, so
         // lexical max is newest). Going through the reconciliation instead of
         // a raw directory scan means an un-indexed file still wins its way in
         // and a phantom manifest id can't name a file that isn't there.
-        let Some(id) = self.list_drofus_snapshot_ids(project_id)?.pop() else {
+        let Some(id) = self.list_drofus_snapshot_ids(project_id, source)?.pop() else {
             return Ok(None);
         };
-        match self.get_drofus(project_id, &id)? {
+        match self.get_drofus(project_id, source, &id)? {
             Some(bytes) => Ok(Some((id, bytes))),
             None => Ok(None), // racing delete; treat as no data
         }
@@ -501,7 +507,7 @@ mod tests {
                 "modelA".to_string(),
                 ModelEntry { name: "M".to_string(), snapshots: vec!["2026-01-01T10:00:00Z".to_string()] },
             )]),
-            drofus_snapshots: vec![],
+            reference_snapshots: BTreeMap::new(),
         };
         std::fs::write(&manifest_path, toml::to_string_pretty(&manifest).unwrap()).unwrap();
 
@@ -563,7 +569,7 @@ mod tests {
                     snapshots: vec!["2026-01-02T10:00:00Z".to_string(), "2026-01-03T10:00:00Z".to_string()],
                 },
             )]),
-            drofus_snapshots: vec![],
+            reference_snapshots: BTreeMap::new(),
         };
         std::fs::write(&manifest_path, toml::to_string_pretty(&manifest).unwrap()).unwrap();
 
@@ -609,27 +615,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("roommate-drofus-{}", std::process::id()));
         let store = FsStore::new(dir.clone()).unwrap();
 
-        assert!(store.get_latest_drofus("p").unwrap().is_none());
-        assert!(store.list_drofus_snapshot_ids("p").unwrap().is_empty());
+        assert!(store.get_latest_drofus("p", "drofus").unwrap().is_none());
+        assert!(store.list_drofus_snapshot_ids("p", "drofus").unwrap().is_empty());
 
-        assert!(store.put_drofus("p", "2026-01-02T10:00:00Z", b"csv-two").unwrap());
-        assert!(store.put_drofus("p", "2026-01-01T10:00:00Z", b"csv-one").unwrap());
+        assert!(store.put_drofus("p", "drofus", "2026-01-02T10:00:00Z", b"csv-two").unwrap());
+        assert!(store.put_drofus("p", "drofus", "2026-01-01T10:00:00Z", b"csv-one").unwrap());
 
         assert_eq!(
-            store.list_drofus_snapshot_ids("p").unwrap(),
+            store.list_drofus_snapshot_ids("p", "drofus").unwrap(),
             vec!["2026-01-01T10:00:00Z".to_string(), "2026-01-02T10:00:00Z".to_string()]
         );
-        assert_eq!(store.get_drofus("p", "2026-01-01T10:00:00Z").unwrap().unwrap(), b"csv-one");
-        assert!(store.get_drofus("p", "2026-03-01T10:00:00Z").unwrap().is_none());
+        assert_eq!(store.get_drofus("p", "drofus", "2026-01-01T10:00:00Z").unwrap().unwrap(), b"csv-one");
+        assert!(store.get_drofus("p", "drofus", "2026-03-01T10:00:00Z").unwrap().is_none());
 
         // Latest is the lexical max — the older backfill did not displace it.
-        let (id, bytes) = store.get_latest_drofus("p").unwrap().unwrap();
+        let (id, bytes) = store.get_latest_drofus("p", "drofus").unwrap().unwrap();
         assert_eq!(id, "2026-01-02T10:00:00Z");
         assert_eq!(bytes, b"csv-two");
 
         // Duplicate taken_at: skipped (false), original bytes preserved.
-        assert!(!store.put_drofus("p", "2026-01-02T10:00:00Z", b"CHANGED").unwrap());
-        assert_eq!(store.get_drofus("p", "2026-01-02T10:00:00Z").unwrap().unwrap(), b"csv-two");
+        assert!(!store.put_drofus("p", "drofus", "2026-01-02T10:00:00Z", b"CHANGED").unwrap());
+        assert_eq!(store.get_drofus("p", "drofus", "2026-01-02T10:00:00Z").unwrap().unwrap(), b"csv-two");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -643,7 +649,7 @@ mod tests {
         let store = FsStore::new(dir.clone()).unwrap();
 
         store.put(&payload("p", "m", "2026-01-01T10:00:00Z")).unwrap();
-        store.put_drofus("p", "2026-01-01T11:00:00Z", b"csv").unwrap();
+        store.put_drofus("p", "drofus", "2026-01-01T11:00:00Z", b"csv").unwrap();
 
         let keys = store.list_models().unwrap();
         assert_eq!(keys.len(), 1);
@@ -660,20 +666,23 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("roommate-drofus-rec-{}", std::process::id()));
         let store = FsStore::new(dir.clone()).unwrap();
 
-        store.put_drofus("p", "2026-01-01T10:00:00Z", b"one").unwrap();
-        store.put_drofus("p", "2026-01-02T10:00:00Z", b"two").unwrap();
+        store.put_drofus("p", "drofus", "2026-01-01T10:00:00Z", b"one").unwrap();
+        store.put_drofus("p", "drofus", "2026-01-02T10:00:00Z", b"two").unwrap();
 
         // Sabotage the manifest: drop the first id, add a phantom one.
         let manifest_path = dir.join("p").join("project.toml");
         let manifest = ProjectManifest {
             name: String::new(),
             models: BTreeMap::new(),
-            drofus_snapshots: vec!["2026-01-02T10:00:00Z".to_string(), "2026-01-03T10:00:00Z".to_string()],
+            reference_snapshots: BTreeMap::from([(
+                "drofus".to_string(),
+                vec!["2026-01-02T10:00:00Z".to_string(), "2026-01-03T10:00:00Z".to_string()],
+            )]),
         };
         std::fs::write(&manifest_path, toml::to_string_pretty(&manifest).unwrap()).unwrap();
 
         assert_eq!(
-            store.list_drofus_snapshot_ids("p").unwrap(),
+            store.list_drofus_snapshot_ids("p", "drofus").unwrap(),
             vec!["2026-01-01T10:00:00Z".to_string(), "2026-01-02T10:00:00Z".to_string()],
             "un-indexed file recovered (with its ':' restored), phantom id dropped"
         );

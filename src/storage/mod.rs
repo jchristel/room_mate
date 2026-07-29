@@ -3,7 +3,7 @@
 //! The whole point of this module is the `SnapshotStore` trait: handlers and
 //! `AppState` talk to *it*, never to the filesystem directly. Today the impl is
 //! `FsStore` (a directory tree); tomorrow it could be a database — a new impl,
-//! no change to callers. Same seam discipline as `DrofusSource`.
+//! no change to callers. Same seam discipline as `ReferenceOrigin`.
 //!
 //! The two impls live in their own files behind this module — `fs` (`FsStore`)
 //! and `mem` (`MemStore`) — re-exported here so `crate::storage::FsStore` /
@@ -17,8 +17,9 @@
 //! <root>/
 //!   <project-guid>/
 //!     project.toml          authoritative: project name + known models
-//!     drofus/               reserved (never a model id): uploaded dRofus CSVs
-//!       <snapshot-ts>.csv   one file per upload — history kept, never overwritten
+//!     reference/             reserved (never a model id): uploaded reference-source CSVs
+//!       <source-name>/       one subdir per reference source (e.g. "drofus")
+//!         <snapshot-ts>.csv  one file per upload — history kept, never overwritten
 //!     <model-guid>/
 //!       <snapshot-ts>.json  one file per push — history kept, never overwritten
 //! ```
@@ -45,11 +46,12 @@ mod mem;
 pub use fs::FsStore;
 pub use mem::MemStore;
 
-/// Reserved subdirectory name inside a project dir for uploaded dRofus CSVs.
-/// Never treated as a model dir — `list_models` skips it explicitly. (Model
-/// ids are Revit GUIDs in practice, so a real collision is implausible; the
-/// skip makes it impossible.)
-pub const DROFUS_DIR: &str = "drofus";
+/// Reserved subdirectory name inside a project dir for uploaded reference-
+/// source CSVs, one further subdirectory per source name (e.g. `reference/
+/// drofus/`). Never treated as a model dir — `list_models` skips it
+/// explicitly. (Model ids are Revit GUIDs in practice, so a real collision is
+/// implausible; the skip makes it impossible.)
+pub const REFERENCE_DIR: &str = "reference";
 
 // ---------- project.toml ----------
 
@@ -68,13 +70,14 @@ pub struct ProjectManifest {
     /// Known models under this project, keyed by model GUID.
     #[serde(default)]
     pub models: BTreeMap<String, ModelEntry>,
-    /// Snapshot ids (raw `taken_at` values) of uploaded dRofus CSVs, ascending.
-    /// Project-scoped, not model-scoped: dRofus is reference data joined onto
-    /// every model's rooms, so it hangs off the manifest directly rather than
-    /// a `ModelEntry`. Same index role (and same `default` back-compat rule)
-    /// as `ModelEntry::snapshots`.
+    /// Snapshot ids (raw `taken_at` values) of uploaded reference-source
+    /// CSVs, ascending, keyed by source name (e.g. "drofus"). Project-scoped,
+    /// not model-scoped: a reference source is data joined onto every
+    /// model's rooms, so it hangs off the manifest directly rather than a
+    /// `ModelEntry`. Same index role (and same `default` back-compat rule) as
+    /// `ModelEntry::snapshots`.
     #[serde(default)]
-    pub drofus_snapshots: Vec<String>,
+    pub reference_snapshots: BTreeMap<String, Vec<String>>,
 }
 
 /// One model's entry in a `ProjectManifest`.
@@ -131,25 +134,25 @@ pub trait SnapshotStore: Send + Sync {
     /// (`MemStore`) can only answer for its current latest.
     fn get_snapshot(&self, key: &ModelKey, taken_at: &str) -> Result<Option<RoomPayload>>;
 
-    /// Store one uploaded dRofus CSV against a project. Returns `false` when
-    /// a dRofus snapshot with this `taken_at` already exists — skipped with a
-    /// warning, never overwritten, same duplicate rule as `put`. The caller
-    /// is expected to have *validated the CSV before storing it*: a stored
-    /// CSV is hydrated at every boot, so a bad one stored here fails the next
-    /// startup loudly.
-    fn put_drofus(&self, project_id: &str, taken_at: &str, csv: &[u8]) -> Result<bool>;
+    /// Store one uploaded CSV against a project's named reference source
+    /// (e.g. "drofus"). Returns `false` when a snapshot with this `taken_at`
+    /// already exists for that source — skipped with a warning, never
+    /// overwritten, same duplicate rule as `put`. The caller is expected to
+    /// have *validated the CSV before storing it*: a stored CSV is hydrated
+    /// at every boot, so a bad one stored here fails the next startup loudly.
+    fn put_drofus(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool>;
 
-    /// Every dRofus snapshot id (`taken_at`) stored for one project,
-    /// ascending — latest is the last element. Empty when the project is
-    /// unknown or has no uploads yet. A history-less store (`MemStore`)
-    /// reports just its current latest.
-    fn list_drofus_snapshot_ids(&self, project_id: &str) -> Result<Vec<String>>;
+    /// Every snapshot id (`taken_at`) stored for one project's named
+    /// reference source, ascending — latest is the last element. Empty when
+    /// the project or source is unknown or has no uploads yet. A
+    /// history-less store (`MemStore`) reports just its current latest.
+    fn list_drofus_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>>;
 
-    /// One stored dRofus CSV by its snapshot id, or `None`.
-    fn get_drofus(&self, project_id: &str, taken_at: &str) -> Result<Option<Vec<u8>>>;
+    /// One stored CSV for one reference source, by its snapshot id, or `None`.
+    fn get_drofus(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>>;
 
-    /// The newest stored dRofus CSV with its id — the bootstrap hydration
-    /// read that turns an `Upload`-sourced project's stored data into its
-    /// in-memory `DrofusData`.
-    fn get_latest_drofus(&self, project_id: &str) -> Result<Option<(String, Vec<u8>)>>;
+    /// The newest stored CSV for one reference source, with its id — the
+    /// bootstrap hydration read that turns an `Upload`-sourced project's
+    /// stored data into its in-memory `ReferenceData`.
+    fn get_latest_drofus(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>>;
 }

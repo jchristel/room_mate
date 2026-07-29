@@ -55,7 +55,7 @@ use serde::Serialize;
 
 use crate::classify::TierValue;
 use crate::contract::{Level, Point2D, Room, RoomBoundary, SUPPORTED_SCHEMA};
-use crate::drofus::DrofusRecord;
+use crate::drofus::ReferenceRecord;
 use crate::settings::AreaPolicy;
 use crate::state::AppState;
 
@@ -137,8 +137,12 @@ pub struct AdjacencyNode {
     /// mean of whatever points it has, and to the origin when it has none.
     pub centroid: Point2D,
     pub classification: Vec<TierValue>,
+    /// Carried through for the "drofus" source specifically — same scope
+    /// limit as `service::validation` (see
+    /// `docs/HANDOVER-reference-sources.md`), not generalized to every
+    /// joined source in this pass.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub drofus: Option<DrofusRecord>,
+    pub drofus: Option<ReferenceRecord>,
 }
 
 /// One undirected adjacency. Emitted once per pair with `a < b` by room id, so
@@ -730,7 +734,7 @@ pub fn assemble_adjacency(
             level_id: r.room.level_id.clone(),
             centroid: centroid_of(&r.room),
             classification: r.classification.clone(),
-            drofus: r.drofus.clone(),
+            drofus: r.reference.get("drofus").cloned(),
         })
         .collect();
 
@@ -1093,11 +1097,10 @@ mod tests {
 
         fn bundle() -> ProjectSettings {
             ProjectSettings {
-                drofus: None,
+                reference: std::collections::BTreeMap::new(),
                 hierarchy: vec![],
                 builtin_properties: vec![],
                 room_label: vec!["$name".to_string()],
-                drofus_fields: vec![],
                 milestones: vec![],
                 comparison_key: None,
                 comparison_properties: vec![],

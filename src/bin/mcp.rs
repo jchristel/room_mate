@@ -193,7 +193,7 @@ struct GetDrofusSnapshotParams {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct UploadDrofusParams {
     /// The project id, as returned by `list_projects`. Its settings must
-    /// declare `[sources.drofus] type = "upload"`.
+    /// declare `[sources.reference.drofus] type = "upload"`.
     project_id: String,
     /// Absolute path to the dRofus CSV export to upload.
     path: String,
@@ -250,7 +250,11 @@ impl RoommateMcp {
     fn get_rooms(&self, Parameters(p): Parameters<GetRoomsParams>) -> Result<CallToolResult, McpError> {
         // Parsed here, in the adapter holding the raw strings, then passed
         // down as a domain type -- `service` never sees the filter syntax.
-        let filter = rooms::RoomFilter::parse(&p.filter).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        // The known-source vocabulary comes from the live registry, not a
+        // fixed list -- see `handlers::get_rooms`'s matching call.
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
         let scope = rooms::RoomScope {
             project: p.project.as_deref(),
             building: p.building.as_deref(),
@@ -361,7 +365,7 @@ impl RoommateMcp {
     #[tool(description = "List every uploaded dRofus CSV snapshot id (RFC3339 UTC taken_at) for one project, ascending, with the latest. \
                           Reads the shared store fresh, so an upload forwarded moments ago shows here immediately.")]
     fn list_drofus_snapshots(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
-        let result = drofus::list_drofus_snapshots(&self.state, &p.project_id).map_err(to_mcp_error)?;
+        let result = drofus::list_drofus_snapshots(&self.state, &p.project_id, "drofus").map_err(to_mcp_error)?;
         json_result(&result)
     }
 
@@ -372,7 +376,8 @@ impl RoommateMcp {
     #[tool(description = "Get a parsed summary (record count, link property, field labels) of one uploaded dRofus CSV -- the given taken_at, or the latest when omitted. \
                           Reads the shared store fresh.")]
     fn get_drofus_snapshot(&self, Parameters(p): Parameters<GetDrofusSnapshotParams>) -> Result<CallToolResult, McpError> {
-        let result = drofus::get_drofus_snapshot(&self.state, &p.project_id, p.taken_at.as_deref()).map_err(to_mcp_error)?;
+        let result =
+            drofus::get_drofus_snapshot(&self.state, &p.project_id, "drofus", p.taken_at.as_deref()).map_err(to_mcp_error)?;
         match result {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no such dRofus upload stored for that project",
@@ -388,7 +393,7 @@ impl RoommateMcp {
     #[tool(description = "Upload a dRofus CSV export (given as an absolute file path) for one project. \
                           Forwards the file over HTTP to the running roommate server, which validates it against the project's \
                           drofus_fields before storing it as a dated snapshot and applying it live -- so the HTTP server must be running. \
-                          The project's settings must declare [sources.drofus] type = \"upload\". \
+                          The project's settings must declare [sources.reference.drofus] type = \"upload\". \
                           Note the staleness asymmetry: after an upload, this process's own get_rooms/get_validation still join the \
                           dRofus data loaded at ITS startup; list_drofus_snapshots/get_drofus_snapshot read the store fresh and see the new upload immediately.")]
     async fn upload_drofus(&self, Parameters(p): Parameters<UploadDrofusParams>) -> Result<CallToolResult, McpError> {

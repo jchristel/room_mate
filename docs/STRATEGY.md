@@ -3,7 +3,7 @@
 Notes capturing the design decisions behind the Revit → Rust → browser room
 viewer. Written as a reference to come back to, not a spec. Split along the
 pipeline's own boundaries, so each can be read (and changed) without pulling in
-the others — six docs describing what ships today, plus one forward-looking
+the others — seven docs describing what ships today, plus one forward-looking
 design doc for data the user authors:
 
 - **This doc** — the pipeline overview, the core split principle that governs
@@ -30,6 +30,11 @@ design doc for data the user authors:
   milestones, and served. An application of the upload-envelope and
   snapshot-store patterns to input that cannot be re-derived; read it before
   building any of that.
+- **[Security](STRATEGY-SECURITY.md)** — the threat model for the near-future
+  shift from a loopback-only bind to a LAN-reachable server: what a hostile
+  local-network user can and cannot do, and the invariants (no delete route,
+  settings backups, rate limiting) that keep it that way. Read it before
+  widening the bind past `127.0.0.1`.
 
 A change that touches more than one layer (the v5 property rework did all
 three) should update every doc it touches — that's the cost of the split, and

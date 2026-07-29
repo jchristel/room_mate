@@ -111,11 +111,10 @@ mod tests {
 
     fn make_bundle() -> ProjectSettings {
         ProjectSettings {
-            drofus: None,
+            reference: std::collections::BTreeMap::new(),
             hierarchy: vec![],
             builtin_properties: vec![],
             room_label: vec!["$name".to_string()],
-            drofus_fields: vec![],
             milestones: vec![],
             comparison_key: None,
             comparison_properties: vec![],

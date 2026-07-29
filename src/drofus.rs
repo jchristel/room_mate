@@ -9,12 +9,17 @@
 //! be fused into the room's own properties — keeping it separate keeps the seam
 //! where the refresh boundary actually is.
 //!
-//! The loader is byte-source-agnostic (`load_drofus_from_reader`, with path
-//! and bytes wrappers): a settings-file path (`DrofusSource::File`), an
-//! uploaded CSV hydrated from the snapshot store (`DrofusSource::Upload`), or
+//! The loader is byte-source-agnostic (`load_reference_from_reader`, with path
+//! and bytes wrappers): a settings-file path (`ReferenceOrigin::File`), an
+//! uploaded CSV hydrated from the snapshot store (`ReferenceOrigin::Upload`), or
 //! a future API response all parse through the same function. Which source
 //! feeds it is dispatched in `bootstrap::load_project_bundle`, where the
 //! store is in scope — not here.
+//!
+//! Named `drofus` still: this file is currently dRofus's loader specifically
+//! (its types generalized to `Reference*` in the reference-sources pass, but
+//! the module itself has not moved to `reference.rs` — a deferred, purely
+//! mechanical rename, not a behaviour change).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -22,24 +27,25 @@ use std::path::Path;
 use anyhow::Context;
 use serde::Serialize;
 
-/// One dRofus row, resolved. `fields` is dRofus-field-label → value (row 1
-/// labels as keys). Kept as strings — same raw discipline as custom props.
+/// One reference-source row, resolved. `fields` is the source's own
+/// field-label → value (row 1 labels as keys). Kept as strings — same raw
+/// discipline as custom props.
 #[derive(Debug, Clone, Serialize)]
-pub struct DrofusRecord {
+pub struct ReferenceRecord {
     pub fields: BTreeMap<String, String>,
 }
 
-/// The whole dRofus dataset, resolved once at startup. `Clone` so a bundle
-/// marked `is_default` can be registered both under its own project id and as
-/// `AppState`'s fallback without the two copies aliasing.
+/// One reference source's whole dataset, resolved once at startup. `Clone` so
+/// a bundle marked `is_default` can be registered both under its own project
+/// id and as `AppState`'s fallback without the two copies aliasing.
 #[derive(Clone)]
-pub struct DrofusData {
+pub struct ReferenceData {
     /// Which room property holds the linking id (CSV row 2, col 0).
     /// Read the room property of THIS name to get its dRofus key.
     pub link_property: String,
 
     /// dRofus id → record. Direct value match; ids are unique, so a plain map.
-    pub by_id: BTreeMap<String, DrofusRecord>,
+    pub by_id: BTreeMap<String, ReferenceRecord>,
 
     /// dRofus field label (row 1) → the Revit property name row 2 lists for
     /// that same column (columns 1+; column 0 is `link_property` above).
@@ -57,7 +63,7 @@ pub struct DrofusData {
     pub all_labels: Vec<String>,
 }
 
-/// Read the two-header-row CSV into DrofusData. Fail fast (startup) on a
+/// Read the two-header-row CSV into ReferenceData. Fail fast (startup) on a
 /// malformed file — same contract as load_settings.
 ///
 /// CSV shape:
@@ -65,7 +71,7 @@ pub struct DrofusData {
 ///   row 2: Revit param names    (RevitDrofusKey, d_net_area, d_dept, …)
 ///   row 3+: data rows
 /// Row 2, col 0 = the Revit room property whose value is the dRofus id (link).
-pub fn load_drofus_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result<DrofusData> {
+pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result<ReferenceData> {
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false) // both header rows are data to us; we parse them by hand
         .from_reader(reader);
@@ -118,7 +124,7 @@ pub fn load_drofus_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result<Dr
                 fields.insert(label.to_string(), val.to_string());
             }
         }
-        by_id.insert(id, DrofusRecord { fields });
+        by_id.insert(id, ReferenceRecord { fields });
     }
 
     tracing::info!(
@@ -126,16 +132,16 @@ pub fn load_drofus_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result<Dr
         by_id.len(),
         link_property
     );
-    Ok(DrofusData { link_property, by_id, reconciliation, all_labels })
+    Ok(ReferenceData { link_property, by_id, reconciliation, all_labels })
 }
 
-/// Load a dRofus CSV from a file path (`DrofusSource::File`, and the settings
-/// API's dry-run check). Reads the whole file so the bytes path below — and
-/// its BOM handling — is the single parse entry.
-pub fn load_drofus_from_path(path: &Path) -> anyhow::Result<DrofusData> {
+/// Load a dRofus CSV from a file path (`ReferenceOrigin::File`, and the
+/// settings API's dry-run check). Reads the whole file so the bytes path
+/// below — and its BOM handling — is the single parse entry.
+pub fn load_reference_from_path(path: &Path) -> anyhow::Result<ReferenceData> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("could not open dRofus CSV: {}", path.display()))?;
-    load_drofus_from_bytes(&bytes)
+    load_reference_from_bytes(&bytes)
 }
 
 /// Load a dRofus CSV from raw bytes (an upload body, or a stored upload
@@ -143,9 +149,9 @@ pub fn load_drofus_from_path(path: &Path) -> anyhow::Result<DrofusData> {
 /// routinely carry one and the csv crate does not strip it. The BOM lands in
 /// row 1 col 0 — unused today, but a quoted first cell parses wrong with a
 /// BOM in front, and "col 0 is never read" is not a contract worth leaning on.
-pub fn load_drofus_from_bytes(bytes: &[u8]) -> anyhow::Result<DrofusData> {
+pub fn load_reference_from_bytes(bytes: &[u8]) -> anyhow::Result<ReferenceData> {
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    load_drofus_from_reader(bytes)
+    load_reference_from_reader(bytes)
 }
 
 #[cfg(test)]
@@ -168,7 +174,7 @@ mod tests {
         .unwrap();
         drop(file);
 
-        let data = load_drofus_from_path(&path).unwrap();
+        let data = load_reference_from_path(&path).unwrap();
 
         assert_eq!(data.link_property, "Number");
         assert_eq!(data.reconciliation.get("NetArea"), Some(&"Area".to_string()));
@@ -192,16 +198,16 @@ mod tests {
     /// The bytes loader parses an upload body directly, and strips a leading
     /// UTF-8 BOM (Excel exports carry one; the csv crate does not strip it).
     #[test]
-    fn test_load_drofus_from_bytes_strips_bom() {
+    fn test_load_reference_from_bytes_strips_bom() {
         let csv = "DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n";
 
-        let plain = load_drofus_from_bytes(csv.as_bytes()).unwrap();
+        let plain = load_reference_from_bytes(csv.as_bytes()).unwrap();
         assert_eq!(plain.link_property, "Number");
         assert_eq!(plain.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
 
         let mut bom_prefixed = b"\xEF\xBB\xBF".to_vec();
         bom_prefixed.extend_from_slice(csv.as_bytes());
-        let bom = load_drofus_from_bytes(&bom_prefixed).unwrap();
+        let bom = load_reference_from_bytes(&bom_prefixed).unwrap();
         assert_eq!(bom.link_property, "Number");
         assert_eq!(bom.all_labels, vec!["NetArea".to_string()]);
     }

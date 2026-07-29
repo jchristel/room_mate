@@ -35,11 +35,11 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::contract::{date_match, numeric_match, PropertyPresence};
-use crate::settings::{BuiltinPropertyDef, CompareMode, DrofusFieldConfig, FieldType};
+use crate::settings::{BuiltinPropertyDef, CompareMode, ReferenceFieldConfig, FieldType};
 use crate::state::AppState;
 
 use super::rooms::{
-    assemble_rooms, resolve_presence, source_joined, split_namespace, NamespaceSplit, RoomResponse, RoomScope,
+    assemble_rooms, resolve_presence, source_joined, RoomResponse, RoomScope,
 };
 use super::ServiceError;
 
@@ -168,6 +168,7 @@ type KeyIndex<'a> = BTreeMap<String, &'a RoomResponse>;
 fn index_by_key<'a>(
     rooms: &'a [RoomResponse],
     key_prop: &str,
+    known: &std::collections::BTreeSet<String>,
     builtin: &[BuiltinPropertyDef],
 ) -> (KeyIndex<'a>, Vec<DuplicateKeyValue>) {
     let mut groups: BTreeMap<String, Vec<&RoomResponse>> = BTreeMap::new();
@@ -175,7 +176,7 @@ fn index_by_key<'a>(
         // Only `Present` yields a usable key: a room with no value for it
         // (absent and empty collapse together here) can't be matched across
         // milestones — dropped, there is nothing to diff it against.
-        if let (_, PropertyPresence::Present(value)) = resolve_presence(rr, key_prop, builtin) {
+        if let (_, PropertyPresence::Present(value)) = resolve_presence(rr, key_prop, known, builtin) {
             groups.entry(value).or_default().push(rr);
         }
     }
@@ -224,7 +225,7 @@ fn index_by_key<'a>(
 /// which applies equally here); `qa = "ignore"` is not (it declares whether
 /// the QA pass checks a column, and comparison has its own explicit property
 /// list — naming a column there is a deliberate request to compare it).
-fn values_agree(a: &str, b: &str, source: Option<&str>, field_cfg: Option<&DrofusFieldConfig>) -> bool {
+fn values_agree(a: &str, b: &str, source: Option<&str>, field_cfg: Option<&ReferenceFieldConfig>) -> bool {
     let exact = field_cfg.and_then(|f| f.qa) == Some(CompareMode::Exact);
 
     if source == Some("drofus") && !exact {
@@ -253,23 +254,21 @@ fn values_agree(a: &str, b: &str, source: Option<&str>, field_cfg: Option<&Drofu
     }
 }
 
-/// The `drofus_fields` declaration for a comparable field, when it names a
-/// dRofus column. Resolved through the shared `split_namespace` so "what goes
-/// before the dot" keeps one answer across filtering, comparison and settings
-/// validation.
+/// The declared field config for a comparable property, when it names a
+/// joined source's column — looked up from *that source's own* `fields` list,
+/// not a single global one, now that a project may configure more than
+/// "drofus". `source` has already been resolved and validated as joined by
+/// `resolve_presence`, so the label is pulled directly off `property` (the
+/// text after the dot) rather than re-running `split_namespace`, which would
+/// need its own `known` set for no benefit here.
 fn field_config<'a>(
     property: &str,
     source: Option<&str>,
-    drofus_fields: &'a [DrofusFieldConfig],
-) -> Option<&'a DrofusFieldConfig> {
-    if source != Some("drofus") {
-        return None;
-    }
-    let label = match split_namespace(property) {
-        NamespaceSplit::Joined { property, .. } => property,
-        _ => return None,
-    };
-    drofus_fields.iter().find(|f| f.label == label)
+    reference: &'a BTreeMap<String, crate::state::ProjectReferenceSource>,
+) -> Option<&'a ReferenceFieldConfig> {
+    let source = source?;
+    let label = property.strip_prefix(source)?.strip_prefix('.')?.trim();
+    reference.get(source)?.fields.iter().find(|f| f.label == label)
 }
 
 /// Compare one common room (present in both baseline and other, by key) over
@@ -284,8 +283,9 @@ fn diff_room(
     baseline: &RoomResponse,
     other: &RoomResponse,
     properties: &[String],
+    known: &std::collections::BTreeSet<String>,
     builtin: &[BuiltinPropertyDef],
-    drofus_fields: &[DrofusFieldConfig],
+    reference: &BTreeMap<String, crate::state::ProjectReferenceSource>,
 ) -> Option<ChangedRoom> {
     let mut differences = Vec::new();
     let mut missing_properties = Vec::new();
@@ -297,19 +297,19 @@ fn diff_room(
         // baseline room with no dRofus record has nothing to compare, so a
         // join *gained* on the other side goes unreported — exactly as a
         // property gained on the other side always has.
-        let (source, base) = resolve_presence(baseline, property, builtin);
+        let (source, base) = resolve_presence(baseline, property, known, builtin);
         let PropertyPresence::Present(baseline_value) = base else {
             continue;
         };
-        let cfg = field_config(property, source, drofus_fields);
+        let cfg = field_config(property, source.as_deref(), reference);
 
-        match resolve_presence(other, property, builtin) {
+        match resolve_presence(other, property, known, builtin) {
             // The whole source is unmatched on the other side: one per-room
             // fact, recorded once — N identical missing-property rows would
             // bury the actual signal (the room lost its join).
-            (Some(ns), PropertyPresence::Absent) if !source_joined(other, ns) => {
-                if !unjoined_sources.iter().any(|s| s == ns) {
-                    unjoined_sources.push(ns.to_string());
+            (Some(ns), PropertyPresence::Absent) if !source_joined(other, &ns) => {
+                if !unjoined_sources.contains(&ns) {
+                    unjoined_sources.push(ns);
                 }
             }
             (_, PropertyPresence::Absent) => missing_properties.push(MissingProperty {
@@ -322,7 +322,7 @@ fn diff_room(
                 other_value: String::new(),
             }),
             (_, PropertyPresence::Present(other_value)) => {
-                if !values_agree(&baseline_value, &other_value, source, cfg) {
+                if !values_agree(&baseline_value, &other_value, source.as_deref(), cfg) {
                     differences.push(PropertyDifference {
                         property: property.clone(),
                         baseline_value,
@@ -381,6 +381,12 @@ pub fn compare_milestones(
     };
     let properties = bundle.comparison_properties.clone();
     let builtin = &bundle.builtin_properties;
+    // A comparison is always scoped to this one project, so its own
+    // configured source names are the right (and only reachable) vocabulary
+    // — see the matching note on `bootstrap::load_project_bundle`'s
+    // `validate_comparison_field` call for why this differs from the
+    // registry-wide set the live `/rooms` filter needs.
+    let known: std::collections::BTreeSet<String> = bundle.reference.keys().cloned().collect();
 
     // Baseline once; its index and duplicates are shared across every compared
     // milestone. `assemble_rooms` returns None only when the store is entirely
@@ -388,7 +394,7 @@ pub fn compare_milestones(
     let baseline_rooms = assemble_rooms(state, &scope(project, baseline))?
         .map(|r| r.rooms)
         .unwrap_or_default();
-    let (baseline_index, baseline_duplicates) = index_by_key(&baseline_rooms, &key_prop, builtin);
+    let (baseline_index, baseline_duplicates) = index_by_key(&baseline_rooms, &key_prop, &known, builtin);
 
     let mut comparisons = Vec::new();
     for other in others {
@@ -399,7 +405,7 @@ pub fn compare_milestones(
         let other_rooms = assemble_rooms(state, &scope(project, other))?
             .map(|r| r.rooms)
             .unwrap_or_default();
-        let (other_index, other_duplicates) = index_by_key(&other_rooms, &key_prop, builtin);
+        let (other_index, other_duplicates) = index_by_key(&other_rooms, &key_prop, &known, builtin);
 
         // Added = in other, not baseline. Removed = in baseline, not other.
         // Duplicated keys are absent from both indexes, so they're already
@@ -415,12 +421,16 @@ pub fn compare_milestones(
             .cloned()
             .collect();
 
-        // Rooms in both: compare their comparable properties.
+        // Rooms in both: compare their comparable properties. Field configs
+        // are looked up per resolved source (`field_config`), not just
+        // "drofus" — any reference source this project configures is now
+        // comparable, not only the one the join/filter vocabulary has
+        // historically singled out.
         let changed_rooms: Vec<ChangedRoom> = baseline_index
             .iter()
             .filter_map(|(key, base_room)| {
                 let other_room = other_index.get(key)?;
-                diff_room(key, base_room, other_room, &properties, builtin, &bundle.drofus_fields)
+                diff_room(key, base_room, other_room, &properties, &known, builtin, &bundle.reference)
             })
             .collect();
 
@@ -464,7 +474,7 @@ mod tests {
         Milestone {
             name: name.to_string(),
             date: "2026-06-30".to_string(),
-            drofus_snapshot: None,
+            reference_snapshots: BTreeMap::new(),
             attachments: BTreeMap::from([(model_id.to_string(), taken_at.to_string())]),
         }
     }
@@ -472,22 +482,25 @@ mod tests {
     /// `milestone` plus a dRofus snapshot pin — the joined-source tests need
     /// each milestone to resolve its own dRofus data.
     fn milestone_with_drofus(name: &str, model_id: &str, taken_at: &str, drofus_ts: &str) -> Milestone {
-        Milestone { drofus_snapshot: Some(drofus_ts.to_string()), ..milestone(name, model_id, taken_at) }
+        Milestone {
+            reference_snapshots: BTreeMap::from([("drofus".to_string(), drofus_ts.to_string())]),
+            ..milestone(name, model_id, taken_at)
+        }
     }
 
     /// A *current* dRofus dataset: link property + one record per `(id,
     /// fields)` entry. Attached to a bundle by the joined-source tests —
     /// `make_bundle` itself stays dRofus-free, because comparison standing
     /// alone without dRofus is a design property under regression guard.
-    fn drofus_data(link: &str, records: &[(&str, &[(&str, &str)])]) -> crate::drofus::DrofusData {
-        crate::drofus::DrofusData {
+    fn drofus_data(link: &str, records: &[(&str, &[(&str, &str)])]) -> crate::drofus::ReferenceData {
+        crate::drofus::ReferenceData {
             link_property: link.to_string(),
             by_id: records
                 .iter()
                 .map(|(id, fields)| {
                     (
                         id.to_string(),
-                        crate::drofus::DrofusRecord {
+                        crate::drofus::ReferenceRecord {
                             fields: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                         },
                     )
@@ -506,17 +519,26 @@ mod tests {
         milestones: Vec<Milestone>,
     ) -> ProjectSettings {
         ProjectSettings {
-            drofus: None,
+            reference: BTreeMap::new(),
             hierarchy: vec![],
             builtin_properties: vec![],
             room_label: vec!["$name".to_string()],
-            drofus_fields: vec![],
             milestones,
             comparison_key: comparison_key.map(|s| s.to_string()),
             comparison_properties: comparison_properties.iter().map(|s| s.to_string()).collect(),
             areas: Default::default(),
             hierarchy_exclusions: vec![],
         }
+    }
+
+    /// Attach a "drofus"-named reference source to a bundle built by
+    /// `make_bundle`, carrying `data` and, if any, `fields` — the test-side
+    /// equivalent of what `bootstrap::load_project_bundle` wires up for the
+    /// one source name the read path currently recognises.
+    fn set_drofus(bundle: &mut ProjectSettings, data: crate::drofus::ReferenceData, fields: Vec<ReferenceFieldConfig>) {
+        bundle
+            .reference
+            .insert("drofus".to_string(), crate::state::ProjectReferenceSource { data: Some(data), fields });
     }
 
     fn payload_at(model_id: &str, taken_at: &str, rooms: Vec<Room>) -> RoomPayload {
@@ -689,7 +711,7 @@ mod tests {
         );
         // The decoy: if the diff read the current dRofus it would see 99 on
         // both sides and report nothing.
-        bundle.drofus = Some(drofus_data("Number", &[("101", &[("NetArea", "99")])]));
+        set_drofus(&mut bundle, drofus_data("Number", &[("101", &[("NetArea", "99")])]), vec![]);
         let (state, dir) = state_with(bundle, "drofus-pin");
 
         state
@@ -698,8 +720,8 @@ mod tests {
         state
             .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])]))
             .unwrap();
-        state.put_drofus("p1", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n").unwrap();
-        state.put_drofus("p1", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n").unwrap();
+        state.put_drofus("p1", "drofus", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n").unwrap();
+        state.put_drofus("p1", "drofus", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n").unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
 
@@ -730,7 +752,7 @@ mod tests {
         );
         // Link property (DKey) is distinct from the comparison key (Number):
         // the baseline room carries a link value, the later one lost it.
-        bundle.drofus = Some(drofus_data("DKey", &[("d1", &[("NetArea", "20"), ("Dept", "Admin")])]));
+        set_drofus(&mut bundle, drofus_data("DKey", &[("d1", &[("NetArea", "20"), ("Dept", "Admin")])]), vec![]);
         let (state, dir) = state_with(bundle, "unjoined");
 
         state
@@ -769,7 +791,7 @@ mod tests {
             &["drofus.NetArea"],
             vec![milestone("Base", "m1", base_ts), milestone("Later", "m1", later_ts)],
         );
-        bundle.drofus = Some(drofus_data("DKey", &[("d1", &[("NetArea", "20")])]));
+        set_drofus(&mut bundle, drofus_data("DKey", &[("d1", &[("NetArea", "20")])]), vec![]);
         let (state, dir) = state_with(bundle, "join-gained");
 
         // Baseline unjoined, later joined.
@@ -801,10 +823,11 @@ mod tests {
             &["Area"],
             vec![milestone("Base", "m1", base_ts), milestone("Later", "m1", later_ts)],
         );
-        bundle.drofus = Some(drofus_data(
-            "Number",
-            &[("101", &[("Code", "A")]), ("102", &[("Code", "B")])],
-        ));
+        set_drofus(
+            &mut bundle,
+            drofus_data("Number", &[("101", &[("Code", "A")]), ("102", &[("Code", "B")])]),
+            vec![],
+        );
         let (state, dir) = state_with(bundle, "drofus-key");
 
         state
@@ -846,7 +869,7 @@ mod tests {
     /// report every date as a change.
     #[test]
     fn test_values_agree_drofus_date_compares_instants() {
-        let cfg = DrofusFieldConfig {
+        let cfg = ReferenceFieldConfig {
             label: "LastSync".to_string(),
             field_type: FieldType::Date,
             format: Some("%Y-%m-%d %H:%M".to_string()),
@@ -887,7 +910,7 @@ mod tests {
     /// because naming it in `comparison_properties` is an explicit request.
     #[test]
     fn test_values_agree_honours_exact_but_not_ignore() {
-        let mk = |qa| DrofusFieldConfig {
+        let mk = |qa| ReferenceFieldConfig {
             label: "NetArea".to_string(),
             field_type: FieldType::String,
             format: None,
@@ -922,24 +945,27 @@ mod tests {
                 milestone_with_drofus("Later", "m1", later_ts, d_later),
             ],
         );
-        bundle.drofus_fields = vec![DrofusFieldConfig {
-            label: "LastSync".to_string(),
-            field_type: FieldType::Date,
-            format: Some("%Y-%m-%d %H:%M:%S%z".to_string()),
-            revit_format: None,
-            qa: None,
-        }];
-        bundle.drofus = Some(drofus_data("Number", &[("101", &[("LastSync", "x")])]));
+        set_drofus(
+            &mut bundle,
+            drofus_data("Number", &[("101", &[("LastSync", "x")])]),
+            vec![ReferenceFieldConfig {
+                label: "LastSync".to_string(),
+                field_type: FieldType::Date,
+                format: Some("%Y-%m-%d %H:%M:%S%z".to_string()),
+                revit_format: None,
+                qa: None,
+            }],
+        );
         let (state, dir) = state_with(bundle, "date-drift");
 
         state.set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101")])])).unwrap();
         state.set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])])).unwrap();
         // Same instant, two offsets: +10:00 local vs the same moment in UTC.
         state
-            .put_drofus("p1", d_base, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n")
+            .put_drofus("p1", "drofus", d_base, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n")
             .unwrap();
         state
-            .put_drofus("p1", d_later, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n")
+            .put_drofus("p1", "drofus", d_later, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n")
             .unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();

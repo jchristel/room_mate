@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use super::{DrofusSource, ServerConfig, Settings};
+use super::{ReferenceOrigin, ServerConfig, Settings};
 
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let raw = std::fs::read_to_string(path)
@@ -52,8 +52,10 @@ pub fn load_settings(path: &Path) -> anyhow::Result<Settings> {
     // "no base to prepend" — those paths fall back to cwd-relative, same as
     // before this fix.
     let settings_dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(DrofusSource::File { path: drofus_path }) = &mut settings.sources.drofus {
-        resolve_relative_to(drofus_path, settings_dir);
+    for source in settings.sources.reference.values_mut() {
+        if let ReferenceOrigin::File { path: source_path } = &mut source.origin {
+            resolve_relative_to(source_path, settings_dir);
+        }
     }
 
     if settings.project_id.trim().is_empty() {
@@ -141,7 +143,7 @@ mod tests {
                 r#"
 project_id = "p1"
 
-[sources.drofus]
+[sources.reference.drofus]
 type = "file"
 path = "{}"
 
@@ -175,7 +177,7 @@ code_property = "b"
         std::fs::write(&settings_path, "project_id = \"p1\"\n").unwrap();
 
         let settings = load_settings(&settings_path).unwrap();
-        assert!(settings.sources.drofus.is_none());
+        assert!(settings.sources.reference.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }

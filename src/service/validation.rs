@@ -3,7 +3,7 @@
 //! Moved verbatim out of `handlers::get_project_validation` (see
 //! HANDOVER-service-layer.md) -- `compute_validation` never touched a
 //! transport type to begin with, so this extraction only adds the
-//! `AppState`/`Option<DrofusData>` handling that the handler used to do
+//! `AppState`/`Option<ReferenceData>` handling that the handler used to do
 //! inline.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::contract::{date_match, lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload};
-use crate::drofus::DrofusData;
-use crate::settings::{BuiltinPropertyDef, CompareMode, DrofusFieldConfig, FieldType};
+use crate::drofus::ReferenceData;
+use crate::settings::{BuiltinPropertyDef, CompareMode, ReferenceFieldConfig, FieldType};
 use crate::state::{AppState, ModelKey};
 
 use super::ServiceError;
@@ -38,7 +38,7 @@ pub struct PropertyMismatch {
     pub room_id: String,
     pub drofus_id: String,
     /// The dRofus field label (row 1) — the same key `reconciliation` and
-    /// `DrofusRecord.fields` use.
+    /// `ReferenceRecord.fields` use.
     pub field: String,
     pub room_value: String,
     pub drofus_value: String,
@@ -159,7 +159,7 @@ impl ValidationResponse {
 }
 
 /// The declaration for one dRofus field label, if the settings carry one.
-fn field_config<'a>(drofus_fields: &'a [DrofusFieldConfig], label: &str) -> Option<&'a DrofusFieldConfig> {
+fn field_config<'a>(drofus_fields: &'a [ReferenceFieldConfig], label: &str) -> Option<&'a ReferenceFieldConfig> {
     drofus_fields.iter().find(|f| f.label == label)
 }
 
@@ -167,7 +167,7 @@ fn field_config<'a>(drofus_fields: &'a [DrofusFieldConfig], label: &str) -> Opti
 /// column has no declaration, or a declaration with no `qa` set (both mean
 /// the default: numeric-adaptive if both sides parse as a number, else exact
 /// string match).
-fn compare_mode(drofus_fields: &[DrofusFieldConfig], label: &str) -> Option<CompareMode> {
+fn compare_mode(drofus_fields: &[ReferenceFieldConfig], label: &str) -> Option<CompareMode> {
     field_config(drofus_fields, label).and_then(|f| f.qa)
 }
 
@@ -190,7 +190,7 @@ fn ascii_narrowed(s: &str) -> String {
 fn resolve_link_values<'a>(
     project_id: &str,
     stored: &'a [(ModelKey, RoomPayload)],
-    drofus: &DrofusData,
+    drofus: &ReferenceData,
     builtin_defs: &[BuiltinPropertyDef],
 ) -> (usize, Vec<String>, LinkValueIndex<'a>) {
     let mut total_rooms = 0;
@@ -220,7 +220,7 @@ fn resolve_link_values<'a>(
 /// (with the ASCII-narrowing re-check that forgives duHast's lossy
 /// `encode_ascii` export step — see `ascii_narrowed`). `Exact` mode skips both
 /// typed rungs and forces the string comparison.
-fn field_values_agree(drofus_value: &str, room_value: &str, field_cfg: Option<&DrofusFieldConfig>) -> bool {
+fn field_values_agree(drofus_value: &str, room_value: &str, field_cfg: Option<&ReferenceFieldConfig>) -> bool {
     let exact_mode = field_cfg.and_then(|f| f.qa) == Some(CompareMode::Exact);
     let date = if exact_mode {
         None
@@ -250,7 +250,7 @@ fn field_values_agree(drofus_value: &str, room_value: &str, field_cfg: Option<&D
 /// except those overridden `Ignore` (a deliberate exclusion, hidden from this
 /// report entirely rather than shown as "not checked"), each flagged with
 /// whether row 2 mapped it to a Revit property.
-fn compute_field_coverage(drofus: &DrofusData, drofus_fields: &[DrofusFieldConfig]) -> Vec<FieldCoverage> {
+fn compute_field_coverage(drofus: &ReferenceData, drofus_fields: &[ReferenceFieldConfig]) -> Vec<FieldCoverage> {
     let ignored: BTreeSet<&str> = drofus_fields
         .iter()
         .filter(|f| f.qa == Some(CompareMode::Ignore))
@@ -282,7 +282,7 @@ fn compute_field_coverage(drofus: &DrofusData, drofus_fields: &[DrofusFieldConfi
 fn collect_error_rooms(
     project_id: &str,
     stored: &[(ModelKey, RoomPayload)],
-    drofus: &DrofusData,
+    drofus: &ReferenceData,
     builtin_defs: &[BuiltinPropertyDef],
     error_ids: &BTreeSet<String>,
 ) -> BTreeMap<String, ErrorRoomInfo> {
@@ -324,9 +324,9 @@ fn collect_error_rooms(
 pub fn compute_validation(
     project_id: &str,
     stored: &[(ModelKey, RoomPayload)],
-    drofus: &DrofusData,
+    drofus: &ReferenceData,
     builtin_defs: &[BuiltinPropertyDef],
-    drofus_fields: &[DrofusFieldConfig],
+    drofus_fields: &[ReferenceFieldConfig],
 ) -> ValidationResponse {
     let (total_rooms, rooms_missing_link_value, by_value) =
         resolve_link_values(project_id, stored, drofus, builtin_defs);
@@ -445,20 +445,25 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     let Some(bundle) = registry.settings_for(project_id) else {
         return Ok(ValidationResponse::drofus_not_configured());
     };
-    let Some(drofus) = bundle.drofus.as_ref() else {
+    // Reads the "drofus"-named reference source specifically — this report
+    // is not yet generalized to N sources (see docs/HANDOVER-reference-sources.md).
+    let Some(drofus_source) = bundle.reference.get("drofus") else {
+        return Ok(ValidationResponse::drofus_not_configured());
+    };
+    let Some(drofus) = drofus_source.data.as_ref() else {
         return Ok(ValidationResponse::drofus_not_configured());
     };
 
     let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
 
-    Ok(compute_validation(project_id, &stored, drofus, &bundle.builtin_properties, &bundle.drofus_fields))
+    Ok(compute_validation(project_id, &stored, drofus, &bundle.builtin_properties, &drofus_source.fields))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::contract::{CustomValue, Model, Project, Snapshot};
-    use crate::drofus::DrofusRecord;
+    use crate::drofus::ReferenceRecord;
 
     fn make_room(id: &str, name: &str, props: &[(&str, &str)]) -> Room {
         let mut properties = BTreeMap::new();
@@ -487,7 +492,7 @@ mod tests {
         link_property: &str,
         records: &[(&str, &[(&str, &str)])],
         reconciliation: &[(&str, &str)],
-    ) -> DrofusData {
+    ) -> ReferenceData {
         let mut by_id = BTreeMap::new();
         // `all_labels` mirrors the real loader's row-1 label set: the union
         // of every reconciled label and every field label that shows up in
@@ -500,14 +505,14 @@ mod tests {
                 f.insert(k.to_string(), v.to_string());
                 all_labels.insert(k.to_string());
             }
-            by_id.insert(id.to_string(), DrofusRecord { fields: f });
+            by_id.insert(id.to_string(), ReferenceRecord { fields: f });
         }
         let mut reconciliation_map = BTreeMap::new();
         for (k, v) in reconciliation {
             reconciliation_map.insert(k.to_string(), v.to_string());
             all_labels.insert(k.to_string());
         }
-        DrofusData {
+        ReferenceData {
             link_property: link_property.to_string(),
             by_id,
             reconciliation: reconciliation_map,
@@ -756,7 +761,7 @@ mod tests {
         // Also declares the field's type -- proves `qa: Ignore` and `type:
         // Date` coexist: QA still skips it, independent of what a future
         // date-consuming feature would do with the same declaration.
-        let drofus_fields = vec![crate::settings::DrofusFieldConfig {
+        let drofus_fields = vec![crate::settings::ReferenceFieldConfig {
             label: "LastSync".to_string(),
             field_type: crate::settings::FieldType::Date,
             format: Some("%Y-%m-%d".to_string()),
@@ -774,8 +779,8 @@ mod tests {
 
     /// A `Date` field declaration for tests: the shipped dRofus pattern,
     /// optionally a distinct Revit-side pattern, optionally a QA override.
-    fn date_field(label: &str, revit_format: Option<&str>, qa: Option<CompareMode>) -> DrofusFieldConfig {
-        DrofusFieldConfig {
+    fn date_field(label: &str, revit_format: Option<&str>, qa: Option<CompareMode>) -> ReferenceFieldConfig {
+        ReferenceFieldConfig {
             label: label.to_string(),
             field_type: FieldType::Date,
             format: Some("%-m/%-d/%Y %-I:%M:%S %p %z".to_string()),

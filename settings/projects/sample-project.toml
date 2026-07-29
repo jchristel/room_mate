@@ -9,9 +9,19 @@ room_label = [
 ]
 milestones = []
 
-[sources.drofus]
+[sources.reference.drofus]
 type = "file"
 path = "../drofus.csv"
+
+[[sources.reference.drofus.fields]]
+label = "Department"
+type = "string"
+qa = "exact"
+
+[[sources.reference.drofus.fields]]
+label = "NetArea"
+type = "numeric"
+qa = "exact"
 
 [[hierarchy]]
 name = "Building"
@@ -39,16 +49,6 @@ canonical = "Department"
 
 [builtin_properties.by_source]
 revit = "Department"
-
-[[drofus_fields]]
-label = "Department"
-type = "string"
-qa = "exact"
-
-[[drofus_fields]]
-label = "NetArea"
-type = "numeric"
-qa = "exact"
 
 [[colour_plans]]
 name = "Area vs Perimeter"

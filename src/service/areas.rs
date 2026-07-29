@@ -1876,14 +1876,13 @@ mod tests {
         /// the given footprint exclusions.
         fn bundle(exclusions: Vec<HierarchyExclusion>) -> ProjectSettings {
             ProjectSettings {
-                drofus: None,
+                reference: BTreeMap::new(),
                 hierarchy: vec![
                     HierarchyTier { name: "Building".to_string(), code_property: None, name_property: Some("bldg".to_string()) },
                     HierarchyTier { name: "Dept".to_string(), code_property: None, name_property: Some("dept".to_string()) },
                 ],
                 builtin_properties: vec![],
                 room_label: vec!["$name".to_string()],
-                drofus_fields: vec![],
                 milestones: vec![],
                 comparison_key: None,
                 comparison_properties: vec![],

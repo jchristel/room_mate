@@ -14,7 +14,7 @@ use crate::contract::{
     elevation_match, lookup_property, numeric_match, property_presence, Level, PropertyPresence, Room, RoomBoundary,
     RoomPayload, SUPPORTED_SCHEMA,
 };
-use crate::drofus::{DrofusData, DrofusRecord};
+use crate::drofus::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, HierarchyTier};
 use crate::state::{AppState, ModelKey, ProjectSettings, SettingsRegistry};
 
@@ -26,27 +26,36 @@ use super::ServiceError;
 /// lifetime. The unit the three assembly phases pass between them.
 type ScopedPayload<'a> = (ModelKey, RoomPayload, &'a ProjectSettings);
 
-/// The dRofus a milestone view joins against, resolved once per project
-/// (`project id → override`). A `Some(data)` is joined instead of the
-/// project's current dRofus; a `None` *value* means "attempted, fall back to
+/// The reference data a milestone view joins against, resolved once per
+/// (project id, source name) pair. A `Some(data)` is joined instead of that
+/// source's current data; a `None` *value* means "attempted, fall back to
 /// current" (a missing or unparseable pin, memoised so it's neither re-parsed
 /// nor re-warned). Empty on the non-milestone path.
-type MilestoneDrofus = BTreeMap<String, Option<DrofusData>>;
+type MilestoneReference = BTreeMap<(String, String), Option<ReferenceData>>;
 
-/// A room as sent to the viewer: the stored room plus any attached dRofus data
-/// and its resolved classification path. Separate response type so the join
-/// never mutates the stored snapshot, and so dRofus stays a distinct sub-object
-/// (its own lifecycle — it will later refresh on its own trigger, so it must
-/// not be fused into the room's own properties).
+/// A room as sent to the viewer: the stored room plus any attached reference-
+/// source data and its resolved classification path. Separate response type
+/// so the join never mutates the stored snapshot, and so each joined source
+/// stays a distinct sub-object (its own lifecycle — dRofus, for one, will
+/// later refresh on its own trigger, so it must not be fused into the room's
+/// own properties).
 #[derive(Serialize)]
 pub struct RoomResponse {
     #[serde(flatten)]
     pub room: Room,
 
-    /// Present only when the room's link value matched a dRofus record.
-    /// Absent (skipped) otherwise — an unmatched key is a signal, not an error.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub drofus: Option<DrofusRecord>,
+    /// Joined reference-source records, keyed by source name. `#[serde(flatten)]`
+    /// spreads each entry as its own top-level wire key — `reference["drofus"]`
+    /// serializes exactly as the single `drofus` field did before this
+    /// generalized to N sources, so today's one-source wire shape is
+    /// byte-identical; a second configured source just adds its own top-level
+    /// key alongside it, no frontend change required to keep working. A source
+    /// with no joined record for this room (including every source when
+    /// nothing joined) is simply absent from the map — an unmatched key is a
+    /// signal, not an error — and an empty map flattens to no keys at all, so
+    /// no separate `skip_serializing_if` is needed.
+    #[serde(flatten)]
+    pub reference: BTreeMap<String, ReferenceRecord>,
 
     /// Full-depth classification path. Empty when no hierarchy is configured.
     pub classification: Vec<TierValue>,
@@ -91,9 +100,9 @@ fn resolve_label_fields(
         .collect()
 }
 
-/// Assemble one room's response: raw room + dRofus join + classification.
-/// Pulled out so the single- and multi-model paths derive rooms identically —
-/// the join/classify logic lives in exactly one place.
+/// Assemble one room's response: raw room + every reference-source join +
+/// classification. Pulled out so the single- and multi-model paths derive
+/// rooms identically — the join/classify logic lives in exactly one place.
 ///
 /// `bundle` is the owning payload's project's settings (see
 /// `AppState::settings_for`) — every field that used to come off `AppState`
@@ -102,23 +111,35 @@ fn resolve_label_fields(
 /// `BuiltinPropertyDef.by_source` entry `lookup_property` uses to resolve a
 /// canonical name to this room's actual raw property name.
 ///
-/// `drofus` is passed in explicitly rather than read off `bundle.drofus`, so a
-/// milestone view can join a *pinned* dRofus snapshot instead of the project's
-/// current data — the default (non-milestone) caller passes
-/// `bundle.drofus.as_ref()`, identical to before.
-fn assemble_room(bundle: &ProjectSettings, drofus: Option<&DrofusData>, room: &Room, source: &str) -> RoomResponse {
-    // dRofus join: read the link property off the room, look up the record.
-    let drofus = drofus.and_then(|d| {
-        lookup_property(room, &d.link_property, source, &bundle.builtin_properties)
-            .and_then(|key| d.by_id.get(&key).cloned())
-    });
+/// `effective_reference` (source name → its data) is passed in explicitly
+/// rather than read off `bundle.reference`, so a milestone view can join
+/// *pinned* snapshots instead of each source's current data — see
+/// `assemble_scoped_rooms`, which resolves it once per project and passes
+/// the same map into every room `assemble_room` sees for that project.
+fn assemble_room(
+    bundle: &ProjectSettings,
+    effective_reference: &BTreeMap<String, &ReferenceData>,
+    room: &Room,
+    source: &str,
+) -> RoomResponse {
+    // One join per configured source: read its link property off the room,
+    // look up the record. A source with no match for this room contributes
+    // no entry — an unmatched key is a signal, not an error.
+    let reference: BTreeMap<String, ReferenceRecord> = effective_reference
+        .iter()
+        .filter_map(|(name, data)| {
+            let record = lookup_property(room, &data.link_property, source, &bundle.builtin_properties)
+                .and_then(|key| data.by_id.get(&key).cloned())?;
+            Some((name.clone(), record))
+        })
+        .collect();
 
     // Classification resolved fresh — see staleness note on classify_room.
     let classification = classify_room(room, &bundle.hierarchy, source, &bundle.builtin_properties);
 
     let label = resolve_label_fields(room, &bundle.room_label, source, &bundle.builtin_properties);
 
-    RoomResponse { room: room.clone(), drofus, classification, label, source: source.to_string() }
+    RoomResponse { room: room.clone(), reference, classification, label, source: source.to_string() }
 }
 
 /// Sentinel `building` key for rooms whose "Building" tier didn't resolve —
@@ -145,13 +166,6 @@ pub fn building_tier_index(hierarchy: &[HierarchyTier]) -> Option<usize> {
     hierarchy.iter().position(|t| t.name == "Building")
 }
 
-/// The joined data sources a predicate may qualify a field with — the field
-/// names of `settings::Sources`, so "what can I write before the dot" has the
-/// same answer as the settings file's `[sources.<name>]` sections. Adding a
-/// source means one entry here and one arm in `resolve_field`; nothing else in
-/// this module knows the vocabulary.
-const JOINED_SOURCES: &[&str] = &["drofus"];
-
 /// The three ways a field name splits against the namespace vocabulary.
 /// Returned by `split_namespace` so every consumer (filter parsing, comparison
 /// resolution, settings validation) applies the *same* split rule and only
@@ -160,9 +174,10 @@ const JOINED_SOURCES: &[&str] = &["drofus"];
 /// message itself can't live here, but the classification must.
 pub enum NamespaceSplit<'a> {
     /// `<known-source>.<property>` — a joined data source's field. `source` is
-    /// the `JOINED_SOURCES` entry itself (hence `'static`), so downstream
-    /// consumers can carry it without re-splitting.
-    Joined { source: &'static str, property: &'a str },
+    /// owned (cloned out of the caller's `known` set) rather than borrowed, so
+    /// downstream consumers can carry it without re-splitting or fighting a
+    /// lifetime tied to that set.
+    Joined { source: String, property: &'a str },
     /// No namespace: the room's own property vocabulary (canonical names plus
     /// the `$name`/`$id` intrinsics).
     Unqualified(&'a str),
@@ -173,16 +188,23 @@ pub enum NamespaceSplit<'a> {
 }
 
 /// Split one field name against the `source.property` vocabulary. The single
-/// owner of the split rule: a dot after a recognised source name binds as a
+/// owner of the split rule: a dot after a name in `known` binds as a
 /// namespace; a dot after an unrecognised *single word* is an error; a dot
 /// inside a name containing spaces stays part of the property name, because a
 /// raw Revit property name is far likelier to contain a dot than to be an
 /// attempted namespace.
-pub fn split_namespace(field: &str) -> NamespaceSplit<'_> {
+///
+/// `known` is the *recognised* source-name vocabulary at the call site, not a
+/// fixed list — see `SettingsRegistry::known_reference_sources` for the
+/// registry-wide set a `/rooms` filter uses (unscoped, so no single project's
+/// config can answer "what's before the dot"), and
+/// `bootstrap::load_project_bundle` for the project-local set settings
+/// validation uses instead.
+pub fn split_namespace<'a>(field: &'a str, known: &std::collections::BTreeSet<String>) -> NamespaceSplit<'a> {
     match field.split_once('.') {
         Some((ns, rest)) => {
-            if let Some(source) = JOINED_SOURCES.iter().find(|s| **s == ns) {
-                NamespaceSplit::Joined { source, property: rest.trim() }
+            if let Some(source) = known.get(ns) {
+                NamespaceSplit::Joined { source: source.clone(), property: rest.trim() }
             } else if !ns.contains(' ') {
                 NamespaceSplit::UnknownSource(ns)
             } else {
@@ -197,8 +219,9 @@ pub fn split_namespace(field: &str) -> NamespaceSplit<'_> {
 /// context. Each consumer prefixes its own ("filter …", "comparison_key …")
 /// so the *vocabulary* half of the message can never drift between the two
 /// surfaces while the *noun* half stays accurate to each.
-pub fn unknown_source_message(ns: &str) -> String {
-    format!("unknown data source {ns:?} — known sources: {}", JOINED_SOURCES.join(", "))
+pub fn unknown_source_message(ns: &str, known: &std::collections::BTreeSet<String>) -> String {
+    let known: Vec<&str> = known.iter().map(String::as_str).collect();
+    format!("unknown data source {ns:?} — known sources: {}", known.join(", "))
 }
 
 /// A comparison operator in a room predicate. `Contains` (`~`) is the only
@@ -265,17 +288,16 @@ impl Predicate {
     /// Parse one `[<source>.]<property><op><value>` expression.
     ///
     /// A leading `<name>.` binds as a source namespace when `<name>` is in
-    /// `JOINED_SOURCES`, and is an *error* naming the known sources otherwise —
-    /// never a silent fallback to a room property. Without that rule a raw
-    /// property literally named `Drofus.NetArea` would bind as a room property
-    /// today and silently change meaning the day a namespace of that name
-    /// exists.
+    /// `known`, and is an *error* naming the known sources otherwise — never a
+    /// silent fallback to a room property. Without that rule a raw property
+    /// literally named `Drofus.NetArea` would bind as a room property today
+    /// and silently change meaning the day a namespace of that name exists.
     ///
     /// An unknown *unqualified* property is deliberately not an error:
     /// `resolve_raw_name` falls back to using the name as a raw key, which is
     /// exactly right for a raw property no `BuiltinPropertyDef` maps. So a typo
     /// returns zero rooms rather than a complaint.
-    fn parse(expr: &str) -> Result<Self, String> {
+    fn parse(expr: &str, known: &std::collections::BTreeSet<String>) -> Result<Self, String> {
         let Some((field, op, value)) = split_operator(expr) else {
             return Err(format!(
                 "filter {expr:?}: no operator found — expected one of = != > >= < <= ~ (e.g. \"Department=Cardiology\")"
@@ -303,10 +325,10 @@ impl Predicate {
 
         // The split rule itself (including the dot-in-a-spaced-name subtlety)
         // lives in `split_namespace`; only the error phrasing is ours.
-        let (source, property) = match split_namespace(field) {
-            NamespaceSplit::Joined { source, property } => (Some(source.to_string()), property),
+        let (source, property) = match split_namespace(field, known) {
+            NamespaceSplit::Joined { source, property } => (Some(source), property),
             NamespaceSplit::UnknownSource(ns) => {
-                return Err(format!("filter {expr:?}: {}", unknown_source_message(ns)));
+                return Err(format!("filter {expr:?}: {}", unknown_source_message(ns, known)));
             }
             NamespaceSplit::Unqualified(name) => (None, name),
         };
@@ -350,9 +372,10 @@ impl Predicate {
 
 /// Resolve one already-split field against an assembled room to its
 /// three-state presence. The single place that knows the namespace vocabulary
-/// at read time: a new joined source adds one arm here and an entry in
-/// `JOINED_SOURCES`, and nothing else changes — filtering (`resolve_field`)
-/// and milestone comparison (`resolve_presence`) both funnel through this.
+/// at read time — a map lookup on `room.reference`, so a new joined source
+/// needs no arm here at all, only a settings entry — filtering
+/// (`resolve_field`) and milestone comparison (`resolve_presence`) both funnel
+/// through this.
 fn presence_of(
     room: &RoomResponse,
     source: Option<&str>,
@@ -375,25 +398,23 @@ fn presence_of(
             "$id" => intrinsic(&room.room.id),
             canonical => property_presence(&room.room, canonical, &room.source, builtin_defs),
         },
-        // The joined record's own field labels, verbatim as
-        // `get_drofus_snapshot` reports them — no canonical mapping, since
-        // those labels are the source's vocabulary, not Revit's. A room with
-        // no joined record at all is `Absent` on every field of that source;
-        // callers that need to tell "source unjoined" from "field missing"
-        // ask `source_joined` (see `service::comparison`).
-        Some("drofus") => match room.drofus.as_ref() {
+        // The joined record's own field labels, verbatim as the source
+        // reports them — no canonical mapping, since those labels are the
+        // source's vocabulary, not Revit's. A room with no joined record for
+        // this source at all is `Absent` on every field of it; callers that
+        // need to tell "source unjoined" from "field missing" ask
+        // `source_joined` (see `service::comparison`). A `source` naming a
+        // namespace no room could ever carry (rejected at settings load and
+        // filter parse before reaching here) degrades to the same `Absent`
+        // via the map lookup — no separate catch-all needed.
+        Some(name) => match room.reference.get(name) {
             None => PropertyPresence::Absent,
-            Some(d) => match d.fields.get(property) {
+            Some(record) => match record.fields.get(property) {
                 None => PropertyPresence::Absent,
                 Some(v) if v.is_empty() => PropertyPresence::Empty,
                 Some(v) => PropertyPresence::Present(v.clone()),
             },
         },
-        // Unreachable today: `Predicate::parse` and the settings load both
-        // reject any other namespace. Kept total rather than `unreachable!()`
-        // so a source added to `JOINED_SOURCES` but not here degrades to
-        // "matches nothing" instead of panicking mid-request.
-        Some(_) => PropertyPresence::Absent,
     }
 }
 
@@ -410,14 +431,18 @@ fn presence_of(
 pub fn resolve_presence(
     room: &RoomResponse,
     field: &str,
+    known: &std::collections::BTreeSet<String>,
     builtin: &[BuiltinPropertyDef],
-) -> (Option<&'static str>, PropertyPresence) {
-    match split_namespace(field) {
-        NamespaceSplit::Joined { source, property } => (Some(source), presence_of(room, Some(source), property, builtin)),
+) -> (Option<String>, PropertyPresence) {
+    match split_namespace(field, known) {
+        NamespaceSplit::Joined { source, property } => {
+            let presence = presence_of(room, Some(&source), property, builtin);
+            (Some(source), presence)
+        }
         NamespaceSplit::Unqualified(name) => (None, presence_of(room, None, name, builtin)),
         // Rejected at settings load and filter parse, so unreachable through
         // either configured path — degrades to "nothing to compare" rather
-        // than panicking, same discipline as `presence_of`'s catch-all arm.
+        // than panicking, same discipline as `presence_of`'s map-lookup arm.
         NamespaceSplit::UnknownSource(_) => (None, PropertyPresence::Absent),
     }
 }
@@ -426,12 +451,8 @@ pub fn resolve_presence(
 /// "the source never matched this room" (one per-room fact) from "the source
 /// matched but lacks this field" (a per-field fact) — `service::comparison`
 /// reports the former once per room rather than once per configured property.
-/// One arm per `JOINED_SOURCES` entry, co-located with the vocabulary.
 pub fn source_joined(room: &RoomResponse, source: &str) -> bool {
-    match source {
-        "drofus" => room.drofus.is_some(),
-        _ => false,
-    }
+    room.reference.contains_key(source)
 }
 
 /// Resolve one predicate's field against an assembled room, collapsed for
@@ -455,9 +476,9 @@ fn resolve_field(room: &RoomResponse, predicate: &Predicate, builtin_defs: &[Bui
 /// this check turns into a loud load error (see CODING-CONVENTIONS.md §"Loud
 /// startup over silent no-op"). Called from `bootstrap::load_project_bundle`,
 /// which the settings-save path re-runs, so a save gets the same rejection.
-pub fn validate_comparison_field(field: &str) -> Result<(), String> {
-    match split_namespace(field) {
-        NamespaceSplit::UnknownSource(ns) => Err(unknown_source_message(ns)),
+pub fn validate_comparison_field(field: &str, known: &std::collections::BTreeSet<String>) -> Result<(), String> {
+    match split_namespace(field, known) {
+        NamespaceSplit::UnknownSource(ns) => Err(unknown_source_message(ns, known)),
         NamespaceSplit::Joined { source, property: "" } => {
             Err(format!("no property named after the {source:?} namespace — expected {source}.<field label>"))
         }
@@ -481,11 +502,13 @@ impl RoomFilter {
     /// Parse one predicate per element — the MCP form, where an array element
     /// per predicate means a caller never has to escape a separator.
     /// `Err` carries caller-addressable text naming the offending element.
-    pub fn parse(exprs: &[String]) -> Result<Self, String> {
+    /// `known` is the recognised source-name vocabulary — see
+    /// `split_namespace`.
+    pub fn parse(exprs: &[String], known: &std::collections::BTreeSet<String>) -> Result<Self, String> {
         let predicates = exprs
             .iter()
             .filter(|e| !e.trim().is_empty())
-            .map(|e| Predicate::parse(e.trim()))
+            .map(|e| Predicate::parse(e.trim(), known))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(RoomFilter { predicates })
     }
@@ -493,7 +516,7 @@ impl RoomFilter {
     /// Parse the HTTP `?filter=` form: comma-separated predicates. A value
     /// containing a literal comma must be quoted (`Department="A, B"`) — the
     /// split respects those quotes.
-    pub fn parse_query(s: &str) -> Result<Self, String> {
+    pub fn parse_query(s: &str, known: &std::collections::BTreeSet<String>) -> Result<Self, String> {
         let mut parts: Vec<String> = Vec::new();
         let mut current = String::new();
         let mut quoted = false;
@@ -508,7 +531,7 @@ impl RoomFilter {
             }
         }
         parts.push(current);
-        RoomFilter::parse(&parts)
+        RoomFilter::parse(&parts, known)
     }
 
     /// True when this filter holds no predicates — the caller then passes
@@ -601,7 +624,7 @@ pub struct RoomsResult {
 /// One project's dRofus column vocabulary, as joined into this response.
 #[derive(Serialize)]
 pub struct DrofusLabels {
-    /// Every row-1 CSV label, mapped or not (`DrofusData::all_labels`).
+    /// Every row-1 CSV label, mapped or not (`ReferenceData::all_labels`).
     pub all_labels: Vec<String>,
     /// dRofus label → the Revit property row 2 maps it to — the mapped
     /// subset, so a consumer can mark which columns have a Revit counterpart.
@@ -705,11 +728,11 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
     // Three phases, each its own helper: scope the stored payloads to the
     // request (and resolve any milestone substitutions), dedup levels across
     // linked models, then derive the response rooms/levels.
-    let (scoped, milestone_drofus) = scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
+    let (scoped, milestone_reference) = scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
     let revision = scoped_revision(&scoped);
     let level_remap = dedup_levels(&scoped);
     let AssembledRooms { levels, rooms, drofus_labels, boundary_by_level } =
-        assemble_scoped_rooms(&scoped, &level_remap, &milestone_drofus, scope);
+        assemble_scoped_rooms(&scoped, &level_remap, &milestone_reference, scope);
 
     Ok(Some(RoomsResult {
         schema_version: SUPPORTED_SCHEMA,
@@ -730,21 +753,21 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
 /// tuple's payload slot). A project without the named milestone, or a model it
 /// doesn't pin, contributes nothing — the building-filter discipline.
 ///
-/// The second return value is the milestone's pinned dRofus, resolved once per
-/// project (`project id → override`): `Some(data)` = joined instead of the
-/// project's current dRofus; a `None` *value* means "attempted, fall back to
-/// current" (a missing or unparseable pin), memoised so it's neither re-parsed
-/// nor re-warned across a project's models. Empty on the non-milestone path.
-/// Kept together with the scoping loop that fills it, since that's where the
-/// pin is known.
+/// The second return value is each milestone-pinned reference source,
+/// resolved once per (project id, source name): `Some(data)` = joined instead
+/// of that source's current data; a `None` *value* means "attempted, fall
+/// back to current" (a missing or unparseable pin), memoised so it's neither
+/// re-parsed nor re-warned across a project's models. Empty on the
+/// non-milestone path. Kept together with the scoping loop that fills it,
+/// since that's where the pin is known.
 fn scope_payloads<'r>(
     state: &AppState,
     registry: &'r SettingsRegistry,
     stored: Vec<(ModelKey, RoomPayload)>,
     project: Option<&str>,
     milestone: Option<&str>,
-) -> Result<(Vec<ScopedPayload<'r>>, MilestoneDrofus), ServiceError> {
-    let mut milestone_drofus: MilestoneDrofus = BTreeMap::new();
+) -> Result<(Vec<ScopedPayload<'r>>, MilestoneReference), ServiceError> {
+    let mut milestone_reference: MilestoneReference = BTreeMap::new();
     let mut scoped: Vec<ScopedPayload> = Vec::new();
 
     for (key, payload) in stored {
@@ -765,11 +788,16 @@ fn scope_payloads<'r>(
                 };
                 match state.get_snapshot(&key, pinned_id).map_err(ServiceError::Internal)? {
                     Some(pinned) => {
-                        if let Some(drofus_pin) = &ms.drofus_snapshot
-                            && !milestone_drofus.contains_key(&key.project_id)
-                        {
-                            let resolved = resolve_pinned_drofus(state, wanted, &key.project_id, drofus_pin)?;
-                            milestone_drofus.insert(key.project_id.clone(), resolved);
+                        // One resolution per (project, source) pin — a
+                        // project may pin several sources for one milestone,
+                        // each memoised independently the first time any of
+                        // its models is seen.
+                        for (source, pin) in &ms.reference_snapshots {
+                            let map_key = (key.project_id.clone(), source.clone());
+                            if let std::collections::btree_map::Entry::Vacant(e) = milestone_reference.entry(map_key) {
+                                let resolved = resolve_pinned_reference(state, wanted, &key.project_id, source, pin)?;
+                                e.insert(resolved);
+                            }
                         }
                         scoped.push((key, pinned, bundle));
                     }
@@ -782,34 +810,35 @@ fn scope_payloads<'r>(
         }
     }
 
-    Ok((scoped, milestone_drofus))
+    Ok((scoped, milestone_reference))
 }
 
-/// Load and parse a milestone's pinned dRofus CSV for one project. A missing
-/// or unparseable pin resolves to `None` with a warning (fall back to the
-/// project's current dRofus — signal, not error, same stance as a dangling
-/// model pin).
-fn resolve_pinned_drofus(
+/// Load and parse a milestone's pinned CSV for one project's reference
+/// source. A missing or unparseable pin resolves to `None` with a warning
+/// (fall back to that source's current data — signal, not error, same stance
+/// as a dangling model pin).
+fn resolve_pinned_reference(
     state: &AppState,
     milestone: &str,
     project_id: &str,
-    drofus_pin: &str,
-) -> Result<Option<DrofusData>, ServiceError> {
-    match state.get_drofus(project_id, drofus_pin).map_err(ServiceError::Internal)? {
-        Some(bytes) => match crate::drofus::load_drofus_from_bytes(&bytes) {
+    source: &str,
+    pin: &str,
+) -> Result<Option<ReferenceData>, ServiceError> {
+    match state.get_drofus(project_id, source, pin).map_err(ServiceError::Internal)? {
+        Some(bytes) => match crate::drofus::load_reference_from_bytes(&bytes) {
             Ok(data) => Ok(Some(data)),
             Err(e) => {
                 tracing::warn!(
-                    "milestone '{}' pins dRofus snapshot {:?} for project {}, but it failed to parse ({e:#}) — falling back to current dRofus",
-                    milestone, drofus_pin, project_id
+                    "milestone '{}' pins '{}' snapshot {:?} for project {}, but it failed to parse ({e:#}) — falling back to current data",
+                    milestone, source, pin, project_id
                 );
                 Ok(None)
             }
         },
         None => {
             tracing::warn!(
-                "milestone '{}' pins dRofus snapshot {:?} for project {}, but no such snapshot exists — falling back to current dRofus",
-                milestone, drofus_pin, project_id
+                "milestone '{}' pins '{}' snapshot {:?} for project {}, but no such snapshot exists — falling back to current data",
+                milestone, source, pin, project_id
             );
             Ok(None)
         }
@@ -873,16 +902,18 @@ fn dedup_levels(scoped: &[ScopedPayload<'_>]) -> BTreeMap<(String, String, Strin
 /// the building filter already followed.
 ///
 /// Also collects each project's dRofus label set (the third return value)
-/// from the *same* `effective_drofus` the rooms are joined against — carried
-/// out of this loop rather than re-resolved so a milestone view can never
-/// show current column headers over pinned data. Collected *before* the
-/// "contributed nothing" check: the labels describe the project's dataset,
-/// not its rooms, so a project whose rooms all fail a filter still reports
-/// its columns.
+/// from the *same* effective "drofus" data the rooms are joined against —
+/// carried out of this loop rather than re-resolved so a milestone view can
+/// never show current column headers over pinned data. Collected *before*
+/// the "contributed nothing" check: the labels describe the project's
+/// dataset, not its rooms, so a project whose rooms all fail a filter still
+/// reports its columns. Stays specifically about "drofus" (not generalized to
+/// every joined source) — the same scope limit as `service::validation`;
+/// see `docs/HANDOVER-reference-sources.md`.
 fn assemble_scoped_rooms(
     scoped: &[ScopedPayload<'_>],
     level_remap: &BTreeMap<(String, String, String), String>,
-    milestone_drofus: &MilestoneDrofus,
+    milestone_reference: &MilestoneReference,
     scope: &RoomScope<'_>,
 ) -> AssembledRooms {
     let building = scope.building;
@@ -924,19 +955,28 @@ fn assemble_scoped_rooms(
             (None, _) => payload.rooms.iter().collect(),
         };
 
-        // A milestone-pinned dRofus override wins when it resolved; otherwise
-        // (no milestone, no pin, or a pin that fell back) the project's current
-        // dRofus — identical to pre-pinning behaviour.
-        let effective_drofus = match milestone_drofus.get(&key.project_id) {
-            Some(Some(data)) => Some(data),
-            _ => bundle.drofus.as_ref(),
-        };
+        // A milestone-pinned override wins per source when it resolved;
+        // otherwise (no milestone, no pin for that source, or a pin that fell
+        // back) that source's current data — identical to pre-pinning
+        // behaviour, generalized from one hardcoded source to every source
+        // this project configures.
+        let effective_reference: BTreeMap<String, &ReferenceData> = bundle
+            .reference
+            .iter()
+            .filter_map(|(source, cfg)| {
+                let pinned = milestone_reference
+                    .get(&(key.project_id.clone(), source.clone()))
+                    .and_then(|o| o.as_ref());
+                let data = pinned.or(cfg.data.as_ref())?;
+                Some((source.clone(), data))
+            })
+            .collect();
 
         // First model of a project wins; every model of one project resolves
-        // the same effective dRofus, so this is dedup, not precedence. A
-        // project with no dRofus gets no entry — absent, not empty, matching
-        // how `RoomResponse.drofus` treats an unmatched room.
-        if let Some(d) = effective_drofus {
+        // the same effective data, so this is dedup, not precedence. A
+        // project with no "drofus" source gets no entry — absent, not empty,
+        // matching how `RoomResponse.reference` treats an unmatched room.
+        if let Some(d) = effective_reference.get("drofus") {
             drofus_labels.entry(key.project_id.clone()).or_insert_with(|| DrofusLabels {
                 all_labels: d.all_labels.clone(),
                 reconciliation: d.reconciliation.clone(),
@@ -948,7 +988,7 @@ fn assemble_scoped_rooms(
         let assembled: Vec<RoomResponse> = matching_rooms
             .into_iter()
             .map(|room| {
-                let mut response = assemble_room(bundle, effective_drofus, room, &payload.model.source);
+                let mut response = assemble_room(bundle, &effective_reference, room, &payload.model.source);
                 if let Some(canonical_id) =
                     level_remap.get(&(key.project_id.clone(), key.model_id.clone(), room.level_id.clone()))
                 {
@@ -1033,8 +1073,8 @@ mod tests {
         Room { id: id.to_string(), name: name.to_string(), level_id: "1".to_string(), loops: vec![], properties }
     }
 
-    fn make_drofus(link_property: &str) -> DrofusData {
-        DrofusData {
+    fn make_drofus(link_property: &str) -> ReferenceData {
+        ReferenceData {
             link_property: link_property.to_string(),
             by_id: BTreeMap::new(),
             reconciliation: BTreeMap::new(),
@@ -1042,16 +1082,33 @@ mod tests {
         }
     }
 
+    /// Set (or, with `None`, clear) a bundle's "drofus"-named reference
+    /// source — the test-side equivalent of what `bootstrap::load_project_bundle`
+    /// wires up for the one source name the read path currently recognises.
+    fn with_drofus(mut bundle: ProjectSettings, data: Option<ReferenceData>) -> ProjectSettings {
+        match data {
+            Some(d) => {
+                bundle
+                    .reference
+                    .insert("drofus".to_string(), crate::state::ProjectReferenceSource { data: Some(d), fields: vec![] });
+            }
+            None => {
+                bundle.reference.remove("drofus");
+            }
+        }
+        bundle
+    }
+
     /// A dRofus dataset with one record: link id `id` carries `label` = `value`.
     /// Used by the milestone-pinning tests to make the *current* dRofus differ
     /// from the *pinned* one for the same room, so the join source is what the
     /// assertion actually distinguishes.
-    fn make_drofus_with_record(link_property: &str, id: &str, label: &str, value: &str) -> DrofusData {
-        DrofusData {
+    fn make_drofus_with_record(link_property: &str, id: &str, label: &str, value: &str) -> ReferenceData {
+        ReferenceData {
             link_property: link_property.to_string(),
             by_id: BTreeMap::from([(
                 id.to_string(),
-                DrofusRecord { fields: BTreeMap::from([(label.to_string(), value.to_string())]) },
+                ReferenceRecord { fields: BTreeMap::from([(label.to_string(), value.to_string())]) },
             )]),
             reconciliation: BTreeMap::new(),
             all_labels: vec![label.to_string()],
@@ -1062,16 +1119,17 @@ mod tests {
     /// link id "1", with one "Design Freeze" milestone pinning model "m1" to
     /// `pinned_ts` and optionally a `drofus_snapshot`.
     fn bundle_for_drofus_pin(current_value: &str, pinned_ts: &str, drofus_ts: Option<&str>) -> ProjectSettings {
-        ProjectSettings {
-            drofus: Some(make_drofus_with_record("Number", "1", "NetArea", current_value)),
+        with_drofus(ProjectSettings {
             milestones: vec![crate::settings::Milestone {
                 name: "Design Freeze".to_string(),
                 date: "2026-06-30".to_string(),
-                drofus_snapshot: drofus_ts.map(|s| s.to_string()),
+                reference_snapshots: drofus_ts
+                    .map(|s| std::collections::BTreeMap::from([("drofus".to_string(), s.to_string())]))
+                    .unwrap_or_default(),
                 attachments: std::collections::BTreeMap::from([("m1".to_string(), pinned_ts.to_string())]),
             }],
             ..make_bundle("Number")
-        }
+        }, Some(make_drofus_with_record("Number", "1", "NetArea", current_value)))
     }
 
     /// A two-header-row dRofus CSV pinning link id "1" to one `NetArea` value —
@@ -1083,17 +1141,20 @@ mod tests {
     /// A minimal `ProjectSettings` bundle for tests that only care about the
     /// dRofus link property and the default room label.
     fn make_bundle(link_property: &str) -> ProjectSettings {
-        ProjectSettings {
-            drofus: Some(make_drofus(link_property)),
-            hierarchy: vec![],
-            builtin_properties: vec![],
-            room_label: vec!["$name".to_string(), "$id".to_string()],
-            drofus_fields: vec![],
-            milestones: vec![],
-            comparison_key: None,
-            comparison_properties: vec![],
-            areas: Default::default(),
-            hierarchy_exclusions: vec![],        }
+        with_drofus(
+            ProjectSettings {
+                reference: BTreeMap::new(),
+                hierarchy: vec![],
+                builtin_properties: vec![],
+                room_label: vec!["$name".to_string(), "$id".to_string()],
+                milestones: vec![],
+                comparison_key: None,
+                comparison_properties: vec![],
+                areas: Default::default(),
+                hierarchy_exclusions: vec![],
+            },
+            Some(make_drofus(link_property)),
+        )
     }
 
     /// The two scope dimensions most tests vary; building and filter tests
@@ -1102,11 +1163,17 @@ mod tests {
         RoomScope { project, milestone, ..Default::default() }
     }
 
+    /// The recognised source-name vocabulary every test filter/predicate
+    /// parses against — "drofus" is the one source these tests configure.
+    fn known() -> BTreeSet<String> {
+        BTreeSet::from(["drofus".to_string()])
+    }
+
     /// Parse one predicate expression, panicking on a parse error -- the
     /// matcher tests are about matching, not about parsing.
     fn filter(exprs: &[&str]) -> RoomFilter {
         let owned: Vec<String> = exprs.iter().map(|s| (*s).to_string()).collect();
-        RoomFilter::parse(&owned).expect("test filter must parse")
+        RoomFilter::parse(&owned, &known()).expect("test filter must parse")
     }
 
     /// Registers one project's bundle under its id -- the shape
@@ -1485,7 +1552,9 @@ mod tests {
             milestones: vec![crate::settings::Milestone {
                 name: "Design Freeze".to_string(),
                 date: "2026-06-30".to_string(),
-                drofus_snapshot: drofus_ts.map(|s| s.to_string()),
+                reference_snapshots: drofus_ts
+                    .map(|s| std::collections::BTreeMap::from([("drofus".to_string(), s.to_string())]))
+                    .unwrap_or_default(),
                 attachments: std::collections::BTreeMap::from([("m1".to_string(), pinned_ts.to_string())]),
             }],
             ..make_bundle("Number")
@@ -1572,18 +1641,18 @@ mod tests {
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(old).unwrap();
         state.set_snapshot(new).unwrap();
-        state.put_drofus("p1", old_drofus_ts, &drofus_csv("old-value")).unwrap();
+        state.put_drofus("p1", "drofus", old_drofus_ts, &drofus_csv("old-value")).unwrap();
 
         let latest = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
         assert_eq!(
-            latest.rooms[0].drofus.as_ref().unwrap().fields.get("NetArea"),
+            latest.rooms[0].reference.get("drofus").unwrap().fields.get("NetArea"),
             Some(&"new-value".to_string()),
             "default view joins the current dRofus"
         );
 
         let pinned = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze"))).unwrap().expect("store has data");
         assert_eq!(
-            pinned.rooms[0].drofus.as_ref().unwrap().fields.get("NetArea"),
+            pinned.rooms[0].reference.get("drofus").unwrap().fields.get("NetArea"),
             Some(&"old-value".to_string()),
             "milestone view joins the pinned dRofus snapshot"
         );
@@ -1611,7 +1680,7 @@ mod tests {
         let result = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze"))).unwrap().expect("store has data");
         assert_eq!(result.rooms.len(), 1, "the room is still returned (fallback, not dropped)");
         assert_eq!(
-            result.rooms[0].drofus.as_ref().unwrap().fields.get("NetArea"),
+            result.rooms[0].reference.get("drofus").unwrap().fields.get("NetArea"),
             Some(&"current-value".to_string()),
             "falls back to the current dRofus"
         );
@@ -1636,7 +1705,7 @@ mod tests {
 
         let result = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze"))).unwrap().expect("store has data");
         assert_eq!(
-            result.rooms[0].drofus.as_ref().unwrap().fields.get("NetArea"),
+            result.rooms[0].reference.get("drofus").unwrap().fields.get("NetArea"),
             Some(&"current-value".to_string())
         );
 
@@ -1667,18 +1736,18 @@ mod tests {
         let state = AppState::new(Box::new(store), registry, None);
         state.set_snapshot(a).unwrap();
         state.set_snapshot(b).unwrap();
-        state.put_drofus("pA", a_drofus_ts, &drofus_csv("A-pinned")).unwrap();
+        state.put_drofus("pA", "drofus", a_drofus_ts, &drofus_csv("A-pinned")).unwrap();
 
         let result = assemble_rooms(&state, &scope(None, Some("Design Freeze"))).unwrap().expect("store has data");
         let room_a = result.rooms.iter().find(|r| r.room.id == "rA").expect("A present");
         let room_b = result.rooms.iter().find(|r| r.room.id == "rB").expect("B present");
         assert_eq!(
-            room_a.drofus.as_ref().unwrap().fields.get("NetArea"),
+            room_a.reference.get("drofus").unwrap().fields.get("NetArea"),
             Some(&"A-pinned".to_string()),
             "A joins its own pinned dRofus"
         );
         assert_eq!(
-            room_b.drofus.as_ref().unwrap().fields.get("NetArea"),
+            room_b.reference.get("drofus").unwrap().fields.get("NetArea"),
             Some(&"B-current".to_string()),
             "B keeps its current dRofus — A's pin did not leak across"
         );
@@ -1714,8 +1783,9 @@ mod tests {
 
     /// A `RoomResponse` as `assemble_room` would produce it -- for the matcher
     /// tests, which are about matching rather than about assembly.
-    fn response(room: Room, drofus: Option<DrofusRecord>) -> RoomResponse {
-        RoomResponse { room, drofus, classification: vec![], label: vec![], source: "revit".to_string() }
+    fn response(room: Room, drofus: Option<ReferenceRecord>) -> RoomResponse {
+        let reference = drofus.map(|d| BTreeMap::from([("drofus".to_string(), d)])).unwrap_or_default();
+        RoomResponse { room, reference, classification: vec![], label: vec![], source: "revit".to_string() }
     }
 
     /// Every operator, including the two spellings a naive left-to-right scan
@@ -1733,7 +1803,7 @@ mod tests {
             ("Name~ward", Op::Contains, "Name", "ward"),
         ];
         for (expr, op, property, value) in cases {
-            let p = Predicate::parse(expr).unwrap_or_else(|e| panic!("{expr:?} must parse: {e}"));
+            let p = Predicate::parse(expr, &known()).unwrap_or_else(|e| panic!("{expr:?} must parse: {e}"));
             assert_eq!((p.op, p.property.as_str(), p.value.as_str()), (op, property, value), "{expr:?}");
         }
     }
@@ -1743,7 +1813,7 @@ mod tests {
     /// able to express a value containing a comma.
     #[test]
     fn test_predicate_parse_trims_and_unquotes() {
-        let p = Predicate::parse("  Department = \"Cardiology, North\"  ").expect("must parse");
+        let p = Predicate::parse("  Department = \"Cardiology, North\"  ", &known()).expect("must parse");
         assert_eq!(p.property, "Department");
         assert_eq!(p.value, "Cardiology, North");
     }
@@ -1753,7 +1823,7 @@ mod tests {
     #[test]
     fn test_predicate_parse_rejects_malformed() {
         for expr in ["Department", "=Cardiology", "Department="] {
-            assert!(Predicate::parse(expr).is_err(), "{expr:?} must not parse");
+            assert!(Predicate::parse(expr, &known()).is_err(), "{expr:?} must not parse");
         }
     }
 
@@ -1763,11 +1833,11 @@ mod tests {
     /// filter means.
     #[test]
     fn test_predicate_parse_binds_known_namespace_only() {
-        let p = Predicate::parse("drofus.NetArea>20").expect("must parse");
+        let p = Predicate::parse("drofus.NetArea>20", &known()).expect("must parse");
         assert_eq!(p.source.as_deref(), Some("drofus"));
         assert_eq!(p.property, "NetArea");
 
-        let err = Predicate::parse("cobie.Space=1").expect_err("an unknown source must not become a property");
+        let err = Predicate::parse("cobie.Space=1", &known()).expect_err("an unknown source must not become a property");
         assert!(err.contains("drofus"), "the error must name the known sources, got {err:?}");
     }
 
@@ -1777,16 +1847,16 @@ mod tests {
     /// after the dot are rejected with a message naming the known sources.
     #[test]
     fn test_validate_comparison_field() {
-        assert!(validate_comparison_field("Area").is_ok());
-        assert!(validate_comparison_field("drofus.NetArea").is_ok());
+        assert!(validate_comparison_field("Area", &known()).is_ok());
+        assert!(validate_comparison_field("drofus.NetArea", &known()).is_ok());
         // A dot inside a spaced name stays part of the property name — the
         // same subtlety `Predicate::parse` applies, via the same helper.
-        assert!(validate_comparison_field("Room Ref. Number").is_ok());
+        assert!(validate_comparison_field("Room Ref. Number", &known()).is_ok());
 
-        let err = validate_comparison_field("drofuss.NetArea").expect_err("unknown namespace must be rejected");
+        let err = validate_comparison_field("drofuss.NetArea", &known()).expect_err("unknown namespace must be rejected");
         assert!(err.contains("unknown data source") && err.contains("drofus"), "names the known sources: {err:?}");
 
-        let err = validate_comparison_field("drofus.").expect_err("empty property after the dot must be rejected");
+        let err = validate_comparison_field("drofus.", &known()).expect_err("empty property after the dot must be rejected");
         assert!(err.contains("drofus"), "names the namespace: {err:?}");
     }
 
@@ -1799,25 +1869,31 @@ mod tests {
     fn test_resolve_presence_spans_room_and_joined_vocabularies() {
         let joined = response(
             make_room("r1", "Room", &[("Area", "25")]),
-            Some(DrofusRecord { fields: std::collections::BTreeMap::from([("NetArea".to_string(), "20".to_string())]) }),
+            Some(ReferenceRecord { fields: std::collections::BTreeMap::from([("NetArea".to_string(), "20".to_string())]) }),
         );
-        assert_eq!(resolve_presence(&joined, "Area", &[]), (None, PropertyPresence::Present("25".to_string())));
+        assert_eq!(resolve_presence(&joined, "Area", &known(), &[]), (None, PropertyPresence::Present("25".to_string())));
         assert_eq!(
-            resolve_presence(&joined, "drofus.NetArea", &[]),
-            (Some("drofus"), PropertyPresence::Present("20".to_string()))
+            resolve_presence(&joined, "drofus.NetArea", &known(), &[]),
+            (Some("drofus".to_string()), PropertyPresence::Present("20".to_string()))
         );
-        assert_eq!(resolve_presence(&joined, "drofus.Dept", &[]), (Some("drofus"), PropertyPresence::Absent));
+        assert_eq!(
+            resolve_presence(&joined, "drofus.Dept", &known(), &[]),
+            (Some("drofus".to_string()), PropertyPresence::Absent)
+        );
         assert!(source_joined(&joined, "drofus"));
 
         let unjoined = response(make_room("r2", "Room", &[]), None);
-        assert_eq!(resolve_presence(&unjoined, "drofus.NetArea", &[]), (Some("drofus"), PropertyPresence::Absent));
+        assert_eq!(
+            resolve_presence(&unjoined, "drofus.NetArea", &known(), &[]),
+            (Some("drofus".to_string()), PropertyPresence::Absent)
+        );
         assert!(!source_joined(&unjoined, "drofus"));
     }
 
     /// The HTTP form splits on commas that aren't inside quotes.
     #[test]
     fn test_filter_parse_query_splits_on_unquoted_commas_only() {
-        let f = RoomFilter::parse_query("Department=\"Cardiology, North\",Area>20").expect("must parse");
+        let f = RoomFilter::parse_query("Department=\"Cardiology, North\",Area>20", &known()).expect("must parse");
         assert_eq!(f.predicates.len(), 2);
         assert_eq!(f.predicates[0].value, "Cardiology, North");
         assert_eq!(f.predicates[1].op, Op::Gt);
@@ -1879,7 +1955,7 @@ mod tests {
     /// value).
     #[test]
     fn test_filter_matches_joined_drofus_fields() {
-        let record = DrofusRecord { fields: BTreeMap::from([("NetArea".to_string(), "30".to_string())]) };
+        let record = ReferenceRecord { fields: BTreeMap::from([("NetArea".to_string(), "30".to_string())]) };
         let joined = response(make_room("r1", "Room", &[]), Some(record));
         assert!(filter(&["drofus.NetArea>20"]).matches(&joined, &[]));
         assert!(!filter(&["drofus.NetArea>40"]).matches(&joined, &[]));
@@ -2007,7 +2083,7 @@ mod tests {
         let mut drofus = make_drofus_with_record("Number", "1", "NetArea", "20");
         drofus.all_labels = vec!["NetArea".to_string(), "UnmatchedCol".to_string()];
         drofus.reconciliation = BTreeMap::from([("NetArea".to_string(), "Area".to_string())]);
-        let bundle = ProjectSettings { drofus: Some(drofus), ..make_bundle("Number") };
+        let bundle = with_drofus(make_bundle("Number"), Some(drofus));
         let state = AppState::new(Box::new(MemStore::new()), single_project("p1", bundle), None);
         // The room carries no link value, so NOTHING joins: the labels must
         // come from the dataset, not from any room's joined fields.
@@ -2028,13 +2104,13 @@ mod tests {
         let registry = std::collections::HashMap::from([
             (
                 "p1".to_string(),
-                ProjectSettings { drofus: Some(make_drofus_with_record("Number", "1", "ColA", "x")), ..make_bundle("Number") },
+                with_drofus(make_bundle("Number"), Some(make_drofus_with_record("Number", "1", "ColA", "x"))),
             ),
             (
                 "p2".to_string(),
-                ProjectSettings { drofus: Some(make_drofus_with_record("Number", "1", "ColB", "y")), ..make_bundle("Number") },
+                with_drofus(make_bundle("Number"), Some(make_drofus_with_record("Number", "1", "ColB", "y"))),
             ),
-            ("p3".to_string(), ProjectSettings { drofus: None, ..make_bundle("Number") }),
+            ("p3".to_string(), with_drofus(make_bundle("Number"), None)),
         ]);
         let state = AppState::new(Box::new(MemStore::new()), registry, None);
         for p in ["p1", "p2", "p3"] {
@@ -2047,6 +2123,63 @@ mod tests {
         assert_eq!(result.drofus_labels["p1"].all_labels, vec!["ColA".to_string()]);
         assert_eq!(result.drofus_labels["p2"].all_labels, vec!["ColB".to_string()]);
         assert!(!result.drofus_labels.contains_key("p3"), "no dRofus, no entry");
+    }
+
+    /// Two configured reference sources, on different projects, prove the
+    /// registry-wide known-source vocabulary end to end: a `doors`-qualified
+    /// filter joins and matches only the project that actually configures
+    /// "doors", an unrecognised namespace still errors naming both known
+    /// sources, and — the fallback `presence_of`'s map lookup already
+    /// provides for free — a project that doesn't configure "doors" treats it
+    /// as *recognised but absent* rather than an error, so an unscoped query
+    /// never errors just because one project out of several configures a
+    /// source another doesn't.
+    #[test]
+    fn test_multiple_reference_sources_across_projects() {
+        let mut p2_bundle = make_bundle("Number");
+        p2_bundle.reference.insert(
+            "doors".to_string(),
+            crate::state::ProjectReferenceSource {
+                data: Some(make_drofus_with_record("DoorKey", "D1", "Mark", "101A")),
+                fields: vec![],
+            },
+        );
+        let registry = std::collections::HashMap::from([
+            ("p1".to_string(), make_bundle("Number")), // only "drofus" configured
+            ("p2".to_string(), p2_bundle),             // "drofus" AND "doors" configured
+        ]);
+        let state = AppState::new(Box::new(MemStore::new()), registry, None);
+        state
+            .set_snapshot(make_payload("p1", "m1", vec![], vec![make_room("r1", "Room", &[("Number", "1")])]))
+            .unwrap();
+        state
+            .set_snapshot(make_payload(
+                "p2",
+                "m1",
+                vec![],
+                vec![make_room("r2", "Room", &[("Number", "1"), ("DoorKey", "D1")])],
+            ))
+            .unwrap();
+
+        let known: BTreeSet<String> = BTreeSet::from(["drofus".to_string(), "doors".to_string()]);
+
+        // Unscoped, "doors.Mark=101A": matches only p2's room. p1's room has
+        // no "doors" join at all — `Absent`, not an error, even though p1
+        // never configures that source.
+        let f = RoomFilter::parse_query("doors.Mark=101A", &known).expect("recognised namespace parses");
+        let result = assemble_rooms(&state, &RoomScope { filter: Some(&f), ..Default::default() })
+            .unwrap()
+            .expect("store has data");
+        assert_eq!(result.rooms.len(), 1, "only the room actually joined to \"doors\" matches");
+        assert_eq!(result.rooms[0].room.id, "r2");
+
+        // Both sources are independently filterable in the same query.
+        let both = RoomFilter::parse_query("drofus.NetArea=25.5,doors.Mark=101A", &known).expect("must parse");
+        assert!(!both.is_empty());
+
+        // An unrecognised namespace still errors, naming every known source.
+        let err = RoomFilter::parse_query("cobie.Space=1", &known).expect_err("unknown source must error");
+        assert!(err.contains("drofus") && err.contains("doors"), "names both known sources: {err}");
     }
 
     /// Under a milestone with a pinned dRofus snapshot the label set comes
@@ -2063,19 +2196,21 @@ mod tests {
         pinned.snapshot.taken_at = model_ts.to_string();
 
         // Current dRofus's one column is CurrentCol; the pinned CSV's is NetArea.
-        let bundle = ProjectSettings {
-            drofus: Some(make_drofus_with_record("Number", "1", "CurrentCol", "99")),
-            milestones: vec![crate::settings::Milestone {
-                name: "Design Freeze".to_string(),
-                date: "2026-06-30".to_string(),
-                drofus_snapshot: Some(drofus_ts.to_string()),
-                attachments: std::collections::BTreeMap::from([("m1".to_string(), model_ts.to_string())]),
-            }],
-            ..make_bundle("Number")
-        };
+        let bundle = with_drofus(
+            ProjectSettings {
+                milestones: vec![crate::settings::Milestone {
+                    name: "Design Freeze".to_string(),
+                    date: "2026-06-30".to_string(),
+                    reference_snapshots: std::collections::BTreeMap::from([("drofus".to_string(), drofus_ts.to_string())]),
+                    attachments: std::collections::BTreeMap::from([("m1".to_string(), model_ts.to_string())]),
+                }],
+                ..make_bundle("Number")
+            },
+            Some(make_drofus_with_record("Number", "1", "CurrentCol", "99")),
+        );
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(pinned).unwrap();
-        state.put_drofus("p1", drofus_ts, &drofus_csv("20")).unwrap();
+        state.put_drofus("p1", "drofus", drofus_ts, &drofus_csv("20")).unwrap();
 
         let at_milestone = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
             .unwrap()
@@ -2106,7 +2241,7 @@ mod tests {
         let bundle = bundle_for_drofus_pin("new-value", model_ts, Some(drofus_ts));
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(pinned).unwrap();
-        state.put_drofus("p1", drofus_ts, &drofus_csv("old-value")).unwrap();
+        state.put_drofus("p1", "drofus", drofus_ts, &drofus_csv("old-value")).unwrap();
 
         let f = filter(&["drofus.NetArea=old-value"]);
         let at_milestone = assemble_rooms(

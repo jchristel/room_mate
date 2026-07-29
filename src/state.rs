@@ -10,16 +10,16 @@
 //! both state and storage key on; keeping it here avoids a state↔storage import
 //! cycle.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
 
 use crate::contract::RoomPayload;
-use crate::drofus::DrofusData;
+use crate::drofus::ReferenceData;
 use crate::settings::{
-    BuiltinPropertyDef, DrofusFieldConfig, HierarchyExclusion, HierarchyTier, Milestone, TestData,
+    BuiltinPropertyDef, ReferenceFieldConfig, HierarchyExclusion, HierarchyTier, Milestone, TestData,
 };
 use crate::storage::SnapshotStore;
 
@@ -61,15 +61,33 @@ pub fn is_path_safe_component(s: &str) -> bool {
         || s.chars().any(|c| c.is_control()))
 }
 
+/// One reference source's resolved runtime state for a project: its loaded
+/// data (`None` when configured but not yet uploaded — the `Upload`-sourced,
+/// no-CSV-yet state) and its declared per-column type/QA fields, carried
+/// together so a request-time consumer (comparison, validation) never needs a
+/// second lookup back into `Settings` for the field configs that go with the
+/// data it just resolved.
+#[derive(Clone)]
+pub struct ProjectReferenceSource {
+    pub data: Option<ReferenceData>,
+    pub fields: Vec<ReferenceFieldConfig>,
+}
+
 /// One project's classification/join inputs — everything that used to be a
 /// flat field on `AppState`, bundled so it can be registered per project
 /// instead of applied globally. See HANDOVER-per-project-settings.md.
 #[derive(Clone)]
 pub struct ProjectSettings {
-    /// Resolved dRofus data for this project, loaded once at startup. Joined
-    /// onto rooms at response assembly — a stored snapshot is never mutated
-    /// by the join.
-    pub drofus: Option<DrofusData>,
+    /// Resolved reference sources for this project, keyed by source name —
+    /// the same name a `/rooms` filter or `comparison_key` writes before the
+    /// dot (`drofus.NetArea`). Loaded once at startup from
+    /// `Settings.sources.reference`. Joined onto rooms at response assembly —
+    /// a stored snapshot is never mutated by the join. Only "drofus" is
+    /// actually wired up to the join/filter/comparison read path today (see
+    /// `service::rooms::JOINED_SOURCES`); the map shape is what lets a second
+    /// source be *configured* without a settings-type change, ahead of that
+    /// read-path generalization.
+    pub reference: BTreeMap<String, ProjectReferenceSource>,
 
     /// Classification tiers loaded from this project's settings. Resolved
     /// per-room inside `/rooms` assembly; not cached (see classify_room).
@@ -84,12 +102,6 @@ pub struct ProjectSettings {
     /// Ordered property names shown on a room's label in the viewer. Resolved
     /// per-room inside `/rooms` assembly, same as `hierarchy`.
     pub room_label: Vec<String>,
-
-    /// Per-column dRofus type/QA declarations loaded from this project's
-    /// settings. Consulted by `compute_validation` alongside `drofus`, and
-    /// available to any future consumer (e.g. a date-based colouring
-    /// feature) that needs to know a column's declared type.
-    pub drofus_fields: Vec<DrofusFieldConfig>,
 
     /// User-defined milestones (named dates with explicit snapshot pins)
     /// loaded from this project's settings. Read by the milestones listing
@@ -148,6 +160,24 @@ impl SettingsRegistry {
     /// configured, else `None` (unregistered, no fallback).
     pub fn settings_for(&self, project_id: &str) -> Option<&ProjectSettings> {
         self.by_project.get(project_id).or(self.default.as_ref())
+    }
+
+    /// The union of every registered project's reference-source names —
+    /// what a `/rooms` filter or `comparison_key` may write before the dot
+    /// (`service::rooms::split_namespace`'s vocabulary). Computed fresh from
+    /// the live registry rather than cached: a `/rooms` filter can span
+    /// several projects unscoped, so its namespace vocabulary can't be
+    /// resolved from any one project's config alone, and recomputing this
+    /// small union (a handful of projects, a source or two each) per request
+    /// is cheap — cheaper than a second piece of state to keep in sync across
+    /// a settings hot-swap.
+    pub fn known_reference_sources(&self) -> std::collections::BTreeSet<String> {
+        self.by_project
+            .values()
+            .chain(self.default.iter())
+            .flat_map(|p| p.reference.keys())
+            .cloned()
+            .collect()
     }
 }
 
@@ -238,26 +268,27 @@ impl AppState {
         self.store.as_ref()
     }
 
-    /// Store one uploaded dRofus CSV — see `SnapshotStore::put_drofus`.
-    pub fn put_drofus(&self, project_id: &str, taken_at: &str, csv: &[u8]) -> anyhow::Result<bool> {
-        self.store.put_drofus(project_id, taken_at, csv)
+    /// Store one uploaded reference-source CSV — see `SnapshotStore::put_drofus`.
+    pub fn put_drofus(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> anyhow::Result<bool> {
+        self.store.put_drofus(project_id, source, taken_at, csv)
     }
 
-    /// One project's dRofus snapshot ids, ascending — see
+    /// One project's snapshot ids for one reference source, ascending — see
     /// `SnapshotStore::list_drofus_snapshot_ids`.
-    pub fn list_drofus_snapshot_ids(&self, project_id: &str) -> anyhow::Result<Vec<String>> {
-        self.store.list_drofus_snapshot_ids(project_id)
+    pub fn list_drofus_snapshot_ids(&self, project_id: &str, source: &str) -> anyhow::Result<Vec<String>> {
+        self.store.list_drofus_snapshot_ids(project_id, source)
     }
 
-    /// One stored dRofus CSV by snapshot id — see `SnapshotStore::get_drofus`.
-    pub fn get_drofus(&self, project_id: &str, taken_at: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        self.store.get_drofus(project_id, taken_at)
+    /// One stored reference-source CSV by snapshot id — see
+    /// `SnapshotStore::get_drofus`.
+    pub fn get_drofus(&self, project_id: &str, source: &str, taken_at: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        self.store.get_drofus(project_id, source, taken_at)
     }
 
-    /// The newest stored dRofus CSV with its id — see
+    /// The newest stored CSV for one reference source, with its id — see
     /// `SnapshotStore::get_latest_drofus`.
-    pub fn get_latest_drofus(&self, project_id: &str) -> anyhow::Result<Option<(String, Vec<u8>)>> {
-        self.store.get_latest_drofus(project_id)
+    pub fn get_latest_drofus(&self, project_id: &str, source: &str) -> anyhow::Result<Option<(String, Vec<u8>)>> {
+        self.store.get_latest_drofus(project_id, source)
     }
 }
 

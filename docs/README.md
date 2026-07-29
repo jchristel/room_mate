@@ -14,6 +14,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | [Sources](STRATEGY-SOURCES.md) | Data sources strategy |
 | [MCP](STRATEGY-MCP.md) | Model Context Protocol integration strategy |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data & documents — connections, PDFs, hierarchy scopes _(design settled, not built)_ |
+| [Security](STRATEGY-SECURITY.md) | Threat model for the LAN-reachable deployment: trust boundary, invariants, settings backups, rate limiting |
 
 ## Implementation notes
 

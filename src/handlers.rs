@@ -356,26 +356,53 @@ pub async fn get_model_latest_snapshot(
 
 /// Lists every uploaded dRofus snapshot id for one project — see
 /// `service::drofus::list_drofus_snapshots`. Soft-empty for unknown
-/// projects, same as the model-snapshot listing.
+/// projects, same as the model-snapshot listing. Kept as the "drofus" alias
+/// of `get_reference_snapshots` below — the route `static/settings.html`
+/// already calls, unchanged.
 pub async fn get_drofus_snapshots(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
 ) -> Result<Json<DrofusSnapshotList>, (StatusCode, String)> {
-    let result = drofus::list_drofus_snapshots(&state, &project_id).map_err(map_service_error)?;
+    let result = drofus::list_drofus_snapshots(&state, &project_id, "drofus").map_err(map_service_error)?;
     Ok(Json(result))
 }
 
 /// A parsed summary of the latest uploaded dRofus CSV for one project — see
 /// `service::drofus::get_drofus_snapshot`. 404 when there is none: this
 /// names one specific resource, same convention as
-/// `get_model_latest_snapshot`.
+/// `get_model_latest_snapshot`. Kept as the "drofus" alias of
+/// `get_reference_latest` below.
 pub async fn get_drofus_latest(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
 ) -> Result<Json<DrofusSnapshotInfo>, (StatusCode, String)> {
-    let result = drofus::get_drofus_snapshot(&state, &project_id, None).map_err(map_service_error)?;
+    let result = drofus::get_drofus_snapshot(&state, &project_id, "drofus", None).map_err(map_service_error)?;
     match result {
         None => Err((StatusCode::NOT_FOUND, "no dRofus upload stored for that project".to_string())),
+        Some(info) => Ok(Json(info)),
+    }
+}
+
+/// Lists every uploaded snapshot id for one project's named reference source
+/// — the source-generalized form of `get_drofus_snapshots`, for any source
+/// the project configures, not just "drofus".
+pub async fn get_reference_snapshots(
+    State(state): State<Shared>,
+    Path((project_id, source)): Path<(String, String)>,
+) -> Result<Json<DrofusSnapshotList>, (StatusCode, String)> {
+    let result = drofus::list_drofus_snapshots(&state, &project_id, &source).map_err(map_service_error)?;
+    Ok(Json(result))
+}
+
+/// A parsed summary of the latest uploaded CSV for one project's named
+/// reference source — the source-generalized form of `get_drofus_latest`.
+pub async fn get_reference_latest(
+    State(state): State<Shared>,
+    Path((project_id, source)): Path<(String, String)>,
+) -> Result<Json<DrofusSnapshotInfo>, (StatusCode, String)> {
+    let result = drofus::get_drofus_snapshot(&state, &project_id, &source, None).map_err(map_service_error)?;
+    match result {
+        None => Err((StatusCode::NOT_FOUND, format!("no '{source}' upload stored for that project"))),
         Some(info) => Ok(Json(info)),
     }
 }
@@ -438,11 +465,16 @@ pub async fn get_rooms(
     Query(query): Query<RoomsQuery>,
 ) -> Result<Response, (StatusCode, String)> {
     // Parsed here, in the adapter that holds the raw string, then passed down
-    // as a domain type -- `service` never sees the query syntax.
+    // as a domain type -- `service` never sees the query syntax. The known-
+    // source vocabulary comes from the live registry, not a fixed list: a
+    // `/rooms` request can span every stored project unscoped, so no single
+    // project's config can answer "what's before the dot" (see
+    // `SettingsRegistry::known_reference_sources`).
+    let known = state.settings().known_reference_sources();
     let filter = query
         .filter
         .as_deref()
-        .map(rooms::RoomFilter::parse_query)
+        .map(|s| rooms::RoomFilter::parse_query(s, &known))
         .transpose()
         .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
         .filter(|f| !f.is_empty());
@@ -587,8 +619,8 @@ pub async fn compare_project_milestones(
 mod tests {
     use super::*;
     use crate::contract::{Level, Model, Project, Snapshot};
-    use crate::drofus::DrofusData;
-    use crate::state::{AppState, ProjectSettings};
+    use crate::drofus::ReferenceData;
+    use crate::state::{AppState, ProjectReferenceSource, ProjectSettings};
     use crate::storage::MemStore;
     use std::collections::BTreeMap;
 
@@ -596,8 +628,8 @@ mod tests {
         Room { id: id.to_string(), name: name.to_string(), level_id: "1".to_string(), loops: vec![], properties: BTreeMap::new() }
     }
 
-    fn make_drofus() -> DrofusData {
-        DrofusData {
+    fn make_drofus() -> ReferenceData {
+        ReferenceData {
             link_property: "Number".to_string(),
             by_id: BTreeMap::new(),
             reconciliation: BTreeMap::new(),
@@ -607,11 +639,13 @@ mod tests {
 
     fn make_bundle() -> ProjectSettings {
         ProjectSettings {
-            drofus: Some(make_drofus()),
+            reference: BTreeMap::from([(
+                "drofus".to_string(),
+                ProjectReferenceSource { data: Some(make_drofus()), fields: vec![] },
+            )]),
             hierarchy: vec![],
             builtin_properties: vec![],
             room_label: vec!["$name".to_string(), "$id".to_string()],
-            drofus_fields: vec![],
             milestones: vec![],
             comparison_key: None,
             comparison_properties: vec![],
@@ -733,7 +767,7 @@ mod tests {
 
         assert_eq!(query.project.as_deref(), Some("p1"));
         assert_eq!(query.filter.as_deref(), Some("Department=Cardiology,Area>20"));
-        let filter = rooms::RoomFilter::parse_query(query.filter.as_deref().unwrap()).expect("must parse");
+        let filter = rooms::RoomFilter::parse_query(query.filter.as_deref().unwrap(), &Default::default()).expect("must parse");
         assert!(!filter.is_empty());
     }
 
