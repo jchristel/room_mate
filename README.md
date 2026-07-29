@@ -6,6 +6,8 @@ external reference data (dRofus), classified into a project's own hierarchy, and
 served to a viewer that draws plans, aggregates areas and graphs which rooms
 share a wall.
 
+![Screen Shot](images/Room_Mate_Splash.PNG)
+
 **Start with [docs/](docs) — [Architecture & Strategy](docs/STRATEGY.md) is the
 index.** The design rationale lives there, not here; this file is orientation
 only.
