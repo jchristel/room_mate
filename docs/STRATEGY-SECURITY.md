@@ -157,12 +157,56 @@ Sizing X is a tuning question against real push cadence (a legitimate multi-mode
 project push is a burst of writes), not a security constant — set it well above
 the busiest honest client and revisit from the `warn` logs.
 
+## The browser is the local attacker — two controls, both required
+
+Binding `127.0.0.1` does not mean "only things you trust can call this." Your
+browser runs locally, so a page you merely *visit* can address the server. Two
+separate controls answer two separate roads in, and each is blind to the other's:
+
+- **`read_only_cors`** grants a cross-origin caller `GET`/`HEAD` and nothing
+  else. It stopped a real hole: under the previous `CorsLayer::permissive()`, a
+  hostile page could `POST /api/settings/reference-check {"path":
+  "C:/Windows/win.ini"}` and read that file back.
+- **`guard_host`** rejects any request whose `Host` header is not a loopback
+  name. This covers **DNS rebinding**, which CORS structurally cannot: the
+  attacker serves a page from `evil.example` on a one-second DNS TTL, then
+  re-answers that name as `127.0.0.1`. The page's fetches are now *same-origin*
+  — no preflight, no `Origin` header, the CORS layer never consults anything.
+  The `Host` is what the attacker cannot forge, because the browser fills it
+  with the name the page asked for. It is layered outside CORS so it runs first.
+
+A request with no `Host` at all is allowed: HTTP/1.1 requires it and every
+browser sends it, so absence means a non-browser client (`curl`, the pyRevit
+pusher, the MCP binary's HTTP client), which is not the threat. Nothing a
+rebinding attacker controls can omit it.
+
+### Why `reference-check` does not validate its path
+
+The obvious-looking hardening — confine the dry-run path to the project-settings
+directory — is **deliberately not done**, because it would be security theatre
+bought with a working feature:
+
+- A settings file may legitimately name an **absolute** path
+  (`settings/load.rs`'s `resolve_relative_to` returns early for absolute paths,
+  by design — a CSV on a network share), and the shipped sample names
+  `../drofus.csv`, which already escapes the directory. Confinement breaks both.
+- It closes nothing. Anyone who can reach `POST /api/settings/projects` can
+  write a settings file pointing at any path on disk and read its contents back
+  through `/rooms`. Constraining the *preview* endpoint while the *save*
+  endpoint accepts the same paths just moves the same read one call to the left.
+
+So the file-read surface is inherent to what the settings API is for, and it is
+bounded by **who can reach the API**, not by what the path says: the loopback
+bind, the CORS policy, and the `Host` guard. Confining the path becomes worth
+doing only alongside authentication — at which point the question is which
+*principal* may name a path, which is a different control.
+
 ## Belt-and-braces already in place
 
 Not new, but part of the same posture, noted so they're not re-litigated:
 
 - **Body limits on every ingest route** (`ROOMS_BODY_LIMIT_BYTES`,
-  `DROFUS_BODY_LIMIT_BYTES` in `main.rs`; the streaming route bounds memory by
+  `REFERENCE_BODY_LIMIT_BYTES` in `main.rs`; the streaming route bounds memory by
   reading line-by-line instead). One giant body can't OOM the process — a flood
   variant the request-count limiter alone wouldn't catch.
 - **Snapshot ids are structurally path-safe** (RFC3339 UTC, can't contain `/`,

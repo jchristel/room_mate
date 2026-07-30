@@ -1080,11 +1080,11 @@ async function uploadReferenceFile(src, file) {
 }
 
 // ---------- reference-source check (file type) ----------
-// /api/settings/drofus-check only ever dry-ran a bare path — already
+// /api/settings/reference-check only ever dry-ran a bare path — already
 // source-agnostic, so every file-type card reuses it unchanged.
 async function checkReferenceSource(src, quiet) {
   const path = (src.path || "").trim();
-  const result = await apiSend("POST", "/api/settings/drofus-check", { path });
+  const result = await apiSend("POST", "/api/settings/reference-check", { path });
   if (result.ok) {
     const data = JSON.parse(result.text);
     labelsBySource[src.name] = data.labels;

@@ -5,7 +5,7 @@
 //! `compare_milestones`, `list_reference_snapshots`, `get_reference_snapshot` --
 //! plus two settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`) and the one forwarded
-//! mutation (`upload_drofus`, below). Fifteen in total; keep this list and
+//! mutation (`upload_reference`, below). Fifteen in total; keep this list and
 //! STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
 //! `roommate::service` -- parse params, call one service function, serialize
 //! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
@@ -15,7 +15,7 @@
 //! LLM to push a full room snapshot isn't a realistic flow, and the HTTP
 //! server remains the ingest path.
 //!
-//! The one mutating tool, `upload_drofus`, doesn't break that rule: it never
+//! The one mutating tool, `upload_reference`, doesn't break that rule: it never
 //! writes this process's state or the store — it reads a CSV file and
 //! *forwards it over HTTP* to the running server (`--server-url`, default the
 //! shared default address), which stays the single writer and hot-swaps
@@ -396,7 +396,7 @@ impl RoommateMcp {
                           The project's settings must declare [sources.reference.drofus] type = \"upload\". \
                           Note the staleness asymmetry: after an upload, this process's own get_rooms/get_validation still join the \
                           dRofus data loaded at ITS startup; list_reference_snapshots/get_reference_snapshot read the store fresh and see the new upload immediately.")]
-    async fn upload_drofus(&self, Parameters(p): Parameters<UploadDrofusParams>) -> Result<CallToolResult, McpError> {
+    async fn upload_reference(&self, Parameters(p): Parameters<UploadDrofusParams>) -> Result<CallToolResult, McpError> {
         let bytes = std::fs::read(&p.path)
             .map_err(|e| McpError::invalid_params(format!("could not read CSV file {:?}: {e}", p.path), None))?;
 
@@ -438,7 +438,7 @@ impl RoommateMcp {
     // in-memory registry -- the file and the serving process would silently
     // disagree until a restart. Mutation stays behind the HTTP settings UI
     // (see `settings_api`'s module doc), matching the "Read-only access
-    // against local state" contract `get_info` declares. `upload_drofus`
+    // against local state" contract `get_info` declares. `upload_reference`
     // above is not an exception: it forwards to that HTTP server rather than
     // writing anything from this process.
 
@@ -503,7 +503,7 @@ impl ServerHandler for RoommateMcp {
             .with_server_info(Implementation::new("roommate-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Read-only access to roommate's stored room and dRofus data -- this process never \
-                 writes its own state or the store. The one mutating tool, upload_drofus, forwards \
+                 writes its own state or the store. The one mutating tool, upload_reference, forwards \
                  the CSV over HTTP to the running roommate server, which stays the single writer \
                  and hot-swaps its own registry. Requires the same [storage] root as the HTTP \
                  server (via --server-settings) to see real data -- this process does not share \
@@ -526,7 +526,7 @@ struct Args {
     project_settings: PathBuf,
 
     /// Base URL of the running roommate HTTP server, used only by the
-    /// `upload_drofus` tool (which forwards uploads to it). Defaults to the
+    /// `upload_reference` tool (which forwards uploads to it). Defaults to the
     /// address the server binary binds by default.
     ///
     /// It tracks the server's *default* port, not its actual one: the server

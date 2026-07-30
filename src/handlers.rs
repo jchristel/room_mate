@@ -563,7 +563,7 @@ pub async fn get_project_adjacency(
 /// The baseline milestone plus the milestones to compare against it. A POST
 /// body rather than query params because the compared set is a list (repeated
 /// query keys don't deserialize cleanly, and milestone names can contain any
-/// character) — the same POST-that-reads shape `drofus-check` uses.
+/// character) — the same POST-that-reads shape `reference-check` uses.
 #[derive(Deserialize)]
 pub struct ComparisonRequest {
     pub baseline: String,
