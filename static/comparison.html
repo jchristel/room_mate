@@ -272,11 +272,17 @@ async function loadPropertyKeys(projectId) {
   try {
     const data = await apiGet(`/rooms?project=${encodeURIComponent(projectId)}`);
     const set = new Set();
-    const otherSourceLabels = {}; // source name -> Set(labels), for sources without a labels endpoint
+    // The response's own per-source vocabulary is authoritative where it
+    // exists — it includes columns that matched no room in scope, which the
+    // rooms alone can never reveal. Sources it does not cover (another
+    // project's, on an unscoped merge) fall back to the union of the labels
+    // actually seen on the rooms.
+    const labelled = (data.reference_labels || {})[projectId] || {};
+    const otherSourceLabels = {}; // source name -> Set(labels), for sources with no vocabulary here
     for (const room of (data.rooms || [])) {
       for (const k of Object.keys(room.properties || {})) set.add(k);
       for (const key of Object.keys(room)) {
-        if (ROOM_FIXED_KEYS.has(key) || key === "drofus") continue;
+        if (ROOM_FIXED_KEYS.has(key) || key in labelled) continue;
         const v = room[key];
         if (v && typeof v === "object" && !Array.isArray(v) && v.fields && typeof v.fields === "object") {
           (otherSourceLabels[key] ??= new Set());
@@ -284,7 +290,8 @@ async function loadPropertyKeys(projectId) {
         }
       }
     }
-    for (const label of (((data.drofus_labels || {})[projectId] || {}).all_labels || [])) set.add(`drofus.${label}`);
+    for (const [source, info] of Object.entries(labelled))
+      for (const label of (info.all_labels || [])) set.add(`${source}.${label}`);
     for (const [source, labels] of Object.entries(otherSourceLabels)) for (const label of labels) set.add(`${source}.${label}`);
     keys = [...set].sort();
   } catch (err) { keys = []; }

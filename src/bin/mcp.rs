@@ -272,7 +272,7 @@ impl RoommateMcp {
 
     /// Lists one project's milestones (named dated snapshot pins) -- see
     /// `service::milestones::list_milestones`.
-    #[tool(description = "List one project's milestones: named dates with data snapshots pinned to them, newest first — each carries its model-pin count and its pinned dRofus snapshot id (drofus_snapshot) when one is set. Pass a milestone's name to get_rooms to view the project as captured at that milestone, rooms AND dRofus.")]
+    #[tool(description = "List one project's milestones: named dates with data snapshots pinned to them, newest first — each carries its model-pin count and `reference_snapshots`, a map of reference source name to the snapshot id that milestone pins for it (absent sources are joined at their current data). Pass a milestone's name to get_rooms to view the project as captured at that milestone, rooms AND every reference source.")]
     fn list_milestones(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = milestones::list_milestones(&self.state, &p.project_id).map_err(to_mcp_error)?;
         json_result(&result)

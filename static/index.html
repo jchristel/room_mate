@@ -2697,16 +2697,19 @@ const ROOM_FIXED_KEYS = new Set(["id", "name", "level_id", "loops", "properties"
 // current payload: any room key shaped like `{fields: {...}}` (a
 // `ReferenceRecord`) that isn't one of Room's own fields. No extra fetch, and
 // this naturally covers the unscoped multi-project view (whatever sources
-// actually show up on the merged rooms). "drofus" is also included whenever
-// `drofus_labels` has an entry, even if every room in scope is unmatched, so
-// its (empty) column/toggle still appears — the one source the backend still
-// exposes a full CSV vocabulary for (see STRATEGY-SOURCES.md). A different
-// source that matched zero rooms in the current scope has no such fallback
-// and won't be discovered — a known gap, not a bug, until a per-source labels
-// endpoint exists.
+// actually show up on the merged rooms).
+//
+// Plus every source named in `reference_labels`, so a source whose rows all
+// went unmatched in this scope still gets its (empty) column group and
+// toggle. That used to be a "drofus"-only fallback, and the gap it left —
+// any OTHER source matching zero rooms simply vanished from the UI — closed
+// when the backend started reporting a vocabulary per source rather than for
+// dRofus alone (see STRATEGY-SOURCES.md).
 function detectReferenceSources(payload) {
   const names = new Set();
-  if (Object.keys(payload?.drofus_labels || {}).length) names.add("drofus");
+  for (const perSource of Object.values(payload?.reference_labels || {})) {
+    for (const name of Object.keys(perSource)) names.add(name);
+  }
   for (const room of (payload?.rooms || [])) {
     for (const key of Object.keys(room)) {
       if (ROOM_FIXED_KEYS.has(key)) continue;
@@ -2770,18 +2773,20 @@ function buildGridColumns() {
     cols.push({ key: `p:${k}`, label: k, source: "model", get: r => (r.properties?.[k]?.value) ?? "" });
   }
 
-  // Reference-source columns, one group per discovered source. "drofus"
-  // comes from the response's own label set, NOT a union of the rooms'
+  // Reference-source columns, one group per discovered source. Columns come
+  // from the response's own per-source label set, NOT a union of the rooms'
   // joined fields: a column that matched no room in scope would otherwise be
   // invisible — precisely the case the coverage report goes out of its way
   // to show as "not checked" rather than omit. `reconciliation` marks which
-  // columns have a Revit counterpart; the rest render as unmapped. Any other
-  // source has no labels endpoint to draw on, so it falls back to the union
-  // of its joined fields across rooms in scope — no unmatched-only columns,
-  // no `unmapped` styling (no reconciliation data for it either), an honest
-  // lesser capability until the backend grows a per-source labels endpoint.
+  // columns have a Revit counterpart; the rest render as unmapped.
+  //
+  // The union fallback below now only fires for a source that appears on the
+  // rooms but has no vocabulary for THIS project — the unscoped multi-project
+  // merge, where another project's source rides along on its own rooms. It
+  // yields no unmatched-only columns and no `unmapped` styling, an honest
+  // lesser capability for a case where the labels genuinely belong elsewhere.
   for (const name of knownReferenceSources) {
-    const labels = name === "drofus" ? (currentPayload.drofus_labels || {})[projectId] : null;
+    const labels = ((currentPayload.reference_labels || {})[projectId] || {})[name];
     if (labels) {
       const mapped = labels.reconciliation || {};
       for (const label of labels.all_labels || []) {
