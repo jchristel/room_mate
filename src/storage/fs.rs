@@ -21,6 +21,76 @@ pub struct FsStore {
     root: PathBuf,
 }
 
+/// Write `contents` to `path` so a reader never observes a partial file.
+///
+/// **Why this is not `fs::write`.** Every artifact this store writes is
+/// re-read later and parsed strictly: a snapshot as JSON, a CSV through the
+/// reference loader, and `project.toml` as TOML at *every* read and every
+/// boot. `fs::write` truncates first and then fills, so a process killed
+/// mid-write — or a full disk — leaves a syntactically broken file where a
+/// valid one used to be.
+///
+/// For `project.toml` that is the worst case in the store, and the reason this
+/// exists. `read_manifest` returns `Err("malformed manifest")` rather than a
+/// default, and that error propagates through `list_models` -> `all_latest`
+/// into every `/rooms` request and the next startup of both binaries. A
+/// project would be bricked while **every snapshot file beside it stayed
+/// perfectly intact** — and `list_snapshot_ids` already knows how to rebuild
+/// the index from the directory (filesystem wins on disagreement). The
+/// recovery path was there; only the write was not safe enough to reach it.
+///
+/// Write to a sibling temp file, flush and `sync_all` so the bytes are on the
+/// device before anything points at them, then `rename` over the target —
+/// atomic on POSIX, and on Windows for a same-directory replace. A crash
+/// leaves either the old complete file or the new complete file. The temp file
+/// is a sibling, not in the system temp dir, so the rename never crosses a
+/// filesystem boundary (which would silently degrade to copy-then-delete).
+///
+/// The temp name carries a process id and a counter rather than being a plain
+/// `.tmp` sibling. Two pushes for *different models of one project* both
+/// rewrite that project's `project.toml`, and axum serves them concurrently —
+/// with a shared temp name they would interleave inside the temp file and one
+/// would rename a mixture of both into place. Unique names make the two writes
+/// independent; the rename is still last-one-wins, which is the intended
+/// upsert semantics, but neither file is ever malformed.
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp");
+    let tmp = path.with_file_name(format!(
+        ".{stem}.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    // Scoped so the handle is closed before the rename — Windows refuses to
+    // rename a file that still has an open handle.
+    let write = (|| -> Result<()> {
+        let mut file = fs::File::create(&tmp)
+            .with_context(|| format!("could not create temp file: {}", tmp.display()))?;
+        file.write_all(contents)
+            .with_context(|| format!("could not write temp file: {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("could not flush temp file to disk: {}", tmp.display()))
+    })();
+
+    // Never leave a partial temp behind on failure: the names are unique, so
+    // an abandoned one would accumulate rather than be reused.
+    if let Err(e) = write {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(anyhow::Error::from(e)
+            .context(format!("could not replace {} with {}", path.display(), tmp.display())));
+    }
+    Ok(())
+}
+
 impl FsStore {
     /// Bind to a root dir, creating it if absent. Fail fast on an unwritable
     /// root — same startup-loud contract as the rest of config.
@@ -68,7 +138,9 @@ impl FsStore {
     fn write_manifest(&self, project_id: &str, manifest: &ProjectManifest) -> Result<()> {
         let path = self.manifest_path(project_id);
         let toml = toml::to_string_pretty(manifest).context("could not serialise manifest")?;
-        fs::write(&path, toml)
+        // Atomic: a torn manifest fails every subsequent read AND the next
+        // boot, even though the snapshots beside it are fine. See `write_atomic`.
+        write_atomic(&path, toml.as_bytes())
             .with_context(|| format!("could not write manifest: {}", path.display()))
     }
 
@@ -176,7 +248,7 @@ impl SnapshotStore for FsStore {
             return Ok(());
         }
         let json = serde_json::to_string_pretty(payload).context("could not serialise snapshot")?;
-        fs::write(&file, json)
+        write_atomic(&file, json.as_bytes())
             .with_context(|| format!("could not write snapshot: {}", file.display()))?;
 
         tracing::info!(
@@ -348,7 +420,7 @@ impl SnapshotStore for FsStore {
             tracing::warn!("reference-source snapshot already exists, skipping: {}", file.display());
             return Ok(false);
         }
-        fs::write(&file, csv)
+        write_atomic(&file, csv)
             .with_context(|| format!("could not write reference-source snapshot: {}", file.display()))?;
 
         tracing::info!("stored reference-source snapshot {}/{} @ {}", project_id, source, taken_at);
@@ -708,6 +780,78 @@ mod tests {
         let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
         let latest = store.get_latest(&key).unwrap().unwrap();
         assert_eq!(latest.project.name, "P", "the original snapshot survives a duplicate-timestamp re-push");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `write_atomic` replaces content in full and leaves nothing behind. The
+    /// no-leftovers half matters: the temp names are unique per call, so a
+    /// stray one would accumulate forever rather than being reused.
+    #[test]
+    fn test_write_atomic_replaces_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("roommate-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("project.toml");
+
+        write_atomic(&target, b"first").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "first");
+
+        // A shorter payload over a longer one: a non-atomic writer that only
+        // truncated would be the obvious way to leave trailing garbage.
+        write_atomic(&target, b"second, which is longer").unwrap();
+        write_atomic(&target, b"third").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "third");
+
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
+            .filter(|n| n != "project.toml")
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A failed write must not clobber the file already in place — the whole
+    /// point. An unwritable temp (its parent directory does not exist) errors
+    /// out with the previous content untouched.
+    #[test]
+    fn test_failed_write_leaves_the_previous_file_intact() {
+        let dir = std::env::temp_dir().join(format!("roommate-atomic-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("project.toml");
+        write_atomic(&target, b"good").unwrap();
+
+        let unwritable = dir.join("does").join("not").join("exist").join("project.toml");
+        assert!(write_atomic(&unwritable, b"doomed").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "good", "untouched by an unrelated failure");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The manifest goes through `write_atomic`, and a rewritten one still
+    /// parses — the round trip that a torn write would break, and that
+    /// `read_manifest` turns into a hard error on every later read.
+    #[test]
+    fn test_manifest_rewrite_round_trips() {
+        let dir = std::env::temp_dir().join(format!("roommate-atomic-manifest-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FsStore::new(dir.clone()).unwrap();
+
+        store.put(&payload("p1", "m1", "2026-01-01T10:00:00Z")).unwrap();
+        store.put(&payload("p1", "m2", "2026-01-02T10:00:00Z")).unwrap();
+        store.put(&payload("p1", "m1", "2026-01-03T10:00:00Z")).unwrap();
+
+        let manifest = store.read_manifest("p1").unwrap();
+        assert_eq!(manifest.models.len(), 2);
+        assert_eq!(manifest.models["m1"].snapshots.len(), 2, "both m1 snapshots indexed");
+
+        let files: Vec<_> = std::fs::read_dir(dir.join("p1"))
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(files.is_empty(), "temp files left in the project dir: {files:?}");
 
         std::fs::remove_dir_all(&dir).ok();
     }
