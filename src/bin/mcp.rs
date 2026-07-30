@@ -2,7 +2,7 @@
 //! per existing HTTP read route -- `list_projects`, `list_buildings`,
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
 //! `list_snapshots`, `get_latest_snapshot`, `list_milestones`,
-//! `compare_milestones`, `list_drofus_snapshots`, `get_drofus_snapshot` --
+//! `compare_milestones`, `list_reference_snapshots`, `get_reference_snapshot` --
 //! plus two settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`) and the one forwarded
 //! mutation (`upload_drofus`, below). Fifteen in total; keep this list and
@@ -43,7 +43,7 @@ use rmcp::{
 
 use roommate::bootstrap::build_state;
 use roommate::service::{
-    adjacency, areas, comparison, drofus, milestones, projects, rooms, snapshots, validation, ServiceError,
+    adjacency, areas, comparison, milestones, projects, reference, rooms, snapshots, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -81,7 +81,7 @@ struct GetRoomsParams {
     /// is a canonical room property (as listed by get_project_settings'
     /// builtin_properties), plus $name / $id for the room's own fields; a
     /// "drofus."-prefixed name reads the joined dRofus record's field label
-    /// (as listed by get_drofus_snapshot). A room missing the property -- or
+    /// (as listed by get_reference_snapshot). A room missing the property -- or
     /// with no joined dRofus record at all -- never matches, negative
     /// operators included. Quote a value containing spaces if in doubt.
     /// Omit for no filter.
@@ -185,7 +185,7 @@ struct CompareMilestonesParams {
 struct GetDrofusSnapshotParams {
     /// The project id, as returned by `list_projects`.
     project_id: String,
-    /// A dRofus snapshot id from `list_drofus_snapshots`. Omit for the latest.
+    /// A dRofus snapshot id from `list_reference_snapshots`. Omit for the latest.
     #[serde(default)]
     taken_at: Option<String>,
 }
@@ -361,23 +361,23 @@ impl RoommateMcp {
     }
 
     /// Lists every uploaded dRofus snapshot id for one project -- see
-    /// `service::drofus::list_drofus_snapshots`.
+    /// `service::reference::list_reference_snapshots`.
     #[tool(description = "List every uploaded dRofus CSV snapshot id (RFC3339 UTC taken_at) for one project, ascending, with the latest. \
                           Reads the shared store fresh, so an upload forwarded moments ago shows here immediately.")]
-    fn list_drofus_snapshots(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
-        let result = drofus::list_drofus_snapshots(&self.state, &p.project_id, "drofus").map_err(to_mcp_error)?;
+    fn list_reference_snapshots(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let result = reference::list_reference_snapshots(&self.state, &p.project_id, "drofus").map_err(to_mcp_error)?;
         json_result(&result)
     }
 
     /// A parsed summary of one uploaded dRofus CSV -- see
-    /// `service::drofus::get_drofus_snapshot`. The service's `None` (the
+    /// `service::reference::get_reference_snapshot`. The service's `None` (the
     /// HTTP 404 case) becomes a short plain-text answer, same convention as
     /// `get_latest_snapshot`.
     #[tool(description = "Get a parsed summary (record count, link property, field labels) of one uploaded dRofus CSV -- the given taken_at, or the latest when omitted. \
                           Reads the shared store fresh.")]
-    fn get_drofus_snapshot(&self, Parameters(p): Parameters<GetDrofusSnapshotParams>) -> Result<CallToolResult, McpError> {
+    fn get_reference_snapshot(&self, Parameters(p): Parameters<GetDrofusSnapshotParams>) -> Result<CallToolResult, McpError> {
         let result =
-            drofus::get_drofus_snapshot(&self.state, &p.project_id, "drofus", p.taken_at.as_deref()).map_err(to_mcp_error)?;
+            reference::get_reference_snapshot(&self.state, &p.project_id, "drofus", p.taken_at.as_deref()).map_err(to_mcp_error)?;
         match result {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no such dRofus upload stored for that project",
@@ -395,7 +395,7 @@ impl RoommateMcp {
                           drofus_fields before storing it as a dated snapshot and applying it live -- so the HTTP server must be running. \
                           The project's settings must declare [sources.reference.drofus] type = \"upload\". \
                           Note the staleness asymmetry: after an upload, this process's own get_rooms/get_validation still join the \
-                          dRofus data loaded at ITS startup; list_drofus_snapshots/get_drofus_snapshot read the store fresh and see the new upload immediately.")]
+                          dRofus data loaded at ITS startup; list_reference_snapshots/get_reference_snapshot read the store fresh and see the new upload immediately.")]
     async fn upload_drofus(&self, Parameters(p): Parameters<UploadDrofusParams>) -> Result<CallToolResult, McpError> {
         let bytes = std::fs::read(&p.path)
             .map_err(|e| McpError::invalid_params(format!("could not read CSV file {:?}: {e}", p.path), None))?;

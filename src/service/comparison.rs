@@ -492,15 +492,15 @@ mod tests {
     /// fields)` entry. Attached to a bundle by the joined-source tests —
     /// `make_bundle` itself stays dRofus-free, because comparison standing
     /// alone without dRofus is a design property under regression guard.
-    fn drofus_data(link: &str, records: &[(&str, &[(&str, &str)])]) -> crate::drofus::ReferenceData {
-        crate::drofus::ReferenceData {
+    fn drofus_data(link: &str, records: &[(&str, &[(&str, &str)])]) -> crate::reference::ReferenceData {
+        crate::reference::ReferenceData {
             link_property: link.to_string(),
             by_id: records
                 .iter()
                 .map(|(id, fields)| {
                     (
                         id.to_string(),
-                        crate::drofus::ReferenceRecord {
+                        crate::reference::ReferenceRecord {
                             fields: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                         },
                     )
@@ -535,7 +535,7 @@ mod tests {
     /// `make_bundle`, carrying `data` and, if any, `fields` — the test-side
     /// equivalent of what `bootstrap::load_project_bundle` wires up for the
     /// one source name the read path currently recognises.
-    fn set_drofus(bundle: &mut ProjectSettings, data: crate::drofus::ReferenceData, fields: Vec<ReferenceFieldConfig>) {
+    fn set_drofus(bundle: &mut ProjectSettings, data: crate::reference::ReferenceData, fields: Vec<ReferenceFieldConfig>) {
         bundle
             .reference
             .insert("drofus".to_string(), crate::state::ProjectReferenceSource { data: Some(data), fields });
@@ -720,8 +720,8 @@ mod tests {
         state
             .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])]))
             .unwrap();
-        state.put_drofus("p1", "drofus", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n").unwrap();
-        state.put_drofus("p1", "drofus", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n").unwrap();
+        state.put_reference("p1", "drofus", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n").unwrap();
+        state.put_reference("p1", "drofus", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n").unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
 
@@ -962,10 +962,10 @@ mod tests {
         state.set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])])).unwrap();
         // Same instant, two offsets: +10:00 local vs the same moment in UTC.
         state
-            .put_drofus("p1", "drofus", d_base, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n")
+            .put_reference("p1", "drofus", d_base, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n")
             .unwrap();
         state
-            .put_drofus("p1", "drofus", d_later, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n")
+            .put_reference("p1", "drofus", d_later, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n")
             .unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();

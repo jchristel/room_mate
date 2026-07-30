@@ -55,7 +55,7 @@ use serde::Serialize;
 
 use crate::classify::TierValue;
 use crate::contract::{Level, Point2D, Room, RoomBoundary, SUPPORTED_SCHEMA};
-use crate::drofus::ReferenceRecord;
+use crate::reference::ReferenceRecord;
 use crate::settings::AreaPolicy;
 use crate::state::AppState;
 

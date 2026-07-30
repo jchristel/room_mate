@@ -10,7 +10,7 @@
 pub mod adjacency;
 pub mod areas;
 pub mod comparison;
-pub mod drofus;
+pub mod reference;
 pub mod milestones;
 pub mod projects;
 pub mod rooms;

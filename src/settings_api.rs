@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::{load_project_bundle, load_project_settings_dir};
 use crate::contract::{ensure_taken_at, validate_snapshot_id, Snapshot};
-use crate::drofus::{load_reference_from_bytes, load_reference_from_path};
+use crate::reference::{load_reference_from_bytes, load_reference_from_path};
 use crate::settings::{validate_reference_fields, ReferenceOrigin, Settings};
 use crate::state::{is_path_safe_component, AppState, SettingsRegistry, Shared};
 
@@ -380,7 +380,7 @@ pub fn upload_drofus(
     let fields = reference_source.map(|s| s.fields.clone()).unwrap_or_default();
     validate_reference_fields(&fields, &data.all_labels).map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
 
-    let stored = state.put_drofus(project_id, source, &snapshot.taken_at, csv).map_err(SettingsError::Internal)?;
+    let stored = state.put_reference(project_id, source, &snapshot.taken_at, csv).map_err(SettingsError::Internal)?;
 
     // Rebuild + swap so the upload is live without a restart. The bundle
     // re-hydrates from the store's *latest* — a backfilled older `taken_at`
@@ -898,8 +898,8 @@ ids = ["12345", "67890"]
         }
 
         // None of the failures stored anything.
-        assert!(state.list_drofus_snapshot_ids("p1", "drofus").unwrap().is_empty());
-        assert!(state.list_drofus_snapshot_ids("p2", "drofus").unwrap().is_empty());
+        assert!(state.list_reference_snapshot_ids("p1", "drofus").unwrap().is_empty());
+        assert!(state.list_reference_snapshot_ids("p2", "drofus").unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -923,7 +923,7 @@ ids = ["12345", "67890"]
         upload_drofus(&state, "p1", "drofus", Some("2026-01-01T10:00:00Z"), UPLOAD_CSV).unwrap();
 
         // Both stored, newer still the live one.
-        assert_eq!(state.list_drofus_snapshot_ids("p1", "drofus").unwrap().len(), 2);
+        assert_eq!(state.list_reference_snapshot_ids("p1", "drofus").unwrap().len(), 2);
         let registry = state.settings();
         let drofus = registry.settings_for("p1").unwrap().reference["drofus"].data.as_ref().unwrap();
         assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"99.9".to_string()));

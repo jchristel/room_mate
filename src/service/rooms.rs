@@ -14,7 +14,7 @@ use crate::contract::{
     elevation_match, lookup_property, numeric_match, property_presence, Level, PropertyPresence, Room, RoomBoundary,
     RoomPayload, SUPPORTED_SCHEMA,
 };
-use crate::drofus::{ReferenceData, ReferenceRecord};
+use crate::reference::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, HierarchyTier};
 use crate::state::{AppState, ModelKey, ProjectSettings, SettingsRegistry};
 
@@ -824,8 +824,8 @@ fn resolve_pinned_reference(
     source: &str,
     pin: &str,
 ) -> Result<Option<ReferenceData>, ServiceError> {
-    match state.get_drofus(project_id, source, pin).map_err(ServiceError::Internal)? {
-        Some(bytes) => match crate::drofus::load_reference_from_bytes(&bytes) {
+    match state.get_reference(project_id, source, pin).map_err(ServiceError::Internal)? {
+        Some(bytes) => match crate::reference::load_reference_from_bytes(&bytes) {
             Ok(data) => Ok(Some(data)),
             Err(e) => {
                 tracing::warn!(
@@ -1641,7 +1641,7 @@ mod tests {
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(old).unwrap();
         state.set_snapshot(new).unwrap();
-        state.put_drofus("p1", "drofus", old_drofus_ts, &drofus_csv("old-value")).unwrap();
+        state.put_reference("p1", "drofus", old_drofus_ts, &drofus_csv("old-value")).unwrap();
 
         let latest = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
         assert_eq!(
@@ -1736,7 +1736,7 @@ mod tests {
         let state = AppState::new(Box::new(store), registry, None);
         state.set_snapshot(a).unwrap();
         state.set_snapshot(b).unwrap();
-        state.put_drofus("pA", "drofus", a_drofus_ts, &drofus_csv("A-pinned")).unwrap();
+        state.put_reference("pA", "drofus", a_drofus_ts, &drofus_csv("A-pinned")).unwrap();
 
         let result = assemble_rooms(&state, &scope(None, Some("Design Freeze"))).unwrap().expect("store has data");
         let room_a = result.rooms.iter().find(|r| r.room.id == "rA").expect("A present");
@@ -2210,7 +2210,7 @@ mod tests {
         );
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(pinned).unwrap();
-        state.put_drofus("p1", "drofus", drofus_ts, &drofus_csv("20")).unwrap();
+        state.put_reference("p1", "drofus", drofus_ts, &drofus_csv("20")).unwrap();
 
         let at_milestone = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
             .unwrap()
@@ -2241,7 +2241,7 @@ mod tests {
         let bundle = bundle_for_drofus_pin("new-value", model_ts, Some(drofus_ts));
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(pinned).unwrap();
-        state.put_drofus("p1", "drofus", drofus_ts, &drofus_csv("old-value")).unwrap();
+        state.put_reference("p1", "drofus", drofus_ts, &drofus_csv("old-value")).unwrap();
 
         let f = filter(&["drofus.NetArea=old-value"]);
         let at_milestone = assemble_rooms(

@@ -25,12 +25,12 @@ use crate::contract::{ModelToShared, Room, RoomBoundary, RoomPayload, StreamEnve
 use crate::service::adjacency;
 use crate::service::areas;
 use crate::service::comparison::{self, ComparisonResponse};
-use crate::service::drofus::{DrofusSnapshotInfo, DrofusSnapshotList};
+use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::snapshots::{LatestSnapshot, ProjectSnapshotsResponse};
 use crate::service::validation::ValidationResponse;
-use crate::service::{drofus, milestones, projects, rooms, snapshots, validation, ServiceError};
+use crate::service::{milestones, projects, reference, rooms, snapshots, validation, ServiceError};
 use crate::state::Shared;
 
 /// Reject a project/model id that can't safely become a filesystem path
@@ -359,8 +359,8 @@ pub async fn get_model_latest_snapshot(
 pub async fn get_reference_snapshots(
     State(state): State<Shared>,
     Path((project_id, source)): Path<(String, String)>,
-) -> Result<Json<DrofusSnapshotList>, (StatusCode, String)> {
-    let result = drofus::list_drofus_snapshots(&state, &project_id, &source).map_err(map_service_error)?;
+) -> Result<Json<ReferenceSnapshotList>, (StatusCode, String)> {
+    let result = reference::list_reference_snapshots(&state, &project_id, &source).map_err(map_service_error)?;
     Ok(Json(result))
 }
 
@@ -370,8 +370,8 @@ pub async fn get_reference_snapshots(
 pub async fn get_reference_latest(
     State(state): State<Shared>,
     Path((project_id, source)): Path<(String, String)>,
-) -> Result<Json<DrofusSnapshotInfo>, (StatusCode, String)> {
-    let result = drofus::get_drofus_snapshot(&state, &project_id, &source, None).map_err(map_service_error)?;
+) -> Result<Json<ReferenceSnapshotInfo>, (StatusCode, String)> {
+    let result = reference::get_reference_snapshot(&state, &project_id, &source, None).map_err(map_service_error)?;
     match result {
         None => Err((StatusCode::NOT_FOUND, format!("no '{source}' upload stored for that project"))),
         Some(info) => Ok(Json(info)),
@@ -590,7 +590,7 @@ pub async fn compare_project_milestones(
 mod tests {
     use super::*;
     use crate::contract::{Level, Model, Project, Snapshot};
-    use crate::drofus::ReferenceData;
+    use crate::reference::ReferenceData;
     use crate::state::{AppState, ProjectReferenceSource, ProjectSettings};
     use crate::storage::MemStore;
     use std::collections::BTreeMap;

@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::contract::{date_match, lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload};
-use crate::drofus::ReferenceData;
+use crate::reference::ReferenceData;
 use crate::settings::{BuiltinPropertyDef, CompareMode, ReferenceFieldConfig, FieldType};
 use crate::state::{AppState, ModelKey};
 
@@ -463,7 +463,7 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
 mod tests {
     use super::*;
     use crate::contract::{CustomValue, Model, Project, Snapshot};
-    use crate::drofus::ReferenceRecord;
+    use crate::reference::ReferenceRecord;
 
     fn make_room(id: &str, name: &str, props: &[(&str, &str)]) -> Room {
         let mut properties = BTreeMap::new();

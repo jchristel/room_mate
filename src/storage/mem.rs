@@ -82,7 +82,7 @@ impl SnapshotStore for MemStore {
             .cloned())
     }
 
-    fn put_drofus(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
+    fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
         // Latest-only: replacement is the normal upsert (same stance as
         // `put`), so the duplicate-skip rule doesn't apply here.
         self.drofus
@@ -92,7 +92,7 @@ impl SnapshotStore for MemStore {
         Ok(true)
     }
 
-    fn list_drofus_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>> {
+    fn list_reference_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>> {
         Ok(self
             .drofus
             .lock()
@@ -102,7 +102,7 @@ impl SnapshotStore for MemStore {
             .unwrap_or_default())
     }
 
-    fn get_drofus(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>> {
+    fn get_reference(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>> {
         Ok(self
             .drofus
             .lock()
@@ -112,7 +112,7 @@ impl SnapshotStore for MemStore {
             .map(|(_, bytes)| bytes.clone()))
     }
 
-    fn get_latest_drofus(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>> {
+    fn get_latest_reference(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>> {
         Ok(self.drofus.lock().unwrap().get(&(project_id.to_string(), source.to_string())).cloned())
     }
 }
@@ -151,16 +151,16 @@ mod tests {
     #[test]
     fn test_mem_store_drofus_latest_only() {
         let store = MemStore::new();
-        assert!(store.get_latest_drofus("p", "drofus").unwrap().is_none());
+        assert!(store.get_latest_reference("p", "drofus").unwrap().is_none());
 
-        store.put_drofus("p", "drofus", "2026-01-01T10:00:00Z", b"one").unwrap();
-        store.put_drofus("p", "drofus", "2026-01-02T10:00:00Z", b"two").unwrap();
+        store.put_reference("p", "drofus", "2026-01-01T10:00:00Z", b"one").unwrap();
+        store.put_reference("p", "drofus", "2026-01-02T10:00:00Z", b"two").unwrap();
 
-        assert_eq!(store.list_drofus_snapshot_ids("p", "drofus").unwrap(), vec!["2026-01-02T10:00:00Z".to_string()]);
-        let (id, bytes) = store.get_latest_drofus("p", "drofus").unwrap().unwrap();
+        assert_eq!(store.list_reference_snapshot_ids("p", "drofus").unwrap(), vec!["2026-01-02T10:00:00Z".to_string()]);
+        let (id, bytes) = store.get_latest_reference("p", "drofus").unwrap().unwrap();
         assert_eq!(id, "2026-01-02T10:00:00Z");
         assert_eq!(bytes, b"two");
-        assert!(store.get_drofus("p", "drofus", "2026-01-01T10:00:00Z").unwrap().is_none());
-        assert_eq!(store.get_drofus("p", "drofus", "2026-01-02T10:00:00Z").unwrap().unwrap(), b"two");
+        assert!(store.get_reference("p", "drofus", "2026-01-01T10:00:00Z").unwrap().is_none());
+        assert_eq!(store.get_reference("p", "drofus", "2026-01-02T10:00:00Z").unwrap().unwrap(), b"two");
     }
 }

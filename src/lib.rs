@@ -11,7 +11,7 @@
 //! - `contract`  — the JSON contract shared with the Revit extractor + the
 //!   cross-tier property lookup both consumers use.
 //! - `settings`  — startup TOML config (sources, test seed, hierarchy defn).
-//! - `drofus`    — reference-data loader + join dataset.
+//! - `reference` — reference-data loader + join dataset.
 //! - `classify`  — room → full-depth classification path.
 //! - `state`     — shared app state: settings registry + the snapshot store
 //!   behind its trait, plus the startup seed.
@@ -58,7 +58,7 @@ pub fn default_http_addr() -> String {
 pub mod bootstrap;
 pub mod classify;
 pub mod contract;
-pub mod drofus;
+pub mod reference;
 pub mod handlers;
 pub mod service;
 pub mod settings;

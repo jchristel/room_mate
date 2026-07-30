@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::drofus::{load_reference_from_bytes, load_reference_from_path};
+use crate::reference::{load_reference_from_bytes, load_reference_from_path};
 use crate::service::rooms::validate_comparison_field;
 use crate::settings::{
     load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields,
@@ -109,7 +109,7 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
                     .with_context(|| format!("bad '{name}' fields in {}", path.display()))?;
                 Some(data)
             }
-            ReferenceOrigin::Upload => match store.get_latest_drofus(&settings.project_id, name)? {
+            ReferenceOrigin::Upload => match store.get_latest_reference(&settings.project_id, name)? {
                 Some((taken_at, bytes)) => {
                     // A stored CSV that fails to parse fails the boot loudly —
                     // same discipline as a rotted `file` CSV. The upload endpoint
@@ -322,7 +322,7 @@ mod tests {
 
         let store = MemStore::new();
         store
-            .put_drofus("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
+            .put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
             .unwrap();
 
         let (registry, _default) = load_project_settings_dir(&dir, &store).unwrap();
@@ -391,7 +391,7 @@ mod tests {
 
         let store = MemStore::new();
         store
-            .put_drofus("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
+            .put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
             .unwrap();
 
         let msg = match load_project_settings_dir(&dir, &store) {
@@ -442,8 +442,8 @@ mod tests {
         .unwrap();
 
         let store = MemStore::new();
-        store.put_drofus("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n").unwrap();
-        store.put_drofus("p1", "doors", "2026-01-01T10:00:00Z", b"DoorId,Mark\nMark,Mark\nD1,101A\n").unwrap();
+        store.put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n").unwrap();
+        store.put_reference("p1", "doors", "2026-01-01T10:00:00Z", b"DoorId,Mark\nMark,Mark\nD1,101A\n").unwrap();
 
         let (registry, _default) = load_project_settings_dir(&dir, &store).unwrap();
         let bundle = registry.get("p1").unwrap();
