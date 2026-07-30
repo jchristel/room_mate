@@ -10,19 +10,17 @@
 //! push, so it must not be fused into the room's own properties — keeping it
 //! separate keeps the seam where the refresh boundary actually is.
 //!
-//! The loader is byte-source-agnostic (`load_reference_from_reader`, with path
-//! and bytes wrappers): a settings-file path (`ReferenceOrigin::File`), an
-//! uploaded CSV hydrated from the snapshot store (`ReferenceOrigin::Upload`), or
-//! a future API response all parse through the same function. Which source
-//! feeds it is dispatched in `bootstrap::load_project_bundle`, where the
-//! store is in scope — not here.
+//! The loader is byte-source-agnostic (`load_reference_from_reader`, with a
+//! bytes wrapper): an uploaded CSV hydrated from the snapshot store
+//! (`ReferenceOrigin::Upload`) and a future API response parse through the
+//! same function. Which source feeds it is dispatched in
+//! `bootstrap::load_project_bundle`, where the store is in scope — not here.
 //!
 //! The two-header-row CSV shape this parses is dRofus's export format, which
 //! is where it came from; nothing else about the module is dRofus-specific,
 //! and a source declaring that shape parses here whatever it is called.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use anyhow::Context;
 use serde::Serialize;
@@ -135,15 +133,6 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
     Ok(ReferenceData { link_property, by_id, reconciliation, all_labels })
 }
 
-/// Load a dRofus CSV from a file path (`ReferenceOrigin::File`, and the
-/// settings API's dry-run check). Reads the whole file so the bytes path
-/// below — and its BOM handling — is the single parse entry.
-pub fn load_reference_from_path(path: &Path) -> anyhow::Result<ReferenceData> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("could not open reference CSV: {}", path.display()))?;
-    load_reference_from_bytes(&bytes)
-}
-
 /// Load a dRofus CSV from raw bytes (an upload body, or a stored upload
 /// hydrated at boot). Strips a leading UTF-8 BOM first: Excel CSV exports
 /// routinely carry one and the csv crate does not strip it. The BOM lands in
@@ -157,24 +146,15 @@ pub fn load_reference_from_bytes(bytes: &[u8]) -> anyhow::Result<ReferenceData> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     /// Row 2's non-link columns populate `reconciliation` (label -> Revit
     /// property name); a blank Revit-name cell is skipped, not fatal.
     #[test]
     fn test_load_drofus_populates_reconciliation() {
-        let dir = std::env::temp_dir().join(format!("roommate-drofus-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("drofus.csv");
-        let mut file = std::fs::File::create(&path).unwrap();
-        write!(
-            file,
-            "DrofusRoomId,NetArea,Department,Notes\nNumber,Area,Department,\n1,25.5,Cardiology,ignored\n"
+        let data = load_reference_from_bytes(
+            b"DrofusRoomId,NetArea,Department,Notes\nNumber,Area,Department,\n1,25.5,Cardiology,ignored\n",
         )
         .unwrap();
-        drop(file);
-
-        let data = load_reference_from_path(&path).unwrap();
 
         assert_eq!(data.link_property, "Number");
         assert_eq!(data.reconciliation.get("NetArea"), Some(&"Area".to_string()));
@@ -192,7 +172,6 @@ mod tests {
             vec!["NetArea".to_string(), "Department".to_string(), "Notes".to_string()]
         );
 
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The bytes loader parses an upload body directly, and strips a leading

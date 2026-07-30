@@ -181,7 +181,7 @@
 
         <section class="block">
           <h2>Reference sources</h2>
-          <p class="hint">External reference data joined onto rooms (e.g. dRofus), keyed by name — the name is the join namespace a filter or comparison key writes as "&lt;name&gt;.&lt;label&gt;" (see STRATEGY-SOURCES.md). A project with none configured is a normal state. "file" reads a CSV path from disk; "upload" takes CSVs uploaded here, stored server-side as dated snapshots.</p>
+          <p class="hint">External reference data joined onto rooms (e.g. dRofus), keyed by name — the name is the join namespace a filter or comparison key writes as "&lt;name&gt;.&lt;label&gt;" (see STRATEGY-SOURCES.md). A project with none configured is a normal state. A source's CSVs are uploaded here and stored server-side as dated snapshots, so each upload is a version a milestone can pin.</p>
           <div id="referenceSourceRows"></div>
           <button type="button" class="action" id="addReferenceSourceBtn">+ reference source</button>
         </section>
@@ -410,7 +410,7 @@ function normalize(s) {
   s.sources = Object.entries((s.sources && s.sources.reference) || {}).map(([name, cfg]) => ({
     name,
     type: cfg.type || "",
-    path: cfg.type === "file" ? (cfg.path || "") : "",
+    path: "",
     fields: (cfg.fields || []).map(f => ({
       label: f.label || "",
       type: f.type || "string",
@@ -654,11 +654,10 @@ function renderMilestones() {
       ...rowControls(milestones, i, renderMilestones),
     ]));
 
-    // One reference-source pin row per upload-type source that actually has
-    // snapshots to choose from. Absent for a source with none — pinning
-    // nothing is the default anyway.
+    // One reference-source pin row per source that actually has snapshots to
+    // choose from. Absent for a source with none — pinning nothing is the
+    // default anyway.
     for (const src of current.settings.sources) {
-      if (src.type !== "upload") continue;
       const snapshots = snapshotsBySource[src.name];
       if (!snapshots || snapshots.length === 0) continue;
       rows.appendChild(el("div", { class: "row" }, [
@@ -703,9 +702,8 @@ function renderMilestones() {
 // (each source owns its column set — `ReferenceSourceConfig.fields`).
 function renderReferenceFields(card, src, cardIndex) {
   const block = el("div", { class: "ref-fields" });
-  block.appendChild(el("p", { class: "hint", text: src.type === "upload"
-    ? "Per-column type/comparison declarations for the validation report. Labels come from row 1 of the latest uploaded CSV."
-    : "Per-column type/comparison declarations for the validation report. Labels come from row 1 of this source's CSV — run \"check\" above to load them." }));
+  block.appendChild(el("p", { class: "hint", text:
+    "Per-column type/comparison declarations for the validation report. Labels come from row 1 of the latest uploaded CSV." }));
 
   const datalistId = `refLabelOptions-${cardIndex}`;
   block.appendChild(el("datalist", { id: datalistId }, (labelsBySource[src.name] || []).map(l => el("option", { value: l }))));
@@ -939,23 +937,14 @@ function renderReferenceSources() {
 function renderReferenceSourceCard(src, i) {
   const card = el("div", { class: "ref-card" });
 
-  const typeSelect = el("select", { onchange: (e) => {
-    src.type = e.target.value;
-    src._status = null;
-    renderReferenceSources();
-    renderMilestones(); // a type change can add/drop this source's pin row
-    if (src.type === "upload" && !current.isNew) { loadReferenceLatest(src); loadReferenceSnapshots(src); }
-  }}, [
-    el("option", { value: "", text: "— choose —" }),
-    el("option", { value: "file", text: "file" }),
-    el("option", { value: "upload", text: "upload" }),
-  ]);
-  typeSelect.value = src.type;
+  // No type picker: `upload` is the only origin a source can have. The old
+  // "file" type (a CSV path the server read off disk) is gone, so a card is
+  // always an upload dropzone plus its field declarations.
+  src.type = "upload";
 
   card.appendChild(el("div", { class: "ref-card-head" }, [
     el("span", { text: "name" }),
     textInput(src, "name", { size: "14", placeholder: "drofus", class: "grow" }),
-    el("span", { text: "type" }), typeSelect,
     el("button", { type: "button", class: "action icon", title: "remove source", text: "✕", onclick: () => {
       current.settings.sources.splice(i, 1);
       renderReferenceSources();
@@ -964,19 +953,11 @@ function renderReferenceSourceCard(src, i) {
     }}),
   ]));
 
-  if (src.type === "file") {
-    card.appendChild(el("div", { class: "row" }, [
-      el("span", { text: "csv path" }),
-      textInput(src, "path", { size: "36", placeholder: "../drofus.csv" }),
-      el("button", { type: "button", class: "action", text: "check", onclick: () => checkReferenceSource(src, false) }),
-    ]));
-  } else if (src.type === "upload") {
-    card.appendChild(referenceUploadBlock(src));
-  }
+  card.appendChild(referenceUploadBlock(src));
 
   if (src._status) card.appendChild(el("div", { class: `ref-status ${src._status.cls}`, text: src._status.text }));
 
-  if (src.type === "file" || src.type === "upload") renderReferenceFields(card, src, i);
+  renderReferenceFields(card, src, i);
 
   return card;
 }
@@ -1079,28 +1060,12 @@ async function uploadReferenceFile(src, file) {
   }
 }
 
-// ---------- reference-source check (file type) ----------
-// /api/settings/reference-check only ever dry-ran a bare path — already
-// source-agnostic, so every file-type card reuses it unchanged.
-async function checkReferenceSource(src, quiet) {
-  const path = (src.path || "").trim();
-  const result = await apiSend("POST", "/api/settings/reference-check", { path });
-  if (result.ok) {
-    const data = JSON.parse(result.text);
-    labelsBySource[src.name] = data.labels;
-    referenceStatus(src, "ok", `✓ ${data.record_count} records · link property "${data.link_property}" · ${data.labels.length} labels`);
-  } else {
-    labelsBySource[src.name] = [];
-    if (quiet) { src._status = null; renderReferenceSources(); }
-    else referenceStatus(src, "bad", `⚠ ${result.text}`);
-  }
-}
-
-// Pre-load the label dropdown for one already-configured source: a file
-// source dry-runs its path, an upload source reads the latest stored CSV.
+// Pre-load the label dropdown for one already-configured source from its
+// latest stored upload. There is nothing else to read it from now that a
+// source's data only ever arrives through the upload endpoint.
 function preloadReferenceSource(src) {
-  if (src.type === "file") checkReferenceSource(src, true);
-  else if (src.type === "upload") { loadReferenceLatest(src); loadReferenceSnapshots(src); }
+  loadReferenceLatest(src);
+  loadReferenceSnapshots(src);
 }
 function preloadAllReferenceSources() {
   for (const src of current.settings.sources) preloadReferenceSource(src);
@@ -1128,11 +1093,10 @@ function toPayload() {
     name: opt($("projectName").value),
     is_default: $("isDefault").checked,
     sources: {
-      reference: Object.fromEntries(s.sources.filter(src => src.name.trim() && src.type).map(src => [
+      reference: Object.fromEntries(s.sources.filter(src => src.name.trim()).map(src => [
         src.name.trim(),
         {
-          type: src.type,
-          ...(src.type === "file" ? { path: src.path.trim() } : {}),
+          type: "upload",
           fields: src.fields.map(f => ({
             label: f.label.trim(),
             type: f.type,
@@ -1231,7 +1195,7 @@ async function save() {
 $("newProjectBtn").addEventListener("click", newProject);
 $("editor").addEventListener("submit", (e) => { e.preventDefault(); save(); });
 $("addReferenceSourceBtn").addEventListener("click", () => {
-  current.settings.sources.push({ name: "", type: "", path: "", fields: [] });
+  current.settings.sources.push({ name: "", type: "upload", fields: [] });
   renderReferenceSources();
 });
 $("addTierBtn").addEventListener("click", () => {

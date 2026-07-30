@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use super::{ReferenceOrigin, ServerConfig, Settings};
+use super::{ServerConfig, Settings};
 
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let raw = std::fs::read_to_string(path)
@@ -45,19 +45,12 @@ fn resolve_relative_to(path: &mut PathBuf, settings_dir: Option<&Path>) {
 pub fn load_settings(path: &Path) -> anyhow::Result<Settings> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("could not read settings file: {}", path.display()))?;
-    let mut settings: Settings = toml::from_str(&raw).context("failed to parse settings TOML")?;
+    let settings: Settings = toml::from_str(&raw).context("failed to parse settings TOML")?;
 
     // Base dir for every relative path *inside* the settings file. `.filter`
     // turns a bare filename's empty parent ("") into None, which just means
     // "no base to prepend" — those paths fall back to cwd-relative, same as
     // before this fix.
-    let settings_dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    for source in settings.sources.reference.values_mut() {
-        if let ReferenceOrigin::File { path: source_path } = &mut source.origin {
-            resolve_relative_to(source_path, settings_dir);
-        }
-    }
-
     if settings.project_id.trim().is_empty() {
         anyhow::bail!("settings file {} has an empty project_id", path.display());
     }
@@ -133,19 +126,15 @@ mod tests {
     fn test_duplicate_tier_names_fail_load_settings() {
         let dir = std::env::temp_dir().join(format!("roommate-dup-tier-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let drofus_path = dir.join("drofus.csv");
-        std::fs::write(&drofus_path, "Id\nNumber\n").unwrap();
 
         let settings_path = dir.join("settings.toml");
         std::fs::write(
             &settings_path,
-            format!(
-                r#"
+            r#"
 project_id = "p1"
 
 [sources.reference.drofus]
-type = "file"
-path = "{}"
+type = "upload"
 
 [[hierarchy]]
 name = "Building"
@@ -155,8 +144,6 @@ code_property = "a"
 name = "Building"
 code_property = "b"
 "#,
-                drofus_path.display().to_string().replace('\\', "/")
-            ),
         )
         .unwrap();
 

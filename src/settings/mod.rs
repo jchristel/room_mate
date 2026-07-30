@@ -656,13 +656,27 @@ pub struct ReferenceSourceConfig {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ReferenceOrigin {
-    /// Load from a local file path, once at startup.
+    /// **Removed. Retained only to fail an old settings file usefully.**
+    ///
+    /// `type = "file"` read a CSV from a path in the settings file, once at
+    /// startup. It was the stand-in for uploads before uploads existed; now
+    /// that they do, it is a second way to get the same data in, with a worse
+    /// story on every axis — no history (an overwritten CSV is gone, while an
+    /// upload is a dated snapshot a milestone can pin), no validation before
+    /// the data goes live, and a path the server reads on the operator's
+    /// behalf, which is what made `/api/settings/reference-check` an
+    /// unauthenticated arbitrary-file read.
+    ///
+    /// Deserializing still works so `bootstrap::load_project_bundle` can
+    /// reject it by name and say how to migrate, rather than leaving serde to
+    /// answer with "unknown variant `file`". Nothing loads it — see that
+    /// function's `File` arm, the only place this variant is now read.
     File { path: PathBuf },
-    /// Data arrives via `POST /projects/{id}/drofus` uploads, stored as
-    /// timestamped snapshots in the `SnapshotStore`; the latest one is
-    /// hydrated at startup (and hot-swapped in after each upload). A project
-    /// with this source but no upload yet is legitimately "not configured
-    /// yet" downstream — not a startup error.
+    /// Data arrives via `POST /projects/{id}/reference/{source}` uploads,
+    /// stored as timestamped snapshots in the `SnapshotStore`; the latest one
+    /// is hydrated at startup (and hot-swapped in after each upload). A
+    /// project with this source but no upload yet is legitimately "not
+    /// configured yet" downstream — not a startup error. **The only origin.**
     Upload,
     // Future: Api { url: String, api_key: String },
 }

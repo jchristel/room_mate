@@ -30,7 +30,7 @@ use roommate::handlers::{
     ingest_rooms_stream,
 };
 use roommate::settings_api::{
-    http_create_project, http_reference_check, http_get_project, http_get_project_resolved,
+    http_create_project, http_get_project, http_get_project_resolved,
     http_list_projects, http_update_project, http_upload_reference,
 };
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
@@ -88,10 +88,13 @@ struct Args {
 /// `localhost:5151` and, under a permissive policy, **read the responses**.
 ///
 /// The server has no authentication of any kind, and `/api/settings` writes
-/// project files and reads dRofus CSVs from paths the caller supplies. With
-/// permissive CORS, `POST /api/settings/reference-check {"path": "C:/Windows/win.ini"}`
-/// from a hostile page returned that file's second line. Loopback binding did
-/// nothing to stop it; only the CORS policy could.
+/// project files. With permissive CORS, `POST /api/settings/drofus-check
+/// {"path": "C:/Windows/win.ini"}` from a hostile page returned that file's
+/// second line. Loopback binding did nothing to stop it; only the CORS policy
+/// could. That endpoint has since been deleted along with the `file` reference
+/// origin, so the specific read is gone — but the policy it forced still
+/// guards every remaining write route, which is why it is asserted over all of
+/// them below rather than over the one that leaked.
 ///
 /// So: allow `GET`/`HEAD` cross-origin — the documented reason the layer exists
 /// at all, so a viewer served from somewhere else can still read `/rooms` — and
@@ -251,7 +254,6 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // is_default file, so the viewer's payload id (not a settings project_id)
         // still finds its colour plans. Editors keep the strict route above.
         .route("/api/settings/resolve/{id}", get(http_get_project_resolved))
-        .route("/api/settings/reference-check", post(http_reference_check))
         // Serves the viewer page at "/" from ./static.
         .fallback_service(ServeDir::new("static"))
         // Inflate gzip request bodies (Content-Encoding: gzip) before Json/NDJSON
@@ -384,9 +386,10 @@ mod tests {
 
     /// **The regression guard for a real vulnerability.** Under
     /// `CorsLayer::permissive()` a page on any origin could preflight and then
-    /// `POST /api/settings/reference-check {"path": "C:/Windows/win.ini"}` and read
+    /// `POST /api/settings/drofus-check {"path": "C:/Windows/win.ini"}` and read
     /// back that file's second line — loopback binding is no defence, because
-    /// the browser making the request is itself local.
+    /// the browser making the request is itself local. That endpoint is gone,
+    /// but the routes below can still write project files.
     ///
     /// No cross-origin caller may be granted a mutating method on any route.
     /// Asserted over the write routes rather than just the one that leaked: the
@@ -394,7 +397,6 @@ mod tests {
     #[tokio::test]
     async fn test_cross_origin_writes_are_never_granted() {
         for path in [
-            "/api/settings/reference-check",
             "/api/settings/projects",
             "/api/settings/projects/p1",
             "/rooms",
@@ -461,7 +463,7 @@ mod tests {
     async fn test_rebound_host_is_refused() {
         for host in ["evil.example", "evil.example:5151", "192.168.1.10:5151", "roommate.attacker.test"] {
             assert_eq!(
-                with_host("/api/settings/reference-check", "POST", host).await,
+                with_host("/api/settings/projects", "POST", host).await,
                 StatusCode::FORBIDDEN,
                 "Host {host:?} must not reach a handler"
             );
