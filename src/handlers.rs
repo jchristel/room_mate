@@ -354,38 +354,8 @@ pub async fn get_model_latest_snapshot(
     }
 }
 
-/// Lists every uploaded dRofus snapshot id for one project — see
-/// `service::drofus::list_drofus_snapshots`. Soft-empty for unknown
-/// projects, same as the model-snapshot listing. Kept as the "drofus" alias
-/// of `get_reference_snapshots` below — the route `static/settings.html`
-/// already calls, unchanged.
-pub async fn get_drofus_snapshots(
-    State(state): State<Shared>,
-    Path(project_id): Path<String>,
-) -> Result<Json<DrofusSnapshotList>, (StatusCode, String)> {
-    let result = drofus::list_drofus_snapshots(&state, &project_id, "drofus").map_err(map_service_error)?;
-    Ok(Json(result))
-}
-
-/// A parsed summary of the latest uploaded dRofus CSV for one project — see
-/// `service::drofus::get_drofus_snapshot`. 404 when there is none: this
-/// names one specific resource, same convention as
-/// `get_model_latest_snapshot`. Kept as the "drofus" alias of
-/// `get_reference_latest` below.
-pub async fn get_drofus_latest(
-    State(state): State<Shared>,
-    Path(project_id): Path<String>,
-) -> Result<Json<DrofusSnapshotInfo>, (StatusCode, String)> {
-    let result = drofus::get_drofus_snapshot(&state, &project_id, "drofus", None).map_err(map_service_error)?;
-    match result {
-        None => Err((StatusCode::NOT_FOUND, "no dRofus upload stored for that project".to_string())),
-        Some(info) => Ok(Json(info)),
-    }
-}
-
-/// Lists every uploaded snapshot id for one project's named reference source
-/// — the source-generalized form of `get_drofus_snapshots`, for any source
-/// the project configures, not just "drofus".
+/// Lists every uploaded snapshot id for one project's named reference source.
+/// Soft-empty for unknown projects, same as the model-snapshot listing.
 pub async fn get_reference_snapshots(
     State(state): State<Shared>,
     Path((project_id, source)): Path<(String, String)>,
@@ -395,7 +365,8 @@ pub async fn get_reference_snapshots(
 }
 
 /// A parsed summary of the latest uploaded CSV for one project's named
-/// reference source — the source-generalized form of `get_drofus_latest`.
+/// reference source. 404 when there is none: this names one specific
+/// resource, same convention as `get_model_latest_snapshot`.
 pub async fn get_reference_latest(
     State(state): State<Shared>,
     Path((project_id, source)): Path<(String, String)>,

@@ -515,27 +515,10 @@ pub struct DrofusUploadQuery {
     pub taken_at: Option<String>,
 }
 
-/// `POST /projects/{id}/drofus` — raw `text/csv` body (buffered `Bytes`: real
-/// dRofus exports are a few MB of CSV, not the >100 MB FFE case that forced
-/// `/rooms/stream` to stream). Kept as the "drofus" alias of
-/// `http_upload_reference` below — the route `static/settings.html` already
-/// calls, unchanged, so widening the upload path to any configured source
-/// name didn't have to move it.
-pub async fn http_upload_drofus(
-    State(state): State<Shared>,
-    UrlPath(project_id): UrlPath<String>,
-    Query(query): Query<DrofusUploadQuery>,
-    body: axum::body::Bytes,
-) -> Result<Json<DrofusUploadResult>, (StatusCode, String)> {
-    upload_drofus(&state, &project_id, "drofus", query.taken_at.as_deref(), &body)
-        .map(Json)
-        .map_err(to_http)
-}
-
-/// `POST /projects/{id}/reference/{source}` — the source-generalized upload
-/// route: same raw `text/csv` body and `?taken_at=` convention as
-/// `http_upload_drofus`, for any reference source the project configures
-/// with an `upload` origin, not just "drofus".
+/// `POST /projects/{id}/reference/{source}` — raw `text/csv` body (buffered
+/// `Bytes`: real reference exports are a few MB of CSV, not the >100 MB FFE
+/// case that forced `/rooms/stream` to stream), for any reference source the
+/// project configures with an `upload` origin.
 pub async fn http_upload_reference(
     State(state): State<Shared>,
     UrlPath((project_id, source)): UrlPath<(String, String)>,

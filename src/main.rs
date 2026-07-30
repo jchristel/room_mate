@@ -23,14 +23,14 @@ use tower_http::{
 
 use roommate::bootstrap::build_state;
 use roommate::handlers::{
-    compare_project_milestones, get_drofus_latest, get_drofus_snapshots, get_model_latest_snapshot,
-    get_project_adjacency, get_project_areas, get_project_buildings, get_project_milestones,
-    get_project_snapshots, get_project_validation, get_projects, get_reference_latest,
-    get_reference_snapshots, get_rooms, ingest_rooms, ingest_rooms_stream,
+    compare_project_milestones, get_model_latest_snapshot, get_project_adjacency, get_project_areas,
+    get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation,
+    get_projects, get_reference_latest, get_reference_snapshots, get_rooms, ingest_rooms,
+    ingest_rooms_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_drofus_check, http_get_project, http_get_project_resolved,
-    http_list_projects, http_update_project, http_upload_drofus, http_upload_reference,
+    http_list_projects, http_update_project, http_upload_reference,
 };
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
@@ -41,10 +41,10 @@ use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 /// home for anything approaching this ceiling anyway. See HANDOVER-gzip.md.
 const ROOMS_BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 
-/// Cap on a dRofus CSV upload body (decompressed, same as above). Real dRofus
-/// exports are a few MB of CSV; 32 MB is generous headroom. Without an
+/// Cap on a reference-source CSV upload body (decompressed, same as above).
+/// Real exports are a few MB of CSV; 32 MB is generous headroom. Without an
 /// explicit layer this route would get axum's silent 2 MB default.
-const DROFUS_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
+const REFERENCE_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Parser)]
 struct Args {
@@ -159,23 +159,14 @@ fn build_router(state: roommate::state::Shared) -> Router {
             "/projects/{project_id}/models/{model_id}/snapshots/latest",
             get(get_model_latest_snapshot),
         )
-        // dRofus upload ingest + its read side: uploaded CSVs are timestamped
-        // project-scoped snapshots in the store (see settings_api's
-        // `upload_drofus` for the validate-before-store pipeline). Kept as
-        // the "drofus" alias of the `/reference/{source}` routes below —
-        // `static/settings.html` calls this path today, unchanged.
-        .route(
-            "/projects/{id}/drofus",
-            post(http_upload_drofus).layer(DefaultBodyLimit::max(DROFUS_BODY_LIMIT_BYTES)),
-        )
-        .route("/projects/{id}/drofus/snapshots", get(get_drofus_snapshots))
-        .route("/projects/{id}/drofus/latest", get(get_drofus_latest))
-        // The source-generalized form: any reference source a project
-        // configures with an `upload` origin, not just "drofus". Same body
-        // limit and validate-before-store pipeline, one more path segment.
+        // Reference-source upload ingest + its read side, for any source a
+        // project configures with an `upload` origin: uploaded CSVs are
+        // timestamped project-scoped snapshots in the store (see
+        // settings_api's `upload_reference` for the validate-before-store
+        // pipeline).
         .route(
             "/projects/{id}/reference/{source}",
-            post(http_upload_reference).layer(DefaultBodyLimit::max(DROFUS_BODY_LIMIT_BYTES)),
+            post(http_upload_reference).layer(DefaultBodyLimit::max(REFERENCE_BODY_LIMIT_BYTES)),
         )
         .route("/projects/{id}/reference/{source}/snapshots", get(get_reference_snapshots))
         .route("/projects/{id}/reference/{source}/latest", get(get_reference_latest))
@@ -330,7 +321,7 @@ mod tests {
             "/api/settings/projects/p1",
             "/rooms",
             "/rooms/stream",
-            "/projects/p1/drofus",
+            "/projects/p1/reference/drofus",
             "/projects/p1/comparison",
         ] {
             for method in ["POST", "PUT"] {
