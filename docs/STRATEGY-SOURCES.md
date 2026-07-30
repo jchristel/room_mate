@@ -70,10 +70,11 @@ Revit.
   per *joined* source (`room.drofus`, `room.doors`, ...) exactly as the
   single-source shape did before — a project with only dRofus configured is
   byte-identical on the wire to before this generalized. `ReferenceOrigin`
-  (`#[serde(tag = "type")]`) still has the same two variants per source —
-  `File { path }` and `Upload` — an `Api` variant later still slots in with
-  no other consumer touched. The loader itself is **byte-source-agnostic**
-  (`load_reference_from_reader`, with path and bytes wrappers; the bytes path
+  (`#[serde(tag = "type")]`) now has **one** live variant, `Upload`; an `Api`
+  variant later still slots in with no other consumer touched. (`File { path }`
+  survives as a deserializable migration tripwire only — see "Uploads are the
+  only origin" below.) The loader itself is **byte-source-agnostic**
+  (`load_reference_from_reader`, with a bytes wrapper; the bytes path
   strips a leading UTF-8 BOM, which Excel CSV exports routinely carry and the
   csv crate does not strip) — which source feeds it is dispatched per entry
   in `bootstrap::load_project_bundle`, where the store is in scope. Row 2's
@@ -172,6 +173,43 @@ Revit.
   points. Because it rides the envelope, the streaming path carries it on line 1
   with no per-room scan. Georeferencing Phase 1 — see
   `docs/Superseded/HANDOVER-georeferencing.md`.
+
+## Uploads are the only origin
+
+A reference source's data arrives **only** by upload, stored as a dated
+snapshot in the `SnapshotStore`. There used to be a second way in — `type =
+"file"`, a CSV path in the settings file that the server read at every boot —
+and it is gone.
+
+It was the stand-in for uploads before uploads existed. Once both worked, it
+was a second path to the same place with a worse story on every axis:
+
+- **No history.** An overwritten CSV is simply gone. An upload is a dated
+  snapshot, which is what lets a milestone pin the data as it stood then.
+- **No validate-before-store.** An upload is parsed and checked against the
+  source's declared fields *before* anything is written, so a bad CSV is
+  rejected at the door. A `file` source was only discovered to be bad at the
+  next boot — and since a stored artifact is hydrated at every boot, that is
+  precisely when it is most expensive.
+- **It made the server read a path on the caller's behalf**, which is what
+  turned `/api/settings/reference-check` into an unauthenticated arbitrary-file
+  read. See [Security](STRATEGY-SECURITY.md).
+
+`ReferenceOrigin::File { path }` still *deserializes*, purely so
+`bootstrap::load_project_bundle` can reject it by name and print the migration
+— replace the `type`/`path` lines with `type = "upload"`, then upload the CSV
+once — rather than leaving serde to answer "unknown variant `file`". Nothing
+loads it. A settings file written before the change fails the boot loudly with
+instructions, which is the "loud startup over silent no-op" rule applied to a
+removal.
+
+`scripts/fixtures/drofus-sample.csv` is the two-row sample the shipped
+`sample-project` used to point at; upload it once to give that project data:
+
+```bash
+curl --data-binary @scripts/fixtures/drofus-sample.csv -H 'Content-Type: text/csv' \
+  http://127.0.0.1:5151/projects/sample-project/reference/drofus
+```
 
 ## Why sources need reconciling, not just parsing
 

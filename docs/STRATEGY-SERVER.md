@@ -196,8 +196,7 @@ each module carrying its rationale in a header, all with unit tests.
   from the crate root, or `static/` copied alongside it.)
 - **Sample dev config.** `settings/` holds a runnable example: `server.toml`
   (storage root + dev seed), `projects/sample-project.toml` (classification,
-  dRofus source, room label — one file per project, see
-  Superseded/HANDOVER-per-project-settings.md), a two-row `drofus.csv`, and a
+  an `upload` reference source, room label — one file per project), and a
   `test_snapshot.json` (a real v5 payload produced by `post_rooms.py`'s
   `translate()` against `test/Data/rooms.json`/`levels.json`) — `cargo run --
   --server-settings settings/server.toml --project-settings
@@ -246,9 +245,11 @@ each module carrying its rationale in a header, all with unit tests.
   room label, and QA fields through a form. `settings_api.rs` mirrors the
   handler/service split inside one module: a transport-agnostic core over the
   projects dir (typed `SettingsError`) plus thin Axum adapters
-  (`GET/POST /api/settings/projects`, `GET/PUT /api/settings/projects/{id}`,
-  and `POST /api/settings/drofus-check`, a dry-run of a dRofus CSV path
-  powering the form's "check" button and its label dropdowns). The TOML files
+  (`GET/POST /api/settings/projects`, `GET/PUT /api/settings/projects/{id}`).
+  A source's label dropdowns are populated from its latest stored upload
+  (`/projects/{id}/reference/{source}/latest`), not from a path dry-run — the
+  `drofus-check` endpoint that did the latter is gone with the `file` origin,
+  see [Security](STRATEGY-SECURITY.md). The TOML files
   remain the single source of truth: reads parse them fresh per call (no
   filename bookkeeping in `AppState`), and a save validates the candidate
   through the exact startup pipeline (`bootstrap::load_project_bundle`)

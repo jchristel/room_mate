@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::{load_project_bundle, load_project_settings_dir};
 use crate::contract::{ensure_taken_at, validate_snapshot_id, Snapshot};
-use crate::reference::{load_reference_from_bytes, load_reference_from_path};
+use crate::reference::load_reference_from_bytes;
 use crate::settings::{validate_reference_fields, ReferenceOrigin, Settings};
 use crate::state::{is_path_safe_component, AppState, SettingsRegistry, Shared};
 
@@ -57,15 +57,6 @@ pub struct ProjectFileSummary {
     pub reference_sources: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-}
-
-/// Result of dry-running a reference-source CSV path — powers the UI's
-/// "check" button and its per-source field label dropdown.
-#[derive(Serialize)]
-pub struct ReferenceCheckResult {
-    pub record_count: usize,
-    pub link_property: String,
-    pub labels: Vec<String>,
 }
 
 /// Typed failure for the core functions; each transport maps it itself
@@ -182,26 +173,6 @@ pub fn resolve_project_file(projects_dir: &Path, project_id: &str) -> Result<(St
     Err(SettingsError::NotFound(format!(
         "no settings file declares project_id '{project_id}' and none is marked is_default"
     )))
-}
-
-/// Dry-run a dRofus CSV path (relative paths resolve against the projects
-/// dir, exactly as they would from a settings file there) and report what it
-/// contains — record count for the UI's sanity line, the label set for the
-/// drofus_fields dropdown.
-pub fn check_reference(projects_dir: &Path, path: &str) -> Result<ReferenceCheckResult, SettingsError> {
-    if path.trim().is_empty() {
-        return Err(SettingsError::Invalid("dRofus path is empty".to_string()));
-    }
-    let mut resolved = PathBuf::from(path);
-    if resolved.is_relative() {
-        resolved = projects_dir.join(resolved);
-    }
-    let data = load_reference_from_path(&resolved).map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
-    Ok(ReferenceCheckResult {
-        record_count: data.by_id.len(),
-        link_property: data.link_property,
-        labels: data.all_labels,
-    })
 }
 
 /// Save one project's settings: validate through the startup pipeline, write
@@ -496,20 +467,6 @@ pub async fn http_update_project(
     Ok(Json(SaveResponse { applied: true, settings }))
 }
 
-#[derive(Deserialize)]
-pub struct ReferenceCheckRequest {
-    pub path: String,
-}
-
-/// `POST /api/settings/reference-check`
-pub async fn http_reference_check(
-    State(state): State<Shared>,
-    Json(req): Json<ReferenceCheckRequest>,
-) -> Result<Json<ReferenceCheckResult>, (StatusCode, String)> {
-    let dir = require_dir(&state)?;
-    check_reference(&dir, &req.path).map(Json).map_err(to_http)
-}
-
 /// Optional `?taken_at=` on a dRofus upload — the snapshot-id half of the
 /// upload envelope, carried as a query param because a raw CSV body has no
 /// JSON envelope to put it in.
@@ -580,8 +537,7 @@ comparison_key = "Number"
 comparison_properties = ["Area", "Department"]
 
 [sources.reference.drofus]
-type = "file"
-path = "drofus.csv"
+type = "upload"
 
 [[hierarchy]]
 name = "Building"
@@ -658,7 +614,7 @@ ids = ["12345", "67890"]
         // key/values rather than folding them into `[sources]`.
         assert_eq!(reparsed.comparison_key.as_deref(), Some("Number"));
         assert_eq!(reparsed.comparison_properties, vec!["Area".to_string(), "Department".to_string()]);
-        assert!(matches!(reparsed.sources.reference.get("drofus").map(|s| &s.origin), Some(ReferenceOrigin::File { .. })));
+        assert!(matches!(reparsed.sources.reference.get("drofus").map(|s| &s.origin), Some(ReferenceOrigin::Upload)));
         assert_eq!(reparsed.hierarchy.len(), 1);
         assert_eq!(reparsed.builtin_properties.len(), 1);
         assert_eq!(reparsed.sources.reference["drofus"].fields.len(), 1);
@@ -1003,23 +959,6 @@ ids = ["12345", "67890"]
 
     /// The dRofus dry-run reports records and labels; a bogus path is the
     /// same loud error a bad startup source would raise.
-    #[test]
-    fn test_check_reference() {
-        let dir = temp_dir("reference-check");
-        std::fs::write(dir.join("d.csv"), "DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n2,30.0\n").unwrap();
-
-        let ok = check_reference(&dir, "d.csv").unwrap();
-        assert_eq!(ok.record_count, 2);
-        assert_eq!(ok.link_property, "Number");
-        assert_eq!(ok.labels, vec!["NetArea".to_string()]);
-
-        assert!(matches!(check_reference(&dir, "missing.csv"), Err(SettingsError::Invalid(_))));
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// A file that fails to parse still appears in the list, carrying its
-    /// error — the settings UI stays usable when one file is broken.
     #[test]
     fn test_list_reports_broken_file() {
         let dir = temp_dir("broken-file");

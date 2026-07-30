@@ -560,7 +560,8 @@ pub async fn get_project_adjacency(
 /// The baseline milestone plus the milestones to compare against it. A POST
 /// body rather than query params because the compared set is a list (repeated
 /// query keys don't deserialize cleanly, and milestone names can contain any
-/// character) — the same POST-that-reads shape `reference-check` uses.
+/// character). A POST that reads rather than writes — unusual, and the reason
+/// it still sits behind the CORS/Host guards like any other mutating route.
 #[derive(Deserialize)]
 pub struct ComparisonRequest {
     pub baseline: String,

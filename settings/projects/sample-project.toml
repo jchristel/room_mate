@@ -10,8 +10,7 @@ room_label = [
 milestones = []
 
 [sources.reference.drofus]
-type = "file"
-path = "../drofus.csv"
+type = "upload"
 
 [[sources.reference.drofus.fields]]
 label = "Department"

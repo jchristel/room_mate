@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::reference::{load_reference_from_bytes, load_reference_from_path};
+use crate::reference::load_reference_from_bytes;
 use crate::service::rooms::validate_comparison_field;
 use crate::settings::{
     load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields,
@@ -87,26 +87,37 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
         }
     }
 
-    // Every configured reference source is loaded and validated the same way:
-    // a `file` source reads its CSV path; an `upload` source hydrates the
-    // latest stored CSV for that (project, source) pair from the snapshot
-    // store (which is why the store is a parameter) — absent upload data is a
-    // legitimate "not configured yet" state, not a startup error. Each
-    // source's `fields` list lives on its own settings entry
-    // (`[sources.reference.<name>].fields`), so there is no way to declare
-    // fields with no source to attach them to.
+    // Every configured reference source hydrates the latest stored CSV for
+    // that (project, source) pair from the snapshot store (which is why the
+    // store is a parameter) — absent upload data is a legitimate "not
+    // configured yet" state, not a startup error. Each source's `fields` list
+    // lives on its own settings entry (`[sources.reference.<name>].fields`),
+    // so there is no way to declare fields with no source to attach them to.
     let mut reference = std::collections::BTreeMap::new();
     for (name, source_cfg) in &settings.sources.reference {
         let data = match &source_cfg.origin {
+            // `type = "file"` is gone. Rejected by name with the migration
+            // command rather than left to serde's "unknown variant `file`",
+            // because a settings file written before this change is a
+            // situation the operator has to be *told how to fix*, not merely
+            // told about — the "loud startup over silent no-op" rule, applied
+            // to a removal instead of a typo.
             ReferenceOrigin::File { path: csv_path } => {
-                let data = load_reference_from_path(csv_path)
-                    .with_context(|| format!("bad '{name}' reference source in {}", path.display()))?;
-
-                // Can't validate this inside `load_settings`: the CSV (and its
-                // label set) isn't loaded until the line above, one step later.
-                validate_reference_fields(&source_cfg.fields, &data.all_labels)
-                    .with_context(|| format!("bad '{name}' fields in {}", path.display()))?;
-                Some(data)
+                anyhow::bail!(
+                    "settings file {} declares `[sources.reference.{name}] type = \"file\"`, \
+                     which is no longer supported — reference data is uploaded and stored as \
+                     dated snapshots now.\n\
+                     \n\
+                     To migrate, replace that source's `type`/`path` lines with:\n\
+                     \n    [sources.reference.{name}]\n    type = \"upload\"\n\n\
+                     then upload the CSV once, with the server running:\n\
+                     \n    curl --data-binary @{} -H 'Content-Type: text/csv' \\\n         \
+                     http://127.0.0.1:5151/projects/{}/reference/{name}\n\n\
+                     (or drag it onto that source's card in the settings page).",
+                    path.display(),
+                    csv_path.display(),
+                    settings.project_id,
+                );
             }
             ReferenceOrigin::Upload => match store.get_latest_reference(&settings.project_id, name)? {
                 Some((taken_at, bytes)) => {
@@ -247,9 +258,42 @@ mod tests {
         dir
     }
 
+    /// **The migration tripwire.** A settings file still declaring the removed
+    /// `type = "file"` fails the boot with a message that names the source and
+    /// spells out the migration, rather than leaving serde to answer "unknown
+    /// variant". The whole reason the variant is still deserializable.
+    #[test]
+    fn test_file_origin_fails_with_migration_instructions() {
+        let dir = temp_projects_dir("file-origin");
+        let path = dir.join("p1.toml");
+        std::fs::write(
+            &path,
+            "project_id = \"p1\"
+
+[sources.reference.drofus]
+type = \"file\"
+path = \"../drofus.csv\"
+",
+        )
+        .unwrap();
+
+        let msg = match load_project_bundle(&path, &MemStore::new()) {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("a `file` source must not load"),
+        };
+
+        assert!(msg.contains("no longer supported"), "says it is gone: {msg}");
+        assert!(msg.contains("drofus"), "names the source: {msg}");
+        assert!(msg.contains("type = \"upload\""), "shows the replacement: {msg}");
+        assert!(msg.contains("/projects/p1/reference/drofus"), "gives the upload URL: {msg}");
+        assert!(msg.contains("../drofus.csv"), "names the CSV to upload: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A project with no `[sources]` at all registers with an empty
-    /// `reference` map — the state `compute_project_validation` reports as
-    /// `drofus_configured: false`.
+    /// `reference` map — the "nothing to reconcile" state
+    /// `compute_project_validation` reports as an empty `sources` map.
     #[test]
     fn test_project_without_sources_registers_with_no_drofus() {
         let dir = temp_projects_dir("no-sources");

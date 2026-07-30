@@ -165,8 +165,10 @@ separate controls answer two separate roads in, and each is blind to the other's
 
 - **`read_only_cors`** grants a cross-origin caller `GET`/`HEAD` and nothing
   else. It stopped a real hole: under the previous `CorsLayer::permissive()`, a
-  hostile page could `POST /api/settings/reference-check {"path":
-  "C:/Windows/win.ini"}` and read that file back.
+  hostile page could `POST /api/settings/drofus-check {"path":
+  "C:/Windows/win.ini"}` and read that file back. (That endpoint no longer
+  exists — see below — but the policy it motivated still guards every other
+  write route.)
 - **`guard_host`** rejects any request whose `Host` header is not a loopback
   name. This covers **DNS rebinding**, which CORS structurally cannot: the
   attacker serves a page from `evil.example` on a one-second DNS TTL, then
@@ -180,26 +182,30 @@ browser sends it, so absence means a non-browser client (`curl`, the pyRevit
 pusher, the MCP binary's HTTP client), which is not the threat. Nothing a
 rebinding attacker controls can omit it.
 
-### Why `reference-check` does not validate its path
+### The server no longer reads a file path on the caller's behalf
 
-The obvious-looking hardening — confine the dry-run path to the project-settings
-directory — is **deliberately not done**, because it would be security theatre
-bought with a working feature:
+The settings API used to accept a CSV path two ways: `type = "file"` on a
+reference source (read at every boot) and `POST /api/settings/reference-check`
+(a dry-run of that path, for the UI's "check" button). Together they made the
+server an **unauthenticated arbitrary-file-read oracle** for anything that
+could reach loopback.
 
-- A settings file may legitimately name an **absolute** path
-  (`settings/load.rs`'s `resolve_relative_to` returns early for absolute paths,
-  by design — a CSV on a network share), and the shipped sample names
-  `../drofus.csv`, which already escapes the directory. Confinement breaks both.
-- It closes nothing. Anyone who can reach `POST /api/settings/projects` can
-  write a settings file pointing at any path on disk and read its contents back
-  through `/rooms`. Constraining the *preview* endpoint while the *save*
-  endpoint accepts the same paths just moves the same read one call to the left.
+Path validation was considered and rejected as theatre — a settings file could
+legitimately name an absolute path (a CSV on a network share), and confining
+the *preview* endpoint while the *save* endpoint accepted the same paths would
+only have moved the same read one call to the left. Anyone who could reach
+`POST /api/settings/projects` could write a settings file naming any path and
+read it back through `/rooms`.
 
-So the file-read surface is inherent to what the settings API is for, and it is
-bounded by **who can reach the API**, not by what the path says: the loopback
-bind, the CORS policy, and the `Host` guard. Confining the path becomes worth
-doing only alongside authentication — at which point the question is which
-*principal* may name a path, which is a different control.
+**Both are now gone.** `ReferenceOrigin::File` is removed and reference data
+arrives only by upload, so no path from a settings file is ever opened, and
+`reference-check` — whose only job was to dry-run such a path — was deleted
+with it. The class is closed by deletion rather than by validation, which is
+the stronger form: there is no longer a path for a check to get wrong.
+
+What remains is the store's own tree, whose components are ids the server
+generated or validated (`is_path_safe_component`), never free text a caller
+supplies as a path.
 
 ## Belt-and-braces already in place
 
