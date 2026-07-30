@@ -198,7 +198,7 @@ fn compare_mode(drofus_fields: &[ReferenceFieldConfig], label: &str) -> Option<C
 /// through before it reached this service. Used to re-check a string-compare
 /// mismatch: if narrowing the dRofus side the same lossy way makes it equal
 /// to the room value, the two sides agree and the mismatch was purely an
-/// artefact of that export step (HANDOVER_utf8.md), not a real disagreement.
+/// artefact of that export step, not a real disagreement.
 fn ascii_narrowed(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii() { c } else { '?' }).collect()
 }
@@ -695,7 +695,7 @@ mod tests {
     /// non-ASCII character with `?` before the value reaches this service, so
     /// a room value that legitimately started with an en dash arrives as
     /// `?`. That must not be flagged once the dRofus side is narrowed the
-    /// same lossy way and the two agree (HANDOVER_utf8.md).
+    /// same lossy way and the two agree.
     #[test]
     fn test_compute_validation_ascii_narrowing_no_false_mismatch() {
         let room = make_room("1", "Room", &[("Number", "1"), ("Department", "Loading Dock ? Option 2")]);

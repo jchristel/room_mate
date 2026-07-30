@@ -9,8 +9,9 @@ design doc for data the user authors:
 - **This doc** — the pipeline overview, the core split principle that governs
   all three layers, and the current wire contract they all share.
 - **[Sources](STRATEGY-SOURCES.md)** — everything that supplies raw data:
-  the Revit/pyRevit producer and dRofus (today's only external reference
-  source). What each extracts, its raw format, and how the server reconciles
+  the Revit/pyRevit producer and the reference sources joined onto rooms
+  (dRofus is the one most projects configure; the pipeline is keyed on N of
+  them). What each extracts, its raw format, and how the server reconciles
   property names across sources.
 - **[Server](STRATEGY-SERVER.md)** — the Rust/axum process: data model,
   storage, classification, settings.

@@ -1,13 +1,11 @@
 //! HTTP handlers for `/rooms`, `/projects`, and validation: thin Axum
-//! adapters over `service/` (see HANDOVER-service-layer.md). Each handler
-//! extracts its own input form, calls exactly one `service` function, and
-//! translates the result into HTTP -- `StatusCode`, `Query`, `Path`, `Json`
-//! never leak past this file.
+//! adapters over `service/`. Each handler extracts its own input form, calls
+//! exactly one `service` function, and translates the result into HTTP --
+//! `StatusCode`, `Query`, `Path`, `Json` never leak past this file.
 //!
 //! Ingest (`ingest_rooms` / `ingest_rooms_stream`) is the exception: it has no
 //! derive logic worth sharing with the MCP server (which deliberately exposes
-//! no ingest -- see `src/bin/mcp.rs`), so it stays here in full per the
-//! handover doc.
+//! no ingest -- see `src/bin/mcp.rs`), so it stays here in full.
 
 use axum::{
     body::Body,
@@ -55,10 +53,9 @@ fn validate_id(kind: &str, id: &str) -> Result<(), (StatusCode, String)> {
 /// buffered and streaming paths can't drift on what gets rejected:
 /// - a schema version this server doesn't speak;
 /// - a project with no registered settings — rejected rather than lazily
-///   accepted, pairing with `assemble_rooms`'s "skip on read" policy (see
-///   HANDOVER-per-project-settings.md): a project must be explicitly
-///   onboarded (a settings file registered under its id, or an explicit
-///   `is_default` fallback) before it can push at all;
+///   accepted, pairing with `assemble_rooms`'s "skip on read" policy: a
+///   project must be explicitly onboarded (a settings file registered under
+///   its id, or an explicit `is_default` fallback) before it can push at all;
 /// - identity ids unsafe as storage path components (`validate_id`);
 /// - a `taken_at` that isn't an RFC3339 UTC date-time (`validate_taken_at`).
 ///
@@ -108,9 +105,9 @@ const MODEL_TO_SHARED_DET_TOL: f64 = 1e-6;
 
 /// Warn (never reject) when a push carries a `model_to_shared` whose linear part
 /// isn't a pure rotation — a scaled/sheared transform would silently distort
-/// placement. This is advisory only (HANDOVER-georeferencing.md "the underlay is
-/// non-load-bearing"; "signal, not error"): the geometry still stores and
-/// renders, so a 422 would be wrong here. A missing transform is the normal
+/// placement. This is advisory only -- the underlay is non-load-bearing, and
+/// this is "signal, not error": the geometry still stores and renders, so a
+/// 422 would be wrong here. A missing transform is the normal
 /// un-placed case and warns nothing.
 fn warn_on_transform_drift(model_to_shared: Option<&ModelToShared>, project_id: &str, model_id: &str) {
     if let Some(m) = model_to_shared
@@ -206,7 +203,7 @@ fn resolved_boundary(state: &Shared, project_id: &str, declared: Option<RoomBoun
         .unwrap_or(RoomBoundary::FinishFace)
 }
 
-/// Streaming ingest for very large models (NDJSON, see HANDOVER-streaming.md).
+/// Streaming ingest for very large models (NDJSON).
 /// Reads the request body as a line-delimited stream instead of buffering it
 /// whole with `Json<RoomPayload>`, so peak memory is one line, not the entire
 /// (possibly >100 MB) payload. Line 1 is the envelope (identity + levels, no

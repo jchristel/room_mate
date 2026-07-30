@@ -6,7 +6,8 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Security](STRATEGY-SECURITY.md)
 
 Everything that supplies raw data into the pipeline: the Revit/pyRevit
-producer, and dRofus (external reference data, today's only other source).
+producer, and reference sources (external data joined onto rooms; dRofus is
+the one most projects configure, but the pipeline is keyed on N of them).
 Two different origins, same discipline — extract raw, let the server
 interpret. See the [Index](STRATEGY.md) for the "Revit extracts, Rust
 processes" principle and its disciplines (extract-dumb, ElementId
@@ -60,7 +61,7 @@ Revit.
   IS the join namespace (`[sources.reference.drofus]`, `[sources.reference.doors]`,
   ...), replacing what used to be a single hardcoded `drofus` field. Each
   source's CSV is a two-header-row export read into a keyed map (`by_id:
-  BTreeMap<String, ReferenceRecord>`, in `src/drofus.rs` — `ReferenceData`/
+  BTreeMap<String, ReferenceRecord>`, in `src/reference.rs` — `ReferenceData`/
   `ReferenceRecord`, renamed from `DrofusData`/`DrofusRecord` when this
   generalized); joined onto rooms at `/rooms` response assembly as its own
   sub-object per source, leaving the stored snapshot raw. `RoomResponse`
@@ -78,15 +79,15 @@ Revit.
   in `bootstrap::load_project_bundle`, where the store is in scope. Row 2's
   non-link columns are also retained, as `reconciliation: BTreeMap<String,
   String>` (reference field label → the Revit property it corresponds to) —
-  see [Server](STRATEGY-SERVER.md)'s data validation report, currently the
-  only consumer and still scoped to the source literally named `"drofus"`
-  (see the capability boundary below).
+  see [Server](STRATEGY-SERVER.md)'s data validation report, which runs it
+  once per configured source.
 - **A reference source as an uploaded, snapshotted source (`type =
   "upload"`).** A project declaring `[sources.reference.<name>] type =
   "upload"` takes that source's data from `POST /projects/{id}/reference/{name}`
   (raw `text/csv` body, drag-and-drop on the settings page or any HTTP
-  client — `/projects/{id}/drofus` is kept as a permanent alias of the
-  `name = "drofus"` case, both routes hitting the same source-keyed handler);
+  client). The pre-generalization `/projects/{id}/drofus` aliases existed only
+  until `settings.html` moved over, and have since been deleted — their sole
+  remaining function was to hardcode the string `"drofus"` in the router;
   each accepted upload is stored as a dated snapshot in the `SnapshotStore`
   (`<root>/<project>/reference/<name>/<taken_at>.csv`), the latest one
   hydrated at startup and hot-swapped in after each upload. The snapshot id
@@ -213,29 +214,37 @@ The two header rows are the join spec and must both be retained:
   data, and retained in full as `ReferenceData.all_labels` regardless of
   whether row 2 mapped a given column (needed so [Server](STRATEGY-SERVER.md)'s
   coverage report can show an unmapped column as "not checked" rather than
-  omitting it silently; its second consumer is `/rooms`' per-project
-  `drofus_labels` — see Server and the capability boundary below — which
-  serves the full column set to tabular clients that could otherwise only
-  union per-room joined fields). Row 2's other columns are the Revit param
+  omitting it silently; its second consumer is `/rooms`' per-project,
+  per-source `reference_labels` — see Server — which serves the full column
+  set to tabular clients that could otherwise only union per-room joined
+  fields). Row 2's other columns are the Revit param
   names those fields correspond to, kept for reconciliation.
 
 The link is a direct value match and each source's ids are unique, so the
 loader builds a flat `Map<String, ReferenceRecord>` per source — no collision
 handling needed.
 
-**A capability boundary worth naming.** `/rooms`' `drofus_labels` (the *full*
-column vocabulary, including columns no room matched) and
-`/projects/{id}/validation`'s whole `ValidationResponse` (the QA coverage
-report) both still resolve specifically against the source named `"drofus"`
-— a deliberate scope-out when the settings/loader/join layers generalized to
-N sources, not an oversight. A second configured source (e.g. `doors`) is
-independently joinable, filterable, and comparable (`doors.Mark=101A` works
-end to end), and both `static/index.html` and `static/comparison.html`
-discover it from the rooms it actually joined onto — but neither gets a QA
-coverage report, and neither can show a column that matched zero rooms in
-the current scope (there is no `doors_labels` to fall back on). Generalizing
-`drofus_labels`/`ValidationResponse` to a per-source shape is the natural
-follow-up once a second source actually needs either.
+**The capability boundary is closed.** For a while `/rooms`' label set and
+`/projects/{id}/validation`'s whole report resolved specifically against the
+source named `"drofus"` — a deliberate scope-out when the settings/loader/join
+layers first generalized to N sources. A second configured source was
+joinable, filterable and comparable (`doors.Mark=101A` worked end to end) but
+got no QA report, and could not show a column that matched zero rooms in
+scope, because there was no `doors_labels` to fall back on.
+
+Both are now per source:
+
+- **`/rooms` carries `reference_labels`**, keyed by project id and then by
+  source name. Source has to be part of the address because two sources may
+  both declare a label called `NetArea`.
+- **`ValidationResponse` carries `sources`**, one `SourceValidation` per
+  configured source, each with its own `link_property`, discrepancy lists and
+  `field_coverage`, plus a cross-source `discrepancies` total. Each source
+  declares its own link property, so "which rooms resolved no link value" is a
+  different question per source and cannot share a list.
+
+No source is privileged anywhere on the read path — `"drofus"` is simply the
+name most projects configure.
 
 **Design notes on the join:**
 
@@ -300,12 +309,12 @@ follow-up once a second source actually needs either.
   cards (add/remove by name — no reorder, since it's map-keyed, not
   ordered), each owning its own type/path-or-upload and `fields`.
   `static/index.html` and `static/comparison.html` never hardcode a source
-  name: they detect which sources are present by scanning a room's own
-  flattened keys for anything shaped like `{fields: {...}}` (see
-  `detectReferenceSources` in `index.html`) — that's what the capability
-  boundary above actually costs a second source: full-vocabulary
-  (unmatched-column) discovery only works for the one source `drofus_labels`
-  still names, everything else is discovered from what actually joined.
+  name: they take every source named in `reference_labels` for the current
+  project, plus any shaped like `{fields: {...}}` on a room's own flattened
+  keys (see `detectReferenceSources` in `index.html`). The first half is what
+  makes a source with zero matched rooms in scope still appear; the second
+  covers the unscoped multi-project merge, where another project's source
+  rides along on its own rooms and its vocabulary belongs elsewhere.
 
 ## Open items / things to watch
 

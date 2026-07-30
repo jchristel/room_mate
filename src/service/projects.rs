@@ -1,8 +1,8 @@
 //! Project and building listings for the pickers — derived from stored
 //! snapshots, with no storage or identity of their own.
 //!
-//! Moved verbatim out of `handlers::get_projects` / `handlers::get_project_buildings`
-//! (see HANDOVER-service-layer.md).
+//! Moved verbatim out of `handlers::get_projects` /
+//! `handlers::get_project_buildings` when the service layer was split out.
 
 use std::collections::BTreeMap;
 

@@ -172,8 +172,7 @@ pub fn validate_snapshot_id(taken_at: &str) -> Result<(), String> {
 /// The affine transform mapping a model's room points from Revit model space
 /// into the project's SHARED coordinate system. One per model, not per room:
 /// it's a model-level `ProjectLocation` fact (the *same* relationship on every
-/// room), so it rides the envelope rather than each polygon — see
-/// HANDOVER-georeferencing.md "Fact 1".
+/// room), so it rides the envelope rather than each polygon.
 ///
 /// It exists for two independent reasons: (a) it puts every room in a model into
 /// one common frame, which cross-model comparison needs regardless of any map
@@ -223,7 +222,7 @@ impl ModelToShared {
 /// million-foot spike, sibling overlaps — is downstream of that guess. Declaring
 /// the regime does not merely improve the tolerance: on a centreline model the
 /// close radius collapses to zero and the entire artifact class cannot arise.
-/// See Superseded/HANDOVER-areas-boundary-location.md Decision 1.
+/// See STRATEGY-AREA-CALCULATION.md §2, "The two regimes".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomBoundary {
@@ -280,7 +279,7 @@ pub struct RoomPayload {
 /// per line. Kept as its own type (rather than making `rooms` optional on
 /// `RoomPayload`) so the envelope deserializes on its own with no rooms
 /// present, and so `RoomPayload` itself keeps `rooms` guaranteed for every
-/// other consumer. See HANDOVER-streaming.md.
+/// other consumer.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StreamEnvelope {
     pub schema_version: u32,
@@ -311,13 +310,13 @@ pub struct StreamEnvelope {
 /// means the same thing — and bumps are reserved for changes that would make
 /// an existing producer's payload misparse or change meaning.
 ///
-/// Still 5 after the optional `model_to_shared` envelope field was added
-/// (HANDOVER-georeferencing.md Phase 1): same reasoning — it defaults to
+/// Still 5 after the optional `model_to_shared` envelope field was added:
+/// same reasoning — it defaults to
 /// `None`, so a pre-georeference payload stays valid and means exactly what it
 /// did (an un-placed model, rendered via auto-fit).
 ///
 /// Still 5 after the optional `room_boundary` envelope field
-/// (Superseded/HANDOVER-areas-boundary-location.md Decision 1) joined it, on the same
+/// (STRATEGY-AREA-CALCULATION.md §2) joined it, on the same
 /// `model_to_shared` precedent: absent it defaults to `None`, and a payload
 /// that omits it means exactly what it did before — a model whose regime the
 /// server infers from project policy rather than reads.

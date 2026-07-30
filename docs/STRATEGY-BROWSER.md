@@ -105,9 +105,9 @@ side should shape future server endpoints.
   sub-object ("store raw, join late") precisely because the two have
   different lifecycles, and a flat table would imply a single source of truth
   the data model deliberately doesn't have. A per-source toggle shows either
-  or both. dRofus columns come from the response's own `drofus_labels` set,
-  **not** a union of the rooms' joined fields, so a column that matched no
-  room in scope still appears (and one with no Revit counterpart in row 2 of
+  or both. Reference columns come from the response's own per-source
+  `reference_labels` set, **not** a union of the rooms' joined fields, so a
+  column that matched no room in scope still appears (and one with no Revit counterpart in row 2 of
   the CSV renders visibly *unmapped* rather than being hidden — the same
   honesty the coverage report applies). An unmatched room simply has empty
   dRofus cells, never an error.

@@ -9,7 +9,7 @@
 //! STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
 //! `roommate::service` -- parse params, call one service function, serialize
 //! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
-//! second transport over the same domain layer. See HANDOVER-service-layer.md.
+//! second transport over the same domain layer.
 //!
 //! Ingest (`POST /rooms`) has no MCP equivalent here: an MCP client asking an
 //! LLM to push a full room snapshot isn't a realistic flow, and the HTTP

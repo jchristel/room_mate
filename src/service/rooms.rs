@@ -1,6 +1,6 @@
 //! `/rooms` fetch-side derive logic: dRofus join, classification, level dedup.
 //!
-//! Moved verbatim out of `handlers::get_rooms` (see HANDOVER-service-layer.md)
+//! Moved verbatim out of `handlers::get_rooms`
 //! -- the join/classify logic never depended on `Query`/`Json`/`StatusCode`,
 //! so the only real change here is the signature: plain `Option<&str>` filters
 //! in, a plain `RoomsResult` out, no transport type touched.
@@ -423,7 +423,7 @@ fn presence_of(
 /// I write before the dot" must have one answer across filtering, comparison,
 /// and settings validation, or a name that filters correctly would silently
 /// diff as nothing — the bug this function exists to close (see
-/// HANDOVER-comparison-sources.md).
+/// STRATEGY-SOURCES.md).
 ///
 /// Returns the resolved namespace alongside the presence so callers can react
 /// per source (an unjoined source, a source-aware comparator) without
@@ -580,7 +580,8 @@ pub struct RoomsResult {
     /// model provides (see `scoped_revision`). Two idle responses return a
     /// byte-identical value; a real push bumps it. The viewer compares this one
     /// field instead of re-stringifying the whole payload every poll, so a quiet
-    /// system triggers no re-render (see HANDOVER-viewer-performance.md).
+    /// system triggers no re-render (see STRATEGY-BROWSER.md, "Endpoints follow
+    /// fetch lifecycle").
     pub revision: String,
     pub levels: Vec<Level>,
     pub rooms: Vec<RoomResponse>,
@@ -751,8 +752,8 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
 
 /// Phase 1 — scope the stored payloads to the request. Drops any payload whose
 /// project has no registered settings bundle (an unscoped merge is
-/// per-project, so a model with nothing to classify/join against has no home —
-/// see HANDOVER-per-project-settings.md "skip on read"), and, under a
+/// per-project, so a model with nothing to classify/join against has no
+/// home), and, under a
 /// milestone filter, *replaces* each surviving model's latest payload with the
 /// snapshot the milestone pins for it (owned payloads, hence no `&` on the
 /// tuple's payload slot). A project without the named milestone, or a model it
@@ -912,9 +913,9 @@ fn dedup_levels(scoped: &[ScopedPayload<'_>]) -> BTreeMap<(String, String, Strin
 /// never show current column headers over pinned data. Collected *before*
 /// the "contributed nothing" check: the labels describe the project's
 /// dataset, not its rooms, so a project whose rooms all fail a filter still
-/// reports its columns. Stays specifically about "drofus" (not generalized to
-/// every joined source) — the same scope limit as `service::validation`;
-/// see `docs/HANDOVER-reference-sources.md`.
+/// reports its columns. Collected for EVERY configured source, keyed by
+/// source name: two sources may both declare a label called `NetArea`, so the
+/// source has to be part of the address.
 fn assemble_scoped_rooms(
     scoped: &[ScopedPayload<'_>],
     level_remap: &BTreeMap<(String, String, String), String>,

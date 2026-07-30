@@ -24,7 +24,6 @@
 //!   call into `service`.
 //! - `service`   — transport-agnostic derive/assemble logic (dRofus join,
 //!   classification, validation), shared by `handlers` and the MCP binary.
-//!   See HANDOVER-service-layer.md.
 //! - `settings_api` — read/save API behind the settings UI: transport-agnostic
 //!   core (reads shared with the MCP binary) + the `/api/settings` Axum
 //!   adapters; saves hot-swap the registry.

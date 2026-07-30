@@ -39,7 +39,7 @@ use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 /// `RequestDecompressionLayer` inflates before this limit is checked. FFE
 /// exports run >100 MB uncompressed; sized generously above that rather than
 /// tuned tight, since the streaming route (`/rooms/stream`) is the intended
-/// home for anything approaching this ceiling anyway. See HANDOVER-gzip.md.
+/// home for anything approaching this ceiling anyway.
 const ROOMS_BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 
 /// Cap on a reference-source CSV upload body (decompressed, same as above).
@@ -54,8 +54,7 @@ struct Args {
     server_settings: PathBuf,
 
     /// Path to a directory of per-project TOML settings files (one per
-    /// project, each declaring its own `project_id`). See
-    /// HANDOVER-per-project-settings.md.
+    /// project, each declaring its own `project_id`).
     #[arg(long)]
     project_settings: PathBuf,
 
@@ -200,8 +199,8 @@ fn build_router(state: roommate::state::Shared) -> Router {
             "/rooms",
             post(ingest_rooms).get(get_rooms).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
         )
-        // Streaming NDJSON ingest for models too large to buffer whole (see
-        // HANDOVER-streaming.md) -- disables the body limit entirely and relies
+        // Streaming NDJSON ingest for models too large to buffer whole --
+        // disables the body limit entirely and relies
         // on line-by-line reading to keep peak memory low instead.
         .route(
             "/rooms/stream",

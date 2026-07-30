@@ -114,18 +114,21 @@ pub struct ProjectReferenceSource {
 
 /// One project's classification/join inputs — everything that used to be a
 /// flat field on `AppState`, bundled so it can be registered per project
-/// instead of applied globally. See HANDOVER-per-project-settings.md.
+/// instead of applied globally.
 #[derive(Clone)]
 pub struct ProjectSettings {
     /// Resolved reference sources for this project, keyed by source name —
     /// the same name a `/rooms` filter or `comparison_key` writes before the
     /// dot (`drofus.NetArea`). Loaded once at startup from
     /// `Settings.sources.reference`. Joined onto rooms at response assembly —
-    /// a stored snapshot is never mutated by the join. Only "drofus" is
-    /// actually wired up to the join/filter/comparison read path today (see
-    /// `service::rooms::JOINED_SOURCES`); the map shape is what lets a second
-    /// source be *configured* without a settings-type change, ahead of that
-    /// read-path generalization.
+    /// a stored snapshot is never mutated by the join.
+    ///
+    /// **Every source in this map is live on every read path**: the join and
+    /// filter in `service::rooms`, the QA report in `service::validation`
+    /// (one section per source), `service::comparison`, the graph nodes in
+    /// `service::adjacency`, and each milestone's per-source snapshot pin. No
+    /// source is privileged — "drofus" is just the name most projects happen
+    /// to configure.
     pub reference: BTreeMap<String, ProjectReferenceSource>,
 
     /// Classification tiers loaded from this project's settings. Resolved

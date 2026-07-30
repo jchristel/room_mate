@@ -9,8 +9,7 @@
 //! to how the store backend is chosen, for instance, only has one call site
 //! to update.
 //!
-//! See HANDOVER-per-project-settings.md: settings moved from one-per-process
-//! to one-per-project, while `[storage]`/`[test_data]` (server-wide, not tied
+//! Settings are one-per-project rather than one-per-process, while `[storage]`/`[test_data]` (server-wide, not tied
 //! to any one project) stayed behind in their own `ServerConfig` file.
 
 use std::collections::HashMap;

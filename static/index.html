@@ -45,7 +45,7 @@
   header .links a:hover { text-decoration: underline; }
 
   /* Global scope pickers: project / milestone / building — one scope for the
-     whole page (see "single-project viewer", Superseded/HANDOVER-ui-layout Decision 1). */
+     whole page (the single-project viewer). */
   header select.picker {
     font-family: var(--mono); font-size: 0.72rem;
     background: var(--paper); color: var(--ink);
@@ -101,7 +101,7 @@
     min-width: 0;
   }
 
-  /* ---- room inspector (Superseded/HANDOVER-ui-layout Decision 3) ----------------------
+  /* ---- room inspector (selection is page state) ---------------------------
      ONE per page, never one per zone: selection is page state, so a per-zone
      inspector would sit empty in every zone but one. A layout participant that
      reflows the plans, NOT an absolutely-positioned overlay inside
@@ -216,7 +216,7 @@
      plan or error); non-matches fade so matches stand out. `.dim` is opacity so
      it works regardless of an inline colour-plan fill. */
   .room.match { stroke: var(--accent); stroke-width: 3; }
-  /* Click-selection (Superseded/HANDOVER-ui-layout Decision 3): ONE room at a time for the
+  /* Click-selection: ONE room at a time for the
      whole page. Deliberately louder than `.match` and dashed, so a selected room
      is still distinguishable when it is also a search match — the two states are
      independent and routinely co-occur. Stroke only, never fill: a colour plan
@@ -255,7 +255,7 @@
   .zone-canvas .empty code { background: #0001; padding: 0.1rem 0.4rem; }
   .hidden { display: none; }
 
-  /* --- bottom region: the results band (Superseded/HANDOVER-ui-layout Decision 2) ---
+  /* --- bottom region: the results band ---
      Tabular/temporal output lives at the bottom of the page, not in overlays
      covering the plan. Band 1 = results (QA, area figures): sometimes
      visible, collapsed to a one-line strip by default — a fully hidden band
@@ -555,7 +555,7 @@
     </div>
   </header>
   <!-- The middle band is two columns: the zones, and the right-hand inspector
-       (Superseded/HANDOVER-ui-layout Decision 3). A wrapper rather than columns on <main>
+       (selection is page state). A wrapper rather than columns on <main>
        itself, because `main` IS the zone container and its
        `grid-template-columns` is rewritten from JS on every zone add/remove —
        any static column here would be overwritten. -->
@@ -592,7 +592,7 @@
          reason: it is a page-level result derived from the scope (plus the one
          page selection), not a per-zone presentation. Lives here rather than in
          a right-hand column because that column is reserved for the room
-         inspector (Superseded/HANDOVER-ui-layout Decision 3). -->
+         inspector. -->
     <div class="result-band hidden" id="adjBand">
       <button class="band-head" id="adjHead">▸ Adjacency</button>
       <div class="band-body hidden" id="adjBody">
@@ -704,7 +704,7 @@ const zoneTemplate = document.getElementById("zoneTemplate");
 // the poll cursor, the payload, colour-plan config, and validation state are
 // module-level singletons — there is exactly one scope on screen, so zones
 // can never disagree about what data they show, only how they draw it
-// (Superseded/HANDOVER-ui-layout Decision 1: the single-project viewer). Multiple zones
+// (there is one scope on screen: the single-project viewer). Multiple zones
 // exist to show several LEVELS of one building at once.
 const zones = [];
 let zoneSeq = 0;
@@ -748,7 +748,7 @@ let linkViews = false;
 // calls paintLevel directly and never sees zone-level classes — a CSS-only
 // toggle would be silently ignored by every exported file. Deliberately not
 // persisted: linkViews isn't either, and view prefs should persist together
-// or not at all (Superseded/HANDOVER-ui-layout.md, Decision 4 "Persistence").
+// or not at all (STRATEGY-BROWSER.md, "UI growth").
 let showRoomLabels = true;
 
 // Global room search (see the "search" section lower down): one query + one set
@@ -762,7 +762,7 @@ let searchFieldsInitialised = false;
 let searchMatchIds = null;
 let searchActive = false;
 
-// ---- selection: PAGE state, not zone state (Superseded/HANDOVER-ui-layout Decision 3)
+// ---- selection: PAGE state, not zone state
 // One selected THING at a time regardless of which zone the click landed in. The
 // same room can legitimately appear in two zones showing the same level, so the
 // highlight is applied in EVERY zone that draws it, while `zoneId` records where
@@ -924,7 +924,7 @@ const MISMATCH_COLOUR = "#d73027";  // red:   outside tolerance
 // because three other features walk `zone.cullUnits` — `roomAtNode`
 // (click-to-select), `applySelection` and `applyHighlight`. Disabling culling by
 // not collecting them would break room selection and search, which looks nothing
-// like a culling change. See Superseded/HANDOVER-culling-disable-switch.md §2.
+// like a culling change. See STRATEGY-BROWSER.md, "Rendering" §2.
 let CULL_ENABLED = true;
 // date-range: a date after near_date is "future" — a fixed blue, separate from
 // the green→red near/far ramp (the RdYlGn scheme has no blue of its own).
@@ -1504,7 +1504,7 @@ function ingestZone(zone) {
   // Refit (reset zoom/pan to the fitted view) only on the first render or when
   // the active level actually changed. A plain data re-push on the same level
   // keeps the user's current zoom rather than snapping back to fitted, which
-  // read as zoom-specific stutter (see HANDOVER-viewer-performance.md). The
+  // read as zoom-specific stutter (see STRATEGY-BROWSER.md, "Endpoints follow fetch lifecycle"). The
   // first render must fit: zone.fitted has to exist for a no-refit render, whose
   // grid/label sizing reads it. Explicit level switches still refit via
   // selectLevel.
@@ -2175,7 +2175,7 @@ function ringCentroid(ring) {
 
 // Net area of one room = its outer loop minus its holes (shoelace, model coords).
 // The dissolved footprint is always >= the summed net of its rooms; the gap is
-// wall zones + filled voids (see HANDOVER-hierarchy-areas.md "Naming").
+// wall zones + filled voids (see STRATEGY-AREA-CALCULATION.md).
 function roomNetArea(room) {
   if (!room.loops || room.loops.length === 0) return 0;
   const ringArea = (loop) => {
@@ -2642,7 +2642,7 @@ const gridFilters = new Map(); // column key -> lowercased filter text
 let gridScrollTop = 0;
 // Band 2 folds to its bar the way the band-1 blocks do. In-memory only, like
 // linkViews and the region height — view state persistence is deferred as one
-// decision (Superseded/HANDOVER-ui-layout Decision 4, "Persistence"), not per control.
+// decision (view prefs persist together or not at all), not per control.
 let gridCollapsed = false;
 // QA marks, at the finest address the report supports. `compute_validation`
 // keys its field-level findings by (room, field), which in this grid IS a
@@ -3017,7 +3017,7 @@ function downloadGridCsv() {
 // substring scan over rooms already in memory; highlighting toggles classes on
 // the already-rendered nodes (the cull-unit room->nodes map) rather than
 // rebuilding the SVG — so it stays smooth at thousands of rooms. See the plan /
-// HANDOVER for why this is frontend-only.
+// See STRATEGY-BROWSER.md for why this is frontend-only.
 
 function debounce(fn, ms) {
   let t;
@@ -3093,7 +3093,7 @@ function applyHighlight(zone) {
 //
 // Built as its own step because two features need it: the adjacency graph
 // (which centres on the selection) and the inspector
-// (Superseded/HANDOVER-ui-layout Decision 3). Neither owns it.
+// (selection is page state). Neither owns it.
 
 // Toggle `.selected` on whatever the selection names, in one zone. Rooms come
 // from the cull units (nodes[0] is the outer polygon — holes and the label are
@@ -3162,7 +3162,7 @@ function areaAtNode(zone, node) {
 
 // ========================= inspector (right column) =========================
 //
-// Superseded/HANDOVER-ui-layout Decision 3, and the third consumer of the selection layer
+// selection is page state, and this is the third consumer of that layer
 // after the graph and the plan highlight. Deliberately a *listener plus a
 // renderer*: it never calls into `select`, never introduces an `activeZoneId`,
 // and never re-renders a zone — a selection change stays a class toggle.
@@ -3174,7 +3174,7 @@ function areaAtNode(zone, node) {
 // third, so "show the properties of the selected thing" is the panel's job —
 // "show the properties of the selected room" was the narrower special case.
 //
-// See Superseded/HANDOVER-room-inspector.md for the measurements behind the filtering.
+// See STRATEGY-BROWSER.md, "UI growth" for the measurements behind the filtering.
 
 // A room's 45 properties (House A) are not 45 useful ones: 19 of them hold no
 // real value on ANY room. Revit emits the literal string "None" for an unset
@@ -3189,7 +3189,7 @@ let inspHideEmpty = true;   // default ON: 45 -> 26 on House A, no config needed
 let inspFilter = "";        // substring match on property NAME
 
 // Deliberately not persisted — `linkViews`, the labels toggle and the search
-// field picker are all unpersisted too, and Superseded/HANDOVER-ui-layout Decision 4 made
+// field picker are all unpersisted too, and the persistence decision made
 // "persist every view pref or none" a standing decision. The durable version of
 // "which properties matter" is `room_label` in project settings, server-side.
 
@@ -3520,7 +3520,7 @@ async function poll() {
     const payload = await res.json();
     // Change-detection compares the server's one-value content revision instead
     // of re-stringifying the whole payload every poll (see the `revision` field
-    // in rooms.rs / HANDOVER-viewer-performance.md). A quiet system returns the
+    // in rooms.rs / STRATEGY-BROWSER.md). A quiet system returns the
     // same revision every tick, so `ingestAll` (full teardown + rebuild) never
     // fires between real pushes. Fall back to a stringify only if an older
     // server omits the field, so the viewer still updates against one.

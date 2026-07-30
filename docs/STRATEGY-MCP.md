@@ -44,22 +44,27 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   property filters optional — see the property-filter bullet below),
   `get_validation`, `list_snapshots`,
   `get_latest_snapshot`, `list_milestones`, `compare_milestones`,
-  `get_hierarchy_areas`, `get_adjacency`, `list_drofus_snapshots`, and
-  `get_drofus_snapshot` mirror the twelve HTTP read routes (snapshot-history,
-  milestone, geometry and dRofus-upload endpoints: see
+  `get_hierarchy_areas`, `get_adjacency`, `list_reference_snapshots`, and
+  `get_reference_snapshot` mirror the twelve HTTP read routes (snapshot-history,
+  milestone, geometry and reference-upload endpoints: see
   [Server](STRATEGY-SERVER.md);
-  `get_latest_snapshot` and `get_drofus_snapshot` map the service's `None` —
+  `get_latest_snapshot` and `get_reference_snapshot` map the service's `None` —
   HTTP's 404 — to a short plain-text answer, same convention as `get_rooms`'
   empty-store case).
-  **Milestone dRofus pinning is inherited, not re-plumbed:** `get_rooms`'s
+  **Milestone reference pinning is inherited, not re-plumbed:** `get_rooms`'s
   `milestone` filter calls the same `assemble_rooms` the HTTP route does, and
-  that function resolves a milestone's pinned dRofus snapshot below the
+  that function resolves a milestone's pinned snapshot per source below the
   transport seam — so a milestone view over MCP substitutes both the pinned
-  *model* snapshots and the pinned *dRofus* CSV automatically, no MCP-specific
-  code. `list_milestones` surfaces each milestone's `drofus_snapshot` id (its
-  `MilestoneSummary`, alongside the model-pin count) so a client sees whether
-  and what dRofus a milestone pins without a second `get_project_settings`
-  call. Authoring a pin stays HTTP/settings-UI only (the read-only stance
+  *model* snapshots and each pinned *reference* CSV automatically, no
+  MCP-specific code. `list_milestones` surfaces each milestone's
+  `reference_snapshots` map (its `MilestoneSummary`, alongside the model-pin
+  count) so a client sees whether and what each source pins without a second
+  `get_project_settings` call.
+
+  **The three reference tools take an optional `source`.** Omitted, it
+  resolves to the project's sole configured source; ambiguity is refused with
+  the choices named rather than guessed, since silently picking the first
+  would answer confidently about the wrong dataset. Authoring a pin stays HTTP/settings-UI only (the read-only stance
   below), though `get_project_settings` exposes the raw pins for reading.
   `list_project_settings` / `get_project_settings` reuse `settings_api`'s
   transport-agnostic read core (see [Server](STRATEGY-SERVER.md)'s settings
@@ -113,8 +118,8 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   `main.rs` never imports `rmcp`/`reqwest`. **Staleness asymmetry, stated in
   the tool description so it doesn't read as a bug:** after a forwarded
   upload, this process's own `get_rooms`/`get_validation` still join the
-  dRofus data loaded at *its* startup (registries aren't shared), while
-  `list_drofus_snapshots`/`get_drofus_snapshot` read the shared store fresh
+  reference data loaded at *its* startup (registries aren't shared), while
+  `list_reference_snapshots`/`get_reference_snapshot` read the shared store fresh
   and see the new upload immediately.
 - **`ServiceError` → `McpError` mapping.** `NotFound`/`BadInput` both become
   `McpError::invalid_params` (MCP's tool-call error surface has no direct

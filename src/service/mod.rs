@@ -5,7 +5,8 @@
 //! `StatusCode` in here. `ServiceError` is the seam: each transport (the Axum
 //! `handlers`, the MCP server in `src/bin/mcp.rs`) maps it to its own
 //! convention. That mapping is deliberately kept *out* of this module -- it
-//! belongs in the adapter, not the domain. See HANDOVER-service-layer.md.
+//! belongs in the adapter, not the domain. (CODING-CONVENTIONS.md,
+//! "Dependency direction is the seam".)
 
 pub mod adjacency;
 pub mod areas;

@@ -146,5 +146,7 @@ are all diagnostic signals, not errors.
 ## TOML footgun (serialize side)
 - A scalar struct field serialized *after* a map/sub-table field lands inside
   that `[table]`, not the parent. Declare scalar fields **before** any
-  map/sub-table field in the struct (e.g. `Milestone.drofus_snapshot` before
-  `attachments`) so the round-trip through the settings API stays correct.
+  map/sub-table field in the struct (e.g. `Milestone.name`/`date` before
+  `reference_snapshots` and `attachments`) so the round-trip through the
+  settings API stays correct. Note this bites harder now that `Milestone` has
+  *two* map fields: every scalar must precede both.

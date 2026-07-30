@@ -31,8 +31,8 @@ pub use load::{load_server_config, load_settings};
 pub use validate::{validate_colour_plans, validate_reference_field_shapes, validate_reference_fields};
 
 /// One project's settings, parsed once at startup from its own TOML file
-/// (one of N files in the `--project-settings` directory — see
-/// HANDOVER-per-project-settings.md). Server-wide config (`[storage]`,
+/// (one of N files in the `--project-settings` directory). Server-wide config
+/// (`[storage]`,
 /// `[test_data]`) lives separately in `ServerConfig`, loaded once from
 /// `--server-settings` independent of this per-project loop.
 ///
@@ -238,7 +238,7 @@ pub enum MeasurementStandard {
 /// so it rides the upload envelope. Which measurement standard applies is
 /// **contractual**, and the width above which a gap stops being a wall and
 /// becomes a void is a **project judgement** — neither is discoverable from the
-/// model, so both live here. See Superseded/HANDOVER-areas-boundary-location.md Decision 2.
+/// model, so both live here. See STRATEGY-AREA-CALCULATION.md §6.
 ///
 /// `max_wall_thickness` is deliberately **one quantity with two consumers**:
 /// `service::areas` sizes its wall zone by it and `service::adjacency` uses it
