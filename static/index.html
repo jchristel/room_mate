@@ -347,6 +347,14 @@
   .band-body.hidden { display: none; }
   .band-body section { margin-bottom: 1rem; }
   .band-body section h3 { font-size: 0.68rem; margin: 0 0 0.35rem; }
+  /* One QA block per reference source. The rule is the divider — a finding
+     only means something against the source that found it, so the sections
+     must not read as one flat list when a project configures two. */
+  .band-body section.qa-source { border-top: 1px solid var(--rule); padding-top: 0.5rem; }
+  .band-body section.qa-source > h2 {
+    font-size: 0.72rem; margin: 0 0 0.5rem; text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .band-body .qa-source-meta { text-transform: none; letter-spacing: 0; opacity: 0.7; font-weight: 400; }
   .band-body ul { margin: 0; padding-left: 1.1rem; }
   .band-body .mismatch { margin-bottom: 0.3rem; }
   .band-body .ok { opacity: 0.6; }
@@ -1761,22 +1769,67 @@ function renderFieldCoverage(coverage) {
   ).join("")}</ul></section>`;
 }
 
+// Every room id flagged by one source's report. Per source because each
+// source reconciles on its own link property, so the same room can be clean
+// for one and unmatched for another.
+function sourceErrorRoomIds(report) {
+  return [
+    ...report.rooms_missing_link_value,
+    ...report.duplicate_link_values.flatMap(d => d.room_ids),
+    ...report.rooms_unmatched,
+    ...report.property_mismatches.map(m => m.room_id),
+    ...report.fields_absent_in_revit.map(m => m.room_id),
+    ...report.fields_empty_in_revit.map(m => m.room_id),
+  ];
+}
+
+// One source's findings, as a titled block. The six sections are the same
+// six the single-source band always showed; what is new is that they are
+// rendered once PER SOURCE, under a heading naming it, because a discrepancy
+// is only meaningful against the source that found it — "unmatched" means
+// unmatched in dRofus or unmatched in FFE, never just "unmatched".
+function renderSourceValidation(name, report) {
+  // Each entry names its room via `data-room`, which makes it a jump target
+  // into band 2 rather than a place to repeat the row's detail (see the
+  // delegated handler below). Cheap to allow for now, expensive to retrofit.
+  const at = (id) => ` data-room="${escapeHtml(id)}"`;
+  const label = escapeHtml(sourceDisplayName(name));
+  const body = [
+    section("Missing link value", report.rooms_missing_link_value, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
+    section("Duplicate link values", report.duplicate_link_values,
+      d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(id => `<span${at(id)}>${escapeHtml(id)}</span>`).join(", ")}</li>`),
+    section(`Unmatched in ${label}`, report.rooms_unmatched, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
+    section("Property mismatches", report.property_mismatches, m =>
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}: `
+      + `"${escapeHtml(m.room_value)}" vs ${label} "${escapeHtml(m.reference_value)}"</li>`),
+    section("Field absent in Revit", report.fields_absent_in_revit, m =>
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
+    section("Field empty in Revit", report.fields_empty_in_revit, m =>
+      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
+  ].join("");
+
+  const count = report.discrepancies?.total ?? 0;
+  return `<section class="qa-source">`
+    + `<h2>${label} <span class="qa-source-meta">link property `
+    + `<strong>${escapeHtml(report.link_property)}</strong> · ${count ? `⚠ ${count}` : "✓ no issues"}</span></h2>`
+    + (count ? body : `<p class="ok">No issues found.</p>`)
+    + renderFieldCoverage(report.field_coverage)
+    + `</section>`;
+}
+
 // Update the globals from a fresh report and reflect it into the QA band.
 function renderValidation(data) {
   currentValidation = data;
-  errorRoomIds = data.drofus_configured
-    ? new Set([
-        ...data.rooms_missing_link_value,
-        ...data.duplicate_link_values.flatMap(d => d.room_ids),
-        ...data.rooms_unmatched_in_drofus,
-        ...data.property_mismatches.map(m => m.room_id),
-        ...data.fields_absent_in_revit.map(m => m.room_id),
-        ...data.fields_empty_in_revit.map(m => m.room_id),
-      ])
-    : new Set();
+  const sources = Object.entries(data.sources || {});
+
+  // The union across sources: a room is flagged on the plan if ANY source
+  // has something to say about it. Which source is in the band, not the plan.
+  errorRoomIds = new Set(sources.flatMap(([, report]) => sourceErrorRoomIds(report)));
 
   const band = document.getElementById("qaBand");
-  if (!data.drofus_configured) {
+  // No configured-and-loaded source anywhere = nothing to reconcile. This is
+  // the empty-map form of what `drofus_configured: false` used to say.
+  if (sources.length === 0) {
     band.classList.add("hidden");
     updateRegionHeight();
     setShowErrors(false);
@@ -1788,38 +1841,17 @@ function renderValidation(data) {
   // Fresh error set: re-highlight open plans without disturbing pan/zoom.
   if (showErrors) rerenderZones();
 
-  // The server now tallies this (data.discrepancies.total); fall back to the
-  // per-list sum for an older server that doesn't send the summary.
-  const issueCount = data.discrepancies?.total ?? (
-    data.rooms_missing_link_value.length + data.duplicate_link_values.length
-    + data.rooms_unmatched_in_drofus.length + data.property_mismatches.length
-    + data.fields_absent_in_revit.length + data.fields_empty_in_revit.length);
+  // Summed across every source by the server, so a second source's problems
+  // can't hide behind a clean first one.
+  const issueCount = data.discrepancies?.total ?? 0;
 
   const open = !document.getElementById("qaBody").classList.contains("hidden");
   document.getElementById("qaHead").innerHTML =
     `${open ? "▾" : "▸"} QA · ` + (issueCount ? `<span class="issues">⚠ ${issueCount}</span>` : "✓");
 
-  // Each entry names its room via `data-room`, which makes it a jump target
-  // into band 2 rather than a place to repeat the row's detail (see the
-  // delegated handler below). Cheap to allow for now, expensive to retrofit.
-  const at = (id) => ` data-room="${escapeHtml(id)}"`;
-  const html = [
-    `<p>${data.total_rooms} room(s) checked against link property <strong>${escapeHtml(data.link_property)}</strong>.</p>`,
-    section("Missing link value", data.rooms_missing_link_value, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
-    section("Duplicate link values", data.duplicate_link_values,
-      d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(id => `<span${at(id)}>${escapeHtml(id)}</span>`).join(", ")}</li>`),
-    section("Unmatched in dRofus", data.rooms_unmatched_in_drofus, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
-    section("Property mismatches", data.property_mismatches, m =>
-      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}: `
-      + `"${escapeHtml(m.room_value)}" vs dRofus "${escapeHtml(m.drofus_value)}"</li>`),
-    section("Field absent in Revit", data.fields_absent_in_revit, m =>
-      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
-    section("Field empty in Revit", data.fields_empty_in_revit, m =>
-      `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}</li>`),
-  ].join("");
-
   document.getElementById("qaContent").innerHTML =
-    (issueCount ? html : `<p class="ok">No issues found.</p>`) + renderFieldCoverage(data.field_coverage);
+    `<p>${data.total_rooms} room(s) checked against ${sources.length} reference source(s).</p>`
+    + sources.map(([name, report]) => renderSourceValidation(name, report)).join("");
 
   // A fresh report re-addresses the grid's QA marks.
   rebuildGridErrorIndex();
@@ -1857,25 +1889,32 @@ function csvEscape(value) {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+// One CSV covering every source. `source` is a real column rather than one
+// file per source: a room that is clean in dRofus and broken in FFE should
+// appear once per finding in one sheet, sortable by either dimension.
+//
+// The link-value column can no longer be headed by THE link property, since
+// each source has its own — so the header is generic and the source column
+// tells you which property the value came from. room_number / room_name /
+// link_value come from that source's per-room detail (error_rooms).
 function buildValidationCsv(data) {
-  // room_number / room_name / link-value come from the server's per-room detail
-  // (error_rooms), keyed by room_id; the link-value column is headed by the
-  // link property name (e.g. "Number"). Older servers omit these -> blank cells.
-  const info = data.error_rooms || {};
-  const linkHeader = data.link_property || "link_value";
-  const rows = [["room_id", "room_number", "room_name", linkHeader, "error"]];
-  const push = (id, error) => {
-    const r = info[id] || {};
-    rows.push([id, r.number || "", r.name || "", r.link_value || "", error]);
-  };
-  for (const id of data.rooms_missing_link_value) push(id, "missing link value");
-  for (const dup of data.duplicate_link_values)
-    for (const id of dup.room_ids) push(id, `duplicate link value: ${dup.value}`);
-  for (const id of data.rooms_unmatched_in_drofus) push(id, "unmatched in dRofus");
-  for (const m of data.property_mismatches)
-    push(m.room_id, `property mismatch: ${m.field} (room="${m.room_value}" vs dRofus="${m.drofus_value}")`);
-  for (const m of data.fields_absent_in_revit) push(m.room_id, `field absent in Revit: ${m.field}`);
-  for (const m of data.fields_empty_in_revit) push(m.room_id, `field empty in Revit: ${m.field}`);
+  const rows = [["source", "room_id", "room_number", "room_name", "link_property", "link_value", "error"]];
+  for (const [name, report] of Object.entries(data.sources || {})) {
+    const info = report.error_rooms || {};
+    const label = sourceDisplayName(name);
+    const push = (id, error) => {
+      const r = info[id] || {};
+      rows.push([label, id, r.number || "", r.name || "", report.link_property || "", r.link_value || "", error]);
+    };
+    for (const id of report.rooms_missing_link_value) push(id, "missing link value");
+    for (const dup of report.duplicate_link_values)
+      for (const id of dup.room_ids) push(id, `duplicate link value: ${dup.value}`);
+    for (const id of report.rooms_unmatched) push(id, `unmatched in ${label}`);
+    for (const m of report.property_mismatches)
+      push(m.room_id, `property mismatch: ${m.field} (room="${m.room_value}" vs ${label}="${m.reference_value}")`);
+    for (const m of report.fields_absent_in_revit) push(m.room_id, `field absent in Revit: ${m.field}`);
+    for (const m of report.fields_empty_in_revit) push(m.room_id, `field empty in Revit: ${m.field}`);
+  }
   return rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
 }
 
@@ -1891,7 +1930,7 @@ function downloadCsv(filename, csvText) {
 }
 
 function downloadValidationCsv() {
-  if (!currentValidation || !currentValidation.drofus_configured) return;
+  if (!currentValidation || !Object.keys(currentValidation.sources || {}).length) return;
   downloadCsv(`validation-${projectId || "project"}.csv`, buildValidationCsv(currentValidation));
 }
 
@@ -2610,20 +2649,43 @@ let gridCollapsed = false;
 // (row, column) address — so a mismatch is marked *on the disagreeing cell*
 // rather than only listed in band 1. Room-level findings (no link value,
 // unmatched, duplicate) have no column, so they mark the Id cell instead.
-let gridCellErrors = new Set(); // `${roomId}\0${revitProperty}`
+//
+// Keyed by the grid's OWN column key (`gridColumns`' `key`), not by a bare
+// name. Two things force that. A finding's `field` is the *reference label*
+// (`NetArea`), while the Revit column is keyed by the *property* it maps to
+// (`p:Area`) — comparing the two only ever matched when a label happened to
+// equal its property name, which is why `Department` marked correctly and
+// `NetArea` never did. And with N sources, two of them may both declare a
+// label called `NetArea`, so the key has to name the source as well.
+//
+// A disagreement is between two cells, so BOTH are marked: the source's own
+// cell and the Revit cell it contradicts (resolved through that source's
+// `field_coverage`, which is where label -> revit_property already lives).
+let gridCellErrors = new Set(); // `${roomId}\0${columnKey}`
 let gridRoomErrors = new Set(); // roomId
 
 function rebuildGridErrorIndex() {
   gridCellErrors = new Set();
   gridRoomErrors = new Set();
   const d = currentValidation;
-  if (!d || !d.drofus_configured) return;
-  for (const m of d.property_mismatches) gridCellErrors.add(`${m.room_id}\0${m.field}`);
-  for (const m of d.fields_absent_in_revit) gridCellErrors.add(`${m.room_id}\0${m.field}`);
-  for (const m of d.fields_empty_in_revit) gridCellErrors.add(`${m.room_id}\0${m.field}`);
-  for (const id of d.rooms_missing_link_value) gridRoomErrors.add(id);
-  for (const id of d.rooms_unmatched_in_drofus) gridRoomErrors.add(id);
-  for (const dup of d.duplicate_link_values) for (const id of dup.room_ids) gridRoomErrors.add(id);
+  if (!d) return;
+  for (const [name, report] of Object.entries(d.sources || {})) {
+    // label -> the Revit property it is reconciled against, for this source.
+    const revitProperty = new Map(
+      (report.field_coverage || []).filter(c => c.revit_property).map(c => [c.label, c.revit_property])
+    );
+    const mark = (roomId, label) => {
+      gridCellErrors.add(`${roomId}\0${name}:${label}`);
+      const prop = revitProperty.get(label);
+      if (prop) gridCellErrors.add(`${roomId}\0p:${prop}`);
+    };
+    for (const m of report.property_mismatches) mark(m.room_id, m.field);
+    for (const m of report.fields_absent_in_revit) mark(m.room_id, m.field);
+    for (const m of report.fields_empty_in_revit) mark(m.room_id, m.field);
+    for (const id of report.rooms_missing_link_value) gridRoomErrors.add(id);
+    for (const id of report.rooms_unmatched) gridRoomErrors.add(id);
+    for (const dup of report.duplicate_link_values) for (const id of dup.room_ids) gridRoomErrors.add(id);
+  }
 }
 
 // Fixed `RoomResponse` fields (`room` and `reference` are both `#[serde(flatten)]`d
@@ -2852,10 +2914,10 @@ function renderGridBody(cols) {
     const cells = cols.map(c => {
       const v = String(c.get(room));
       // A field-level finding marks its own cell; a room-level one (which has
-      // no column) marks the Id cell.
-      const bad = c.key.startsWith("p:")
-        ? gridCellErrors.has(`${room.id}\0${c.key.slice(2)}`)
-        : (c.key === "$id" && roomBad);
+      // no column) marks the Id cell. The index is keyed by column key, so
+      // reference and Revit columns are both reachable — see
+      // `rebuildGridErrorIndex`.
+      const bad = gridCellErrors.has(`${room.id}\0${c.key}`) || (c.key === "$id" && roomBad);
       const refCls = c.source !== "model" ? " src-reference" : "";
       return `<td class="src-${c.source}${refCls}${bad ? " err" : ""}" title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
     }).join("");
