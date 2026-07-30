@@ -17,7 +17,7 @@ use std::sync::{Arc, RwLock};
 use anyhow::Context;
 
 use crate::contract::RoomPayload;
-use crate::drofus::ReferenceData;
+use crate::reference::ReferenceData;
 use crate::settings::{
     BuiltinPropertyDef, ReferenceFieldConfig, HierarchyExclusion, HierarchyTier, Milestone, TestData,
 };
@@ -47,18 +47,57 @@ impl ModelKey {
     }
 }
 
+/// Names Windows reserves for DOS devices. Reserved **with any extension and
+/// any case**, so `settings/projects/CON.toml` does not name a file — it names
+/// the console — and `data/snapshots/NUL/` cannot be created at all.
+///
+/// The primary development machine here is Windows while CI runs ubuntu, which
+/// is exactly the split that lets a Windows-only rule rot unnoticed: on Linux
+/// these are perfectly ordinary directory names and every test passes.
+const WINDOWS_RESERVED_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
+    "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
 /// Whether `s` is safe to use as a single filesystem path component —
 /// `FsStore` builds paths from project/model ids verbatim, and the settings
 /// API names project files `<project_id>.toml`. One predicate shared by
 /// ingest validation and the settings API so the two can never disagree on
 /// what a safe id is. Lives here next to `ModelKey` for the same reason it
 /// does: it's identity policy both state and storage depend on.
+///
+/// **Rejects on every platform, including the Windows-specific rules.** The
+/// store is meant to be portable — a project directory written on Windows and
+/// read on Linux, or a repo cloned across both — so a name that is legal on
+/// one and impossible on the other would make the tree unopenable after a
+/// move. Applying the strictest union everywhere keeps ids meaning the same
+/// thing wherever the store is opened, and costs only the handful of names
+/// below, which nobody chooses deliberately.
+///
+/// The three Windows rules, beyond the reserved characters:
+/// - **DOS device names** (`WINDOWS_RESERVED_NAMES`) — reserved regardless of
+///   extension, so `CON.toml` is the console, not a settings file.
+/// - **A trailing dot or space** — silently stripped by the Win32 layer, so
+///   `"Ward "` and `"Ward"` become the same directory. Two ids that must stay
+///   distinct would collide and one project would overwrite the other.
+/// - Both checks are case-insensitive, since the reservation is.
 pub fn is_path_safe_component(s: &str) -> bool {
-    !(s.trim().is_empty()
+    if s.trim().is_empty()
         || s == "."
         || s == ".."
         || s.contains(['/', '\\', '<', '>', ':', '"', '|', '?', '*'])
-        || s.chars().any(|c| c.is_control()))
+        || s.chars().any(|c| c.is_control())
+    {
+        return false;
+    }
+    // Trailing dot/space: Windows strips them, silently aliasing two ids.
+    if s.ends_with('.') || s.ends_with(' ') {
+        return false;
+    }
+    // DOS device names, extension and case irrelevant: "con", "CON.toml" and
+    // "Com1.csv" all resolve to a device rather than a file.
+    let stem = s.split('.').next().unwrap_or(s);
+    !WINDOWS_RESERVED_NAMES.iter().any(|reserved| stem.eq_ignore_ascii_case(reserved))
 }
 
 /// One reference source's resolved runtime state for a project: its loaded
@@ -75,18 +114,21 @@ pub struct ProjectReferenceSource {
 
 /// One project's classification/join inputs — everything that used to be a
 /// flat field on `AppState`, bundled so it can be registered per project
-/// instead of applied globally. See HANDOVER-per-project-settings.md.
+/// instead of applied globally.
 #[derive(Clone)]
 pub struct ProjectSettings {
     /// Resolved reference sources for this project, keyed by source name —
     /// the same name a `/rooms` filter or `comparison_key` writes before the
     /// dot (`drofus.NetArea`). Loaded once at startup from
     /// `Settings.sources.reference`. Joined onto rooms at response assembly —
-    /// a stored snapshot is never mutated by the join. Only "drofus" is
-    /// actually wired up to the join/filter/comparison read path today (see
-    /// `service::rooms::JOINED_SOURCES`); the map shape is what lets a second
-    /// source be *configured* without a settings-type change, ahead of that
-    /// read-path generalization.
+    /// a stored snapshot is never mutated by the join.
+    ///
+    /// **Every source in this map is live on every read path**: the join and
+    /// filter in `service::rooms`, the QA report in `service::validation`
+    /// (one section per source), `service::comparison`, the graph nodes in
+    /// `service::adjacency`, and each milestone's per-source snapshot pin. No
+    /// source is privileged — "drofus" is just the name most projects happen
+    /// to configure.
     pub reference: BTreeMap<String, ProjectReferenceSource>,
 
     /// Classification tiers loaded from this project's settings. Resolved
@@ -268,27 +310,27 @@ impl AppState {
         self.store.as_ref()
     }
 
-    /// Store one uploaded reference-source CSV — see `SnapshotStore::put_drofus`.
-    pub fn put_drofus(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> anyhow::Result<bool> {
-        self.store.put_drofus(project_id, source, taken_at, csv)
+    /// Store one uploaded reference-source CSV — see `SnapshotStore::put_reference`.
+    pub fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> anyhow::Result<bool> {
+        self.store.put_reference(project_id, source, taken_at, csv)
     }
 
     /// One project's snapshot ids for one reference source, ascending — see
-    /// `SnapshotStore::list_drofus_snapshot_ids`.
-    pub fn list_drofus_snapshot_ids(&self, project_id: &str, source: &str) -> anyhow::Result<Vec<String>> {
-        self.store.list_drofus_snapshot_ids(project_id, source)
+    /// `SnapshotStore::list_reference_snapshot_ids`.
+    pub fn list_reference_snapshot_ids(&self, project_id: &str, source: &str) -> anyhow::Result<Vec<String>> {
+        self.store.list_reference_snapshot_ids(project_id, source)
     }
 
     /// One stored reference-source CSV by snapshot id — see
-    /// `SnapshotStore::get_drofus`.
-    pub fn get_drofus(&self, project_id: &str, source: &str, taken_at: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        self.store.get_drofus(project_id, source, taken_at)
+    /// `SnapshotStore::get_reference`.
+    pub fn get_reference(&self, project_id: &str, source: &str, taken_at: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        self.store.get_reference(project_id, source, taken_at)
     }
 
     /// The newest stored CSV for one reference source, with its id — see
-    /// `SnapshotStore::get_latest_drofus`.
-    pub fn get_latest_drofus(&self, project_id: &str, source: &str) -> anyhow::Result<Option<(String, Vec<u8>)>> {
-        self.store.get_latest_drofus(project_id, source)
+    /// `SnapshotStore::get_latest_reference`.
+    pub fn get_latest_reference(&self, project_id: &str, source: &str) -> anyhow::Result<Option<(String, Vec<u8>)>> {
+        self.store.get_latest_reference(project_id, source)
     }
 }
 
@@ -310,4 +352,70 @@ pub fn seed_if_test(state: &AppState, test_data: Option<&TestData>) -> anyhow::R
         tracing::info!("seeded snapshot from {}", test.snapshot_path.display());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ordinary ids — the real shapes this sees: a Revit document GUID, a
+    /// human project name with spaces, a dotted version. All must pass, or
+    /// the guard is rejecting legitimate pushes.
+    #[test]
+    fn test_ordinary_ids_are_accepted() {
+        for id in [
+            "sample-project",
+            "Rouse Hill Hospital",
+            "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+            "Building_BF_Framing_jan.r.christel",
+            "130486",
+            "v1.2.3",
+            "CONTRACT",   // starts with a reserved name but is not one
+            "NULLABLE",
+            "COM10",      // only COM1-9 are devices
+        ] {
+            assert!(is_path_safe_component(id), "{id:?} is a legitimate id");
+        }
+    }
+
+    /// **The traversal guard.** `FsStore` joins these ids straight into a path,
+    /// so a separator or `..` would escape the storage root entirely.
+    #[test]
+    fn test_traversal_and_separators_are_rejected() {
+        for id in ["", "   ", ".", "..", "../etc", "a/b", "a\\b", "a:b", "a|b", "a?b", "a*b", "a\"b", "a<b", "a>b"] {
+            assert!(!is_path_safe_component(id), "{id:?} must not become a path component");
+        }
+    }
+
+    /// Control characters, including the NUL that would truncate a path at the
+    /// syscall boundary.
+    #[test]
+    fn test_control_characters_are_rejected() {
+        for id in ["a\0b", "a\nb", "a\tb", "a\rb"] {
+            assert!(!is_path_safe_component(id), "{id:?} must be rejected");
+        }
+    }
+
+    /// **Windows DOS device names, with any extension and any case.** The
+    /// settings API names files `<project_id>.toml`, so a project id of `CON`
+    /// produces `CON.toml` — which on Windows is the console, not a file. CI
+    /// runs ubuntu, where these are ordinary names, so nothing else would
+    /// catch this.
+    #[test]
+    fn test_windows_device_names_are_rejected() {
+        for id in ["CON", "con", "Con", "NUL", "PRN", "AUX", "COM1", "com9", "LPT1", "lpt9", "CON.toml", "nul.csv"] {
+            assert!(!is_path_safe_component(id), "{id:?} is a DOS device name, not a file name");
+        }
+    }
+
+    /// A trailing dot or space is silently stripped by Windows, so two ids
+    /// that must stay distinct would resolve to one directory and one
+    /// project's snapshots would land on top of another's.
+    #[test]
+    fn test_trailing_dot_or_space_is_rejected() {
+        for id in ["Ward ", "Ward.", "project ", "project."] {
+            assert!(!is_path_safe_component(id), "{id:?} aliases to its stripped form on Windows");
+        }
+        assert!(is_path_safe_component("Ward"), "the stripped form itself is fine");
+    }
 }

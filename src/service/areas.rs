@@ -88,7 +88,7 @@
 //! the plain union of its rooms. Bevels, chamfers, spikes and sibling overlaps
 //! cannot arise, because the operation that produces them never executes. That
 //! is the payoff of declaring the regime rather than guessing it — see
-//! Superseded/HANDOVER-areas-boundary-location.md.
+//! STRATEGY-AREA-CALCULATION.md §2, "The two regimes".
 //!
 //! **History / reversed decisions.** An earlier version stripped *every*
 //! interior ring, so enclosed open space always counted as area, and it only
@@ -101,8 +101,8 @@
 //! Every artifact (bevelled corners, 45° chamfers, a million-foot spike,
 //! sibling overlaps) then had to be arbitrated after the fact. The wall zone
 //! replaces the arbitration with a partition: we were using an area operator to
-//! answer a topology question. See Superseded/handover-hierarchical-void-closure.md and its
-//! reconciliation note.
+//! answer a topology question. See STRATEGY-AREA-CALCULATION.md §3, "The wall
+//! zone", and §4 for why the ownership rule falls out as a theorem.
 //!
 //! ## Cost, measured rather than assumed
 //!

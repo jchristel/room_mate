@@ -12,7 +12,23 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    # Both platforms, because this crate's storage layer is path code and the
+    # two disagree about paths. `FsStore` builds directories from user-supplied
+    # project/model ids, `is_path_safe_component` enforces Windows-specific
+    # rules (DOS device names, trailing dot/space) that are perfectly ordinary
+    # names on Linux, and `write_atomic` relies on rename-over-existing, which
+    # Windows only permits once the source handle is closed. Every one of those
+    # passes on ubuntu whether or not it is right.
+    #
+    # Windows is also the primary development machine here, so an ubuntu-only
+    # gate tested the platform nobody runs and skipped the one everybody does.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel the other leg on first failure — when a change breaks one
+      # platform, whether it broke both is the first thing worth knowing.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
     - uses: actions/checkout@v4
@@ -33,7 +49,9 @@ jobs:
     # That was the actual failure mode: the lint was configured, ran locally,
     # and had accumulated 35 unread warnings.
     #
-    # Note this runs on ubuntu while the primary dev machine is Windows. Keep
-    # any future path/line-ending-sensitive lint in mind; nothing today is.
+    # Only on ubuntu: clippy findings are platform-independent for this crate,
+    # so running it twice would double the gate's cost to re-report the same
+    # diagnostics. The Windows leg is here for *behaviour*, not lints.
     - name: Clippy
+      if: matrix.os == 'ubuntu-latest'
       run: cargo clippy --all-targets -- -D warnings

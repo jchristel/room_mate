@@ -4,6 +4,8 @@
 //! `settings::Milestone`), so this list hot-updates the moment a settings
 //! save lands, no push required.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use super::ServiceError;
@@ -12,19 +14,20 @@ use crate::state::AppState;
 /// One milestone as the picker sees it. `attached_models` is a *count* of
 /// model pins, not the pin map itself — the dropdown only labels options, and
 /// the settings UI (which edits the pins) reads the full map through the
-/// settings API instead. `drofus_snapshot` is the exception: it surfaces the
-/// milestone's "drofus"-named `reference_snapshots` pin (if any) as a single
-/// scalar, which is what lets a consumer (notably the MCP `list_milestones`
-/// tool) see *whether and what* dRofus a milestone pins without a second
-/// `get_project_settings` call. Absent when the milestone joins the current
-/// dRofus (no pin).
+/// settings API instead. `reference_snapshots` is the exception: it surfaces
+/// the milestone's reference-source pins verbatim (source name → the pinned
+/// `taken_at`), which is what lets a consumer (notably the MCP
+/// `list_milestones` tool) see *whether and what* each source pins without a
+/// second `get_project_settings` call. A source absent from the map is one the
+/// milestone joins at its current data (no pin); an empty map is skipped
+/// entirely on the wire.
 #[derive(Serialize)]
 pub struct MilestoneSummary {
     pub name: String,
     pub date: String,
     pub attached_models: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub drofus_snapshot: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub reference_snapshots: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -49,7 +52,7 @@ pub fn list_milestones(state: &AppState, project_id: &str) -> Result<MilestonesR
             name: m.name.clone(),
             date: m.date.clone(),
             attached_models: m.attachments.len(),
-            drofus_snapshot: m.reference_snapshots.get("drofus").cloned(),
+            reference_snapshots: m.reference_snapshots.clone(),
         })
         .collect();
     // Both accepted date shapes (`YYYY-MM-DD`, RFC3339) start with the
@@ -88,12 +91,15 @@ mod tests {
             hierarchy_exclusions: vec![],        }
     }
 
-    /// Milestones list newest date first, each carrying its pin count and its
-    /// dRofus pin when set (absent otherwise).
+    /// Milestones list newest date first, each carrying its pin count and
+    /// every reference-source pin it sets (empty map when it sets none).
+    /// Two sources pinned at once is the case the single `drofus_snapshot`
+    /// scalar could not express at all.
     #[test]
     fn test_list_milestones_newest_first() {
         let mut pinned = make_milestone("Design Freeze", "2026-06-30");
         pinned.reference_snapshots.insert("drofus".to_string(), "2026-06-29T17:00:00Z".to_string());
+        pinned.reference_snapshots.insert("ffe".to_string(), "2026-06-28T09:00:00Z".to_string());
         let bundle = make_bundle(vec![make_milestone("Concept", "2026-03-01"), pinned]);
         let registry = std::collections::HashMap::from([("p1".to_string(), bundle)]);
         let state = AppState::new(Box::new(MemStore::new()), registry, None);
@@ -104,8 +110,15 @@ mod tests {
         assert_eq!(result.milestones[0].name, "Design Freeze");
         assert_eq!(result.milestones[1].name, "Concept");
         assert_eq!(result.milestones[0].attached_models, 1);
-        assert_eq!(result.milestones[0].drofus_snapshot.as_deref(), Some("2026-06-29T17:00:00Z"));
-        assert_eq!(result.milestones[1].drofus_snapshot, None, "no pin → absent");
+        assert_eq!(
+            result.milestones[0].reference_snapshots,
+            BTreeMap::from([
+                ("drofus".to_string(), "2026-06-29T17:00:00Z".to_string()),
+                ("ffe".to_string(), "2026-06-28T09:00:00Z".to_string()),
+            ]),
+            "every source's pin, not just one"
+        );
+        assert!(result.milestones[1].reference_snapshots.is_empty(), "no pins → empty map");
     }
 
     /// An unknown/unregistered project answers an empty list, not an error.

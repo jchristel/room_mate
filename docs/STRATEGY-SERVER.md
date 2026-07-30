@@ -135,18 +135,20 @@ each module carrying its rationale in a header, all with unit tests.
   contributing room's `level_id` is remapped to it before serialization, so
   the level picker and room filtering agree on one id per real-world level.
   A dedicated per-model endpoint is still deferred.
-- **Per-project dRofus label set on `/rooms` (`drofus_labels`).** The
-  response carries each contributing project's dRofus column vocabulary —
-  `all_labels` (every row-1 CSV label, mapped or not) plus `reconciliation`
-  (label → the Revit property row 2 maps it to) — keyed by **project id**,
-  because the unscoped read merges every stored project and dRofus resolves
-  per project; a flat list would silently mean "some project's labels".
-  Sourced from the same `effective_drofus` the rooms were joined against, so
-  a milestone's pinned dRofus reports the *pinned* column set, never current
-  headers over pinned rows; a project with no dRofus has no entry (absent,
-  not empty, the `RoomResponse.drofus` discipline). Additive, no schema bump
+- **Per-project, per-source reference label sets on `/rooms`
+  (`reference_labels`).** The response carries each contributing project's
+  reference column vocabulary — `all_labels` (every row-1 CSV label, mapped
+  or not) plus `reconciliation` (label → the Revit property row 2 maps it to)
+  — keyed by **project id, then source name**. Project first because the
+  unscoped read merges every stored project and a source resolves per project;
+  source second because two sources may both declare a label called `NetArea`,
+  so the source has to be part of the address. Sourced from the same effective
+  data the rooms were joined against, so a milestone's pinned snapshot reports
+  the *pinned* column set, never current headers over pinned rows; a project
+  with no reference source has no entry (absent, not empty, the
+  `RoomResponse.reference` discipline). Additive, no schema bump
   (the viewer ignores unknown fields). Exists for tabular consumers — the
-  planned source-data grid (HANDOVER-ui-layout.md) and `comparison.html`'s
+  source-data grid in `index.html` and `comparison.html`'s
   property datalist — which otherwise could only discover columns by unioning
   per-room `fields`, making a column that matched no room in scope invisible:
   precisely the column the coverage report shows as "not checked" rather than
@@ -345,9 +347,15 @@ each module carrying its rationale in a header, all with unit tests.
     previously-implicit "a blank Revit-name cell in row 2 means this column
     isn't checked" convention visible in the running server, not just
     legible from the CSV.
-  - `drofus_configured: false` (no dRofus source at all) short-circuits to an
-    empty report, not an error, same discipline as `tier_configured` for
-    buildings.
+  - The report is **one section per configured reference source**
+    (`sources`, keyed by source name), each with its own `link_property`,
+    discrepancy lists and `field_coverage`, plus a cross-source
+    `discrepancies` total for a collapsed header. Each source declares its own
+    link property, so "which rooms resolved no link value" is a different
+    question per source and cannot share a list.
+  - An **empty `sources` map** (no reference source configured, none uploaded
+    yet, or no registered settings) short-circuits to an empty report, not an
+    error — same discipline as `tier_configured` for buildings.
 
 - **Gzip request decompression + streaming NDJSON ingest.** FFE exports run
   >100 MB uncompressed. Two independent, composable changes: (1)
@@ -391,14 +399,15 @@ each module carrying its rationale in a header, all with unit tests.
   defining no milestone of that name contributes nothing, a model the
   milestone doesn't pin contributes nothing, and a pinned model's payload is
   the pinned snapshot loaded via `SnapshotStore::get_snapshot` — substituted
-  *before* level dedup / building filter / dRofus join / classification, so
+  *before* level dedup / building filter / reference join / classification, so
   every downstream step (and the building filter) composes unchanged. A
-  milestone can also pin **one dRofus snapshot** (`drofus_snapshot`, the
-  optional field beside `attachments`): under that milestone, `assemble_rooms`
-  joins the pinned CSV loaded from the store (`get_drofus` +
-  `load_drofus_from_bytes`) instead of the project's current dRofus, resolved
-  once per project and memoised so an unscoped multi-project `?milestone=`
-  merge never cross-joins one project's pinned dRofus onto another's rooms. A
+  milestone can also pin **a snapshot per reference source**
+  (`reference_snapshots`, source name → `taken_at`, beside `attachments`):
+  under that milestone, `assemble_rooms` joins each pinned CSV loaded from the
+  store (`get_reference` + `load_reference_from_bytes`) instead of that
+  source's current data, resolved once per (project, source) and memoised so an
+  unscoped multi-project `?milestone=` merge never cross-joins one project's
+  pinned data onto another's rooms. A
   pin whose snapshot is missing or unparseable falls back to the current
   dRofus with a warning — the same signal-not-error stance as a dangling model
   pin (the room is still served, just joined against current data). This kept
@@ -621,14 +630,14 @@ each module carrying its rationale in a header, all with unit tests.
   same contract functions as rooms ingest, and an explicit 32 MB
   `DefaultBodyLimit` (axum's default is a silent 2 MB). **Validate before
   store, order load-bearing:** the CSV is parsed and its labels checked
-  against the project's `drofus_fields` *before* `put_drofus` — a stored CSV
-  is hydrated at every boot, so accepting a bad one would fail the next
-  startup of both binaries. Storage: `<root>/<project>/drofus/<taken_at>.csv`
-  (same `:`→`-` filename sanitisation, `.csv` extension), indexed by a new
-  `drofus_snapshots` list on the project manifest with the same
-  filesystem-wins reconciliation as model snapshots; `drofus/` is a reserved
-  name `list_models` explicitly skips (else it would surface as a phantom
-  model). Duplicate `taken_at`: skip + warn, reported as `stored: false`.
+  against that source's declared fields *before* `put_reference` — a stored
+  CSV is hydrated at every boot, so accepting a bad one would fail the next
+  startup of both binaries. Storage:
+  `<root>/<project>/reference/<source>/<taken_at>.csv` (same `:`→`-` filename
+  sanitisation, `.csv` extension), indexed by a `reference_snapshots` map on
+  the project manifest with the same filesystem-wins reconciliation as model
+  snapshots; `reference/` is a reserved name `list_models` explicitly skips
+  (else it would surface as a phantom model). Duplicate `taken_at`: skip + warn, reported as `stored: false`.
   The upload core lives in `settings_api` because that's where the mutation
   machinery already is: it runs under the same `SAVE_LOCK` as settings saves
   and shares their `reload_and_swap` tail, so an upload and a save can never

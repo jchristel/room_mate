@@ -55,7 +55,7 @@ use serde::Serialize;
 
 use crate::classify::TierValue;
 use crate::contract::{Level, Point2D, Room, RoomBoundary, SUPPORTED_SCHEMA};
-use crate::drofus::ReferenceRecord;
+use crate::reference::ReferenceRecord;
 use crate::settings::AreaPolicy;
 use crate::state::AppState;
 
@@ -122,10 +122,10 @@ pub struct AdjacencyResult {
     pub edges: Vec<AdjacencyEdge>,
 }
 
-/// One room as a graph node. `classification` and `drofus` are carried
-/// **through** from the room assembly rather than re-fetched: the graph colours
-/// by department, and making the client cross-reference a second request to do
-/// that would be a worse version of what `/rooms` already solved.
+/// One room as a graph node. `classification` and the joined reference records
+/// are carried **through** from the room assembly rather than re-fetched: the
+/// graph colours by department, and making the client cross-reference a second
+/// request to do that would be a worse version of what `/rooms` already solved.
 #[derive(Serialize)]
 pub struct AdjacencyNode {
     pub room_id: String,
@@ -137,12 +137,14 @@ pub struct AdjacencyNode {
     /// mean of whatever points it has, and to the origin when it has none.
     pub centroid: Point2D,
     pub classification: Vec<TierValue>,
-    /// Carried through for the "drofus" source specifically — same scope
-    /// limit as `service::validation` (see
-    /// `docs/HANDOVER-reference-sources.md`), not generalized to every
-    /// joined source in this pass.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub drofus: Option<ReferenceRecord>,
+    /// Every joined reference record for this room, keyed by source name and
+    /// `#[serde(flatten)]`ed exactly as `RoomResponse.reference` is — so a
+    /// node and a room carry their sources in the same wire shape, and one
+    /// client-side accessor reads both. A source with no record for this room
+    /// is simply absent (an unmatched key is a signal, not an error), and an
+    /// empty map flattens to no keys at all.
+    #[serde(flatten)]
+    pub reference: BTreeMap<String, ReferenceRecord>,
 }
 
 /// One undirected adjacency. Emitted once per pair with `a < b` by room id, so
@@ -734,7 +736,7 @@ pub fn assemble_adjacency(
             level_id: r.room.level_id.clone(),
             centroid: centroid_of(&r.room),
             classification: r.classification.clone(),
-            drofus: r.reference.get("drofus").cloned(),
+            reference: r.reference.clone(),
         })
         .collect();
 

@@ -204,22 +204,28 @@ fn index_by_key<'a>(
 /// - **Unqualified (Revit vs Revit)** — numeric-adaptive, then trimmed
 ///   string. Both sides came through the same Revit export at different
 ///   times, so encoding and formatting artefacts are symmetric and cancel.
-/// - **`drofus.`-qualified (dRofus vs dRofus)** — the same two rungs, plus a
-///   **date** rung ahead of them when the column is declared `type = "date"`.
-///   dRofus hands dates back as *formatted text*, not a structured value, so
-///   two snapshots can render the same instant differently if the export's
-///   format or locale changed between them. That is a real, reachable
-///   difference this comparator would otherwise report as a change, and the
-///   `drofus_fields` declaration needed to detect it already exists.
+/// - **Source-qualified (`drofus.`, `ffe.`, … — one snapshot of that source
+///   against another)** — the same two rungs, plus a **date** rung ahead of
+///   them when the column is declared `type = "date"`. A reference CSV hands
+///   dates back as *formatted text*, not a structured value, so two snapshots
+///   can render the same instant differently if the export's format or locale
+///   changed between them. That is a real, reachable difference this
+///   comparator would otherwise report as a change, and the per-source field
+///   declaration needed to detect it already exists.
 ///
-/// **The ASCII-narrowing rung is deliberately NOT applied here**, though
-/// HANDOVER-comparison-sources.md step 4 proposed it. That rung exists to
-/// forgive duHast's `encode_ascii` export step, which narrows *Revit* strings
-/// before they reach this service; dRofus CSVs are uploaded raw and never
-/// pass through it. So on a dRofus-vs-dRofus diff the artefact cannot arise,
-/// and adding the rung would forgive a genuine difference (a real `–` against
-/// a literal `?`) with nothing to blame it on. See `validation::ascii_narrowed`,
-/// which stays where the artefact actually happens.
+///   The rung keys on "is this a reference source at all", not on which one.
+///   The property that earns it is being **a CSV of formatted text with a
+///   declared column type** — true of every configured source by construction,
+///   since that is the shape `reference.rs` parses. Naming one source here
+///   would have made the second one silently lose its date handling.
+///
+/// **The ASCII-narrowing rung is deliberately NOT applied here.** That rung
+/// exists to forgive duHast's `encode_ascii` export step, which narrows
+/// *Revit* strings before they reach this service; reference CSVs are uploaded
+/// raw and never pass through it. So on a source-vs-itself diff the artefact
+/// cannot arise, and adding the rung would forgive a genuine difference (a
+/// real `–` against a literal `?`) with nothing to blame it on. See
+/// `validation::ascii_narrowed`, which stays where the artefact happens.
 ///
 /// `qa = "exact"` is honoured (it declares *how* a column should be compared,
 /// which applies equally here); `qa = "ignore"` is not (it declares whether
@@ -228,10 +234,10 @@ fn index_by_key<'a>(
 fn values_agree(a: &str, b: &str, source: Option<&str>, field_cfg: Option<&ReferenceFieldConfig>) -> bool {
     let exact = field_cfg.and_then(|f| f.qa) == Some(CompareMode::Exact);
 
-    if source == Some("drofus") && !exact {
-        // Same pattern on BOTH sides: this is one dRofus snapshot against
-        // another, so `revit_format` (the Revit side of a QA comparison) has
-        // no meaning here.
+    if source.is_some() && !exact {
+        // Same pattern on BOTH sides: this is one snapshot of a source against
+        // another of the same source, so `revit_format` (the Revit side of a
+        // QA comparison) has no meaning here.
         // Falling out of this `if` means one of two things — the column is not
         // declared a date, or it is and a side failed to parse. Both land on the
         // string rungs below, the same "declaration is a hint, not truth"
@@ -492,15 +498,15 @@ mod tests {
     /// fields)` entry. Attached to a bundle by the joined-source tests —
     /// `make_bundle` itself stays dRofus-free, because comparison standing
     /// alone without dRofus is a design property under regression guard.
-    fn drofus_data(link: &str, records: &[(&str, &[(&str, &str)])]) -> crate::drofus::ReferenceData {
-        crate::drofus::ReferenceData {
+    fn drofus_data(link: &str, records: &[(&str, &[(&str, &str)])]) -> crate::reference::ReferenceData {
+        crate::reference::ReferenceData {
             link_property: link.to_string(),
             by_id: records
                 .iter()
                 .map(|(id, fields)| {
                     (
                         id.to_string(),
-                        crate::drofus::ReferenceRecord {
+                        crate::reference::ReferenceRecord {
                             fields: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                         },
                     )
@@ -535,7 +541,7 @@ mod tests {
     /// `make_bundle`, carrying `data` and, if any, `fields` — the test-side
     /// equivalent of what `bootstrap::load_project_bundle` wires up for the
     /// one source name the read path currently recognises.
-    fn set_drofus(bundle: &mut ProjectSettings, data: crate::drofus::ReferenceData, fields: Vec<ReferenceFieldConfig>) {
+    fn set_drofus(bundle: &mut ProjectSettings, data: crate::reference::ReferenceData, fields: Vec<ReferenceFieldConfig>) {
         bundle
             .reference
             .insert("drofus".to_string(), crate::state::ProjectReferenceSource { data: Some(data), fields });
@@ -720,8 +726,8 @@ mod tests {
         state
             .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])]))
             .unwrap();
-        state.put_drofus("p1", "drofus", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n").unwrap();
-        state.put_drofus("p1", "drofus", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n").unwrap();
+        state.put_reference("p1", "drofus", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n").unwrap();
+        state.put_reference("p1", "drofus", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n").unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
 
@@ -962,10 +968,10 @@ mod tests {
         state.set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])])).unwrap();
         // Same instant, two offsets: +10:00 local vs the same moment in UTC.
         state
-            .put_drofus("p1", "drofus", d_base, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n")
+            .put_reference("p1", "drofus", d_base, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n")
             .unwrap();
         state
-            .put_drofus("p1", "drofus", d_later, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n")
+            .put_reference("p1", "drofus", d_later, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n")
             .unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();

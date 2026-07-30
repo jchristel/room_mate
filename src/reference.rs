@@ -1,13 +1,14 @@
-//! dRofus reference data: loaded once at startup, joined onto rooms at response
-//! assembly — never merged into the stored snapshot.
+//! Reference data (dRofus and any other configured source): loaded once at
+//! startup, joined onto rooms at response assembly — never merged into the
+//! stored snapshot.
 //!
 //! Two disciplines from STRATEGY.md live here. *Store raw, join late:* the
 //! parsed map sits in `AppState` and is attached at `/rooms` assembly, so the
 //! Revit snapshot stays untouched and the join is reversible. *Separate
-//! sub-object because separate lifecycle:* dRofus will later refresh on its own
-//! trigger (a mid-session poll), independent of the Revit push, so it must not
-//! be fused into the room's own properties — keeping it separate keeps the seam
-//! where the refresh boundary actually is.
+//! sub-object because separate lifecycle:* a reference source will later
+//! refresh on its own trigger (a mid-session poll), independent of the Revit
+//! push, so it must not be fused into the room's own properties — keeping it
+//! separate keeps the seam where the refresh boundary actually is.
 //!
 //! The loader is byte-source-agnostic (`load_reference_from_reader`, with path
 //! and bytes wrappers): a settings-file path (`ReferenceOrigin::File`), an
@@ -16,10 +17,9 @@
 //! feeds it is dispatched in `bootstrap::load_project_bundle`, where the
 //! store is in scope — not here.
 //!
-//! Named `drofus` still: this file is currently dRofus's loader specifically
-//! (its types generalized to `Reference*` in the reference-sources pass, but
-//! the module itself has not moved to `reference.rs` — a deferred, purely
-//! mechanical rename, not a behaviour change).
+//! The two-header-row CSV shape this parses is dRofus's export format, which
+//! is where it came from; nothing else about the module is dRofus-specific,
+//! and a source declaring that shape parses here whatever it is called.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -81,15 +81,15 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
     // Row 1: dRofus field labels.
     let labels = records
         .next()
-        .context("dRofus CSV missing row 1 (field labels)")??;
+        .context("reference CSV missing row 1 (field labels)")??;
     // Row 2: Revit param names. Col 0 is the link property name.
     let revit_names = records
         .next()
-        .context("dRofus CSV missing row 2 (Revit param names)")??;
+        .context("reference CSV missing row 2 (Revit param names)")??;
 
     let link_property = revit_names
         .get(0)
-        .context("dRofus CSV row 2 col 0 (link property) is empty")?
+        .context("reference CSV row 2 col 0 (link property) is empty")?
         .to_string();
 
     // Row 1/row 2, cols 1+: dRofus field label -> the Revit property name it
@@ -140,7 +140,7 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
 /// below — and its BOM handling — is the single parse entry.
 pub fn load_reference_from_path(path: &Path) -> anyhow::Result<ReferenceData> {
     let bytes = std::fs::read(path)
-        .with_context(|| format!("could not open dRofus CSV: {}", path.display()))?;
+        .with_context(|| format!("could not open reference CSV: {}", path.display()))?;
     load_reference_from_bytes(&bytes)
 }
 

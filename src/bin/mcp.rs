@@ -2,20 +2,20 @@
 //! per existing HTTP read route -- `list_projects`, `list_buildings`,
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
 //! `list_snapshots`, `get_latest_snapshot`, `list_milestones`,
-//! `compare_milestones`, `list_drofus_snapshots`, `get_drofus_snapshot` --
+//! `compare_milestones`, `list_reference_snapshots`, `get_reference_snapshot` --
 //! plus two settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`) and the one forwarded
-//! mutation (`upload_drofus`, below). Fifteen in total; keep this list and
+//! mutation (`upload_reference`, below). Fifteen in total; keep this list and
 //! STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
 //! `roommate::service` -- parse params, call one service function, serialize
 //! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
-//! second transport over the same domain layer. See HANDOVER-service-layer.md.
+//! second transport over the same domain layer.
 //!
 //! Ingest (`POST /rooms`) has no MCP equivalent here: an MCP client asking an
 //! LLM to push a full room snapshot isn't a realistic flow, and the HTTP
 //! server remains the ingest path.
 //!
-//! The one mutating tool, `upload_drofus`, doesn't break that rule: it never
+//! The one mutating tool, `upload_reference`, doesn't break that rule: it never
 //! writes this process's state or the store — it reads a CSV file and
 //! *forwards it over HTTP* to the running server (`--server-url`, default the
 //! shared default address), which stays the single writer and hot-swaps
@@ -43,7 +43,7 @@ use rmcp::{
 
 use roommate::bootstrap::build_state;
 use roommate::service::{
-    adjacency, areas, comparison, drofus, milestones, projects, rooms, snapshots, validation, ServiceError,
+    adjacency, areas, comparison, milestones, projects, reference, rooms, snapshots, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -80,9 +80,9 @@ struct GetRoomsParams {
     /// = != > >= < <= and ~ (case-insensitive contains). An unqualified name
     /// is a canonical room property (as listed by get_project_settings'
     /// builtin_properties), plus $name / $id for the room's own fields; a
-    /// "drofus."-prefixed name reads the joined dRofus record's field label
-    /// (as listed by get_drofus_snapshot). A room missing the property -- or
-    /// with no joined dRofus record at all -- never matches, negative
+    /// source-prefixed name (e.g. "drofus.") reads that joined record's field label
+    /// (as listed by get_reference_snapshot). A room missing the property -- or
+    /// with no joined record for that source at all -- never matches, negative
     /// operators included. Quote a value containing spaces if in doubt.
     /// Omit for no filter.
     #[serde(default)]
@@ -151,6 +151,44 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+/// Which reference source a reference tool call means.
+///
+/// The tools used to hardcode `"drofus"`, which quietly made every other
+/// configured source unreachable over MCP. Making `source` *required* instead
+/// would have been the honest fix and a bad trade: the overwhelmingly common
+/// project configures exactly one source, and an agent should not have to make
+/// a `get_project_settings` round trip to learn a name the server can infer.
+///
+/// So: an explicit `source` always wins. Omitted, it resolves to the project's
+/// sole configured source. Ambiguity is refused rather than guessed — picking
+/// "the first one" would silently answer about the wrong dataset, and the
+/// error names the actual choices so the retry is obvious.
+fn resolve_source(state: &Shared, project_id: &str, requested: Option<&str>) -> Result<String, McpError> {
+    if let Some(name) = requested {
+        return Ok(name.to_string());
+    }
+    let registry = state.settings();
+    let names: Vec<&String> = registry
+        .settings_for(project_id)
+        .map(|bundle| bundle.reference.keys().collect())
+        .unwrap_or_default();
+    match names.as_slice() {
+        [only] => Ok((*only).clone()),
+        [] => Err(McpError::invalid_params(
+            format!("project '{project_id}' configures no reference source"),
+            None,
+        )),
+        many => Err(McpError::invalid_params(
+            format!(
+                "project '{project_id}' configures {} reference sources ({}); pass `source` to say which",
+                many.len(),
+                many.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+            None,
+        )),
+    }
+}
+
 /// `ServiceError` -> `McpError`: an internal failure becomes `internal_error`,
 /// a malformed request `invalid_params` -- the MCP counterpart of the HTTP
 /// adapter's 500/400 split, mapped here in the adapter rather than in the
@@ -182,20 +220,38 @@ struct CompareMilestonesParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct GetDrofusSnapshotParams {
+struct ReferenceSourceParams {
     /// The project id, as returned by `list_projects`.
     project_id: String,
-    /// A dRofus snapshot id from `list_drofus_snapshots`. Omit for the latest.
+    /// Which reference source, e.g. "drofus". Omit when the project
+    /// configures exactly one — see `resolve_source`.
+    #[serde(default)]
+    source: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetReferenceSnapshotParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Which reference source, e.g. "drofus". Omit when the project
+    /// configures exactly one — see `resolve_source`.
+    #[serde(default)]
+    source: Option<String>,
+    /// A snapshot id from `list_reference_snapshots`. Omit for the latest.
     #[serde(default)]
     taken_at: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct UploadDrofusParams {
+struct UploadReferenceParams {
     /// The project id, as returned by `list_projects`. Its settings must
-    /// declare `[sources.reference.drofus] type = "upload"`.
+    /// declare `[sources.reference.<source>] type = "upload"`.
     project_id: String,
-    /// Absolute path to the dRofus CSV export to upload.
+    /// Which reference source to upload for, e.g. "drofus". Omit when the
+    /// project configures exactly one — see `resolve_source`.
+    #[serde(default)]
+    source: Option<String>,
+    /// Absolute path to the CSV export to upload.
     path: String,
     /// Snapshot id (RFC3339 UTC date-time) to store the upload under. Omit
     /// to let the server mint one; the result reports the resolved id.
@@ -272,7 +328,7 @@ impl RoommateMcp {
 
     /// Lists one project's milestones (named dated snapshot pins) -- see
     /// `service::milestones::list_milestones`.
-    #[tool(description = "List one project's milestones: named dates with data snapshots pinned to them, newest first — each carries its model-pin count and its pinned dRofus snapshot id (drofus_snapshot) when one is set. Pass a milestone's name to get_rooms to view the project as captured at that milestone, rooms AND dRofus.")]
+    #[tool(description = "List one project's milestones: named dates with data snapshots pinned to them, newest first — each carries its model-pin count and `reference_snapshots`, a map of reference source name to the snapshot id that milestone pins for it (absent sources are joined at their current data). Pass a milestone's name to get_rooms to view the project as captured at that milestone, rooms AND every reference source.")]
     fn list_milestones(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = milestones::list_milestones(&self.state, &p.project_id).map_err(to_mcp_error)?;
         json_result(&result)
@@ -284,7 +340,7 @@ impl RoommateMcp {
     #[tool(description = "Compare milestones for one project: one baseline milestone versus each of the others (a star diff, not all-pairs). \
                           Reports rooms added and removed relative to the baseline, and per-property differences on rooms present in both, \
                           over the project's configured comparison property set. Rooms are matched by the project's user-defined comparison_key \
-                          property (its own setting, NOT the dRofus link property); if none is configured the result is comparison_key_configured: false.")]
+                          property (its own setting, NOT any reference source's link property); if none is configured the result is comparison_key_configured: false.")]
     fn compare_milestones(&self, Parameters(p): Parameters<CompareMilestonesParams>) -> Result<CallToolResult, McpError> {
         let result = comparison::compare_milestones(&self.state, &p.project_id, &p.baseline, &p.others).map_err(to_mcp_error)?;
         json_result(&result)
@@ -313,9 +369,9 @@ impl RoommateMcp {
         }
     }
 
-    /// Runs the dRofus reconciliation QA report for one project -- see
+    /// Runs the reference reconciliation QA report for one project -- see
     /// `service::validation::compute_project_validation`.
-    #[tool(description = "Run the dRofus reconciliation validation report for one project. Includes a 'discrepancies' summary (total plus a per-category breakdown) for a one-shot count, and 'error_rooms' (room_id -> number/name/link value) for the flagged rooms.")]
+    #[tool(description = "Run the reference reconciliation validation report for one project. Returns one report per configured reference source under 'sources' (keyed by source name, each with its own link_property, discrepancy lists, field coverage and 'error_rooms' room_id -> number/name/link value for the flagged rooms), plus a cross-source 'discrepancies' summary for a one-shot count. An empty 'sources' map means the project reconciles against nothing -- normal, not an error.")]
     fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;
         json_result(&result)
@@ -342,7 +398,7 @@ impl RoommateMcp {
     /// the HTTP `GET /projects/{id}/adjacency` uses, including the tolerance
     /// validation, so the two front doors cannot disagree on what a valid
     /// `wall_max` is.
-    #[tool(description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and joined dRofus record) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, not door connectivity (the extractor collects no doors). The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor.")]
+    #[tool(description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and any joined reference records, each flattened under its source name) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, not door connectivity (the extractor collects no doors). The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor.")]
     fn get_adjacency(&self, Parameters(p): Parameters<AdjacencyParams>) -> Result<CallToolResult, McpError> {
         let result = adjacency::assemble_adjacency(
             &self.state,
@@ -360,47 +416,59 @@ impl RoommateMcp {
         }
     }
 
-    /// Lists every uploaded dRofus snapshot id for one project -- see
-    /// `service::drofus::list_drofus_snapshots`.
-    #[tool(description = "List every uploaded dRofus CSV snapshot id (RFC3339 UTC taken_at) for one project, ascending, with the latest. \
+    /// Lists every uploaded snapshot id for one project's reference source --
+    /// see `service::reference::list_reference_snapshots`.
+    #[tool(description = "List every uploaded CSV snapshot id (RFC3339 UTC taken_at) for one project's reference source, ascending, with the latest. \
+                          `source` names the reference source (e.g. \"drofus\") and may be omitted when the project configures exactly one; \
+                          when it configures several, the error names them. \
                           Reads the shared store fresh, so an upload forwarded moments ago shows here immediately.")]
-    fn list_drofus_snapshots(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
-        let result = drofus::list_drofus_snapshots(&self.state, &p.project_id, "drofus").map_err(to_mcp_error)?;
+    fn list_reference_snapshots(&self, Parameters(p): Parameters<ReferenceSourceParams>) -> Result<CallToolResult, McpError> {
+        let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
+        let result = reference::list_reference_snapshots(&self.state, &p.project_id, &source).map_err(to_mcp_error)?;
         json_result(&result)
     }
 
-    /// A parsed summary of one uploaded dRofus CSV -- see
-    /// `service::drofus::get_drofus_snapshot`. The service's `None` (the
+    /// A parsed summary of one uploaded reference CSV -- see
+    /// `service::reference::get_reference_snapshot`. The service's `None` (the
     /// HTTP 404 case) becomes a short plain-text answer, same convention as
     /// `get_latest_snapshot`.
-    #[tool(description = "Get a parsed summary (record count, link property, field labels) of one uploaded dRofus CSV -- the given taken_at, or the latest when omitted. \
+    #[tool(description = "Get a parsed summary (record count, link property, field labels) of one uploaded reference CSV -- the given taken_at, or the latest when omitted. \
+                          `source` names the reference source (e.g. \"drofus\") and may be omitted when the project configures exactly one. \
                           Reads the shared store fresh.")]
-    fn get_drofus_snapshot(&self, Parameters(p): Parameters<GetDrofusSnapshotParams>) -> Result<CallToolResult, McpError> {
-        let result =
-            drofus::get_drofus_snapshot(&self.state, &p.project_id, "drofus", p.taken_at.as_deref()).map_err(to_mcp_error)?;
+    fn get_reference_snapshot(&self, Parameters(p): Parameters<GetReferenceSnapshotParams>) -> Result<CallToolResult, McpError> {
+        let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
+        let result = reference::get_reference_snapshot(&self.state, &p.project_id, &source, p.taken_at.as_deref())
+            .map_err(to_mcp_error)?;
         match result {
-            None => Ok(CallToolResult::success(vec![ContentBlock::text(
-                "no such dRofus upload stored for that project",
-            )])),
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "no such '{source}' upload stored for that project"
+            ))])),
             Some(info) => json_result(&info),
         }
     }
 
-    /// Uploads a dRofus CSV by FORWARDING it to the running HTTP server --
+    /// Uploads a reference CSV by FORWARDING it to the running HTTP server --
     /// this process never writes the store itself (see the module doc): the
     /// server validates, stores, and hot-swaps its own registry, staying the
     /// single writer.
-    #[tool(description = "Upload a dRofus CSV export (given as an absolute file path) for one project. \
-                          Forwards the file over HTTP to the running roommate server, which validates it against the project's \
-                          drofus_fields before storing it as a dated snapshot and applying it live -- so the HTTP server must be running. \
-                          The project's settings must declare [sources.reference.drofus] type = \"upload\". \
+    #[tool(description = "Upload a reference-source CSV export (given as an absolute file path) for one project. \
+                          `source` names the reference source (e.g. \"drofus\") and may be omitted when the project configures exactly one. \
+                          Forwards the file over HTTP to the running roommate server, which validates it against that source's \
+                          declared fields before storing it as a dated snapshot and applying it live -- so the HTTP server must be running. \
+                          The project's settings must declare [sources.reference.<source>] type = \"upload\". \
                           Note the staleness asymmetry: after an upload, this process's own get_rooms/get_validation still join the \
-                          dRofus data loaded at ITS startup; list_drofus_snapshots/get_drofus_snapshot read the store fresh and see the new upload immediately.")]
-    async fn upload_drofus(&self, Parameters(p): Parameters<UploadDrofusParams>) -> Result<CallToolResult, McpError> {
+                          data loaded at ITS startup; list_reference_snapshots/get_reference_snapshot read the store fresh and see the new upload immediately.")]
+    async fn upload_reference(&self, Parameters(p): Parameters<UploadReferenceParams>) -> Result<CallToolResult, McpError> {
+        let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
         let bytes = std::fs::read(&p.path)
             .map_err(|e| McpError::invalid_params(format!("could not read CSV file {:?}: {e}", p.path), None))?;
 
-        let mut url = format!("{}/projects/{}/drofus", self.server_url.trim_end_matches('/'), urlencode(&p.project_id));
+        let mut url = format!(
+            "{}/projects/{}/reference/{}",
+            self.server_url.trim_end_matches('/'),
+            urlencode(&p.project_id),
+            urlencode(&source)
+        );
         if let Some(taken_at) = &p.taken_at {
             url.push_str(&format!("?taken_at={}", urlencode(taken_at)));
         }
@@ -438,13 +506,13 @@ impl RoommateMcp {
     // in-memory registry -- the file and the serving process would silently
     // disagree until a restart. Mutation stays behind the HTTP settings UI
     // (see `settings_api`'s module doc), matching the "Read-only access
-    // against local state" contract `get_info` declares. `upload_drofus`
+    // against local state" contract `get_info` declares. `upload_reference`
     // above is not an exception: it forwards to that HTTP server rather than
     // writing anything from this process.
 
     /// Lists every project settings file with its headline facts -- see
     /// `settings_api::list_project_files`.
-    #[tool(description = "List every project settings file (project id, is_default, whether dRofus is configured). \
+    #[tool(description = "List every project settings file (project id, is_default, and reference_sources -- the names of the reference sources it declares). \
                           Reads the files fresh, so a settings change saved through the HTTP UI shows here immediately; \
                           this process's own get_rooms/get_validation behavior still reflects the settings loaded at its startup.")]
     fn list_project_settings(&self) -> Result<CallToolResult, McpError> {
@@ -455,7 +523,7 @@ impl RoommateMcp {
 
     /// One project's parsed settings as JSON -- see
     /// `settings_api::get_project_file`.
-    #[tool(description = "Get one project's settings (hierarchy, dRofus source, builtin properties, room label, QA fields) as JSON. \
+    #[tool(description = "Get one project's settings (hierarchy, reference sources, builtin properties, room label, QA fields) as JSON. \
                           Reads the file fresh, so a settings change saved through the HTTP UI shows here immediately; \
                           this process's own get_rooms/get_validation behavior still reflects the settings loaded at its startup.")]
     fn get_project_settings(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
@@ -502,8 +570,8 @@ impl ServerHandler for RoommateMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("roommate-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Read-only access to roommate's stored room and dRofus data -- this process never \
-                 writes its own state or the store. The one mutating tool, upload_drofus, forwards \
+                "Read-only access to roommate's stored room and reference data -- this process never \
+                 writes its own state or the store. The one mutating tool, upload_reference, forwards \
                  the CSV over HTTP to the running roommate server, which stays the single writer \
                  and hot-swaps its own registry. Requires the same [storage] root as the HTTP \
                  server (via --server-settings) to see real data -- this process does not share \
@@ -526,7 +594,7 @@ struct Args {
     project_settings: PathBuf,
 
     /// Base URL of the running roommate HTTP server, used only by the
-    /// `upload_drofus` tool (which forwards uploads to it). Defaults to the
+    /// `upload_reference` tool (which forwards uploads to it). Defaults to the
     /// address the server binary binds by default.
     ///
     /// It tracks the server's *default* port, not its actual one: the server
@@ -560,4 +628,85 @@ async fn main() -> anyhow::Result<()> {
     service.waiting().await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use roommate::state::{AppState, ProjectSettings};
+    use roommate::storage::MemStore;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// A registered project configuring `sources` reference sources by name.
+    fn state_with(sources: &[&str]) -> Shared {
+        let bundle = ProjectSettings {
+            reference: sources
+                .iter()
+                .map(|name| {
+                    (name.to_string(), roommate::state::ProjectReferenceSource { data: None, fields: vec![] })
+                })
+                .collect(),
+            hierarchy: vec![],
+            builtin_properties: vec![],
+            room_label: vec![],
+            milestones: vec![],
+            comparison_key: None,
+            comparison_properties: vec![],
+            areas: Default::default(),
+            hierarchy_exclusions: vec![],
+        };
+        Arc::new(AppState::new(
+            Box::new(MemStore::new()),
+            HashMap::from([("p1".to_string(), bundle)]),
+            None,
+        ))
+    }
+
+    /// The common case: one configured source, so a caller that names none
+    /// still gets the right one. This is what keeps `source` optional instead
+    /// of forcing a `get_project_settings` round trip before every call.
+    #[test]
+    fn test_sole_source_resolves_without_being_named() {
+        assert_eq!(resolve_source(&state_with(&["drofus"]), "p1", None).unwrap(), "drofus");
+    }
+
+    /// An explicit source always wins — including one the project does not
+    /// configure. Whether that source has data is the service's answer to
+    /// give (a soft-empty listing), not this resolver's to pre-empt.
+    #[test]
+    fn test_explicit_source_wins() {
+        let state = state_with(&["drofus", "ffe"]);
+        assert_eq!(resolve_source(&state, "p1", Some("ffe")).unwrap(), "ffe");
+        assert_eq!(resolve_source(&state, "p1", Some("nope")).unwrap(), "nope");
+    }
+
+    /// **Ambiguity is refused, not guessed.** Silently taking the first source
+    /// would answer confidently about the wrong dataset, which is worse than
+    /// an error. The message names the real choices so the retry is obvious.
+    #[test]
+    fn test_ambiguous_source_is_refused_and_names_the_choices() {
+        let err = resolve_source(&state_with(&["drofus", "ffe"]), "p1", None).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("drofus") && msg.contains("ffe"), "must name the choices: {msg}");
+    }
+
+    /// A project with no reference source, and an unregistered project, both
+    /// fail with a caller-addressable message rather than defaulting to a
+    /// name that would then 404 deeper in.
+    #[test]
+    fn test_no_configured_source_is_an_error() {
+        assert!(resolve_source(&state_with(&[]), "p1", None).is_err());
+        assert!(resolve_source(&state_with(&["drofus"]), "ghost", None).is_err());
+    }
+
+    /// Path and query components are percent-encoded before they reach the
+    /// forwarded upload URL — a source or project name with a space or slash
+    /// must not split the path.
+    #[test]
+    fn test_urlencode_escapes_path_hostile_characters() {
+        assert_eq!(urlencode("drofus"), "drofus");
+        assert_eq!(urlencode("a b/c"), "a%20b%2Fc");
+        assert_eq!(urlencode("2026-01-01T10:00:00+10:00"), "2026-01-01T10%3A00%3A00%2B10%3A00");
+    }
 }

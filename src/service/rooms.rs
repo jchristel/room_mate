@@ -1,6 +1,6 @@
 //! `/rooms` fetch-side derive logic: dRofus join, classification, level dedup.
 //!
-//! Moved verbatim out of `handlers::get_rooms` (see HANDOVER-service-layer.md)
+//! Moved verbatim out of `handlers::get_rooms`
 //! -- the join/classify logic never depended on `Query`/`Json`/`StatusCode`,
 //! so the only real change here is the signature: plain `Option<&str>` filters
 //! in, a plain `RoomsResult` out, no transport type touched.
@@ -14,7 +14,7 @@ use crate::contract::{
     elevation_match, lookup_property, numeric_match, property_presence, Level, PropertyPresence, Room, RoomBoundary,
     RoomPayload, SUPPORTED_SCHEMA,
 };
-use crate::drofus::{ReferenceData, ReferenceRecord};
+use crate::reference::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, HierarchyTier};
 use crate::state::{AppState, ModelKey, ProjectSettings, SettingsRegistry};
 
@@ -423,7 +423,7 @@ fn presence_of(
 /// I write before the dot" must have one answer across filtering, comparison,
 /// and settings validation, or a name that filters correctly would silently
 /// diff as nothing — the bug this function exists to close (see
-/// HANDOVER-comparison-sources.md).
+/// STRATEGY-SOURCES.md).
 ///
 /// Returns the resolved namespace alongside the presence so callers can react
 /// per source (an unjoined source, a source-aware comparator) without
@@ -580,23 +580,28 @@ pub struct RoomsResult {
     /// model provides (see `scoped_revision`). Two idle responses return a
     /// byte-identical value; a real push bumps it. The viewer compares this one
     /// field instead of re-stringifying the whole payload every poll, so a quiet
-    /// system triggers no re-render (see HANDOVER-viewer-performance.md).
+    /// system triggers no re-render (see STRATEGY-BROWSER.md, "Endpoints follow
+    /// fetch lifecycle").
     pub revision: String,
     pub levels: Vec<Level>,
     pub rooms: Vec<RoomResponse>,
-    /// Each contributing project's dRofus column vocabulary, keyed by project
-    /// id — **per project, not flat**, because the unscoped read merges every
-    /// stored project and dRofus resolves per project; a flat list would
-    /// silently mean "some project's labels" in that case. Sourced from the
-    /// same resolved dataset the rows were joined against (a milestone's
-    /// pinned dRofus included), so the column set always describes the data
-    /// actually on the response, never current headers over pinned rows. A
-    /// project with no dRofus simply has no entry. Exists so a tabular
-    /// consumer can render the *complete* column set — a dRofus column that
-    /// matched no room in scope is undiscoverable from the rooms alone, and
-    /// that is precisely the column the coverage report shows as "not
-    /// checked" rather than omitting (see STRATEGY-SOURCES.md).
-    pub drofus_labels: BTreeMap<String, DrofusLabels>,
+    /// Each contributing project's reference column vocabulary, keyed by
+    /// project id and then by source name — **per project, not flat**, because
+    /// the unscoped read merges every stored project and a source resolves per
+    /// project; a flat list would silently mean "some project's labels" in that
+    /// case. The second level is per source for the same reason one level down:
+    /// two sources may both declare a label called `NetArea`, so the source has
+    /// to be part of the address.
+    ///
+    /// Sourced from the same resolved datasets the rows were joined against (a
+    /// milestone's pinned snapshots included), so the column set always
+    /// describes the data actually on the response, never current headers over
+    /// pinned rows. A project with no reference source simply has no entry.
+    /// Exists so a tabular consumer can render the *complete* column set — a
+    /// column that matched no room in scope is undiscoverable from the rooms
+    /// alone, and that is precisely the column the coverage report shows as
+    /// "not checked" rather than omitting (see STRATEGY-SOURCES.md).
+    pub reference_labels: BTreeMap<String, BTreeMap<String, ReferenceLabels>>,
 
     /// The boundary regime in force on each **canonical** level in this
     /// response, keyed by the same level ids `levels` carries.
@@ -621,12 +626,13 @@ pub struct RoomsResult {
     pub boundary_by_level: BTreeMap<String, RoomBoundary>,
 }
 
-/// One project's dRofus column vocabulary, as joined into this response.
+/// One reference source's column vocabulary for one project, as joined into
+/// this response.
 #[derive(Serialize)]
-pub struct DrofusLabels {
+pub struct ReferenceLabels {
     /// Every row-1 CSV label, mapped or not (`ReferenceData::all_labels`).
     pub all_labels: Vec<String>,
-    /// dRofus label → the Revit property row 2 maps it to — the mapped
+    /// Source label → the Revit property row 2 maps it to — the mapped
     /// subset, so a consumer can mark which columns have a Revit counterpart.
     pub reconciliation: BTreeMap<String, String>,
 }
@@ -731,7 +737,7 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
     let (scoped, milestone_reference) = scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
     let revision = scoped_revision(&scoped);
     let level_remap = dedup_levels(&scoped);
-    let AssembledRooms { levels, rooms, drofus_labels, boundary_by_level } =
+    let AssembledRooms { levels, rooms, reference_labels, boundary_by_level } =
         assemble_scoped_rooms(&scoped, &level_remap, &milestone_reference, scope);
 
     Ok(Some(RoomsResult {
@@ -739,15 +745,15 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
         revision,
         levels,
         rooms,
-        drofus_labels,
+        reference_labels,
         boundary_by_level,
     }))
 }
 
 /// Phase 1 — scope the stored payloads to the request. Drops any payload whose
 /// project has no registered settings bundle (an unscoped merge is
-/// per-project, so a model with nothing to classify/join against has no home —
-/// see HANDOVER-per-project-settings.md "skip on read"), and, under a
+/// per-project, so a model with nothing to classify/join against has no
+/// home), and, under a
 /// milestone filter, *replaces* each surviving model's latest payload with the
 /// snapshot the milestone pins for it (owned payloads, hence no `&` on the
 /// tuple's payload slot). A project without the named milestone, or a model it
@@ -824,8 +830,8 @@ fn resolve_pinned_reference(
     source: &str,
     pin: &str,
 ) -> Result<Option<ReferenceData>, ServiceError> {
-    match state.get_drofus(project_id, source, pin).map_err(ServiceError::Internal)? {
-        Some(bytes) => match crate::drofus::load_reference_from_bytes(&bytes) {
+    match state.get_reference(project_id, source, pin).map_err(ServiceError::Internal)? {
+        Some(bytes) => match crate::reference::load_reference_from_bytes(&bytes) {
             Ok(data) => Ok(Some(data)),
             Err(e) => {
                 tracing::warn!(
@@ -907,9 +913,9 @@ fn dedup_levels(scoped: &[ScopedPayload<'_>]) -> BTreeMap<(String, String, Strin
 /// never show current column headers over pinned data. Collected *before*
 /// the "contributed nothing" check: the labels describe the project's
 /// dataset, not its rooms, so a project whose rooms all fail a filter still
-/// reports its columns. Stays specifically about "drofus" (not generalized to
-/// every joined source) — the same scope limit as `service::validation`;
-/// see `docs/HANDOVER-reference-sources.md`.
+/// reports its columns. Collected for EVERY configured source, keyed by
+/// source name: two sources may both declare a label called `NetArea`, so the
+/// source has to be part of the address.
 fn assemble_scoped_rooms(
     scoped: &[ScopedPayload<'_>],
     level_remap: &BTreeMap<(String, String, String), String>,
@@ -923,7 +929,7 @@ fn assemble_scoped_rooms(
     // project's level suppress another's.
     let mut emitted_level_ids: BTreeSet<(String, String)> = BTreeSet::new();
     let mut rooms: Vec<RoomResponse> = Vec::new();
-    let mut drofus_labels: BTreeMap<String, DrofusLabels> = BTreeMap::new();
+    let mut reference_labels: BTreeMap<String, BTreeMap<String, ReferenceLabels>> = BTreeMap::new();
     let mut boundary_by_level: BTreeMap<String, RoomBoundary> = BTreeMap::new();
 
     for (key, payload, bundle) in scoped {
@@ -974,13 +980,16 @@ fn assemble_scoped_rooms(
 
         // First model of a project wins; every model of one project resolves
         // the same effective data, so this is dedup, not precedence. A
-        // project with no "drofus" source gets no entry — absent, not empty,
+        // project with no reference source gets no entry — absent, not empty,
         // matching how `RoomResponse.reference` treats an unmatched room.
-        if let Some(d) = effective_reference.get("drofus") {
-            drofus_labels.entry(key.project_id.clone()).or_insert_with(|| DrofusLabels {
-                all_labels: d.all_labels.clone(),
-                reconciliation: d.reconciliation.clone(),
-            });
+        if !effective_reference.is_empty() {
+            let per_source = reference_labels.entry(key.project_id.clone()).or_default();
+            for (source, data) in &effective_reference {
+                per_source.entry(source.clone()).or_insert_with(|| ReferenceLabels {
+                    all_labels: data.all_labels.clone(),
+                    reconciliation: data.reconciliation.clone(),
+                });
+            }
         }
 
         // Assemble first, filter second: a predicate may name a joined field,
@@ -1033,7 +1042,7 @@ fn assemble_scoped_rooms(
         rooms.extend(assembled);
     }
 
-    AssembledRooms { levels, rooms, drofus_labels, boundary_by_level }
+    AssembledRooms { levels, rooms, reference_labels, boundary_by_level }
 }
 
 /// The regime that needs the *more* work done of the two — finish face, whose
@@ -1054,7 +1063,7 @@ fn widest_boundary(a: RoomBoundary, b: RoomBoundary) -> RoomBoundary {
 struct AssembledRooms {
     levels: Vec<Level>,
     rooms: Vec<RoomResponse>,
-    drofus_labels: BTreeMap<String, DrofusLabels>,
+    reference_labels: BTreeMap<String, BTreeMap<String, ReferenceLabels>>,
     boundary_by_level: BTreeMap<String, RoomBoundary>,
 }
 
@@ -1641,7 +1650,7 @@ mod tests {
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(old).unwrap();
         state.set_snapshot(new).unwrap();
-        state.put_drofus("p1", "drofus", old_drofus_ts, &drofus_csv("old-value")).unwrap();
+        state.put_reference("p1", "drofus", old_drofus_ts, &drofus_csv("old-value")).unwrap();
 
         let latest = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
         assert_eq!(
@@ -1736,7 +1745,7 @@ mod tests {
         let state = AppState::new(Box::new(store), registry, None);
         state.set_snapshot(a).unwrap();
         state.set_snapshot(b).unwrap();
-        state.put_drofus("pA", "drofus", a_drofus_ts, &drofus_csv("A-pinned")).unwrap();
+        state.put_reference("pA", "drofus", a_drofus_ts, &drofus_csv("A-pinned")).unwrap();
 
         let result = assemble_rooms(&state, &scope(None, Some("Design Freeze"))).unwrap().expect("store has data");
         let room_a = result.rooms.iter().find(|r| r.room.id == "rA").expect("A present");
@@ -2091,7 +2100,7 @@ mod tests {
 
         let result = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
 
-        let labels = result.drofus_labels.get("p1").expect("one entry for the project");
+        let labels = &result.reference_labels.get("p1").expect("one entry for the project")["drofus"];
         assert_eq!(labels.all_labels, vec!["NetArea".to_string(), "UnmatchedCol".to_string()]);
         assert_eq!(labels.reconciliation.get("NetArea").map(String::as_str), Some("Area"));
     }
@@ -2119,10 +2128,10 @@ mod tests {
 
         let result = assemble_rooms(&state, &scope(None, None)).unwrap().expect("store has data");
 
-        assert_eq!(result.drofus_labels.len(), 2, "one entry per dRofus-bearing project");
-        assert_eq!(result.drofus_labels["p1"].all_labels, vec!["ColA".to_string()]);
-        assert_eq!(result.drofus_labels["p2"].all_labels, vec!["ColB".to_string()]);
-        assert!(!result.drofus_labels.contains_key("p3"), "no dRofus, no entry");
+        assert_eq!(result.reference_labels.len(), 2, "one entry per dRofus-bearing project");
+        assert_eq!(result.reference_labels["p1"]["drofus"].all_labels, vec!["ColA".to_string()]);
+        assert_eq!(result.reference_labels["p2"]["drofus"].all_labels, vec!["ColB".to_string()]);
+        assert!(!result.reference_labels.contains_key("p3"), "no dRofus, no entry");
     }
 
     /// Two configured reference sources, on different projects, prove the
@@ -2210,15 +2219,15 @@ mod tests {
         );
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(pinned).unwrap();
-        state.put_drofus("p1", "drofus", drofus_ts, &drofus_csv("20")).unwrap();
+        state.put_reference("p1", "drofus", drofus_ts, &drofus_csv("20")).unwrap();
 
         let at_milestone = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
             .unwrap()
             .expect("store has data");
-        assert_eq!(at_milestone.drofus_labels["p1"].all_labels, vec!["NetArea".to_string()], "pinned CSV's columns");
+        assert_eq!(at_milestone.reference_labels["p1"]["drofus"].all_labels, vec!["NetArea".to_string()], "pinned CSV's columns");
 
         let latest = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
-        assert_eq!(latest.drofus_labels["p1"].all_labels, vec!["CurrentCol".to_string()], "current dataset's columns");
+        assert_eq!(latest.reference_labels["p1"]["drofus"].all_labels, vec!["CurrentCol".to_string()], "current dataset's columns");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2241,7 +2250,7 @@ mod tests {
         let bundle = bundle_for_drofus_pin("new-value", model_ts, Some(drofus_ts));
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(pinned).unwrap();
-        state.put_drofus("p1", "drofus", drofus_ts, &drofus_csv("old-value")).unwrap();
+        state.put_reference("p1", "drofus", drofus_ts, &drofus_csv("old-value")).unwrap();
 
         let f = filter(&["drofus.NetArea=old-value"]);
         let at_milestone = assemble_rooms(

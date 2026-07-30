@@ -21,6 +21,76 @@ pub struct FsStore {
     root: PathBuf,
 }
 
+/// Write `contents` to `path` so a reader never observes a partial file.
+///
+/// **Why this is not `fs::write`.** Every artifact this store writes is
+/// re-read later and parsed strictly: a snapshot as JSON, a CSV through the
+/// reference loader, and `project.toml` as TOML at *every* read and every
+/// boot. `fs::write` truncates first and then fills, so a process killed
+/// mid-write — or a full disk — leaves a syntactically broken file where a
+/// valid one used to be.
+///
+/// For `project.toml` that is the worst case in the store, and the reason this
+/// exists. `read_manifest` returns `Err("malformed manifest")` rather than a
+/// default, and that error propagates through `list_models` -> `all_latest`
+/// into every `/rooms` request and the next startup of both binaries. A
+/// project would be bricked while **every snapshot file beside it stayed
+/// perfectly intact** — and `list_snapshot_ids` already knows how to rebuild
+/// the index from the directory (filesystem wins on disagreement). The
+/// recovery path was there; only the write was not safe enough to reach it.
+///
+/// Write to a sibling temp file, flush and `sync_all` so the bytes are on the
+/// device before anything points at them, then `rename` over the target —
+/// atomic on POSIX, and on Windows for a same-directory replace. A crash
+/// leaves either the old complete file or the new complete file. The temp file
+/// is a sibling, not in the system temp dir, so the rename never crosses a
+/// filesystem boundary (which would silently degrade to copy-then-delete).
+///
+/// The temp name carries a process id and a counter rather than being a plain
+/// `.tmp` sibling. Two pushes for *different models of one project* both
+/// rewrite that project's `project.toml`, and axum serves them concurrently —
+/// with a shared temp name they would interleave inside the temp file and one
+/// would rename a mixture of both into place. Unique names make the two writes
+/// independent; the rename is still last-one-wins, which is the intended
+/// upsert semantics, but neither file is ever malformed.
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp");
+    let tmp = path.with_file_name(format!(
+        ".{stem}.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    // Scoped so the handle is closed before the rename — Windows refuses to
+    // rename a file that still has an open handle.
+    let write = (|| -> Result<()> {
+        let mut file = fs::File::create(&tmp)
+            .with_context(|| format!("could not create temp file: {}", tmp.display()))?;
+        file.write_all(contents)
+            .with_context(|| format!("could not write temp file: {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("could not flush temp file to disk: {}", tmp.display()))
+    })();
+
+    // Never leave a partial temp behind on failure: the names are unique, so
+    // an abandoned one would accumulate rather than be reused.
+    if let Err(e) = write {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(anyhow::Error::from(e)
+            .context(format!("could not replace {} with {}", path.display(), tmp.display())));
+    }
+    Ok(())
+}
+
 impl FsStore {
     /// Bind to a root dir, creating it if absent. Fail fast on an unwritable
     /// root — same startup-loud contract as the rest of config.
@@ -68,7 +138,9 @@ impl FsStore {
     fn write_manifest(&self, project_id: &str, manifest: &ProjectManifest) -> Result<()> {
         let path = self.manifest_path(project_id);
         let toml = toml::to_string_pretty(manifest).context("could not serialise manifest")?;
-        fs::write(&path, toml)
+        // Atomic: a torn manifest fails every subsequent read AND the next
+        // boot, even though the snapshots beside it are fine. See `write_atomic`.
+        write_atomic(&path, toml.as_bytes())
             .with_context(|| format!("could not write manifest: {}", path.display()))
     }
 
@@ -176,7 +248,7 @@ impl SnapshotStore for FsStore {
             return Ok(());
         }
         let json = serde_json::to_string_pretty(payload).context("could not serialise snapshot")?;
-        fs::write(&file, json)
+        write_atomic(&file, json.as_bytes())
             .with_context(|| format!("could not write snapshot: {}", file.display()))?;
 
         tracing::info!(
@@ -327,7 +399,7 @@ impl SnapshotStore for FsStore {
         Ok(Some(Self::read_payload(&path)?))
     }
 
-    fn put_drofus(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
+    fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
         // Same upsert shape as `put`: ensure the dir, index the id in the
         // manifest, then write the file — skipping (never overwriting) a
         // duplicate `taken_at`.
@@ -348,14 +420,14 @@ impl SnapshotStore for FsStore {
             tracing::warn!("reference-source snapshot already exists, skipping: {}", file.display());
             return Ok(false);
         }
-        fs::write(&file, csv)
+        write_atomic(&file, csv)
             .with_context(|| format!("could not write reference-source snapshot: {}", file.display()))?;
 
         tracing::info!("stored reference-source snapshot {}/{} @ {}", project_id, source, taken_at);
         Ok(true)
     }
 
-    fn list_drofus_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>> {
+    fn list_reference_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>> {
         // Same manifest-vs-directory reconciliation as `list_snapshot_ids`:
         // the manifest is the index, the files are the record, filesystem
         // wins on disagreement, both directions warned.
@@ -407,7 +479,7 @@ impl SnapshotStore for FsStore {
         Ok(ids)
     }
 
-    fn get_drofus(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>> {
+    fn get_reference(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>> {
         let path = self.reference_dir(project_id, source).join(Self::drofus_filename(taken_at));
         if !path.exists() {
             return Ok(None);
@@ -416,15 +488,15 @@ impl SnapshotStore for FsStore {
             .with_context(|| format!("could not read reference-source snapshot: {}", path.display()))?))
     }
 
-    fn get_latest_drofus(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>> {
+    fn get_latest_reference(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>> {
         // Latest = last of the reconciled ascending list (RFC3339-UTC ids, so
         // lexical max is newest). Going through the reconciliation instead of
         // a raw directory scan means an un-indexed file still wins its way in
         // and a phantom manifest id can't name a file that isn't there.
-        let Some(id) = self.list_drofus_snapshot_ids(project_id, source)?.pop() else {
+        let Some(id) = self.list_reference_snapshot_ids(project_id, source)?.pop() else {
             return Ok(None);
         };
-        match self.get_drofus(project_id, source, &id)? {
+        match self.get_reference(project_id, source, &id)? {
             Some(bytes) => Ok(Some((id, bytes))),
             None => Ok(None), // racing delete; treat as no data
         }
@@ -615,27 +687,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("roommate-drofus-{}", std::process::id()));
         let store = FsStore::new(dir.clone()).unwrap();
 
-        assert!(store.get_latest_drofus("p", "drofus").unwrap().is_none());
-        assert!(store.list_drofus_snapshot_ids("p", "drofus").unwrap().is_empty());
+        assert!(store.get_latest_reference("p", "drofus").unwrap().is_none());
+        assert!(store.list_reference_snapshot_ids("p", "drofus").unwrap().is_empty());
 
-        assert!(store.put_drofus("p", "drofus", "2026-01-02T10:00:00Z", b"csv-two").unwrap());
-        assert!(store.put_drofus("p", "drofus", "2026-01-01T10:00:00Z", b"csv-one").unwrap());
+        assert!(store.put_reference("p", "drofus", "2026-01-02T10:00:00Z", b"csv-two").unwrap());
+        assert!(store.put_reference("p", "drofus", "2026-01-01T10:00:00Z", b"csv-one").unwrap());
 
         assert_eq!(
-            store.list_drofus_snapshot_ids("p", "drofus").unwrap(),
+            store.list_reference_snapshot_ids("p", "drofus").unwrap(),
             vec!["2026-01-01T10:00:00Z".to_string(), "2026-01-02T10:00:00Z".to_string()]
         );
-        assert_eq!(store.get_drofus("p", "drofus", "2026-01-01T10:00:00Z").unwrap().unwrap(), b"csv-one");
-        assert!(store.get_drofus("p", "drofus", "2026-03-01T10:00:00Z").unwrap().is_none());
+        assert_eq!(store.get_reference("p", "drofus", "2026-01-01T10:00:00Z").unwrap().unwrap(), b"csv-one");
+        assert!(store.get_reference("p", "drofus", "2026-03-01T10:00:00Z").unwrap().is_none());
 
         // Latest is the lexical max — the older backfill did not displace it.
-        let (id, bytes) = store.get_latest_drofus("p", "drofus").unwrap().unwrap();
+        let (id, bytes) = store.get_latest_reference("p", "drofus").unwrap().unwrap();
         assert_eq!(id, "2026-01-02T10:00:00Z");
         assert_eq!(bytes, b"csv-two");
 
         // Duplicate taken_at: skipped (false), original bytes preserved.
-        assert!(!store.put_drofus("p", "drofus", "2026-01-02T10:00:00Z", b"CHANGED").unwrap());
-        assert_eq!(store.get_drofus("p", "drofus", "2026-01-02T10:00:00Z").unwrap().unwrap(), b"csv-two");
+        assert!(!store.put_reference("p", "drofus", "2026-01-02T10:00:00Z", b"CHANGED").unwrap());
+        assert_eq!(store.get_reference("p", "drofus", "2026-01-02T10:00:00Z").unwrap().unwrap(), b"csv-two");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -649,7 +721,7 @@ mod tests {
         let store = FsStore::new(dir.clone()).unwrap();
 
         store.put(&payload("p", "m", "2026-01-01T10:00:00Z")).unwrap();
-        store.put_drofus("p", "drofus", "2026-01-01T11:00:00Z", b"csv").unwrap();
+        store.put_reference("p", "drofus", "2026-01-01T11:00:00Z", b"csv").unwrap();
 
         let keys = store.list_models().unwrap();
         assert_eq!(keys.len(), 1);
@@ -666,8 +738,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("roommate-drofus-rec-{}", std::process::id()));
         let store = FsStore::new(dir.clone()).unwrap();
 
-        store.put_drofus("p", "drofus", "2026-01-01T10:00:00Z", b"one").unwrap();
-        store.put_drofus("p", "drofus", "2026-01-02T10:00:00Z", b"two").unwrap();
+        store.put_reference("p", "drofus", "2026-01-01T10:00:00Z", b"one").unwrap();
+        store.put_reference("p", "drofus", "2026-01-02T10:00:00Z", b"two").unwrap();
 
         // Sabotage the manifest: drop the first id, add a phantom one.
         let manifest_path = dir.join("p").join("project.toml");
@@ -682,7 +754,7 @@ mod tests {
         std::fs::write(&manifest_path, toml::to_string_pretty(&manifest).unwrap()).unwrap();
 
         assert_eq!(
-            store.list_drofus_snapshot_ids("p", "drofus").unwrap(),
+            store.list_reference_snapshot_ids("p", "drofus").unwrap(),
             vec!["2026-01-01T10:00:00Z".to_string(), "2026-01-02T10:00:00Z".to_string()],
             "un-indexed file recovered (with its ':' restored), phantom id dropped"
         );
@@ -708,6 +780,78 @@ mod tests {
         let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
         let latest = store.get_latest(&key).unwrap().unwrap();
         assert_eq!(latest.project.name, "P", "the original snapshot survives a duplicate-timestamp re-push");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `write_atomic` replaces content in full and leaves nothing behind. The
+    /// no-leftovers half matters: the temp names are unique per call, so a
+    /// stray one would accumulate forever rather than being reused.
+    #[test]
+    fn test_write_atomic_replaces_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("roommate-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("project.toml");
+
+        write_atomic(&target, b"first").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "first");
+
+        // A shorter payload over a longer one: a non-atomic writer that only
+        // truncated would be the obvious way to leave trailing garbage.
+        write_atomic(&target, b"second, which is longer").unwrap();
+        write_atomic(&target, b"third").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "third");
+
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
+            .filter(|n| n != "project.toml")
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A failed write must not clobber the file already in place — the whole
+    /// point. An unwritable temp (its parent directory does not exist) errors
+    /// out with the previous content untouched.
+    #[test]
+    fn test_failed_write_leaves_the_previous_file_intact() {
+        let dir = std::env::temp_dir().join(format!("roommate-atomic-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("project.toml");
+        write_atomic(&target, b"good").unwrap();
+
+        let unwritable = dir.join("does").join("not").join("exist").join("project.toml");
+        assert!(write_atomic(&unwritable, b"doomed").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "good", "untouched by an unrelated failure");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The manifest goes through `write_atomic`, and a rewritten one still
+    /// parses — the round trip that a torn write would break, and that
+    /// `read_manifest` turns into a hard error on every later read.
+    #[test]
+    fn test_manifest_rewrite_round_trips() {
+        let dir = std::env::temp_dir().join(format!("roommate-atomic-manifest-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FsStore::new(dir.clone()).unwrap();
+
+        store.put(&payload("p1", "m1", "2026-01-01T10:00:00Z")).unwrap();
+        store.put(&payload("p1", "m2", "2026-01-02T10:00:00Z")).unwrap();
+        store.put(&payload("p1", "m1", "2026-01-03T10:00:00Z")).unwrap();
+
+        let manifest = store.read_manifest("p1").unwrap();
+        assert_eq!(manifest.models.len(), 2);
+        assert_eq!(manifest.models["m1"].snapshots.len(), 2, "both m1 snapshots indexed");
+
+        let files: Vec<_> = std::fs::read_dir(dir.join("p1"))
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().to_string()))
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(files.is_empty(), "temp files left in the project dir: {files:?}");
 
         std::fs::remove_dir_all(&dir).ok();
     }

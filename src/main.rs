@@ -13,7 +13,8 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
+use axum::response::IntoResponse;
 use tower_http::{
     cors::{Any, CorsLayer},
     decompression::RequestDecompressionLayer,
@@ -23,14 +24,14 @@ use tower_http::{
 
 use roommate::bootstrap::build_state;
 use roommate::handlers::{
-    compare_project_milestones, get_drofus_latest, get_drofus_snapshots, get_model_latest_snapshot,
-    get_project_adjacency, get_project_areas, get_project_buildings, get_project_milestones,
-    get_project_snapshots, get_project_validation, get_projects, get_reference_latest,
-    get_reference_snapshots, get_rooms, ingest_rooms, ingest_rooms_stream,
+    compare_project_milestones, get_model_latest_snapshot, get_project_adjacency, get_project_areas,
+    get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation,
+    get_projects, get_reference_latest, get_reference_snapshots, get_rooms, ingest_rooms,
+    ingest_rooms_stream,
 };
 use roommate::settings_api::{
-    http_create_project, http_drofus_check, http_get_project, http_get_project_resolved,
-    http_list_projects, http_update_project, http_upload_drofus, http_upload_reference,
+    http_create_project, http_reference_check, http_get_project, http_get_project_resolved,
+    http_list_projects, http_update_project, http_upload_reference,
 };
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
@@ -38,13 +39,13 @@ use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 /// `RequestDecompressionLayer` inflates before this limit is checked. FFE
 /// exports run >100 MB uncompressed; sized generously above that rather than
 /// tuned tight, since the streaming route (`/rooms/stream`) is the intended
-/// home for anything approaching this ceiling anyway. See HANDOVER-gzip.md.
+/// home for anything approaching this ceiling anyway.
 const ROOMS_BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 
-/// Cap on a dRofus CSV upload body (decompressed, same as above). Real dRofus
-/// exports are a few MB of CSV; 32 MB is generous headroom. Without an
+/// Cap on a reference-source CSV upload body (decompressed, same as above).
+/// Real exports are a few MB of CSV; 32 MB is generous headroom. Without an
 /// explicit layer this route would get axum's silent 2 MB default.
-const DROFUS_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
+const REFERENCE_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Parser)]
 struct Args {
@@ -53,8 +54,7 @@ struct Args {
     server_settings: PathBuf,
 
     /// Path to a directory of per-project TOML settings files (one per
-    /// project, each declaring its own `project_id`). See
-    /// HANDOVER-per-project-settings.md.
+    /// project, each declaring its own `project_id`).
     #[arg(long)]
     project_settings: PathBuf,
 
@@ -89,7 +89,7 @@ struct Args {
 ///
 /// The server has no authentication of any kind, and `/api/settings` writes
 /// project files and reads dRofus CSVs from paths the caller supplies. With
-/// permissive CORS, `POST /api/settings/drofus-check {"path": "C:/Windows/win.ini"}`
+/// permissive CORS, `POST /api/settings/reference-check {"path": "C:/Windows/win.ini"}`
 /// from a hostile page returned that file's second line. Loopback binding did
 /// nothing to stop it; only the CORS policy could.
 ///
@@ -110,11 +110,84 @@ struct Args {
 /// and put real authentication in front of `/api/settings` before binding
 /// anything but loopback — which is why `DEFAULT_HTTP_HOST` is a constant with
 /// no flag behind it, while the port next to it is configurable.
+///
+/// **This layer is half the control, not all of it.** It decides from the
+/// `Origin`, and a DNS-rebinding attack is built precisely to make that field
+/// harmless — a rebound request is same-origin, so it arrives with no `Origin`
+/// at all and this policy never runs. `guard_host` below is the other half, and
+/// neither is sufficient alone.
 fn read_only_cors() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::HEAD])
         .allow_headers(Any)
+}
+
+/// The host names this server will answer to. Anything else is a request that
+/// reached our socket under a name we do not own — see `guard_host`.
+const ALLOWED_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
+
+/// Strip the `:port` suffix and any IPv6 brackets from a `Host` header value.
+/// IPv6 literals are bracketed (`[::1]:5151`), so the last colon is only a
+/// port separator when it falls outside the brackets.
+fn host_name(value: &str) -> &str {
+    let bare = if let Some(end) = value.find(']') {
+        &value[..end + 1]
+    } else if value.matches(':').count() == 1 {
+        value.split(':').next().unwrap_or(value)
+    } else {
+        // A bare IPv6 literal with no brackets and no port.
+        value
+    };
+    bare.trim_start_matches('[').trim_end_matches(']')
+}
+
+/// **The defence `read_only_cors` cannot provide: DNS rebinding.**
+///
+/// CORS is decided from the *`Origin`*, and a rebinding attack is designed to
+/// make that field harmless. A hostile page on `evil.example` is served with a
+/// one-second-TTL DNS record; once loaded, the record is re-answered as
+/// `127.0.0.1`. The page then fetches `http://evil.example:5151/...`, which the
+/// browser now routes to this server — and because the page's own origin *is*
+/// `evil.example`, the request is **same-origin**. No preflight is sent, no
+/// `Origin` header is attached, and `read_only_cors` never gets a say. The
+/// arbitrary-file read it was written to stop is reachable again by a different
+/// road.
+///
+/// The `Host` header is what survives that trick: the browser fills it with the
+/// name the page asked for (`evil.example`), not the address it resolved to. So
+/// the check is simply "is this a name we own" — loopback, in the three spellings
+/// a browser can produce. A rebound request announces someone else's hostname and
+/// is refused before it reaches a handler.
+///
+/// **A missing `Host` is allowed.** HTTP/1.1 requires the header and every
+/// browser sends it, so absence means a non-browser client (the pyRevit pusher,
+/// `curl`, the MCP binary's HTTP client, and the `oneshot` router tests below),
+/// which is not the threat this guards — nothing a rebinding attacker controls
+/// can *omit* it.
+///
+/// This is a name check, not authentication: it stops a remote page from driving
+/// this server, and does nothing about a hostile process already on the machine.
+/// Real auth in front of `/api/settings` remains the prerequisite for binding
+/// anything but loopback (see `DEFAULT_HTTP_HOST`).
+async fn guard_host(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    let claimed = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| req.uri().host());
+
+    if let Some(claimed) = claimed
+        && !ALLOWED_HOSTS.contains(&host_name(claimed))
+    {
+        tracing::warn!("refused request claiming Host {claimed:?} — not a loopback name this server answers to");
+        return (
+            StatusCode::FORBIDDEN,
+            "this server answers only to localhost; the Host header named something else\n",
+        )
+            .into_response();
+    }
+    next.run(req).await
 }
 
 /// Build the application router. Split out of `main` so the CORS policy above
@@ -126,8 +199,8 @@ fn build_router(state: roommate::state::Shared) -> Router {
             "/rooms",
             post(ingest_rooms).get(get_rooms).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
         )
-        // Streaming NDJSON ingest for models too large to buffer whole (see
-        // HANDOVER-streaming.md) -- disables the body limit entirely and relies
+        // Streaming NDJSON ingest for models too large to buffer whole --
+        // disables the body limit entirely and relies
         // on line-by-line reading to keep peak memory low instead.
         .route(
             "/rooms/stream",
@@ -159,23 +232,14 @@ fn build_router(state: roommate::state::Shared) -> Router {
             "/projects/{project_id}/models/{model_id}/snapshots/latest",
             get(get_model_latest_snapshot),
         )
-        // dRofus upload ingest + its read side: uploaded CSVs are timestamped
-        // project-scoped snapshots in the store (see settings_api's
-        // `upload_drofus` for the validate-before-store pipeline). Kept as
-        // the "drofus" alias of the `/reference/{source}` routes below —
-        // `static/settings.html` calls this path today, unchanged.
-        .route(
-            "/projects/{id}/drofus",
-            post(http_upload_drofus).layer(DefaultBodyLimit::max(DROFUS_BODY_LIMIT_BYTES)),
-        )
-        .route("/projects/{id}/drofus/snapshots", get(get_drofus_snapshots))
-        .route("/projects/{id}/drofus/latest", get(get_drofus_latest))
-        // The source-generalized form: any reference source a project
-        // configures with an `upload` origin, not just "drofus". Same body
-        // limit and validate-before-store pipeline, one more path segment.
+        // Reference-source upload ingest + its read side, for any source a
+        // project configures with an `upload` origin: uploaded CSVs are
+        // timestamped project-scoped snapshots in the store (see
+        // settings_api's `upload_reference` for the validate-before-store
+        // pipeline).
         .route(
             "/projects/{id}/reference/{source}",
-            post(http_upload_reference).layer(DefaultBodyLimit::max(DROFUS_BODY_LIMIT_BYTES)),
+            post(http_upload_reference).layer(DefaultBodyLimit::max(REFERENCE_BODY_LIMIT_BYTES)),
         )
         .route("/projects/{id}/reference/{source}/snapshots", get(get_reference_snapshots))
         .route("/projects/{id}/reference/{source}/latest", get(get_reference_latest))
@@ -187,7 +251,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // is_default file, so the viewer's payload id (not a settings project_id)
         // still finds its colour plans. Editors keep the strict route above.
         .route("/api/settings/resolve/{id}", get(http_get_project_resolved))
-        .route("/api/settings/drofus-check", post(http_drofus_check))
+        .route("/api/settings/reference-check", post(http_reference_check))
         // Serves the viewer page at "/" from ./static.
         .fallback_service(ServeDir::new("static"))
         // Inflate gzip request bodies (Content-Encoding: gzip) before Json/NDJSON
@@ -200,6 +264,11 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // Lets a browser viewer served from elsewhere READ /rooms — and nothing
         // more than read. See `read_only_cors`.
         .layer(read_only_cors())
+        // Outside CORS, so it runs FIRST on the request path (Router::layer
+        // wraps outward). A DNS-rebound request is same-origin and never
+        // reaches the CORS layer's decision at all, so the name check has to
+        // sit in front of it rather than behind. See `guard_host`.
+        .layer(axum::middleware::from_fn(guard_host))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -315,7 +384,7 @@ mod tests {
 
     /// **The regression guard for a real vulnerability.** Under
     /// `CorsLayer::permissive()` a page on any origin could preflight and then
-    /// `POST /api/settings/drofus-check {"path": "C:/Windows/win.ini"}` and read
+    /// `POST /api/settings/reference-check {"path": "C:/Windows/win.ini"}` and read
     /// back that file's second line — loopback binding is no defence, because
     /// the browser making the request is itself local.
     ///
@@ -325,12 +394,12 @@ mod tests {
     #[tokio::test]
     async fn test_cross_origin_writes_are_never_granted() {
         for path in [
-            "/api/settings/drofus-check",
+            "/api/settings/reference-check",
             "/api/settings/projects",
             "/api/settings/projects/p1",
             "/rooms",
             "/rooms/stream",
-            "/projects/p1/drofus",
+            "/projects/p1/reference/drofus",
             "/projects/p1/comparison",
         ] {
             for method in ["POST", "PUT"] {
@@ -364,5 +433,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// One request announcing `host`, as a browser fills the header in.
+    async fn with_host(path: &str, method: &str, host: &str) -> StatusCode {
+        router()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::HOST, host)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// **The regression guard for the hole CORS cannot cover.** A DNS-rebound
+    /// request is same-origin, so it carries no `Origin` and never reaches the
+    /// CORS layer's decision — `test_cross_origin_writes_are_never_granted`
+    /// would pass while the arbitrary-file read was wide open again. What the
+    /// attacker cannot forge is the `Host`: the browser writes the name the
+    /// page asked for, and that name is not ours.
+    #[tokio::test]
+    async fn test_rebound_host_is_refused() {
+        for host in ["evil.example", "evil.example:5151", "192.168.1.10:5151", "roommate.attacker.test"] {
+            assert_eq!(
+                with_host("/api/settings/reference-check", "POST", host).await,
+                StatusCode::FORBIDDEN,
+                "Host {host:?} must not reach a handler"
+            );
+            // Reads too: rebinding is just as good for exfiltrating /rooms.
+            assert_eq!(with_host("/projects", "GET", host).await, StatusCode::FORBIDDEN, "Host {host:?}");
+        }
+    }
+
+    /// Every spelling of loopback a browser can put in the header still works,
+    /// with and without the port, including the bracketed IPv6 literal. If this
+    /// fails the guard has locked the operator out of their own viewer.
+    #[tokio::test]
+    async fn test_loopback_hosts_are_allowed() {
+        for host in ["localhost", "localhost:5151", "127.0.0.1", "127.0.0.1:5151", "[::1]", "[::1]:5151"] {
+            assert_eq!(with_host("/projects", "GET", host).await, StatusCode::OK, "Host {host:?} must be allowed");
+        }
+    }
+
+    /// A client that sends no `Host` at all is not the threat — nothing a
+    /// rebinding attacker controls can omit it, while `curl`, the pyRevit
+    /// pusher and the MCP binary's HTTP client all reach the server this way.
+    #[tokio::test]
+    async fn test_missing_host_is_allowed() {
+        let response = router()
+            .oneshot(Request::builder().uri("/projects").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// The port split has to survive IPv6 literals, where colons are part of
+    /// the address rather than a port separator.
+    #[test]
+    fn test_host_name_strips_port_not_address() {
+        assert_eq!(host_name("localhost:5151"), "localhost");
+        assert_eq!(host_name("127.0.0.1"), "127.0.0.1");
+        assert_eq!(host_name("[::1]:5151"), "::1");
+        assert_eq!(host_name("[::1]"), "::1");
+        assert_eq!(host_name("::1"), "::1");
     }
 }

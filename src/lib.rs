@@ -11,7 +11,7 @@
 //! - `contract`  — the JSON contract shared with the Revit extractor + the
 //!   cross-tier property lookup both consumers use.
 //! - `settings`  — startup TOML config (sources, test seed, hierarchy defn).
-//! - `drofus`    — reference-data loader + join dataset.
+//! - `reference` — reference-data loader + join dataset.
 //! - `classify`  — room → full-depth classification path.
 //! - `state`     — shared app state: settings registry + the snapshot store
 //!   behind its trait, plus the startup seed.
@@ -24,7 +24,6 @@
 //!   call into `service`.
 //! - `service`   — transport-agnostic derive/assemble logic (dRofus join,
 //!   classification, validation), shared by `handlers` and the MCP binary.
-//!   See HANDOVER-service-layer.md.
 //! - `settings_api` — read/save API behind the settings UI: transport-agnostic
 //!   core (reads shared with the MCP binary) + the `/api/settings` Axum
 //!   adapters; saves hot-swap the registry.
@@ -58,7 +57,7 @@ pub fn default_http_addr() -> String {
 pub mod bootstrap;
 pub mod classify;
 pub mod contract;
-pub mod drofus;
+pub mod reference;
 pub mod handlers;
 pub mod service;
 pub mod settings;

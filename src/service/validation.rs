@@ -1,17 +1,22 @@
-//! dRofus reconciliation QA: does each room's Revit data agree with dRofus.
+//! Reference reconciliation QA: does each room's Revit data agree with every
+//! reference source the project configures.
 //!
-//! Moved verbatim out of `handlers::get_project_validation` (see
-//! HANDOVER-service-layer.md) -- `compute_validation` never touched a
-//! transport type to begin with, so this extraction only adds the
-//! `AppState`/`Option<ReferenceData>` handling that the handler used to do
-//! inline.
+//! **One report per source, not one report.** Each source declares its own
+//! link property, so "which rooms resolved no link value" and "what is this
+//! room's link value" are different questions for each of them and cannot
+//! share a list. `compute_validation` reconciles one source and knows nothing
+//! about the others; `compute_project_validation` runs it once per loaded
+//! source and sums the tallies for the panel's collapsed header. A source
+//! configured but not yet uploaded is skipped, not failed — "declared,
+//! nothing uploaded yet" is a normal state, the same "signal, not error"
+//! policy the unmatched-key checks themselves follow.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
 use crate::contract::{date_match, lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload};
-use crate::drofus::ReferenceData;
+use crate::reference::ReferenceData;
 use crate::settings::{BuiltinPropertyDef, CompareMode, ReferenceFieldConfig, FieldType};
 use crate::state::{AppState, ModelKey};
 
@@ -36,12 +41,12 @@ pub struct DuplicateLinkValue {
 #[derive(Serialize)]
 pub struct PropertyMismatch {
     pub room_id: String,
-    pub drofus_id: String,
+    pub reference_id: String,
     /// The dRofus field label (row 1) — the same key `reconciliation` and
     /// `ReferenceRecord.fields` use.
     pub field: String,
     pub room_value: String,
-    pub drofus_value: String,
+    pub reference_value: String,
 }
 
 /// One reconciled field where dRofus has a real value but the matched room's
@@ -55,7 +60,7 @@ pub struct PropertyMismatch {
 #[derive(Serialize)]
 pub struct MissingInRevit {
     pub room_id: String,
-    pub drofus_id: String,
+    pub reference_id: String,
     pub field: String,
 }
 
@@ -95,30 +100,42 @@ pub struct ErrorRoomInfo {
 /// Category counts are the **list lengths** — `duplicate_link_values` counts
 /// duplicate-value *groups*, not the rooms in them — matching the panel's
 /// existing issue count. `total` is their sum.
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct DiscrepancyCounts {
     pub total: usize,
     pub rooms_missing_link_value: usize,
     pub duplicate_link_values: usize,
-    pub rooms_unmatched_in_drofus: usize,
+    pub rooms_unmatched: usize,
     pub property_mismatches: usize,
     pub fields_absent_in_revit: usize,
     pub fields_empty_in_revit: usize,
 }
 
-/// Data-quality report for one project's rooms against dRofus, for the
-/// header's validation panel. An on-demand aggregate over the whole
-/// snapshot, not a per-room render concern — see STRATEGY-SOURCES.md.
+impl DiscrepancyCounts {
+    /// Accumulate another source's tallies into this one — how the response's
+    /// cross-source total is built, so the QA header can show one number
+    /// without the client re-summing every section.
+    fn add(&mut self, other: &DiscrepancyCounts) {
+        self.total += other.total;
+        self.rooms_missing_link_value += other.rooms_missing_link_value;
+        self.duplicate_link_values += other.duplicate_link_values;
+        self.rooms_unmatched += other.rooms_unmatched;
+        self.property_mismatches += other.property_mismatches;
+        self.fields_absent_in_revit += other.fields_absent_in_revit;
+        self.fields_empty_in_revit += other.fields_empty_in_revit;
+    }
+}
+
+/// One reference source's reconciliation report. Every list here is scoped to
+/// that source: each source declares its own link property, so "which rooms
+/// failed to resolve a link value" and "what is this room's link value" are
+/// different questions per source and cannot share a list.
 #[derive(Serialize)]
-pub struct ValidationResponse {
-    /// False when no dRofus source is configured at all — every list below
-    /// is then empty, not an error (a project not using dRofus is normal).
-    pub drofus_configured: bool,
-    pub link_property: Option<String>,
-    pub total_rooms: usize,
+pub struct SourceValidation {
+    pub link_property: String,
     pub rooms_missing_link_value: Vec<String>,
     pub duplicate_link_values: Vec<DuplicateLinkValue>,
-    pub rooms_unmatched_in_drofus: Vec<String>,
+    pub rooms_unmatched: Vec<String>,
     pub property_mismatches: Vec<PropertyMismatch>,
     pub fields_absent_in_revit: Vec<MissingInRevit>,
     pub fields_empty_in_revit: Vec<MissingInRevit>,
@@ -127,34 +144,38 @@ pub struct ValidationResponse {
     pub discrepancies: DiscrepancyCounts,
     /// `room_id` → its `ErrorRoomInfo`, populated only for rooms that appear in
     /// some discrepancy list above. What the CSV export reads to fill its
-    /// room_number/room_name/link-value columns.
+    /// room_number/room_name/link-value columns. Per source because
+    /// `link_value` is resolved through *this* source's link property.
     pub error_rooms: BTreeMap<String, ErrorRoomInfo>,
 }
 
+/// Data-quality report for one project's rooms against every reference source
+/// it configures, for the header's validation panel. An on-demand aggregate
+/// over the whole snapshot, not a per-room render concern — see
+/// STRATEGY-SOURCES.md.
+#[derive(Serialize)]
+pub struct ValidationResponse {
+    /// One report per configured, loaded reference source, keyed by source
+    /// name. **Empty is the normal "nothing to reconcile" answer**, not an
+    /// error: a project may configure no reference source, have one declared
+    /// but not yet uploaded, or have no registered settings at all. The old
+    /// `drofus_configured: false` said exactly this for the single-source
+    /// world; an empty map says it for N.
+    pub sources: BTreeMap<String, SourceValidation>,
+    /// Rooms examined. A project-level fact, identical for every source, so it
+    /// sits here rather than being repeated per section.
+    pub total_rooms: usize,
+    /// Tallies summed across every source — what the collapsed QA header
+    /// counts. Each source's own breakdown is on its `SourceValidation`.
+    pub discrepancies: DiscrepancyCounts,
+}
+
 impl ValidationResponse {
-    fn drofus_not_configured() -> Self {
-        Self {
-            drofus_configured: false,
-            link_property: None,
-            total_rooms: 0,
-            rooms_missing_link_value: vec![],
-            duplicate_link_values: vec![],
-            rooms_unmatched_in_drofus: vec![],
-            property_mismatches: vec![],
-            fields_absent_in_revit: vec![],
-            fields_empty_in_revit: vec![],
-            field_coverage: vec![],
-            discrepancies: DiscrepancyCounts {
-                total: 0,
-                rooms_missing_link_value: 0,
-                duplicate_link_values: 0,
-                rooms_unmatched_in_drofus: 0,
-                property_mismatches: 0,
-                fields_absent_in_revit: 0,
-                fields_empty_in_revit: 0,
-            },
-            error_rooms: BTreeMap::new(),
-        }
+    /// The "nothing configured" answer: no sources, no rooms counted, no
+    /// discrepancies. Callers return this rather than an error — see
+    /// `compute_project_validation`.
+    fn nothing_to_reconcile() -> Self {
+        Self { sources: BTreeMap::new(), total_rooms: 0, discrepancies: DiscrepancyCounts::default() }
     }
 }
 
@@ -177,7 +198,7 @@ fn compare_mode(drofus_fields: &[ReferenceFieldConfig], label: &str) -> Option<C
 /// through before it reached this service. Used to re-check a string-compare
 /// mismatch: if narrowing the dRofus side the same lossy way makes it equal
 /// to the room value, the two sides agree and the mismatch was purely an
-/// artefact of that export step (HANDOVER_utf8.md), not a real disagreement.
+/// artefact of that export step, not a real disagreement.
 fn ascii_narrowed(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii() { c } else { '?' }).collect()
 }
@@ -220,7 +241,7 @@ fn resolve_link_values<'a>(
 /// (with the ASCII-narrowing re-check that forgives duHast's lossy
 /// `encode_ascii` export step — see `ascii_narrowed`). `Exact` mode skips both
 /// typed rungs and forces the string comparison.
-fn field_values_agree(drofus_value: &str, room_value: &str, field_cfg: Option<&ReferenceFieldConfig>) -> bool {
+fn field_values_agree(reference_value: &str, room_value: &str, field_cfg: Option<&ReferenceFieldConfig>) -> bool {
     let exact_mode = field_cfg.and_then(|f| f.qa) == Some(CompareMode::Exact);
     let date = if exact_mode {
         None
@@ -228,20 +249,20 @@ fn field_values_agree(drofus_value: &str, room_value: &str, field_cfg: Option<&R
         field_cfg.filter(|f| f.field_type == FieldType::Date).and_then(|f| {
             let fmt = f.format.as_deref()?; // always Some on Date (validated at startup)
             let revit_fmt = f.revit_format.as_deref().unwrap_or(fmt);
-            date_match(drofus_value, room_value, fmt, revit_fmt)
+            date_match(reference_value, room_value, fmt, revit_fmt)
         })
     };
     let numeric = if exact_mode || date.is_some() {
         None
     } else {
-        numeric_match(drofus_value, room_value)
+        numeric_match(reference_value, room_value)
     };
     match (date, numeric) {
         (Some(date_matches), _) => date_matches,
         (None, Some(numeric_matches)) => numeric_matches,
         (None, None) => {
-            drofus_value.trim() == room_value.trim()
-                || ascii_narrowed(drofus_value.trim()) == room_value.trim()
+            reference_value.trim() == room_value.trim()
+                || ascii_narrowed(reference_value.trim()) == room_value.trim()
         }
     }
 }
@@ -324,15 +345,15 @@ fn collect_error_rooms(
 pub fn compute_validation(
     project_id: &str,
     stored: &[(ModelKey, RoomPayload)],
-    drofus: &ReferenceData,
+    reference: &ReferenceData,
     builtin_defs: &[BuiltinPropertyDef],
-    drofus_fields: &[ReferenceFieldConfig],
-) -> ValidationResponse {
-    let (total_rooms, rooms_missing_link_value, by_value) =
-        resolve_link_values(project_id, stored, drofus, builtin_defs);
+    fields: &[ReferenceFieldConfig],
+) -> SourceValidation {
+    let (_total_rooms, rooms_missing_link_value, by_value) =
+        resolve_link_values(project_id, stored, reference, builtin_defs);
 
     let mut duplicate_link_values = Vec::new();
-    let mut rooms_unmatched_in_drofus = Vec::new();
+    let mut rooms_unmatched = Vec::new();
     let mut property_mismatches = Vec::new();
     let mut fields_absent_in_revit = Vec::new();
     let mut fields_empty_in_revit = Vec::new();
@@ -346,12 +367,12 @@ pub fn compute_validation(
             continue; // ambiguous -- can't uniquely match, so no further checks
         }
         let (room, source) = rooms[0];
-        let Some(record) = drofus.by_id.get(value) else {
-            rooms_unmatched_in_drofus.push(room.id.clone());
+        let Some(record) = reference.by_id.get(value) else {
+            rooms_unmatched.push(room.id.clone());
             continue;
         };
-        for (label, revit_property) in &drofus.reconciliation {
-            if compare_mode(drofus_fields, label) == Some(CompareMode::Ignore) {
+        for (label, revit_property) in &reference.reconciliation {
+            if compare_mode(fields, label) == Some(CompareMode::Ignore) {
                 continue;
             }
             // Normalize the dRofus side the same way `lookup_property`
@@ -359,28 +380,28 @@ pub fn compute_validation(
             // here", not a real empty-string value to compare against. A
             // dRofus-side absence isn't tracked further -- only Revit-side
             // absence is (see `MissingInRevit`'s doc comment for why).
-            let Some(drofus_value) = record.fields.get(label).filter(|s| !s.is_empty()) else {
+            let Some(reference_value) = record.fields.get(label).filter(|s| !s.is_empty()) else {
                 continue;
             };
             match property_presence(room, revit_property, source, builtin_defs) {
                 PropertyPresence::Absent => fields_absent_in_revit.push(MissingInRevit {
                     room_id: room.id.clone(),
-                    drofus_id: value.clone(),
+                    reference_id: value.clone(),
                     field: label.clone(),
                 }),
                 PropertyPresence::Empty => fields_empty_in_revit.push(MissingInRevit {
                     room_id: room.id.clone(),
-                    drofus_id: value.clone(),
+                    reference_id: value.clone(),
                     field: label.clone(),
                 }),
                 PropertyPresence::Present(room_value) => {
-                    if !field_values_agree(drofus_value, &room_value, field_config(drofus_fields, label)) {
+                    if !field_values_agree(reference_value, &room_value, field_config(fields, label)) {
                         property_mismatches.push(PropertyMismatch {
                             room_id: room.id.clone(),
-                            drofus_id: value.clone(),
+                            reference_id: value.clone(),
                             field: label.clone(),
                             room_value,
-                            drofus_value: drofus_value.clone(),
+                            reference_value: reference_value.clone(),
                         });
                     }
                 }
@@ -393,13 +414,13 @@ pub fn compute_validation(
     let discrepancies = DiscrepancyCounts {
         total: rooms_missing_link_value.len()
             + duplicate_link_values.len()
-            + rooms_unmatched_in_drofus.len()
+            + rooms_unmatched.len()
             + property_mismatches.len()
             + fields_absent_in_revit.len()
             + fields_empty_in_revit.len(),
         rooms_missing_link_value: rooms_missing_link_value.len(),
         duplicate_link_values: duplicate_link_values.len(),
-        rooms_unmatched_in_drofus: rooms_unmatched_in_drofus.len(),
+        rooms_unmatched: rooms_unmatched.len(),
         property_mismatches: property_mismatches.len(),
         fields_absent_in_revit: fields_absent_in_revit.len(),
         fields_empty_in_revit: fields_empty_in_revit.len(),
@@ -410,26 +431,36 @@ pub fn compute_validation(
     let mut error_ids: BTreeSet<String> = BTreeSet::new();
     error_ids.extend(rooms_missing_link_value.iter().cloned());
     error_ids.extend(duplicate_link_values.iter().flat_map(|d| d.room_ids.iter().cloned()));
-    error_ids.extend(rooms_unmatched_in_drofus.iter().cloned());
+    error_ids.extend(rooms_unmatched.iter().cloned());
     error_ids.extend(property_mismatches.iter().map(|m| m.room_id.clone()));
     error_ids.extend(fields_absent_in_revit.iter().map(|m| m.room_id.clone()));
     error_ids.extend(fields_empty_in_revit.iter().map(|m| m.room_id.clone()));
-    let error_rooms = collect_error_rooms(project_id, stored, drofus, builtin_defs, &error_ids);
+    let error_rooms = collect_error_rooms(project_id, stored, reference, builtin_defs, &error_ids);
 
-    ValidationResponse {
-        drofus_configured: true,
-        link_property: Some(drofus.link_property.clone()),
-        total_rooms,
+    SourceValidation {
+        link_property: reference.link_property.clone(),
         rooms_missing_link_value,
         duplicate_link_values,
-        rooms_unmatched_in_drofus,
+        rooms_unmatched,
         property_mismatches,
         fields_absent_in_revit,
         fields_empty_in_revit,
-        field_coverage: compute_field_coverage(drofus, drofus_fields),
+        field_coverage: compute_field_coverage(reference, fields),
         discrepancies,
         error_rooms,
     }
+}
+
+/// Rooms in one project across every stored model. Counted here rather than
+/// taken from `compute_validation`, because it is a project-level fact that
+/// every source would otherwise report identically — see
+/// `ValidationResponse::total_rooms`.
+fn count_project_rooms(project_id: &str, stored: &[(ModelKey, RoomPayload)]) -> usize {
+    stored
+        .iter()
+        .filter(|(_, payload)| payload.project.id == project_id)
+        .map(|(_, payload)| payload.rooms.len())
+        .sum()
 }
 
 /// Data-quality report for the header's validation panel — see
@@ -443,27 +474,41 @@ pub fn compute_validation(
 pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<ValidationResponse, ServiceError> {
     let registry = state.settings();
     let Some(bundle) = registry.settings_for(project_id) else {
-        return Ok(ValidationResponse::drofus_not_configured());
-    };
-    // Reads the "drofus"-named reference source specifically — this report
-    // is not yet generalized to N sources (see docs/HANDOVER-reference-sources.md).
-    let Some(drofus_source) = bundle.reference.get("drofus") else {
-        return Ok(ValidationResponse::drofus_not_configured());
-    };
-    let Some(drofus) = drofus_source.data.as_ref() else {
-        return Ok(ValidationResponse::drofus_not_configured());
+        return Ok(ValidationResponse::nothing_to_reconcile());
     };
 
+    // Reconcile against every source that has data. A configured-but-not-yet-
+    // uploaded source (`data: None`) is skipped rather than reported as a
+    // failure — "declared, nothing uploaded yet" is a normal state, and the
+    // same "signal, not error" policy the unmatched-key checks below follow.
+    let loaded: Vec<(&String, &ReferenceData, &[ReferenceFieldConfig])> = bundle
+        .reference
+        .iter()
+        .filter_map(|(name, src)| src.data.as_ref().map(|data| (name, data, src.fields.as_slice())))
+        .collect();
+    if loaded.is_empty() {
+        return Ok(ValidationResponse::nothing_to_reconcile());
+    }
+
+    // One storage read for all of them: `all_snapshots` is the expensive call
+    // here, and every source reconciles against the same room set.
     let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
 
-    Ok(compute_validation(project_id, &stored, drofus, &bundle.builtin_properties, &drofus_source.fields))
+    let mut response = ValidationResponse::nothing_to_reconcile();
+    response.total_rooms = count_project_rooms(project_id, &stored);
+    for (name, data, fields) in loaded {
+        let report = compute_validation(project_id, &stored, data, &bundle.builtin_properties, fields);
+        response.discrepancies.add(&report.discrepancies);
+        response.sources.insert(name.clone(), report);
+    }
+    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::contract::{CustomValue, Model, Project, Snapshot};
-    use crate::drofus::ReferenceRecord;
+    use crate::reference::ReferenceRecord;
 
     fn make_room(id: &str, name: &str, props: &[(&str, &str)]) -> Room {
         let mut properties = BTreeMap::new();
@@ -531,7 +576,7 @@ mod tests {
 
         let result = compute_validation("p1", &stored, &drofus, &[], &[]);
 
-        assert_eq!(result.total_rooms, 1);
+        assert_eq!(count_project_rooms("p1", &stored), 1);
         assert_eq!(result.rooms_missing_link_value, vec!["1".to_string()]);
         assert!(result.duplicate_link_values.is_empty());
     }
@@ -555,7 +600,7 @@ mod tests {
         let dup = &result.duplicate_link_values[0];
         assert_eq!(dup.value, "101");
         assert_eq!(dup.room_ids, vec!["1".to_string(), "2".to_string()]);
-        assert!(result.rooms_unmatched_in_drofus.is_empty());
+        assert!(result.rooms_unmatched.is_empty());
         assert!(result.property_mismatches.is_empty());
     }
 
@@ -570,7 +615,7 @@ mod tests {
 
         let result = compute_validation("p1", &stored, &drofus, &[], &[]);
 
-        assert_eq!(result.rooms_unmatched_in_drofus, vec!["1".to_string()]);
+        assert_eq!(result.rooms_unmatched, vec!["1".to_string()]);
     }
 
     /// A uniquely-matched room: an agreeing reconciled field produces no
@@ -588,12 +633,12 @@ mod tests {
 
         let result = compute_validation("p1", &stored, &drofus, &[], &[]);
 
-        assert!(result.rooms_unmatched_in_drofus.is_empty());
+        assert!(result.rooms_unmatched.is_empty());
         assert_eq!(result.property_mismatches.len(), 1);
         let mismatch = &result.property_mismatches[0];
         assert_eq!(mismatch.field, "NetArea");
         assert_eq!(mismatch.room_value, "25.5");
-        assert_eq!(mismatch.drofus_value, "30.0");
+        assert_eq!(mismatch.reference_value, "30.0");
     }
 
     /// A discrepant room carries its number/name/link-value in `error_rooms`
@@ -650,7 +695,7 @@ mod tests {
     /// non-ASCII character with `?` before the value reaches this service, so
     /// a room value that legitimately started with an en dash arrives as
     /// `?`. That must not be flagged once the dRofus side is narrowed the
-    /// same lossy way and the two agree (HANDOVER_utf8.md).
+    /// same lossy way and the two agree.
     #[test]
     fn test_compute_validation_ascii_narrowing_no_false_mismatch() {
         let room = make_room("1", "Room", &[("Number", "1"), ("Department", "Loading Dock ? Option 2")]);
@@ -908,5 +953,126 @@ mod tests {
         let notes = result.field_coverage.iter().find(|c| c.label == "Notes").unwrap();
         assert!(!notes.checked);
         assert!(notes.revit_property.is_none());
+    }
+
+    /// Register a project whose settings carry `sources`, each a
+    /// (name, data, field configs) triple, and store one payload for it.
+    fn state_with_sources(
+        rooms: Vec<Room>,
+        sources: Vec<(&str, ReferenceData)>,
+    ) -> AppState {
+        let (_key, payload) = make_payload("p1", rooms);
+        let reference = sources
+            .into_iter()
+            .map(|(name, data)| {
+                (name.to_string(), crate::state::ProjectReferenceSource { data: Some(data), fields: vec![] })
+            })
+            .collect();
+        let bundle = crate::state::ProjectSettings {
+            reference,
+            hierarchy: vec![],
+            builtin_properties: vec![],
+            room_label: vec![],
+            milestones: vec![],
+            comparison_key: None,
+            comparison_properties: vec![],
+            areas: Default::default(),
+            hierarchy_exclusions: vec![],
+        };
+        let state = AppState::new(
+            Box::new(crate::storage::MemStore::new()),
+            std::collections::HashMap::from([("p1".to_string(), bundle)]),
+            None,
+        );
+        state.set_snapshot(payload).unwrap();
+        state
+    }
+
+    /// **The point of the generalization.** Two configured sources produce two
+    /// reports, each reconciled against its OWN link property — not one report
+    /// about whichever source happened to be called "drofus". `drofus` keys on
+    /// Number and agrees; `ffe` keys on Code and disagrees on Finish, and each
+    /// discrepancy lands in its own section.
+    #[test]
+    fn test_every_configured_source_gets_its_own_report() {
+        let room = make_room("1", "Room", &[("Number", "1"), ("Code", "C1"), ("Area", "25.5"), ("Finish", "Vinyl")]);
+        let drofus = make_drofus("Number", &[("1", &[("NetArea", "25.5")])], &[("NetArea", "Area")]);
+        let ffe = make_drofus("Code", &[("C1", &[("FinishSpec", "Carpet")])], &[("FinishSpec", "Finish")]);
+        let state = state_with_sources(vec![room], vec![("drofus", drofus), ("ffe", ffe)]);
+
+        let result = compute_project_validation(&state, "p1").unwrap();
+
+        assert_eq!(result.sources.keys().collect::<Vec<_>>(), vec!["drofus", "ffe"]);
+        assert_eq!(result.total_rooms, 1, "counted once for the project, not once per source");
+
+        let d = &result.sources["drofus"];
+        assert_eq!(d.link_property, "Number");
+        assert!(d.property_mismatches.is_empty(), "drofus agrees");
+
+        let f = &result.sources["ffe"];
+        assert_eq!(f.link_property, "Code", "each source reconciles on its own link property");
+        assert_eq!(f.property_mismatches.len(), 1);
+        assert_eq!(f.property_mismatches[0].reference_value, "Carpet");
+        assert_eq!(f.property_mismatches[0].room_value, "Vinyl");
+
+        // The header's one number is the sum, so a second source's problems
+        // cannot hide behind a clean first one.
+        assert_eq!(result.discrepancies.total, 1);
+        assert_eq!(result.discrepancies.property_mismatches, 1);
+    }
+
+    /// A project with no reference source at all answers an empty map, not an
+    /// error — the shape that replaced `drofus_configured: false`.
+    #[test]
+    fn test_no_configured_source_is_an_empty_map_not_an_error() {
+        let state = state_with_sources(vec![make_room("1", "Room", &[])], vec![]);
+        let result = compute_project_validation(&state, "p1").unwrap();
+        assert!(result.sources.is_empty());
+        assert_eq!(result.discrepancies.total, 0);
+
+        // Same answer for a project that has no registered settings at all.
+        let unknown = compute_project_validation(&state, "ghost").unwrap();
+        assert!(unknown.sources.is_empty());
+    }
+
+    /// A source declared in settings but never uploaded (`data: None`) is
+    /// skipped, not reported as a failure — "declared, nothing uploaded yet"
+    /// is a normal state on the `Upload` origin.
+    #[test]
+    fn test_configured_but_unloaded_source_is_skipped() {
+        let (_key, payload) = make_payload("p1", vec![make_room("1", "Room", &[("Number", "1")])]);
+        let reference = BTreeMap::from([
+            (
+                "drofus".to_string(),
+                crate::state::ProjectReferenceSource {
+                    data: Some(make_drofus("Number", &[("1", &[])], &[])),
+                    fields: vec![],
+                },
+            ),
+            (
+                "pending".to_string(),
+                crate::state::ProjectReferenceSource { data: None, fields: vec![] },
+            ),
+        ]);
+        let bundle = crate::state::ProjectSettings {
+            reference,
+            hierarchy: vec![],
+            builtin_properties: vec![],
+            room_label: vec![],
+            milestones: vec![],
+            comparison_key: None,
+            comparison_properties: vec![],
+            areas: Default::default(),
+            hierarchy_exclusions: vec![],
+        };
+        let state = AppState::new(
+            Box::new(crate::storage::MemStore::new()),
+            std::collections::HashMap::from([("p1".to_string(), bundle)]),
+            None,
+        );
+        state.set_snapshot(payload).unwrap();
+
+        let result = compute_project_validation(&state, "p1").unwrap();
+        assert_eq!(result.sources.keys().collect::<Vec<_>>(), vec!["drofus"], "the unloaded source contributes nothing");
     }
 }

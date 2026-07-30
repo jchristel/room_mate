@@ -140,19 +140,19 @@ pub trait SnapshotStore: Send + Sync {
     /// overwritten, same duplicate rule as `put`. The caller is expected to
     /// have *validated the CSV before storing it*: a stored CSV is hydrated
     /// at every boot, so a bad one stored here fails the next startup loudly.
-    fn put_drofus(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool>;
+    fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool>;
 
     /// Every snapshot id (`taken_at`) stored for one project's named
     /// reference source, ascending — latest is the last element. Empty when
     /// the project or source is unknown or has no uploads yet. A
     /// history-less store (`MemStore`) reports just its current latest.
-    fn list_drofus_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>>;
+    fn list_reference_snapshot_ids(&self, project_id: &str, source: &str) -> Result<Vec<String>>;
 
     /// One stored CSV for one reference source, by its snapshot id, or `None`.
-    fn get_drofus(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>>;
+    fn get_reference(&self, project_id: &str, source: &str, taken_at: &str) -> Result<Option<Vec<u8>>>;
 
     /// The newest stored CSV for one reference source, with its id — the
     /// bootstrap hydration read that turns an `Upload`-sourced project's
     /// stored data into its in-memory `ReferenceData`.
-    fn get_latest_drofus(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>>;
+    fn get_latest_reference(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>>;
 }

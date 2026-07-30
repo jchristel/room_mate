@@ -1,13 +1,11 @@
 //! HTTP handlers for `/rooms`, `/projects`, and validation: thin Axum
-//! adapters over `service/` (see HANDOVER-service-layer.md). Each handler
-//! extracts its own input form, calls exactly one `service` function, and
-//! translates the result into HTTP -- `StatusCode`, `Query`, `Path`, `Json`
-//! never leak past this file.
+//! adapters over `service/`. Each handler extracts its own input form, calls
+//! exactly one `service` function, and translates the result into HTTP --
+//! `StatusCode`, `Query`, `Path`, `Json` never leak past this file.
 //!
 //! Ingest (`ingest_rooms` / `ingest_rooms_stream`) is the exception: it has no
 //! derive logic worth sharing with the MCP server (which deliberately exposes
-//! no ingest -- see `src/bin/mcp.rs`), so it stays here in full per the
-//! handover doc.
+//! no ingest -- see `src/bin/mcp.rs`), so it stays here in full.
 
 use axum::{
     body::Body,
@@ -25,12 +23,12 @@ use crate::contract::{ModelToShared, Room, RoomBoundary, RoomPayload, StreamEnve
 use crate::service::adjacency;
 use crate::service::areas;
 use crate::service::comparison::{self, ComparisonResponse};
-use crate::service::drofus::{DrofusSnapshotInfo, DrofusSnapshotList};
+use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::snapshots::{LatestSnapshot, ProjectSnapshotsResponse};
 use crate::service::validation::ValidationResponse;
-use crate::service::{drofus, milestones, projects, rooms, snapshots, validation, ServiceError};
+use crate::service::{milestones, projects, reference, rooms, snapshots, validation, ServiceError};
 use crate::state::Shared;
 
 /// Reject a project/model id that can't safely become a filesystem path
@@ -55,10 +53,9 @@ fn validate_id(kind: &str, id: &str) -> Result<(), (StatusCode, String)> {
 /// buffered and streaming paths can't drift on what gets rejected:
 /// - a schema version this server doesn't speak;
 /// - a project with no registered settings — rejected rather than lazily
-///   accepted, pairing with `assemble_rooms`'s "skip on read" policy (see
-///   HANDOVER-per-project-settings.md): a project must be explicitly
-///   onboarded (a settings file registered under its id, or an explicit
-///   `is_default` fallback) before it can push at all;
+///   accepted, pairing with `assemble_rooms`'s "skip on read" policy: a
+///   project must be explicitly onboarded (a settings file registered under
+///   its id, or an explicit `is_default` fallback) before it can push at all;
 /// - identity ids unsafe as storage path components (`validate_id`);
 /// - a `taken_at` that isn't an RFC3339 UTC date-time (`validate_taken_at`).
 ///
@@ -108,9 +105,9 @@ const MODEL_TO_SHARED_DET_TOL: f64 = 1e-6;
 
 /// Warn (never reject) when a push carries a `model_to_shared` whose linear part
 /// isn't a pure rotation — a scaled/sheared transform would silently distort
-/// placement. This is advisory only (HANDOVER-georeferencing.md "the underlay is
-/// non-load-bearing"; "signal, not error"): the geometry still stores and
-/// renders, so a 422 would be wrong here. A missing transform is the normal
+/// placement. This is advisory only -- the underlay is non-load-bearing, and
+/// this is "signal, not error": the geometry still stores and renders, so a
+/// 422 would be wrong here. A missing transform is the normal
 /// un-placed case and warns nothing.
 fn warn_on_transform_drift(model_to_shared: Option<&ModelToShared>, project_id: &str, model_id: &str) {
     if let Some(m) = model_to_shared
@@ -206,7 +203,7 @@ fn resolved_boundary(state: &Shared, project_id: &str, declared: Option<RoomBoun
         .unwrap_or(RoomBoundary::FinishFace)
 }
 
-/// Streaming ingest for very large models (NDJSON, see HANDOVER-streaming.md).
+/// Streaming ingest for very large models (NDJSON).
 /// Reads the request body as a line-delimited stream instead of buffering it
 /// whole with `Json<RoomPayload>`, so peak memory is one line, not the entire
 /// (possibly >100 MB) payload. Line 1 is the envelope (identity + levels, no
@@ -354,53 +351,24 @@ pub async fn get_model_latest_snapshot(
     }
 }
 
-/// Lists every uploaded dRofus snapshot id for one project — see
-/// `service::drofus::list_drofus_snapshots`. Soft-empty for unknown
-/// projects, same as the model-snapshot listing. Kept as the "drofus" alias
-/// of `get_reference_snapshots` below — the route `static/settings.html`
-/// already calls, unchanged.
-pub async fn get_drofus_snapshots(
-    State(state): State<Shared>,
-    Path(project_id): Path<String>,
-) -> Result<Json<DrofusSnapshotList>, (StatusCode, String)> {
-    let result = drofus::list_drofus_snapshots(&state, &project_id, "drofus").map_err(map_service_error)?;
-    Ok(Json(result))
-}
-
-/// A parsed summary of the latest uploaded dRofus CSV for one project — see
-/// `service::drofus::get_drofus_snapshot`. 404 when there is none: this
-/// names one specific resource, same convention as
-/// `get_model_latest_snapshot`. Kept as the "drofus" alias of
-/// `get_reference_latest` below.
-pub async fn get_drofus_latest(
-    State(state): State<Shared>,
-    Path(project_id): Path<String>,
-) -> Result<Json<DrofusSnapshotInfo>, (StatusCode, String)> {
-    let result = drofus::get_drofus_snapshot(&state, &project_id, "drofus", None).map_err(map_service_error)?;
-    match result {
-        None => Err((StatusCode::NOT_FOUND, "no dRofus upload stored for that project".to_string())),
-        Some(info) => Ok(Json(info)),
-    }
-}
-
-/// Lists every uploaded snapshot id for one project's named reference source
-/// — the source-generalized form of `get_drofus_snapshots`, for any source
-/// the project configures, not just "drofus".
+/// Lists every uploaded snapshot id for one project's named reference source.
+/// Soft-empty for unknown projects, same as the model-snapshot listing.
 pub async fn get_reference_snapshots(
     State(state): State<Shared>,
     Path((project_id, source)): Path<(String, String)>,
-) -> Result<Json<DrofusSnapshotList>, (StatusCode, String)> {
-    let result = drofus::list_drofus_snapshots(&state, &project_id, &source).map_err(map_service_error)?;
+) -> Result<Json<ReferenceSnapshotList>, (StatusCode, String)> {
+    let result = reference::list_reference_snapshots(&state, &project_id, &source).map_err(map_service_error)?;
     Ok(Json(result))
 }
 
 /// A parsed summary of the latest uploaded CSV for one project's named
-/// reference source — the source-generalized form of `get_drofus_latest`.
+/// reference source. 404 when there is none: this names one specific
+/// resource, same convention as `get_model_latest_snapshot`.
 pub async fn get_reference_latest(
     State(state): State<Shared>,
     Path((project_id, source)): Path<(String, String)>,
-) -> Result<Json<DrofusSnapshotInfo>, (StatusCode, String)> {
-    let result = drofus::get_drofus_snapshot(&state, &project_id, &source, None).map_err(map_service_error)?;
+) -> Result<Json<ReferenceSnapshotInfo>, (StatusCode, String)> {
+    let result = reference::get_reference_snapshot(&state, &project_id, &source, None).map_err(map_service_error)?;
     match result {
         None => Err((StatusCode::NOT_FOUND, format!("no '{source}' upload stored for that project"))),
         Some(info) => Ok(Json(info)),
@@ -592,7 +560,7 @@ pub async fn get_project_adjacency(
 /// The baseline milestone plus the milestones to compare against it. A POST
 /// body rather than query params because the compared set is a list (repeated
 /// query keys don't deserialize cleanly, and milestone names can contain any
-/// character) — the same POST-that-reads shape `drofus-check` uses.
+/// character) — the same POST-that-reads shape `reference-check` uses.
 #[derive(Deserialize)]
 pub struct ComparisonRequest {
     pub baseline: String,
@@ -619,7 +587,7 @@ pub async fn compare_project_milestones(
 mod tests {
     use super::*;
     use crate::contract::{Level, Model, Project, Snapshot};
-    use crate::drofus::ReferenceData;
+    use crate::reference::ReferenceData;
     use crate::state::{AppState, ProjectReferenceSource, ProjectSettings};
     use crate::storage::MemStore;
     use std::collections::BTreeMap;
