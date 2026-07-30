@@ -111,11 +111,11 @@
   .chip button { border: none; background: none; cursor: pointer; font-family: var(--mono); font-size: 0.72rem; padding: 0 0.2rem; }
   .chip button:hover { color: var(--accent); }
 
-  .drofus-status { font-size: 0.7rem; margin-top: 0.35rem; }
-  .drofus-status.ok { color: var(--ok); }
-  .drofus-status.bad { color: var(--accent); }
+  .ref-status { font-size: 0.7rem; margin-top: 0.35rem; }
+  .ref-status.ok { color: var(--ok); }
+  .ref-status.bad { color: var(--accent); }
 
-  /* dRofus upload drop zone */
+  /* Reference-source upload drop zone */
   .drop-zone {
     border: 1px dashed var(--ink);
     padding: 0.9rem;
@@ -126,9 +126,19 @@
   .drop-zone.drag { background: var(--fill); border-style: solid; }
   .drop-zone.disabled { opacity: 0.45; }
   .drop-zone.disabled button { pointer-events: none; }
-  #drofusSnapshotList { list-style: none; margin: 0.4rem 0 0; padding: 0; font-size: 0.68rem; }
-  #drofusSnapshotList li { padding: 0.1rem 0; }
-  #drofusSnapshotList .latest-mark { color: var(--ok); }
+  .ref-snapshot-list { list-style: none; margin: 0.4rem 0 0; padding: 0; font-size: 0.68rem; }
+  .ref-snapshot-list li { padding: 0.1rem 0; }
+  .ref-snapshot-list .latest-mark { color: var(--ok); }
+
+  /* One card per configured reference source -- a repeatable, keyed list
+     (map key = name), unlike the ordered Vec sections above, so no
+     up/down reorder controls, same discipline as builtin_properties'
+     by_source pairs. */
+  .ref-card { border: 1px solid var(--rule); padding: 0.6rem 0.7rem; margin: 0 0 0.7rem; }
+  .ref-card-head { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
+  .ref-card-head .grow { flex: 1 1 auto; }
+  .ref-fields { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed var(--rule); }
+  .ref-fields > .hint { font-size: 0.64rem; opacity: 0.6; margin: 0 0 0.4rem; }
 
   #saveBar { display: flex; align-items: center; gap: 1rem; max-width: 760px; margin-top: 1rem; }
   #saveMessage { font-size: 0.72rem; white-space: pre-wrap; }
@@ -170,30 +180,10 @@
         </section>
 
         <section class="block">
-          <h2>dRofus source</h2>
-          <p class="hint">Reference data joined onto rooms. A project without dRofus is a normal state. "file" reads a CSV path from disk; "upload" takes CSVs uploaded here, stored server-side as dated snapshots.</p>
-          <label class="field">source
-            <select id="drofusSourceType">
-              <option value="">none</option>
-              <option value="file">file</option>
-              <option value="upload">upload</option>
-            </select>
-          </label>
-          <span id="drofusFileBlock" class="hidden">
-            <label class="field">csv path
-              <input type="text" id="drofusPath" size="36" placeholder="../drofus.csv" />
-            </label>
-            <button type="button" class="action" id="drofusCheckBtn">check</button>
-          </span>
-          <div id="drofusUploadBlock" class="hidden">
-            <div class="drop-zone" id="drofusDrop">
-              <span id="drofusDropHint">drop a dRofus CSV here, or</span>
-              <button type="button" class="action" id="drofusPickBtn">choose file…</button>
-              <input type="file" id="drofusFile" accept=".csv,text/csv" class="hidden" />
-            </div>
-            <ul id="drofusSnapshotList"></ul>
-          </div>
-          <div class="drofus-status hidden" id="drofusStatus"></div>
+          <h2>Reference sources</h2>
+          <p class="hint">External reference data joined onto rooms (e.g. dRofus), keyed by name — the name is the join namespace a filter or comparison key writes as "&lt;name&gt;.&lt;label&gt;" (see STRATEGY-SOURCES.md). A project with none configured is a normal state. "file" reads a CSV path from disk; "upload" takes CSVs uploaded here, stored server-side as dated snapshots.</p>
+          <div id="referenceSourceRows"></div>
+          <button type="button" class="action" id="addReferenceSourceBtn">+ reference source</button>
         </section>
 
         <section class="block">
@@ -225,14 +215,6 @@
           <p class="hint">Named dates with data snapshots pinned to them. The viewer's milestone dropdown lists these; a pinned model is served from that snapshot instead of its latest, and an unpinned model doesn't appear in the milestone view. Snapshot ids are what's stored on the server.</p>
           <div class="rows" id="milestoneRows"></div>
           <button type="button" class="action" id="addMilestoneBtn">+ milestone</button>
-        </section>
-
-        <section class="block" id="qaBlock">
-          <h2>dRofus QA fields</h2>
-          <p class="hint" id="qaHint">Per-column type/comparison declarations for the validation report. Labels come from row 1 of the dRofus CSV — run "check" above to load them.</p>
-          <div class="rows" id="qaRows"></div>
-          <button type="button" class="action" id="addQaBtn">+ field</button>
-          <datalist id="qaLabelOptions"></datalist>
         </section>
 
         <section class="block">
@@ -278,11 +260,11 @@ function el(tag, attrs, children) {
 // editors mutate it in place and re-render. The server is the validator —
 // its 422 messages are shown verbatim.
 let current = null;      // { isNew, file, settings }
-let drofusLabels = [];   // labels from the last drofus-check/upload, for the QA dropdown
+let labelsBySource = {}; // source name -> labels[] from its last check/upload, for that card's QA dropdown
 let activeProjectId = null;
 let didRestore = false; // one-shot: auto-open the URL/localStorage-seeded project on first list load
 let projectSnapshots = null; // /projects/{id}/snapshots models for the active project; null = loading
-let drofusSnapshots = null;  // /projects/{id}/drofus/snapshots for the active project; null = loading
+let snapshotsBySource = {};  // source name -> /projects/{id}/reference/{name}/snapshots result; null = loading
 let roomPropertyKeys = [];   // union of room.properties keys for the active project, for colour-plan property inputs
 
 const $ = (id) => document.getElementById(id);
@@ -292,12 +274,11 @@ function blankSettings() {
     project_id: "",
     name: null,
     is_default: false,
-    sources: {},
+    sources: [],   // editing shape: [{ name, type, path, fields }] -- see normalize()
     hierarchy: [],
     builtin_properties: [],
     room_label: ["$name", "$id"],
     milestones: [],
-    drofus_fields: [],
     colour_plans: [],
     // Milestone-comparison config is edited on comparison.html, not here; this
     // page has no UI for it but must carry it through a save (toPayload rebuilds
@@ -361,15 +342,13 @@ async function selectProject(projectId) {
   activeProjectId = projectId;
   persistSelection(activeProjectId); // keep the pick in URL + localStorage across pages
   current = { isNew: false, file: data.file, settings: normalize(data.settings) };
-  drofusLabels = [];
-  drofusSnapshots = null;
+  labelsBySource = {};
+  snapshotsBySource = {};
   openEditor();
   loadProjectList();
-  // Pre-load the label dropdown when a source is already configured: a file
-  // source dry-runs its path, an upload source reads the latest stored CSV.
-  const drofus = current.settings.sources.drofus;
-  if (drofus && drofus.type === "file") checkDrofus(true);
-  if (drofus && drofus.type === "upload") { loadDrofusLatest(); loadDrofusSnapshots(); }
+  // Pre-load each configured source's label dropdown: a file source dry-runs
+  // its path, an upload source reads the latest stored CSV.
+  preloadAllReferenceSources();
   // Pre-load the stored snapshot ids the milestone pin dropdowns offer.
   loadProjectSnapshots(projectId);
   // Pre-load the room property keys the colour-plan property inputs offer.
@@ -399,9 +378,9 @@ function newProject() {
   activeProjectId = null;
   persistSelection(null); // no active project → clear the restored-pick seed
   current = { isNew: true, file: null, settings: blankSettings() };
-  drofusLabels = [];
+  labelsBySource = {};
   projectSnapshots = []; // a project that doesn't exist yet has no stored data
-  drofusSnapshots = [];
+  snapshotsBySource = {};
   roomPropertyKeys = [];
   openEditor();
   loadProjectList();
@@ -425,7 +404,21 @@ async function loadProjectSnapshots(projectId) {
 // Server JSON has nulls for absent Options — normalize to a shape the form
 // logic can treat uniformly (empty strings / absent keys).
 function normalize(s) {
-  s.sources = s.sources || {};
+  // Wire shape is a map (the key IS the join namespace); editing shape is a
+  // list of cards, same "map -> pair-list for editing" idiom builtin_properties'
+  // by_source and milestones' attachments already use below.
+  s.sources = Object.entries((s.sources && s.sources.reference) || {}).map(([name, cfg]) => ({
+    name,
+    type: cfg.type || "",
+    path: cfg.type === "file" ? (cfg.path || "") : "",
+    fields: (cfg.fields || []).map(f => ({
+      label: f.label || "",
+      type: f.type || "string",
+      format: f.format || "",
+      revit_format: f.revit_format || "",
+      qa: f.qa || "",
+    })),
+  }));
   s.hierarchy = (s.hierarchy || []).map(t => ({
     name: t.name || "",
     code_property: t.code_property || "",
@@ -440,15 +433,10 @@ function normalize(s) {
   s.milestones = (s.milestones || []).map(m => ({
     name: m.name || "",
     date: m.date || "",
-    drofus_snapshot: m.drofus_snapshot || "",
+    // Kept as a plain object (not a pair-list): its keys are exactly the
+    // configured source names, not user-free-typed pairs.
+    reference_snapshots: { ...(m.reference_snapshots || {}) },
     attachments: Object.entries(m.attachments || {}).map(([model, taken_at]) => ({ model, taken_at })),
-  }));
-  s.drofus_fields = (s.drofus_fields || []).map(f => ({
-    label: f.label || "",
-    type: f.type || "string",
-    format: f.format || "",
-    revit_format: f.revit_format || "",
-    qa: f.qa || "",
   }));
   // Colour plans -> a flat editing shape covering all three modes. A plan of a
   // genuinely unknown kind (forward-compat) is preserved *opaquely* (`opaque` +
@@ -507,17 +495,11 @@ function openEditor() {
   $("projectName").value = s.name || "";
   $("isDefault").checked = !!s.is_default;
 
-  const drofus = s.sources.drofus;
-  $("drofusSourceType").value = drofus ? drofus.type : "";
-  $("drofusPath").value = drofus && drofus.type === "file" ? drofus.path : "";
-  $("drofusStatus").classList.add("hidden");
-  renderDrofusSource();
-
+  renderReferenceSources();
   renderHierarchy();
   renderBuiltins();
   renderLabels();
   renderMilestones();
-  renderQa();
   renderColourPlans();
   showMessage(null, "");
 }
@@ -632,19 +614,25 @@ function attachmentSelect(milestone, model) {
   return sel;
 }
 
-// The dRofus-snapshot pin for one milestone: "current dRofus" (empty) plus one
-// option per uploaded dRofus snapshot. dRofus is project-scoped, so it's a
-// single pin, not per-model. A pinned id no longer stored is kept as an
+// One reference source's snapshot pin for one milestone: "current <name>"
+// (empty) plus one option per uploaded snapshot for that source. Each
+// upload-sourced reference source is project-scoped, so it's a single pin
+// per source, not per-model. A pinned id no longer stored is kept as an
 // explicit "(missing)" option, same stance as an attachment pin.
-function drofusPinSelect(milestone) {
-  const sel = el("select", { onchange: (e) => { milestone.drofus_snapshot = e.target.value; } }, [
-    el("option", { value: "", text: "— current dRofus —" }),
-    ...drofusSnapshots.map(ts => el("option", { value: ts, text: ts })),
+function referencePinSelect(milestone, sourceName) {
+  const snapshots = snapshotsBySource[sourceName] || [];
+  const pinned = milestone.reference_snapshots[sourceName] || "";
+  const sel = el("select", { onchange: (e) => {
+    if (e.target.value) milestone.reference_snapshots[sourceName] = e.target.value;
+    else delete milestone.reference_snapshots[sourceName];
+  }}, [
+    el("option", { value: "", text: `— current ${sourceName} —` }),
+    ...snapshots.map(ts => el("option", { value: ts, text: ts })),
   ]);
-  if (milestone.drofus_snapshot && !drofusSnapshots.includes(milestone.drofus_snapshot)) {
-    sel.appendChild(el("option", { value: milestone.drofus_snapshot, text: `${milestone.drofus_snapshot} (missing)` }));
+  if (pinned && !snapshots.includes(pinned)) {
+    sel.appendChild(el("option", { value: pinned, text: `${pinned} (missing)` }));
   }
-  sel.value = milestone.drofus_snapshot || "";
+  sel.value = pinned;
   return sel;
 }
 
@@ -666,14 +654,17 @@ function renderMilestones() {
       ...rowControls(milestones, i, renderMilestones),
     ]));
 
-    // dRofus pin: only meaningful when the project has uploaded dRofus
-    // snapshots to choose from (an upload-sourced project with at least one
-    // upload). Absent otherwise — pinning nothing is the default anyway.
-    if (drofusSnapshots && drofusSnapshots.length > 0) {
+    // One reference-source pin row per upload-type source that actually has
+    // snapshots to choose from. Absent for a source with none — pinning
+    // nothing is the default anyway.
+    for (const src of current.settings.sources) {
+      if (src.type !== "upload") continue;
+      const snapshots = snapshotsBySource[src.name];
+      if (!snapshots || snapshots.length === 0) continue;
       rows.appendChild(el("div", { class: "row" }, [
         el("span", { class: "row-head", text: "⟐" }),
-        el("span", { text: "dRofus" }),
-        drofusPinSelect(milestone),
+        el("span", { text: src.name }),
+        referencePinSelect(milestone, src.name),
       ]));
     }
 
@@ -708,24 +699,21 @@ function renderMilestones() {
   });
 }
 
-function renderQa() {
-  const drofus = current.settings.sources.drofus;
-  $("qaBlock").classList.toggle("disabled", !drofus);
-  $("qaHint").textContent = !drofus
-    ? "Declarations require a dRofus source — enable one above first."
-    : drofus.type === "upload"
-      ? "Per-column type/comparison declarations for the validation report. Labels come from row 1 of the latest uploaded CSV."
-      : "Per-column type/comparison declarations for the validation report. Labels come from row 1 of the dRofus CSV — run \"check\" above to load them.";
+// Per-source QA field declarations, rendered inside that source's own card
+// (each source owns its column set — `ReferenceSourceConfig.fields`).
+function renderReferenceFields(card, src, cardIndex) {
+  const block = el("div", { class: "ref-fields" });
+  block.appendChild(el("p", { class: "hint", text: src.type === "upload"
+    ? "Per-column type/comparison declarations for the validation report. Labels come from row 1 of the latest uploaded CSV."
+    : "Per-column type/comparison declarations for the validation report. Labels come from row 1 of this source's CSV — run \"check\" above to load them." }));
 
-  const options = $("qaLabelOptions");
-  options.replaceChildren(...drofusLabels.map(l => el("option", { value: l })));
+  const datalistId = `refLabelOptions-${cardIndex}`;
+  block.appendChild(el("datalist", { id: datalistId }, (labelsBySource[src.name] || []).map(l => el("option", { value: l }))));
 
-  const rows = $("qaRows");
-  const fields = current.settings.drofus_fields;
-  rows.replaceChildren();
-  fields.forEach((field, i) => {
+  const rows = el("div", { class: "rows" });
+  src.fields.forEach((field, i) => {
     const isDate = field.type === "date";
-    const typeSelect = el("select", { onchange: (e) => { field.type = e.target.value; renderQa(); } }, [
+    const typeSelect = el("select", { onchange: (e) => { field.type = e.target.value; renderReferenceSources(); } }, [
       el("option", { value: "string", text: "string" }),
       el("option", { value: "numeric", text: "numeric" }),
       el("option", { value: "date", text: "date" }),
@@ -740,7 +728,7 @@ function renderQa() {
 
     const children = [
       el("span", { text: "label" }),
-      textInput(field, "label", { size: "14", list: "qaLabelOptions" }),
+      textInput(field, "label", { size: "14", list: datalistId }),
       el("span", { text: "type" }), typeSelect,
     ];
     if (isDate) {
@@ -751,9 +739,15 @@ function renderQa() {
         textInput(field, "revit_format", { size: "16", placeholder: "(same as format)" }),
       );
     }
-    children.push(el("span", { text: "qa" }), qaSelect, ...rowControls(fields, i, renderQa));
+    children.push(el("span", { text: "qa" }), qaSelect, ...rowControls(src.fields, i, renderReferenceSources));
     rows.appendChild(el("div", { class: "row" }, children));
   });
+  block.appendChild(rows);
+  block.appendChild(el("button", { type: "button", class: "action", text: "+ field", onclick: () => {
+    src.fields.push({ label: "", type: "string", format: "", revit_format: "", qa: "" });
+    renderReferenceSources();
+  }}));
+  card.appendChild(block);
 }
 
 // ---------- colour plans ----------
@@ -774,9 +768,10 @@ function renderColourPlans() {
   const rows = $("colourRows");
   const plans = current.settings.colour_plans;
   // Date-range format hints: the strftime patterns the project's date-typed
-  // dRofus fields already declare (Revit room dates come from dRofus, so they
-  // share the format) — the author picks one instead of retyping.
-  const dateFormats = [...new Set((current.settings.drofus_fields || [])
+  // reference-source fields already declare, across every configured source
+  // (Revit room dates come from a reference source, so they share the
+  // format) — the author picks one instead of retyping.
+  const dateFormats = [...new Set(current.settings.sources.flatMap(src => src.fields)
     .filter(f => f.type === "date" && f.format).map(f => f.format))];
   $("dateFormatOptions").replaceChildren(...dateFormats.map(f => el("option", { value: f })));
   rows.replaceChildren();
@@ -920,131 +915,195 @@ function renderDateRangePlan(rows, plan) {
     el("span", { text: "date format" }),
     textInput(plan, "format", { size: "22", list: "dateFormatOptions", placeholder: "(blank = ISO-8601)" }),
   ]));
-  rows.appendChild(el("div", { class: "row row-head", text: "format is the strftime pattern the dates are in (reuse the dRofus date field's format); after near date → blue" }));
+  rows.appendChild(el("div", { class: "row row-head", text: "format is the strftime pattern the dates are in (reuse a reference source's date field format); after near date → blue" }));
 }
 
-// ---------- dRofus source ----------
-// Show the block matching the selected source type. The upload zone is
-// disabled for an unsaved project: the endpoint rejects unregistered
-// projects, so say why up front instead of letting the POST fail.
-function renderDrofusSource() {
-  const type = $("drofusSourceType").value;
-  $("drofusFileBlock").classList.toggle("hidden", type !== "file");
-  $("drofusUploadBlock").classList.toggle("hidden", type !== "upload");
-  if (type === "upload") {
-    const locked = current.isNew;
-    $("drofusDrop").classList.toggle("disabled", locked);
-    $("drofusDropHint").textContent = locked
-      ? "save the project first, then upload CSVs here —"
-      : "drop a dRofus CSV here, or";
-    renderDrofusSnapshots();
+// ---------- reference sources ----------
+// One repeatable card per configured source (settings.sources.reference,
+// keyed by name — the join namespace, see the section hint). No fixed DOM
+// ids per field: every card is rebuilt from current.settings.sources plus
+// the per-source caches below, the same "mutate the model, rebuild the
+// section" idiom the other list sections (hierarchy, milestones, ...) use.
+
+function referenceStatus(src, cls, text) {
+  src._status = { cls, text };
+  renderReferenceSources();
+}
+
+function renderReferenceSources() {
+  const container = $("referenceSourceRows");
+  container.replaceChildren();
+  current.settings.sources.forEach((src, i) => container.appendChild(renderReferenceSourceCard(src, i)));
+}
+
+function renderReferenceSourceCard(src, i) {
+  const card = el("div", { class: "ref-card" });
+
+  const typeSelect = el("select", { onchange: (e) => {
+    src.type = e.target.value;
+    src._status = null;
+    renderReferenceSources();
+    renderMilestones(); // a type change can add/drop this source's pin row
+    if (src.type === "upload" && !current.isNew) { loadReferenceLatest(src); loadReferenceSnapshots(src); }
+  }}, [
+    el("option", { value: "", text: "— choose —" }),
+    el("option", { value: "file", text: "file" }),
+    el("option", { value: "upload", text: "upload" }),
+  ]);
+  typeSelect.value = src.type;
+
+  card.appendChild(el("div", { class: "ref-card-head" }, [
+    el("span", { text: "name" }),
+    textInput(src, "name", { size: "14", placeholder: "drofus", class: "grow" }),
+    el("span", { text: "type" }), typeSelect,
+    el("button", { type: "button", class: "action icon", title: "remove source", text: "✕", onclick: () => {
+      current.settings.sources.splice(i, 1);
+      renderReferenceSources();
+      renderMilestones();
+      renderColourPlans(); // date-format hints depend on the union of every source's fields
+    }}),
+  ]));
+
+  if (src.type === "file") {
+    card.appendChild(el("div", { class: "row" }, [
+      el("span", { text: "csv path" }),
+      textInput(src, "path", { size: "36", placeholder: "../drofus.csv" }),
+      el("button", { type: "button", class: "action", text: "check", onclick: () => checkReferenceSource(src, false) }),
+    ]));
+  } else if (src.type === "upload") {
+    card.appendChild(referenceUploadBlock(src));
   }
+
+  if (src._status) card.appendChild(el("div", { class: `ref-status ${src._status.cls}`, text: src._status.text }));
+
+  if (src.type === "file" || src.type === "upload") renderReferenceFields(card, src, i);
+
+  return card;
 }
 
-function renderDrofusSnapshots() {
-  const list = $("drofusSnapshotList");
-  list.replaceChildren();
-  if (drofusSnapshots === null) {
+// The upload dropzone + stored-snapshot list for one source. Disabled for an
+// unsaved project: the endpoint rejects unregistered projects, so say why up
+// front instead of letting the POST fail.
+function referenceUploadBlock(src) {
+  const locked = current.isNew;
+  const drop = el("div", { class: locked ? "drop-zone disabled" : "drop-zone" });
+  const fileInput = el("input", { type: "file", accept: ".csv,text/csv", class: "hidden", onchange: (e) => {
+    uploadReferenceFile(src, e.target.files[0]);
+    e.target.value = ""; // allow re-uploading the same file
+  }});
+  drop.append(
+    el("span", { text: locked ? "save the project first, then upload CSVs here —" : `drop a ${src.name || "reference"} CSV here, or` }),
+    el("button", { type: "button", class: "action", text: "choose file…", onclick: () => fileInput.click() }),
+    fileInput,
+  );
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); if (!locked) drop.classList.add("drag"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("drag");
+    if (!locked) uploadReferenceFile(src, e.dataTransfer.files[0]);
+  });
+
+  const list = el("ul", { class: "ref-snapshot-list" });
+  const snapshots = snapshotsBySource[src.name];
+  if (snapshots == null) {
     list.appendChild(el("li", { class: "row-head", text: "loading stored uploads…" }));
-  } else if (drofusSnapshots.length === 0) {
+  } else if (snapshots.length === 0) {
     list.appendChild(el("li", { class: "row-head", text: "no uploads stored yet" }));
   } else {
     // Newest first for reading; the last id in the (ascending) list is latest.
-    const latest = drofusSnapshots[drofusSnapshots.length - 1];
-    [...drofusSnapshots].reverse().forEach(ts => {
+    const latest = snapshots[snapshots.length - 1];
+    [...snapshots].reverse().forEach(ts => {
       const li = el("li", {}, [el("span", { text: ts + " " })]);
       if (ts === latest) li.appendChild(el("span", { class: "latest-mark", text: "← latest (live)" }));
       list.appendChild(li);
     });
   }
+  return el("div", {}, [drop, list]);
 }
 
-async function loadDrofusSnapshots() {
-  drofusSnapshots = null;
-  renderDrofusSnapshots();
-  renderMilestones(); // hide any stale dRofus pin dropdowns while reloading
+async function loadReferenceSnapshots(src) {
+  snapshotsBySource[src.name] = null;
+  renderReferenceSources();
+  renderMilestones(); // hide any stale pin dropdowns while reloading
   try {
-    const data = await apiGet(`/projects/${encodeURIComponent(activeProjectId)}/drofus/snapshots`);
-    drofusSnapshots = data.snapshots || [];
+    const data = await apiGet(`/projects/${encodeURIComponent(activeProjectId)}/reference/${encodeURIComponent(src.name)}/snapshots`);
+    snapshotsBySource[src.name] = data.snapshots || [];
   } catch (err) {
-    drofusSnapshots = [];
+    snapshotsBySource[src.name] = [];
   }
-  renderDrofusSnapshots();
+  renderReferenceSources();
   renderMilestones(); // the milestone pin dropdowns depend on this list
 }
 
 // The upload-mode counterpart of the file-mode "check": read the latest
 // stored CSV's summary to fill the QA label dropdown. "No upload yet" (404)
 // is a neutral state, not an error.
-async function loadDrofusLatest() {
-  const status = $("drofusStatus");
-  const res = await fetch(`/projects/${encodeURIComponent(activeProjectId)}/drofus/latest`, { cache: "no-store" });
-  status.classList.remove("hidden", "ok", "bad");
+async function loadReferenceLatest(src) {
+  const res = await fetch(`/projects/${encodeURIComponent(activeProjectId)}/reference/${encodeURIComponent(src.name)}/latest`, { cache: "no-store" });
   if (res.ok) {
     const data = await res.json();
-    drofusLabels = data.labels;
-    status.classList.add("ok");
-    status.textContent = `✓ latest upload ${data.taken_at} · ${data.record_count} records · link property "${data.link_property}"`;
+    labelsBySource[src.name] = data.labels;
+    referenceStatus(src, "ok", `✓ latest upload ${data.taken_at} · ${data.record_count} records · link property "${data.link_property}"`);
   } else {
-    drofusLabels = [];
-    status.textContent = "no upload yet — QA labels load from the first uploaded CSV";
+    labelsBySource[src.name] = [];
+    referenceStatus(src, "", "no upload yet — QA labels load from the first uploaded CSV");
   }
-  renderQa();
 }
 
-async function uploadDrofusFile(file) {
+async function uploadReferenceFile(src, file) {
   if (!file || current.isNew) return;
-  const status = $("drofusStatus");
-  status.classList.remove("hidden", "ok", "bad");
-  status.textContent = `uploading ${file.name}…`;
+  referenceStatus(src, "", `uploading ${file.name}…`);
   let res, text;
   try {
-    res = await fetch(`/projects/${encodeURIComponent(activeProjectId)}/drofus`, {
+    res = await fetch(`/projects/${encodeURIComponent(activeProjectId)}/reference/${encodeURIComponent(src.name)}`, {
       method: "POST",
       headers: { "Content-Type": "text/csv" },
       body: file,
     });
     text = await res.text();
   } catch (err) {
-    status.classList.add("bad");
-    status.textContent = `⚠ upload failed: ${err.message || err}`;
+    referenceStatus(src, "bad", `⚠ upload failed: ${err.message || err}`);
     return;
   }
   if (res.ok) {
     const data = JSON.parse(text);
-    drofusLabels = data.labels;
-    status.classList.add("ok");
-    status.textContent =
+    labelsBySource[src.name] = data.labels;
+    referenceStatus(src, "ok",
       `✓ ${data.record_count} records · link property "${data.link_property}" · snapshot ${data.snapshot_taken_at}` +
-      (data.stored ? " — applied live" : " — duplicate snapshot id, skipped");
-    renderQa();
-    loadDrofusSnapshots();
+      (data.stored ? " — applied live" : " — duplicate snapshot id, skipped"));
+    loadReferenceSnapshots(src);
   } else {
     // The server's 422 is the real validator — show it verbatim.
-    status.classList.add("bad");
-    status.textContent = `⚠ ${text}`;
+    referenceStatus(src, "bad", `⚠ ${text}`);
   }
 }
 
-// ---------- dRofus check ----------
-async function checkDrofus(quiet) {
-  const path = $("drofusPath").value.trim();
-  const status = $("drofusStatus");
+// ---------- reference-source check (file type) ----------
+// /api/settings/drofus-check only ever dry-ran a bare path — already
+// source-agnostic, so every file-type card reuses it unchanged.
+async function checkReferenceSource(src, quiet) {
+  const path = (src.path || "").trim();
   const result = await apiSend("POST", "/api/settings/drofus-check", { path });
-  status.classList.remove("hidden", "ok", "bad");
   if (result.ok) {
     const data = JSON.parse(result.text);
-    drofusLabels = data.labels;
-    status.classList.add("ok");
-    status.textContent = `✓ ${data.record_count} records · link property "${data.link_property}" · ${data.labels.length} labels`;
-    renderQa();
+    labelsBySource[src.name] = data.labels;
+    referenceStatus(src, "ok", `✓ ${data.record_count} records · link property "${data.link_property}" · ${data.labels.length} labels`);
   } else {
-    drofusLabels = [];
-    status.classList.add("bad");
-    status.textContent = quiet ? "" : `⚠ ${result.text}`;
-    if (quiet) status.classList.add("hidden");
-    renderQa();
+    labelsBySource[src.name] = [];
+    if (quiet) { src._status = null; renderReferenceSources(); }
+    else referenceStatus(src, "bad", `⚠ ${result.text}`);
   }
+}
+
+// Pre-load the label dropdown for one already-configured source: a file
+// source dry-runs its path, an upload source reads the latest stored CSV.
+function preloadReferenceSource(src) {
+  if (src.type === "file") checkReferenceSource(src, true);
+  else if (src.type === "upload") { loadReferenceLatest(src); loadReferenceSnapshots(src); }
+}
+function preloadAllReferenceSources() {
+  for (const src of current.settings.sources) preloadReferenceSource(src);
 }
 
 // ---------- save ----------
@@ -1057,7 +1116,8 @@ function showMessage(ok, text) {
 }
 
 // Build the exact Settings JSON the server deserializes: empty strings
-// become absent Options, the by_source pair list folds back into a map.
+// become absent Options, the by_source / sources / reference_snapshots
+// pair-lists (or objects) fold back into maps.
 function toPayload() {
   const s = current.settings;
   const opt = (v) => (v && v.trim() ? v.trim() : null);
@@ -1067,12 +1127,22 @@ function toPayload() {
     // the project then displays under its id.
     name: opt($("projectName").value),
     is_default: $("isDefault").checked,
-    sources: (() => {
-      const type = $("drofusSourceType").value;
-      if (type === "file") return { drofus: { type: "file", path: $("drofusPath").value.trim() } };
-      if (type === "upload") return { drofus: { type: "upload" } };
-      return {};
-    })(),
+    sources: {
+      reference: Object.fromEntries(s.sources.filter(src => src.name.trim() && src.type).map(src => [
+        src.name.trim(),
+        {
+          type: src.type,
+          ...(src.type === "file" ? { path: src.path.trim() } : {}),
+          fields: src.fields.map(f => ({
+            label: f.label.trim(),
+            type: f.type,
+            format: opt(f.format),
+            revit_format: opt(f.revit_format),
+            qa: opt(f.qa),
+          })),
+        },
+      ])),
+    },
     hierarchy: s.hierarchy.map(t => ({
       name: t.name.trim(),
       code_property: opt(t.code_property),
@@ -1086,15 +1156,8 @@ function toPayload() {
     milestones: s.milestones.map(m => ({
       name: m.name.trim(),
       date: m.date.trim(),
-      drofus_snapshot: opt(m.drofus_snapshot),
+      reference_snapshots: Object.fromEntries(Object.entries(m.reference_snapshots).filter(([, v]) => v)),
       attachments: Object.fromEntries(m.attachments.filter(a => a.taken_at).map(a => [a.model, a.taken_at])),
-    })),
-    drofus_fields: s.drofus_fields.map(f => ({
-      label: f.label.trim(),
-      type: f.type,
-      format: opt(f.format),
-      revit_format: opt(f.revit_format),
-      qa: opt(f.qa),
     })),
     colour_plans: s.colour_plans.map(colourPlanToWire),
     // Preserved, not edited here — see blankSettings. Carried straight from
@@ -1157,9 +1220,7 @@ async function save() {
     current = { isNew: false, file: `${activeProjectId}.toml`, settings: normalize(data.settings) };
     openEditor();
     loadProjectList();
-    const drofus = current.settings.sources.drofus;
-    if (drofus && drofus.type === "file") checkDrofus(true);
-    if (drofus && drofus.type === "upload") { loadDrofusLatest(); loadDrofusSnapshots(); }
+    preloadAllReferenceSources();
   } else {
     // The server's 422 is the real validator — show it verbatim.
     showMessage(false, `⚠ ${result.text}`);
@@ -1169,40 +1230,10 @@ async function save() {
 // ---------- wiring ----------
 $("newProjectBtn").addEventListener("click", newProject);
 $("editor").addEventListener("submit", (e) => { e.preventDefault(); save(); });
-$("drofusSourceType").addEventListener("change", (e) => {
-  const type = e.target.value;
-  if (type === "file") {
-    current.settings.sources.drofus = { type: "file", path: $("drofusPath").value };
-  } else if (type === "upload") {
-    current.settings.sources.drofus = { type: "upload" };
-    if (!current.isNew) { loadDrofusLatest(); loadDrofusSnapshots(); }
-  } else {
-    delete current.settings.sources.drofus;
-  }
-  $("drofusStatus").classList.add("hidden");
-  renderDrofusSource();
-  renderQa();
+$("addReferenceSourceBtn").addEventListener("click", () => {
+  current.settings.sources.push({ name: "", type: "", path: "", fields: [] });
+  renderReferenceSources();
 });
-$("drofusPath").addEventListener("input", (e) => {
-  const drofus = current.settings.sources.drofus;
-  if (drofus && drofus.type === "file") drofus.path = e.target.value;
-});
-$("drofusCheckBtn").addEventListener("click", () => checkDrofus(false));
-$("drofusPickBtn").addEventListener("click", () => $("drofusFile").click());
-$("drofusFile").addEventListener("change", (e) => {
-  uploadDrofusFile(e.target.files[0]);
-  e.target.value = ""; // allow re-uploading the same file
-});
-{
-  const drop = $("drofusDrop");
-  drop.addEventListener("dragover", (e) => { e.preventDefault(); if (!current?.isNew) drop.classList.add("drag"); });
-  drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
-  drop.addEventListener("drop", (e) => {
-    e.preventDefault();
-    drop.classList.remove("drag");
-    uploadDrofusFile(e.dataTransfer.files[0]);
-  });
-}
 $("addTierBtn").addEventListener("click", () => {
   current.settings.hierarchy.push({ name: "", code_property: "", name_property: "" });
   renderHierarchy();
@@ -1222,12 +1253,8 @@ $("labelInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); $("addLabelBtn").click(); }
 });
 $("addMilestoneBtn").addEventListener("click", () => {
-  current.settings.milestones.push({ name: "", date: "", attachments: [] });
+  current.settings.milestones.push({ name: "", date: "", reference_snapshots: {}, attachments: [] });
   renderMilestones();
-});
-$("addQaBtn").addEventListener("click", () => {
-  current.settings.drofus_fields.push({ label: "", type: "string", format: "", revit_format: "", qa: "" });
-  renderQa();
 });
 $("addColourBtn").addEventListener("click", () => {
   // A new plan defaults to property-compare/match, inactive (the user marks it

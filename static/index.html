@@ -138,10 +138,12 @@
     font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
     color: var(--accent);
   }
-  /* Model vs dRofus stay visually distinct: STRATEGY-SOURCES keeps dRofus a
-     separate sub-object with its own lifecycle, and band 2 already tints its
-     columns as a block. The inspector must not be the place that blurs it. */
-  #inspector .insp-rows.src-drofus { background: var(--drofus-tint, rgba(0, 0, 0, 0.03)); }
+  /* Model vs reference-source data stay visually distinct: STRATEGY-SOURCES
+     keeps every reference source a separate sub-object with its own
+     lifecycle, and band 2 already tints its columns as a block. The
+     inspector must not be the place that blurs it. `.src-reference` is
+     shared by every joined source (dRofus, or any other), not just dRofus. */
+  #inspector .insp-rows.src-reference { background: var(--reference-tint, rgba(0, 0, 0, 0.03)); }
   #inspector .insp-row {
     display: grid; grid-template-columns: 45% 1fr; gap: 0.4rem;
     padding: 0.18rem 0.7rem; align-items: start;
@@ -499,12 +501,14 @@
   #gridTable thead tr.group th > span { position: sticky; left: 0.4rem; display: inline-block; }
   #gridTable thead tr.names th { top: 1.35rem; border-bottom: 1px solid var(--ink); }
   #gridTable thead tr.group th.src-model { color: var(--ink); }
-  #gridTable thead tr.group th.src-drofus { color: var(--accent); }
-  /* dRofus columns tinted as a block, so the "separate sub-object, never
-     merged" boundary is visible rather than implied. */
-  #gridTable .src-drofus { background: color-mix(in srgb, var(--accent) 7%, var(--paper)); }
-  /* A dRofus column with no Revit counterpart in row 2 of the CSV: shown,
-     visibly distinguished, never hidden (see field coverage). */
+  #gridTable thead tr.group th.src-reference { color: var(--accent); }
+  /* Reference-source columns (dRofus, or any other configured source)
+     tinted as a block, so the "separate sub-object, never merged" boundary
+     is visible rather than implied. */
+  #gridTable .src-reference { background: color-mix(in srgb, var(--accent) 7%, var(--paper)); }
+  /* A reference-source column with no Revit counterpart in row 2 of the CSV
+     (only known for dRofus -- see detectReferenceSources): shown, visibly
+     distinguished, never hidden (see field coverage). */
   #gridTable thead th.unmapped { font-style: italic; opacity: 0.75; }
   #gridTable thead th.sorted::after { content: " ▾"; color: var(--accent); }
   #gridTable thead th.sorted.asc::after { content: " ▴"; }
@@ -636,7 +640,9 @@
              bar when the plans matter more than the table. -->
         <button class="grid-collapse" id="gridHead" title="Collapse the table">▾ Rooms</button>
         <label><input type="checkbox" id="srcModel" checked /> Model</label>
-        <label><input type="checkbox" id="srcDrofus" checked /> dRofus</label>
+        <!-- One checkbox per discovered reference source (dRofus, or any
+             other), rendered by syncReferenceSources() -- see detectReferenceSources. -->
+        <span id="srcToggles"></span>
         <button id="gridClearFilters" title="Clear all column filters">Clear filters</button>
         <button id="gridDownload">Download CSV</button>
         <span class="count" id="gridCount"></span>
@@ -1441,6 +1447,10 @@ function updateMeta(zone) {
 // re-renders its own level from the shared payload.
 function ingestAll(payload) {
   currentPayload = payload;
+  // A new payload may add/drop reference sources (a different project) —
+  // refresh the discovered-source list and its toggles before anything below
+  // reads knownReferenceSources.
+  syncReferenceSources();
   // A new payload may add properties (a different project) — refresh the search
   // field checklist, then recompute the match set so the renders below carry
   // the highlight.
@@ -1448,7 +1458,8 @@ function ingestAll(payload) {
   computeMatches();
   for (const zone of zones) ingestZone(zone);
   // The grid's column set is payload-derived (property keys + the response's
-  // dRofus labels), so it is rebuilt here rather than on every render.
+  // dRofus labels, plus any other discovered source's joined fields), so it
+  // is rebuilt here rather than on every render.
   gridColumns = buildGridColumns();
   renderGrid();
   // The inspector reads the selected room OUT of this payload, so a new push (or
@@ -2549,11 +2560,12 @@ const debouncedLoadAdjacency = debounce(() => loadAdjacency({ force: true }), 15
 // scope/presentation blur the global-scope migration removed. Filtering by
 // level stays available as an ordinary column filter, driven by the user.
 //
-// Model-derived and dRofus-derived columns are grouped and visually separated
-// rather than interleaved: STRATEGY-SOURCES keeps dRofus a distinct
-// sub-object ("store raw, join late") precisely because the two have
-// different lifecycles, and an interleaved table would imply a single source
-// of truth the data model deliberately doesn't have.
+// Model-derived and reference-source-derived columns are grouped and visually
+// separated rather than interleaved: STRATEGY-SOURCES keeps every reference
+// source a distinct sub-object ("store raw, join late") precisely because
+// they have different lifecycles from the model, and an interleaved table
+// would imply a single source of truth the data model deliberately doesn't
+// have.
 
 // The region reserves its dragged height only when some child actually
 // flex-fills it: the grid expanded, or a band-1 block open. Otherwise it drops
@@ -2582,7 +2594,9 @@ function updateRegionHeight() {
 const GRID_ROW_H = 20;      // px; fixed so a row's offset is index * height
 const GRID_OVERSCAN = 8;    // rows rendered beyond the viewport, to hide scroll seams
 
-let gridColumns = [];       // [{ key, label, source: "model"|"drofus", get(room), unmapped }]
+let gridColumns = [];       // [{ key, label, source: "model"|<reference source name>, get(room), unmapped }]
+let knownReferenceSources = []; // last-detected reference source names, see syncReferenceSources()
+let enabledReferenceSources = new Set(); // subset of the above currently shown in the grid
 let gridRows = [];          // rooms after filter + sort (the windowed row list)
 let gridSort = { key: null, asc: true };
 const gridFilters = new Map(); // column key -> lowercased filter text
@@ -2612,6 +2626,70 @@ function rebuildGridErrorIndex() {
   for (const dup of d.duplicate_link_values) for (const id of dup.room_ids) gridRoomErrors.add(id);
 }
 
+// Fixed `RoomResponse` fields (`room` and `reference` are both `#[serde(flatten)]`d
+// onto the same JSON object in rooms.rs) -- everything else on a room is
+// either a reference-source sub-object or a regular response field.
+const ROOM_FIXED_KEYS = new Set(["id", "name", "level_id", "loops", "properties", "classification", "label"]);
+
+// Data-driven discovery of every joined/configured reference source in the
+// current payload: any room key shaped like `{fields: {...}}` (a
+// `ReferenceRecord`) that isn't one of Room's own fields. No extra fetch, and
+// this naturally covers the unscoped multi-project view (whatever sources
+// actually show up on the merged rooms). "drofus" is also included whenever
+// `drofus_labels` has an entry, even if every room in scope is unmatched, so
+// its (empty) column/toggle still appears — the one source the backend still
+// exposes a full CSV vocabulary for (see STRATEGY-SOURCES.md). A different
+// source that matched zero rooms in the current scope has no such fallback
+// and won't be discovered — a known gap, not a bug, until a per-source labels
+// endpoint exists.
+function detectReferenceSources(payload) {
+  const names = new Set();
+  if (Object.keys(payload?.drofus_labels || {}).length) names.add("drofus");
+  for (const room of (payload?.rooms || [])) {
+    for (const key of Object.keys(room)) {
+      if (ROOM_FIXED_KEYS.has(key)) continue;
+      const v = room[key];
+      if (v && typeof v === "object" && !Array.isArray(v) && v.fields && typeof v.fields === "object") names.add(key);
+    }
+  }
+  return [...names].sort();
+}
+
+const REFERENCE_SOURCE_DISPLAY_NAMES = { drofus: "dRofus" };
+function sourceDisplayName(name) {
+  return REFERENCE_SOURCE_DISPLAY_NAMES[name] || (name.charAt(0).toUpperCase() + name.slice(1));
+}
+
+// Refresh the known-source list from the current payload and the toggle
+// checkboxes that drive `enabledReferenceSources`. Called once per payload,
+// before the grid/search/inspector are rebuilt off `knownReferenceSources`.
+function syncReferenceSources() {
+  knownReferenceSources = detectReferenceSources(currentPayload);
+  // A newly seen source defaults to shown, same "new field -> on" rule
+  // refreshFieldsPanel uses for search fields.
+  for (const name of knownReferenceSources) enabledReferenceSources.add(name);
+  renderSourceToggles();
+}
+
+function renderSourceToggles() {
+  const box = document.getElementById("srcToggles");
+  box.replaceChildren();
+  for (const name of knownReferenceSources) {
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = enabledReferenceSources.has(name);
+    cb.addEventListener("change", () => {
+      if (cb.checked) enabledReferenceSources.add(name); else enabledReferenceSources.delete(name);
+      gridScrollTop = 0;
+      document.getElementById("gridScroll").scrollTop = 0;
+      renderGrid();
+    });
+    const label = document.createElement("label");
+    label.append(cb, document.createTextNode(" " + sourceDisplayName(name)));
+    box.appendChild(label);
+  }
+}
+
 // Intrinsic columns first — the identity a reader scans by — then the room's
 // own property keys. `$level` resolves through the payload's level list, which
 // is why it isn't just another property.
@@ -2630,22 +2708,36 @@ function buildGridColumns() {
     cols.push({ key: `p:${k}`, label: k, source: "model", get: r => (r.properties?.[k]?.value) ?? "" });
   }
 
-  // dRofus columns come from the response's own label set, NOT a union of the
-  // rooms' joined fields: a column that matched no room in scope would
-  // otherwise be invisible — precisely the case the coverage report goes out
-  // of its way to show as "not checked" rather than omit. `reconciliation`
-  // marks which columns have a Revit counterpart; the rest render as unmapped.
-  const labels = (currentPayload.drofus_labels || {})[projectId];
-  if (labels) {
-    const mapped = labels.reconciliation || {};
-    for (const label of labels.all_labels || []) {
-      cols.push({
-        key: `d:${label}`, label, source: "drofus",
-        unmapped: !(label in mapped),
-        // An unmatched room simply has no `drofus` key — empty cells, never an
-        // error (an unmatched link value is a signal, not a failure).
-        get: r => (r.drofus?.fields?.[label]) ?? "",
-      });
+  // Reference-source columns, one group per discovered source. "drofus"
+  // comes from the response's own label set, NOT a union of the rooms'
+  // joined fields: a column that matched no room in scope would otherwise be
+  // invisible — precisely the case the coverage report goes out of its way
+  // to show as "not checked" rather than omit. `reconciliation` marks which
+  // columns have a Revit counterpart; the rest render as unmapped. Any other
+  // source has no labels endpoint to draw on, so it falls back to the union
+  // of its joined fields across rooms in scope — no unmatched-only columns,
+  // no `unmapped` styling (no reconciliation data for it either), an honest
+  // lesser capability until the backend grows a per-source labels endpoint.
+  for (const name of knownReferenceSources) {
+    const labels = name === "drofus" ? (currentPayload.drofus_labels || {})[projectId] : null;
+    if (labels) {
+      const mapped = labels.reconciliation || {};
+      for (const label of labels.all_labels || []) {
+        cols.push({
+          key: `${name}:${label}`, label, source: name,
+          unmapped: !(label in mapped),
+          // An unmatched room simply has no key for this source — empty
+          // cells, never an error (an unmatched link value is a signal, not
+          // a failure).
+          get: r => (r[name]?.fields?.[label]) ?? "",
+        });
+      }
+    } else {
+      const fieldKeys = new Set();
+      for (const r of currentPayload.rooms) if (r[name]) for (const k of Object.keys(r[name].fields || {})) fieldKeys.add(k);
+      for (const label of [...fieldKeys].sort()) {
+        cols.push({ key: `${name}:${label}`, label, source: name, get: r => (r[name]?.fields?.[label]) ?? "" });
+      }
     }
   }
   return cols;
@@ -2653,8 +2745,7 @@ function buildGridColumns() {
 
 function visibleGridColumns() {
   const model = document.getElementById("srcModel").checked;
-  const drofus = document.getElementById("srcDrofus").checked;
-  return gridColumns.filter(c => (c.source === "model" ? model : drofus));
+  return gridColumns.filter(c => (c.source === "model" ? model : enabledReferenceSources.has(c.source)));
 }
 
 // Rooms after every active column filter, then the active sort. Sorting is
@@ -2682,8 +2773,8 @@ function computeGridRows() {
   gridRows = rows;
 }
 
-// Header: a group row (Model | dRofus, spanning their columns) over a names
-// row carrying sort, over a filter row.
+// Header: a group row (Model | each reference source, spanning their
+// columns) over a names row carrying sort, over a filter row.
 //
 // Rebuilt ONLY when the column set changes — a sort or filter keystroke just
 // restyles the existing cells. That matters for more than cost: re-rendering
@@ -2713,19 +2804,21 @@ function renderGridHead(cols) {
     else groups.push({ source: c.source, span: 1 });
   }
 
+  const refCls = (source) => source !== "model" ? " src-reference" : "";
+
   const groupRow = groups.map(g =>
-    `<th class="group-cell src-${g.source}" colspan="${g.span}"><span>${g.source === "model" ? "Model" : "dRofus"}</span></th>`
+    `<th class="group-cell src-${g.source}${refCls(g.source)}" colspan="${g.span}"><span>${g.source === "model" ? "Model" : escapeHtml(sourceDisplayName(g.source))}</span></th>`
   ).join("");
 
   const nameRow = cols.map(c => {
     const sorted = gridSort.key === c.key ? ` sorted${gridSort.asc ? " asc" : ""}` : "";
     const unmapped = c.unmapped ? " unmapped" : "";
     const title = c.unmapped ? ` title="${escapeHtml(c.label)} — no Revit property mapped (not QA-checked)"` : "";
-    return `<th class="src-${c.source}${sorted}${unmapped}" data-key="${escapeHtml(c.key)}"${title}>${escapeHtml(c.label)}</th>`;
+    return `<th class="src-${c.source}${refCls(c.source)}${sorted}${unmapped}" data-key="${escapeHtml(c.key)}"${title}>${escapeHtml(c.label)}</th>`;
   }).join("");
 
   const filterRow = cols.map(c =>
-    `<th class="src-${c.source}"><input data-key="${escapeHtml(c.key)}" value="${escapeHtml(gridFilters.get(c.key) || "")}" placeholder="filter" /></th>`
+    `<th class="src-${c.source}${refCls(c.source)}"><input data-key="${escapeHtml(c.key)}" value="${escapeHtml(gridFilters.get(c.key) || "")}" placeholder="filter" /></th>`
   ).join("");
 
   thead.innerHTML = `<tr class="group">${groupRow}</tr><tr class="names">${nameRow}</tr><tr id="gridFilters">${filterRow}</tr>`;
@@ -2763,7 +2856,8 @@ function renderGridBody(cols) {
       const bad = c.key.startsWith("p:")
         ? gridCellErrors.has(`${room.id}\0${c.key.slice(2)}`)
         : (c.key === "$id" && roomBad);
-      return `<td class="src-${c.source}${bad ? " err" : ""}" title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
+      const refCls = c.source !== "model" ? " src-reference" : "";
+      return `<td class="src-${c.source}${refCls}${bad ? " err" : ""}" title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
     }).join("");
     parts.push(`<tr data-room="${escapeHtml(room.id)}" style="height:${GRID_ROW_H}px">${cells}</tr>`);
   }
@@ -2791,7 +2885,7 @@ function renderGrid() {
   if (cols.length === 0) {
     scroll.classList.add("hidden");
     empty.classList.remove("hidden");
-    empty.textContent = "No columns shown — enable Model or dRofus above.";
+    empty.textContent = "No columns shown — enable Model or a reference source above.";
   } else {
     scroll.classList.remove("hidden");
     empty.classList.add("hidden");
@@ -2840,7 +2934,7 @@ function gridScrollToRoom(roomId) {
 function buildGridCsv() {
   const cols = visibleGridColumns();
   if (cols.length === 0) return "";
-  const rows = [cols.map(c => (c.source === "drofus" ? `drofus.${c.label}` : c.label))];
+  const rows = [cols.map(c => (c.source === "model" ? c.label : `${c.source}.${c.label}`))];
   for (const room of gridRows) rows.push(cols.map(c => c.get(room)));
   return rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
 }
@@ -2864,18 +2958,23 @@ function debounce(fn, ms) {
 }
 
 // Intrinsic/aggregate field keys carry a friendly label; raw property keys show
-// verbatim.
-const SEARCH_FIELD_LABELS = { "$name": "Name", "$id": "Id", "$classification": "Classification", "$drofus": "dRofus" };
-function searchFieldLabel(key) { return SEARCH_FIELD_LABELS[key] || key; }
+// verbatim. `$<source>` pseudo-fields (one per discovered reference source)
+// route through sourceDisplayName instead of a fixed table entry.
+const SEARCH_FIELD_LABELS = { "$name": "Name", "$id": "Id", "$classification": "Classification" };
+function searchFieldLabel(key) {
+  if (key.startsWith("$") && knownReferenceSources.includes(key.slice(1))) return sourceDisplayName(key.slice(1));
+  return SEARCH_FIELD_LABELS[key] || key;
+}
 
-// Every field the search can look at: the intrinsic/aggregate keys plus the
-// union of raw property keys across the loaded payload (one payload for the
-// page — every zone shows the same scope).
+// Every field the search can look at: the intrinsic/aggregate keys, one
+// `$<source>` pseudo-field per discovered reference source, plus the union of
+// raw property keys across the loaded payload (one payload for the page —
+// every zone shows the same scope).
 function availableSearchFields() {
   const props = new Set();
   for (const r of (currentPayload ? currentPayload.rooms : []))
     for (const k of Object.keys(r.properties || {})) props.add(k);
-  return ["$name", "$id", "$classification", "$drofus", ...[...props].sort()];
+  return ["$name", "$id", "$classification", ...knownReferenceSources.map(n => `$${n}`), ...[...props].sort()];
 }
 
 // True when `q` (already lowercased) is a substring of any ENABLED field's value.
@@ -2885,8 +2984,10 @@ function roomMatches(room, q, fields) {
   if (fields.has("$id") && hit(room.id)) return true;
   if (fields.has("$classification") && room.classification &&
       room.classification.some(t => hit(t.name) || hit(t.code))) return true;
-  if (fields.has("$drofus") && room.drofus && room.drofus.fields &&
-      Object.values(room.drofus.fields).some(hit)) return true;
+  for (const name of knownReferenceSources) {
+    if (fields.has(`$${name}`) && room[name] && room[name].fields &&
+        Object.values(room[name].fields).some(hit)) return true;
+  }
   const props = room.properties || {};
   for (const k in props) if (fields.has(k) && hit(props[k].value)) return true;
   return false;
@@ -3045,7 +3146,7 @@ function inspSection(host, title, entries, { source = null } = {}) {
   h.textContent = title;
   host.appendChild(h);
   const rows = document.createElement("div");
-  rows.className = "insp-rows" + (source ? ` src-${source}` : "");
+  rows.className = "insp-rows" + (source ? ` src-${source}${source !== "model" ? " src-reference" : ""}` : "");
   for (const [k, v] of entries) inspRow(rows, k, v);
   host.appendChild(rows);
   return entries.length;
@@ -3223,22 +3324,26 @@ function renderRoomInspector(host) {
   const shown = inspApplyFilters(all);
   inspSection(host, "Model", shown, { source: "model" });
 
-  // ---- dRofus --------------------------------------------------------------
-  // Absent is a real, common state (an unmatched room, or no dRofus at all) and
-  // says something different from "matched but blank" — so it is named, never
-  // rendered as an empty section.
-  const labels = (currentPayload.drofus_labels || {})[projectId] || null;
-  if (room.drofus) {
-    const dr = Object.entries(room.drofus.fields || {});
-    dr.sort((a, b) => a[0].localeCompare(b[0]));
-    inspSection(host, "dRofus", inspApplyFilters(dr), { source: "drofus" });
-  } else if (labels) {
-    const h = document.createElement("h4");
-    h.textContent = "dRofus";
-    const note = document.createElement("div");
-    note.className = "insp-note";
-    note.textContent = "Not joined — this room matched no dRofus record.";
-    host.append(h, note);
+  // ---- reference sources ----------------------------------------------------
+  // Absent is a real, common state (an unmatched room, or a source with no
+  // join for this project) and says something different from "matched but
+  // blank" — so it is named, never rendered as an empty section. Loops every
+  // discovered source (see detectReferenceSources) rather than a single
+  // hardcoded "dRofus" block.
+  for (const name of knownReferenceSources) {
+    const display = sourceDisplayName(name);
+    if (room[name]) {
+      const dr = Object.entries(room[name].fields || {});
+      dr.sort((a, b) => a[0].localeCompare(b[0]));
+      inspSection(host, display, inspApplyFilters(dr), { source: name });
+    } else {
+      const h = document.createElement("h4");
+      h.textContent = display;
+      const note = document.createElement("div");
+      note.className = "insp-note";
+      note.textContent = `Not joined — this room matched no ${display} record.`;
+      host.append(h, note);
+    }
   }
 
   // ---- what the filters removed, never silently ----------------------------
@@ -3841,13 +3946,13 @@ function toggleGrid() {
 document.getElementById("gridHead").addEventListener("click", toggleGrid);
 
 document.getElementById("gridScroll").addEventListener("scroll", onGridScroll);
-for (const id of ["srcModel", "srcDrofus"]) {
-  document.getElementById(id).addEventListener("change", () => {
-    gridScrollTop = 0;
-    document.getElementById("gridScroll").scrollTop = 0;
-    renderGrid();
-  });
-}
+document.getElementById("srcModel").addEventListener("change", () => {
+  gridScrollTop = 0;
+  document.getElementById("gridScroll").scrollTop = 0;
+  renderGrid();
+});
+// Reference-source toggles are dynamic (one per discovered source) -- their
+// change listeners are wired in renderSourceToggles() itself.
 // Sort and filter are delegated off <thead>, which is rebuilt on every render.
 document.getElementById("gridTable").addEventListener("click", (e) => {
   const th = e.target.closest("thead tr.names th");

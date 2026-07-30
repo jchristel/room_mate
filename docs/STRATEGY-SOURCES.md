@@ -55,51 +55,67 @@ Revit.
   contract's two, because the only thing downstream cares about is whether
   neighbouring rooms tile or are separated by a real gap. See
   [Server](STRATEGY-SERVER.md).
-- **dRofus loader + join.** Two-header-row CSV read into a keyed map
-  (`by_id: BTreeMap<String, DrofusRecord>`); joined onto rooms at `/rooms`
-  response assembly as a separate `drofus` sub-object, leaving the stored
-  snapshot raw. The `#[serde(tag = "type")]` source enum now has **two
-  variants**: `File { path }` (read from disk once at startup — the original
-  behaviour, unchanged) and `Upload` (data arrives via browser/HTTP upload,
-  stored as timestamped snapshots — see the next bullet); an `Api` variant
-  later still slots in with no other consumer touched. The loader itself is
-  **byte-source-agnostic** (`load_drofus_from_reader`, with path and bytes
-  wrappers; the bytes path strips a leading UTF-8 BOM, which Excel CSV
-  exports routinely carry and the csv crate does not strip) — which source
-  feeds it is dispatched in `bootstrap::load_project_bundle`, where the
-  store is in scope. Row 2's non-link columns are also retained, as
-  `reconciliation: BTreeMap<String, String>` (dRofus field label → the Revit
-  property it corresponds to) — see [Server](STRATEGY-SERVER.md)'s data
-  validation report, the first real consumer of the "kept for
-  reconciliation" data below.
-- **dRofus as an uploaded, snapshotted source (`type = "upload"`).** The
-  previously-deferred item. A project declaring `[sources.drofus] type =
-  "upload"` takes its dRofus data from `POST /projects/{id}/drofus` (raw
-  `text/csv` body, drag-and-drop on the settings page or any HTTP client);
+- **Reference-source loader + join, generalized to N named sources.**
+  `Sources.reference: BTreeMap<String, ReferenceSourceConfig>` — the map key
+  IS the join namespace (`[sources.reference.drofus]`, `[sources.reference.doors]`,
+  ...), replacing what used to be a single hardcoded `drofus` field. Each
+  source's CSV is a two-header-row export read into a keyed map (`by_id:
+  BTreeMap<String, ReferenceRecord>`, in `src/drofus.rs` — `ReferenceData`/
+  `ReferenceRecord`, renamed from `DrofusData`/`DrofusRecord` when this
+  generalized); joined onto rooms at `/rooms` response assembly as its own
+  sub-object per source, leaving the stored snapshot raw. `RoomResponse`
+  flattens both `room` and its `reference: BTreeMap<String, ReferenceRecord>`
+  onto the same JSON object, so a room's wire shape carries one top-level key
+  per *joined* source (`room.drofus`, `room.doors`, ...) exactly as the
+  single-source shape did before — a project with only dRofus configured is
+  byte-identical on the wire to before this generalized. `ReferenceOrigin`
+  (`#[serde(tag = "type")]`) still has the same two variants per source —
+  `File { path }` and `Upload` — an `Api` variant later still slots in with
+  no other consumer touched. The loader itself is **byte-source-agnostic**
+  (`load_reference_from_reader`, with path and bytes wrappers; the bytes path
+  strips a leading UTF-8 BOM, which Excel CSV exports routinely carry and the
+  csv crate does not strip) — which source feeds it is dispatched per entry
+  in `bootstrap::load_project_bundle`, where the store is in scope. Row 2's
+  non-link columns are also retained, as `reconciliation: BTreeMap<String,
+  String>` (reference field label → the Revit property it corresponds to) —
+  see [Server](STRATEGY-SERVER.md)'s data validation report, currently the
+  only consumer and still scoped to the source literally named `"drofus"`
+  (see the capability boundary below).
+- **A reference source as an uploaded, snapshotted source (`type =
+  "upload"`).** A project declaring `[sources.reference.<name>] type =
+  "upload"` takes that source's data from `POST /projects/{id}/reference/{name}`
+  (raw `text/csv` body, drag-and-drop on the settings page or any HTTP
+  client — `/projects/{id}/drofus` is kept as a permanent alias of the
+  `name = "drofus"` case, both routes hitting the same source-keyed handler);
   each accepted upload is stored as a dated snapshot in the `SnapshotStore`
-  (`<root>/<project>/drofus/<taken_at>.csv` — see
-  [Server](STRATEGY-SERVER.md)), the latest one hydrated at startup and
-  hot-swapped in after each upload. The snapshot id rides the shared upload
-  envelope's rules via `?taken_at=` (see [Index](STRATEGY.md)). A project
-  with the upload source but no upload yet is a legitimate "not configured
-  yet" state (`drofus_configured: false` downstream), not a startup error —
-  its `drofus_fields` get shape-only validation until the first CSV supplies
-  a label set. This is also the storage groundwork milestones need to pin
-  dRofus data (the pinning itself is still deferred).
-- **Per-column dRofus type/QA declarations (`drofus_fields`).** One
-  declaration per dRofus column — `label` (matches row 1), an optional `type`
-  (`string` default, `numeric`, or `date`), an optional `format` (required,
-  and only meaningful, when `type = "date"` — a chrono strftime-style
-  pattern, since dRofus hands dates back as formatted text, e.g.
-  `"6/29/2026 5:01:01 PM +10:00"`, not a structured value), an optional
-  `revit_format` (a second strftime pattern for the *Revit* side of a date
-  comparison, when the room property renders dates differently from the
-  dRofus column — absent means `format` covers both sides), and an optional
-  `qa` override (`exact` forces string comparison even when both sides parse
-  as numbers; `ignore` excludes the column from comparison *and* the
-  coverage report entirely). Deliberately **one** table answering "what is
-  this column," not two: the QA override started life as its own standalone
-  list (`drofus_field_overrides`/`CompareMode`) until a colour-rooms-by-date
+  (`<root>/<project>/reference/<name>/<taken_at>.csv`), the latest one
+  hydrated at startup and hot-swapped in after each upload. The snapshot id
+  rides the shared upload envelope's rules via `?taken_at=` (see
+  [Index](STRATEGY.md)). A project with the upload source but no upload yet
+  is a legitimate "not configured yet" state, not a startup error — its
+  `fields` get shape-only validation until the first CSV supplies a label
+  set. `Milestone.reference_snapshots: BTreeMap<String, String>` (source name
+  → pinned snapshot id) is the storage groundwork milestones use to pin a
+  source's data as it stood at a milestone — dRofus was the first (and for a
+  long time only) entry; it's now one key among however many sources a
+  project configures.
+- **Per-source, per-column type/QA declarations (`ReferenceSourceConfig.fields`).**
+  Each reference source owns its own field list — a project with two sources
+  (say dRofus and a door schedule) declares two independent column
+  vocabularies, not one shared list. One declaration per column — `label`
+  (matches row 1), an optional `type` (`string` default, `numeric`, or
+  `date`), an optional `format` (required, and only meaningful, when `type =
+  "date"` — a chrono strftime-style pattern, since a reference export
+  typically hands dates back as formatted text, e.g. `"6/29/2026 5:01:01 PM
+  +10:00"`, not a structured value), an optional `revit_format` (a second
+  strftime pattern for the *Revit* side of a date comparison, when the room
+  property renders dates differently from the reference column — absent
+  means `format` covers both sides), and an optional `qa` override (`exact`
+  forces string comparison even when both sides parse as numbers; `ignore`
+  excludes the column from comparison *and* the coverage report entirely).
+  Deliberately **one** table answering "what is this column" per source, not
+  two: the QA override started life as its own standalone list
+  (`drofus_field_overrides`/`CompareMode`) until a colour-rooms-by-date
   feature idea came up that needs to actually parse a column's type, not
   just skip it in QA — a second, separate "what is this column" table would
   only have drifted from the first, so the override was folded into this
@@ -108,10 +124,12 @@ Revit.
   report parses a `date`-declared column's values with the declared
   pattern(s) and compares the parsed instants instead of the raw strings
   (the colour-rooms-by-date viewer feature that motivated typing the column
-  is still unbuilt). Everything is validated at startup: a `date` field
-  needs a `format`, a `format`/`revit_format` on anything else is almost
-  certainly a mistake, each pattern must be a valid strftime string, and
-  every `label` must actually exist in the loaded CSV.
+  is still unbuilt, and the validation report itself is still dRofus-only —
+  see the capability boundary below). Everything is validated at startup,
+  per source: a `date` field needs a `format`, a `format`/`revit_format` on
+  anything else is almost certainly a mistake, each pattern must be a valid
+  strftime string, and every `label` must actually exist in that source's
+  loaded CSV.
 - **Transport: HTTP POST to localhost.** Revit add-ins run in-process on .NET;
   POST is simplest, most debuggable, language-agnostic, and the same
   `HttpClient` carries over to a future C# add-in. Alternatives considered:
@@ -174,10 +192,11 @@ guarantee; a flat map with a runtime-resolved name is not — but that guarantee
 was never something IFC (or any second source) could actually promise, so
 keeping it in the type system was enforcing a fiction.
 
-## Reference: dRofus CSV format
+## Reference: the reference-source CSV format
 
-The dRofus export is CSV, not JSON — the one input that isn't machine-JSON,
-since it's a dRofus-side export in its native tabular form:
+Every `File`/`Upload` reference source is CSV, not JSON — this is a
+format-of-origin choice each such source makes, not something JSON-native
+inputs need. dRofus is the first instance and still the running example:
 
 ```
 DrofusRoomId,   NetArea,     Department,  ...   ← row 1: dRofus property names
@@ -187,21 +206,36 @@ RevitDrofusKey, d_net_area,  d_dept,      ...   ← row 2: matching Revit param 
 
 The two header rows are the join spec and must both be retained:
 
-- **Row 2, column 0** names the Revit room property whose *value* holds the
-  dRofus id — the link, constant for the whole file, read once at load.
-- **Row 1** is the dRofus field labels — the display layer for the joined
-  data, and retained in full as `DrofusData.all_labels` regardless of
+- **Row 2, column 0** names the Revit room property whose *value* holds this
+  source's linking id — constant for the whole file, read once at load
+  (`ReferenceData.link_property`).
+- **Row 1** is this source's field labels — the display layer for the joined
+  data, and retained in full as `ReferenceData.all_labels` regardless of
   whether row 2 mapped a given column (needed so [Server](STRATEGY-SERVER.md)'s
   coverage report can show an unmapped column as "not checked" rather than
   omitting it silently; its second consumer is `/rooms`' per-project
-  `drofus_labels` — see Server — which serves the full column set to tabular
-  clients that could otherwise only union per-room joined fields). Row 2's
-  other columns are the Revit param names those fields correspond to, kept
-  for reconciliation — now actually retained and used (see Implemented
-  above), not just parsed and discarded.
+  `drofus_labels` — see Server and the capability boundary below — which
+  serves the full column set to tabular clients that could otherwise only
+  union per-room joined fields). Row 2's other columns are the Revit param
+  names those fields correspond to, kept for reconciliation.
 
-The link is a direct value match and dRofus ids are unique, so the loader
-builds a flat `Map<String, DrofusRecord>` — no collision handling needed.
+The link is a direct value match and each source's ids are unique, so the
+loader builds a flat `Map<String, ReferenceRecord>` per source — no collision
+handling needed.
+
+**A capability boundary worth naming.** `/rooms`' `drofus_labels` (the *full*
+column vocabulary, including columns no room matched) and
+`/projects/{id}/validation`'s whole `ValidationResponse` (the QA coverage
+report) both still resolve specifically against the source named `"drofus"`
+— a deliberate scope-out when the settings/loader/join layers generalized to
+N sources, not an oversight. A second configured source (e.g. `doors`) is
+independently joinable, filterable, and comparable (`doors.Mark=101A` works
+end to end), and both `static/index.html` and `static/comparison.html`
+discover it from the rooms it actually joined onto — but neither gets a QA
+coverage report, and neither can show a column that matched zero rooms in
+the current scope (there is no `doors_labels` to fall back on). Generalizing
+`drofus_labels`/`ValidationResponse` to a per-source shape is the natural
+follow-up once a second source actually needs either.
 
 **Design notes on the join:**
 
@@ -217,29 +251,38 @@ builds a flat `Map<String, DrofusRecord>` — no collision handling needed.
   just gets no dRofus data. A key present on the room but absent from the map
   is a useful mismatch — the two exports saw different model state, same
   diagnostic role as the room↔level join below.
-- **A joined source is queryable under its `[sources.<name>]` key.** `/rooms`'
-  property filter (see [Server](STRATEGY-SERVER.md)) namespaces a predicate's
-  field as `<source>.<label>` — `drofus.NetArea>20` — where `<source>` is
-  exactly a field name of `settings::Sources`, so "what goes before the dot"
-  has the same answer as the settings file. Milestone comparison's
-  `comparison_key` / `comparison_properties` (see Server) are the **second
-  consumer** of the same vocabulary — a name that filters correctly also
-  compares correctly, resolved through the same `rooms::split_namespace` /
-  `rooms::resolve_presence`, never a re-derivation. **This is the extension
-  point a second source touches:** one entry in `rooms::JOINED_SOURCES`, one
-  arm in `rooms::presence_of` (the shared read both filtering and comparison
-  collapse from), and one arm in `rooms::source_joined`, nothing else. The
-  namespace is reserved in the grammar rather than inferred — an unknown
-  prefix is a parse error naming the known sources (and, for the persisted
-  comparison settings, a loud settings-load/save rejection), never a silent
-  fallback to a room property, so a raw property literally named
-  `Newsource.Field` can't quietly change meaning the day that source is
-  added. The filter runs on the *assembled* room (after the join) precisely
-  so a source's fields are reachable at all; consistent with "unmatched key
-  is a signal", a room whose link value matched no record fails every
-  predicate on that source, negative operators included — and comparison
-  reports that unmatched state per room (`unjoined_sources`), not as one
-  missing value per configured field.
+- **A joined source is queryable under its `[sources.reference.<name>]`
+  key.** `/rooms`' property filter (see [Server](STRATEGY-SERVER.md))
+  namespaces a predicate's field as `<source>.<label>` — `drofus.NetArea>20`
+  — where `<source>` is exactly a key of `Sources.reference`, so "what goes
+  before the dot" has the same answer as the settings file. Milestone
+  comparison's `comparison_key` / `comparison_properties` (see Server) are
+  the **second consumer** of the same vocabulary — a name that filters
+  correctly also compares correctly, resolved through the same
+  `rooms::split_namespace` / `rooms::resolve_presence`, never a
+  re-derivation. **The extension point a new source touches is one line of
+  settings, nothing else in Rust:** the recognized-namespace set isn't a
+  compiled constant anymore (the old `rooms::JOINED_SOURCES: &[&str]` is
+  gone) — `SettingsRegistry::known_reference_sources()` computes it at
+  settings-load time as the union of every `reference` key across every
+  project's settings, and `split_namespace` / `Predicate::parse` /
+  `presence_of` / `source_joined` all take that `&BTreeSet<String>` as a
+  parameter instead of reading a global. `presence_of`'s single generic arm
+  (`room.reference.get(source)`) already covers every source there ever
+  will be, matched or not. The namespace is still reserved in the grammar
+  rather than inferred — an unknown prefix is a parse error naming every
+  known source (and, for the persisted comparison settings, a loud
+  settings-load/save rejection), never a silent fallback to a room property,
+  so a raw property literally named `Newsource.Field` can't quietly change
+  meaning the day that source is added. The filter runs on the *assembled*
+  room (after the join) precisely so a source's fields are reachable at all;
+  consistent with "unmatched key is a signal", a room whose link value
+  matched no record fails every predicate on that source, negative operators
+  included — and comparison reports that unmatched state per room
+  (`unjoined_sources`), not as one missing value per configured field. A
+  project that simply doesn't configure a source another project does is
+  **recognized but absent** for an unscoped query across both, not an error
+  — same `presence_of` arm, no special case needed.
 - **`[sources.reference.*]` currently means "reference sources *for
   rooms*."** The join, filter, and comparison machinery above all resolve
   onto an assembled *room* — nothing in this module joins onto any other
@@ -250,8 +293,19 @@ builds a flat `Map<String, DrofusRecord>` — no collision handling needed.
   silently no-op — configured but joined nowhere. This table generalizes
   cleanly to *more room-keyed sources* (the extension point above); it does
   **not** generalize to *sources keyed on a different entity* without that
-  entity existing first. See `docs/HANDOVER-reference-sources.md` for the
-  full two-axis breakdown.
+  entity existing first. See `docs/Superseded/HANDOVER-reference-sources.md`
+  for the full two-axis breakdown.
+- **The frontend discovers sources from the data, not a fixed list.**
+  `static/settings.html` edits `Sources.reference` as a repeatable list of
+  cards (add/remove by name — no reorder, since it's map-keyed, not
+  ordered), each owning its own type/path-or-upload and `fields`.
+  `static/index.html` and `static/comparison.html` never hardcode a source
+  name: they detect which sources are present by scanning a room's own
+  flattened keys for anything shaped like `{fields: {...}}` (see
+  `detectReferenceSources` in `index.html`) — that's what the capability
+  boundary above actually costs a second source: full-vocabulary
+  (unmatched-column) discovery only works for the one source `drofus_labels`
+  still names, everything else is discovered from what actually joined.
 
 ## Open items / things to watch
 

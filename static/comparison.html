@@ -250,20 +250,42 @@ async function selectProject(projectId) {
   loadMilestones(projectId);
 }
 
+// Fixed RoomResponse fields (see index.html's detectReferenceSources, which
+// this mirrors): `room` and `reference` are both flattened onto the same
+// JSON object in rooms.rs, so any other room key shaped like `{fields: {...}}`
+// is a joined reference-source record.
+const ROOM_FIXED_KEYS = new Set(["id", "name", "level_id", "loops", "properties", "classification", "label"]);
+
 // The union of property names on this project's rooms, for the two datalists —
 // same source settings.html uses — plus `drofus.`-prefixed entries from the
 // response's per-project label set, so joined fields are discoverable in the
 // same vocabulary the server compares them in (a name that filters correctly
-// also compares correctly). The authoritative list, not a union of joined
-// per-room fields: a dRofus column that matched no room still appears.
+// also compares correctly). The authoritative list for dRofus, not a union of
+// joined per-room fields: a dRofus column that matched no room still appears
+// — the one source the backend exposes a full CSV vocabulary for. Any other
+// reference source has no such endpoint, so it falls back to the union of its
+// joined fields across the fetched rooms (matched rooms only — an honest
+// lesser capability, same boundary index.html's grid documents).
 // A free-text input still works if empty.
 async function loadPropertyKeys(projectId) {
   let keys = [];
   try {
     const data = await apiGet(`/rooms?project=${encodeURIComponent(projectId)}`);
     const set = new Set();
-    for (const room of (data.rooms || [])) for (const k of Object.keys(room.properties || {})) set.add(k);
+    const otherSourceLabels = {}; // source name -> Set(labels), for sources without a labels endpoint
+    for (const room of (data.rooms || [])) {
+      for (const k of Object.keys(room.properties || {})) set.add(k);
+      for (const key of Object.keys(room)) {
+        if (ROOM_FIXED_KEYS.has(key) || key === "drofus") continue;
+        const v = room[key];
+        if (v && typeof v === "object" && !Array.isArray(v) && v.fields && typeof v.fields === "object") {
+          (otherSourceLabels[key] ??= new Set());
+          for (const label of Object.keys(v.fields)) otherSourceLabels[key].add(label);
+        }
+      }
+    }
     for (const label of (((data.drofus_labels || {})[projectId] || {}).all_labels || [])) set.add(`drofus.${label}`);
+    for (const [source, labels] of Object.entries(otherSourceLabels)) for (const label of labels) set.add(`${source}.${label}`);
     keys = [...set].sort();
   } catch (err) { keys = []; }
   $("propertyOptions").replaceChildren(...keys.map(k => el("option", { value: k })));
