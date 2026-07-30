@@ -50,13 +50,17 @@ pub struct ProjectFileSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub is_default: bool,
-    pub drofus_configured: bool,
+    /// Every reference source this file declares, by name — the list form of
+    /// what `drofus_configured: bool` used to answer for one hardcoded source.
+    /// A bool could only ever say "is dRofus there", which was already the
+    /// wrong question once a project could configure several.
+    pub reference_sources: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-/// Result of dry-running a dRofus CSV path — powers the UI's "check" button
-/// and its drofus_fields label dropdown.
+/// Result of dry-running a reference-source CSV path — powers the UI's
+/// "check" button and its per-source field label dropdown.
 #[derive(Serialize)]
 pub struct ReferenceCheckResult {
     pub record_count: usize,
@@ -122,7 +126,7 @@ pub fn list_project_files(projects_dir: &Path) -> Result<Vec<ProjectFileSummary>
                 project_id: Some(settings.project_id),
                 name: settings.name,
                 is_default: settings.is_default,
-                drofus_configured: settings.sources.reference.contains_key("drofus"),
+                reference_sources: settings.sources.reference.keys().cloned().collect(),
                 error: None,
             }),
             Err(e) => out.push(ProjectFileSummary {
@@ -130,7 +134,7 @@ pub fn list_project_files(projects_dir: &Path) -> Result<Vec<ProjectFileSummary>
                 project_id: None,
                 name: None,
                 is_default: false,
-                drofus_configured: false,
+                reference_sources: vec![],
                 error: Some(format!("{e:#}")),
             }),
         }

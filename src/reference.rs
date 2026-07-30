@@ -81,15 +81,15 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
     // Row 1: dRofus field labels.
     let labels = records
         .next()
-        .context("dRofus CSV missing row 1 (field labels)")??;
+        .context("reference CSV missing row 1 (field labels)")??;
     // Row 2: Revit param names. Col 0 is the link property name.
     let revit_names = records
         .next()
-        .context("dRofus CSV missing row 2 (Revit param names)")??;
+        .context("reference CSV missing row 2 (Revit param names)")??;
 
     let link_property = revit_names
         .get(0)
-        .context("dRofus CSV row 2 col 0 (link property) is empty")?
+        .context("reference CSV row 2 col 0 (link property) is empty")?
         .to_string();
 
     // Row 1/row 2, cols 1+: dRofus field label -> the Revit property name it
@@ -140,7 +140,7 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
 /// below — and its BOM handling — is the single parse entry.
 pub fn load_reference_from_path(path: &Path) -> anyhow::Result<ReferenceData> {
     let bytes = std::fs::read(path)
-        .with_context(|| format!("could not open dRofus CSV: {}", path.display()))?;
+        .with_context(|| format!("could not open reference CSV: {}", path.display()))?;
     load_reference_from_bytes(&bytes)
 }
 
