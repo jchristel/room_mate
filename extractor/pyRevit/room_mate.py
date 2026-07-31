@@ -24,9 +24,15 @@
 import copy
 import datetime
 
-# The only direct Revit API use in this script. duHast exports elements; the
-# room boundary location is a document *setting*, which it has no collector for.
-from Autodesk.Revit.DB import AreaVolumeSettings, SpatialElementType
+# The direct Revit API use in this script. duHast exports elements; the room
+# boundary location is a document *setting* it has no collector for, and phase
+# membership needs the document's phase *ordering*, which nothing else has.
+from Autodesk.Revit.DB import (
+    AreaVolumeSettings,
+    BuiltInCategory,
+    FilteredElementCollector,
+    SpatialElementType,
+)
 
 from duHast.Revit.Rooms.Export.to_data_room import get_all_room_data
 from duHast.Revit.Levels.Export.to_data_level_building import get_all_level_data
@@ -104,6 +110,132 @@ def choose_project(forms):
     return {"id": project["id"], "name": project["name"]}
 
 
+def element_id_str(element_id):
+    """An ElementId as the string the wire uses. `.Value` is the modern API;
+    `.IntegerValue` is what older Revit exposes, and this script has to run on
+    both, so neither name is hard-coded."""
+    value = getattr(element_id, "Value", None)
+    if value is None:
+        value = getattr(element_id, "IntegerValue", None)
+    return str(value)
+
+
+def document_phases(doc):
+    """This document's phases as an ORDERED list of `{"id", "name"}`.
+
+    The order is the entire point: "does this element exist in phase X" is a
+    range test over the phase *sequence*, not an equality check, and `doc.Phases`
+    is the only place that sequence exists. Ids are per-document (the same phase
+    name has a different id in every model), so the name is what crosses between
+    documents and the id is only ever used within one."""
+    return [{"id": element_id_str(p.Id), "name": p.Name} for p in doc.Phases]
+
+
+def exists_in_phase(created, demolished, selected):
+    """Revit's phase-membership rule, on phase *sequence indices*:
+
+        created <= selected AND (demolished invalid OR demolished > selected)
+
+    `None` for `demolished` is the "invalid phase id" case — an element that was
+    never demolished — which is why an unknown index reads as "still standing"
+    rather than as a failure.
+
+    **Not `created == selected`.** Equality would drop every element built in an
+    earlier phase and still standing, which on a phased model is most of them.
+    That mistake will not show up against a single-phase model, where the two
+    agree exactly — which is what makes it worth naming here.
+
+    A `created` that resolves to no known phase excludes the element: it cannot
+    be placed in the sequence, so it cannot be shown to be in scope."""
+    if created is None or created > selected:
+        return False
+    return demolished is None or demolished > selected
+
+
+def choose_phase(selected_docs, forms):
+    """The one phase every selected document will be filtered to, by name, or
+    `None` to abort the run.
+
+    **Prompted once, not once per document.** `pick_document` is multiselect and
+    phases are per-document, so prompting per model would mean five dialogs for
+    five models. Instead the choice is offered over the phase names *common to
+    every selected document*, and each document then resolves that name against
+    its own phases (`rooms_in_phase`) — which is exactly why identity is the
+    name and not the id.
+
+    A document lacking the chosen name fails loudly later rather than being
+    quietly skipped. No common name at all is a hard stop: there is no single
+    phase the run could be scoped to, and pushing per-document phases from one
+    run would mean silently mixing them."""
+    per_doc = []
+    for d in selected_docs:
+        per_doc.append([p["name"] for p in document_phases(d)])
+
+    if not per_doc or not per_doc[0]:
+        forms.alert("No phases found in the selected model(s).",
+                    title="Roommate - push aborted", warn_icon=True)
+        return None
+
+    # Ordered by the first document's phase sequence, so the list a user sees
+    # runs oldest-to-newest rather than alphabetically.
+    common = [name for name in per_doc[0] if all(name in names for names in per_doc[1:])]
+    if not common:
+        forms.alert(
+            "The selected models share no common phase name, so there is no "
+            "single phase this push could be scoped to.\n\n"
+            "Push them in separate runs, or align the phase names.",
+            title="Roommate - push aborted", warn_icon=True)
+        return None
+
+    # One shared phase means there is nothing to ask -- the common case for a
+    # model that was never phased beyond "New Construction".
+    if len(common) == 1:
+        return common[0]
+
+    selected = forms.SelectFromList.show(
+        common,
+        title="Select the phase to push",
+        button_name="Push this phase",
+        multiselect=False)
+    return selected or None
+
+
+def rooms_in_phase(doc, phase_name):
+    """The element ids of `doc`'s rooms that exist in `phase_name`, as strings
+    matching the ids the export carries.
+
+    The filter runs here, client-side, because only the live document has the
+    phase ordering `exists_in_phase` needs — the server never re-evaluates the
+    predicate, which is why the ordered phase list is not on the wire at all.
+    It also means strictly *less* extraction, the axis that actually pays.
+
+    Raises when the document has no phase of that name: a model that cannot be
+    scoped to the chosen phase must fail loudly rather than push everything."""
+    phases = document_phases(doc)
+    order_by_name = dict((p["name"], i) for i, p in enumerate(phases))
+    order_by_id = dict((p["id"], i) for i, p in enumerate(phases))
+
+    if phase_name not in order_by_name:
+        raise ValueError(
+            "model has no phase named '{}' (it has: {})".format(
+                phase_name, ", ".join(p["name"] for p in phases))
+        )
+    selected = order_by_name[phase_name]
+
+    allowed = set()
+    collector = (
+        FilteredElementCollector(doc)
+        .OfCategory(BuiltInCategory.OST_Rooms)
+        .WhereElementIsNotElementType()
+    )
+    for room in collector:
+        created = order_by_id.get(element_id_str(room.CreatedPhaseId))
+        demolished = order_by_id.get(element_id_str(room.DemolishedPhaseId))
+        if exists_in_phase(created, demolished, selected):
+            allowed.add(element_id_str(room.Id))
+    return allowed
+
+
 def rooms_export_entry(doc, uiapp, output, forms):
 
     """
@@ -140,6 +272,18 @@ def rooms_export_entry(doc, uiapp, output, forms):
             return_value.update_sep(False, "Push aborted: no project selected.")
             return return_value
 
+        # Pick ONE phase for the whole run (see choose_phase). Every selected
+        # model is filtered to it and declares it on the envelope; the server
+        # refuses a push that declares none, and a model whose declared phase
+        # disagrees with what it was first pushed under is quarantined rather
+        # than made live. Asked once, after the project, because it is a
+        # property of what is being pushed rather than of where it goes.
+        phase_name = choose_phase(selected_docs, forms)
+        if phase_name is None:
+            return_value.update_sep(False, "Push aborted: no phase selected.")
+            return return_value
+        return_value.append_message("Pushing phase '{}'".format(phase_name))
+
         # get going
         model_counter = 0
         
@@ -159,7 +303,7 @@ def rooms_export_entry(doc, uiapp, output, forms):
                 pb.update_progress(model_counter, max_value=len(selected_docs))
 
                 try:
-                    export_and_post_model(selected_doc, project, return_value, pb)
+                    export_and_post_model(selected_doc, project, phase_name, return_value, pb)
                 except Exception as e:
                     return_value.update_sep(
                         False, "{}: failed with exception: {}".format(selected_doc.Title, e)
@@ -181,11 +325,17 @@ def rooms_export_entry(doc, uiapp, output, forms):
     return return_value
 
 
-def export_and_post_model(selected_doc, project, return_value, pb):
+def export_and_post_model(selected_doc, project, phase_name, return_value, pb):
     """Export one model's rooms and levels and push them to the server under
-    the picked `project` ({"id", "name"}), recording the outcome on
-    `return_value`. Raises on export/envelope failures -- the caller catches
-    per model so one bad model doesn't abandon the rest."""
+    the picked `project` ({"id", "name"}), scoped to `phase_name`, recording the
+    outcome on `return_value`. Raises on export/envelope failures -- the caller
+    catches per model so one bad model doesn't abandon the rest."""
+
+    # Resolve the run's phase against THIS document's own phases before
+    # exporting anything: the name is the identity across models, and a document
+    # that doesn't have it raises here (caught per model) rather than pushing an
+    # unfiltered, silently-wrong room set.
+    allowed_room_ids = rooms_in_phase(selected_doc, phase_name)
 
     # get room data
     room_data = get_all_room_data(selected_doc)
@@ -222,6 +372,12 @@ def export_and_post_model(selected_doc, project, return_value, pb):
         "snapshot": {
             "taken_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         },
+        # The one AUTHORED envelope field: model_to_shared and room_boundary
+        # below are both read off the document, but a document has many phases
+        # and only the user knows which is being pushed. Required, unlike those
+        # two -- the server refuses a push that declares none, because rooms
+        # that were never filtered are a mix of every phase.
+        "phase": phase_name,
     }
 
     # Model->shared placement transform (HANDOVER-georeferencing.md Phase 1).
@@ -311,11 +467,22 @@ def export_and_post_model(selected_doc, project, return_value, pb):
     # A failed push flips the overall Result red but does NOT abort
     # the caller's loop -- one bad model shouldn't discard the other
     # models' successful pushes, the run just must not end green.
-    ok, status, text = post_payload_stream(json_formatted_room, json_formatted_level)
+    ok, status, text = post_payload_stream(
+        json_formatted_room, json_formatted_level, allowed_room_ids=allowed_room_ids
+    )
     if ok:
-        return_value.append_message(
-            "{}: server accepted ({})".format(selected_doc.Title, text)
-        )
+        # 202 is NOT a plain accept: the phase disagrees with what this model
+        # was first pushed under, so the payload is stored inert and nothing
+        # reads it until someone activates it. Reported distinctly, or a user
+        # sees "accepted" and believes the model updated.
+        if status == 202:
+            return_value.append_message(
+                "{}: stored but NOT live -- {}".format(selected_doc.Title, text)
+            )
+        else:
+            return_value.append_message(
+                "{}: server accepted ({})".format(selected_doc.Title, text)
+            )
     else:
         return_value.update_sep(
             False,

@@ -290,6 +290,33 @@ impl AppState {
         self.store.all_latest()
     }
 
+    /// The phase one model's lineage is declared to be in — see
+    /// `SnapshotStore::get_phase`. Read at ingest to decide whether a push
+    /// agrees with the model it is joining.
+    pub fn model_phase(&self, key: &ModelKey) -> anyhow::Result<Option<String>> {
+        self.store.get_phase(key)
+    }
+
+    /// Quarantine a push whose phase disagrees with the lineage's — see
+    /// `SnapshotStore::put_pending`. Stored but not live, awaiting an explicit
+    /// promotion.
+    pub fn set_pending_snapshot(&self, key: &ModelKey, payload: &RoomPayload) -> anyhow::Result<()> {
+        self.store.put_pending(key, payload)
+    }
+
+    /// The quarantined push waiting on one model, if any — see
+    /// `SnapshotStore::get_pending`.
+    pub fn pending_snapshot(&self, key: &ModelKey) -> anyhow::Result<Option<RoomPayload>> {
+        self.store.get_pending(key)
+    }
+
+    /// Make a quarantined push live, re-phasing the lineage — see
+    /// `SnapshotStore::promote_pending`. The one deliberate way a model's phase
+    /// changes after it is first set.
+    pub fn promote_pending_snapshot(&self, key: &ModelKey) -> anyhow::Result<Option<RoomPayload>> {
+        self.store.promote_pending(key)
+    }
+
     /// One model's snapshot ids, ascending — see `SnapshotStore::list_snapshot_ids`.
     pub fn list_snapshot_ids(&self, key: &ModelKey) -> anyhow::Result<Vec<String>> {
         self.store.list_snapshot_ids(key)

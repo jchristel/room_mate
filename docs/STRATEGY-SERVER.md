@@ -3,7 +3,7 @@
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Browser](STRATEGY-BROWSER.md) ·
 [MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md) ·
-[Security](STRATEGY-SECURITY.md)
+[Entities](STRATEGY-ENTITIES.md) · [Security](STRATEGY-SECURITY.md)
 
 The Rust/axum process: what it stores, how it derives data at read time, and
 how it's configured. Code is a library crate (`lib.rs`) split across `src/`
@@ -92,6 +92,27 @@ each module carrying its rationale in a header, all with unit tests.
   not "was a snapshot stored?" (that's `accepted`/`room_count`) — a producer
   that stamps its own `taken_at`, as the Revit one does, sees `false` on every
   successful push. Still v5: a pure relaxation, not a bump.
+- **Revit phase on the upload envelope, one per `(project, model)` lineage.**
+  Every push declares the phase its elements were filtered to (a bare name,
+  `"New Construction"`); the *extractor* does the filtering, since the range
+  test `created <= selected AND (demolished invalid OR demolished > selected)`
+  needs the document's phase ordering. A push with no phase is a **422** — it
+  means a producer predating phase support, whose rooms were never filtered at
+  all — and that requirement is what took `SUPPORTED_SCHEMA` to **6**. The phase
+  is fixed by a lineage's first phased push and **immutable** after: a push
+  naming a different phase is stored inert under `<model>/pending/` and answered
+  **202**, then made live by
+  `POST /projects/{p}/models/{m}/snapshots/pending/activate` (with
+  `GET .../snapshots/pending` to discover it). That pair is the only way a
+  model's phase ever changes. Enforcement is per-model, never per-project —
+  requiring a project's models to agree would deadlock any attempt to move one.
+  Cross-model disagreement is a **read-time finding** (`phases.disagree` in the
+  validation report) plus a raw fact on `/rooms` (`phase_by_model`), because the
+  merge proceeds and a plan spanning two phases would otherwise look complete.
+  `ModelEntry.phase` in `project.toml` is the enforcement key; each snapshot's
+  own file is the record, so a pre-phasing snapshot keeps reporting itself
+  unphased forever rather than being retroactively relabelled. Full rationale in
+  [PLAN-phasing.md](PLAN-phasing.md).
 - **Snapshot history endpoints (`GET /projects/{id}/snapshots`,
   `GET /projects/{p}/models/{m}/snapshots/latest`).** The read side of
   snapshot identity: the first lists every stored snapshot id per model of a

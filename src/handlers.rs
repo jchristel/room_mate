@@ -26,10 +26,10 @@ use crate::service::comparison::{self, ComparisonResponse};
 use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
-use crate::service::snapshots::{LatestSnapshot, ProjectSnapshotsResponse};
+use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
 use crate::service::validation::ValidationResponse;
 use crate::service::{milestones, projects, reference, rooms, snapshots, validation, ServiceError};
-use crate::state::Shared;
+use crate::state::{ModelKey, Shared};
 
 /// Reject a project/model id that can't safely become a filesystem path
 /// component. `FsStore` builds paths as `root/<project_id>/<model_id>` straight
@@ -98,6 +98,66 @@ fn validate_taken_at(taken_at: &str) -> Result<(), (StatusCode, String)> {
     crate::contract::validate_snapshot_id(taken_at).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))
 }
 
+/// What ingest decided to do with a push once its phase has been checked
+/// against the model's lineage.
+enum PhaseDecision {
+    /// Store it as a normal, live snapshot.
+    Accept,
+    /// Quarantine it (`put_pending`) and answer 202: the lineage is phased and
+    /// this push names a different phase. Carries the lineage's phase so the
+    /// response can say what it disagreed with.
+    Quarantine { lineage: String },
+}
+
+/// Apply the phase half of the ingest contract. The `schema_version` check in
+/// `validate_ingest` runs first and catches a stale producer before this is
+/// reached; this is what decides between live, quarantined, and refused.
+///
+/// The full table (PLAN-phasing.md "P3"):
+///
+/// | pushed | lineage | result |
+/// | --- | --- | --- |
+/// | none | *any* | 422 — a producer predating phase support |
+/// | some | none | accept; `put` records the lineage's phase |
+/// | some | some, agree | accept |
+/// | some | some, differ | quarantine, 202 |
+///
+/// **The two failures are deliberately asymmetric.** A differently-phased push
+/// is a correct export of a *different* phase — real, filtered data the user may
+/// want to switch the model to, so it is kept and made promotable. A push with
+/// no phase at all was never filtered by the phase range test, so it is
+/// unfiltered mixed-phase content: there is nothing worth activating, and
+/// offering to activate it would be offering to corrupt the model. Hence reject,
+/// never quarantine.
+///
+/// Takes the already-normalized phase (`contract::normalize_phase`), so a
+/// blank name has collapsed to `None` and reads as the stale-producer case
+/// rather than sneaking through as a phase named "".
+fn decide_phase(state: &Shared, key: &ModelKey, pushed: Option<&str>) -> Result<PhaseDecision, (StatusCode, String)> {
+    let Some(pushed) = pushed else {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "push for {}/{} carries no phase, which indicates an extractor predating phase support; \
+                 its elements were never filtered to a phase. Update the extractor.",
+                key.project_id, key.model_id
+            ),
+        ));
+    };
+
+    let lineage = state.model_phase(key).map_err(|e| {
+        tracing::error!("failed to read lineage phase: {e:#}");
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read model phase: {e}"))
+    })?;
+
+    match lineage {
+        // First phased push to this lineage — `put` records it from the payload.
+        None => Ok(PhaseDecision::Accept),
+        Some(stored) if crate::contract::phases_agree(Some(pushed), Some(&stored)) => Ok(PhaseDecision::Accept),
+        Some(stored) => Ok(PhaseDecision::Quarantine { lineage: stored }),
+    }
+}
+
 /// Tolerance for the `model_to_shared` rigidity check: the linear part should be
 /// a pure rotation (`|det| ≈ 1`). Generous — its only job is to catch a matrix
 /// that has silently picked up scale/shear, not to police float noise.
@@ -128,8 +188,9 @@ fn warn_on_transform_drift(model_to_shared: Option<&ModelToShared>, project_id: 
 pub async fn ingest_rooms(
     State(state): State<Shared>,
     Json(mut payload): Json<RoomPayload>,
-) -> Result<Json<IngestResponse>, (StatusCode, String)> {
+) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
     let snapshot_id_generated = crate::contract::ensure_taken_at(&mut payload.snapshot);
+    payload.phase = crate::contract::normalize_phase(payload.phase.as_deref());
     validate_ingest(
         &state,
         payload.schema_version,
@@ -137,6 +198,8 @@ pub async fn ingest_rooms(
         &payload.model.id,
         &payload.snapshot.taken_at,
     )?;
+    let key = ModelKey::from_payload(&payload);
+    let decision = decide_phase(&state, &key, payload.phase.as_deref())?;
     warn_on_transform_drift(payload.model_to_shared.as_ref(), &payload.project.id, &payload.model.id);
 
     let count = payload.rooms.len();
@@ -144,23 +207,70 @@ pub async fn ingest_rooms(
     let room_boundary = resolved_boundary(&state, &payload.project.id, payload.room_boundary);
     tracing::info!("received {} room(s)", count);
 
-    // Persist. A storage failure (unwritable disk, etc.) is a real server error,
-    // not a bad request — surface it as 500 rather than swallowing it.
-    state.set_snapshot(payload).map_err(|e| {
-        tracing::error!("failed to store snapshot: {e:#}");
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store snapshot: {e}"))
-    })?;
-
-    Ok(Json(IngestResponse {
-        accepted: true,
-        room_count: count,
-        snapshot_taken_at,
-        snapshot_id_generated,
-        room_boundary,
-    }))
+    store_or_quarantine(&state, &key, payload, decision).map(|(status, quarantined)| {
+        (
+            status,
+            Json(IngestResponse {
+                accepted: quarantined.is_none(),
+                room_count: count,
+                snapshot_taken_at,
+                snapshot_id_generated,
+                room_boundary,
+                quarantined,
+            }),
+        )
+    })
 }
 
-#[derive(Serialize)]
+/// Commit one push according to its `PhaseDecision`: live via `set_snapshot`, or
+/// quarantined via `set_pending_snapshot`. Returns the status to answer with and
+/// the quarantine reason, if any.
+///
+/// Shared by both ingest routes so the buffered and streamed paths cannot
+/// disagree about what a phase disagreement does — the same reason
+/// `validate_ingest` is shared.
+fn store_or_quarantine(
+    state: &Shared,
+    key: &ModelKey,
+    payload: RoomPayload,
+    decision: PhaseDecision,
+) -> Result<(StatusCode, Option<String>), (StatusCode, String)> {
+    // A storage failure (unwritable disk, etc.) is a real server error, not a
+    // bad request — surface it as 500 rather than swallowing it.
+    let fail = |e: anyhow::Error| {
+        tracing::error!("failed to store snapshot: {e:#}");
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store snapshot: {e}"))
+    };
+
+    match decision {
+        PhaseDecision::Accept => {
+            state.set_snapshot(payload).map_err(fail)?;
+            Ok((StatusCode::OK, None))
+        }
+        PhaseDecision::Quarantine { lineage } => {
+            let pushed = payload.phase.clone().unwrap_or_default();
+            state.set_pending_snapshot(key, &payload).map_err(fail)?;
+            tracing::warn!(
+                "quarantined push for {}/{}: phase {:?} disagrees with the model's {:?}",
+                key.project_id,
+                key.model_id,
+                pushed,
+                lineage
+            );
+            // 202, not 200: the payload was accepted and stored, but has not
+            // been acted upon — it is inert until someone promotes it.
+            Ok((
+                StatusCode::ACCEPTED,
+                Some(format!(
+                    "stored but not live: this push is phase {pushed:?} while the model is {lineage:?}. \
+                     A model's phase is fixed once set; activate this push to re-phase the model."
+                )),
+            ))
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub struct IngestResponse {
     pub accepted: bool,
     pub room_count: usize,
@@ -176,6 +286,18 @@ pub struct IngestResponse {
     /// `taken_at` (as the Revit one always does) therefore sees `false` here
     /// on every successful push.
     pub snapshot_id_generated: bool,
+
+    /// Why this push was stored but **not** made live, when that happened —
+    /// its phase disagrees with the one the model's lineage is fixed to. `None`
+    /// on a normal push, and omitted from the JSON entirely so an accepted
+    /// response looks exactly as it always did.
+    ///
+    /// Paired with a `202 Accepted` rather than the usual `200`, and with
+    /// `accepted: false`: the data is safely stored and promotable, but nothing
+    /// reads it yet. A producer that ignores this field sees `accepted: false`
+    /// and knows its push did not go live, which is the important half.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quarantined: Option<String>,
 
     /// The boundary regime the server **resolved** for this model — what the
     /// envelope declared, or, when it declared nothing, what the project's
@@ -219,7 +341,7 @@ fn resolved_boundary(state: &Shared, project_id: &str, declared: Option<RoomBoun
 pub async fn ingest_rooms_stream(
     State(state): State<Shared>,
     body: Body,
-) -> Result<Json<IngestResponse>, (StatusCode, String)> {
+) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
     let stream = body.into_data_stream().map(|r| r.map_err(std::io::Error::other));
     let reader = StreamReader::new(stream);
     let mut lines = reader.lines();
@@ -236,6 +358,7 @@ pub async fn ingest_rooms_stream(
     // Same resolve-then-pre-flight as the buffered path -- run as soon as the
     // envelope is parsed, before the (potentially large) room stream is read.
     let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
+    envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
     validate_ingest(
         &state,
         envelope.schema_version,
@@ -243,6 +366,11 @@ pub async fn ingest_rooms_stream(
         &envelope.model.id,
         &envelope.snapshot.taken_at,
     )?;
+    // Decided from the envelope alone, before a single room line is read: a
+    // push that will be refused should cost the producer one line, not a
+    // hundred megabytes of upload.
+    let key = ModelKey { project_id: envelope.project.id.clone(), model_id: envelope.model.id.clone() };
+    let decision = decide_phase(&state, &key, envelope.phase.as_deref())?;
     warn_on_transform_drift(envelope.model_to_shared.as_ref(), &envelope.project.id, &envelope.model.id);
 
     let mut rooms: Vec<Room> = Vec::new();
@@ -269,24 +397,26 @@ pub async fn ingest_rooms_stream(
         project: envelope.project,
         model: envelope.model,
         snapshot: envelope.snapshot,
+        phase: envelope.phase,
         model_to_shared: envelope.model_to_shared,
         room_boundary: envelope.room_boundary,
         levels: envelope.levels,
         rooms,
     };
 
-    state.set_snapshot(payload).map_err(|e| {
-        tracing::error!("failed to store snapshot: {e:#}");
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store snapshot: {e}"))
-    })?;
-
-    Ok(Json(IngestResponse {
-        accepted: true,
-        room_count: count,
-        snapshot_taken_at,
-        snapshot_id_generated,
-        room_boundary,
-    }))
+    store_or_quarantine(&state, &key, payload, decision).map(|(status, quarantined)| {
+        (
+            status,
+            Json(IngestResponse {
+                accepted: quarantined.is_none(),
+                room_count: count,
+                snapshot_taken_at,
+                snapshot_id_generated,
+                room_boundary,
+                quarantined,
+            }),
+        )
+    })
 }
 
 /// `ServiceError` -> `(StatusCode, String)`, the same message-carrying error
@@ -340,6 +470,41 @@ pub async fn get_model_latest_snapshot(
     match result {
         None => Err((StatusCode::NOT_FOUND, "no snapshots stored for that project/model".to_string())),
         Some(latest) => Ok(Json(latest)),
+    }
+}
+
+/// The quarantined push waiting on one model, if any. 404 when there is none —
+/// same one-specific-resource convention as `get_model_latest_snapshot`.
+///
+/// The read half of the re-phase flow: a push whose phase disagrees with its
+/// model's is answered `202` and stored inert, and that response is the only
+/// other place the quarantine is ever announced. Without this route, nobody who
+/// wasn't watching the push could discover there is something to activate.
+pub async fn get_model_pending_snapshot(
+    State(state): State<Shared>,
+    Path((project_id, model_id)): Path<(String, String)>,
+) -> Result<Json<PendingSnapshot>, (StatusCode, String)> {
+    let result = snapshots::pending_snapshot(&state, &project_id, &model_id).map_err(map_service_error)?;
+    match result {
+        None => Err((StatusCode::NOT_FOUND, "no pending push for that project/model".to_string())),
+        Some(pending) => Ok(Json(pending)),
+    }
+}
+
+/// Activate the quarantined push: make it live and re-phase the model to its
+/// phase. 404 when nothing is pending.
+///
+/// The only route in the server that can change a model's phase. A `POST` with
+/// no body — the resource being acted on is fully identified by the path, and
+/// there is exactly one pending push per model, so there is nothing to select.
+pub async fn activate_model_pending_snapshot(
+    State(state): State<Shared>,
+    Path((project_id, model_id)): Path<(String, String)>,
+) -> Result<Json<PendingSnapshot>, (StatusCode, String)> {
+    let result = snapshots::activate_pending_snapshot(&state, &project_id, &model_id).map_err(map_service_error)?;
+    match result {
+        None => Err((StatusCode::NOT_FOUND, "no pending push for that project/model".to_string())),
+        Some(activated) => Ok(Json(activated)),
     }
 }
 
@@ -713,6 +878,7 @@ mod tests {
                 project: Project { id: "p1".to_string(), name: "P".to_string() },
                 model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
                 snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                phase: Some("New Construction".to_string()),
                 model_to_shared: None,
                 room_boundary: None,
                 levels: vec![Level { id: "1".to_string(), name: "L".to_string(), elevation: 0.0 }],
@@ -765,10 +931,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_rooms_empty_filter_result_is_200_not_204() {
         let payload = RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
             model_to_shared: None,
             room_boundary: None,
             levels: vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
@@ -809,6 +976,7 @@ mod tests {
                 project: Project { id: "p1".to_string(), name: "P".to_string() },
                 model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
                 snapshot: Snapshot { taken_at: taken_at.to_string() },
+                phase: Some("New Construction".to_string()),
                 model_to_shared: None,
                 room_boundary: None,
                 levels: vec![],
@@ -837,15 +1005,162 @@ mod tests {
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: good_ts.to_string() },
+            phase: Some("New Construction".to_string()),
             model_to_shared: None,
             room_boundary: None,
             levels: vec![],
             rooms: vec![],
         };
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
-        let response = ingest_rooms(State(state), Json(payload)).await.unwrap();
-        assert_eq!(response.0.snapshot_taken_at, good_ts);
-        assert!(!response.0.snapshot_id_generated);
+        let (status, Json(body)) = ingest_rooms(State(state), Json(payload)).await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.snapshot_taken_at, good_ts);
+        assert!(!body.snapshot_id_generated);
+    }
+
+    /// One payload for the phase tests, phase supplied per case.
+    fn phase_payload(model: &str, ts: &str, phase: Option<&str>) -> RoomPayload {
+        RoomPayload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: ts.to_string() },
+            phase: phase.map(str::to_string),
+            model_to_shared: None,
+            room_boundary: None,
+            levels: vec![],
+            rooms: vec![make_room("r1", "Room A")],
+        }
+    }
+
+    fn phase_state() -> Shared {
+        std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None))
+    }
+
+    /// Row 1 of the ingest table: a push with no phase is refused outright,
+    /// against an unphased lineage as much as a phased one. It means a producer
+    /// predating phase support, whose rooms were never filtered to a phase —
+    /// unfiltered mixed-phase content, which is the thing phasing exists to keep
+    /// out. The message has to say so, or the operator debugs the wrong thing.
+    #[tokio::test]
+    async fn test_ingest_rejects_a_push_with_no_phase() {
+        let state = phase_state();
+
+        let (status, message) =
+            ingest_rooms(State(state.clone()), Json(phase_payload("m1", "2026-01-01T00:00:00Z", None)))
+                .await
+                .expect_err("an unphased push is refused");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("no phase"), "the message names the cause: {message}");
+        assert!(message.contains("extractor"), "and points at the producer: {message}");
+
+        // Nothing was stored -- neither live nor quarantined.
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert!(state.list_snapshot_ids(&key).unwrap().is_empty());
+        assert!(state.store().get_pending(&key).unwrap().is_none(), "a refused push is not quarantined");
+    }
+
+    /// A whitespace-only phase is the same case as an absent one: `normalize_phase`
+    /// collapses it, so it cannot sneak past the check as a phase literally
+    /// named "   ".
+    #[tokio::test]
+    async fn test_ingest_treats_a_blank_phase_as_absent() {
+        let state = phase_state();
+        let (status, _) = ingest_rooms(State(state), Json(phase_payload("m1", "2026-01-01T00:00:00Z", Some("   "))))
+            .await
+            .expect_err("a blank phase is no phase");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// Rows 2 and 3: the first phased push sets the lineage's phase, and a later
+    /// push naming the same phase joins it. Agreement folds whitespace and case,
+    /// so a differently-typed but identical phase is not a disagreement.
+    #[tokio::test]
+    async fn test_ingest_sets_lineage_phase_then_accepts_agreeing_pushes() {
+        let state = phase_state();
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+
+        let (status, Json(body)) = ingest_rooms(
+            State(state.clone()),
+            Json(phase_payload("m1", "2026-01-01T00:00:00Z", Some("New Construction"))),
+        )
+        .await
+        .expect("the first phased push is accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.accepted);
+        assert!(body.quarantined.is_none());
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
+
+        // Same phase, typed differently -- still the same phase.
+        let (status, Json(body)) = ingest_rooms(
+            State(state.clone()),
+            Json(phase_payload("m1", "2026-01-02T00:00:00Z", Some("  NEW CONSTRUCTION "))),
+        )
+        .await
+        .expect("an agreeing push is accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.accepted);
+        // The lineage keeps the *first* push's casing; later spellings don't
+        // rewrite it.
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
+    }
+
+    /// Row 4: a push naming a genuinely different phase is stored but not live.
+    /// 202 rather than 200 (accepted, not acted upon) and `accepted: false`, so
+    /// a producer that ignores the reason string still knows it did not land.
+    /// The live snapshot and the lineage's phase are both untouched.
+    #[tokio::test]
+    async fn test_ingest_quarantines_a_differently_phased_push() {
+        let state = phase_state();
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let _ = ingest_rooms(
+            State(state.clone()),
+            Json(phase_payload("m1", "2026-01-01T00:00:00Z", Some("New Construction"))),
+        )
+        .await
+        .expect("first push");
+
+        let (status, Json(body)) =
+            ingest_rooms(State(state.clone()), Json(phase_payload("m1", "2026-06-01T00:00:00Z", Some("Existing"))))
+                .await
+                .expect("a disagreeing push is kept, not refused");
+
+        assert_eq!(status, StatusCode::ACCEPTED, "202: stored, not acted upon");
+        assert!(!body.accepted, "it did not go live");
+        let reason = body.quarantined.expect("a quarantined push says why");
+        assert!(
+            reason.contains("Existing") && reason.contains("New Construction"),
+            "names both phases: {reason}"
+        );
+
+        // The model is unchanged: same phase, same latest snapshot.
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
+        assert_eq!(state.list_snapshot_ids(&key).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
+        // But the push is retrievable for promotion.
+        let pending = state.store().get_pending(&key).unwrap().expect("quarantined");
+        assert_eq!(pending.phase.as_deref(), Some("Existing"));
+    }
+
+    /// The streamed route applies the identical rule, and applies it from the
+    /// envelope line alone -- a push that will be refused costs the producer one
+    /// line, not the whole upload. Both routes share `decide_phase` precisely so
+    /// they cannot drift on this.
+    #[tokio::test]
+    async fn test_stream_ingest_rejects_an_unphased_envelope() {
+        let state = phase_state();
+        let body = concat!(
+            r#"{"schema_version":6,"project":{"id":"p1","name":"P"},"model":{"id":"m1","name":"M","source":"revit"},"#,
+            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"levels":[]}"#,
+            "\n",
+            r#"{"id":"r1","name":"Room A","level_id":"1","loops":[]}"#,
+            "\n",
+        );
+
+        let (status, message) = ingest_rooms_stream(State(state), Body::from(body))
+            .await
+            .expect_err("an unphased streamed push is refused too");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("no phase"), "same message as the buffered route: {message}");
     }
 
     /// The ingest response's JSON keys are the producer-facing contract (the
@@ -860,10 +1175,14 @@ mod tests {
             snapshot_taken_at: "2026-07-15T11:18:58.186000Z".to_string(),
             snapshot_id_generated: false,
             room_boundary: RoomBoundary::FinishFace,
+            quarantined: None,
         })
         .unwrap();
 
         assert!(json.contains(r#""snapshot_id_generated":false"#), "unexpected wire shape: {json}");
+        // An accepted response is byte-for-byte what it always was: the
+        // quarantine key is absent, not present-and-null.
+        assert!(!json.contains("quarantined"), "an accepted push carries no quarantine key: {json}");
         assert!(json.contains(r#""snapshot_taken_at":"2026-07-15T11:18:58.186000Z""#));
         assert!(json.contains(r#""room_count":26"#));
         // The snake_case spellings are the producer-facing contract too: an
@@ -881,6 +1200,7 @@ mod tests {
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "".to_string() },
+            phase: Some("New Construction".to_string()),
             model_to_shared: None,
             room_boundary: None,
             levels: vec![],
@@ -888,13 +1208,13 @@ mod tests {
         };
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let response = ingest_rooms(State(state.clone()), Json(payload)).await.unwrap();
+        let (_, Json(body)) = ingest_rooms(State(state.clone()), Json(payload)).await.unwrap();
 
-        assert!(response.0.snapshot_id_generated);
-        assert!(crate::contract::validate_snapshot_id(&response.0.snapshot_taken_at).is_ok());
+        assert!(body.snapshot_id_generated);
+        assert!(crate::contract::validate_snapshot_id(&body.snapshot_taken_at).is_ok());
         // The store keyed the push under exactly the id the response reports.
         let key = crate::state::ModelKey { project_id: "p1".into(), model_id: "m1".into() };
-        assert_eq!(state.list_snapshot_ids(&key).unwrap(), vec![response.0.snapshot_taken_at.clone()]);
+        assert_eq!(state.list_snapshot_ids(&key).unwrap(), vec![body.snapshot_taken_at.clone()]);
     }
 
     /// A push for a project with no registered settings (and no default
@@ -907,6 +1227,7 @@ mod tests {
             project: Project { id: "unregistered".to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
             model_to_shared: None,
             room_boundary: None,
             levels: vec![],
@@ -938,6 +1259,7 @@ mod tests {
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
             model_to_shared: Some(ModelToShared { matrix }),
             room_boundary: None,
             levels: vec![],
@@ -962,6 +1284,7 @@ mod tests {
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
             model_to_shared: Some(ModelToShared { matrix: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] }),
             room_boundary: None,
             levels: vec![],
@@ -969,8 +1292,8 @@ mod tests {
         };
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let response = ingest_rooms(State(state), Json(payload)).await.expect("accepted despite det drift");
-        assert!(response.0.accepted);
+        let (_, Json(body)) = ingest_rooms(State(state), Json(payload)).await.expect("accepted despite det drift");
+        assert!(body.accepted);
     }
 
     /// A declared `room_boundary` rides the envelope through **both** ingest
@@ -987,6 +1310,7 @@ mod tests {
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: "buffered".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
             model_to_shared: None,
             room_boundary: Some(RoomBoundary::FinishFace),
             levels: vec![],
@@ -995,8 +1319,8 @@ mod tests {
         let _ = ingest_rooms(State(state.clone() as Shared), Json(buffered)).await.expect("accepted");
 
         let body = concat!(
-            r#"{"schema_version":5,"project":{"id":"p1","name":"P"},"model":{"id":"streamed","name":"M","source":"revit"},"#,
-            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"room_boundary":"centreline","levels":[]}"#,
+            r#"{"schema_version":6,"project":{"id":"p1","name":"P"},"model":{"id":"streamed","name":"M","source":"revit"},"#,
+            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"phase":"New Construction","room_boundary":"centreline","levels":[]}"#,
             "\n",
             r#"{"id":"r1","name":"Room A","level_id":"1","loops":[]}"#,
             "\n",

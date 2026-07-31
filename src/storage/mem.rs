@@ -25,6 +25,17 @@ pub struct MemStore {
     /// Latest uploaded CSV per (project id, source name): `(taken_at,
     /// bytes)`. Latest-only like `latest` — history is a disk affordance.
     drofus: Mutex<DrofusByProjectSource>,
+    /// Each lineage's declared phase — `FsStore` keeps this in `project.toml`,
+    /// and this store has no manifest, so it gets its own map.
+    ///
+    /// Held separately rather than derived from `latest`'s payload, even though
+    /// immutability means the two currently agree: the phase is a fact about
+    /// the *lineage* and the payload's is a fact about one push, and collapsing
+    /// them would quietly break the moment `promote_pending` makes them differ
+    /// for an instant.
+    phases: Mutex<BTreeMap<ModelKey, String>>,
+    /// The one quarantined push per model, invisible to every read path.
+    pending: Mutex<BTreeMap<ModelKey, RoomPayload>>,
 }
 
 impl MemStore {
@@ -36,6 +47,12 @@ impl MemStore {
 impl SnapshotStore for MemStore {
     fn put(&self, payload: &RoomPayload) -> Result<()> {
         let key = ModelKey::from_payload(payload);
+        // Record the lineage's phase on the first phased push and never
+        // overwrite it — same immutability backstop `FsStore.put` applies to
+        // the manifest entry. `or_insert` is exactly that rule.
+        if let Some(phase) = payload.phase.clone() {
+            self.phases.lock().unwrap().entry(key.clone()).or_insert(phase);
+        }
         self.latest.lock().unwrap().insert(key, payload.clone());
         Ok(())
     }
@@ -68,6 +85,35 @@ impl SnapshotStore for MemStore {
         // Latest-only store: an id can only be answered when it IS the
         // current latest; anything older is genuinely gone.
         Ok(self.latest.lock().unwrap().get(key).filter(|p| p.snapshot.taken_at == taken_at).cloned())
+    }
+
+    fn get_phase(&self, key: &ModelKey) -> Result<Option<String>> {
+        Ok(self.phases.lock().unwrap().get(key).cloned())
+    }
+
+    fn put_pending(&self, key: &ModelKey, payload: &RoomPayload) -> Result<()> {
+        // One slot per model: replacement is the rule here, same as on disk.
+        self.pending.lock().unwrap().insert(key.clone(), payload.clone());
+        Ok(())
+    }
+
+    fn get_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
+        Ok(self.pending.lock().unwrap().get(key).cloned())
+    }
+
+    fn promote_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
+        let Some(payload) = self.pending.lock().unwrap().remove(key) else {
+            return Ok(None);
+        };
+        // Re-phase explicitly: `put` only fills an *absent* phase, so the
+        // deliberate overwrite has to happen here, exactly as in `FsStore`.
+        if let Some(phase) = payload.phase.clone() {
+            self.phases.lock().unwrap().insert(key.clone(), phase);
+        } else {
+            self.phases.lock().unwrap().remove(key);
+        }
+        self.latest.lock().unwrap().insert(key.clone(), payload.clone());
+        Ok(Some(payload))
     }
 
     fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
@@ -108,14 +154,15 @@ impl SnapshotStore for MemStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{Model, Project, Snapshot};
+    use crate::contract::{Model, Project, Snapshot, SUPPORTED_SCHEMA};
 
     fn payload(project: &str, model: &str, ts: &str) -> RoomPayload {
         RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: project.into(), name: "P".into() },
             model: Model { id: model.into(), name: "M".into(), source: "revit".into() },
             snapshot: Snapshot { taken_at: ts.into() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels: vec![],
@@ -133,6 +180,39 @@ mod tests {
 
         let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
         assert_eq!(store.list_snapshot_ids(&key).unwrap(), vec!["2026-01-02T10:00:00Z".to_string()]);
+    }
+
+    /// The phase rules are trait behaviour, not an `FsStore` detail, so the
+    /// volatile store has to honour them identically: a lineage phases once and
+    /// stays, a quarantined push is inert, and promotion is the one way past
+    /// that. Asserted here so the two impls can't drift.
+    #[test]
+    fn test_mem_store_honours_phase_immutability_and_quarantine() {
+        let phased = |ts: &str, phase: &str| RoomPayload { phase: Some(phase.into()), ..payload("p", "m", ts) };
+        let store = MemStore::new();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put(&phased("2026-01-01T10:00:00Z", "New Construction")).unwrap();
+        store.put(&phased("2026-01-02T10:00:00Z", "Existing")).unwrap();
+        assert_eq!(
+            store.get_phase(&key).unwrap().as_deref(),
+            Some("New Construction"),
+            "immutable once set, exactly as on disk"
+        );
+
+        store.put_pending(&key, &phased("2026-06-01T10:00:00Z", "Demolition")).unwrap();
+        assert_eq!(
+            store.get_latest(&key).unwrap().unwrap().snapshot.taken_at,
+            "2026-01-02T10:00:00Z",
+            "a quarantined push is never the latest"
+        );
+        assert_eq!(store.get_phase(&key).unwrap().as_deref(), Some("New Construction"));
+
+        let promoted = store.promote_pending(&key).unwrap().expect("something was pending");
+        assert_eq!(promoted.snapshot.taken_at, "2026-06-01T10:00:00Z");
+        assert_eq!(store.get_phase(&key).unwrap().as_deref(), Some("Demolition"), "promotion re-phases");
+        assert!(store.get_pending(&key).unwrap().is_none());
+        assert!(store.promote_pending(&key).unwrap().is_none(), "nothing left to promote");
     }
 
     /// MemStore dRofus: latest-only, replacement is the normal upsert.

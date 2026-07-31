@@ -3,8 +3,8 @@
 Notes capturing the design decisions behind the Revit → Rust → browser room
 viewer. Written as a reference to come back to, not a spec. Split along the
 pipeline's own boundaries, so each can be read (and changed) without pulling in
-the others — seven docs describing what ships today, plus one forward-looking
-design doc for data the user authors:
+the others — seven docs describing what ships today, plus two forward-looking
+design docs: one for data the user authors, one for the entities beyond rooms:
 
 - **This doc** — the pipeline overview, the core split principle that governs
   all three layers, and the current wire contract they all share.
@@ -31,6 +31,13 @@ design doc for data the user authors:
   milestones, and served. An application of the upload-envelope and
   snapshot-store patterns to input that cannot be re-derived; read it before
   building any of that.
+- **[Entities](STRATEGY-ENTITIES.md)** — *design settled, not built.* What makes
+  something a primary entity rather than a reference source, what the
+  rooms/doors pair proves generalizes and what stays per-entity work, and how a
+  Revit phase scopes a push. Doors are the first entity after rooms and FFE is
+  the next, so this is the doc that decides how much of the second one is free.
+  Its phasing half **is** being built — see
+  [PLAN-phasing.md](PLAN-phasing.md), which supersedes several of its details.
 - **[Security](STRATEGY-SECURITY.md)** — the threat model for the near-future
   shift from a loopback-only bind to a LAN-reachable server: what a hostile
   local-network user can and cannot do, and the invariants (no delete route,
@@ -129,14 +136,15 @@ Two related notes:
   a tight single-threaded loop once overhead is counted. Rayon pays off at scale
   (thousands of independent elements). Measure before parallelizing.
 
-## Current contract (v5 — shipped)
+## Current contract (v6 — shipped)
 
 ```json
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "project":  { "id": "p1", "name": "Hospital Job" },
   "model":    { "id": "<revit-guid>", "name": "Project1-ARCH", "source": "revit" },
   "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
+  "phase": "New Construction",
   "model_to_shared": { "matrix": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] },
   "room_boundary": "finish_face",
   "levels": [
@@ -173,6 +181,15 @@ response assembly, never stored (see Server and Sources respectively).
 `model_to_shared` is the optional per-model placement transform and
 `room_boundary` the optional per-model boundary regime — see [The upload
 envelope](#the-upload-envelope) below.
+
+`phase` is **required** and is the reason the contract went v5 → v6. It names
+the Revit phase this push's rooms were filtered to, and it is the first
+*authored* envelope field: the other two are read off the document, but a
+document has many phases and only the user knows which is being pushed. Its
+rules — one phase per `(project, model)` lineage, immutable once set, a
+disagreeing push quarantined rather than refused — are in
+[PLAN-phasing.md](PLAN-phasing.md), with the entity-level context in
+[Entities](STRATEGY-ENTITIES.md).
 
 ### The upload envelope
 

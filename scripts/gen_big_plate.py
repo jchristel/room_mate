@@ -105,7 +105,8 @@ def snapshot(project_id, project_name, model_id, model_name, taken_at, plates):
         rooms.extend(plate_rooms)
         levels.append(level)
     return {
-        "schema_version": 5,
+        "schema_version": 6,
+        "phase": "New Construction",
         "project": {"id": project_id, "name": project_name},
         "model": {"id": model_id, "name": model_name, "source": "revit"},
         "snapshot": {"taken_at": taken_at},

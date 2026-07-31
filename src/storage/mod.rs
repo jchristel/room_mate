@@ -53,6 +53,24 @@ pub use mem::MemStore;
 /// implausible; the skip makes it impossible.)
 pub const REFERENCE_DIR: &str = "reference";
 
+/// Reserved subdirectory name inside a *model* dir holding the one quarantined
+/// push waiting for a re-phase decision (`PENDING_FILE` inside it).
+///
+/// A directory rather than a `pending.json` file beside the real snapshots,
+/// because both model-dir scans accept anything with a `.json` extension — a
+/// quarantined file sitting there would be read as live history by
+/// `latest_snapshot_file` and `list_snapshot_ids`. A directory has no
+/// extension, so it is invisible to both with no change to either. Same
+/// additivity trick that makes `REFERENCE_DIR` safe at the project level.
+pub const PENDING_DIR: &str = "pending";
+
+/// The single file inside a model's `PENDING_DIR`. A fixed name, not the
+/// snapshot's `taken_at`: "at most one pending push per model" is then true by
+/// construction — a second quarantined push overwrites the first rather than
+/// relying on cleanup code to prune a directory that could otherwise
+/// accumulate forever, given there is no delete route.
+pub const PENDING_FILE: &str = "snapshot.json";
+
 // ---------- project.toml ----------
 
 /// The authoritative per-project manifest, one `project.toml` per project dir.
@@ -85,6 +103,29 @@ pub struct ProjectManifest {
 pub struct ModelEntry {
     /// Model display name (mutable; the GUID dir name is the stable identity).
     pub name: String,
+    /// The Revit phase this model's lineage is declared to be in, set by its
+    /// first phased push and immutable thereafter — changing it takes a
+    /// quarantined push and an explicit promotion (`promote_pending`).
+    ///
+    /// **The enforcement key, not a record of history.** It says what future
+    /// pushes must match; it says nothing about what any individual snapshot
+    /// contains. A snapshot written before phases existed reports itself as
+    /// unphased forever, because its own file has no phase — and that stays
+    /// true after a later push phases the lineage. Reads therefore take the
+    /// phase from the snapshot they loaded, never from here. (PLAN-phasing.md
+    /// "D8".)
+    ///
+    /// Living in the manifest is what lets `snapshots/latest` answer "what
+    /// phase is this model in" without opening a snapshot file — the same
+    /// index-not-record role `snapshots` below plays, and the reason that read
+    /// can stay cheap.
+    ///
+    /// A scalar declared before `snapshots` per the TOML ordering rule in
+    /// CODING-CONVENTIONS.md. `default` keeps every manifest written before
+    /// this field existed parseable, as an unphased lineage — which is exactly
+    /// what it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
     /// Snapshot ids (raw `taken_at` values) stored for this model, ascending.
     /// The manifest's index role extended to snapshots: listing a model's
     /// history reads this, never the (possibly >100 MB) snapshot JSONs.
@@ -133,6 +174,36 @@ pub trait SnapshotStore: Send + Sync {
     /// such snapshot exists — the milestone read path. A history-less store
     /// (`MemStore`) can only answer for its current latest.
     fn get_snapshot(&self, key: &ModelKey, taken_at: &str) -> Result<Option<RoomPayload>>;
+
+    /// The phase this model's lineage is declared to be in (`ModelEntry.phase`),
+    /// or `None` for a lineage nothing phased has ever been pushed to.
+    ///
+    /// Answered from the index, never by opening a snapshot — that is the whole
+    /// reason the phase is mirrored into the manifest.
+    fn get_phase(&self, key: &ModelKey) -> Result<Option<String>>;
+
+    /// Store a push whose phase disagrees with the lineage's, without making it
+    /// live. **At most one per model**: a second quarantined push replaces the
+    /// first, since only the newest could sensibly be promoted and there is no
+    /// delete route to clear a backlog.
+    ///
+    /// A quarantined payload is invisible to every read path — `get_latest`,
+    /// `all_latest`, `list_snapshot_ids`, `get_snapshot` — and cannot be pinned
+    /// by a milestone. It exists only to be promoted or overwritten.
+    fn put_pending(&self, key: &ModelKey, payload: &RoomPayload) -> Result<()>;
+
+    /// The quarantined push waiting on this model, if any.
+    fn get_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>>;
+
+    /// Make the quarantined push live: re-phase the lineage to *its* phase,
+    /// store it as a normal snapshot, and clear the quarantine. Returns the
+    /// promoted payload, or `None` when nothing was pending.
+    ///
+    /// This is the **only** way a lineage's phase changes after it is first set
+    /// — the deliberate act that keeps `put` free to treat the phase as
+    /// immutable. Promoting does not rewrite history: earlier snapshots keep
+    /// reporting whatever phase they were pushed under.
+    fn promote_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>>;
 
     /// Store one uploaded CSV against a project's named reference source
     /// (e.g. "drofus"). Returns `false` when a snapshot with this `taken_at`

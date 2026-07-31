@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::{ProjectManifest, SnapshotStore, REFERENCE_DIR};
+use super::{ProjectManifest, SnapshotStore, PENDING_DIR, PENDING_FILE, REFERENCE_DIR};
 use crate::contract::RoomPayload;
 use crate::state::ModelKey;
 
@@ -113,6 +113,13 @@ impl FsStore {
 
     fn reference_dir(&self, project_id: &str, source: &str) -> PathBuf {
         self.project_dir(project_id).join(REFERENCE_DIR).join(source)
+    }
+
+    /// The one quarantined push for a model: `<model>/pending/snapshot.json`.
+    /// Inside a subdirectory so the `.json`-extension model-dir scans can't see
+    /// it — see `PENDING_DIR`.
+    fn pending_file(&self, key: &ModelKey) -> PathBuf {
+        self.model_dir(&key.project_id, &key.model_id).join(PENDING_DIR).join(PENDING_FILE)
     }
 
     /// Reference-source CSV filename from a snapshot id — same `:`
@@ -224,6 +231,15 @@ impl SnapshotStore for FsStore {
         manifest.name = payload.project.name.clone();
         let entry = manifest.models.entry(model_id.clone()).or_default();
         entry.name = payload.model.name.clone();
+        // Record the lineage's phase on the first phased push, and never
+        // overwrite it afterwards. The ingest handler is the real gate — a
+        // disagreeing push is quarantined before it ever reaches `put` — but
+        // expressing immutability structurally here means no future caller can
+        // re-phase a model by accident. `promote_pending` is the one deliberate
+        // way past it.
+        if entry.phase.is_none() {
+            entry.phase = payload.phase.clone();
+        }
         if !entry.snapshots.contains(&payload.snapshot.taken_at) {
             entry.snapshots.push(payload.snapshot.taken_at.clone());
             entry.snapshots.sort();
@@ -392,6 +408,74 @@ impl SnapshotStore for FsStore {
         Ok(Some(Self::read_payload(&path)?))
     }
 
+    fn get_phase(&self, key: &ModelKey) -> Result<Option<String>> {
+        Ok(self
+            .read_manifest(&key.project_id)?
+            .models
+            .get(&key.model_id)
+            .and_then(|m| m.phase.clone()))
+    }
+
+    fn put_pending(&self, key: &ModelKey, payload: &RoomPayload) -> Result<()> {
+        let file = self.pending_file(key);
+        let dir = file.parent().expect("pending file always has a parent dir");
+        fs::create_dir_all(dir).with_context(|| format!("could not create pending dir: {}", dir.display()))?;
+        let json = serde_json::to_string_pretty(payload).context("could not serialise pending snapshot")?;
+        // Overwrite, unlike `put`: there is exactly one pending slot per model
+        // and the newest quarantined push is the only one worth promoting.
+        write_atomic(&file, json.as_bytes())
+            .with_context(|| format!("could not write pending snapshot: {}", file.display()))?;
+        tracing::info!(
+            "quarantined push {}/{} @ {} (phase {:?})",
+            key.project_id,
+            key.model_id,
+            payload.snapshot.taken_at,
+            payload.phase
+        );
+        Ok(())
+    }
+
+    fn get_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
+        let file = self.pending_file(key);
+        if !file.exists() {
+            return Ok(None);
+        }
+        Ok(Some(Self::read_payload(&file)?))
+    }
+
+    fn promote_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
+        let Some(payload) = self.get_pending(key)? else {
+            return Ok(None);
+        };
+
+        // Store it as a normal snapshot first, reusing `put` rather than
+        // reimplementing the write + index. `put` leaves the existing phase
+        // alone (it only fills an absent one), which is why the re-phase below
+        // is a separate, explicit step rather than a side effect.
+        self.put(&payload)?;
+
+        let mut manifest = self.read_manifest(&key.project_id)?;
+        if let Some(entry) = manifest.models.get_mut(&key.model_id) {
+            entry.phase = payload.phase.clone();
+        }
+        self.write_manifest(&key.project_id, &manifest)?;
+
+        // Clear the quarantine only after the snapshot and manifest are both
+        // committed: a failure above leaves the pending push intact and
+        // retryable, where removing it first could lose it entirely.
+        let file = self.pending_file(key);
+        fs::remove_file(&file).with_context(|| format!("could not clear pending snapshot: {}", file.display()))?;
+
+        tracing::info!(
+            "promoted pending push {}/{} @ {}; lineage phase is now {:?}",
+            key.project_id,
+            key.model_id,
+            payload.snapshot.taken_at,
+            payload.phase
+        );
+        Ok(Some(payload))
+    }
+
     fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
         // Same upsert shape as `put`: ensure the dir, index the id in the
         // manifest, then write the file — skipping (never overwriting) a
@@ -500,21 +584,146 @@ impl SnapshotStore for FsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{Model, Project, Snapshot};
+    use crate::contract::{Model, Project, Snapshot, SUPPORTED_SCHEMA};
     use crate::storage::{MemStore, ModelEntry};
     use std::collections::BTreeMap;
 
     fn payload(project: &str, model: &str, ts: &str) -> RoomPayload {
         RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: project.into(), name: "P".into() },
             model: Model { id: model.into(), name: "M".into(), source: "revit".into() },
             snapshot: Snapshot { taken_at: ts.into() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels: vec![],
             rooms: vec![],
         }
+    }
+
+    fn phased(project: &str, model: &str, ts: &str, phase: &str) -> RoomPayload {
+        RoomPayload { phase: Some(phase.into()), ..payload(project, model, ts) }
+    }
+
+    /// The lineage's phase is set by the first phased push and never moved by a
+    /// later one — the immutability backstop `put` applies regardless of what
+    /// the ingest handler decided. A push that disagrees should never reach
+    /// `put` at all; if one does, it must not silently re-phase the model.
+    #[test]
+    fn test_put_records_lineage_phase_once_and_never_overwrites() {
+        let dir = std::env::temp_dir().join(format!("roommate-phase-set-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        // An unphased push leaves the lineage unphased.
+        store.put(&payload("p", "m", "2026-01-01T10:00:00Z")).unwrap();
+        assert_eq!(store.get_phase(&key).unwrap(), None);
+
+        // The first phased push sets it.
+        store.put(&phased("p", "m", "2026-01-02T10:00:00Z", "New Construction")).unwrap();
+        assert_eq!(store.get_phase(&key).unwrap().as_deref(), Some("New Construction"));
+
+        // A later disagreeing one does not move it.
+        store.put(&phased("p", "m", "2026-01-03T10:00:00Z", "Existing")).unwrap();
+        assert_eq!(
+            store.get_phase(&key).unwrap().as_deref(),
+            Some("New Construction"),
+            "a lineage's phase is immutable once set"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A quarantined push is stored but inert: no read path can see it, and it
+    /// cannot be mistaken for history. This is the property the whole
+    /// `pending/` subdirectory exists to guarantee — a `.json` file sitting
+    /// beside the real snapshots would be picked up by both model-dir scans.
+    #[test]
+    fn test_pending_push_is_invisible_to_every_read_path() {
+        let dir = std::env::temp_dir().join(format!("roommate-pending-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put(&phased("p", "m", "2026-01-01T10:00:00Z", "New Construction")).unwrap();
+        store.put_pending(&key, &phased("p", "m", "2026-06-01T10:00:00Z", "Existing")).unwrap();
+
+        let latest = store.get_latest(&key).unwrap().expect("the live snapshot");
+        assert_eq!(latest.snapshot.taken_at, "2026-01-01T10:00:00Z", "the pending push is not the latest");
+        assert_eq!(store.list_snapshot_ids(&key).unwrap(), vec!["2026-01-01T10:00:00Z".to_string()]);
+        assert_eq!(store.all_latest().unwrap().len(), 1);
+        assert!(store.get_snapshot(&key, "2026-06-01T10:00:00Z").unwrap().is_none());
+        // The lineage's phase is untouched by a quarantined push.
+        assert_eq!(store.get_phase(&key).unwrap().as_deref(), Some("New Construction"));
+        // But it is retrievable, which is what makes promotion possible.
+        assert_eq!(store.get_pending(&key).unwrap().expect("pending").phase.as_deref(), Some("Existing"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// One pending slot per model: a second quarantined push replaces the
+    /// first. With no delete route, an accumulating backlog would be
+    /// unclearable, and only the newest is ever worth promoting.
+    #[test]
+    fn test_second_pending_push_replaces_the_first() {
+        let dir = std::env::temp_dir().join(format!("roommate-pending-2-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put_pending(&key, &phased("p", "m", "2026-06-01T10:00:00Z", "Existing")).unwrap();
+        store.put_pending(&key, &phased("p", "m", "2026-07-01T10:00:00Z", "Demolition")).unwrap();
+
+        let pending = store.get_pending(&key).unwrap().expect("pending");
+        assert_eq!(pending.snapshot.taken_at, "2026-07-01T10:00:00Z");
+        assert_eq!(pending.phase.as_deref(), Some("Demolition"));
+
+        let pending_dir = dir.join("p").join("m").join(PENDING_DIR);
+        assert_eq!(std::fs::read_dir(&pending_dir).unwrap().count(), 1, "exactly one pending file, always");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Promotion is the one deliberate way a lineage re-phases: the quarantined
+    /// push becomes a normal snapshot, the manifest's phase moves to its phase,
+    /// and the quarantine clears. History is not rewritten — the earlier
+    /// snapshot still reports the phase it was pushed under.
+    #[test]
+    fn test_promote_pending_rephases_the_lineage_without_rewriting_history() {
+        let dir = std::env::temp_dir().join(format!("roommate-promote-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put(&phased("p", "m", "2026-01-01T10:00:00Z", "New Construction")).unwrap();
+        store.put_pending(&key, &phased("p", "m", "2026-06-01T10:00:00Z", "Existing")).unwrap();
+
+        let promoted = store.promote_pending(&key).unwrap().expect("something was pending");
+        assert_eq!(promoted.snapshot.taken_at, "2026-06-01T10:00:00Z");
+
+        assert_eq!(store.get_phase(&key).unwrap().as_deref(), Some("Existing"), "the lineage re-phased");
+        assert_eq!(store.get_latest(&key).unwrap().unwrap().snapshot.taken_at, "2026-06-01T10:00:00Z");
+        assert_eq!(store.list_snapshot_ids(&key).unwrap().len(), 2, "both snapshots are history now");
+        assert!(store.get_pending(&key).unwrap().is_none(), "the quarantine is cleared");
+
+        // The pre-existing snapshot keeps its own phase: the manifest is the
+        // enforcement key, not a retroactive relabelling of what was stored.
+        let old = store.get_snapshot(&key, "2026-01-01T10:00:00Z").unwrap().expect("still there");
+        assert_eq!(old.phase.as_deref(), Some("New Construction"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Promoting with nothing pending is a `None`, not an error — the endpoint
+    /// turns that into a 404 rather than a 500.
+    #[test]
+    fn test_promote_pending_with_nothing_pending_is_none() {
+        let dir = std::env::temp_dir().join(format!("roommate-promote-none-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put(&phased("p", "m", "2026-01-01T10:00:00Z", "New Construction")).unwrap();
+        assert!(store.promote_pending(&key).unwrap().is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Two models under one project don't overwrite; each keeps its own latest.
@@ -571,7 +780,11 @@ mod tests {
             name: "P".to_string(),
             models: BTreeMap::from([(
                 "modelA".to_string(),
-                ModelEntry { name: "M".to_string(), snapshots: vec!["2026-01-01T10:00:00Z".to_string()] },
+                ModelEntry {
+                    name: "M".to_string(),
+                    phase: None,
+                    snapshots: vec!["2026-01-01T10:00:00Z".to_string()],
+                },
             )]),
             reference_snapshots: BTreeMap::new(),
         };
@@ -632,6 +845,7 @@ mod tests {
                 "m".to_string(),
                 ModelEntry {
                     name: "M".to_string(),
+                    phase: None,
                     snapshots: vec!["2026-01-02T10:00:00Z".to_string(), "2026-01-03T10:00:00Z".to_string()],
                 },
             )]),

@@ -440,7 +440,7 @@ pub fn compare_milestones(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{CustomValue, Level, Model, Project, Room, RoomPayload, Snapshot};
+    use crate::contract::{CustomValue, Level, Model, Project, Room, RoomPayload, Snapshot, SUPPORTED_SCHEMA};
     use crate::settings::Milestone;
     use crate::state::ProjectSettings;
     use crate::storage::FsStore;
@@ -539,10 +539,11 @@ mod tests {
 
     fn payload_at(model_id: &str, taken_at: &str, rooms: Vec<Room>) -> RoomPayload {
         RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: taken_at.to_string() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels: vec![Level { id: "1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],

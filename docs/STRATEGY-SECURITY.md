@@ -3,7 +3,7 @@
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Server](STRATEGY-SERVER.md) ·
 [Browser](STRATEGY-BROWSER.md) · [MCP](STRATEGY-MCP.md) ·
-[Authored](STRATEGY-AUTHORED.md)
+[Authored](STRATEGY-AUTHORED.md) · [Entities](STRATEGY-ENTITIES.md)
 
 What this server defends against, what it deliberately does **not**, and the
 code-level invariants that follow. Separate from [Server](STRATEGY-SERVER.md)
