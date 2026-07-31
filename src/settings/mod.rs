@@ -30,11 +30,10 @@ mod validate;
 pub use load::{load_server_config, load_settings};
 pub use validate::{validate_colour_plans, validate_reference_field_shapes, validate_reference_fields};
 
-/// One project's settings, parsed once at startup from its own TOML file
-/// (one of N files in the `--project-settings` directory). Server-wide config
-/// (`[storage]`,
-/// `[test_data]`) lives separately in `ServerConfig`, loaded once from
-/// `--server-settings` independent of this per-project loop.
+/// One project's settings, parsed once at startup from its own TOML file (one
+/// of N files in the `--project-settings` directory). Server-wide config
+/// (`[storage]`, `[test_data]`) lives separately in `ServerConfig`, loaded
+/// once from `--server-settings` independent of this per-project loop.
 ///
 /// Also derives `Serialize` (as do all the types it contains): the settings
 /// API serves this exact shape as JSON and writes it back as TOML, so the
@@ -110,8 +109,8 @@ pub struct Settings {
     /// Reference sources joined onto this project's rooms, keyed by name (the
     /// join namespace — see `Sources`). Defaulted so a project with no
     /// external sources at all is legal config — a project not using dRofus
-    /// is normal, and the validation endpoint already reports it as
-    /// `drofus_configured: false` rather than an error.
+    /// is normal, and the validation endpoint reports it as an empty `sources`
+    /// map rather than an error.
     #[serde(default)]
     pub sources: Sources,
 
@@ -340,9 +339,7 @@ impl AreaPolicy {
     /// first — the model knows, the project guesses, the server assumes the
     /// case that still needs work done.
     pub fn resolve_boundary(&self, declared: Option<crate::contract::RoomBoundary>) -> crate::contract::RoomBoundary {
-        declared
-            .or(self.boundary_location)
-            .unwrap_or(crate::contract::RoomBoundary::FinishFace)
+        declared.or(self.boundary_location).unwrap_or(crate::contract::RoomBoundary::FinishFace)
     }
 
     /// The gap this regime implies, in feet — the one number `areas` closes by
@@ -488,10 +485,7 @@ pub enum ColourMode {
     /// the parent hues (child tint/shade is derived by lightening, no second
     /// scheme). One tier → hue only; a room whose parent tier is `undefined`
     /// renders "no data" grey.
-    Hierarchy {
-        tiers: Vec<String>,
-        scheme: String,
-    },
+    Hierarchy { tiers: Vec<String>, scheme: String },
 
     /// Colour by proximity of a date-typed `property` to `near_date`: nearest
     /// green, furthest red, a date after `near_date` blue. `property` is a
@@ -750,9 +744,8 @@ impl Milestone {
         // Same rule as an attachments pin: a valid RFC3339-UTC snapshot id.
         // Existence is not checkable here (settings can't see storage).
         for (source, id) in &self.reference_snapshots {
-            crate::contract::validate_snapshot_id(id).map_err(|e| {
-                anyhow::anyhow!("milestone '{}', reference_snapshots.{}: {}", self.name, source, e)
-            })?;
+            crate::contract::validate_snapshot_id(id)
+                .map_err(|e| anyhow::anyhow!("milestone '{}', reference_snapshots.{}: {}", self.name, source, e))?;
         }
         Ok(())
     }
@@ -779,10 +772,7 @@ impl HierarchyTier {
     /// "undefined" for every room.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.code_property.is_none() && self.name_property.is_none() {
-            anyhow::bail!(
-                "hierarchy tier '{}' names neither code_property nor name_property",
-                self.name
-            );
+            anyhow::bail!("hierarchy tier '{}' names neither code_property nor name_property", self.name);
         }
         Ok(())
     }
@@ -828,10 +818,7 @@ impl BuiltinPropertyDef {
     /// fail fast rather than silently never matching at request time.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.by_source.is_empty() {
-            anyhow::bail!(
-                "builtin property '{}' has no by_source mappings",
-                self.canonical
-            );
+            anyhow::bail!("builtin property '{}' has no by_source mappings", self.canonical);
         }
         Ok(())
     }
@@ -844,11 +831,7 @@ mod tests {
     /// A HierarchyTier with neither property fails validation.
     #[test]
     fn test_unkeyable_tier_fails_validation() {
-        let tier = HierarchyTier {
-            name: "Ghost".to_string(),
-            code_property: None,
-            name_property: None,
-        };
+        let tier = HierarchyTier { name: "Ghost".to_string(), code_property: None, name_property: None };
         assert!(tier.validate().is_err());
     }
 
@@ -877,16 +860,22 @@ mod tests {
         assert!(bad_pin.validate().is_err(), "attachment id must be a valid snapshot id");
 
         let mut good_pin = milestone("M", "2026-06-30");
-        good_pin.attachments.insert("model-1".to_string(), "2026-06-29T10:00:00.123456Z".to_string());
+        good_pin
+            .attachments
+            .insert("model-1".to_string(), "2026-06-29T10:00:00.123456Z".to_string());
         assert!(good_pin.validate().is_ok());
 
         // A reference-source pin follows the same snapshot-id rule as an attachment.
         let mut bad_drofus = milestone("M", "2026-06-30");
-        bad_drofus.reference_snapshots.insert("drofus".to_string(), "not-a-snapshot-id".to_string());
+        bad_drofus
+            .reference_snapshots
+            .insert("drofus".to_string(), "not-a-snapshot-id".to_string());
         assert!(bad_drofus.validate().is_err(), "reference_snapshots entry must be a valid snapshot id");
 
         let mut good_drofus = milestone("M", "2026-06-30");
-        good_drofus.reference_snapshots.insert("drofus".to_string(), "2026-06-29T17:00:00Z".to_string());
+        good_drofus
+            .reference_snapshots
+            .insert("drofus".to_string(), "2026-06-29T17:00:00Z".to_string());
         assert!(good_drofus.validate().is_ok());
     }
 

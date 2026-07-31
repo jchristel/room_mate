@@ -9,8 +9,9 @@
 //! to how the store backend is chosen, for instance, only has one call site
 //! to update.
 //!
-//! Settings are one-per-project rather than one-per-process, while `[storage]`/`[test_data]` (server-wide, not tied
-//! to any one project) stayed behind in their own `ServerConfig` file.
+//! Settings are one-per-project rather than one-per-process, while
+//! `[storage]`/`[test_data]` (server-wide, not tied to any one project) stay
+//! behind in their own `ServerConfig` file.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -21,17 +22,16 @@ use anyhow::Context;
 use crate::reference::load_reference_from_bytes;
 use crate::service::rooms::validate_comparison_field;
 use crate::settings::{
-    load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields,
-    ReferenceOrigin, ServerConfig,
+    load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields, ReferenceOrigin,
+    ServerConfig,
 };
 use crate::state::{seed_if_test, AppState, ProjectReferenceSource, ProjectSettings, Shared};
 use crate::storage::{FsStore, MemStore, SnapshotStore};
 
 /// Load and fully validate ONE project settings file into its runtime
-/// bundle: parse TOML, load each configured reference source's data (a
-/// `file` source reads its CSV path; an `upload` source hydrates the latest
-/// stored CSV from the snapshot store — which is why the store is a
-/// parameter), validate each source's declared fields against it. This is
+/// bundle: parse TOML, hydrate each configured reference source from its
+/// latest stored upload (which is why the store is a parameter), validate
+/// each source's declared fields against it. This is
 /// the single validation pipeline for a project file — startup
 /// (`load_project_settings_dir`) and the settings API's save both run
 /// exactly this, so a file the UI accepts can never fail the next boot.
@@ -76,8 +76,15 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
     // field on every response instead of adding one. Checked here, not in
     // `load_settings`, because the reserved vocabulary is `service::rooms`'s
     // to define and settings must not depend on service.
-    const RESERVED_REFERENCE_NAMES: &[&str] =
-        &["id", "name", "level_id", "loops", "properties", "classification", "label"];
+    const RESERVED_REFERENCE_NAMES: &[&str] = &[
+        "id",
+        "name",
+        "level_id",
+        "loops",
+        "properties",
+        "classification",
+        "label",
+    ];
     for name in settings.sources.reference.keys() {
         if RESERVED_REFERENCE_NAMES.contains(&name.as_str()) {
             anyhow::bail!(
@@ -236,7 +243,10 @@ pub fn build_state(server_settings: &Path, projects_dir: &Path) -> anyhow::Resul
         .with_context(|| format!("bad project settings directory: {}", projects_dir.display()))?;
 
     if project_settings.is_empty() && default_settings.is_none() {
-        tracing::warn!("no project settings files found in {} -- every read/ingest will be rejected/skipped until one is added", projects_dir.display());
+        tracing::warn!(
+            "no project settings files found in {} -- every read/ingest will be rejected/skipped until one is added",
+            projects_dir.display()
+        );
     }
 
     let state: Shared = Arc::new(
@@ -485,8 +495,12 @@ path = \"../drofus.csv\"
         .unwrap();
 
         let store = MemStore::new();
-        store.put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n").unwrap();
-        store.put_reference("p1", "doors", "2026-01-01T10:00:00Z", b"DoorId,Mark\nMark,Mark\nD1,101A\n").unwrap();
+        store
+            .put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
+            .unwrap();
+        store
+            .put_reference("p1", "doors", "2026-01-01T10:00:00Z", b"DoorId,Mark\nMark,Mark\nD1,101A\n")
+            .unwrap();
 
         let (registry, _default) = load_project_settings_dir(&dir, &store).unwrap();
         let bundle = registry.get("p1").unwrap();

@@ -27,12 +27,15 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     Ok(config)
 }
 
-/// Resolve a path from the settings file relative to the settings file's own
+/// Resolve a path from the server-settings file relative to that file's own
 /// directory, not the process's current working directory. Without this, a
-/// relative path like `./settings/drofus.csv` only works when the binary
-/// happens to be launched with cwd == crate root (e.g. via `cargo run`) —
-/// running the compiled exe directly from anywhere else silently breaks it.
-/// Absolute paths pass through unchanged.
+/// relative path like `../data/snapshots` only works when the binary happens
+/// to be launched with cwd == crate root (e.g. via `cargo run`) — running the
+/// compiled exe directly from anywhere else silently breaks it. Absolute paths
+/// pass through unchanged.
+///
+/// Only `ServerConfig` has paths to resolve now: a project file's reference
+/// sources are uploads, so nothing in one names a path.
 fn resolve_relative_to(path: &mut PathBuf, settings_dir: Option<&Path>) {
     if path.is_absolute() {
         return;
@@ -43,14 +46,10 @@ fn resolve_relative_to(path: &mut PathBuf, settings_dir: Option<&Path>) {
 }
 
 pub fn load_settings(path: &Path) -> anyhow::Result<Settings> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("could not read settings file: {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("could not read settings file: {}", path.display()))?;
     let settings: Settings = toml::from_str(&raw).context("failed to parse settings TOML")?;
 
-    // Base dir for every relative path *inside* the settings file. `.filter`
-    // turns a bare filename's empty parent ("") into None, which just means
-    // "no base to prepend" — those paths fall back to cwd-relative, same as
-    // before this fix.
     if settings.project_id.trim().is_empty() {
         anyhow::bail!("settings file {} has an empty project_id", path.display());
     }

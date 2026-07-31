@@ -77,13 +77,9 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
     let mut records = rdr.records();
 
     // Row 1: dRofus field labels.
-    let labels = records
-        .next()
-        .context("reference CSV missing row 1 (field labels)")??;
+    let labels = records.next().context("reference CSV missing row 1 (field labels)")??;
     // Row 2: Revit param names. Col 0 is the link property name.
-    let revit_names = records
-        .next()
-        .context("reference CSV missing row 2 (Revit param names)")??;
+    let revit_names = records.next().context("reference CSV missing row 2 (Revit param names)")??;
 
     let link_property = revit_names
         .get(0)
@@ -125,11 +121,7 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
         by_id.insert(id, ReferenceRecord { fields });
     }
 
-    tracing::info!(
-        "loaded {} dRofus record(s); link property = {}",
-        by_id.len(),
-        link_property
-    );
+    tracing::info!("loaded {} dRofus record(s); link property = {}", by_id.len(), link_property);
     Ok(ReferenceData { link_property, by_id, reconciliation, all_labels })
 }
 
@@ -171,7 +163,6 @@ mod tests {
             data.all_labels,
             vec!["NetArea".to_string(), "Department".to_string(), "Notes".to_string()]
         );
-
     }
 
     /// The bytes loader parses an upload body directly, and strips a leading

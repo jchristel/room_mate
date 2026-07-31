@@ -1,0 +1,37 @@
+# Formatting config, tuned to the style this codebase was already written in
+# rather than the other way round.
+#
+# The default rustfmt profile disagreed with the tree in ~670 places. Adopting
+# it would have rewritten every file — losing `git blame` across the whole
+# crate — to enforce a house style nobody had chosen. These settings encode the
+# style already in use, which cut the one-time reformat to something
+# reviewable. `cargo fmt --check` is gated in CI against *this* config.
+#
+# If a future change makes one of these fight the code rather than describe it,
+# change the number here and re-run `cargo fmt`; that is cheaper and more
+# honest than sprinkling `#[rustfmt::skip]`.
+
+# p99 of the existing non-test line lengths is ~115 chars. 100 (the default)
+# would have wrapped a long tail of lines that read fine as they are.
+max_width = 120
+
+# Keep short literals and calls on one line. The defaults (18 / 60 / 60) split
+# things this codebase deliberately keeps inline — e.g.
+# `Self { state, server_url, tool_router: Self::tool_router() }`, which the
+# default `struct_lit_width` exploded into five lines.
+struct_lit_width = 80
+fn_call_width = 90
+chain_width = 90
+single_line_if_else_max_width = 80
+
+# `bin/mcp.rs` carries the MCP tool descriptions as long single-string
+# attributes. The default threshold wraps each one into a multi-line
+# `#[tool(\n    description = "…"\n)]`, which adds two lines per tool and helps
+# nothing — the string is long because the description is long.
+attr_fn_like_width = 120
+
+# Rust 2024's style edition reorders `use` groups (sorting `ServiceError` and
+# `ErrorData as McpError` ahead of lowercase module names). Pinned to 2021 to
+# keep the existing import order, which reads module-first. This is a style
+# choice only — it does not affect what the `edition = "2024"` crate compiles.
+style_edition = "2021"

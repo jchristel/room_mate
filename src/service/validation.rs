@@ -15,9 +15,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::contract::{date_match, lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload};
+use crate::contract::{
+    date_match, lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload,
+};
 use crate::reference::ReferenceData;
-use crate::settings::{BuiltinPropertyDef, CompareMode, ReferenceFieldConfig, FieldType};
+use crate::settings::{BuiltinPropertyDef, CompareMode, FieldType, ReferenceFieldConfig};
 use crate::state::{AppState, ModelKey};
 
 use super::ServiceError;
@@ -175,7 +177,11 @@ impl ValidationResponse {
     /// discrepancies. Callers return this rather than an error — see
     /// `compute_project_validation`.
     fn nothing_to_reconcile() -> Self {
-        Self { sources: BTreeMap::new(), total_rooms: 0, discrepancies: DiscrepancyCounts::default() }
+        Self {
+            sources: BTreeMap::new(),
+            total_rooms: 0,
+            discrepancies: DiscrepancyCounts::default(),
+        }
     }
 }
 
@@ -261,8 +267,7 @@ fn field_values_agree(reference_value: &str, room_value: &str, field_cfg: Option
         (Some(date_matches), _) => date_matches,
         (None, Some(numeric_matches)) => numeric_matches,
         (None, None) => {
-            reference_value.trim() == room_value.trim()
-                || ascii_narrowed(reference_value.trim()) == room_value.trim()
+            reference_value.trim() == room_value.trim() || ascii_narrowed(reference_value.trim()) == room_value.trim()
         }
     }
 }
@@ -322,8 +327,7 @@ fn collect_error_rooms(
                 ErrorRoomInfo {
                     number: lookup_property(room, "Number", source, builtin_defs).unwrap_or_default(),
                     name: lookup_property(room, "Name", source, builtin_defs).unwrap_or_default(),
-                    link_value: lookup_property(room, &drofus.link_property, source, builtin_defs)
-                        .unwrap_or_default(),
+                    link_value: lookup_property(room, &drofus.link_property, source, builtin_defs).unwrap_or_default(),
                 },
             );
         }
@@ -515,7 +519,13 @@ mod tests {
         for (k, v) in props {
             properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
         }
-        Room { id: id.to_string(), name: name.to_string(), level_id: "1".to_string(), loops: vec![], properties }
+        Room {
+            id: id.to_string(),
+            name: name.to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            properties,
+        }
     }
 
     fn make_payload(project_id: &str, rooms: Vec<Room>) -> (ModelKey, RoomPayload) {
@@ -646,11 +656,7 @@ mod tests {
     /// tally the lists.
     #[test]
     fn test_compute_validation_error_rooms_and_counts() {
-        let room = make_room(
-            "r1",
-            "Office 101",
-            &[("Number", "101"), ("Name", "Office"), ("Area", "25.5")],
-        );
+        let room = make_room("r1", "Office 101", &[("Number", "101"), ("Name", "Office"), ("Area", "25.5")]);
         let (key, payload) = make_payload("p1", vec![room]);
         let stored = vec![(key, payload)];
         let drofus = make_drofus("Number", &[("101", &[("NetArea", "30.0")])], &[("NetArea", "Area")]);
@@ -872,21 +878,11 @@ mod tests {
     #[test]
     fn test_date_match_revit_format_and_mixed_offset() {
         assert_eq!(
-            date_match(
-                "6/29/2026 5:01:01 PM +10:00",
-                "2026-06-29 17:01:01",
-                DROFUS_DATE_FMT,
-                "%Y-%m-%d %H:%M:%S",
-            ),
+            date_match("6/29/2026 5:01:01 PM +10:00", "2026-06-29 17:01:01", DROFUS_DATE_FMT, "%Y-%m-%d %H:%M:%S",),
             Some(true)
         );
         assert_eq!(
-            date_match(
-                "6/29/2026 5:01:01 PM +10:00",
-                "2026-06-29 07:01:01",
-                DROFUS_DATE_FMT,
-                "%Y-%m-%d %H:%M:%S",
-            ),
+            date_match("6/29/2026 5:01:01 PM +10:00", "2026-06-29 07:01:01", DROFUS_DATE_FMT, "%Y-%m-%d %H:%M:%S",),
             Some(false),
             "a naive side is a wall-clock reading, not a UTC instant"
         );
@@ -957,15 +953,15 @@ mod tests {
 
     /// Register a project whose settings carry `sources`, each a
     /// (name, data, field configs) triple, and store one payload for it.
-    fn state_with_sources(
-        rooms: Vec<Room>,
-        sources: Vec<(&str, ReferenceData)>,
-    ) -> AppState {
+    fn state_with_sources(rooms: Vec<Room>, sources: Vec<(&str, ReferenceData)>) -> AppState {
         let (_key, payload) = make_payload("p1", rooms);
         let reference = sources
             .into_iter()
             .map(|(name, data)| {
-                (name.to_string(), crate::state::ProjectReferenceSource { data: Some(data), fields: vec![] })
+                (
+                    name.to_string(),
+                    crate::state::ProjectReferenceSource { data: Some(data), fields: vec![] },
+                )
             })
             .collect();
         let bundle = crate::state::ProjectSettings {
@@ -1049,10 +1045,7 @@ mod tests {
                     fields: vec![],
                 },
             ),
-            (
-                "pending".to_string(),
-                crate::state::ProjectReferenceSource { data: None, fields: vec![] },
-            ),
+            ("pending".to_string(), crate::state::ProjectReferenceSource { data: None, fields: vec![] }),
         ]);
         let bundle = crate::state::ProjectSettings {
             reference,
@@ -1073,6 +1066,10 @@ mod tests {
         state.set_snapshot(payload).unwrap();
 
         let result = compute_project_validation(&state, "p1").unwrap();
-        assert_eq!(result.sources.keys().collect::<Vec<_>>(), vec!["drofus"], "the unloaded source contributes nothing");
+        assert_eq!(
+            result.sources.keys().collect::<Vec<_>>(),
+            vec!["drofus"],
+            "the unloaded source contributes nothing"
+        );
     }
 }

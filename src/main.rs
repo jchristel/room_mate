@@ -7,14 +7,14 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
+use axum::http::{Method, StatusCode};
+use axum::response::IntoResponse;
 use axum::{
     extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
 use clap::Parser;
-use axum::http::{Method, StatusCode};
-use axum::response::IntoResponse;
 use tower_http::{
     cors::{Any, CorsLayer},
     decompression::RequestDecompressionLayer,
@@ -25,13 +25,12 @@ use tower_http::{
 use roommate::bootstrap::build_state;
 use roommate::handlers::{
     compare_project_milestones, get_model_latest_snapshot, get_project_adjacency, get_project_areas,
-    get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation,
-    get_projects, get_reference_latest, get_reference_snapshots, get_rooms, ingest_rooms,
-    ingest_rooms_stream,
+    get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation, get_projects,
+    get_reference_latest, get_reference_snapshots, get_rooms, ingest_rooms, ingest_rooms_stream,
 };
 use roommate::settings_api::{
-    http_create_project, http_get_project, http_get_project_resolved,
-    http_list_projects, http_update_project, http_upload_reference,
+    http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
+    http_upload_reference,
 };
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
@@ -205,10 +204,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // Streaming NDJSON ingest for models too large to buffer whole --
         // disables the body limit entirely and relies
         // on line-by-line reading to keep peak memory low instead.
-        .route(
-            "/rooms/stream",
-            post(ingest_rooms_stream).layer(DefaultBodyLimit::disable()),
-        )
+        .route("/rooms/stream", post(ingest_rooms_stream).layer(DefaultBodyLimit::disable()))
         .route("/projects", get(get_projects))
         .route("/projects/{id}/buildings", get(get_project_buildings))
         .route("/projects/{id}/validation", get(get_project_validation))
@@ -343,7 +339,15 @@ mod tests {
     /// clap's own error, so `--port 70000` cannot quietly become 4464.
     #[test]
     fn test_out_of_range_port_is_rejected() {
-        let argv = ["roommate", "--server-settings", "s.toml", "--project-settings", "p", "--port", "70000"];
+        let argv = [
+            "roommate",
+            "--server-settings",
+            "s.toml",
+            "--project-settings",
+            "p",
+            "--port",
+            "70000",
+        ];
         assert!(Args::try_parse_from(argv).is_err());
     }
 
@@ -461,7 +465,12 @@ mod tests {
     /// page asked for, and that name is not ours.
     #[tokio::test]
     async fn test_rebound_host_is_refused() {
-        for host in ["evil.example", "evil.example:5151", "192.168.1.10:5151", "roommate.attacker.test"] {
+        for host in [
+            "evil.example",
+            "evil.example:5151",
+            "192.168.1.10:5151",
+            "roommate.attacker.test",
+        ] {
             assert_eq!(
                 with_host("/api/settings/projects", "POST", host).await,
                 StatusCode::FORBIDDEN,
@@ -477,7 +486,14 @@ mod tests {
     /// fails the guard has locked the operator out of their own viewer.
     #[tokio::test]
     async fn test_loopback_hosts_are_allowed() {
-        for host in ["localhost", "localhost:5151", "127.0.0.1", "127.0.0.1:5151", "[::1]", "[::1]:5151"] {
+        for host in [
+            "localhost",
+            "localhost:5151",
+            "127.0.0.1",
+            "127.0.0.1:5151",
+            "[::1]",
+            "[::1]:5151",
+        ] {
             assert_eq!(with_host("/projects", "GET", host).await, StatusCode::OK, "Host {host:?} must be allowed");
         }
     }

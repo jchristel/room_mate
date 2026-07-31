@@ -67,14 +67,10 @@ pub fn list_projects(state: &AppState) -> Result<Vec<ProjectSummary>, ServiceErr
         if registry.settings_for(&payload.project.id).is_none() {
             continue; // skip on read, same as assemble_rooms
         }
-        seen.entry(payload.project.id.clone())
-            .or_insert_with(|| payload.project.name.clone());
+        seen.entry(payload.project.id.clone()).or_insert_with(|| payload.project.name.clone());
     }
 
-    let mut projects: Vec<ProjectSummary> = seen
-        .into_iter()
-        .map(|(id, name)| ProjectSummary { id, name })
-        .collect();
+    let mut projects: Vec<ProjectSummary> = seen.into_iter().map(|(id, name)| ProjectSummary { id, name }).collect();
     projects.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(projects)
 }
@@ -194,7 +190,8 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
-            hierarchy_exclusions: vec![],        }
+            hierarchy_exclusions: vec![],
+        }
     }
 
     /// A stored-but-unregistered project is skipped from the listing — same
@@ -218,7 +215,13 @@ mod tests {
         for (k, v) in props {
             properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
         }
-        Room { id: id.to_string(), name: "Room".to_string(), level_id: "1".to_string(), loops: vec![], properties }
+        Room {
+            id: id.to_string(),
+            name: "Room".to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            properties,
+        }
     }
 
     /// A bundle with a one-tier "Building" hierarchy resolving both a code

@@ -19,7 +19,7 @@ use anyhow::Context;
 use crate::contract::RoomPayload;
 use crate::reference::ReferenceData;
 use crate::settings::{
-    BuiltinPropertyDef, ReferenceFieldConfig, HierarchyExclusion, HierarchyTier, Milestone, TestData,
+    BuiltinPropertyDef, HierarchyExclusion, HierarchyTier, Milestone, ReferenceFieldConfig, TestData,
 };
 use crate::storage::SnapshotStore;
 
@@ -40,10 +40,7 @@ impl ModelKey {
     /// Pull the key out of a payload's identity envelope. Centralised so every
     /// call site keys the same way — state and storage agree on "the key".
     pub fn from_payload(payload: &RoomPayload) -> Self {
-        Self {
-            project_id: payload.project.id.clone(),
-            model_id: payload.model.id.clone(),
-        }
+        Self { project_id: payload.project.id.clone(), model_id: payload.model.id.clone() }
     }
 }
 
@@ -55,8 +52,8 @@ impl ModelKey {
 /// is exactly the split that lets a Windows-only rule rot unnoticed: on Linux
 /// these are perfectly ordinary directory names and every test passes.
 const WINDOWS_RESERVED_NAMES: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
-    "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
+    "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 /// Whether `s` is safe to use as a single filesystem path component —
@@ -338,16 +335,11 @@ pub type Shared = Arc<AppState>;
 
 pub fn seed_if_test(state: &AppState, test_data: Option<&TestData>) -> anyhow::Result<()> {
     if let Some(test) = test_data {
-        let raw = std::fs::read_to_string(&test.snapshot_path).with_context(|| {
-            format!(
-                "could not read test snapshot: {}",
-                test.snapshot_path.display()
-            )
-        })?;
+        let raw = std::fs::read_to_string(&test.snapshot_path)
+            .with_context(|| format!("could not read test snapshot: {}", test.snapshot_path.display()))?;
         // Parse into the same type the push handler accepts — seed and push
         // converge on one representation and can never drift.
-        let snapshot: RoomPayload =
-            serde_json::from_str(&raw).context("failed to parse test snapshot JSON")?;
+        let snapshot: RoomPayload = serde_json::from_str(&raw).context("failed to parse test snapshot JSON")?;
         state.set_snapshot(snapshot)?;
         tracing::info!("seeded snapshot from {}", test.snapshot_path.display());
     }
@@ -370,9 +362,9 @@ mod tests {
             "Building_BF_Framing_jan.r.christel",
             "130486",
             "v1.2.3",
-            "CONTRACT",   // starts with a reserved name but is not one
+            "CONTRACT", // starts with a reserved name but is not one
             "NULLABLE",
-            "COM10",      // only COM1-9 are devices
+            "COM10", // only COM1-9 are devices
         ] {
             assert!(is_path_safe_component(id), "{id:?} is a legitimate id");
         }
@@ -382,7 +374,9 @@ mod tests {
     /// so a separator or `..` would escape the storage root entirely.
     #[test]
     fn test_traversal_and_separators_are_rejected() {
-        for id in ["", "   ", ".", "..", "../etc", "a/b", "a\\b", "a:b", "a|b", "a?b", "a*b", "a\"b", "a<b", "a>b"] {
+        for id in [
+            "", "   ", ".", "..", "../etc", "a/b", "a\\b", "a:b", "a|b", "a?b", "a*b", "a\"b", "a<b", "a>b",
+        ] {
             assert!(!is_path_safe_component(id), "{id:?} must not become a path component");
         }
     }
@@ -403,7 +397,9 @@ mod tests {
     /// catch this.
     #[test]
     fn test_windows_device_names_are_rejected() {
-        for id in ["CON", "con", "Con", "NUL", "PRN", "AUX", "COM1", "com9", "LPT1", "lpt9", "CON.toml", "nul.csv"] {
+        for id in [
+            "CON", "con", "Con", "NUL", "PRN", "AUX", "COM1", "com9", "LPT1", "lpt9", "CON.toml", "nul.csv",
+        ] {
             assert!(!is_path_safe_component(id), "{id:?} is a DOS device name, not a file name");
         }
     }

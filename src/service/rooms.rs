@@ -312,10 +312,7 @@ impl Predicate {
         // Quoting is what makes a value containing the HTTP `?filter=`
         // separator expressible: `Department="Cardiology, North"`.
         let value = value.trim();
-        let value = value
-            .strip_prefix('"')
-            .and_then(|v| v.strip_suffix('"'))
-            .unwrap_or(value);
+        let value = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
         if value.is_empty() {
             // Always a mistake rather than a way to ask for "blank": an absent
             // or empty property never matches any operator (see `matches`), so
@@ -479,9 +476,9 @@ fn resolve_field(room: &RoomResponse, predicate: &Predicate, builtin_defs: &[Bui
 pub fn validate_comparison_field(field: &str, known: &std::collections::BTreeSet<String>) -> Result<(), String> {
     match split_namespace(field, known) {
         NamespaceSplit::UnknownSource(ns) => Err(unknown_source_message(ns, known)),
-        NamespaceSplit::Joined { source, property: "" } => {
-            Err(format!("no property named after the {source:?} namespace — expected {source}.<field label>"))
-        }
+        NamespaceSplit::Joined { source, property: "" } => Err(format!(
+            "no property named after the {source:?} namespace — expected {source}.<field label>"
+        )),
         NamespaceSplit::Joined { .. } | NamespaceSplit::Unqualified(_) => Ok(()),
     }
 }
@@ -654,13 +651,7 @@ fn scoped_revision(scoped: &[ScopedPayload]) -> String {
 
     let mut parts: Vec<(&str, &str, &str)> = scoped
         .iter()
-        .map(|(key, payload, _)| {
-            (
-                key.project_id.as_str(),
-                key.model_id.as_str(),
-                payload.snapshot.taken_at.as_str(),
-            )
-        })
+        .map(|(key, payload, _)| (key.project_id.as_str(), key.model_id.as_str(), payload.snapshot.taken_at.as_str()))
         .collect();
     parts.sort_unstable();
 
@@ -807,10 +798,12 @@ fn scope_payloads<'r>(
                         }
                         scoped.push((key, pinned, bundle));
                     }
-                    None => tracing::warn!(
+                    None => {
+                        tracing::warn!(
                         "milestone '{}' pins snapshot {:?} for {}/{}, but no such snapshot exists — skipping the model",
                         wanted, pinned_id, key.project_id, key.model_id
-                    ),
+                    )
+                    }
                 }
             }
         }
@@ -882,10 +875,7 @@ fn dedup_levels(scoped: &[ScopedPayload<'_>]) -> BTreeMap<(String, String, Strin
                     level.id.clone()
                 }
             };
-            level_remap.insert(
-                (key.project_id.clone(), key.model_id.clone(), level.id.clone()),
-                canonical_id,
-            );
+            level_remap.insert((key.project_id.clone(), key.model_id.clone(), level.id.clone()), canonical_id);
         }
     }
     level_remap
@@ -945,7 +935,8 @@ fn assemble_scoped_rooms(
                 .rooms
                 .iter()
                 .filter(|room| {
-                    let path = classify_room(room, &bundle.hierarchy, &payload.model.source, &bundle.builtin_properties);
+                    let path =
+                        classify_room(room, &bundle.hierarchy, &payload.model.source, &bundle.builtin_properties);
                     match path.get(idx) {
                         Some(tier) if tier.undefined => wanted == UNCLASSIFIED_BUILDING_KEY,
                         Some(tier) => building_key(&tier.code, &tier.name) == *wanted,
@@ -1005,9 +996,7 @@ fn assemble_scoped_rooms(
                 }
                 response
             })
-            .filter(|response| {
-                scope.filter.is_none_or(|f| f.matches(response, &bundle.builtin_properties))
-            })
+            .filter(|response| scope.filter.is_none_or(|f| f.matches(response, &bundle.builtin_properties)))
             .collect();
 
         if scope_filter_active && assembled.is_empty() {
@@ -1079,7 +1068,13 @@ mod tests {
         for (k, v) in props {
             properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
         }
-        Room { id: id.to_string(), name: name.to_string(), level_id: "1".to_string(), loops: vec![], properties }
+        Room {
+            id: id.to_string(),
+            name: name.to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            properties,
+        }
     }
 
     fn make_drofus(link_property: &str) -> ReferenceData {
@@ -1097,9 +1092,10 @@ mod tests {
     fn with_drofus(mut bundle: ProjectSettings, data: Option<ReferenceData>) -> ProjectSettings {
         match data {
             Some(d) => {
-                bundle
-                    .reference
-                    .insert("drofus".to_string(), crate::state::ProjectReferenceSource { data: Some(d), fields: vec![] });
+                bundle.reference.insert(
+                    "drofus".to_string(),
+                    crate::state::ProjectReferenceSource { data: Some(d), fields: vec![] },
+                );
             }
             None => {
                 bundle.reference.remove("drofus");
@@ -1128,17 +1124,20 @@ mod tests {
     /// link id "1", with one "Design Freeze" milestone pinning model "m1" to
     /// `pinned_ts` and optionally a `drofus_snapshot`.
     fn bundle_for_drofus_pin(current_value: &str, pinned_ts: &str, drofus_ts: Option<&str>) -> ProjectSettings {
-        with_drofus(ProjectSettings {
-            milestones: vec![crate::settings::Milestone {
-                name: "Design Freeze".to_string(),
-                date: "2026-06-30".to_string(),
-                reference_snapshots: drofus_ts
-                    .map(|s| std::collections::BTreeMap::from([("drofus".to_string(), s.to_string())]))
-                    .unwrap_or_default(),
-                attachments: std::collections::BTreeMap::from([("m1".to_string(), pinned_ts.to_string())]),
-            }],
-            ..make_bundle("Number")
-        }, Some(make_drofus_with_record("Number", "1", "NetArea", current_value)))
+        with_drofus(
+            ProjectSettings {
+                milestones: vec![crate::settings::Milestone {
+                    name: "Design Freeze".to_string(),
+                    date: "2026-06-30".to_string(),
+                    reference_snapshots: drofus_ts
+                        .map(|s| std::collections::BTreeMap::from([("drofus".to_string(), s.to_string())]))
+                        .unwrap_or_default(),
+                    attachments: std::collections::BTreeMap::from([("m1".to_string(), pinned_ts.to_string())]),
+                }],
+                ..make_bundle("Number")
+            },
+            Some(make_drofus_with_record("Number", "1", "NetArea", current_value)),
+        )
     }
 
     /// A two-header-row dRofus CSV pinning link id "1" to one `NetArea` value —
@@ -1310,18 +1309,15 @@ mod tests {
     /// level here (the same pair, declared the other way round) pins down.
     #[test]
     fn test_boundary_by_level_resolves_per_level_and_widens_on_disagreement() {
-        let level = |id: &str, name: &str, elev: f64| Level {
-            id: id.to_string(),
-            name: name.to_string(),
-            elevation: elev,
-        };
+        let level =
+            |id: &str, name: &str, elev: f64| Level { id: id.to_string(), name: name.to_string(), elevation: elev };
         let room_on = |id: &str, level_id: &str| {
             let mut r = make_room(id, id, &[]);
             r.level_id = level_id.to_string();
             r
         };
-        let payload = |model: &str, ts: &str, boundary: Option<RoomBoundary>, levels: Vec<Level>, rooms: Vec<Room>| {
-            RoomPayload {
+        let payload =
+            |model: &str, ts: &str, boundary: Option<RoomBoundary>, levels: Vec<Level>, rooms: Vec<Room>| RoomPayload {
                 schema_version: 5,
                 project: Project { id: "p1".to_string(), name: "P".to_string() },
                 model: Model { id: model.to_string(), name: model.to_string(), source: "revit".to_string() },
@@ -1330,8 +1326,7 @@ mod tests {
                 room_boundary: boundary,
                 levels,
                 rooms,
-            }
-        };
+            };
 
         // Level 1 is shared by both models (same name+elevation, model-local
         // ids), one centreline and one finish face. Level 2 belongs to the
@@ -1362,7 +1357,11 @@ mod tests {
             result.boundary_by_level[id]
         };
         assert_eq!(by_name("Level 1"), RoomBoundary::FinishFace, "the mixed level widens");
-        assert_eq!(by_name("Level 2"), RoomBoundary::Centreline, "the single-model level keeps its own regime");
+        assert_eq!(
+            by_name("Level 2"),
+            RoomBoundary::Centreline,
+            "the single-model level keeps its own regime"
+        );
         assert_eq!(result.boundary_by_level.len(), result.levels.len(), "every level in scope is covered");
     }
 
@@ -1461,7 +1460,9 @@ mod tests {
         let state = AppState::new(Box::new(MemStore::new()), single_project("p1", make_bundle("Number")), None);
         state.set_snapshot(payload).unwrap();
 
-        let result = assemble_rooms(&state, &RoomScope::default()).unwrap().expect("the store did receive a push");
+        let result = assemble_rooms(&state, &RoomScope::default())
+            .unwrap()
+            .expect("the store did receive a push");
         assert!(result.rooms.is_empty(), "but the unregistered project's rooms must not appear");
         assert!(result.levels.is_empty());
     }
@@ -1541,7 +1542,9 @@ mod tests {
         state.set_snapshot(payload_b).unwrap();
 
         let key = building_key(&Some("B01".to_string()), &None);
-        let result = assemble_rooms(&state, &RoomScope { building: Some(&key), ..Default::default() }).unwrap().expect("store has data");
+        let result = assemble_rooms(&state, &RoomScope { building: Some(&key), ..Default::default() })
+            .unwrap()
+            .expect("store has data");
 
         assert_eq!(result.rooms.len(), 1, "only project A's matching room");
         assert_eq!(result.rooms[0].room.id, "r1");
@@ -1593,7 +1596,9 @@ mod tests {
         assert_eq!(latest.rooms.len(), 1);
         assert_eq!(latest.rooms[0].room.name, "New Room");
 
-        let pinned = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze"))).unwrap().expect("store has data");
+        let pinned = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
+            .unwrap()
+            .expect("store has data");
         assert_eq!(pinned.rooms.len(), 1);
         assert_eq!(pinned.rooms[0].room.name, "Old Room", "milestone view serves the pinned snapshot");
 
@@ -1618,12 +1623,16 @@ mod tests {
         state.set_snapshot(pinned_model).unwrap();
         state.set_snapshot(unpinned_model).unwrap();
 
-        let result = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze"))).unwrap().expect("store has data");
+        let result = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
+            .unwrap()
+            .expect("store has data");
         assert_eq!(result.rooms.len(), 1, "only the pinned model contributes");
         assert_eq!(result.rooms[0].room.name, "Pinned");
 
         // A milestone name this project never defined matches nothing.
-        let unknown = assemble_rooms(&state, &scope(Some("p1"), Some("Nonexistent"))).unwrap().expect("store has data");
+        let unknown = assemble_rooms(&state, &scope(Some("p1"), Some("Nonexistent")))
+            .unwrap()
+            .expect("store has data");
         assert!(unknown.rooms.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
@@ -1659,7 +1668,9 @@ mod tests {
             "default view joins the current dRofus"
         );
 
-        let pinned = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze"))).unwrap().expect("store has data");
+        let pinned = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
+            .unwrap()
+            .expect("store has data");
         assert_eq!(
             pinned.rooms[0].reference.get("drofus").unwrap().fields.get("NetArea"),
             Some(&"old-value".to_string()),
@@ -1686,7 +1697,9 @@ mod tests {
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(pinned_model).unwrap();
 
-        let result = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze"))).unwrap().expect("store has data");
+        let result = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
+            .unwrap()
+            .expect("store has data");
         assert_eq!(result.rooms.len(), 1, "the room is still returned (fallback, not dropped)");
         assert_eq!(
             result.rooms[0].reference.get("drofus").unwrap().fields.get("NetArea"),
@@ -1712,7 +1725,9 @@ mod tests {
         let state = AppState::new(Box::new(store), single_project("p1", bundle), None);
         state.set_snapshot(pinned_model).unwrap();
 
-        let result = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze"))).unwrap().expect("store has data");
+        let result = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
+            .unwrap()
+            .expect("store has data");
         assert_eq!(
             result.rooms[0].reference.get("drofus").unwrap().fields.get("NetArea"),
             Some(&"current-value".to_string())
@@ -1747,7 +1762,9 @@ mod tests {
         state.set_snapshot(b).unwrap();
         state.put_reference("pA", "drofus", a_drofus_ts, &drofus_csv("A-pinned")).unwrap();
 
-        let result = assemble_rooms(&state, &scope(None, Some("Design Freeze"))).unwrap().expect("store has data");
+        let result = assemble_rooms(&state, &scope(None, Some("Design Freeze")))
+            .unwrap()
+            .expect("store has data");
         let room_a = result.rooms.iter().find(|r| r.room.id == "rA").expect("A present");
         let room_b = result.rooms.iter().find(|r| r.room.id == "rB").expect("B present");
         assert_eq!(
@@ -1782,9 +1799,10 @@ mod tests {
         state.set_snapshot(payload_b).unwrap();
 
         let key = building_key(&Some("B01".to_string()), &None);
-        let result = assemble_rooms(&state, &RoomScope { project: Some("p2"), building: Some(&key), ..Default::default() })
-            .unwrap()
-            .expect("store is not empty, so this is Some with empty vecs");
+        let result =
+            assemble_rooms(&state, &RoomScope { project: Some("p2"), building: Some(&key), ..Default::default() })
+                .unwrap()
+                .expect("store is not empty, so this is Some with empty vecs");
 
         assert!(result.rooms.is_empty(), "a filter the project can't answer matches nothing");
         assert!(result.levels.is_empty());
@@ -1794,7 +1812,13 @@ mod tests {
     /// tests, which are about matching rather than about assembly.
     fn response(room: Room, drofus: Option<ReferenceRecord>) -> RoomResponse {
         let reference = drofus.map(|d| BTreeMap::from([("drofus".to_string(), d)])).unwrap_or_default();
-        RoomResponse { room, reference, classification: vec![], label: vec![], source: "revit".to_string() }
+        RoomResponse {
+            room,
+            reference,
+            classification: vec![],
+            label: vec![],
+            source: "revit".to_string(),
+        }
     }
 
     /// Every operator, including the two spellings a naive left-to-right scan
@@ -1846,7 +1870,8 @@ mod tests {
         assert_eq!(p.source.as_deref(), Some("drofus"));
         assert_eq!(p.property, "NetArea");
 
-        let err = Predicate::parse("cobie.Space=1", &known()).expect_err("an unknown source must not become a property");
+        let err =
+            Predicate::parse("cobie.Space=1", &known()).expect_err("an unknown source must not become a property");
         assert!(err.contains("drofus"), "the error must name the known sources, got {err:?}");
     }
 
@@ -1862,10 +1887,15 @@ mod tests {
         // same subtlety `Predicate::parse` applies, via the same helper.
         assert!(validate_comparison_field("Room Ref. Number", &known()).is_ok());
 
-        let err = validate_comparison_field("drofuss.NetArea", &known()).expect_err("unknown namespace must be rejected");
-        assert!(err.contains("unknown data source") && err.contains("drofus"), "names the known sources: {err:?}");
+        let err =
+            validate_comparison_field("drofuss.NetArea", &known()).expect_err("unknown namespace must be rejected");
+        assert!(
+            err.contains("unknown data source") && err.contains("drofus"),
+            "names the known sources: {err:?}"
+        );
 
-        let err = validate_comparison_field("drofus.", &known()).expect_err("empty property after the dot must be rejected");
+        let err =
+            validate_comparison_field("drofus.", &known()).expect_err("empty property after the dot must be rejected");
         assert!(err.contains("drofus"), "names the namespace: {err:?}");
     }
 
@@ -1878,9 +1908,14 @@ mod tests {
     fn test_resolve_presence_spans_room_and_joined_vocabularies() {
         let joined = response(
             make_room("r1", "Room", &[("Area", "25")]),
-            Some(ReferenceRecord { fields: std::collections::BTreeMap::from([("NetArea".to_string(), "20".to_string())]) }),
+            Some(ReferenceRecord {
+                fields: std::collections::BTreeMap::from([("NetArea".to_string(), "20".to_string())]),
+            }),
         );
-        assert_eq!(resolve_presence(&joined, "Area", &known(), &[]), (None, PropertyPresence::Present("25".to_string())));
+        assert_eq!(
+            resolve_presence(&joined, "Area", &known(), &[]),
+            (None, PropertyPresence::Present("25".to_string()))
+        );
         assert_eq!(
             resolve_presence(&joined, "drofus.NetArea", &known(), &[]),
             (Some("drofus".to_string()), PropertyPresence::Present("20".to_string()))
@@ -1941,7 +1976,10 @@ mod tests {
         assert!(filter(&["Area=25.5"]).matches(&room, &[]));
         assert!(filter(&["Area>25"]).matches(&room, &[]));
         assert!(!filter(&["Area>26"]).matches(&room, &[]));
-        assert!(!filter(&["Dept>5"]).matches(&room, &[]), "non-numeric under an ordering operator: no match, no error");
+        assert!(
+            !filter(&["Dept>5"]).matches(&room, &[]),
+            "non-numeric under an ordering operator: no match, no error"
+        );
     }
 
     /// The rule that makes an empty result readable: a room missing the field
@@ -1992,7 +2030,11 @@ mod tests {
             "pB",
             "m1",
             vec![],
-            vec![make_room("rB1", "Room", &[("Department", "Cardiology"), ("Area", "40")])],
+            vec![make_room(
+                "rB1",
+                "Room",
+                &[("Department", "Cardiology"), ("Area", "40")],
+            )],
         );
 
         let mapped = ProjectSettings {
@@ -2002,10 +2044,8 @@ mod tests {
             }],
             ..make_bundle("Number")
         };
-        let registry = std::collections::HashMap::from([
-            ("pA".to_string(), mapped),
-            ("pB".to_string(), make_bundle("Number")),
-        ]);
+        let registry =
+            std::collections::HashMap::from([("pA".to_string(), mapped), ("pB".to_string(), make_bundle("Number"))]);
         let state = AppState::new(Box::new(MemStore::new()), registry, None);
         state.set_snapshot(a).unwrap();
         state.set_snapshot(b).unwrap();
@@ -2017,7 +2057,11 @@ mod tests {
 
         let mut ids: Vec<&str> = result.rooms.iter().map(|r| r.room.id.as_str()).collect();
         ids.sort_unstable();
-        assert_eq!(ids, vec!["rA1", "rB1"], "rA2 fails the area predicate; both projects resolve Department their own way");
+        assert_eq!(
+            ids,
+            vec!["rA1", "rB1"],
+            "rA2 fails the area predicate; both projects resolve Department their own way"
+        );
     }
 
     /// A model whose rooms all fail the filter contributes no levels either --
@@ -2054,7 +2098,11 @@ mod tests {
             .expect("store has data");
 
         assert_eq!(result.rooms.len(), 1);
-        assert_eq!(result.levels.len(), 1, "model mB contributed no matching room, so none of its levels either");
+        assert_eq!(
+            result.levels.len(),
+            1,
+            "model mB contributed no matching room, so none of its levels either"
+        );
         assert_eq!(result.levels[0].name, "Level 1");
     }
 
@@ -2074,7 +2122,12 @@ mod tests {
         let f = filter(&["Department=Cardiology"]);
         let result = assemble_rooms(
             &state,
-            &RoomScope { project: Some("p1"), building: Some(&key), filter: Some(&f), ..Default::default() },
+            &RoomScope {
+                project: Some("p1"),
+                building: Some(&key),
+                filter: Some(&f),
+                ..Default::default()
+            },
         )
         .unwrap()
         .expect("store has data");
@@ -2096,7 +2149,9 @@ mod tests {
         let state = AppState::new(Box::new(MemStore::new()), single_project("p1", bundle), None);
         // The room carries no link value, so NOTHING joins: the labels must
         // come from the dataset, not from any room's joined fields.
-        state.set_snapshot(make_payload("p1", "m1", vec![], vec![make_room("r1", "Room", &[])])).unwrap();
+        state
+            .set_snapshot(make_payload("p1", "m1", vec![], vec![make_room("r1", "Room", &[])]))
+            .unwrap();
 
         let result = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
 
@@ -2123,7 +2178,9 @@ mod tests {
         ]);
         let state = AppState::new(Box::new(MemStore::new()), registry, None);
         for p in ["p1", "p2", "p3"] {
-            state.set_snapshot(make_payload(p, "m1", vec![], vec![make_room("r1", "Room", &[])])).unwrap();
+            state
+                .set_snapshot(make_payload(p, "m1", vec![], vec![make_room("r1", "Room", &[])]))
+                .unwrap();
         }
 
         let result = assemble_rooms(&state, &scope(None, None)).unwrap().expect("store has data");
@@ -2210,7 +2267,10 @@ mod tests {
                 milestones: vec![crate::settings::Milestone {
                     name: "Design Freeze".to_string(),
                     date: "2026-06-30".to_string(),
-                    reference_snapshots: std::collections::BTreeMap::from([("drofus".to_string(), drofus_ts.to_string())]),
+                    reference_snapshots: std::collections::BTreeMap::from([(
+                        "drofus".to_string(),
+                        drofus_ts.to_string(),
+                    )]),
                     attachments: std::collections::BTreeMap::from([("m1".to_string(), model_ts.to_string())]),
                 }],
                 ..make_bundle("Number")
@@ -2224,10 +2284,18 @@ mod tests {
         let at_milestone = assemble_rooms(&state, &scope(Some("p1"), Some("Design Freeze")))
             .unwrap()
             .expect("store has data");
-        assert_eq!(at_milestone.reference_labels["p1"]["drofus"].all_labels, vec!["NetArea".to_string()], "pinned CSV's columns");
+        assert_eq!(
+            at_milestone.reference_labels["p1"]["drofus"].all_labels,
+            vec!["NetArea".to_string()],
+            "pinned CSV's columns"
+        );
 
         let latest = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
-        assert_eq!(latest.reference_labels["p1"]["drofus"].all_labels, vec!["CurrentCol".to_string()], "current dataset's columns");
+        assert_eq!(
+            latest.reference_labels["p1"]["drofus"].all_labels,
+            vec!["CurrentCol".to_string()],
+            "current dataset's columns"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2255,7 +2323,12 @@ mod tests {
         let f = filter(&["drofus.NetArea=old-value"]);
         let at_milestone = assemble_rooms(
             &state,
-            &RoomScope { project: Some("p1"), milestone: Some("Design Freeze"), filter: Some(&f), ..Default::default() },
+            &RoomScope {
+                project: Some("p1"),
+                milestone: Some("Design Freeze"),
+                filter: Some(&f),
+                ..Default::default()
+            },
         )
         .unwrap()
         .expect("store has data");
@@ -2264,7 +2337,10 @@ mod tests {
         let latest = assemble_rooms(&state, &RoomScope { project: Some("p1"), filter: Some(&f), ..Default::default() })
             .unwrap()
             .expect("store has data");
-        assert!(latest.rooms.is_empty(), "the current dRofus says new-value, so the same predicate matches nothing");
+        assert!(
+            latest.rooms.is_empty(),
+            "the current dRofus says new-value, so the same predicate matches nothing"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

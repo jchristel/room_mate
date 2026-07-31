@@ -49,13 +49,7 @@ impl SnapshotStore for MemStore {
     }
 
     fn all_latest(&self) -> Result<Vec<(ModelKey, RoomPayload)>> {
-        Ok(self
-            .latest
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect())
+        Ok(self.latest.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
     fn list_snapshot_ids(&self, key: &ModelKey) -> Result<Vec<String>> {
@@ -73,13 +67,7 @@ impl SnapshotStore for MemStore {
     fn get_snapshot(&self, key: &ModelKey, taken_at: &str) -> Result<Option<RoomPayload>> {
         // Latest-only store: an id can only be answered when it IS the
         // current latest; anything older is genuinely gone.
-        Ok(self
-            .latest
-            .lock()
-            .unwrap()
-            .get(key)
-            .filter(|p| p.snapshot.taken_at == taken_at)
-            .cloned())
+        Ok(self.latest.lock().unwrap().get(key).filter(|p| p.snapshot.taken_at == taken_at).cloned())
     }
 
     fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
@@ -156,7 +144,10 @@ mod tests {
         store.put_reference("p", "drofus", "2026-01-01T10:00:00Z", b"one").unwrap();
         store.put_reference("p", "drofus", "2026-01-02T10:00:00Z", b"two").unwrap();
 
-        assert_eq!(store.list_reference_snapshot_ids("p", "drofus").unwrap(), vec!["2026-01-02T10:00:00Z".to_string()]);
+        assert_eq!(
+            store.list_reference_snapshot_ids("p", "drofus").unwrap(),
+            vec!["2026-01-02T10:00:00Z".to_string()]
+        );
         let (id, bytes) = store.get_latest_reference("p", "drofus").unwrap().unwrap();
         assert_eq!(id, "2026-01-02T10:00:00Z");
         assert_eq!(bytes, b"two");

@@ -13,12 +13,7 @@ use super::{Band, ColourMode, ColourPlan, Colouring, FieldType, ReferenceFieldCo
 fn validate_strftime(label: &str, which: &str, pattern: &str) -> anyhow::Result<()> {
     use chrono::format::{Item, StrftimeItems};
     if StrftimeItems::new(pattern).any(|item| matches!(item, Item::Error)) {
-        anyhow::bail!(
-            "reference field '{}' has an invalid {} strftime pattern: '{}'",
-            label,
-            which,
-            pattern
-        );
+        anyhow::bail!("reference field '{}' has an invalid {} strftime pattern: '{}'", label, which, pattern);
     }
     Ok(())
 }
@@ -63,10 +58,7 @@ pub fn validate_reference_field_shapes(fields: &[ReferenceFieldConfig]) -> anyho
         }
         if let Some(revit_format) = &field.revit_format {
             if field.field_type != FieldType::Date {
-                anyhow::bail!(
-                    "reference field '{}' sets revit_format but type is not \"date\"",
-                    field.label
-                );
+                anyhow::bail!("reference field '{}' sets revit_format but type is not \"date\"", field.label);
             }
             validate_strftime(&field.label, "revit_format", revit_format)?;
         }
@@ -90,10 +82,7 @@ pub fn validate_reference_field_shapes(fields: &[ReferenceFieldConfig]) -> anyho
 pub fn validate_colour_plans(plans: &[ColourPlan]) -> anyhow::Result<()> {
     let active: Vec<&str> = plans.iter().filter(|p| p.active).map(|p| p.name.as_str()).collect();
     if active.len() > 1 {
-        anyhow::bail!(
-            "more than one colour plan is marked active ({:?}) — at most one may be active",
-            active
-        );
+        anyhow::bail!("more than one colour plan is marked active ({:?}) — at most one may be active", active);
     }
     for plan in plans {
         match &plan.mode {
@@ -128,10 +117,7 @@ fn validate_bands(plan: &str, bands: &[Band]) -> anyhow::Result<()> {
         if let (Some(lo), Some(hi)) = (band.lo, band.hi)
             && lo >= hi
         {
-            anyhow::bail!(
-                "colour plan '{}' has an empty/reversed band [{}, {}) — lo must be < hi",
-                plan, lo, hi
-            );
+            anyhow::bail!("colour plan '{}' has an empty/reversed band [{}, {}) — lo must be < hi", plan, lo, hi);
         }
     }
     for pair in bands.windows(2) {
@@ -143,7 +129,11 @@ fn validate_bands(plan: &str, bands: &[Band]) -> anyhow::Result<()> {
             anyhow::bail!(
                 "colour plan '{}' has overlapping or out-of-order bands: [{:?}, {:?}) then [{:?}, {:?}) \
                  — each band's hi must be <= the next band's lo, sorted ascending",
-                plan, a.lo, a.hi, b.lo, b.hi
+                plan,
+                a.lo,
+                a.hi,
+                b.lo,
+                b.hi
             );
         }
     }
@@ -247,10 +237,7 @@ mod tests {
         }];
         assert!(validate_reference_fields(&good, &all_labels).is_ok());
 
-        let on_non_date = vec![ReferenceFieldConfig {
-            revit_format: Some("%Y-%m-%d".to_string()),
-            ..field("NetArea")
-        }];
+        let on_non_date = vec![ReferenceFieldConfig { revit_format: Some("%Y-%m-%d".to_string()), ..field("NetArea") }];
         assert!(validate_reference_fields(&on_non_date, &all_labels).is_err());
 
         let malformed = vec![ReferenceFieldConfig {
@@ -298,11 +285,15 @@ mod tests {
     #[test]
     fn test_validate_colour_plans_band_partition() {
         // Open-low, a gap (5..10 uncovered), open-high — all valid.
-        let ok = bands_plan("ok", false, vec![
-            band(None, Some(0.0)),
-            band(Some(0.0), Some(5.0)),
-            band(Some(10.0), None),
-        ]);
+        let ok = bands_plan(
+            "ok",
+            false,
+            vec![
+                band(None, Some(0.0)),
+                band(Some(0.0), Some(5.0)),
+                band(Some(10.0), None),
+            ],
+        );
         assert!(validate_colour_plans(&[ok]).is_ok());
 
         // Overlap: [0,10) then [5,15).
