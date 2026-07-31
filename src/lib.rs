@@ -57,8 +57,8 @@ pub fn default_http_addr() -> String {
 pub mod bootstrap;
 pub mod classify;
 pub mod contract;
-pub mod reference;
 pub mod handlers;
+pub mod reference;
 pub mod service;
 pub mod settings;
 pub mod settings_api;

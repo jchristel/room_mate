@@ -42,12 +42,12 @@ use rmcp::{
 };
 
 use roommate::bootstrap::build_state;
+use roommate::default_http_addr;
 use roommate::service::{
     adjacency, areas, comparison, milestones, projects, reference, rooms, snapshots, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
-use roommate::default_http_addr;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct ProjectIdParams {
@@ -297,12 +297,14 @@ impl RoommateMcp {
     /// service's `None` ("nothing has ever been pushed" -- the HTTP 204 case)
     /// has no MCP status-code equivalent, so it becomes a short plain-text
     /// answer instead of a JSON body; an LLM client reads either just fine.
-    #[tool(description = "Fetch merged rooms and levels across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
+    #[tool(
+        description = "Fetch merged rooms and levels across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
                           A project whose hierarchy has no 'Building' tier matches nothing under a building filter (check list_buildings' tier_configured before filtering); \
                           under a milestone filter, models are served from the snapshots that milestone pins instead of their latest. \
                           Prefer the 'filter' parameter over fetching every room and matching client-side -- it answers property questions ('which rooms are Department = Cardiology?') \
                           server-side, against the same canonical property names the rest of the settings use. Note that a room missing the filtered property never matches, \
-                          negative operators included, so an empty result can mean 'no room has that property' rather than 'no room has that value'.")]
+                          negative operators included, so an empty result can mean 'no room has that property' rather than 'no room has that value'."
+    )]
     fn get_rooms(&self, Parameters(p): Parameters<GetRoomsParams>) -> Result<CallToolResult, McpError> {
         // Parsed here, in the adapter holding the raw strings, then passed
         // down as a domain type -- `service` never sees the filter syntax.
@@ -328,7 +330,9 @@ impl RoommateMcp {
 
     /// Lists one project's milestones (named dated snapshot pins) -- see
     /// `service::milestones::list_milestones`.
-    #[tool(description = "List one project's milestones: named dates with data snapshots pinned to them, newest first — each carries its model-pin count and `reference_snapshots`, a map of reference source name to the snapshot id that milestone pins for it (absent sources are joined at their current data). Pass a milestone's name to get_rooms to view the project as captured at that milestone, rooms AND every reference source.")]
+    #[tool(
+        description = "List one project's milestones: named dates with data snapshots pinned to them, newest first — each carries its model-pin count and `reference_snapshots`, a map of reference source name to the snapshot id that milestone pins for it (absent sources are joined at their current data). Pass a milestone's name to get_rooms to view the project as captured at that milestone, rooms AND every reference source."
+    )]
     fn list_milestones(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = milestones::list_milestones(&self.state, &p.project_id).map_err(to_mcp_error)?;
         json_result(&result)
@@ -337,18 +341,26 @@ impl RoommateMcp {
     /// Compares N milestones against a baseline for one project -- see
     /// `service::comparison::compare_milestones`. A project with no
     /// `comparison_key` configured returns `comparison_key_configured: false`.
-    #[tool(description = "Compare milestones for one project: one baseline milestone versus each of the others (a star diff, not all-pairs). \
+    #[tool(
+        description = "Compare milestones for one project: one baseline milestone versus each of the others (a star diff, not all-pairs). \
                           Reports rooms added and removed relative to the baseline, and per-property differences on rooms present in both, \
                           over the project's configured comparison property set. Rooms are matched by the project's user-defined comparison_key \
-                          property (its own setting, NOT any reference source's link property); if none is configured the result is comparison_key_configured: false.")]
-    fn compare_milestones(&self, Parameters(p): Parameters<CompareMilestonesParams>) -> Result<CallToolResult, McpError> {
-        let result = comparison::compare_milestones(&self.state, &p.project_id, &p.baseline, &p.others).map_err(to_mcp_error)?;
+                          property (its own setting, NOT any reference source's link property); if none is configured the result is comparison_key_configured: false."
+    )]
+    fn compare_milestones(
+        &self,
+        Parameters(p): Parameters<CompareMilestonesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result =
+            comparison::compare_milestones(&self.state, &p.project_id, &p.baseline, &p.others).map_err(to_mcp_error)?;
         json_result(&result)
     }
 
     /// Lists every stored snapshot id for one project, grouped per model --
     /// see `service::snapshots::list_project_snapshots`.
-    #[tool(description = "List every stored snapshot id (RFC3339 UTC taken_at) for one project, grouped per model, each group carrying its latest")]
+    #[tool(
+        description = "List every stored snapshot id (RFC3339 UTC taken_at) for one project, grouped per model, each group carrying its latest"
+    )]
     fn list_snapshots(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = snapshots::list_project_snapshots(&self.state, &p.project_id).map_err(to_mcp_error)?;
         json_result(&result)
@@ -371,7 +383,9 @@ impl RoommateMcp {
 
     /// Runs the reference reconciliation QA report for one project -- see
     /// `service::validation::compute_project_validation`.
-    #[tool(description = "Run the reference reconciliation validation report for one project. Returns one report per configured reference source under 'sources' (keyed by source name, each with its own link_property, discrepancy lists, field coverage and 'error_rooms' room_id -> number/name/link value for the flagged rooms), plus a cross-source 'discrepancies' summary for a one-shot count. An empty 'sources' map means the project reconciles against nothing -- normal, not an error.")]
+    #[tool(
+        description = "Run the reference reconciliation validation report for one project. Returns one report per configured reference source under 'sources' (keyed by source name, each with its own link_property, discrepancy lists, field coverage and 'error_rooms' room_id -> number/name/link value for the flagged rooms), plus a cross-source 'discrepancies' summary for a one-shot count. An empty 'sources' map means the project reconciles against nothing -- normal, not an error."
+    )]
     fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;
         json_result(&result)
@@ -381,7 +395,9 @@ impl RoommateMcp {
     /// `service::areas::assemble_areas`. Shares the exact read logic the HTTP
     /// `GET /projects/{id}/areas` uses; `None` (nothing pushed) mirrors
     /// `get_rooms`' empty-store message.
-    #[tool(description = "Compute per-level, per-tier dissolved area footprints for one project, optionally scoped by building key and milestone name. Each group carries its resolved classification path, its measured footprint area (an aggregated ROOM FOOTPRINT — room area PLUS the enclosed wall bands between rooms, MINUS any genuine void like a courtyard or atrium; NOT net area and NOT a standards gross), whether it counts toward tiers above it (a settings exclusion can withhold a group), and its footprint polygons (each an exterior ring plus any interior rings for open voids). How much wall a footprint contains follows the boundary regime each model declared: a finish-face level fills the gaps between its rooms up to the project's declared max_wall_thickness, while a centreline level already has its walls inside the room polygons and is dissolved with no fill at all. The response echoes the gap applied per level (wall_gap_by_level) and the project's declared measurement_standard, which may be null — the figure is a house convention, not a standards gross, so read measurement_standard before quoting it. A void wider than a wall stays open and is excluded from the area.")]
+    #[tool(
+        description = "Compute per-level, per-tier dissolved area footprints for one project, optionally scoped by building key and milestone name. Each group carries its resolved classification path, its measured footprint area (an aggregated ROOM FOOTPRINT — room area PLUS the enclosed wall bands between rooms, MINUS any genuine void like a courtyard or atrium; NOT net area and NOT a standards gross), whether it counts toward tiers above it (a settings exclusion can withhold a group), and its footprint polygons (each an exterior ring plus any interior rings for open voids). How much wall a footprint contains follows the boundary regime each model declared: a finish-face level fills the gaps between its rooms up to the project's declared max_wall_thickness, while a centreline level already has its walls inside the room polygons and is dissolved with no fill at all. The response echoes the gap applied per level (wall_gap_by_level) and the project's declared measurement_standard, which may be null — the figure is a house convention, not a standards gross, so read measurement_standard before quoting it. A void wider than a wall stays open and is excluded from the area."
+    )]
     fn get_hierarchy_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<CallToolResult, McpError> {
         let result = areas::assemble_areas(&self.state, &p.project_id, p.building.as_deref(), p.milestone.as_deref())
             .map_err(to_mcp_error)?;
@@ -398,7 +414,9 @@ impl RoommateMcp {
     /// the HTTP `GET /projects/{id}/adjacency` uses, including the tolerance
     /// validation, so the two front doors cannot disagree on what a valid
     /// `wall_max` is.
-    #[tool(description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and any joined reference records, each flattened under its source name) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, not door connectivity (the extractor collects no doors). The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor.")]
+    #[tool(
+        description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and any joined reference records, each flattened under its source name) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, not door connectivity (the extractor collects no doors). The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor."
+    )]
     fn get_adjacency(&self, Parameters(p): Parameters<AdjacencyParams>) -> Result<CallToolResult, McpError> {
         let result = adjacency::assemble_adjacency(
             &self.state,
@@ -418,11 +436,16 @@ impl RoommateMcp {
 
     /// Lists every uploaded snapshot id for one project's reference source --
     /// see `service::reference::list_reference_snapshots`.
-    #[tool(description = "List every uploaded CSV snapshot id (RFC3339 UTC taken_at) for one project's reference source, ascending, with the latest. \
+    #[tool(
+        description = "List every uploaded CSV snapshot id (RFC3339 UTC taken_at) for one project's reference source, ascending, with the latest. \
                           `source` names the reference source (e.g. \"drofus\") and may be omitted when the project configures exactly one; \
                           when it configures several, the error names them. \
-                          Reads the shared store fresh, so an upload forwarded moments ago shows here immediately.")]
-    fn list_reference_snapshots(&self, Parameters(p): Parameters<ReferenceSourceParams>) -> Result<CallToolResult, McpError> {
+                          Reads the shared store fresh, so an upload forwarded moments ago shows here immediately."
+    )]
+    fn list_reference_snapshots(
+        &self,
+        Parameters(p): Parameters<ReferenceSourceParams>,
+    ) -> Result<CallToolResult, McpError> {
         let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
         let result = reference::list_reference_snapshots(&self.state, &p.project_id, &source).map_err(to_mcp_error)?;
         json_result(&result)
@@ -432,10 +455,15 @@ impl RoommateMcp {
     /// `service::reference::get_reference_snapshot`. The service's `None` (the
     /// HTTP 404 case) becomes a short plain-text answer, same convention as
     /// `get_latest_snapshot`.
-    #[tool(description = "Get a parsed summary (record count, link property, field labels) of one uploaded reference CSV -- the given taken_at, or the latest when omitted. \
+    #[tool(
+        description = "Get a parsed summary (record count, link property, field labels) of one uploaded reference CSV -- the given taken_at, or the latest when omitted. \
                           `source` names the reference source (e.g. \"drofus\") and may be omitted when the project configures exactly one. \
-                          Reads the shared store fresh.")]
-    fn get_reference_snapshot(&self, Parameters(p): Parameters<GetReferenceSnapshotParams>) -> Result<CallToolResult, McpError> {
+                          Reads the shared store fresh."
+    )]
+    fn get_reference_snapshot(
+        &self,
+        Parameters(p): Parameters<GetReferenceSnapshotParams>,
+    ) -> Result<CallToolResult, McpError> {
         let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
         let result = reference::get_reference_snapshot(&self.state, &p.project_id, &source, p.taken_at.as_deref())
             .map_err(to_mcp_error)?;
@@ -458,7 +486,10 @@ impl RoommateMcp {
                           The project's settings must declare [sources.reference.<source>] type = \"upload\". \
                           Note the staleness asymmetry: after an upload, this process's own get_rooms/get_validation still join the \
                           data loaded at ITS startup; list_reference_snapshots/get_reference_snapshot read the store fresh and see the new upload immediately.")]
-    async fn upload_reference(&self, Parameters(p): Parameters<UploadReferenceParams>) -> Result<CallToolResult, McpError> {
+    async fn upload_reference(
+        &self,
+        Parameters(p): Parameters<UploadReferenceParams>,
+    ) -> Result<CallToolResult, McpError> {
         let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
         let bytes = std::fs::read(&p.path)
             .map_err(|e| McpError::invalid_params(format!("could not read CSV file {:?}: {e}", p.path), None))?;
@@ -512,9 +543,11 @@ impl RoommateMcp {
 
     /// Lists every project settings file with its headline facts -- see
     /// `settings_api::list_project_files`.
-    #[tool(description = "List every project settings file (project id, is_default, and reference_sources -- the names of the reference sources it declares). \
+    #[tool(
+        description = "List every project settings file (project id, is_default, and reference_sources -- the names of the reference sources it declares). \
                           Reads the files fresh, so a settings change saved through the HTTP UI shows here immediately; \
-                          this process's own get_rooms/get_validation behavior still reflects the settings loaded at its startup.")]
+                          this process's own get_rooms/get_validation behavior still reflects the settings loaded at its startup."
+    )]
     fn list_project_settings(&self) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let result = settings_api::list_project_files(&dir).map_err(settings_to_mcp_error)?;
@@ -523,9 +556,11 @@ impl RoommateMcp {
 
     /// One project's parsed settings as JSON -- see
     /// `settings_api::get_project_file`.
-    #[tool(description = "Get one project's settings (hierarchy, reference sources, builtin properties, room label, QA fields) as JSON. \
+    #[tool(
+        description = "Get one project's settings (hierarchy, reference sources, builtin properties, room label, QA fields) as JSON. \
                           Reads the file fresh, so a settings change saved through the HTTP UI shows here immediately; \
-                          this process's own get_rooms/get_validation behavior still reflects the settings loaded at its startup.")]
+                          this process's own get_rooms/get_validation behavior still reflects the settings loaded at its startup."
+    )]
     fn get_project_settings(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let (file, settings) = settings_api::get_project_file(&dir, &p.project_id).map_err(settings_to_mcp_error)?;
@@ -550,9 +585,7 @@ fn settings_to_mcp_error(err: SettingsError) -> McpError {
         SettingsError::NotFound(msg) | SettingsError::Invalid(msg) | SettingsError::Conflict(msg) => {
             McpError::invalid_params(msg, None)
         }
-        SettingsError::NotFileBacked => {
-            McpError::internal_error("no project settings directory configured", None)
-        }
+        SettingsError::NotFileBacked => McpError::internal_error("no project settings directory configured", None),
         SettingsError::Internal(e) => {
             tracing::error!("settings read error: {e:#}");
             McpError::internal_error(e.to_string(), None)
@@ -643,9 +676,7 @@ mod tests {
         let bundle = ProjectSettings {
             reference: sources
                 .iter()
-                .map(|name| {
-                    (name.to_string(), roommate::state::ProjectReferenceSource { data: None, fields: vec![] })
-                })
+                .map(|name| (name.to_string(), roommate::state::ProjectReferenceSource { data: None, fields: vec![] }))
                 .collect(),
             hierarchy: vec![],
             builtin_properties: vec![],

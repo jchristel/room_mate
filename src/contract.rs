@@ -143,9 +143,7 @@ pub struct Snapshot {
 /// its snapshot id through this one function.
 pub fn ensure_taken_at(snapshot: &mut Snapshot) -> bool {
     if snapshot.taken_at.trim().is_empty() {
-        snapshot.taken_at = chrono::Utc::now()
-            .format("%Y-%m-%dT%H:%M:%S%.6fZ")
-            .to_string();
+        snapshot.taken_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
         return true;
     }
     false
@@ -333,11 +331,7 @@ pub const SUPPORTED_SCHEMA: u32 = 5;
 /// were never in the builtin set to begin with) work unchanged, and what lets
 /// hierarchy/dRofus configs reference a raw name directly when no canonical
 /// mapping is configured.
-fn resolve_raw_name<'a>(
-    canonical_name: &'a str,
-    source: &str,
-    builtin_defs: &'a [BuiltinPropertyDef],
-) -> &'a str {
+fn resolve_raw_name<'a>(canonical_name: &'a str, source: &str, builtin_defs: &'a [BuiltinPropertyDef]) -> &'a str {
     builtin_defs
         .iter()
         .find(|d| d.canonical == canonical_name)
@@ -549,10 +543,7 @@ mod tests {
         assert_eq!(payload.model.source, "revit");
         assert_eq!(room.properties["Number"].value, "101");
         assert_eq!(room.properties["Area"].value, "25.5");
-        assert_eq!(
-            room.properties["Dept"].storage_type,
-            Some("String".to_string())
-        );
+        assert_eq!(room.properties["Dept"].storage_type, Some("String".to_string()));
 
         // Confirm round-trip: serialise and re-parse.
         let serialised = serde_json::to_string(&payload).unwrap();
@@ -606,8 +597,7 @@ mod tests {
         // Survives a serialize→parse cycle (compared with tolerance: a JSON f64
         // round-trip can differ by an ULP between the `from_value` and
         // `from_str` paths, which is not what this test is about).
-        let reparsed: RoomPayload =
-            serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
+        let reparsed: RoomPayload = serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
         let back = reparsed.model_to_shared.expect("present after round-trip");
         for (a, b) in back.matrix.iter().zip(mts.matrix.iter()) {
             // Absolute 1e-6 (sub-micron in feet) absorbs the ULP-scale drift a
@@ -621,7 +611,14 @@ mod tests {
     #[test]
     fn test_model_to_shared_determinant_flags_non_rigid() {
         let rigid = ModelToShared {
-            matrix: [0.9704980833640151, -0.2411088347339701, 0.2411088347339701, 0.9704980833640151, 945737.6, 20545096.5],
+            matrix: [
+                0.9704980833640151,
+                -0.2411088347339701,
+                0.2411088347339701,
+                0.9704980833640151,
+                945737.6,
+                20545096.5,
+            ],
         };
         assert!((rigid.determinant() - 1.0).abs() < 1e-9);
         assert!(rigid.is_rigid(1e-6));
@@ -663,8 +660,7 @@ mod tests {
             let payload: RoomPayload = serde_json::from_value(with).unwrap();
             assert_eq!(payload.room_boundary, Some(expected));
 
-            let reparsed: RoomPayload =
-                serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
+            let reparsed: RoomPayload = serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
             assert_eq!(reparsed.room_boundary, Some(expected), "survives a round-trip");
         }
     }
@@ -737,7 +733,11 @@ mod tests {
     fn test_ensure_taken_at_generates_only_when_blank() {
         let mut blank = Snapshot { taken_at: "  ".to_string() };
         assert!(ensure_taken_at(&mut blank));
-        assert!(validate_snapshot_id(&blank.taken_at).is_ok(), "generated id must be valid: {}", blank.taken_at);
+        assert!(
+            validate_snapshot_id(&blank.taken_at).is_ok(),
+            "generated id must be valid: {}",
+            blank.taken_at
+        );
 
         let mut supplied = Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() };
         assert!(!ensure_taken_at(&mut supplied));
@@ -782,10 +782,7 @@ mod tests {
             by_source: HashMap::from([("revit_de".to_string(), "Fläche".to_string())]),
         }];
 
-        assert_eq!(
-            lookup_property(&room, "Area", "revit_de", &defs),
-            Some("25.5".to_string())
-        );
+        assert_eq!(lookup_property(&room, "Area", "revit_de", &defs), Some("25.5".to_string()));
         // A source with no configured mapping falls back to matching the
         // canonical name verbatim — and finds nothing here, correctly.
         assert_eq!(lookup_property(&room, "Area", "revit", &defs), None);
@@ -797,10 +794,7 @@ mod tests {
     #[test]
     fn test_lookup_property_falls_through_with_no_defs() {
         let mut properties = BTreeMap::new();
-        properties.insert(
-            "Dept".to_string(),
-            CustomValue { value: "Finance".to_string(), storage_type: None },
-        );
+        properties.insert("Dept".to_string(), CustomValue { value: "Finance".to_string(), storage_type: None });
         let room = Room {
             id: "r1".into(),
             name: "Office".into(),
@@ -809,10 +803,7 @@ mod tests {
             properties,
         };
 
-        assert_eq!(
-            lookup_property(&room, "Dept", "revit", &[]),
-            Some("Finance".to_string())
-        );
+        assert_eq!(lookup_property(&room, "Dept", "revit", &[]), Some("Finance".to_string()));
     }
 
     /// The reported bug: dRofus's `"1.5"` (1 stated decimal) agrees with
@@ -872,15 +863,15 @@ mod tests {
     #[test]
     fn test_property_presence_distinguishes_absent_empty_present() {
         let mut properties = BTreeMap::new();
-        properties.insert(
-            "Blank".to_string(),
-            CustomValue { value: "".to_string(), storage_type: None },
-        );
-        properties.insert(
-            "Filled".to_string(),
-            CustomValue { value: "25.5".to_string(), storage_type: None },
-        );
-        let room = Room { id: "r1".into(), name: "Office".into(), level_id: "lvl1".into(), loops: vec![], properties };
+        properties.insert("Blank".to_string(), CustomValue { value: "".to_string(), storage_type: None });
+        properties.insert("Filled".to_string(), CustomValue { value: "25.5".to_string(), storage_type: None });
+        let room = Room {
+            id: "r1".into(),
+            name: "Office".into(),
+            level_id: "lvl1".into(),
+            loops: vec![],
+            properties,
+        };
 
         assert_eq!(property_presence(&room, "Missing", "revit", &[]), PropertyPresence::Absent);
         assert_eq!(property_presence(&room, "Blank", "revit", &[]), PropertyPresence::Empty);
@@ -896,11 +887,14 @@ mod tests {
     #[test]
     fn test_lookup_property_still_collapses_absent_and_empty_to_none() {
         let mut properties = BTreeMap::new();
-        properties.insert(
-            "Blank".to_string(),
-            CustomValue { value: "".to_string(), storage_type: None },
-        );
-        let room = Room { id: "r1".into(), name: "Office".into(), level_id: "lvl1".into(), loops: vec![], properties };
+        properties.insert("Blank".to_string(), CustomValue { value: "".to_string(), storage_type: None });
+        let room = Room {
+            id: "r1".into(),
+            name: "Office".into(),
+            level_id: "lvl1".into(),
+            loops: vec![],
+            properties,
+        };
 
         assert_eq!(lookup_property(&room, "Missing", "revit", &[]), None);
         assert_eq!(lookup_property(&room, "Blank", "revit", &[]), None);

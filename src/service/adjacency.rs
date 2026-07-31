@@ -217,7 +217,9 @@ struct WallRun {
 /// same reason. A loop that repeats its first point last is accepted either way;
 /// the contract does not promise one form.
 fn outer_segments(room: &Room) -> Vec<Seg> {
-    let Some(outer) = room.loops.first() else { return Vec::new() };
+    let Some(outer) = room.loops.first() else {
+        return Vec::new();
+    };
     let pts = &outer.points;
     let n = if pts.len() >= 2 && pts[0].x == pts[pts.len() - 1].x && pts[0].y == pts[pts.len() - 1].y {
         pts.len() - 1
@@ -304,7 +306,13 @@ fn overlap_of(s: &Seg, t: &Seg, wall_max: f64) -> Option<Overlap> {
     // take the worst reading inside the overlap, so a pair that is close at one
     // end and far at the other is rejected rather than averaged into acceptance.
     let span = tb - ta;
-    let gap_at = |x: f64| if span.abs() <= COINCIDENT_EPS_FT { pa } else { pa + (pb - pa) * (x - ta) / span };
+    let gap_at = |x: f64| {
+        if span.abs() <= COINCIDENT_EPS_FT {
+            pa
+        } else {
+            pa + (pb - pa) * (x - ta) / span
+        }
+    };
     let gap = gap_at(lo).abs().max(gap_at(hi).abs());
     if gap > wall_max + COINCIDENT_EPS_FT {
         return None;
@@ -577,13 +585,12 @@ fn level_edges(level_id: &str, prepared: &[Prepared<'_>], wall_max: f64) -> Vec<
         if shared_length >= MIN_SHARED_FT {
             // Stable `a < b` ordering by room id, so the pair has one
             // representation regardless of iteration order.
-            let (ra, rb) = if a.room.id <= b.room.id { (&a.room.id, &b.room.id) } else { (&b.room.id, &a.room.id) };
-            edges.push(AdjacencyEdge {
-                a: ra.clone(),
-                b: rb.clone(),
-                level_id: level_id.to_string(),
-                shared_length,
-            });
+            let (ra, rb) = if a.room.id <= b.room.id {
+                (&a.room.id, &b.room.id)
+            } else {
+                (&b.room.id, &a.room.id)
+            };
+            edges.push(AdjacencyEdge { a: ra.clone(), b: rb.clone(), level_id: level_id.to_string(), shared_length });
         }
     }
     edges
@@ -626,7 +633,9 @@ pub fn check_wall_max(requested: Option<f64>) -> Result<Option<f64>, ServiceErro
         return Err(ServiceError::Invalid("wall_max must be a finite number".to_string()));
     }
     if v < 0.0 {
-        return Err(ServiceError::Invalid("wall_max must not be negative (0 is valid — it is the wall-centreline case)".to_string()));
+        return Err(ServiceError::Invalid(
+            "wall_max must not be negative (0 is valid — it is the wall-centreline case)".to_string(),
+        ));
     }
     if v > WALL_MAX_LIMIT_FT {
         return Err(ServiceError::Invalid(format!(
@@ -646,8 +655,8 @@ pub fn check_wall_max(requested: Option<f64>) -> Result<Option<f64>, ServiceErro
 /// matched) falls to the declared thickness; there is no evidence for the
 /// narrower reading, so it is not taken.
 fn default_wall_max(policy: &AreaPolicy, rooms: &RoomsResult) -> f64 {
-    let all_centreline = !rooms.boundary_by_level.is_empty()
-        && rooms.boundary_by_level.values().all(|b| *b == RoomBoundary::Centreline);
+    let all_centreline =
+        !rooms.boundary_by_level.is_empty() && rooms.boundary_by_level.values().all(|b| *b == RoomBoundary::Centreline);
     policy.wall_gap_ft(if all_centreline { RoomBoundary::Centreline } else { RoomBoundary::FinishFace })
 }
 
@@ -682,7 +691,10 @@ fn centroid_of(room: &Room) -> Point2D {
         return Point2D { x: 0.0, y: 0.0 };
     }
     let n = pts.len() as f64;
-    Point2D { x: pts.iter().map(|p| p.x).sum::<f64>() / n, y: pts.iter().map(|p| p.y).sum::<f64>() / n }
+    Point2D {
+        x: pts.iter().map(|p| p.x).sum::<f64>() / n,
+        y: pts.iter().map(|p| p.y).sum::<f64>() / n,
+    }
 }
 
 /// Assemble the adjacency result for one project, scoped like `/rooms` and
@@ -706,11 +718,7 @@ pub fn assemble_adjacency(
     // Guard the request before doing any work — a bad tolerance should not cost
     // a full room merge first.
     let requested = check_wall_max(wall_max)?;
-    let policy = state
-        .settings()
-        .settings_for(project)
-        .map(|b| b.areas.clone())
-        .unwrap_or_default();
+    let policy = state.settings().settings_for(project).map(|b| b.areas.clone()).unwrap_or_default();
 
     let scope = RoomScope { project: Some(project), building, milestone, ..Default::default() };
     let Some(rooms) = assemble_rooms(state, &scope)? else {
@@ -927,7 +935,12 @@ mod tests {
         // `a` is the inner square; `l` wraps its right side and its top.
         let a = rect(0.0, 0.0, 10.0, 10.0);
         let l = vec![
-            (10.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0), (0.0, 10.0), (10.0, 10.0),
+            (10.0, 0.0),
+            (20.0, 0.0),
+            (20.0, 20.0),
+            (0.0, 20.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
         ];
         let e = edges_of(&[room("a", &[&a]), room("l", &[&l])], 0.0);
         assert_eq!(e.len(), 1);
@@ -943,8 +956,12 @@ mod tests {
         let a = rect(0.0, 0.0, 10.0, 10.0);
         // `b`'s facing side is split into three collinear segments.
         let b = vec![
-            (10.0, 0.0), (20.0, 0.0), (20.0, 10.0),
-            (10.0, 10.0), (10.0, 6.0), (10.0, 3.0),
+            (10.0, 0.0),
+            (20.0, 0.0),
+            (20.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 6.0),
+            (10.0, 3.0),
         ];
         let e = edges_of(&[room("a", &[&a]), room("b", &[&b])], 0.0);
         assert_eq!(e.len(), 1);
@@ -989,7 +1006,10 @@ mod tests {
     /// open one — the contract does not promise either form.
     #[test]
     fn test_closed_and_open_loops_agree() {
-        let open = vec![room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]), room("b", &[&rect(10.0, 0.0, 20.0, 10.0)])];
+        let open = vec![
+            room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
+            room("b", &[&rect(10.0, 0.0, 20.0, 10.0)]),
+        ];
         let closed_a = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)];
         let closed = vec![room("a", &[&closed_a]), room("b", &[&rect(10.0, 0.0, 20.0, 10.0)])];
         approx(
@@ -1176,11 +1196,7 @@ mod tests {
                     areas: AreaPolicy { max_wall_thickness: thickness, ..Default::default() },
                     ..bundle()
                 };
-                let state = AppState::new(
-                    Box::new(MemStore::new()),
-                    HashMap::from([("p1".to_string(), bundle)]),
-                    None,
-                );
+                let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle)]), None);
                 state
                     .set_snapshot(RoomPayload {
                         schema_version: 5,
@@ -1207,7 +1223,10 @@ mod tests {
             approx(assemble_adjacency(&undeclared, "p1", None, None, None).unwrap().unwrap().wall_max, 0.4);
 
             // And an explicit request wins over any of it.
-            approx(assemble_adjacency(&centreline, "p1", None, None, Some(1.0)).unwrap().unwrap().wall_max, 1.0);
+            approx(
+                assemble_adjacency(&centreline, "p1", None, None, Some(1.0)).unwrap().unwrap().wall_max,
+                1.0,
+            );
         }
 
         /// An out-of-range tolerance is a caller fault carrying a message, not a

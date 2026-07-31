@@ -184,7 +184,11 @@ pub fn resolve_project_file(projects_dir: &Path, project_id: &str) -> Result<(St
 /// full, successful re-load of the whole directory — the running server can
 /// never observe a half-updated state, and a file this function accepts can
 /// never fail the next boot.
-pub fn save_project(state: &AppState, existing_id: Option<&str>, settings: Settings) -> Result<Settings, SettingsError> {
+pub fn save_project(
+    state: &AppState,
+    existing_id: Option<&str>,
+    settings: Settings,
+) -> Result<Settings, SettingsError> {
     let projects_dir = state.projects_dir().ok_or(SettingsError::NotFileBacked)?.clone();
     let _guard = SAVE_LOCK.lock().unwrap();
 
@@ -249,8 +253,8 @@ pub fn save_project(state: &AppState, existing_id: Option<&str>, settings: Setti
     // (so relative dRofus paths resolve exactly as they will at startup) with
     // a non-.toml extension (so a crash mid-save can't leave a file the next
     // startup scan would pick up).
-    let toml_text =
-        toml::to_string_pretty(&settings).map_err(|e| SettingsError::Invalid(format!("settings do not serialize to TOML: {e}")))?;
+    let toml_text = toml::to_string_pretty(&settings)
+        .map_err(|e| SettingsError::Invalid(format!("settings do not serialize to TOML: {e}")))?;
     let temp = projects_dir.join(format!(".{id}.candidate.tmp"));
     std::fs::write(&temp, &toml_text)
         .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not write candidate file: {e}")))?;
@@ -355,7 +359,9 @@ pub fn upload_reference(
     let fields = reference_source.map(|s| s.fields.clone()).unwrap_or_default();
     validate_reference_fields(&fields, &data.all_labels).map_err(|e| SettingsError::Invalid(format!("{e:#}")))?;
 
-    let stored = state.put_reference(project_id, source, &snapshot.taken_at, csv).map_err(SettingsError::Internal)?;
+    let stored = state
+        .put_reference(project_id, source, &snapshot.taken_at, csv)
+        .map_err(SettingsError::Internal)?;
 
     // Rebuild + swap so the upload is live without a restart. The bundle
     // re-hydrates from the store's *latest* — a backfilled older `taken_at`
@@ -403,7 +409,9 @@ fn require_dir(state: &AppState) -> Result<PathBuf, (StatusCode, String)> {
 }
 
 /// `GET /api/settings/projects`
-pub async fn http_list_projects(State(state): State<Shared>) -> Result<Json<Vec<ProjectFileSummary>>, (StatusCode, String)> {
+pub async fn http_list_projects(
+    State(state): State<Shared>,
+) -> Result<Json<Vec<ProjectFileSummary>>, (StatusCode, String)> {
     let dir = require_dir(&state)?;
     list_project_files(&dir).map(Json).map_err(to_http)
 }
@@ -614,7 +622,10 @@ ids = ["12345", "67890"]
         // key/values rather than folding them into `[sources]`.
         assert_eq!(reparsed.comparison_key.as_deref(), Some("Number"));
         assert_eq!(reparsed.comparison_properties, vec!["Area".to_string(), "Department".to_string()]);
-        assert!(matches!(reparsed.sources.reference.get("drofus").map(|s| &s.origin), Some(ReferenceOrigin::Upload)));
+        assert!(matches!(
+            reparsed.sources.reference.get("drofus").map(|s| &s.origin),
+            Some(ReferenceOrigin::Upload)
+        ));
         assert_eq!(reparsed.hierarchy.len(), 1);
         assert_eq!(reparsed.builtin_properties.len(), 1);
         assert_eq!(reparsed.sources.reference["drofus"].fields.len(), 1);
@@ -759,10 +770,7 @@ ids = ["12345", "67890"]
         }
 
         assert_eq!(std::fs::read_to_string(dir.join("p1.toml")).unwrap(), before, "file untouched");
-        assert!(
-            !dir.join(".p1.candidate.tmp").exists(),
-            "candidate temp file cleaned up"
-        );
+        assert!(!dir.join(".p1.candidate.tmp").exists(), "candidate temp file cleaned up");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -812,7 +820,10 @@ ids = ["12345", "67890"]
 
         // Hot-swap: the running registry now joins the uploaded data.
         let registry = state.settings();
-        let drofus = registry.settings_for("p1").unwrap().reference["drofus"].data.as_ref().expect("hydrated live");
+        let drofus = registry.settings_for("p1").unwrap().reference["drofus"]
+            .data
+            .as_ref()
+            .expect("hydrated live");
         assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
 
         // Omitted taken_at: minted server-side and reported as such.
@@ -843,14 +854,20 @@ ids = ["12345", "67890"]
             Err(SettingsError::Invalid(_))
         ));
         // Unknown project.
-        assert!(matches!(upload_reference(&state, "ghost", "drofus", None, UPLOAD_CSV), Err(SettingsError::NotFound(_))));
+        assert!(matches!(
+            upload_reference(&state, "ghost", "drofus", None, UPLOAD_CSV),
+            Err(SettingsError::NotFound(_))
+        ));
         // Registered, but not upload-sourced — told to set the source first.
         match upload_reference(&state, "p2", "drofus", None, UPLOAD_CSV) {
             Err(SettingsError::Invalid(msg)) => assert!(msg.contains("upload")),
             other => panic!("expected Invalid, got {other:?}"),
         }
         // Unparseable CSV (no row 2).
-        assert!(matches!(upload_reference(&state, "p1", "drofus", None, b"OnlyOneRow\n"), Err(SettingsError::Invalid(_))));
+        assert!(matches!(
+            upload_reference(&state, "p1", "drofus", None, b"OnlyOneRow\n"),
+            Err(SettingsError::Invalid(_))
+        ));
         // Parseable CSV that doesn't carry the declared drofus_fields label.
         match upload_reference(&state, "p1", "drofus", None, UPLOAD_CSV) {
             Err(SettingsError::Invalid(msg)) => assert!(msg.contains("NoSuchColumn")),
@@ -872,14 +889,18 @@ ids = ["12345", "67890"]
         let dir = temp_dir("up-backfill");
         let store_dir = temp_dir("up-backfill-store");
         std::fs::write(dir.join("p1.toml"), UPLOAD_TOML).unwrap();
-        let state = AppState::new(
-            Box::new(crate::storage::FsStore::new(store_dir.clone()).unwrap()),
-            HashMap::new(),
-            None,
-        )
-        .with_projects_dir(dir.to_path_buf());
+        let state =
+            AppState::new(Box::new(crate::storage::FsStore::new(store_dir.clone()).unwrap()), HashMap::new(), None)
+                .with_projects_dir(dir.to_path_buf());
 
-        upload_reference(&state, "p1", "drofus", Some("2026-01-02T10:00:00Z"), b"DrofusRoomId,NetArea\nNumber,Area\n1,99.9\n").unwrap();
+        upload_reference(
+            &state,
+            "p1",
+            "drofus",
+            Some("2026-01-02T10:00:00Z"),
+            b"DrofusRoomId,NetArea\nNumber,Area\n1,99.9\n",
+        )
+        .unwrap();
         upload_reference(&state, "p1", "drofus", Some("2026-01-01T10:00:00Z"), UPLOAD_CSV).unwrap();
 
         // Both stored, newer still the live one.

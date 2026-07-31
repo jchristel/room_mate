@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::{REFERENCE_DIR, ProjectManifest, SnapshotStore};
+use super::{ProjectManifest, SnapshotStore, REFERENCE_DIR};
 use crate::contract::RoomPayload;
 use crate::state::ModelKey;
 
@@ -60,17 +60,14 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp");
-    let tmp = path.with_file_name(format!(
-        ".{stem}.{}.{}.tmp",
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
+    let tmp =
+        path.with_file_name(format!(".{stem}.{}.{}.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
 
     // Scoped so the handle is closed before the rename — Windows refuses to
     // rename a file that still has an open handle.
     let write = (|| -> Result<()> {
-        let mut file = fs::File::create(&tmp)
-            .with_context(|| format!("could not create temp file: {}", tmp.display()))?;
+        let mut file =
+            fs::File::create(&tmp).with_context(|| format!("could not create temp file: {}", tmp.display()))?;
         file.write_all(contents)
             .with_context(|| format!("could not write temp file: {}", tmp.display()))?;
         file.sync_all()
@@ -85,8 +82,11 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     }
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
-        return Err(anyhow::Error::from(e)
-            .context(format!("could not replace {} with {}", path.display(), tmp.display())));
+        return Err(anyhow::Error::from(e).context(format!(
+            "could not replace {} with {}",
+            path.display(),
+            tmp.display()
+        )));
     }
     Ok(())
 }
@@ -95,8 +95,7 @@ impl FsStore {
     /// Bind to a root dir, creating it if absent. Fail fast on an unwritable
     /// root — same startup-loud contract as the rest of config.
     pub fn new(root: PathBuf) -> Result<Self> {
-        fs::create_dir_all(&root)
-            .with_context(|| format!("could not create storage root: {}", root.display()))?;
+        fs::create_dir_all(&root).with_context(|| format!("could not create storage root: {}", root.display()))?;
         Ok(Self { root })
     }
 
@@ -130,8 +129,7 @@ impl FsStore {
         if !path.exists() {
             return Ok(ProjectManifest::default());
         }
-        let raw = fs::read_to_string(&path)
-            .with_context(|| format!("could not read manifest: {}", path.display()))?;
+        let raw = fs::read_to_string(&path).with_context(|| format!("could not read manifest: {}", path.display()))?;
         toml::from_str(&raw).with_context(|| format!("malformed manifest: {}", path.display()))
     }
 
@@ -140,8 +138,7 @@ impl FsStore {
         let toml = toml::to_string_pretty(manifest).context("could not serialise manifest")?;
         // Atomic: a torn manifest fails every subsequent read AND the next
         // boot, even though the snapshots beside it are fine. See `write_atomic`.
-        write_atomic(&path, toml.as_bytes())
-            .with_context(|| format!("could not write manifest: {}", path.display()))
+        write_atomic(&path, toml.as_bytes()).with_context(|| format!("could not write manifest: {}", path.display()))
     }
 
     /// Snapshot filename from the payload's timestamp. The `taken_at` is an
@@ -158,9 +155,7 @@ impl FsStore {
             return Ok(None);
         }
         let mut newest: Option<PathBuf> = None;
-        for entry in fs::read_dir(dir)
-            .with_context(|| format!("could not read model dir: {}", dir.display()))?
-        {
+        for entry in fs::read_dir(dir).with_context(|| format!("could not read model dir: {}", dir.display()))? {
             let path = entry?.path();
             // Only snapshot files count; skips anything non-`.json` in the dir.
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
@@ -199,10 +194,8 @@ impl FsStore {
     }
 
     fn read_payload(path: &Path) -> Result<RoomPayload> {
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("could not read snapshot: {}", path.display()))?;
-        serde_json::from_str(&raw)
-            .with_context(|| format!("malformed snapshot: {}", path.display()))
+        let raw = fs::read_to_string(path).with_context(|| format!("could not read snapshot: {}", path.display()))?;
+        serde_json::from_str(&raw).with_context(|| format!("malformed snapshot: {}", path.display()))
     }
 }
 
@@ -251,12 +244,7 @@ impl SnapshotStore for FsStore {
         write_atomic(&file, json.as_bytes())
             .with_context(|| format!("could not write snapshot: {}", file.display()))?;
 
-        tracing::info!(
-            "stored snapshot {}/{} @ {}",
-            project_id,
-            model_id,
-            payload.snapshot.taken_at
-        );
+        tracing::info!("stored snapshot {}/{} @ {}", project_id, model_id, payload.snapshot.taken_at);
         Ok(())
     }
 
@@ -313,7 +301,11 @@ impl SnapshotStore for FsStore {
                 }
             }
 
-            out.extend(model_ids.into_iter().map(|model_id| ModelKey { project_id: project_id.clone(), model_id }));
+            out.extend(
+                model_ids
+                    .into_iter()
+                    .map(|model_id| ModelKey { project_id: project_id.clone(), model_id }),
+            );
         }
         Ok(out)
     }
@@ -351,9 +343,7 @@ impl SnapshotStore for FsStore {
         let dir = self.model_dir(&key.project_id, &key.model_id);
         let mut on_disk: Vec<String> = Vec::new();
         if dir.exists() {
-            for entry in fs::read_dir(&dir)
-                .with_context(|| format!("could not read model dir: {}", dir.display()))?
-            {
+            for entry in fs::read_dir(&dir).with_context(|| format!("could not read model dir: {}", dir.display()))? {
                 let path = entry?.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("json")
                     && let Some(name) = path.file_name().and_then(|n| n.to_str())
@@ -372,7 +362,9 @@ impl SnapshotStore for FsStore {
             } else {
                 tracing::warn!(
                     "manifest lists snapshot {:?} for {}/{} but no file exists — dropping it (filesystem wins)",
-                    id, key.project_id, key.model_id
+                    id,
+                    key.project_id,
+                    key.model_id
                 );
             }
         }
@@ -381,7 +373,10 @@ impl SnapshotStore for FsStore {
             let id = Self::id_from_file_stem(stem);
             tracing::warn!(
                 "snapshot file {}/{}/{} is missing from project.toml — including it as {:?} (filesystem wins)",
-                key.project_id, key.model_id, filename, id
+                key.project_id,
+                key.model_id,
+                filename,
+                id
             );
             ids.push(id);
         }
@@ -390,9 +385,7 @@ impl SnapshotStore for FsStore {
     }
 
     fn get_snapshot(&self, key: &ModelKey, taken_at: &str) -> Result<Option<RoomPayload>> {
-        let path = self
-            .model_dir(&key.project_id, &key.model_id)
-            .join(Self::snapshot_filename(taken_at));
+        let path = self.model_dir(&key.project_id, &key.model_id).join(Self::snapshot_filename(taken_at));
         if !path.exists() {
             return Ok(None);
         }
@@ -441,8 +434,8 @@ impl SnapshotStore for FsStore {
         let dir = self.reference_dir(project_id, source);
         let mut on_disk: Vec<String> = Vec::new();
         if dir.exists() {
-            for entry in fs::read_dir(&dir)
-                .with_context(|| format!("could not read reference-source dir: {}", dir.display()))?
+            for entry in
+                fs::read_dir(&dir).with_context(|| format!("could not read reference-source dir: {}", dir.display()))?
             {
                 let path = entry?.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("csv")
@@ -484,8 +477,9 @@ impl SnapshotStore for FsStore {
         if !path.exists() {
             return Ok(None);
         }
-        Ok(Some(fs::read(&path)
-            .with_context(|| format!("could not read reference-source snapshot: {}", path.display()))?))
+        Ok(Some(fs::read(&path).with_context(|| {
+            format!("could not read reference-source snapshot: {}", path.display())
+        })?))
     }
 
     fn get_latest_reference(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>> {

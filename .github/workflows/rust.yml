@@ -5,6 +5,10 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  # For the `audit` job below: a new advisory can land against a dependency
+  # with no commit here to trigger on, so it is also checked weekly.
+  schedule:
+    - cron: "0 6 * * 1"
 
 env:
   CARGO_TERM_COLOR: always
@@ -55,3 +59,33 @@ jobs:
     - name: Clippy
       if: matrix.os == 'ubuntu-latest'
       run: cargo clippy --all-targets -- -D warnings
+    # Formatting, gated against the repo's own `rustfmt.toml` rather than
+    # rustfmt's defaults. That distinction is the whole reason this is
+    # tolerable: the defaults disagree with this codebase in ~670 places, and
+    # adopting them would have meant a reformat that rewrites every file and
+    # loses `git blame` on all of it. The committed config encodes the width
+    # and inline-literal thresholds the code was already written to, which cut
+    # the one-time diff to something reviewable. See rustfmt.toml.
+    #
+    # ubuntu only, same reasoning as clippy: formatting is platform-independent.
+    - name: Format
+      if: matrix.os == 'ubuntu-latest'
+      run: cargo fmt --check
+
+  # Known-vulnerability check over the dependency tree, as its own job so a
+  # RUSTSEC advisory published against a crate we never changed still turns the
+  # build red. That is the point: this is the one check whose result can change
+  # without anyone touching the repo, so it also runs on a schedule rather than
+  # only on push.
+  #
+  # Separate from `build` deliberately — an advisory is not a reason to hide
+  # whether the code compiles and passes its tests, so the two report
+  # independently.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install cargo-audit
+      run: cargo install cargo-audit --locked
+    - name: Audit dependencies
+      run: cargo audit

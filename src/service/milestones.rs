@@ -88,7 +88,8 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
-            hierarchy_exclusions: vec![],        }
+            hierarchy_exclusions: vec![],
+        }
     }
 
     /// Milestones list newest date first, each carrying its pin count and
@@ -98,7 +99,9 @@ mod tests {
     #[test]
     fn test_list_milestones_newest_first() {
         let mut pinned = make_milestone("Design Freeze", "2026-06-30");
-        pinned.reference_snapshots.insert("drofus".to_string(), "2026-06-29T17:00:00Z".to_string());
+        pinned
+            .reference_snapshots
+            .insert("drofus".to_string(), "2026-06-29T17:00:00Z".to_string());
         pinned.reference_snapshots.insert("ffe".to_string(), "2026-06-28T09:00:00Z".to_string());
         let bundle = make_bundle(vec![make_milestone("Concept", "2026-03-01"), pinned]);
         let registry = std::collections::HashMap::from([("p1".to_string(), bundle)]);

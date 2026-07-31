@@ -23,9 +23,9 @@ use crate::contract::{ModelToShared, Room, RoomBoundary, RoomPayload, StreamEnve
 use crate::service::adjacency;
 use crate::service::areas;
 use crate::service::comparison::{self, ComparisonResponse};
-use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
+use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::snapshots::{LatestSnapshot, ProjectSnapshotsResponse};
 use crate::service::validation::ValidationResponse;
 use crate::service::{milestones, projects, reference, rooms, snapshots, validation, ServiceError};
@@ -148,10 +148,7 @@ pub async fn ingest_rooms(
     // not a bad request — surface it as 500 rather than swallowing it.
     state.set_snapshot(payload).map_err(|e| {
         tracing::error!("failed to store snapshot: {e:#}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("could not store snapshot: {e}"),
-        )
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store snapshot: {e}"))
     })?;
 
     Ok(Json(IngestResponse {
@@ -223,9 +220,7 @@ pub async fn ingest_rooms_stream(
     State(state): State<Shared>,
     body: Body,
 ) -> Result<Json<IngestResponse>, (StatusCode, String)> {
-    let stream = body
-        .into_data_stream()
-        .map(|r| r.map_err(std::io::Error::other));
+    let stream = body.into_data_stream().map(|r| r.map_err(std::io::Error::other));
     let reader = StreamReader::new(stream);
     let mut lines = reader.lines();
 
@@ -235,8 +230,8 @@ pub async fn ingest_rooms_stream(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
         .ok_or((StatusCode::BAD_REQUEST, "empty body".into()))?;
 
-    let mut envelope: StreamEnvelope = serde_json::from_str(&envelope_line)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad envelope: {e}")))?;
+    let mut envelope: StreamEnvelope =
+        serde_json::from_str(&envelope_line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad envelope: {e}")))?;
 
     // Same resolve-then-pre-flight as the buffered path -- run as soon as the
     // envelope is parsed, before the (potentially large) room stream is read.
@@ -259,8 +254,8 @@ pub async fn ingest_rooms_stream(
         if line.trim().is_empty() {
             continue; // tolerate a trailing blank line
         }
-        let room: Room = serde_json::from_str(&line)
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("bad room line: {e}")))?;
+        let room: Room =
+            serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad room line: {e}")))?;
         rooms.push(room);
     }
 
@@ -282,10 +277,7 @@ pub async fn ingest_rooms_stream(
 
     state.set_snapshot(payload).map_err(|e| {
         tracing::error!("failed to store snapshot: {e:#}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("could not store snapshot: {e}"),
-        )
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store snapshot: {e}"))
     })?;
 
     Ok(Json(IngestResponse {
@@ -537,9 +529,10 @@ pub async fn get_project_adjacency(
 ) -> Result<Response, (StatusCode, String)> {
     let wall_max = match query.wall_max.as_deref() {
         None | Some("") => None,
-        Some(raw) => Some(raw.parse::<f64>().map_err(|_| {
-            map_service_error(ServiceError::Invalid(format!("wall_max {raw:?} is not a number")))
-        })?),
+        Some(raw) => Some(
+            raw.parse::<f64>()
+                .map_err(|_| map_service_error(ServiceError::Invalid(format!("wall_max {raw:?} is not a number"))))?,
+        ),
     };
 
     let result = adjacency::assemble_adjacency(
@@ -579,8 +572,8 @@ pub async fn compare_project_milestones(
     Path(project_id): Path<String>,
     Json(req): Json<ComparisonRequest>,
 ) -> Result<Json<ComparisonResponse>, (StatusCode, String)> {
-    let result = comparison::compare_milestones(&state, &project_id, &req.baseline, &req.others)
-        .map_err(map_service_error)?;
+    let result =
+        comparison::compare_milestones(&state, &project_id, &req.baseline, &req.others).map_err(map_service_error)?;
     Ok(Json(result))
 }
 
@@ -594,7 +587,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn make_room(id: &str, name: &str) -> Room {
-        Room { id: id.to_string(), name: name.to_string(), level_id: "1".to_string(), loops: vec![], properties: BTreeMap::new() }
+        Room {
+            id: id.to_string(),
+            name: name.to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            properties: BTreeMap::new(),
+        }
     }
 
     fn make_drofus() -> ReferenceData {
@@ -619,7 +618,8 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
-            hierarchy_exclusions: vec![],        }
+            hierarchy_exclusions: vec![],
+        }
     }
 
     /// Registers one project's bundle under its id -- the shape
@@ -736,7 +736,8 @@ mod tests {
 
         assert_eq!(query.project.as_deref(), Some("p1"));
         assert_eq!(query.filter.as_deref(), Some("Department=Cardiology,Area>20"));
-        let filter = rooms::RoomFilter::parse_query(query.filter.as_deref().unwrap(), &Default::default()).expect("must parse");
+        let filter =
+            rooms::RoomFilter::parse_query(query.filter.as_deref().unwrap(), &Default::default()).expect("must parse");
         assert!(!filter.is_empty());
     }
 
@@ -751,7 +752,10 @@ mod tests {
         let query = RoomsQuery { filter: Some("Department".to_string()), ..unscoped_query() };
         let (status, message) = get_rooms(State(state), Query(query)).await.expect_err("no operator in the predicate");
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(message.contains("no operator"), "the parser's reason must reach the caller, got {message:?}");
+        assert!(
+            message.contains("no operator"),
+            "the parser's reason must reach the caller, got {message:?}"
+        );
     }
 
     /// A project filter matching nothing still returns 200 with empty
@@ -808,7 +812,8 @@ mod tests {
                 levels: vec![],
                 rooms: vec![],
             };
-            let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+            let state: Shared =
+                std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
             let result = ingest_rooms(State(state), Json(payload)).await;
             match result {
@@ -918,7 +923,14 @@ mod tests {
     /// stored on the snapshot verbatim -- it rides the envelope end to end.
     #[tokio::test]
     async fn test_ingest_rooms_stores_model_to_shared() {
-        let matrix = [0.9704980833640151, -0.2411088347339701, 0.2411088347339701, 0.9704980833640151, 945737.6, 20545096.5];
+        let matrix = [
+            0.9704980833640151,
+            -0.2411088347339701,
+            0.2411088347339701,
+            0.9704980833640151,
+            945737.6,
+            20545096.5,
+        ];
         let payload = RoomPayload {
             schema_version: SUPPORTED_SCHEMA,
             project: Project { id: "p1".to_string(), name: "P".to_string() },
@@ -992,9 +1004,7 @@ mod tests {
             .expect("accepted");
 
         let stored = state.all_snapshots().unwrap();
-        let of = |model: &str| {
-            stored.iter().find(|(k, _)| k.model_id == model).expect("stored").1.room_boundary
-        };
+        let of = |model: &str| stored.iter().find(|(k, _)| k.model_id == model).expect("stored").1.room_boundary;
         assert_eq!(of("buffered"), Some(RoomBoundary::FinishFace));
         assert_eq!(of("streamed"), Some(RoomBoundary::Centreline), "the stream path carries it too");
     }

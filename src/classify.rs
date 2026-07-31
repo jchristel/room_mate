@@ -59,14 +59,8 @@ pub fn classify_room(
         // Resolve this tier's code/name from the room. `as_deref` turns the
         // Option<String> config field into Option<&str> for lookup; a tier may
         // define code, name, or both, so either lookup can be None.
-        let code = tier
-            .code_property
-            .as_deref()
-            .and_then(|p| lookup_property(room, p, source, builtin_defs));
-        let name = tier
-            .name_property
-            .as_deref()
-            .and_then(|p| lookup_property(room, p, source, builtin_defs));
+        let code = tier.code_property.as_deref().and_then(|p| lookup_property(room, p, source, builtin_defs));
+        let name = tier.name_property.as_deref().and_then(|p| lookup_property(room, p, source, builtin_defs));
 
         // A tier resolves if *either* of its referenced properties is present.
         let has_data = code.is_some() || name.is_some();
@@ -76,19 +70,9 @@ pub fn classify_room(
         // undefined if we've already fallen through OR this tier has no data.
         if fell_through || !has_data {
             fell_through = true;
-            path.push(TierValue {
-                tier: tier.name.clone(),
-                code: None,
-                name: None,
-                undefined: true,
-            });
+            path.push(TierValue { tier: tier.name.clone(), code: None, name: None, undefined: true });
         } else {
-            path.push(TierValue {
-                tier: tier.name.clone(),
-                code,
-                name,
-                undefined: false,
-            });
+            path.push(TierValue { tier: tier.name.clone(), code, name, undefined: false });
         }
     }
     path
@@ -113,10 +97,7 @@ mod tests {
                 .map(|(k, (val, st))| {
                     (
                         k.to_string(),
-                        CustomValue {
-                            value: val.to_string(),
-                            storage_type: st.map(|s| s.to_string()),
-                        },
+                        CustomValue { value: val.to_string(), storage_type: st.map(|s| s.to_string()) },
                     )
                 })
                 .collect(),
@@ -134,13 +115,7 @@ mod tests {
     /// A fully-classified room produces a full path with no undefined tiers.
     #[test]
     fn test_classify_room_fully_classified() {
-        let room = make_room(
-            "r1",
-            BTreeMap::from([
-                ("bldg_code", ("B01", None)),
-                ("dept_code", ("D02", None)),
-            ]),
-        );
+        let room = make_room("r1", BTreeMap::from([("bldg_code", ("B01", None)), ("dept_code", ("D02", None))]));
         let tiers = vec![
             make_tier("Building", Some("bldg_code"), None),
             make_tier("Department", Some("dept_code"), None),

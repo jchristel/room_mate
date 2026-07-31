@@ -38,10 +38,7 @@ pub struct LatestSnapshot {
 /// Every stored snapshot id for one project, grouped per model. A project
 /// with nothing stored (or unknown, or unregistered) answers an empty list,
 /// not an error — same soft-success discipline as the other listings.
-pub fn list_project_snapshots(
-    state: &AppState,
-    project_id: &str,
-) -> Result<ProjectSnapshotsResponse, ServiceError> {
+pub fn list_project_snapshots(state: &AppState, project_id: &str) -> Result<ProjectSnapshotsResponse, ServiceError> {
     let registry = state.settings();
     if registry.settings_for(project_id).is_none() {
         return Ok(ProjectSnapshotsResponse { models: vec![] });
@@ -56,13 +53,10 @@ pub fn list_project_snapshots(
         let snapshots = state.list_snapshot_ids(key).map_err(ServiceError::Internal)?;
         // A model appears in `all_snapshots` only via a readable snapshot, so
         // an empty id list can't really happen — skip defensively if it does.
-        let Some(latest) = snapshots.last().cloned() else { continue };
-        models.push(ModelSnapshots {
-            id: key.model_id.clone(),
-            name: payload.model.name.clone(),
-            snapshots,
-            latest,
-        });
+        let Some(latest) = snapshots.last().cloned() else {
+            continue;
+        };
+        models.push(ModelSnapshots { id: key.model_id.clone(), name: payload.model.name.clone(), snapshots, latest });
     }
     models.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
     Ok(ProjectSnapshotsResponse { models })
@@ -81,10 +75,7 @@ pub fn latest_snapshot(
     if state.settings().settings_for(project_id).is_none() {
         return Ok(None);
     }
-    let key = ModelKey {
-        project_id: project_id.to_string(),
-        model_id: model_id.to_string(),
-    };
+    let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.to_string() };
     let ids = state.list_snapshot_ids(&key).map_err(ServiceError::Internal)?;
     Ok(ids.last().map(|taken_at| LatestSnapshot { taken_at: taken_at.clone() }))
 }
@@ -100,7 +91,11 @@ mod tests {
         RoomPayload {
             schema_version: 5,
             project: Project { id: project_id.to_string(), name: "P".to_string() },
-            model: Model { id: model_id.to_string(), name: model_name.to_string(), source: "revit".to_string() },
+            model: Model {
+                id: model_id.to_string(),
+                name: model_name.to_string(),
+                source: "revit".to_string(),
+            },
             snapshot: Snapshot { taken_at: ts.to_string() },
             model_to_shared: None,
             room_boundary: None,
@@ -119,7 +114,8 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
-            hierarchy_exclusions: vec![],        }
+            hierarchy_exclusions: vec![],
+        }
     }
 
     fn make_state() -> AppState {

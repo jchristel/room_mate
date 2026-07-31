@@ -35,12 +35,10 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::contract::{date_match, numeric_match, PropertyPresence};
-use crate::settings::{BuiltinPropertyDef, CompareMode, ReferenceFieldConfig, FieldType};
+use crate::settings::{BuiltinPropertyDef, CompareMode, FieldType, ReferenceFieldConfig};
 use crate::state::AppState;
 
-use super::rooms::{
-    assemble_rooms, resolve_presence, source_joined, RoomResponse, RoomScope,
-};
+use super::rooms::{assemble_rooms, resolve_presence, source_joined, RoomResponse, RoomScope};
 use super::ServiceError;
 
 /// One comparable property whose value differs between the baseline room and
@@ -185,10 +183,7 @@ fn index_by_key<'a>(
     let mut duplicates = Vec::new();
     for (value, matched) in groups {
         if matched.len() > 1 {
-            duplicates.push(DuplicateKeyValue {
-                value,
-                room_ids: matched.iter().map(|r| r.room.id.clone()).collect(),
-            });
+            duplicates.push(DuplicateKeyValue { value, room_ids: matched.iter().map(|r| r.room.id.clone()).collect() });
         } else {
             index.insert(value, matched[0]);
         }
@@ -242,9 +237,7 @@ fn values_agree(a: &str, b: &str, source: Option<&str>, field_cfg: Option<&Refer
         // declared a date, or it is and a side failed to parse. Both land on the
         // string rungs below, the same "declaration is a hint, not truth"
         // contract as QA.
-        if let Some(fmt) = field_cfg
-            .filter(|f| f.field_type == FieldType::Date)
-            .and_then(|f| f.format.as_deref())
+        if let Some(fmt) = field_cfg.filter(|f| f.field_type == FieldType::Date).and_then(|f| f.format.as_deref())
             && let Some(same_instant) = date_match(a, b, fmt, fmt)
         {
             return same_instant;
@@ -318,10 +311,9 @@ fn diff_room(
                     unjoined_sources.push(ns);
                 }
             }
-            (_, PropertyPresence::Absent) => missing_properties.push(MissingProperty {
-                property: property.clone(),
-                baseline_value,
-            }),
+            (_, PropertyPresence::Absent) => {
+                missing_properties.push(MissingProperty { property: property.clone(), baseline_value })
+            }
             (_, PropertyPresence::Empty) => differences.push(PropertyDifference {
                 property: property.clone(),
                 baseline_value,
@@ -329,11 +321,7 @@ fn diff_room(
             }),
             (_, PropertyPresence::Present(other_value)) => {
                 if !values_agree(&baseline_value, &other_value, source.as_deref(), cfg) {
-                    differences.push(PropertyDifference {
-                        property: property.clone(),
-                        baseline_value,
-                        other_value,
-                    });
+                    differences.push(PropertyDifference { property: property.clone(), baseline_value, other_value });
                 }
             }
         }
@@ -397,9 +385,7 @@ pub fn compare_milestones(
     // Baseline once; its index and duplicates are shared across every compared
     // milestone. `assemble_rooms` returns None only when the store is entirely
     // empty — an empty room set for comparison purposes.
-    let baseline_rooms = assemble_rooms(state, &scope(project, baseline))?
-        .map(|r| r.rooms)
-        .unwrap_or_default();
+    let baseline_rooms = assemble_rooms(state, &scope(project, baseline))?.map(|r| r.rooms).unwrap_or_default();
     let (baseline_index, baseline_duplicates) = index_by_key(&baseline_rooms, &key_prop, &known, builtin);
 
     let mut comparisons = Vec::new();
@@ -408,24 +394,16 @@ pub fn compare_milestones(
             continue; // a milestone compared against itself has nothing to show
         }
 
-        let other_rooms = assemble_rooms(state, &scope(project, other))?
-            .map(|r| r.rooms)
-            .unwrap_or_default();
+        let other_rooms = assemble_rooms(state, &scope(project, other))?.map(|r| r.rooms).unwrap_or_default();
         let (other_index, other_duplicates) = index_by_key(&other_rooms, &key_prop, &known, builtin);
 
         // Added = in other, not baseline. Removed = in baseline, not other.
         // Duplicated keys are absent from both indexes, so they're already
         // excluded from these diffs (the same exclusion validation applies).
-        let rooms_added: Vec<String> = other_index
-            .keys()
-            .filter(|k| !baseline_index.contains_key(*k))
-            .cloned()
-            .collect();
-        let rooms_removed: Vec<String> = baseline_index
-            .keys()
-            .filter(|k| !other_index.contains_key(*k))
-            .cloned()
-            .collect();
+        let rooms_added: Vec<String> =
+            other_index.keys().filter(|k| !baseline_index.contains_key(*k)).cloned().collect();
+        let rooms_removed: Vec<String> =
+            baseline_index.keys().filter(|k| !other_index.contains_key(*k)).cloned().collect();
 
         // Rooms in both: compare their comparable properties. Field configs
         // are looked up per resolved source (`field_config`), not just
@@ -473,7 +451,13 @@ mod tests {
         for (k, v) in props {
             properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
         }
-        Room { id: id.to_string(), name: id.to_string(), level_id: "1".to_string(), loops: vec![], properties }
+        Room {
+            id: id.to_string(),
+            name: id.to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            properties,
+        }
     }
 
     fn milestone(name: &str, model_id: &str, taken_at: &str) -> Milestone {
@@ -541,7 +525,11 @@ mod tests {
     /// `make_bundle`, carrying `data` and, if any, `fields` — the test-side
     /// equivalent of what `bootstrap::load_project_bundle` wires up for the
     /// one source name the read path currently recognises.
-    fn set_drofus(bundle: &mut ProjectSettings, data: crate::reference::ReferenceData, fields: Vec<ReferenceFieldConfig>) {
+    fn set_drofus(
+        bundle: &mut ProjectSettings,
+        data: crate::reference::ReferenceData,
+        fields: Vec<ReferenceFieldConfig>,
+    ) {
         bundle
             .reference
             .insert("drofus".to_string(), crate::state::ProjectReferenceSource { data: Some(data), fields });
@@ -602,16 +590,24 @@ mod tests {
 
         // Baseline (Number is the match key):
         //  R1: Area 10, Dept Cardio   R2: Area 20   (R2 only in baseline → removed)
-        let base = payload_at("m1", base_ts, vec![
-            make_room("r1", &[("Number", "101"), ("Area", "10"), ("Dept", "Cardio")]),
-            make_room("r2", &[("Number", "102"), ("Area", "20")]),
-        ]);
+        let base = payload_at(
+            "m1",
+            base_ts,
+            vec![
+                make_room("r1", &[("Number", "101"), ("Area", "10"), ("Dept", "Cardio")]),
+                make_room("r2", &[("Number", "102"), ("Area", "20")]),
+            ],
+        );
         // Later:
         //  R1: Area 15 (changed), Dept absent (missing)   R3: new (added)
-        let later = payload_at("m1", later_ts, vec![
-            make_room("r1b", &[("Number", "101"), ("Area", "15")]),
-            make_room("r3", &[("Number", "103"), ("Area", "30")]),
-        ]);
+        let later = payload_at(
+            "m1",
+            later_ts,
+            vec![
+                make_room("r1b", &[("Number", "101"), ("Area", "15")]),
+                make_room("r3", &[("Number", "103"), ("Area", "30")]),
+            ],
+        );
         state.set_snapshot(base).unwrap();
         state.set_snapshot(later).unwrap();
 
@@ -652,8 +648,12 @@ mod tests {
         );
         let (state, dir) = state_with(bundle, "numeric");
 
-        state.set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "1"), ("Area", "10")])])).unwrap();
-        state.set_snapshot(payload_at("m1", later_ts, vec![make_room("r1", &[("Number", "1"), ("Area", "10.0")])])).unwrap();
+        state
+            .set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "1"), ("Area", "10")])]))
+            .unwrap();
+        state
+            .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1", &[("Number", "1"), ("Area", "10.0")])]))
+            .unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
         assert!(result.comparisons[0].changed_rooms.is_empty(), "10 and 10.0 agree numerically");
@@ -675,13 +675,19 @@ mod tests {
         let (state, dir) = state_with(bundle, "dup");
 
         // Two baseline rooms share Number 101 → ambiguous.
-        state.set_snapshot(payload_at("m1", base_ts, vec![
-            make_room("r1", &[("Number", "101"), ("Area", "10")]),
-            make_room("r2", &[("Number", "101"), ("Area", "20")]),
-        ])).unwrap();
-        state.set_snapshot(payload_at("m1", later_ts, vec![
-            make_room("r1", &[("Number", "101"), ("Area", "99")]),
-        ])).unwrap();
+        state
+            .set_snapshot(payload_at(
+                "m1",
+                base_ts,
+                vec![
+                    make_room("r1", &[("Number", "101"), ("Area", "10")]),
+                    make_room("r2", &[("Number", "101"), ("Area", "20")]),
+                ],
+            ))
+            .unwrap();
+        state
+            .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1", &[("Number", "101"), ("Area", "99")])]))
+            .unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
 
@@ -726,8 +732,12 @@ mod tests {
         state
             .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])]))
             .unwrap();
-        state.put_reference("p1", "drofus", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n").unwrap();
-        state.put_reference("p1", "drofus", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n").unwrap();
+        state
+            .put_reference("p1", "drofus", d_base, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,20\n")
+            .unwrap();
+        state
+            .put_reference("p1", "drofus", d_later, b"DrofusRoomId,NetArea\nNumber,NetArea\n101,25\n")
+            .unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
 
@@ -758,15 +768,15 @@ mod tests {
         );
         // Link property (DKey) is distinct from the comparison key (Number):
         // the baseline room carries a link value, the later one lost it.
-        set_drofus(&mut bundle, drofus_data("DKey", &[("d1", &[("NetArea", "20"), ("Dept", "Admin")])]), vec![]);
+        set_drofus(
+            &mut bundle,
+            drofus_data("DKey", &[("d1", &[("NetArea", "20"), ("Dept", "Admin")])]),
+            vec![],
+        );
         let (state, dir) = state_with(bundle, "unjoined");
 
         state
-            .set_snapshot(payload_at(
-                "m1",
-                base_ts,
-                vec![make_room("r1", &[("Number", "101"), ("DKey", "d1")])],
-            ))
+            .set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101"), ("DKey", "d1")])]))
             .unwrap();
         state
             .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])]))
@@ -805,11 +815,7 @@ mod tests {
             .set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101")])]))
             .unwrap();
         state
-            .set_snapshot(payload_at(
-                "m1",
-                later_ts,
-                vec![make_room("r1b", &[("Number", "101"), ("DKey", "d1")])],
-            ))
+            .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101"), ("DKey", "d1")])]))
             .unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
@@ -964,21 +970,39 @@ mod tests {
         );
         let (state, dir) = state_with(bundle, "date-drift");
 
-        state.set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101")])])).unwrap();
-        state.set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])])).unwrap();
-        // Same instant, two offsets: +10:00 local vs the same moment in UTC.
         state
-            .put_reference("p1", "drofus", d_base, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n")
+            .set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101")])]))
             .unwrap();
         state
-            .put_reference("p1", "drofus", d_later, b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n")
+            .set_snapshot(payload_at("m1", later_ts, vec![make_room("r1b", &[("Number", "101")])]))
+            .unwrap();
+        // Same instant, two offsets: +10:00 local vs the same moment in UTC.
+        state
+            .put_reference(
+                "p1",
+                "drofus",
+                d_base,
+                b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 19:00:00+1000\n",
+            )
+            .unwrap();
+        state
+            .put_reference(
+                "p1",
+                "drofus",
+                d_later,
+                b"DrofusRoomId,LastSync\nNumber,LastSync\n101,2026-06-29 09:00:00+0000\n",
+            )
             .unwrap();
 
         let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
         let reported: Vec<String> = result.comparisons[0]
             .changed_rooms
             .iter()
-            .flat_map(|c| c.differences.iter().map(|d| format!("{}: {} -> {}", d.property, d.baseline_value, d.other_value)))
+            .flat_map(|c| {
+                c.differences
+                    .iter()
+                    .map(|d| format!("{}: {} -> {}", d.property, d.baseline_value, d.other_value))
+            })
             .collect();
         assert!(reported.is_empty(), "two renderings of one instant are not a change, got {reported:?}");
 

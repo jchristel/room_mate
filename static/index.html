@@ -1761,6 +1761,21 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+// A reference-source name as a CSS class token. Source names come from the
+// operator's settings file, so they are free text: `src-${name}` interpolated
+// raw into a `class="..."` attribute let a name containing a quote close the
+// attribute, and one containing a space silently became two classes.
+//
+// Escaping is the wrong tool here — `&quot;` keeps the attribute intact but
+// yields a class no CSS rule can select. A class only has to be a stable,
+// selector-safe token, so anything outside `[A-Za-z0-9_-]` becomes `_`.
+// Two sources can collide in principle (`a.b` and `a-b` both give `a_b`) and
+// it does not matter: the class only drives colour banding, while `data-key`
+// — which addresses a column — carries the exact name, escaped.
+function cssIdent(s) {
+  return String(s).replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
 function renderFieldCoverage(coverage) {
   if (!coverage || coverage.length === 0) return "";
   return `<section><h3>Field coverage (${coverage.length})</h3><ul>${coverage.map(c =>
@@ -2874,18 +2889,18 @@ function renderGridHead(cols) {
   const refCls = (source) => source !== "model" ? " src-reference" : "";
 
   const groupRow = groups.map(g =>
-    `<th class="group-cell src-${g.source}${refCls(g.source)}" colspan="${g.span}"><span>${g.source === "model" ? "Model" : escapeHtml(sourceDisplayName(g.source))}</span></th>`
+    `<th class="group-cell src-${cssIdent(g.source)}${refCls(g.source)}" colspan="${g.span}"><span>${g.source === "model" ? "Model" : escapeHtml(sourceDisplayName(g.source))}</span></th>`
   ).join("");
 
   const nameRow = cols.map(c => {
     const sorted = gridSort.key === c.key ? ` sorted${gridSort.asc ? " asc" : ""}` : "";
     const unmapped = c.unmapped ? " unmapped" : "";
     const title = c.unmapped ? ` title="${escapeHtml(c.label)} — no Revit property mapped (not QA-checked)"` : "";
-    return `<th class="src-${c.source}${refCls(c.source)}${sorted}${unmapped}" data-key="${escapeHtml(c.key)}"${title}>${escapeHtml(c.label)}</th>`;
+    return `<th class="src-${cssIdent(c.source)}${refCls(c.source)}${sorted}${unmapped}" data-key="${escapeHtml(c.key)}"${title}>${escapeHtml(c.label)}</th>`;
   }).join("");
 
   const filterRow = cols.map(c =>
-    `<th class="src-${c.source}${refCls(c.source)}"><input data-key="${escapeHtml(c.key)}" value="${escapeHtml(gridFilters.get(c.key) || "")}" placeholder="filter" /></th>`
+    `<th class="src-${cssIdent(c.source)}${refCls(c.source)}"><input data-key="${escapeHtml(c.key)}" value="${escapeHtml(gridFilters.get(c.key) || "")}" placeholder="filter" /></th>`
   ).join("");
 
   thead.innerHTML = `<tr class="group">${groupRow}</tr><tr class="names">${nameRow}</tr><tr id="gridFilters">${filterRow}</tr>`;
@@ -2924,7 +2939,7 @@ function renderGridBody(cols) {
       // `rebuildGridErrorIndex`.
       const bad = gridCellErrors.has(`${room.id}\0${c.key}`) || (c.key === "$id" && roomBad);
       const refCls = c.source !== "model" ? " src-reference" : "";
-      return `<td class="src-${c.source}${refCls}${bad ? " err" : ""}" title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
+      return `<td class="src-${cssIdent(c.source)}${refCls}${bad ? " err" : ""}" title="${escapeHtml(v)}">${escapeHtml(v)}</td>`;
     }).join("");
     parts.push(`<tr data-room="${escapeHtml(room.id)}" style="height:${GRID_ROW_H}px">${cells}</tr>`);
   }
@@ -3213,7 +3228,7 @@ function inspSection(host, title, entries, { source = null } = {}) {
   h.textContent = title;
   host.appendChild(h);
   const rows = document.createElement("div");
-  rows.className = "insp-rows" + (source ? ` src-${source}${source !== "model" ? " src-reference" : ""}` : "");
+  rows.className = "insp-rows" + (source ? ` src-${cssIdent(source)}${source !== "model" ? " src-reference" : ""}` : "");
   for (const [k, v] of entries) inspRow(rows, k, v);
   host.appendChild(rows);
   return entries.length;

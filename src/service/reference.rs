@@ -104,7 +104,8 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
-            hierarchy_exclusions: vec![],        };
+            hierarchy_exclusions: vec![],
+        };
         let registry = std::collections::HashMap::from([("p1".to_string(), bundle)]);
         AppState::new(Box::new(MemStore::new()), registry, None)
     }
@@ -143,10 +144,14 @@ mod tests {
         assert_eq!(info.link_property, "Number");
         assert_eq!(info.labels, vec!["NetArea".to_string()]);
 
-        let by_id = get_reference_snapshot(&state, "p1", "drofus", Some("2026-01-01T10:00:00Z")).unwrap().unwrap();
+        let by_id = get_reference_snapshot(&state, "p1", "drofus", Some("2026-01-01T10:00:00Z"))
+            .unwrap()
+            .unwrap();
         assert_eq!(by_id.record_count, 2);
 
-        assert!(get_reference_snapshot(&state, "p1", "drofus", Some("2026-02-01T10:00:00Z")).unwrap().is_none());
+        assert!(get_reference_snapshot(&state, "p1", "drofus", Some("2026-02-01T10:00:00Z"))
+            .unwrap()
+            .is_none());
         assert!(get_reference_snapshot(&state, "ghost", "drofus", None).unwrap().is_none());
     }
 }

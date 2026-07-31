@@ -138,9 +138,7 @@
 use std::collections::BTreeMap;
 
 use geo::algorithm::buffer::{BufferStyle, LineJoin};
-use geo::{
-    Area, BooleanOps, BoundingRect, Buffer, Coord, Distance, Euclidean, LineString, MultiPolygon, Polygon,
-};
+use geo::{Area, BooleanOps, BoundingRect, Buffer, Coord, Distance, Euclidean, LineString, MultiPolygon, Polygon};
 use serde::Serialize;
 
 use crate::classify::TierValue;
@@ -411,7 +409,8 @@ fn sharpen_bevels(ring: &LineString<f64>, dirs: &[f64], scale_ft: f64) -> LineSt
     let closed = raw.len() >= 2 && raw.first() == raw.last();
     let mut pts: Vec<Coord<f64>> = if closed { raw[..raw.len() - 1].to_vec() } else { raw.to_vec() };
 
-    let same = |p: &Coord<f64>, q: &Coord<f64>| (p.x - q.x).abs() <= COLLINEAR_EPS_FT && (p.y - q.y).abs() <= COLLINEAR_EPS_FT;
+    let same =
+        |p: &Coord<f64>, q: &Coord<f64>| (p.x - q.x).abs() <= COLLINEAR_EPS_FT && (p.y - q.y).abs() <= COLLINEAR_EPS_FT;
     let is_real_dir = |p: Coord<f64>, q: Coord<f64>| match dir_angle(p, q) {
         Some(a) => dirs.iter().any(|&d| angular_diff(a, d) <= DIR_TOL_RAD),
         None => true, // degenerate edge — nothing to sharpen
@@ -605,7 +604,8 @@ fn resolve_sibling_overlaps(groups: &mut [(Vec<TierValue>, MultiPolygon<f64>)]) 
             // other, and this keeps the pass off the expensive boolean path.
             match (boxes[i], boxes[j]) {
                 (Some(a), Some(b)) => {
-                    if a.max().x < b.min().x || b.max().x < a.min().x || a.max().y < b.min().y || b.max().y < a.min().y {
+                    if a.max().x < b.min().x || b.max().x < a.min().x || a.max().y < b.min().y || b.max().y < a.min().y
+                    {
                         continue;
                     }
                 }
@@ -749,7 +749,12 @@ fn level_groups(
     results
 }
 
-fn emit(level_id: &str, path: Vec<TierValue>, footprint: &MultiPolygon<f64>, exclusions: &[HierarchyExclusion]) -> AreaGroup {
+fn emit(
+    level_id: &str,
+    path: Vec<TierValue>,
+    footprint: &MultiPolygon<f64>,
+    exclusions: &[HierarchyExclusion],
+) -> AreaGroup {
     let counted_upward = !is_group_excluded(&path, exclusions);
     AreaGroup {
         level_id: level_id.to_string(),
@@ -776,8 +781,7 @@ fn is_group_excluded(path: &[TierValue], exclusions: &[HierarchyExclusion]) -> b
     exclusions.iter().any(|e| match e {
         HierarchyExclusion::Group { tier, value } => {
             tier == &last.tier
-                && (last.code.as_deref() == Some(value.as_str())
-                    || last.name.as_deref() == Some(value.as_str()))
+                && (last.code.as_deref() == Some(value.as_str()) || last.name.as_deref() == Some(value.as_str()))
         }
         HierarchyExclusion::Rooms { .. } => false,
     })
@@ -863,7 +867,11 @@ impl From<AreaGroup> for AreaGroupResponse {
 /// Drop a ring's closing point (the viewer re-closes) and project to `[x, y]`.
 fn ring_coords(ring: &LineString<f64>) -> Vec<[f64; 2]> {
     let pts = &ring.0;
-    let n = if pts.len() >= 2 && pts.first() == pts.last() { pts.len() - 1 } else { pts.len() };
+    let n = if pts.len() >= 2 && pts.first() == pts.last() {
+        pts.len() - 1
+    } else {
+        pts.len()
+    };
     pts[..n].iter().map(|c| [c.x, c.y]).collect()
 }
 
@@ -916,8 +924,12 @@ fn warn_on_regime_contradiction(
     }
 
     for (level_id, polys) in by_level {
-        let Some(declared) = boundary_by_level.get(level_id) else { continue };
-        let Some(share) = coincident_share(&polys) else { continue };
+        let Some(declared) = boundary_by_level.get(level_id) else {
+            continue;
+        };
+        let Some(share) = coincident_share(&polys) else {
+            continue;
+        };
         let measured = if share >= COINCIDENT_SHARE_FOR_CENTRELINE {
             RoomBoundary::Centreline
         } else {
@@ -1092,9 +1104,7 @@ mod tests {
             level_id: "L1".to_string(),
             loops: loops
                 .iter()
-                .map(|pts| Loop {
-                    points: pts.iter().map(|&(x, y)| Point2D { x, y }).collect(),
-                })
+                .map(|pts| Loop { points: pts.iter().map(|&(x, y)| Point2D { x, y }).collect() })
                 .collect(),
             properties: Default::default(),
         }
@@ -1118,7 +1128,12 @@ mod tests {
     // ---- Phase 2 helpers ----
 
     fn tv(tier: &str, name: &str) -> TierValue {
-        TierValue { tier: tier.to_string(), code: None, name: Some(name.to_string()), undefined: false }
+        TierValue {
+            tier: tier.to_string(),
+            code: None,
+            name: Some(name.to_string()),
+            undefined: false,
+        }
     }
 
     fn undef(tier: &str) -> TierValue {
@@ -1147,8 +1162,14 @@ mod tests {
         // DeptA = two adjacent rooms (area 200); DeptB = one room (area 100).
         let rooms = [
             (croom("a1", "L1", rect(0.0, 0.0, 10.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "A")]),
-            (croom("a2", "L1", rect(10.0, 0.0, 20.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "A")]),
-            (croom("b1", "L1", rect(20.0, 0.0, 30.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "B")]),
+            (
+                croom("a2", "L1", rect(10.0, 0.0, 20.0, 10.0)),
+                vec![tv("Building", "B1"), tv("Dept", "A")],
+            ),
+            (
+                croom("b1", "L1", rect(20.0, 0.0, 30.0, 10.0)),
+                vec![tv("Building", "B1"), tv("Dept", "B")],
+            ),
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
         let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(WALL_FT));
@@ -1184,7 +1205,7 @@ mod tests {
         approx_area(a, 700.0);
         approx_area(b, 100.0);
         approx_area(building_grp.area, 800.0); // courtyard (100) EXCLUDED
-        // Additive now: the building is exactly its two departments, no filled void.
+                                               // Additive now: the building is exactly its two departments, no filled void.
         assert!((building_grp.area - (a + b)).abs() < 2.0, "building = Σ children (courtyard not claimed)");
         // The building footprint carries the courtyard as an open interior ring.
         assert_eq!(building_grp.footprint.0.len(), 1, "one island");
@@ -1322,8 +1343,7 @@ mod tests {
         ];
 
         let measure = |rooms: &[(Room, Vec<TierValue>)], gap: f64| {
-            let cls: Vec<ClassifiedRoom> =
-                rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
+            let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
             let g = hierarchy_area_groups(&cls, &[], &LevelGaps::uniform(gap));
             (
                 group(&g, "L1", &path_a).area,
@@ -1414,7 +1434,10 @@ mod tests {
     #[test]
     fn test_undefined_bucket_is_a_real_group() {
         let rooms = [
-            (croom("known", "L1", rect(0.0, 0.0, 10.0, 10.0)), vec![tv("Building", "B1"), tv("Dept", "A")]),
+            (
+                croom("known", "L1", rect(0.0, 0.0, 10.0, 10.0)),
+                vec![tv("Building", "B1"), tv("Dept", "A")],
+            ),
             (croom("unk", "L1", rect(10.0, 0.0, 20.0, 10.0)), vec![tv("Building", "B1"), undef("Dept")]),
         ];
         let cls: Vec<ClassifiedRoom> = rooms.iter().map(|(r, p)| ClassifiedRoom { room: r, path: p }).collect();
@@ -1566,17 +1589,14 @@ mod tests {
             return true;
         }
         let n = p.len() - 1; // edge count on a closed ring
-        let cross = |o: Coord<f64>, a: Coord<f64>, b: Coord<f64>| {
-            (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
-        };
+        let cross = |o: Coord<f64>, a: Coord<f64>, b: Coord<f64>| (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
         // Proper crossing only: rings legitimately touch at shared endpoints, and
         // a collinear overlap is what `dedup_collinear` is for, not a crossing.
         let crosses = |i: usize, j: usize| {
             let (a, b, c, d) = (p[i], p[i + 1], p[j], p[j + 1]);
             let (d1, d2) = (cross(a, b, c), cross(a, b, d));
             let (d3, d4) = (cross(c, d, a), cross(c, d, b));
-            (d1 > 0.0) != (d2 > 0.0) && (d1 != 0.0 && d2 != 0.0)
-                && (d3 > 0.0) != (d4 > 0.0) && (d3 != 0.0 && d4 != 0.0)
+            (d1 > 0.0) != (d2 > 0.0) && (d1 != 0.0 && d2 != 0.0) && (d3 > 0.0) != (d4 > 0.0) && (d3 != 0.0 && d4 != 0.0)
         };
         for i in 0..n {
             // Skip the previous, same and next edge — those share an endpoint.
@@ -1617,10 +1637,13 @@ mod tests {
     /// repairs what the close would otherwise chip.
     #[test]
     fn test_dissolved_block_has_sharp_corners() {
-        let fp = group_footprint(&[
-            room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
-            room("b", &[&rect(10.0, 0.0, 20.0, 10.0)]),
-        ], WALL_FT);
+        let fp = group_footprint(
+            &[
+                room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
+                room("b", &[&rect(10.0, 0.0, 20.0, 10.0)]),
+            ],
+            WALL_FT,
+        );
         assert_eq!(fp.0.len(), 1);
         assert_eq!(corner_count(&fp.0[0]), 4, "merged 20x10 block has exactly four corners");
         approx_area(footprint_area(&fp), 200.0);
@@ -1644,10 +1667,13 @@ mod tests {
     /// bridges walls, never a corridor-width gap.
     #[test]
     fn test_two_disjoint_clusters_keep_two_islands() {
-        let fp = group_footprint(&[
-            room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
-            room("b", &[&rect(20.0, 0.0, 30.0, 10.0)]), // 10 ft gap
-        ], WALL_FT);
+        let fp = group_footprint(
+            &[
+                room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
+                room("b", &[&rect(20.0, 0.0, 30.0, 10.0)]), // 10 ft gap
+            ],
+            WALL_FT,
+        );
         assert_eq!(fp.0.len(), 2, "a 10 ft gap is not a wall — islands stay separate");
         approx_area(footprint_area(&fp), 200.0);
     }
@@ -1655,10 +1681,13 @@ mod tests {
     /// Two rooms sharing an edge (centreline) dissolve to one solid island.
     #[test]
     fn test_adjacent_rooms_dissolve_no_sliver() {
-        let fp = group_footprint(&[
-            room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
-            room("b", &[&rect(10.0, 0.0, 20.0, 10.0)]),
-        ], WALL_FT);
+        let fp = group_footprint(
+            &[
+                room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
+                room("b", &[&rect(10.0, 0.0, 20.0, 10.0)]),
+            ],
+            WALL_FT,
+        );
         assert_eq!(fp.0.len(), 1, "adjacent rooms merge into one polygon");
         assert!(fp.0[0].interiors().is_empty(), "no enclosed sliver");
         approx_area(footprint_area(&fp), 200.0);
@@ -1670,10 +1699,13 @@ mod tests {
     /// is the two rooms PLUS the wall, not two disjoint islands.
     #[test]
     fn test_face_of_wall_rooms_dissolve_and_fill_wall() {
-        let fp = group_footprint(&[
-            room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
-            room("b", &[&rect(10.5, 0.0, 20.5, 10.0)]), // 0.5 ft wall gap
-        ], WALL_FT);
+        let fp = group_footprint(
+            &[
+                room("a", &[&rect(0.0, 0.0, 10.0, 10.0)]),
+                room("b", &[&rect(10.5, 0.0, 20.5, 10.0)]), // 0.5 ft wall gap
+            ],
+            WALL_FT,
+        );
         assert_eq!(fp.0.len(), 1, "a wall-width gap bridges into one footprint");
         assert!(fp.0[0].interiors().is_empty(), "the wall band is filled, not a hole");
         approx_area(footprint_area(&fp), 205.0); // 100 + 100 + 0.5*10 wall
@@ -1686,7 +1718,14 @@ mod tests {
         let storage = rect(0.0, 10.0, 15.0, 20.0); // top-left
         let hall = rect(15.0, 10.0, 24.0, 20.0); // top-right
         let stair = rect(0.0, 0.0, 24.0, 10.0); // full-width bottom
-        let fp = group_footprint(&[room("storage", &[&storage]), room("hall", &[&hall]), room("stair", &[&stair])], WALL_FT);
+        let fp = group_footprint(
+            &[
+                room("storage", &[&storage]),
+                room("hall", &[&hall]),
+                room("stair", &[&stair]),
+            ],
+            WALL_FT,
+        );
 
         assert_eq!(fp.0.len(), 1, "three connected rooms -> one polygon");
         assert!(fp.0[0].interiors().is_empty());
@@ -1734,14 +1773,21 @@ mod tests {
         let out = sharpen_bevels(&beveled, &axis, WALL_FT);
         let d = &out.0[..out.0.len() - 1];
         assert_eq!(d.len(), 4, "the 45° chord collapses to one sharp corner, any size");
-        assert!(d.iter().any(|c| (c.x - 10.0).abs() < 1e-6 && (c.y - 10.0).abs() < 1e-6), "corner restored at (10,10)");
+        assert!(
+            d.iter().any(|c| (c.x - 10.0).abs() < 1e-6 && (c.y - 10.0).abs() < 1e-6),
+            "corner restored at (10,10)"
+        );
 
         // The SAME diagonal chord, but now the input genuinely had that direction
         // (a splayed / rotated building): it must be kept, not sharpened.
         let diag_dir = dir_angle(Coord { x: 10.0, y: 6.0 }, Coord { x: 6.0, y: 10.0 }).unwrap();
         let dirs_with_diag = [0.0, PI / 2.0, diag_dir];
         let out = sharpen_bevels(&beveled, &dirs_with_diag, WALL_FT);
-        assert_eq!(out.0[..out.0.len() - 1].len(), 5, "a real diagonal wall (direction in the input) is preserved");
+        assert_eq!(
+            out.0[..out.0.len() - 1].len(),
+            5,
+            "a real diagonal wall (direction in the input) is preserved"
+        );
     }
 
     /// **Regression: the million-foot spike.** A short odd-angled edge whose two
@@ -1759,8 +1805,8 @@ mod tests {
         // (an "invented" direction), which is what invites the sharpen.
         let ring = LineString::from(vec![
             (0.0, 0.0),
-            (20.0, 0.0),      // b : end of flank 1
-            (20.05, 10.0),    // c : start of flank 2 (near-parallel to flank 1)
+            (20.0, 0.0),   // b : end of flank 1
+            (20.05, 10.0), // c : start of flank 2 (near-parallel to flank 1)
             (0.0, 10.02),
             (0.0, 0.0),
         ]);
@@ -1791,7 +1837,10 @@ mod tests {
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for r in &rooms {
             for p in &r.loops[0].points {
-                x0 = x0.min(p.x); y0 = y0.min(p.y); x1 = x1.max(p.x); y1 = y1.max(p.y);
+                x0 = x0.min(p.x);
+                y0 = y0.min(p.y);
+                x1 = x1.max(p.x);
+                y1 = y1.max(p.y);
             }
         }
         let slack = WALL_FT;
@@ -1828,12 +1877,15 @@ mod tests {
     #[test]
     fn test_ring_of_rooms_keeps_courtyard_open() {
         // A 30x30 outer square as a 10-wide frame of four rooms around a 10x10 void.
-        let fp = group_footprint(&[
-            room("bottom", &[&rect(0.0, 0.0, 30.0, 10.0)]),
-            room("top", &[&rect(0.0, 20.0, 30.0, 30.0)]),
-            room("left", &[&rect(0.0, 10.0, 10.0, 20.0)]),
-            room("right", &[&rect(20.0, 10.0, 30.0, 20.0)]),
-        ], WALL_FT);
+        let fp = group_footprint(
+            &[
+                room("bottom", &[&rect(0.0, 0.0, 30.0, 10.0)]),
+                room("top", &[&rect(0.0, 20.0, 30.0, 30.0)]),
+                room("left", &[&rect(0.0, 10.0, 10.0, 20.0)]),
+                room("right", &[&rect(20.0, 10.0, 30.0, 20.0)]),
+            ],
+            WALL_FT,
+        );
         assert_eq!(fp.0.len(), 1, "the frame dissolves to one outer ring");
         assert_eq!(fp.0[0].interiors().len(), 1, "the 10 ft courtyard survives as an open hole");
         approx_area(footprint_area(&fp), 800.0); // 30*30 minus the 10x10 courtyard
@@ -1847,12 +1899,15 @@ mod tests {
     fn test_narrow_wall_fills_wide_void_stays_open() {
         // Four bars around a 10x10 courtyard, each bar 0.5 ft short of its
         // neighbours so the four corners are wall gaps, not shared edges.
-        let fp = group_footprint(&[
-            room("bottom", &[&rect(0.0, 0.0, 30.0, 10.0)]),
-            room("top", &[&rect(0.0, 20.0, 30.0, 30.0)]),
-            room("left", &[&rect(0.0, 10.5, 10.0, 19.5)]), // 0.5 gap top & bottom
-            room("right", &[&rect(20.0, 10.5, 30.0, 19.5)]),
-        ], WALL_FT);
+        let fp = group_footprint(
+            &[
+                room("bottom", &[&rect(0.0, 0.0, 30.0, 10.0)]),
+                room("top", &[&rect(0.0, 20.0, 30.0, 30.0)]),
+                room("left", &[&rect(0.0, 10.5, 10.0, 19.5)]), // 0.5 gap top & bottom
+                room("right", &[&rect(20.0, 10.5, 30.0, 19.5)]),
+            ],
+            WALL_FT,
+        );
         assert_eq!(fp.0.len(), 1, "corner wall gaps bridge into one frame");
         assert_eq!(fp.0[0].interiors().len(), 1, "the courtyard stays open");
         let bare_bars = 300.0 + 300.0 + 90.0 + 90.0; // 780, no corner walls
@@ -1878,8 +1933,16 @@ mod tests {
             ProjectSettings {
                 reference: BTreeMap::new(),
                 hierarchy: vec![
-                    HierarchyTier { name: "Building".to_string(), code_property: None, name_property: Some("bldg".to_string()) },
-                    HierarchyTier { name: "Dept".to_string(), code_property: None, name_property: Some("dept".to_string()) },
+                    HierarchyTier {
+                        name: "Building".to_string(),
+                        code_property: None,
+                        name_property: Some("bldg".to_string()),
+                    },
+                    HierarchyTier {
+                        name: "Dept".to_string(),
+                        code_property: None,
+                        name_property: Some("dept".to_string()),
+                    },
                 ],
                 builtin_properties: vec![],
                 room_label: vec!["$name".to_string()],
