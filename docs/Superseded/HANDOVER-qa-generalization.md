@@ -1,5 +1,17 @@
 # Handover: generalizing QA across reference sources
 
+> **Superseded by [`HANDOVER-qa-cardinality-and-coverage.md`](../HANDOVER-qa-cardinality-and-coverage.md).**
+> Section 3 (per-source response shape) and section 4 (sweep the consumers) are
+> **built**. Section 2 (`qa = "none"`) needed nothing — `CompareMode::Ignore`
+> already did exactly that under a different name. Only section 1 (link
+> cardinality) survives, together with the parenthetical in check 1 about the
+> unmatched *direction*, which turned out to be the sharpest observation here
+> and is still unimplemented. Both moved to the successor doc.
+>
+> Kept for the reasoning, not the plan. **The line below saying nothing is
+> implemented is no longer true** — treat everything past this banner as a
+> record of how the design was arrived at.
+
 Companion to `HANDOVER-reference-sources.md`. That doc covers moving from a single
 hardcoded dRofus reference source to a keyed collection of reference sources. **This
 doc covers the QA consequence of that change.** Nothing implemented yet — design only.
