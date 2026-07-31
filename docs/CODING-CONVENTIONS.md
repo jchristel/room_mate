@@ -161,10 +161,27 @@ are all diagnostic signals, not errors.
   this seam, why this fallback, what would break otherwise) — the thing a future
   reader can't recover from the code alone.
 
-## TOML footgun (serialize side)
-- A scalar struct field serialized *after* a map/sub-table field lands inside
-  that `[table]`, not the parent. Declare scalar fields **before** any
-  map/sub-table field in the struct (e.g. `Milestone.name`/`date` before
-  `reference_snapshots` and `attachments`) so the round-trip through the
-  settings API stays correct. Note this bites harder now that `Milestone` has
-  *two* map fields: every scalar must precede both.
+## TOML footgun (serialize side) — now guarded, not live
+- **The rule stays: declare scalar and inline-array fields before any
+  map/`Vec<Struct>` field** (e.g. `Milestone.name`/`date` before
+  `reference_snapshots` and `attachments`; every scalar must precede *both* of
+  those). Free to follow, and it is the shape the structs already have.
+- **But it no longer bites, and that was worth measuring.** The hazard is that a
+  value emitted *after* a `[table]` header parses back as a key inside that
+  table — the value survives, it just moves, which is why round-trip tests that
+  compare values cannot see it. Under `toml 0.8` the serializer emits **all**
+  value-typed fields before any table regardless of declaration order, so the
+  hazard is currently unreachable. Verified against both write paths
+  (`settings_api::save_project` and `FsStore::write_manifest`, both
+  `to_string_pretty`) and against `to_string`.
+- **`settings_api::tests::test_toml_serializer_hoists_values_above_tables` is
+  the guard.** It serializes a struct declared in deliberately the wrong order
+  and asserts the values still land top level, so the day a `toml` upgrade, a
+  move to `toml_edit`, or a hand-rolled writer restores source-order emission,
+  it fails *before* settings files start being written wrong.
+  `test_project_manifest_scalars_stay_top_level` does the same for
+  `project.toml`, whose corruption fails every read and the next boot while the
+  snapshots beside it stay intact.
+- The reason to keep both the rule and the test: a discipline nothing measures
+  is one nobody can tell has stopped being necessary — and, worse, one nobody
+  notices has started being necessary again.

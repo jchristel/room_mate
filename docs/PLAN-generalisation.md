@@ -1,9 +1,33 @@
 # RoomMate — Generalisation plan
 
-**Status: proposed, not started.** Four structural items surfaced by reviewing
-the codebase after phasing shipped. Each is a generalisation the codebase
-deferred one entity too long; none is a defect today, and all four become
-blocking the moment a second primary entity (doors, then FFE) arrives.
+**Status: R3 done. R1, R2 and R4 are prerequisites for doors — see
+[The line in the sand](#the-line-in-the-sand).** Four structural items surfaced
+by reviewing the codebase after phasing shipped. Each is a generalisation the
+codebase deferred one entity too long; none is a defect today, and three of the
+four become blocking the moment a second primary entity (doors, then FFE)
+arrives.
+
+## The line in the sand
+
+Doors are next. These are the terms:
+
+- **R2 lands before doors' contract is final.** Its open question — whether a
+  door's instance property shadows its type property — is a *contract* decision,
+  not a refactor detail. Deciding it after `Door` is written means rewriting the
+  type or living with the wrong answer.
+- **R1 lands with doors, not after.** The moment a `put_doors` appears beside
+  `put`, the third parallel set exists and FFE makes it a fourth. That is the
+  precise failure [Entities](STRATEGY-ENTITIES.md) Decision 3 was written to
+  prevent, and it is much cheaper to avoid than to undo.
+- **R4 lands with doors' first reference source**, not before (it needs R2) and
+  not later (a shipped `[sources.reference.*]` that silently means "rooms"
+  becomes a back-compat obligation the day someone relies on it).
+
+If doors ship without R1 and R2, this document has failed and the debt is
+permanent — every subsequent entity pays it again. That is the line.
+
+R3 is done: [see below](#r3--the-toml-ordering-footgun-is-documented-not-designed-out)
+— and it did not go as planned, which is recorded there.
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Server](STRATEGY-SERVER.md) · [Entities](STRATEGY-ENTITIES.md) ·
@@ -117,7 +141,36 @@ different findings.
 the precedence decision is the real work.
 **Unblocks:** R4, door reference joins, door validation, door `?filter=`.
 
-## R3 — the TOML ordering footgun is documented, not designed out
+## R3 — the TOML ordering footgun is documented, not designed out — **DONE**
+
+> **Outcome: the hazard does not currently exist.** Measuring it before building
+> the guard turned out to be the whole value of this item.
+>
+> `toml 0.8`'s serializer emits **all** value-typed fields before any table or
+> array-of-tables, *regardless of declaration order* — verified against both
+> write paths and against `to_string` as well as `to_string_pretty`. A struct
+> declared in deliberately the wrong order still round-trips correctly. So the
+> discipline this codebase has been carefully following, and the two bug reports
+> behind it, describe a hazard a dependency upgrade removed at some point
+> without anyone noticing.
+>
+> Shipped anyway, in changed form:
+> `test_toml_serializer_hoists_values_above_tables` declares a struct in the
+> wrong order and asserts the values still land top level — so it fails the day
+> a `toml` upgrade, a switch to `toml_edit`, or a hand-rolled writer restores
+> source-order emission, *before* settings files start being written wrong.
+> `test_project_manifest_scalars_stay_top_level` covers `project.toml`, the
+> other TOML document this server writes.
+> [Conventions](CODING-CONVENTIONS.md) now says the rule is belt-and-braces
+> rather than a live hazard, and points at the guard.
+>
+> The rejected alternative below (a hand-built ordered `toml::Table`) is now
+> *doubly* rejected: it would add a second representation to keep in step in
+> order to solve a problem the dependency already solves.
+
+**What follows is the original analysis, kept because the reasoning still
+applies if the guard ever fires.**
+
 
 **The problem.** serde emits struct fields in declaration order, and a scalar
 declared *after* a map or sub-table lands inside that table rather than the
@@ -178,10 +231,10 @@ target a non-room entity is a config field with no behaviour behind it.
 
 | | Item | Effort | Do it when |
 | --- | --- | --- | --- |
-| 1 | **R3** TOML shape assertions | low | **now** — independent, and protects R4 |
-| 2 | **R2** tiered property trait | medium-low | before doors' contract is final |
-| 3 | **R1** `SnapshotKind` store | medium | with doors; parallel to R2 |
-| 4 | **R4** entity-scoped settings | low-medium | after R2 |
+| 1 | ~~**R3** TOML shape assertions~~ | low | **done** — hazard measured away, guard shipped |
+| 2 | **R2** tiered property trait | medium-low | **before doors' contract is final** |
+| 3 | **R1** `SnapshotKind` store | medium | **with doors**; parallel to R2 |
+| 4 | **R4** entity-scoped settings | low-medium | with doors' first reference source |
 
 R1 and R2 are independent of each other and can run in parallel; both are
 prerequisites for doors. R4 depends on R2. R3 depends on nothing.
