@@ -627,9 +627,9 @@ ids = ["12345", "67890"]
         assert_eq!(reparsed.project_id, "p1");
         assert!(reparsed.is_default);
         assert_eq!(reparsed.room_label, vec!["$name".to_string(), "Area".to_string()]);
-        // Comparison settings survive the round-trip — both are declared before
-        // any table field, so the TOML serializer emits them as top-level
-        // key/values rather than folding them into `[sources]`.
+        // Comparison settings survive the round-trip. See
+        // `test_toml_serializer_hoists_values_above_tables` below for *why*
+        // that holds regardless of where they sit in the struct.
         assert_eq!(reparsed.comparison_key.as_deref(), Some("Number"));
         assert_eq!(reparsed.comparison_properties, vec!["Area".to_string(), "Department".to_string()]);
         assert!(matches!(
@@ -691,6 +691,99 @@ ids = ["12345", "67890"]
             HierarchyExclusion::Rooms { ids } => assert_eq!(ids, &vec!["12345".to_string(), "67890".to_string()]),
             other => panic!("expected Rooms, got {other:?}"),
         }
+    }
+
+    /// **The TOML ordering footgun, pinned.** `toml 0.8`'s serializer emits all
+    /// value-typed fields (scalars and inline arrays) *before* any table or
+    /// array-of-tables, regardless of the order they are declared in the struct.
+    /// That is what makes a value declared after a map safe today.
+    ///
+    /// It was not always so, and CODING-CONVENTIONS.md still teaches declaring
+    /// scalars first — correctly, as belt and braces. But a discipline nothing
+    /// measures is one nobody can tell has stopped being necessary, and the
+    /// reverse is worse: if a future `toml` release, a switch to
+    /// `toml_edit`, or a hand-rolled writer ever restores source-order
+    /// emission, every settings file written after that point silently gains a
+    /// value nested inside the wrong table. The value still round-trips —
+    /// nothing is lost, the key just *moves* — which is exactly why
+    /// `test_settings_toml_round_trip` above cannot catch it and why this is a
+    /// separate test.
+    ///
+    /// Deliberately declared in the WRONG order, so it fails the day the
+    /// serializer stops compensating.
+    #[test]
+    fn test_toml_serializer_hoists_values_above_tables() {
+        #[derive(serde::Serialize)]
+        struct WrongOrder {
+            table: std::collections::BTreeMap<String, String>,
+            array_of_tables: Vec<Inner>,
+            scalar_declared_last: String,
+            inline_array_declared_last: Vec<String>,
+        }
+        #[derive(serde::Serialize)]
+        struct Inner {
+            a: String,
+        }
+
+        let value = WrongOrder {
+            table: std::collections::BTreeMap::from([("k".to_string(), "v".to_string())]),
+            array_of_tables: vec![Inner { a: "x".to_string() }],
+            scalar_declared_last: "top".to_string(),
+            inline_array_declared_last: vec!["also-top".to_string()],
+        };
+
+        let text = toml::to_string_pretty(&value).expect("serializes");
+        let doc: toml::Table = toml::from_str(&text).expect("re-parses");
+
+        for key in ["scalar_declared_last", "inline_array_declared_last"] {
+            assert!(
+                doc.contains_key(key),
+                "`{key}` is no longer emitted at the top level: the TOML serializer has \
+                 stopped hoisting values above tables, so every settings struct whose \
+                 scalars sit below a map or Vec<Struct> now writes them INTO that table. \
+                 Re-order those structs' fields (CODING-CONVENTIONS.md, \"TOML footgun\") \
+                 before this ships.\n--- emitted ---\n{text}"
+            );
+        }
+    }
+
+    /// The same guarantee for the storage manifest, which is the other TOML
+    /// document this server writes. `ModelEntry` gained a scalar (`phase`) and
+    /// will gain more as entities are added, so it is worth asserting rather
+    /// than assuming — a corrupt `project.toml` fails every read *and* the next
+    /// boot, while the snapshots beside it stay perfectly intact.
+    #[test]
+    fn test_project_manifest_scalars_stay_top_level() {
+        use crate::storage::{ModelEntry, ProjectManifest};
+
+        let manifest = ProjectManifest {
+            name: "Hospital Job".to_string(),
+            models: std::collections::BTreeMap::from([(
+                "m1".to_string(),
+                ModelEntry {
+                    name: "ARCH".to_string(),
+                    phase: Some("New Construction".to_string()),
+                    snapshots: vec!["2026-01-01T00:00:00Z".to_string()],
+                },
+            )]),
+            reference_snapshots: std::collections::BTreeMap::from([(
+                "drofus".to_string(),
+                vec!["2026-01-01T00:00:00Z".to_string()],
+            )]),
+        };
+
+        let text = toml::to_string_pretty(&manifest).expect("serializes");
+        let doc: toml::Table = toml::from_str(&text).expect("re-parses");
+        assert!(doc.contains_key("name"), "the project name must stay top level:\n{text}");
+
+        // And the per-model scalars stay inside their own model's table rather
+        // than sliding into a sibling.
+        let reparsed: ProjectManifest = toml::from_str(&text).expect("round-trips");
+        let entry = &reparsed.models["m1"];
+        assert_eq!(entry.name, "ARCH");
+        assert_eq!(entry.phase.as_deref(), Some("New Construction"));
+        assert_eq!(entry.snapshots, vec!["2026-01-01T00:00:00Z".to_string()]);
+        assert_eq!(reparsed.reference_snapshots["drofus"].len(), 1);
     }
 
     /// A settings file with no `colour_plans` key deserializes to an empty
