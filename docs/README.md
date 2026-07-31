@@ -23,7 +23,8 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
 | [Plan: handover actioning](PLAN-handover-actioning.md) | **Closed — P1 through P10 all landed**, and all three handovers it reviews are in `Superseded/`. Kept as the record of how the UI restructure was sequenced and what was deliberately not built; it is history, not a work list |
-| [Plan: phasing](PLAN-phasing.md) | **Open.** The ten decisions behind Revit phase support and the phases that implement them. Supersedes parts of [Entities](STRATEGY-ENTITIES.md)' Decision 2 — read the supersession table there before trusting that doc on phase |
+| [Plan: phasing](PLAN-phasing.md) | **Built (P1–P7), extractor half unverified against Revit.** The ten decisions behind Revit phase support and the phases that implemented them, plus an "As built" section recording where the result departs from the plan |
+| [Plan: generalisation](PLAN-generalisation.md) | **Proposed, not started.** Four seams that grew room-shaped and become blocking the day a second primary entity arrives: the store's `RoomPayload` typing, the `&Room`-typed property lookup, the TOML ordering footgun, and entity-scoped reference sources. Only the TOML item is worth doing before doors |
 
 > **Reading either document above: do not trust their `file.rs:NNN` deep
 > links.** Both pin line numbers, and the files have moved underneath them —
