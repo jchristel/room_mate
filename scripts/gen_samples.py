@@ -142,7 +142,8 @@ def main():
     for lid, _name, _elev, builder in LEVELS:
         rooms.extend(builder(lid))
     snap = {
-        "schema_version": 5,
+        "schema_version": 6,
+        "phase": "New Construction",
         "project": {"id": "showcase", "name": "Sample Campus"},
         "model": {"id": "campus-samples", "name": "Campus-SAMPLES", "source": "revit"},
         "snapshot": {"taken_at": SAMPLES_TS},

@@ -162,17 +162,18 @@ pub fn list_buildings(state: &AppState, project_id: &str) -> Result<BuildingsRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{CustomValue, Model, Project, Room, RoomPayload, Snapshot};
+    use crate::contract::{CustomValue, Model, Project, Room, RoomPayload, Snapshot, SUPPORTED_SCHEMA};
     use crate::settings::HierarchyTier;
     use crate::state::ProjectSettings;
     use crate::storage::MemStore;
 
     fn make_payload(project_id: &str, project_name: &str) -> RoomPayload {
         RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: project_id.to_string(), name: project_name.to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels: vec![],

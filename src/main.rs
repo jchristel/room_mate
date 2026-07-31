@@ -24,9 +24,10 @@ use tower_http::{
 
 use roommate::bootstrap::build_state;
 use roommate::handlers::{
-    compare_project_milestones, get_model_latest_snapshot, get_project_adjacency, get_project_areas,
-    get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation, get_projects,
-    get_reference_latest, get_reference_snapshots, get_rooms, ingest_rooms, ingest_rooms_stream,
+    activate_model_pending_snapshot, compare_project_milestones, get_model_latest_snapshot, get_model_pending_snapshot,
+    get_project_adjacency, get_project_areas, get_project_buildings, get_project_milestones, get_project_snapshots,
+    get_project_validation, get_projects, get_reference_latest, get_reference_snapshots, get_rooms, ingest_rooms,
+    ingest_rooms_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
@@ -230,6 +231,18 @@ fn build_router(state: roommate::state::Shared) -> Router {
         .route(
             "/projects/{project_id}/models/{model_id}/snapshots/latest",
             get(get_model_latest_snapshot),
+        )
+        // The re-phase flow. A model's phase is fixed by its first phased push,
+        // so a push naming a different one is stored inert (202) rather than
+        // refused; these two routes are how it is then discovered and made live.
+        // `activate` is the only route that can change a model's phase.
+        .route(
+            "/projects/{project_id}/models/{model_id}/snapshots/pending",
+            get(get_model_pending_snapshot),
+        )
+        .route(
+            "/projects/{project_id}/models/{model_id}/snapshots/pending/activate",
+            post(activate_model_pending_snapshot),
         )
         // Reference-source upload ingest + its read side, for any source a
         // project configures with an `upload` origin: uploaded CSVs are

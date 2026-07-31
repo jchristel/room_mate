@@ -3,7 +3,7 @@
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Server](STRATEGY-SERVER.md) ·
 [Browser](STRATEGY-BROWSER.md) · [Authored](STRATEGY-AUTHORED.md) ·
-[Security](STRATEGY-SECURITY.md)
+[Entities](STRATEGY-ENTITIES.md) · [Security](STRATEGY-SECURITY.md)
 
 A second front door onto the same stored room/dRofus data: an MCP (Model
 Context Protocol) server, so any MCP-aware client (Claude Desktop, Claude
@@ -38,19 +38,31 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   **stderr only**: stdout is the JSON-RPC stream, and anything else written
   there (an errant `println!`, a stdout-default `tracing_subscriber`)
   silently corrupts the protocol.
-- **Fifteen tools: one per existing read route, two settings reads, and one
+- **Sixteen tools: one per existing read route, two settings reads, and one
   forwarded upload.**
   `list_projects`, `list_buildings`, `get_rooms` (project/building/milestone/
   property filters optional — see the property-filter bullet below),
   `get_validation`, `list_snapshots`,
-  `get_latest_snapshot`, `list_milestones`, `compare_milestones`,
+  `get_latest_snapshot`, `get_pending_snapshot`, `list_milestones`,
+  `compare_milestones`,
   `get_hierarchy_areas`, `get_adjacency`, `list_reference_snapshots`, and
-  `get_reference_snapshot` mirror the twelve HTTP read routes (snapshot-history,
+  `get_reference_snapshot` mirror the thirteen HTTP read routes (snapshot-history,
   milestone, geometry and reference-upload endpoints: see
   [Server](STRATEGY-SERVER.md);
-  `get_latest_snapshot` and `get_reference_snapshot` map the service's `None` —
-  HTTP's 404 — to a short plain-text answer, same convention as `get_rooms`'
-  empty-store case).
+  `get_latest_snapshot`, `get_pending_snapshot` and `get_reference_snapshot` map
+  the service's `None` — HTTP's 404 — to a short plain-text answer, same
+  convention as `get_rooms`' empty-store case).
+  **Activating a pending push stays HTTP-only**, the same line ingest draws:
+  `get_pending_snapshot` reports that one is waiting and what it would change,
+  but re-phasing a model is a mutation and `POST
+  .../snapshots/pending/activate` is the only way to do it.
+  **`get_rooms` and `get_validation` both had to say phase out loud.** Results
+  are scoped to one Revit phase per model, and different models of one project
+  may sit on different phases — an agent reading a merged, two-phase result as a
+  complete model is exactly the failure a tool description exists to prevent.
+  `get_rooms` points at `phase_by_model`; `get_validation` reports the
+  disagreement as a finding under `phases`. See
+  [PLAN-phasing.md](PLAN-phasing.md).
   **Milestone reference pinning is inherited, not re-plumbed:** `get_rooms`'s
   `milestone` filter calls the same `assemble_rooms` the HTTP route does, and
   that function resolves a milestone's pinned snapshot per source below the

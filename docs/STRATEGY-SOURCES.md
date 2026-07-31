@@ -3,7 +3,7 @@
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Server](STRATEGY-SERVER.md) · [Browser](STRATEGY-BROWSER.md) ·
 [MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md) ·
-[Security](STRATEGY-SECURITY.md)
+[Entities](STRATEGY-ENTITIES.md) · [Security](STRATEGY-SECURITY.md)
 
 Everything that supplies raw data into the pipeline: the Revit/pyRevit
 producer, and reference sources (external data joined onto rooms; dRofus is
@@ -173,6 +173,26 @@ Revit.
   points. Because it rides the envelope, the streaming path carries it on line 1
   with no per-room scan. Georeferencing Phase 1 — see
   `docs/Superseded/HANDOVER-georeferencing.md`.
+- **The phase filter runs in the extractor, and is the one thing the user is
+  asked.** "Does this element exist in phase X" is a range test over the
+  document's phase *sequence* —
+  `created <= selected AND (demolished invalid OR demolished > selected)` — and
+  only the live document has that sequence, so `room_mate.rooms_in_phase` runs
+  it and the server never re-evaluates it. That is also why the ordered phase
+  list is deliberately **not** on the wire: it would be a field nothing reads.
+  The push then declares the phase name it filtered to, and the server requires
+  it (contract v6).
+
+  Two things worth not re-deriving. **The test is a range, not an equality** —
+  `created == selected` would drop every room built in an earlier phase and
+  still standing, which on a phased model is most of them, and the two agree
+  exactly on a single-phase model, so the mistake would not show up in testing.
+  And **the prompt is once per run, not once per model**: `pick_document` is
+  multiselect while phases are per-document, so `choose_phase` offers the names
+  common to every selected document and each document then resolves that *name*
+  against its own phase ids — ids being per-document is precisely why identity
+  is the name. A single common phase skips the prompt entirely, which is the
+  usual case. See [PLAN-phasing.md](PLAN-phasing.md).
 
 ## Uploads are the only origin
 

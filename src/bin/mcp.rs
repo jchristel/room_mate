@@ -1,11 +1,12 @@
 //! roommate's MCP server: exposes the read side as MCP tools over stdio, one
 //! per existing HTTP read route -- `list_projects`, `list_buildings`,
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
-//! `list_snapshots`, `get_latest_snapshot`, `list_milestones`,
-//! `compare_milestones`, `list_reference_snapshots`, `get_reference_snapshot` --
+//! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
+//! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
+//! `get_reference_snapshot` --
 //! plus two settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`) and the one forwarded
-//! mutation (`upload_reference`, below). Fifteen in total; keep this list and
+//! mutation (`upload_reference`, below). Sixteen in total; keep this list and
 //! STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
 //! `roommate::service` -- parse params, call one service function, serialize
 //! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
@@ -303,7 +304,12 @@ impl RoommateMcp {
                           under a milestone filter, models are served from the snapshots that milestone pins instead of their latest. \
                           Prefer the 'filter' parameter over fetching every room and matching client-side -- it answers property questions ('which rooms are Department = Cardiology?') \
                           server-side, against the same canonical property names the rest of the settings use. Note that a room missing the filtered property never matches, \
-                          negative operators included, so an empty result can mean 'no room has that property' rather than 'no room has that value'."
+                          negative operators included, so an empty result can mean 'no room has that property' rather than 'no room has that value'. \
+                          IMPORTANT -- results are scoped to ONE Revit phase per model, not the whole model: each model's rooms were filtered at export to the phase named in \
+                          'phase_by_model' (project id -> model id -> phase). This is a partial view of the building by design, so do not read it as a complete model. \
+                          Different models of one project CAN be on different phases, in which case the merged result spans two phases -- compare the values in 'phase_by_model' \
+                          before aggregating across models, and see get_validation's 'phases.disagree' for that as a reported finding. A null phase means a model pushed before \
+                          phasing existed, whose rooms were never filtered to any phase at all."
     )]
     fn get_rooms(&self, Parameters(p): Parameters<GetRoomsParams>) -> Result<CallToolResult, McpError> {
         // Parsed here, in the adapter holding the raw strings, then passed
@@ -381,12 +387,31 @@ impl RoommateMcp {
         }
     }
 
+    /// The quarantined push waiting on one model -- see
+    /// `service::snapshots::pending_snapshot`. Read-only: activating one is a
+    /// mutation and stays HTTP-only, same line ingest draws.
+    #[tool(
+        description = "Get the push waiting to be activated for one model, if any. A model's Revit phase is fixed by its first phased push, so a push declaring a different phase is stored but NOT made live -- nothing reads it until someone activates it over HTTP. Returns its snapshot id, the phase it would move the model to ('phase'), the phase the model is on now ('current_phase'), and its room count."
+    )]
+    fn get_pending_snapshot(&self, Parameters(p): Parameters<ModelIdParams>) -> Result<CallToolResult, McpError> {
+        let result = snapshots::pending_snapshot(&self.state, &p.project_id, &p.model_id).map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no pending push for that project/model",
+            )])),
+            Some(pending) => json_result(&pending),
+        }
+    }
+
     /// Runs the reference reconciliation QA report for one project -- see
     /// `service::validation::compute_project_validation`.
     #[tool(
         description = "Run the reference reconciliation validation report for one project. Returns one report per configured reference source under 'sources' (keyed by source name, each with its own link_property, discrepancy lists, field coverage and 'error_rooms' room_id -> number/name/link value for the flagged rooms), plus a cross-source 'discrepancies' summary for a one-shot count. \
                        Unmatched is reported in BOTH directions and they mean different things: 'rooms_unmatched' lists room ids whose link value finds no record, while 'reference_unmatched' lists the source's own link values that no room resolves to (bare values, not room ids -- there is no room, which is the finding). A value shared by several rooms counts as matched and is reported once under 'duplicate_link_values' instead. \
-                       An empty 'sources' map means the project reconciles against nothing -- normal, not an error."
+                       An empty 'sources' map means the project reconciles against nothing -- normal, not an error. \
+                       Separately from any reference source, 'phases' reports which Revit phase each of the project's models was filtered to ('by_model') and whether they \
+                       disagree ('disagree'). A true 'disagree' means /rooms is merging rooms from two different phases into one plan that will nonetheless look complete; \
+                       an unphased model (null) counts as a distinct value there, since its rooms were never filtered at all. This is reported, never rejected."
     )]
     fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;

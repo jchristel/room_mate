@@ -621,6 +621,31 @@ pub struct RoomsResult {
     /// an area figure whose regime is unstated is exactly the ambiguity this
     /// whole change exists to remove.
     pub boundary_by_level: BTreeMap<String, RoomBoundary>,
+
+    /// The Revit phase each contributing model's rooms were filtered to, keyed
+    /// by project id and then model id.
+    ///
+    /// **On the wire because this response can legitimately span two phases.**
+    /// A model's phase is fixed per `(project, model)` lineage, and nothing
+    /// forces the models of one project to agree — enforcing that would deadlock
+    /// (moving a project from phase A to B would need model 1 pushed first, and
+    /// it would be refused for disagreeing with model 2). So the merge proceeds,
+    /// and without this field a consumer would render a plan mixing "New
+    /// Construction" and "Existing" rooms with no way to tell. The validation
+    /// report names the disagreement as a *finding*; this is the raw fact, for
+    /// labelling what is on screen.
+    ///
+    /// Taken from each **snapshot**, never from the lineage's current phase in
+    /// the manifest: a snapshot pushed before phases existed reports `null`,
+    /// because its rooms genuinely were not filtered to a phase, and that stays
+    /// true after a later push phases the lineage (PLAN-phasing.md "D8"). A
+    /// `null` is therefore a real signal — unfiltered, mixed-phase content —
+    /// not merely missing metadata.
+    ///
+    /// Nested per project rather than flat by model id for the same reason
+    /// `reference_labels` is: an unscoped read merges every stored project, and
+    /// model ids are only unique within one.
+    pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
 }
 
 /// One reference source's column vocabulary for one project, as joined into
@@ -727,6 +752,7 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
     // linked models, then derive the response rooms/levels.
     let (scoped, milestone_reference) = scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
     let revision = scoped_revision(&scoped);
+    let phase_by_model = phases_of(&scoped);
     let level_remap = dedup_levels(&scoped);
     let AssembledRooms { levels, rooms, reference_labels, boundary_by_level } =
         assemble_scoped_rooms(&scoped, &level_remap, &milestone_reference, scope);
@@ -738,7 +764,22 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
         rooms,
         reference_labels,
         boundary_by_level,
+        phase_by_model,
     }))
+}
+
+/// Each contributing model's phase, read off the payload actually in this
+/// response — so under `?milestone=` it reports the *pinned* snapshot's phase,
+/// not the model's current one. Reading it from the payload rather than the
+/// manifest is what keeps that true (PLAN-phasing.md "D8").
+fn phases_of(scoped: &[ScopedPayload<'_>]) -> BTreeMap<String, BTreeMap<String, Option<String>>> {
+    let mut out: BTreeMap<String, BTreeMap<String, Option<String>>> = BTreeMap::new();
+    for (key, payload, _) in scoped {
+        out.entry(key.project_id.clone())
+            .or_default()
+            .insert(key.model_id.clone(), payload.phase.clone());
+    }
+    out
 }
 
 /// Phase 1 — scope the stored payloads to the request. Drops any payload whose
@@ -1175,6 +1216,37 @@ mod tests {
         RoomScope { project, milestone, ..Default::default() }
     }
 
+    /// Each contributing model's phase reaches the response, nested per project
+    /// and taken from the snapshot rather than the lineage. Two models on
+    /// different phases still merge — enforcing agreement would deadlock — so
+    /// the field is the only way a consumer can tell it is looking at a plan
+    /// spanning two phases, and an unphased model must read as `None` rather
+    /// than be silently omitted.
+    #[test]
+    fn test_assemble_rooms_reports_each_models_phase() {
+        let phased = |model: &str, phase: Option<&str>| RoomPayload {
+            phase: phase.map(str::to_string),
+            ..make_payload("p1", model, vec![], vec![])
+        };
+
+        let state = AppState::new(Box::new(MemStore::new()), single_project("p1", make_bundle("Number")), None);
+        state.set_snapshot(phased("arch", Some("New Construction"))).unwrap();
+        state.set_snapshot(phased("struct", Some("Existing"))).unwrap();
+        state.set_snapshot(phased("legacy", None)).unwrap();
+
+        let result = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
+        let by_model = result.phase_by_model.get("p1").expect("keyed by project id");
+
+        assert_eq!(by_model["arch"].as_deref(), Some("New Construction"));
+        assert_eq!(
+            by_model["struct"].as_deref(),
+            Some("Existing"),
+            "a second phase merges, it is not dropped"
+        );
+        assert_eq!(by_model["legacy"], None, "a pre-phasing snapshot reports null, not absent");
+        assert_eq!(by_model.len(), 3);
+    }
+
     /// The recognised source-name vocabulary every test filter/predicate
     /// parses against — "drofus" is the one source these tests configure.
     fn known() -> BTreeSet<String> {
@@ -1209,10 +1281,11 @@ mod tests {
 
     fn make_payload(project_id: &str, model_id: &str, levels: Vec<Level>, rooms: Vec<Room>) -> RoomPayload {
         RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: project_id.to_string(), name: "P".to_string() },
             model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels,
@@ -1265,20 +1338,22 @@ mod tests {
         room_b.level_id = "lvlB".to_string();
 
         let payload_a = RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: "modelA".to_string(), name: "A".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels: vec![Level { id: "lvlA".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
             rooms: vec![room_a],
         };
         let payload_b = RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             model: Model { id: "modelB".to_string(), name: "B".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:01Z".to_string() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             // Same name, elevation drifted by float noise well within tolerance.
@@ -1322,10 +1397,11 @@ mod tests {
         };
         let payload =
             |model: &str, ts: &str, boundary: Option<RoomBoundary>, levels: Vec<Level>, rooms: Vec<Room>| RoomPayload {
-                schema_version: 5,
+                schema_version: SUPPORTED_SCHEMA,
                 project: Project { id: "p1".to_string(), name: "P".to_string() },
                 model: Model { id: model.to_string(), name: model.to_string(), source: "revit".to_string() },
                 snapshot: Snapshot { taken_at: ts.to_string() },
+                phase: None,
                 model_to_shared: None,
                 room_boundary: boundary,
                 levels,
@@ -1375,10 +1451,11 @@ mod tests {
     #[test]
     fn test_boundary_by_level_falls_back_to_project_policy() {
         let undeclared = |project: &str| RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: project.to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels: vec![Level { id: "L1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
@@ -1449,10 +1526,11 @@ mod tests {
     #[test]
     fn test_assemble_rooms_skips_unregistered_project() {
         let payload = RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: "unregistered".to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels: vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],

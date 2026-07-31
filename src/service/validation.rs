@@ -214,6 +214,40 @@ pub struct ValidationResponse {
     /// Tallies summed across every source — what the collapsed QA header
     /// counts. Each source's own breakdown is on its `SourceValidation`.
     pub discrepancies: DiscrepancyCounts,
+    /// Whether this project's models agree on which Revit phase they were
+    /// filtered to (see `PhaseReport`).
+    ///
+    /// A top-level field rather than an entry under `sources`, because a phase
+    /// disagreement has no reference source: `sources` is keyed by source name
+    /// and every other finding here is a room-versus-source reconciliation.
+    /// This one is a room-versus-room problem.
+    pub phases: PhaseReport,
+}
+
+/// Which phase each of a project's models is on, and whether they agree.
+///
+/// **Why this is a finding at all.** `/rooms` merges every model's latest
+/// snapshot, and nothing forces the models of one project onto the same phase —
+/// enforcing that would deadlock, since moving a project from phase A to B
+/// needs some model to go first and it would be refused for disagreeing with
+/// the rest. So a project can legitimately serve a plan whose rooms come from
+/// two different phases, looking complete and being quietly wrong. Under the
+/// immutability rule that state is also *permanent* until someone activates a
+/// re-phase, which is what makes it worth surfacing rather than waiting out.
+///
+/// Reported, never rejected — "signal, not error", the same stance an unmatched
+/// reference key gets.
+#[derive(Debug, Default, Serialize)]
+pub struct PhaseReport {
+    /// Model id → the phase its rooms were filtered to. `null` is a model whose
+    /// snapshot predates phasing: its rooms were never filtered at all, which
+    /// is a distinct (and worse) problem from disagreeing about which phase.
+    pub by_model: BTreeMap<String, Option<String>>,
+    /// True when the models do not all report the same phase — counting an
+    /// unphased model as its own distinct value, since mixing filtered and
+    /// unfiltered rooms is exactly the same class of problem as mixing two
+    /// phases. False for a project with one model, or none.
+    pub disagree: bool,
 }
 
 impl ValidationResponse {
@@ -225,8 +259,32 @@ impl ValidationResponse {
             sources: BTreeMap::new(),
             total_rooms: 0,
             discrepancies: DiscrepancyCounts::default(),
+            phases: PhaseReport::default(),
         }
     }
+}
+
+/// Which phase each of a project's models is on, and whether they agree.
+///
+/// Reads each model's phase off the **snapshot**, not the lineage's current
+/// phase in the manifest — a snapshot pushed before phasing existed reports
+/// `None` because its rooms genuinely were not filtered, and that remains true
+/// after a later push phases the lineage.
+///
+/// Agreement folds case and whitespace, matching `contract::phases_agree`, so a
+/// model differing only in spelling is not reported as a disagreement. The map
+/// keeps the original casing, since that is what a reader recognises.
+fn phase_report(project_id: &str, stored: &[(ModelKey, RoomPayload)]) -> PhaseReport {
+    let mut by_model: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for (key, payload) in stored {
+        if payload.project.id != project_id {
+            continue;
+        }
+        by_model.insert(key.model_id.clone(), payload.phase.clone());
+    }
+    let distinct: std::collections::BTreeSet<Option<String>> =
+        by_model.values().map(|p| p.as_ref().map(|s| s.trim().to_lowercase())).collect();
+    PhaseReport { by_model, disagree: distinct.len() > 1 }
 }
 
 /// The declaration for one dRofus field label, if the settings carry one.
@@ -562,15 +620,21 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
         .iter()
         .filter_map(|(name, src)| src.data.as_ref().map(|data| (name, data, src.fields.as_slice())))
         .collect();
-    if loaded.is_empty() {
-        return Ok(ValidationResponse::nothing_to_reconcile());
-    }
-
     // One storage read for all of them: `all_snapshots` is the expensive call
     // here, and every source reconciles against the same room set.
+    //
+    // Read *before* the no-sources bail below, because the phase report is a
+    // room-versus-room finding that owes nothing to reference data — a project
+    // reconciling against nothing can still be serving two phases at once, and
+    // that is exactly the project nobody would otherwise be watching.
     let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
 
     let mut response = ValidationResponse::nothing_to_reconcile();
+    response.phases = phase_report(project_id, &stored);
+    if loaded.is_empty() {
+        return Ok(response);
+    }
+
     response.total_rooms = count_project_rooms(project_id, &stored);
     for (name, data, fields) in loaded {
         let report = compute_validation(project_id, &stored, data, &bundle.builtin_properties, fields);
@@ -583,7 +647,7 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{CustomValue, Model, Project, Snapshot};
+    use crate::contract::{CustomValue, Model, Project, Snapshot, SUPPORTED_SCHEMA};
     use crate::reference::ReferenceRecord;
 
     fn make_room(id: &str, name: &str, props: &[(&str, &str)]) -> Room {
@@ -603,16 +667,80 @@ mod tests {
     fn make_payload(project_id: &str, rooms: Vec<Room>) -> (ModelKey, RoomPayload) {
         let key = ModelKey { project_id: project_id.to_string(), model_id: "m1".to_string() };
         let payload = RoomPayload {
-            schema_version: 5,
+            schema_version: SUPPORTED_SCHEMA,
             project: Project { id: project_id.to_string(), name: "P".to_string() },
             model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: None,
             model_to_shared: None,
             room_boundary: None,
             levels: vec![],
             rooms,
         };
         (key, payload)
+    }
+
+    /// One model on a named phase, for the phase-report tests.
+    fn on_phase(project_id: &str, model_id: &str, phase: Option<&str>) -> (ModelKey, RoomPayload) {
+        let (_, payload) = make_payload(project_id, vec![]);
+        let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.to_string() };
+        let payload = RoomPayload {
+            model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
+            phase: phase.map(str::to_string),
+            ..payload
+        };
+        (key, payload)
+    }
+
+    /// One model, or several agreeing ones, is not a finding. Agreement folds
+    /// case and whitespace exactly as ingest does, so a model differing only in
+    /// spelling must not be reported as a disagreement — that would be a false
+    /// alarm on data ingest itself considers identical.
+    #[test]
+    fn test_phase_report_agreement_folds_case_and_whitespace() {
+        let stored = vec![
+            on_phase("p1", "arch", Some("New Construction")),
+            on_phase("p1", "struct", Some("  NEW CONSTRUCTION ")),
+        ];
+        let report = phase_report("p1", &stored);
+        assert!(!report.disagree, "same phase, different spelling, is not a disagreement");
+        // The map keeps what was pushed -- a reader recognises the original.
+        assert_eq!(report.by_model["struct"].as_deref(), Some("  NEW CONSTRUCTION "));
+    }
+
+    /// Two genuinely different phases in one project is the finding: `/rooms`
+    /// merges them anyway, so a plan can span two phases and look complete. It
+    /// is reported, never rejected — enforcing agreement across models would
+    /// deadlock a project trying to move phase.
+    #[test]
+    fn test_phase_report_flags_two_phases_in_one_project() {
+        let stored = vec![
+            on_phase("p1", "arch", Some("New Construction")),
+            on_phase("p1", "struct", Some("Existing")),
+            // Another project's disagreement is not this project's finding.
+            on_phase("p2", "other", Some("Demolition")),
+        ];
+        let report = phase_report("p1", &stored);
+        assert!(report.disagree);
+        assert_eq!(report.by_model.len(), 2, "scoped to this project's models");
+    }
+
+    /// An unphased model counts as its own value: mixing rooms that were never
+    /// filtered with rooms that were is the same class of problem as mixing two
+    /// phases, and arguably worse, so it must not read as agreement.
+    #[test]
+    fn test_phase_report_counts_an_unphased_model_as_disagreement() {
+        let stored = vec![
+            on_phase("p1", "arch", Some("New Construction")),
+            on_phase("p1", "legacy", None),
+        ];
+        let report = phase_report("p1", &stored);
+        assert!(report.disagree, "filtered + unfiltered is not agreement");
+        assert_eq!(report.by_model["legacy"], None);
+
+        // But a project that is uniformly unphased has nothing to disagree about.
+        let all_legacy = vec![on_phase("p1", "a", None), on_phase("p1", "b", None)];
+        assert!(!phase_report("p1", &all_legacy).disagree);
     }
 
     fn make_drofus(

@@ -1136,10 +1136,11 @@ mod tests {
             let state = AppState::new(Box::new(MemStore::new()), registry, None);
             state
                 .set_snapshot(RoomPayload {
-                    schema_version: 5,
+                    schema_version: SUPPORTED_SCHEMA,
                     project: Project { id: "p1".to_string(), name: "P".to_string() },
                     model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
                     snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                    phase: None,
                     model_to_shared: None,
                     room_boundary: None,
                     levels: vec![Level { id: "L1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
@@ -1199,10 +1200,11 @@ mod tests {
                 let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle)]), None);
                 state
                     .set_snapshot(RoomPayload {
-                        schema_version: 5,
+                        schema_version: SUPPORTED_SCHEMA,
                         project: Project { id: "p1".to_string(), name: "P".to_string() },
                         model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
                         snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                        phase: None,
                         model_to_shared: None,
                         room_boundary: declared,
                         levels: vec![Level { id: "L1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],

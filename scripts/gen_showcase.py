@@ -146,7 +146,8 @@ def main():
     for variant, ts, builder in [("concept", CONCEPT_TS, concept), ("freeze", FREEZE_TS, freeze)]:
         rooms = builder(slots)
         snap = {
-            "schema_version": 5,
+            "schema_version": 6,
+            "phase": "New Construction",
             "project": {"id": "showcase", "name": "Sample Campus"},
             "model": {"id": "campus-arch", "name": "Campus-ARCH", "source": "revit"},
             "snapshot": {"taken_at": ts},

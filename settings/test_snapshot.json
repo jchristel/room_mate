@@ -1,5 +1,6 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
+  "phase": "New Construction",
   "project": {
     "id": "sample-project",
     "name": "Sample Hospital Job"

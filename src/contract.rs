@@ -167,6 +167,48 @@ pub fn validate_snapshot_id(taken_at: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Normalize a phase name off the wire: trim surrounding whitespace, and treat
+/// an all-whitespace name as absent. Every ingest path runs a pushed phase
+/// through this before comparing or storing it, so a stored name and a compared
+/// name can never disagree about their own edges.
+///
+/// Whitespace is export noise and absorbing it is uncontroversial. Collapsing
+/// blank to `None` rather than keeping `Some("")` means there is exactly one
+/// representation of "no phase", so the one-line absence check in
+/// `phases_agree` cannot be fooled by a producer that sends `""`.
+pub fn normalize_phase(phase: Option<&str>) -> Option<String> {
+    phase.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string)
+}
+
+/// Whether two phase names refer to the same Revit phase. `true` is
+/// "compatible"; a `false` is what ingest turns into a rejected or quarantined
+/// push (see PLAN-phasing.md "D5"/"D6").
+///
+/// Two rules, each load-bearing:
+///
+/// 1. **Either side absent ⇒ compatible.** An absent side constrains nothing:
+///    a model stored before this field existed is *unphased*, and the first
+///    phased push to it is what sets its phase rather than something to reject.
+///    The ingest handler — not this function — decides whether an absent
+///    *pushed* phase is legal at all; here it simply cannot disagree.
+/// 2. **Trimmed and case-insensitive.** Trimming is `normalize_phase`'s job and
+///    is repeated here so a caller that skipped it still gets the right answer.
+///    Case is folded because a phase differing only in case is the same phase
+///    typed twice, and quarantining a correct export over letter-case would be
+///    a bad trade. `to_lowercase` rather than `eq_ignore_ascii_case`: phase
+///    names are user-authored in the modeller's own language, and the ASCII
+///    comparison would silently stop folding at the first non-ASCII character.
+///
+/// The name is the whole identity — there is no id to compare, and deliberately
+/// so (see `RoomPayload::phase`).
+pub fn phases_agree(pushed: Option<&str>, stored: Option<&str>) -> bool {
+    match (pushed, stored) {
+        (Some(a), Some(b)) => a.trim().to_lowercase() == b.trim().to_lowercase(),
+        // Rule 1: an absent side constrains nothing.
+        _ => true,
+    }
+}
+
 /// The affine transform mapping a model's room points from Revit model space
 /// into the project's SHARED coordinate system. One per model, not per room:
 /// it's a model-level `ProjectLocation` fact (the *same* relationship on every
@@ -249,6 +291,44 @@ pub struct RoomPayload {
     #[serde(default)]
     pub snapshot: Snapshot,
 
+    /// The Revit phase this push was filtered to, e.g. `"New Construction"`.
+    ///
+    /// **The first *authored* field on the envelope.** `model_to_shared` and
+    /// `room_boundary` are both facts read off the document; this one is a
+    /// choice the user makes at export time, because a document has many phases
+    /// and only the user knows which is being pushed. Worth writing down: a
+    /// future reader who assumes it can be read from the document, the way the
+    /// other two envelope fields are, will "fix" this into something that
+    /// cannot work.
+    ///
+    /// **A bare name, not an `{id, name}` pair.** Every document owns its own
+    /// phases with its own `ElementId`s, so "New Construction" in the
+    /// architectural model and in the structural model are different ids — the
+    /// same problem `Level.id` has, and the reason `service::rooms` dedups
+    /// levels across linked models. An id is therefore not comparable across
+    /// models, would be carried for display only, and (in the sample export) may
+    /// not even be an `ElementId` — the value `3` is low enough to be an index
+    /// into `doc.Phases`. A field nothing reads and might be wrong is one that
+    /// drifts, so there isn't one.
+    ///
+    /// **`Option` here does NOT mean optional on the wire.** A v6 push must
+    /// carry a phase; ingest rejects one that doesn't. The `Option` exists
+    /// because this same struct is what every stored snapshot deserializes back
+    /// into, and every snapshot written before this field existed has no phase —
+    /// making it required would stop the server hydrating its own store. So the
+    /// type stays permissive and the ingest handler is strict. See
+    /// PLAN-phasing.md "D2".
+    ///
+    /// The phase a *read* reports is always the one on the snapshot it loaded,
+    /// never the lineage's current phase from the manifest — an old unfiltered
+    /// snapshot must keep saying it was unphased, because it was.
+    ///
+    /// The server never decides what "exists in this phase" means: that is a
+    /// range test over the document's phase ordering, and the extractor runs it
+    /// because only the live document has the ordering.
+    #[serde(default)]
+    pub phase: Option<String>,
+
     /// Optional model→shared placement transform for this model (see
     /// `ModelToShared`). Absent on an un-placed model, which still renders fine
     /// via auto-fit exactly as before — `#[serde(default)]` keeps every
@@ -285,6 +365,10 @@ pub struct StreamEnvelope {
     pub model: Model,
     #[serde(default)]
     pub snapshot: Snapshot,
+    /// The push's phase, in lockstep with `RoomPayload` — which ingest route a
+    /// producer picked must never change what phase the stored snapshot claims.
+    #[serde(default)]
+    pub phase: Option<String>,
     /// Model→shared placement transform, in lockstep with `RoomPayload` (a
     /// streamed push carries identical envelope metadata; only `rooms` differ).
     #[serde(default)]
@@ -318,7 +402,27 @@ pub struct StreamEnvelope {
 /// `model_to_shared` precedent: absent it defaults to `None`, and a payload
 /// that omits it means exactly what it did before — a model whose regime the
 /// server infers from project policy rather than reads.
-pub const SUPPORTED_SCHEMA: u32 = 5;
+///
+/// **Now 6: `phase` is required at ingest.** The three additions above all held
+/// the line at 5 by the same test — every payload that was valid before is
+/// still valid and means what it meant — and `phase` would have passed that
+/// test too, had it stayed optional. It did not: the extractor now always
+/// resolves a phase, so a push arriving without one is a producer predating
+/// phase support, whose rooms were never filtered by the phase range test and
+/// are therefore unfiltered mixed-phase content. Rejecting it changes a
+/// previously-valid payload's meaning from "a legal unphased push" to "an
+/// error", which is exactly what a bump is for.
+///
+/// The bump is also the more useful failure: a stale producer is told its schema
+/// is unsupported — which names the real problem, its extractor is old — rather
+/// than that it forgot a field. No transition window, same as v4 → v5: update
+/// the extractor and the server together.
+///
+/// This does not touch stored data. The version is checked at ingest only;
+/// snapshots already on disk deserialize without a version check, and
+/// `RoomPayload::phase` being `Option` is what keeps them readable. See
+/// PLAN-phasing.md "D2".
+pub const SUPPORTED_SCHEMA: u32 = 6;
 
 /// Resolve a *canonical* property name (e.g. "Area") to the source-specific
 /// raw property name a room's `properties` map actually keys on, via
@@ -519,7 +623,7 @@ mod tests {
     #[test]
     fn test_v5_room_properties_round_trip() {
         let json = serde_json::json!({
-            "schema_version": 5,
+            "schema_version": 6,
             "project":  { "id": "p1", "name": "Hospital Job" },
             "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
             "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
@@ -573,7 +677,7 @@ mod tests {
     #[test]
     fn test_model_to_shared_round_trips_and_defaults_to_none() {
         let base = serde_json::json!({
-            "schema_version": 5,
+            "schema_version": 6,
             "project":  { "id": "p1", "name": "Hospital Job" },
             "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
             "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
@@ -639,7 +743,7 @@ mod tests {
     #[test]
     fn test_room_boundary_round_trips_and_defaults_to_none() {
         let base = serde_json::json!({
-            "schema_version": 5,
+            "schema_version": 6,
             "project":  { "id": "p1", "name": "Hospital Job" },
             "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
             "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
@@ -672,7 +776,7 @@ mod tests {
     #[test]
     fn test_stream_envelope_carries_room_boundary() {
         let mut json = serde_json::json!({
-            "schema_version": 5,
+            "schema_version": 6,
             "project":  { "id": "p1", "name": "Hospital Job" },
             "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
             "levels": []
@@ -685,12 +789,108 @@ mod tests {
         assert_eq!(envelope.room_boundary, Some(RoomBoundary::FinishFace));
     }
 
+    /// `phase` rides the envelope as a bare name and survives a round-trip;
+    /// absent it defaults to `None` — which on the *type* means "a snapshot
+    /// stored before this field existed", not "a legal push". Ingest is what
+    /// requires one (see `SUPPORTED_SCHEMA`), and that check is a handler
+    /// concern, not this struct's.
+    #[test]
+    fn test_phase_round_trips_and_defaults_to_none() {
+        let base = serde_json::json!({
+            "schema_version": 6,
+            "project":  { "id": "p1", "name": "Hospital Job" },
+            "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
+            "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
+            "levels": [],
+            "rooms": []
+        });
+
+        // Absent → None: every snapshot already on disk stays readable.
+        let without: RoomPayload = serde_json::from_value(base.clone()).unwrap();
+        assert!(without.phase.is_none());
+
+        let mut with = base;
+        with["phase"] = serde_json::json!("New Construction");
+        let payload: RoomPayload = serde_json::from_value(with).unwrap();
+        assert_eq!(payload.phase.as_deref(), Some("New Construction"));
+
+        let reparsed: RoomPayload = serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
+        assert_eq!(reparsed.phase.as_deref(), Some("New Construction"), "survives a round-trip");
+    }
+
+    /// The streamed envelope carries `phase` in lockstep with the buffered
+    /// payload — which ingest route a producer picked must never change what
+    /// phase the stored snapshot claims. Same lockstep rule `room_boundary` has.
+    #[test]
+    fn test_stream_envelope_carries_phase() {
+        let mut json = serde_json::json!({
+            "schema_version": 6,
+            "project":  { "id": "p1", "name": "Hospital Job" },
+            "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
+            "levels": []
+        });
+        let envelope: StreamEnvelope = serde_json::from_value(json.clone()).unwrap();
+        assert!(envelope.phase.is_none());
+
+        json["phase"] = serde_json::json!("New Construction");
+        let envelope: StreamEnvelope = serde_json::from_value(json).unwrap();
+        assert_eq!(envelope.phase.as_deref(), Some("New Construction"));
+    }
+
+    /// Whitespace is export noise, and an all-whitespace name is not a phase —
+    /// collapsing it to `None` means there is exactly one representation of
+    /// "no phase" for `phases_agree`'s absence check to recognise.
+    #[test]
+    fn test_normalize_phase_trims_and_collapses_blank_to_absent() {
+        assert_eq!(normalize_phase(Some("  New Construction ")), Some("New Construction".to_string()));
+        assert_eq!(normalize_phase(Some("")), None);
+        assert_eq!(normalize_phase(Some("   ")), None);
+        assert_eq!(normalize_phase(None), None);
+    }
+
+    /// The comparison the ingest check is built on: same phase typed with
+    /// different whitespace or casing is the same phase. Asserted together so
+    /// the two foldings read as one deliberate rule rather than two accidents.
+    #[test]
+    fn test_phases_agree_folds_whitespace_and_case() {
+        assert!(phases_agree(Some("  New Construction "), Some("New Construction")));
+        assert!(phases_agree(Some("NEW CONSTRUCTION"), Some("New Construction")));
+        assert!(phases_agree(Some("new construction"), Some("New Construction")));
+    }
+
+    /// Case folding is Unicode-aware, not ASCII-only: phase names are authored
+    /// in the modeller's own language, and `eq_ignore_ascii_case` would stop
+    /// folding at the first non-ASCII character and call these two different
+    /// phases.
+    #[test]
+    fn test_phases_agree_folds_non_ascii_case() {
+        assert!(phases_agree(Some("ABBRÜCHE"), Some("Abbrüche")));
+    }
+
+    /// Two genuinely different phases must not be conflated — this is the
+    /// disagreement that quarantines a push.
+    #[test]
+    fn test_phases_agree_rejects_different_names() {
+        assert!(!phases_agree(Some("New Construction"), Some("Existing")));
+    }
+
+    /// An absent side constrains nothing, in either direction: an unphased
+    /// model accepts the first phase it is told, which is what gives every
+    /// model already on disk a migration path. Whether an absent *pushed*
+    /// phase is legal at all is the ingest handler's call, not this function's.
+    #[test]
+    fn test_phases_agree_treats_absence_as_compatible() {
+        assert!(phases_agree(Some("New Construction"), None));
+        assert!(phases_agree(None, Some("New Construction")));
+        assert!(phases_agree(None, None));
+    }
+
     /// A `StreamEnvelope` (line 1 of a `/rooms/stream` push) deserializes with
     /// no `rooms` key present -- proves it doesn't accidentally require one.
     #[test]
     fn test_stream_envelope_deserializes_without_rooms() {
         let json = serde_json::json!({
-            "schema_version": 5,
+            "schema_version": 6,
             "project":  { "id": "p1", "name": "Hospital Job" },
             "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
             "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
@@ -698,7 +898,7 @@ mod tests {
         });
 
         let envelope: StreamEnvelope = serde_json::from_value(json).unwrap();
-        assert_eq!(envelope.schema_version, 5);
+        assert_eq!(envelope.schema_version, SUPPORTED_SCHEMA);
         assert_eq!(envelope.project.id, "p1");
         assert_eq!(envelope.model.source, "revit");
         assert_eq!(envelope.levels.len(), 1);
@@ -713,7 +913,7 @@ mod tests {
     #[test]
     fn test_payload_deserializes_without_snapshot() {
         let json = serde_json::json!({
-            "schema_version": 5,
+            "schema_version": 6,
             "project":  { "id": "p1", "name": "Hospital Job" },
             "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
             "levels": [],
