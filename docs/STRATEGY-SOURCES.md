@@ -280,6 +280,24 @@ Both are now per source:
   `field_coverage`, plus a cross-source `discrepancies` total. Each source
   declares its own link property, so "which rooms resolved no link value" is a
   different question per source and cannot share a list.
+- **Both sides of the join are checked, and the questions are not symmetric.**
+  On the rooms: duplicate link ids (`duplicate_link_values`), rooms with no
+  value set (`rooms_missing_link_value`), rooms whose id finds no record
+  (`rooms_unmatched`). On the source: records no room reaches
+  (`reference_unmatched`), ids used by more than one row
+  (`reference_duplicate_ids`), rows with no id at all
+  (`reference_blank_id_rows`).
+- **The source-side checks exist because the loader is lossy.** `by_id` keeps
+  one record per id, so a repeated id overwrites the row before it
+  (last-write-wins) and a blank id skips the row entirely. Both are recorded at
+  load (`ReferenceData::duplicate_ids` / `blank_id_rows`) because nothing
+  downstream can detect them — `record_count` is already the deduplicated
+  number, and a surviving record still matches its room, so it is neither
+  unmatched nor a mismatch. Surfaced at upload (where the operator is looking at
+  the file), as a `tracing::warn!` (the loader also runs at boot), and in the QA
+  report. Last-write-wins is kept deliberately: there is no better arbitrary
+  winner, so the fix is to report the arbitrariness rather than pick
+  differently.
 
 No source is privileged anywhere on the read path — `"drofus"` is simply the
 name most projects configure.

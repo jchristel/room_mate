@@ -10,6 +10,15 @@
 //! configured but not yet uploaded is skipped, not failed — "declared,
 //! nothing uploaded yet" is a normal state, the same "signal, not error"
 //! policy the unmatched-key checks themselves follow.
+//!
+//! **Unmatched is reported in both directions**, and only one of them is
+//! obvious. Every other check here walks the rooms and asks the source a
+//! question, so `rooms_unmatched` ("this room has no record") falls out
+//! naturally. `reference_unmatched` ("this record has no room") requires
+//! walking the source instead, and its absence used to fail silently in the
+//! worst way: a source of 200 rows joined against 50 rooms reported zero
+//! unmatched and read as clean. A reconciliation report exists to notice the
+//! two sides disagree, and that was half the disagreement.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -98,7 +107,7 @@ pub struct ErrorRoomInfo {
 }
 
 /// Discrepancy tallies so a consumer (MCP `get_validation`, the browser panel)
-/// can answer "how many discrepancies?" without re-summing the six lists.
+/// can answer "how many discrepancies?" without re-summing the seven lists.
 /// Category counts are the **list lengths** — `duplicate_link_values` counts
 /// duplicate-value *groups*, not the rooms in them — matching the panel's
 /// existing issue count. `total` is their sum.
@@ -108,6 +117,9 @@ pub struct DiscrepancyCounts {
     pub rooms_missing_link_value: usize,
     pub duplicate_link_values: usize,
     pub rooms_unmatched: usize,
+    pub reference_unmatched: usize,
+    pub reference_duplicate_ids: usize,
+    pub reference_blank_id_rows: usize,
     pub property_mismatches: usize,
     pub fields_absent_in_revit: usize,
     pub fields_empty_in_revit: usize,
@@ -122,6 +134,9 @@ impl DiscrepancyCounts {
         self.rooms_missing_link_value += other.rooms_missing_link_value;
         self.duplicate_link_values += other.duplicate_link_values;
         self.rooms_unmatched += other.rooms_unmatched;
+        self.reference_unmatched += other.reference_unmatched;
+        self.reference_duplicate_ids += other.reference_duplicate_ids;
+        self.reference_blank_id_rows += other.reference_blank_id_rows;
         self.property_mismatches += other.property_mismatches;
         self.fields_absent_in_revit += other.fields_absent_in_revit;
         self.fields_empty_in_revit += other.fields_empty_in_revit;
@@ -137,7 +152,36 @@ pub struct SourceValidation {
     pub link_property: String,
     pub rooms_missing_link_value: Vec<String>,
     pub duplicate_link_values: Vec<DuplicateLinkValue>,
+    /// Rooms whose link value finds no record in this source.
     pub rooms_unmatched: Vec<String>,
+    /// **The other direction**: link values this source carries that no room
+    /// resolves to, ascending. `rooms_unmatched` answers "which rooms have no
+    /// record?"; without this, "which records have no room?" was never asked,
+    /// and a source of 200 rows joined against 50 rooms reported zero
+    /// unmatched and read as clean.
+    ///
+    /// A value shared by several rooms is **matched**, not listed here: the
+    /// records do have rooms pointing at them, and the ambiguity is already
+    /// reported once as `duplicate_link_values`. Listing it again in the
+    /// opposite direction would double-count one problem.
+    ///
+    /// Bare values, with no per-record detail. `error_rooms` cannot serve this
+    /// list — its entries are keyed by room id and there is no room here —
+    /// and the link value is the identity a reader needs to go find the row.
+    pub reference_unmatched: Vec<String>,
+    /// Ids the source repeated across rows. **Data the loader threw away**:
+    /// `by_id` keeps one row per id, so every earlier row for a repeated id is
+    /// gone and the surviving values are whichever sat lowest in the file.
+    /// Nothing downstream can detect that — the record still matches a room,
+    /// so it is neither unmatched nor a mismatch — which is why it has to be
+    /// reported from the load itself (`ReferenceData::duplicate_ids`).
+    pub reference_duplicate_ids: Vec<String>,
+    /// Rows the source left without an id, and which the loader therefore
+    /// skipped. A count: a row with no id has nothing to name it by. Mostly
+    /// harmless (a trailing blank line) but the signal that catches the
+    /// expensive case — a CSV whose key column was mis-selected loads as zero
+    /// records and would otherwise look merely empty.
+    pub reference_blank_id_rows: usize,
     pub property_mismatches: Vec<PropertyMismatch>,
     pub fields_absent_in_revit: Vec<MissingInRevit>,
     pub fields_empty_in_revit: Vec<MissingInRevit>,
@@ -338,14 +382,20 @@ fn collect_error_rooms(
 /// Pure computation behind `compute_project_validation` — pulled out so it's
 /// testable without a full `AppState`, same shape as `resolve_label_fields`.
 ///
-/// Four checks, in order: (1) does every room resolve a value for the link
+/// Five checks, in order: (1) does every room resolve a value for the link
 /// property (`resolve_link_values`); (2) among those that do, is the value
 /// actually unique per room (a shared value is ambiguous — recorded, then
-/// excluded from the rest); (3) does each remaining room's value find a dRofus
+/// excluded from the rest); (3) does each remaining room's value find a
 /// record; (4) for rooms that do, does every reconciled, non-`Ignore`d
-/// property agree between the two sides (`field_values_agree`). Also reports
-/// `field_coverage` (`compute_field_coverage`): which dRofus fields this pass
-/// actually checks at all, for the panel's "what's being QA'd" reference.
+/// property agree between the two sides (`field_values_agree`); and (5) the
+/// reverse of (3) — which of the source's records did no room reach at all.
+///
+/// (5) is the only one that walks the source rather than the rooms, which is
+/// exactly why it was missing: every other question starts from a room.
+///
+/// Also reports `field_coverage` (`compute_field_coverage`): which of the
+/// source's fields this pass actually checks at all, for the panel's "what's
+/// being QA'd" reference.
 pub fn compute_validation(
     project_id: &str,
     stored: &[(ModelKey, RoomPayload)],
@@ -413,18 +463,37 @@ pub fn compute_validation(
         }
     }
 
+    // Phase 4 — the reverse direction: records this source carries that no room
+    // points at. Every check above walks the ROOMS and asks the source a
+    // question; this is the only one that walks the source.
+    //
+    // `by_value` holds every link value the rooms resolved, whether or not it
+    // matched a record — so subtracting it from the source's keys leaves
+    // exactly the records nothing reached. That also gives the duplicate case
+    // the right answer for free: a value with several rooms is present in
+    // `by_value`, so its record counts as matched (ambiguously) and is not
+    // re-reported here. `by_id` is a `BTreeMap`, so the result is ascending.
+    let reference_unmatched: Vec<String> =
+        reference.by_id.keys().filter(|id| !by_value.contains_key(*id)).cloned().collect();
+
     // Per-category counts (list lengths — duplicate counts as groups, matching
     // the panel's issue count) and their total, so a consumer needn't re-sum.
     let discrepancies = DiscrepancyCounts {
         total: rooms_missing_link_value.len()
             + duplicate_link_values.len()
             + rooms_unmatched.len()
+            + reference_unmatched.len()
+            + reference.duplicate_ids.len()
+            + reference.blank_id_rows
             + property_mismatches.len()
             + fields_absent_in_revit.len()
             + fields_empty_in_revit.len(),
         rooms_missing_link_value: rooms_missing_link_value.len(),
         duplicate_link_values: duplicate_link_values.len(),
         rooms_unmatched: rooms_unmatched.len(),
+        reference_unmatched: reference_unmatched.len(),
+        reference_duplicate_ids: reference.duplicate_ids.len(),
+        reference_blank_id_rows: reference.blank_id_rows,
         property_mismatches: property_mismatches.len(),
         fields_absent_in_revit: fields_absent_in_revit.len(),
         fields_empty_in_revit: fields_empty_in_revit.len(),
@@ -446,6 +515,9 @@ pub fn compute_validation(
         rooms_missing_link_value,
         duplicate_link_values,
         rooms_unmatched,
+        reference_unmatched,
+        reference_duplicate_ids: reference.duplicate_ids.clone(),
+        reference_blank_id_rows: reference.blank_id_rows,
         property_mismatches,
         fields_absent_in_revit,
         fields_empty_in_revit,
@@ -572,6 +644,8 @@ mod tests {
             by_id,
             reconciliation: reconciliation_map,
             all_labels: all_labels.into_iter().collect(),
+            duplicate_ids: vec![],
+            blank_id_rows: 0,
         }
     }
 
@@ -1015,6 +1089,79 @@ mod tests {
         // cannot hide behind a clean first one.
         assert_eq!(result.discrepancies.total, 1);
         assert_eq!(result.discrepancies.property_mismatches, 1);
+    }
+
+    /// **The gap this check closes.** A source carrying records no room
+    /// reaches used to report nothing at all: every other check starts from a
+    /// room, so records the rooms never mention were invisible. Two rooms
+    /// against four records must surface the two orphans.
+    #[test]
+    fn test_records_no_room_reaches_are_reported() {
+        let rooms = vec![
+            make_room("r1", "One", &[("Number", "101")]),
+            make_room("r2", "Two", &[("Number", "102")]),
+        ];
+        let (key, payload) = make_payload("p1", rooms);
+        let stored = vec![(key, payload)];
+        let reference = make_drofus(
+            "Number",
+            &[
+                ("101", &[("NetArea", "10")]),
+                ("102", &[("NetArea", "20")]),
+                ("903", &[("NetArea", "30")]), // no room
+                ("904", &[("NetArea", "40")]), // no room
+            ],
+            &[],
+        );
+
+        let result = compute_validation("p1", &stored, &reference, &[], &[]);
+
+        assert_eq!(
+            result.reference_unmatched,
+            vec!["903".to_string(), "904".to_string()],
+            "ascending, and only the orphans"
+        );
+        assert!(result.rooms_unmatched.is_empty(), "both rooms did find a record");
+        assert_eq!(result.discrepancies.reference_unmatched, 2);
+        assert_eq!(result.discrepancies.total, 2, "counts toward the header total");
+    }
+
+    /// A link value shared by several rooms is **matched**, not an orphan: the
+    /// record does have rooms pointing at it, and the ambiguity is already
+    /// reported once as a duplicate. Listing it again in the other direction
+    /// would report one problem twice.
+    #[test]
+    fn test_a_duplicated_link_value_is_not_also_an_orphan() {
+        let rooms = vec![
+            make_room("r1", "One", &[("Number", "101")]),
+            make_room("r2", "Two", &[("Number", "101")]), // same value
+        ];
+        let (key, payload) = make_payload("p1", rooms);
+        let stored = vec![(key, payload)];
+        let reference = make_drofus("Number", &[("101", &[("NetArea", "10")])], &[]);
+
+        let result = compute_validation("p1", &stored, &reference, &[], &[]);
+
+        assert_eq!(result.duplicate_link_values.len(), 1, "reported as ambiguous");
+        assert!(result.reference_unmatched.is_empty(), "record 101 has rooms — not an orphan");
+        assert_eq!(result.discrepancies.total, 1, "one problem, counted once");
+    }
+
+    /// A room that resolved a link value matching nothing is an orphan on the
+    /// ROOM side only. The two directions are independent and both reported.
+    #[test]
+    fn test_both_directions_are_reported_independently() {
+        let rooms = vec![make_room("r1", "One", &[("Number", "101")])];
+        let (key, payload) = make_payload("p1", rooms);
+        let stored = vec![(key, payload)];
+        // The one room points at 101; the source only knows 999.
+        let reference = make_drofus("Number", &[("999", &[("NetArea", "10")])], &[]);
+
+        let result = compute_validation("p1", &stored, &reference, &[], &[]);
+
+        assert_eq!(result.rooms_unmatched, vec!["r1".to_string()], "the room found no record");
+        assert_eq!(result.reference_unmatched, vec!["999".to_string()], "the record found no room");
+        assert_eq!(result.discrepancies.total, 2, "two distinct findings, not one");
     }
 
     /// A project with no reference source at all answers an empty map, not an

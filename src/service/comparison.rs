@@ -498,6 +498,8 @@ mod tests {
                 .collect(),
             reconciliation: BTreeMap::new(),
             all_labels: vec![],
+            duplicate_ids: vec![],
+            blank_id_rows: 0,
         }
     }
 

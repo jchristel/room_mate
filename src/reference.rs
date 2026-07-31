@@ -20,7 +20,7 @@
 //! is where it came from; nothing else about the module is dRofus-specific,
 //! and a source declaring that shape parses here whatever it is called.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context;
 use serde::Serialize;
@@ -59,6 +59,31 @@ pub struct ReferenceData {
     /// so it can show "not currently checked" for a label that has no mapping
     /// rather than silently omitting it.
     pub all_labels: Vec<String>,
+
+    /// Ids that appeared on **more than one data row**, ascending, each named
+    /// once however many times it repeated.
+    ///
+    /// `by_id` is a map, so a repeated id can only keep one row: the last one
+    /// wins and the earlier ones are gone. That is a lossy, order-dependent
+    /// outcome — the surviving values are whichever happened to sit lowest in
+    /// the file — and it used to happen in total silence: the count reported
+    /// back was already the deduplicated one, so a 200-row CSV with five
+    /// repeats reported 195 records and nothing anywhere said why.
+    ///
+    /// The load still keeps last-write-wins rather than guessing a better
+    /// winner (there isn't one), but it now records what it dropped, so the
+    /// arbitrariness is *reported* rather than hidden. See
+    /// `service::validation`'s `reference_duplicate_ids`.
+    pub duplicate_ids: Vec<String>,
+
+    /// Data rows whose id cell (column 0) was empty, and which are therefore
+    /// not in `by_id` at all. A count, not a list, because a row with no id
+    /// has nothing to name it by.
+    ///
+    /// Skipping them is deliberate — one blank line should not fail a whole
+    /// upload — but skipping them *silently* meant a CSV whose key column was
+    /// mis-selected could load as zero records and look merely empty.
+    pub blank_id_rows: usize,
 }
 
 /// Read the two-header-row CSV into ReferenceData. Fail fast (startup) on a
@@ -105,12 +130,23 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
 
     // Data rows: col 0 is the dRofus id (the key), cols 1+ are values keyed by
     // the row-1 label at the same column index.
+    // Both counters below exist because this loop is *lossy* in two ways, and
+    // both used to be invisible: a blank id skips the row, and a repeated id
+    // overwrites the row before it. `by_id.len()` reports the survivors, so
+    // without these the loss could not be seen from the outside at all.
     let mut by_id = BTreeMap::new();
+    let mut duplicate_ids = BTreeSet::new();
+    let mut blank_id_rows = 0usize;
     for row in records {
         let row = row?;
         let id = match row.get(0) {
             Some(id) if !id.is_empty() => id.to_string(),
-            _ => continue, // skip blank-key rows rather than fail the whole load
+            _ => {
+                // Skipped, not fatal — one blank line must not fail an upload.
+                // Counted, so "my 200-row CSV loaded 0 records" has an answer.
+                blank_id_rows += 1;
+                continue;
+            }
         };
         let mut fields = BTreeMap::new();
         for col in 1..labels.len() {
@@ -118,11 +154,35 @@ pub fn load_reference_from_reader<R: std::io::Read>(reader: R) -> anyhow::Result
                 fields.insert(label.to_string(), val.to_string());
             }
         }
-        by_id.insert(id, ReferenceRecord { fields });
+        // A `BTreeSet` so an id repeated five times is named once, and the
+        // result is ascending for a stable report.
+        if by_id.insert(id.clone(), ReferenceRecord { fields }).is_some() {
+            duplicate_ids.insert(id);
+        }
     }
 
-    tracing::info!("loaded {} dRofus record(s); link property = {}", by_id.len(), link_property);
-    Ok(ReferenceData { link_property, by_id, reconciliation, all_labels })
+    // Warn as well as report: the loader also runs at boot, where nobody is
+    // looking at an HTTP response.
+    if !duplicate_ids.is_empty() {
+        tracing::warn!(
+            "reference CSV has {} repeated id(s) — only the last row of each was kept: {}",
+            duplicate_ids.len(),
+            duplicate_ids.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+        );
+    }
+    if blank_id_rows > 0 {
+        tracing::warn!("reference CSV has {blank_id_rows} row(s) with an empty id column — skipped");
+    }
+    tracing::info!("loaded {} reference record(s); link property = {}", by_id.len(), link_property);
+
+    Ok(ReferenceData {
+        link_property,
+        by_id,
+        reconciliation,
+        all_labels,
+        duplicate_ids: duplicate_ids.into_iter().collect(),
+        blank_id_rows,
+    })
 }
 
 /// Load a dRofus CSV from raw bytes (an upload body, or a stored upload
@@ -138,6 +198,71 @@ pub fn load_reference_from_bytes(bytes: &[u8]) -> anyhow::Result<ReferenceData> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The silent data loss this reports.** `by_id` keeps one row per id, so
+    /// three rows sharing an id collapse to one — last write wins, meaning the
+    /// surviving values are whichever sat lowest in the file. That is
+    /// arbitrary, and it used to happen with nothing said: `record_count` was
+    /// already the deduplicated number.
+    #[test]
+    fn test_repeated_ids_are_reported_and_last_row_wins() {
+        let data = load_reference_from_bytes(
+            b"DrofusRoomId,NetArea
+Number,Area
+1,first
+1,second
+1,third
+2,only
+",
+        )
+        .unwrap();
+
+        assert_eq!(data.by_id.len(), 2, "four rows, two surviving records");
+        assert_eq!(data.duplicate_ids, vec!["1".to_string()], "named once, however many times it repeated");
+        assert_eq!(
+            data.by_id["1"].fields.get("NetArea"),
+            Some(&"third".to_string()),
+            "last row wins -- arbitrary, which is exactly why it is reported"
+        );
+        assert_eq!(data.blank_id_rows, 0);
+    }
+
+    /// Rows with an empty id cell are skipped — one trailing blank line must
+    /// not fail an upload — but counted, so "my CSV loaded zero records" has
+    /// an answer instead of looking merely empty.
+    #[test]
+    fn test_blank_id_rows_are_skipped_but_counted() {
+        let data = load_reference_from_bytes(
+            b"DrofusRoomId,NetArea
+Number,Area
+1,ok
+,orphan
+,another
+",
+        )
+        .unwrap();
+
+        assert_eq!(data.by_id.len(), 1);
+        assert_eq!(data.blank_id_rows, 2);
+        assert!(data.duplicate_ids.is_empty(), "a missing id is not a repeated one");
+    }
+
+    /// A clean CSV reports neither — the diagnostics must not cry wolf.
+    #[test]
+    fn test_a_clean_csv_reports_no_loss() {
+        let data = load_reference_from_bytes(
+            b"DrofusRoomId,NetArea
+Number,Area
+1,10
+2,20
+",
+        )
+        .unwrap();
+
+        assert_eq!(data.by_id.len(), 2);
+        assert!(data.duplicate_ids.is_empty());
+        assert_eq!(data.blank_id_rows, 0);
+    }
 
     /// Row 2's non-link columns populate `reconciliation` (label -> Revit
     /// property name); a blank Revit-name cell is skipped, not fatal.

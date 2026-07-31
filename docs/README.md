@@ -33,20 +33,19 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 ## Open handovers
 
-**Two.** Everything else has landed and moved to [Superseded](Superseded/).
+**One.** Everything else has landed and moved to [Superseded](Superseded/).
 
 | Document | Status |
 |---|---|
 | [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested. **Two false-positive checks left** — that the graph does not link rooms across a corridor, or through a thin service room — and they need a hospital-scale finish-face export this repo does not have. House A cannot settle them: a `wall_max` sweep on it saturates at 1.5 ft, so there is nothing at corridor distance to wrongly bridge. The item's other three asks are done or moved to [Area calculation](STRATEGY-AREA-CALCULATION.md) |
-| [QA cardinality & unmatched coverage](HANDOVER-qa-cardinality-and-coverage.md) | Not started, two items. **Duplicate link values are unconditionally treated as ambiguous**, which hardcodes a 1:1 assumption a bucket-shaped source (a hardware schedule) breaks; needs a per-source `link_cardinality`. And **unmatched is only checked room→source**: nothing reports source records with no room, so a 200-row CSV against 50 rooms reports zero unmatched and reads as clean. The second is smaller and independent — do it first |
 
 Handoff documents whose work has fully landed live in
 [Superseded](Superseded/) — most recently `HANDOVER-ui-layout.md` (every
 decision built, the inspector last), `HANDOVER-room-inspector.md` and
 `HANDOVER-culling-disable-switch.md`.
 
-Two of those are worth knowing about even though they are superseded, because
-each leaves something recorded rather than pending:
+Three of those are worth knowing about even though they are superseded,
+because each leaves something recorded rather than pending:
 
 - **[Room inspector](Superseded/HANDOVER-room-inspector.md)** — step 6, a
   checkbox property picker, was deliberately not built. Hide-empty plus the name
@@ -55,6 +54,13 @@ each leaves something recorded rather than pending:
   — the switch is permanent (`CULL_ENABLED` in `index.html`) and that document is
   the method for re-measuring whenever the renderer changes. Last run:
   **16.5 ms/frame with culling, 912 ms without.**
+- **[QA coverage of the secondary source](Superseded/HANDOVER-qa-cardinality-and-coverage.md)**
+  — closed, but it records a mis-diagnosis worth not repeating: two drafts read
+  `duplicate_link_values` as "the reference source has duplicates" when it means
+  "the rooms do", and so proposed a cardinality *setting* while the loader was
+  silently discarding duplicate and blank-id rows. The two sides of a join are
+  different questions; a check named after the join does not say which side it
+  inspects.
 
 Area calculation no longer has a handover: its design moved into
 [Area calculation](STRATEGY-AREA-CALCULATION.md), which is the live document and
