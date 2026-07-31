@@ -355,6 +355,13 @@
     font-size: 0.72rem; margin: 0 0 0.5rem; text-transform: uppercase; letter-spacing: 0.06em;
   }
   .band-body .qa-source-meta { text-transform: none; letter-spacing: 0; opacity: 0.7; font-weight: 400; }
+  /* The phase block is not a source block: it reports that the models disagree
+     about which Revit phase they were filtered to, which is a property of the
+     project rather than of anything joined onto it. Accented so it does not
+     read as a fourth reference source in the list. */
+  .band-body section.qa-phases { border-top-color: var(--accent); }
+  .band-body section.qa-phases > h2 { color: var(--accent); }
+  .band-body section.qa-phases > p { margin: 0 0 0.4rem; opacity: 0.8; }
   .band-body ul { margin: 0; padding-left: 1.1rem; }
   .band-body .mismatch { margin-bottom: 0.3rem; }
   .band-body .ok { opacity: 0.6; }
@@ -1851,10 +1858,60 @@ function renderSourceValidation(name, report) {
     + `</section>`;
 }
 
+// Which Revit phase each of the project's models was filtered to, rendered ONLY
+// when they disagree.
+//
+// This is not a reference-source finding — it has no source, which is why the
+// server carries it outside `sources`. It is here because `/rooms` merges every
+// model's latest snapshot regardless of phase (enforcing agreement across models
+// would deadlock a project trying to move phase), so a plan can be assembled
+// from two different phases and still look complete. Under the immutability rule
+// that state is also permanent until someone activates a re-phase, so it will
+// not resolve itself by being ignored.
+//
+// A `null` phase is a model pushed before phasing existed: its rooms were never
+// filtered to any phase at all, which is a worse problem than disagreeing about
+// which, and reads as its own value rather than as missing metadata.
+function renderPhaseReport(phases) {
+  if (!phases || !phases.disagree) return "";
+  const rows = Object.entries(phases.by_model || {})
+    .map(([model, phase]) => `<li class="mismatch">${escapeHtml(model)}: `
+      + (phase ? escapeHtml(phase) : `<span class="uncounted">not phased — rooms were never filtered</span>`)
+      + `</li>`)
+    .join("");
+  return `<section class="qa-source qa-phases">`
+    + `<h2>Phases <span class="qa-source-meta">⚠ models disagree</span></h2>`
+    + `<p>These models were filtered to different Revit phases, so the plan above `
+    + `merges rooms from more than one phase. Areas, adjacency and room counts `
+    + `across models are not comparable while this holds.</p>`
+    + `<ul>${rows}</ul></section>`;
+}
+
+// The collapsed strip's label — **one definition**, because it is written from
+// two places: a fresh report, and the expand/collapse toggle. They used to
+// build it separately, and adding the phase marker to only the first meant the
+// marker vanished the moment you expanded the panel — a strip reading "✓" over
+// a body full of findings, which is worse than no strip at all.
+//
+// A phase disagreement is its own marker rather than folded into the count:
+// `discrepancies.total` is summed per reference source and means "rows that
+// failed to reconcile", so adding one for a project-level phase problem would
+// make the number mean two things.
+function qaStripLabel() {
+  const d = currentValidation;
+  if (!d) return "QA";
+  const marks = [];
+  const issues = d.discrepancies?.total ?? 0;
+  if (issues) marks.push(`<span class="issues">⚠ ${issues}</span>`);
+  if (d.phases?.disagree) marks.push(`<span class="issues">⚠ mixed phases</span>`);
+  return "QA · " + (marks.length ? marks.join(" · ") : "✓");
+}
+
 // Update the globals from a fresh report and reflect it into the QA band.
 function renderValidation(data) {
   currentValidation = data;
   const sources = Object.entries(data.sources || {});
+  const phaseSection = renderPhaseReport(data.phases);
 
   // The union across sources: a room is flagged on the plan if ANY source
   // has something to say about it. Which source is in the band, not the plan.
@@ -1863,7 +1920,12 @@ function renderValidation(data) {
   const band = document.getElementById("qaBand");
   // No configured-and-loaded source anywhere = nothing to reconcile. This is
   // the empty-map form of what `drofus_configured: false` used to say.
-  if (sources.length === 0) {
+  //
+  // A phase disagreement keeps the band open regardless: it owes nothing to
+  // reference data, and a project that reconciles against nothing is exactly
+  // the one where nobody would otherwise be looking. The server computes the
+  // phase report before its own no-sources bail for the same reason.
+  if (sources.length === 0 && !phaseSection) {
     band.classList.add("hidden");
     updateRegionHeight();
     setShowErrors(false);
@@ -1880,11 +1942,13 @@ function renderValidation(data) {
   const issueCount = data.discrepancies?.total ?? 0;
 
   const open = !document.getElementById("qaBody").classList.contains("hidden");
-  document.getElementById("qaHead").innerHTML =
-    `${open ? "▾" : "▸"} QA · ` + (issueCount ? `<span class="issues">⚠ ${issueCount}</span>` : "✓");
+  document.getElementById("qaHead").innerHTML = `${open ? "▾" : "▸"} ` + qaStripLabel();
 
   document.getElementById("qaContent").innerHTML =
-    `<p>${data.total_rooms} room(s) checked against ${sources.length} reference source(s).</p>`
+    (sources.length
+      ? `<p>${data.total_rooms} room(s) checked against ${sources.length} reference source(s).</p>`
+      : `<p>No reference source configured — nothing to reconcile.</p>`)
+    + phaseSection
     + sources.map(([name, report]) => renderSourceValidation(name, report)).join("");
 
   // A fresh report re-addresses the grid's QA marks.
@@ -1933,6 +1997,17 @@ function csvEscape(value) {
 // link_value come from that source's per-room detail (error_rooms).
 function buildValidationCsv(data) {
   const rows = [["source", "room_id", "room_number", "room_name", "link_property", "link_value", "error"]];
+  // The phase disagreement first, and under a "phase" source label rather than
+  // a column of its own: it is per MODEL, not per room, so it fills none of the
+  // room columns — but splitting it into a second file would hide it from
+  // anyone who opens the sheet expecting every finding in one place.
+  if (data.phases?.disagree) {
+    for (const [model, phase] of Object.entries(data.phases.by_model || {})) {
+      rows.push(["phase", "", "", "", "", "",
+        `model ${model} is on phase ${phase ?? "(none — rooms were never filtered)"}; `
+        + `this project's models disagree, so the merged plan spans more than one phase`]);
+    }
+  }
   for (const [name, report] of Object.entries(data.sources || {})) {
     const info = report.error_rooms || {};
     const label = sourceDisplayName(name);
@@ -1974,7 +2049,14 @@ function downloadCsv(filename, csvText) {
 }
 
 function downloadValidationCsv() {
-  if (!currentValidation || !Object.keys(currentValidation.sources || {}).length) return;
+  if (!currentValidation) return;
+  // A phase disagreement is downloadable on its own: the band is visible with
+  // no reference source configured in exactly that case, and a Download button
+  // that silently does nothing while findings are on screen is worse than no
+  // button.
+  const hasFindings =
+    Object.keys(currentValidation.sources || {}).length > 0 || currentValidation.phases?.disagree;
+  if (!hasFindings) return;
   downloadCsv(`validation-${projectId || "project"}.csv`, buildValidationCsv(currentValidation));
 }
 
@@ -3964,12 +4046,7 @@ function clampBand1() {
 }
 
 document.getElementById("qaHead").addEventListener("click", () => {
-  const open = toggleBand("qaBody", "qaHead", () => {
-    const d = currentValidation;
-    if (!d) return "QA";
-    const n = d.discrepancies?.total ?? 0;
-    return "QA · " + (n ? `<span class="issues">⚠ ${n}</span>` : "✓");
-  });
+  const open = toggleBand("qaBody", "qaHead", qaStripLabel);
   // Expanding the results turns on the plans' error highlighting — the same
   // coupling the old side panel had, now attached to a page-level block.
   setShowErrors(open);
