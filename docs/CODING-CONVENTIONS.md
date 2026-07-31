@@ -18,14 +18,32 @@ write it" that sits underneath.
 - A type's inherent `impl { fn validate() }` stays *with the type*; only
   standalone free functions move to a sibling file (see `settings/`).
 
-**Where the codebase actually stands (measured 2026-07-26).** Eight modules are
-past the ~500 real-line trigger — `service/areas.rs` (1,072), `service/rooms.rs`
-(1,021), `settings/mod.rs` (804), `service/adjacency.rs` (748), `handlers.rs`
-(586), `bin/mcp.rs` (551), `settings_api.rs` (531), `contract.rs` (519). That is
-not automatically a defect: the trigger is "worth a second look", not a limit.
-But only `adjacency.rs` writes down *why* it declined to split, and a rule
-nothing is measured against stops being a rule. Two of the eight are worth
-naming specifically:
+**Where the codebase actually stands (measured 2026-08-01, after phasing).**
+Eleven modules are past the ~500 real-line trigger — `service/rooms.rs` (1,099),
+`service/areas.rs` (1,086), `settings/mod.rs` (826), `service/adjacency.rs`
+(763), `handlers.rs` (744), `bin/mcp.rs` (692), `service/validation.rs` (646),
+`contract.rs` (615), `storage/fs.rs` (583), `settings_api.rs` (511). That is not
+automatically a defect: the trigger is "worth a second look", not a limit. But
+only `adjacency.rs` writes down *why* it declined to split, and a rule nothing is
+measured against stops being a rule.
+
+Three moved materially since the last measurement, all from phase support, and
+each is a different answer:
+
+- **`handlers.rs` (586 → 744)** absorbed the ingest phase rules (`decide_phase`,
+  `store_or_quarantine`) plus the pending routes. Ingest is the one part of this
+  file with no `service/` counterpart — it has no derive logic worth sharing with
+  MCP, which exposes no ingest — so it accretes here by design. The seam if it
+  ever splits is obvious and clean: ingest versus the read adapters.
+- **`contract.rs` (519 → 615)** took the phase field and its two helpers.
+  [Entities](STRATEGY-ENTITIES.md) called for splitting this into `contract/`
+  when doors land, and that argument still holds — doors are a *distinct entity*,
+  a natural seam rather than a mechanical one. Phase alone did not justify it.
+- **`storage/fs.rs` (→ 583)** is newly over the trigger, from the pending-snapshot
+  quarantine. It stays whole: it is one impl of one trait, and splitting an impl
+  from its trait contract would separate the rules from the code that keeps them.
+
+Two of the long-standing eleven are still worth naming specifically:
 
 - **`settings/mod.rs` at 804 lines is the one that reads as unfinished.** The
   `settings/` split was done — and is cited above as the worked example — yet
@@ -77,8 +95,8 @@ naming specifically:
 ## `static/` has no conventions yet — and that is now the open question
 These rules are Rust-only. `PLAN-handover-actioning.md`'s P10 flagged that gap
 and deliberately left it a question rather than answering it by accretion, when
-`index.html` was 2,020 lines. It is now **3,941** (~3,260 of them one inline
-`<script>`), and two extractions have happened since without a rule prompting
+`index.html` was 2,020 lines. It is now **4,211** (3,511 of them one inline
+`<script>`; measured 2026-08-01), and two extractions have happened since without a rule prompting
 them — `common.js` (the palette and the classification-path vocabulary, moved
 because two views disagreeing about a group's identity is worse than either
 being arbitrary) and `graph.js` (moved because the concern boundary is a

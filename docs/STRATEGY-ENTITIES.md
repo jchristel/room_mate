@@ -5,13 +5,13 @@ agreed for the pipeline's *second* primary entity — doors — and for the phas
 selection every primary entity after rooms will need, so the first
 implementation doesn't re-derive it.
 
-> **Decision 2 (phasing) has been superseded in part.** Phasing was built ahead
-> of doors, and several details changed once it met the code — the phase is a
-> bare name, comparison is case-insensitive, a disagreeing push is quarantined
-> rather than refused, and a model's phase is immutable once set.
-> **[PLAN-phasing.md](PLAN-phasing.md) is authoritative for phase**; it carries a
-> table of exactly what here still stands. The rest of this document — Decisions
-> 1 and 3 through 6 — is untouched and still design-only.
+> **Decision 2 (phasing) is built, and has been rewritten here to match.** It
+> shipped ahead of doors and several details changed on contact with the code;
+> rather than leave the original sketch standing behind a warning, 2a and 2c now
+> describe what exists and say what they replaced. **[PLAN-phasing.md](PLAN-phasing.md)
+> carries the full rationale** and is authoritative if the two ever drift. The
+> rest of this document — Decisions 1 and 3 through 6 — is untouched and still
+> design-only.
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Server](STRATEGY-SERVER.md) ·
@@ -86,20 +86,19 @@ What does **not** generalize, and is per-entity work every time:
 
 ## Decision 2: one phase per push, chosen by the user, carried on the envelope
 
-> **Superseded in part — see [PLAN-phasing.md](PLAN-phasing.md).** What follows
-> is the original design; these five points changed when it was built:
-> the phase is a bare name, not `{id, name}` (2a); comparison folds case rather
-> than respecting it (2c); a disagreeing push is quarantined and promotable, not
-> a 422 (2c); a model's phase is **immutable** once set, which this doc did not
-> say; and requiring it at ingest bumped `SUPPORTED_SCHEMA` to 6, where 2c
-> predicted no bump. 2b (the range test, extractor-side, ordered list off the
-> wire), 2d and 2e stand as written.
+> **Built, ahead of doors.** This section has been rewritten to describe what
+> actually shipped rather than what was first sketched;
+> [PLAN-phasing.md](PLAN-phasing.md) carries the full rationale and the ten
+> decisions behind it, and is authoritative where the two ever drift.
 
-Revit phasing will surface on doors now and on FFE later. RoomMate supports
-**exactly one phase per push** for the foreseeable future. Multi-phase
-comparison is deliberately out of scope: it is a second axis crossing the
-snapshot axis, and milestones already answer "the model as it was on date X"
-without it.
+Phasing landed on **rooms** first, which reverses the order this document
+assumed — it was designed as something doors would introduce. That turned out to
+be the right way round: phasing is an envelope concern, and building it against
+the entity that already existed meant doors inherit it rather than define it.
+
+RoomMate supports **exactly one phase per push**. Multi-phase comparison is
+deliberately out of scope: it is a second axis crossing the snapshot axis, and
+milestones already answer "the model as it was on date X" without it.
 
 The phase is a **user choice at export time**, not a document fact. That makes it
 the first authored field on the envelope — `model_to_shared` and `room_boundary`
@@ -107,20 +106,29 @@ are both read off the document, and someone will eventually try to "fix" this on
 by reading it from the doc too. It cannot be: a document has many phases and only
 the user knows which one is being pushed.
 
-### 2a. Phase identity is the name; the id is per-document
+### 2a. The phase is a name, and only a name
 
 Each document has its own phases with its own ElementIds, so "New Construction"
 in the architectural model and in the structural model are *different ids*. This
 is the `Level.id` problem the codebase already solved — a level id is unique only
 within one model, which is why `service::rooms` phase 2 dedups levels across
-linked models. Phases get the same treatment: carry `{ id, name }`, stringify the
-id per the ElementId discipline ([Index](STRATEGY.md)), and key all cross-model
-reasoning on the **name**.
+linked models. So all cross-model reasoning keys on the **name**.
 
-**To verify against Revit before building:** `doors.json`'s
-`from_room[].phase_id` is `3`, low enough that it may be an *index* into
-`doc.Phases` rather than an ElementId. If it is an index it is not stable across
-models at all and is unusable even as a display value.
+This document originally proposed carrying `{ id, name }`, with the id kept for
+display and debugging. **The id was dropped.** Once the name is the identity, the
+id is a field nothing reads — and this doc's own 2b argument applies to it: an
+unread field drifts. It was also the least trustworthy value available.
+`doors.json`'s `from_room[].phase_id` is `3`, low enough to be an *index* into
+`doc.Phases` rather than an ElementId, in which case it is not stable across
+models and is useless even for display. Carrying a field that is unread *and*
+possibly wrong is the worst of both, so `phase` is a bare string on the wire:
+`"phase": "New Construction"`.
+
+Comparison folds **case and surrounding whitespace**. The original sketch made it
+case-sensitive, arguing that two phases differing only in case is a modelling
+error worth surfacing loudly. That argument was built for a world where a
+mismatch *rejected* the push; under 2c a mismatch quarantines it instead, and
+quarantining a correct export over letter-case is a bad trade.
 
 ### 2b. "Exists in the selected phase" is a range test, not equality
 
@@ -155,21 +163,44 @@ are already in the generic instance-property dump, so they land in the flat
 
 The export flow — pick model(s), resolve the phase, show the user which phase
 will be pushed, push only matching elements — is a *client* guarantee, and one
-`curl` breaks it. The server rejects a door push whose declared phase disagrees
-with the room snapshot it attaches to, with a 422: same class as the existing
-`schema_version` and unregistered-project rejections.
+`curl` breaks it. So the server enforces, and its rules turned out sharper than
+this section first proposed.
 
-**Scope that check to the `(project, model)` lineage, not the project.**
+**A lineage's phase is immutable.** It is fixed by the first phased push to a
+`(project, model)` and never moves again by ordinary means. This document did not
+originally say so; it follows from the deadlock argument below applied
+consistently.
+
+**The two failure modes are asymmetric**, which is the part worth not
+re-deriving:
+
+- a push naming a **different** phase is *not* refused. It is stored inert under
+  `<model>/pending/` and answered **202**, then made live by `POST
+  .../snapshots/pending/activate`. That pair is the only way a model re-phases.
+  Refusing instead — the original 422 — would leave a model pushed under the
+  wrong phase permanently wrong, there being no delete route;
+- a push naming **no** phase *is* refused, 422, against any lineage. It means a
+  producer predating phase support, whose elements were never filtered by 2b's
+  range test at all, so it is unfiltered mixed-phase content. There is nothing
+  worth activating, and offering to activate it would be offering to corrupt the
+  model.
+
+**Scope the check to the `(project, model)` lineage, not the project.**
 Cross-model enforcement deadlocks: to move a project from Phase A to Phase B you
 would have to push model 1 (rejected — it disagrees with model 2) and you can
 never push either first. Cross-model phase disagreement *within* a project is a
-read-time diagnostic for the validation report, not an ingest rejection —
-"signal, not error" ([Conventions](CODING-CONVENTIONS.md)).
+read-time diagnostic — `phases.disagree` on the validation report, with the raw
+per-model fact as `phase_by_model` on `/rooms` — not an ingest rejection.
+"Signal, not error" ([Conventions](CODING-CONVENTIONS.md)).
 
-A snapshot pushed before this field existed carries no phase and is "unphased".
-An unphased room snapshot accepts any door push; the check only fires when both
-sides state a phase and the names differ. Same relaxation stance as the omittable
-snapshot id, so **no schema bump** on the room contract.
+**This bumped the contract to v6**, where this section originally predicted no
+bump. The no-bump argument was sound *for an optional field*: a payload that was
+valid stays valid and means the same. It stops holding the moment the field is
+required at ingest, because a previously-valid payload now errors — which is
+exactly the test a bump exists for. The field is nonetheless still `Option` on
+the Rust type: stored snapshots are re-parsed at every boot, and a hard
+requirement there would stop the server hydrating its own store. Strictness lives
+in the handler, permissiveness in the type.
 
 ### 2d. Where the client asks
 

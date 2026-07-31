@@ -329,7 +329,10 @@ because this script must run on old and new Revit alike.
 
 ## What this supersedes
 
-[Entities](STRATEGY-ENTITIES.md) Decision 2, on these points:
+[Entities](STRATEGY-ENTITIES.md) Decision 2 has since been **rewritten in place**
+to describe what shipped, so the two no longer disagree. The table below is the
+record of what changed between design and build — useful for understanding *why*
+the decisions look as they do, not a live warning about a stale doc:
 
 | Entities said | Now |
 | --- | --- |
