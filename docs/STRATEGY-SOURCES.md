@@ -280,6 +280,12 @@ Both are now per source:
   `field_coverage`, plus a cross-source `discrepancies` total. Each source
   declares its own link property, so "which rooms resolved no link value" is a
   different question per source and cannot share a list.
+- **Unmatched is reported in both directions.** `rooms_unmatched` lists rooms
+  whose link value finds no record; `reference_unmatched` lists the source's
+  link values that no room resolves to. The second is not the mirror image for
+  free — every other check walks the rooms, so only this one walks the source —
+  and without it a source with far more rows than matching rooms reported
+  nothing at all.
 
 No source is privileged anywhere on the read path — `"drofus"` is simply the
 name most projects configure.

@@ -275,12 +275,23 @@ each module carrying its rationale in a header, all with unit tests.
   it. Computed in one pass by the pure `compute_validation` (thin async
   wrapper does the `State`/`Path` extraction, same shape as
   `resolve_label_fields`):
-  - Every room's `lookup_property` resolution against the dRofus link
+  - Every room's `lookup_property` resolution against the source's link
     property (missing → `rooms_missing_link_value`); values grouped to catch
     a link value shared by more than one room (`duplicate_link_values` —
     ambiguous, so excluded from the remaining checks, since a shared link
     can't be uniquely matched to one room); each remaining room's value
-    looked up in `DrofusData.by_id` (miss → `rooms_unmatched_in_drofus`).
+    looked up in `ReferenceData.by_id` (miss → `rooms_unmatched`).
+  - **And the reverse**: the source's own link values that no room resolves
+    to (`reference_unmatched`). Every other check starts from a room and asks
+    the source a question, so this is the only one that walks the source —
+    which is exactly why it was missing until it was added deliberately. Its
+    absence failed silently in the worst direction: a 200-row CSV joined
+    against 50 rooms reported zero unmatched and read as clean. A value shared
+    by several rooms counts as *matched* here and is reported once as a
+    duplicate rather than twice in both directions. Bare link values, not room
+    ids — there is no room, which is the finding — so these entries are not
+    jump targets in the viewer and fill only the link-value column in the CSV
+    export.
   - For a hit, every `(dRofus label, Revit property)` pair in the
     `reconciliation` map (see [Sources](STRATEGY-SOURCES.md)) is checked,
     unless that field's `drofus_fields` declaration sets `qa = "ignore"` (see

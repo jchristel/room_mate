@@ -38,7 +38,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | Document | Status |
 |---|---|
 | [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested. **Two false-positive checks left** — that the graph does not link rooms across a corridor, or through a thin service room — and they need a hospital-scale finish-face export this repo does not have. House A cannot settle them: a `wall_max` sweep on it saturates at 1.5 ft, so there is nothing at corridor distance to wrongly bridge. The item's other three asks are done or moved to [Area calculation](STRATEGY-AREA-CALCULATION.md) |
-| [QA cardinality & unmatched coverage](HANDOVER-qa-cardinality-and-coverage.md) | Not started, two items. **Duplicate link values are unconditionally treated as ambiguous**, which hardcodes a 1:1 assumption a bucket-shaped source (a hardware schedule) breaks; needs a per-source `link_cardinality`. And **unmatched is only checked room→source**: nothing reports source records with no room, so a 200-row CSV against 50 rooms reports zero unmatched and reads as clean. The second is smaller and independent — do it first |
+| [QA link cardinality](HANDOVER-qa-cardinality-and-coverage.md) | One item left. **Duplicate link values are unconditionally treated as ambiguous**, which hardcodes a 1:1 assumption a bucket-shaped source (a hardware schedule) breaks: every row would be reported as a defect and then skipped, making the report noisy *and* silently incomplete. Needs a per-source `link_cardinality` defaulting to today's behaviour. The doc's other item — unmatched reported source→room as well as room→source — is **built** |
 
 Handoff documents whose work has fully landed live in
 [Superseded](Superseded/) — most recently `HANDOVER-ui-layout.md` (every

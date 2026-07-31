@@ -1787,6 +1787,12 @@ function renderFieldCoverage(coverage) {
 // Every room id flagged by one source's report. Per source because each
 // source reconciles on its own link property, so the same room can be clean
 // for one and unmatched for another.
+//
+// `reference_unmatched` is deliberately absent: it holds the source's own
+// LINK VALUES, not room ids, and the finding is precisely that no room
+// corresponds to them. Mixing them in would put non-room ids into a set used
+// to highlight rooms on the plan and mark rows in the grid — at best inert, at
+// worst flagging an unrelated room whose id happens to equal a link value.
 function sourceErrorRoomIds(report) {
   return [
     ...report.rooms_missing_link_value,
@@ -1813,7 +1819,12 @@ function renderSourceValidation(name, report) {
     section("Missing link value", report.rooms_missing_link_value, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
     section("Duplicate link values", report.duplicate_link_values,
       d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(id => `<span${at(id)}>${escapeHtml(id)}</span>`).join(", ")}</li>`),
-    section(`Unmatched in ${label}`, report.rooms_unmatched, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
+    section(`Rooms unmatched in ${label}`, report.rooms_unmatched, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
+    // The reverse direction. Deliberately NOT a `data-room` jump target: these
+    // are the source's own link values, and there is no room to jump to — that
+    // being the entire finding.
+    section(`${label} records with no room`, report.reference_unmatched || [],
+      value => `<li>${escapeHtml(value)}</li>`),
     section("Property mismatches", report.property_mismatches, m =>
       `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}: `
       + `"${escapeHtml(m.room_value)}" vs ${label} "${escapeHtml(m.reference_value)}"</li>`),
@@ -1924,7 +1935,11 @@ function buildValidationCsv(data) {
     for (const id of report.rooms_missing_link_value) push(id, "missing link value");
     for (const dup of report.duplicate_link_values)
       for (const id of dup.room_ids) push(id, `duplicate link value: ${dup.value}`);
-    for (const id of report.rooms_unmatched) push(id, `unmatched in ${label}`);
+    for (const id of report.rooms_unmatched) push(id, `room unmatched in ${label}`);
+    // No room id, number or name — the whole point is that no room reached
+    // this record — so only the link value is filled, under its own column.
+    for (const value of report.reference_unmatched || [])
+      rows.push([label, "", "", "", report.link_property || "", value, `${label} record with no room`]);
     for (const m of report.property_mismatches)
       push(m.room_id, `property mismatch: ${m.field} (room="${m.room_value}" vs ${label}="${m.reference_value}")`);
     for (const m of report.fields_absent_in_revit) push(m.room_id, `field absent in Revit: ${m.field}`);

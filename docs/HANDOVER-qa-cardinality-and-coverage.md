@@ -1,6 +1,16 @@
-# Handover: link cardinality, and the unmatched direction QA never checks
+# Handover: link cardinality
 
-Two open items, both about **what the QA report asks**, not how it is shaped.
+> **Item 2 (the unmatched direction) is done.** `SourceValidation` now carries
+> `reference_unmatched` — the source's link values no room resolves to —
+> alongside `rooms_unmatched`, with its own `DiscrepancyCounts` entry, a QA
+> band section, and a CSV row shape that fills only the link-value column
+> (there is no room). A duplicated link value counts as *matched* and stays
+> reported once as a duplicate, so the two directions never double-count one
+> problem. **Only item 1, link cardinality, remains open.**
+>
+> Item 2's write-up is kept below as the reasoning behind what was built.
+
+One open item, about **what the QA report asks**, not how it is shaped.
 
 Supersedes `Superseded/HANDOVER-qa-generalization.md`, which proposed three
 changes. Two of them are done or were never needed:
@@ -58,7 +68,7 @@ link_cardinality = "bucket"
   per record" is one answer but not the only one. Whoever implements should
   write the chosen rule down rather than let it fall out of the loop shape.
 
-## 2. Unmatched is only checked in one direction
+## 2. Unmatched is only checked in one direction — **DONE**
 
 `compute_validation` walks the *rooms*' resolved link values and looks each one
 up in the source:
@@ -95,12 +105,19 @@ Points to settle while implementing:
   key is enough. Bare key is the smaller change and probably sufficient.
 - **Interacts with item 1.** Under `bucket`, "records with no room" is still a
   meaningful question; under either cardinality the direction is worth
-  reporting. Implement 2 first — it is independent, and smaller.
+  reporting.
+
+**As built**, all three points above were settled the way this note suggested:
+`reference_unmatched: Vec<String>` on `SourceValidation`, a matching
+`DiscrepancyCounts` field summed by `add()`, bare link values with no
+per-record detail, and no `error_rooms` involvement. The band section carries
+no `data-room`, so these are not jump targets — there is nothing to jump to.
 
 ## Still true: the entity boundary
 
-Unchanged from the superseded doc, and worth restating because it bounds both
-items above. This generalizes QA across reference sources joined onto **rooms**.
+Unchanged from the superseded doc, and worth restating because it bounds the
+cardinality item above. This generalizes QA across reference sources joined
+onto **rooms**.
 A door schedule joins onto *doors*, which are not an entity in this pipeline —
 the extractor collects no door elements. So `[sources.reference.doors]` must not
 be made to *look* QA-ready when nothing joins door-keyed data; door QA is
