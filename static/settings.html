@@ -114,6 +114,10 @@
   .ref-status { font-size: 0.7rem; margin-top: 0.35rem; }
   .ref-status.ok { color: var(--ok); }
   .ref-status.bad { color: var(--accent); }
+  /* Accepted, but rows were dropped at load (repeated or blank ids). Not
+     `bad` — the upload succeeded — but not `ok` either, because the stored
+     record count is lower than the file's row count. */
+  .ref-status.warn { color: var(--accent); opacity: 0.85; }
 
   /* Reference-source upload drop zone */
   .drop-zone {
@@ -1050,9 +1054,18 @@ async function uploadReferenceFile(src, file) {
   if (res.ok) {
     const data = JSON.parse(text);
     labelsBySource[src.name] = data.labels;
-    referenceStatus(src, "ok",
-      `✓ ${data.record_count} records · link property "${data.link_property}" · snapshot ${data.snapshot_taken_at}` +
-      (data.stored ? " — applied live" : " — duplicate snapshot id, skipped"));
+    // `record_count` is the DEDUPLICATED count, so a file with repeated or
+    // blank ids stores fewer records than it has rows. Say so here: this is
+    // the one moment the operator is looking at the file they just picked,
+    // and a bare "1 record" for a 200-row CSV is exactly the surprise worth
+    // catching now rather than in the QA panel later.
+    const lost = [];
+    if (data.duplicate_ids?.length) lost.push(`${data.duplicate_ids.length} repeated id(s), only the last row of each kept`);
+    if (data.blank_id_rows) lost.push(`${data.blank_id_rows} row(s) with no id, skipped`);
+    referenceStatus(src, lost.length ? "warn" : "ok",
+      `${lost.length ? "⚠" : "✓"} ${data.record_count} records · link property "${data.link_property}" · snapshot ${data.snapshot_taken_at}` +
+      (data.stored ? " — applied live" : " — duplicate snapshot id, skipped") +
+      (lost.length ? ` · ${lost.join(" · ")}` : ""));
     loadReferenceSnapshots(src);
   } else {
     // The server's 422 is the real validator — show it verbatim.

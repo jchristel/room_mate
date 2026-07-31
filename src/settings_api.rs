@@ -308,7 +308,15 @@ pub struct ReferenceUploadResult {
     /// the upload was skipped (never overwritten), same duplicate rule as
     /// rooms ingest.
     pub stored: bool,
+    /// Records actually stored — **the deduplicated count**, which is why the
+    /// two fields below matter: a 200-row CSV with five repeated ids reports
+    /// 195 here, and without them nothing would say where the other five went.
     pub record_count: usize,
+    /// Ids the CSV repeated; only the last row of each survived. Reported at
+    /// upload because that is the moment the operator is looking at the file.
+    pub duplicate_ids: Vec<String>,
+    /// Rows whose id cell was empty, skipped by the loader.
+    pub blank_id_rows: usize,
     pub link_property: String,
     pub labels: Vec<String>,
     pub snapshot_taken_at: String,
@@ -379,6 +387,8 @@ pub fn upload_reference(
         accepted: true,
         stored,
         record_count: data.by_id.len(),
+        duplicate_ids: data.duplicate_ids,
+        blank_id_rows: data.blank_id_rows,
         link_property: data.link_property,
         labels: data.all_labels,
         snapshot_taken_at: snapshot.taken_at,

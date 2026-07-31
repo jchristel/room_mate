@@ -118,6 +118,8 @@ pub struct DiscrepancyCounts {
     pub duplicate_link_values: usize,
     pub rooms_unmatched: usize,
     pub reference_unmatched: usize,
+    pub reference_duplicate_ids: usize,
+    pub reference_blank_id_rows: usize,
     pub property_mismatches: usize,
     pub fields_absent_in_revit: usize,
     pub fields_empty_in_revit: usize,
@@ -133,6 +135,8 @@ impl DiscrepancyCounts {
         self.duplicate_link_values += other.duplicate_link_values;
         self.rooms_unmatched += other.rooms_unmatched;
         self.reference_unmatched += other.reference_unmatched;
+        self.reference_duplicate_ids += other.reference_duplicate_ids;
+        self.reference_blank_id_rows += other.reference_blank_id_rows;
         self.property_mismatches += other.property_mismatches;
         self.fields_absent_in_revit += other.fields_absent_in_revit;
         self.fields_empty_in_revit += other.fields_empty_in_revit;
@@ -165,6 +169,19 @@ pub struct SourceValidation {
     /// list — its entries are keyed by room id and there is no room here —
     /// and the link value is the identity a reader needs to go find the row.
     pub reference_unmatched: Vec<String>,
+    /// Ids the source repeated across rows. **Data the loader threw away**:
+    /// `by_id` keeps one row per id, so every earlier row for a repeated id is
+    /// gone and the surviving values are whichever sat lowest in the file.
+    /// Nothing downstream can detect that — the record still matches a room,
+    /// so it is neither unmatched nor a mismatch — which is why it has to be
+    /// reported from the load itself (`ReferenceData::duplicate_ids`).
+    pub reference_duplicate_ids: Vec<String>,
+    /// Rows the source left without an id, and which the loader therefore
+    /// skipped. A count: a row with no id has nothing to name it by. Mostly
+    /// harmless (a trailing blank line) but the signal that catches the
+    /// expensive case — a CSV whose key column was mis-selected loads as zero
+    /// records and would otherwise look merely empty.
+    pub reference_blank_id_rows: usize,
     pub property_mismatches: Vec<PropertyMismatch>,
     pub fields_absent_in_revit: Vec<MissingInRevit>,
     pub fields_empty_in_revit: Vec<MissingInRevit>,
@@ -466,6 +483,8 @@ pub fn compute_validation(
             + duplicate_link_values.len()
             + rooms_unmatched.len()
             + reference_unmatched.len()
+            + reference.duplicate_ids.len()
+            + reference.blank_id_rows
             + property_mismatches.len()
             + fields_absent_in_revit.len()
             + fields_empty_in_revit.len(),
@@ -473,6 +492,8 @@ pub fn compute_validation(
         duplicate_link_values: duplicate_link_values.len(),
         rooms_unmatched: rooms_unmatched.len(),
         reference_unmatched: reference_unmatched.len(),
+        reference_duplicate_ids: reference.duplicate_ids.len(),
+        reference_blank_id_rows: reference.blank_id_rows,
         property_mismatches: property_mismatches.len(),
         fields_absent_in_revit: fields_absent_in_revit.len(),
         fields_empty_in_revit: fields_empty_in_revit.len(),
@@ -495,6 +516,8 @@ pub fn compute_validation(
         duplicate_link_values,
         rooms_unmatched,
         reference_unmatched,
+        reference_duplicate_ids: reference.duplicate_ids.clone(),
+        reference_blank_id_rows: reference.blank_id_rows,
         property_mismatches,
         fields_absent_in_revit,
         fields_empty_in_revit,
@@ -621,6 +644,8 @@ mod tests {
             by_id,
             reconciliation: reconciliation_map,
             all_labels: all_labels.into_iter().collect(),
+            duplicate_ids: vec![],
+            blank_id_rows: 0,
         }
     }
 

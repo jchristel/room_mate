@@ -602,6 +602,8 @@ mod tests {
             by_id: BTreeMap::new(),
             reconciliation: BTreeMap::new(),
             all_labels: vec![],
+            duplicate_ids: vec![],
+            blank_id_rows: 0,
         }
     }
 

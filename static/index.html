@@ -1825,6 +1825,14 @@ function renderSourceValidation(name, report) {
     // being the entire finding.
     section(`${label} records with no room`, report.reference_unmatched || [],
       value => `<li>${escapeHtml(value)}</li>`),
+    // Both of these are about the uploaded FILE, not about any room: rows the
+    // loader had to drop. No `data-room` for the same reason as above.
+    section(`${label} ids used by more than one row`, report.reference_duplicate_ids || [],
+      value => `<li>${escapeHtml(value)} <span class="uncounted">(only the last row kept)</span></li>`),
+    ...(report.reference_blank_id_rows
+      ? [`<section><h3>${label} rows with no id (${report.reference_blank_id_rows})</h3>`
+         + `<ul><li>skipped at load — check the CSV's key column</li></ul></section>`]
+      : []),
     section("Property mismatches", report.property_mismatches, m =>
       `<li class="mismatch"${at(m.room_id)}>room ${escapeHtml(m.room_id)} · ${escapeHtml(m.field)}: `
       + `"${escapeHtml(m.room_value)}" vs ${label} "${escapeHtml(m.reference_value)}"</li>`),
@@ -1940,6 +1948,12 @@ function buildValidationCsv(data) {
     // this record — so only the link value is filled, under its own column.
     for (const value of report.reference_unmatched || [])
       rows.push([label, "", "", "", report.link_property || "", value, `${label} record with no room`]);
+    for (const value of report.reference_duplicate_ids || [])
+      rows.push([label, "", "", "", report.link_property || "", value,
+        `${label} id used by more than one row (only the last kept)`]);
+    if (report.reference_blank_id_rows)
+      rows.push([label, "", "", "", report.link_property || "", "",
+        `${label} has ${report.reference_blank_id_rows} row(s) with no id (skipped at load)`]);
     for (const m of report.property_mismatches)
       push(m.room_id, `property mismatch: ${m.field} (room="${m.room_value}" vs ${label}="${m.reference_value}")`);
     for (const m of report.fields_absent_in_revit) push(m.room_id, `field absent in Revit: ${m.field}`);

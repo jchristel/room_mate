@@ -1,12 +1,20 @@
 # Handover: generalizing QA across reference sources
 
-> **Superseded by [`HANDOVER-qa-cardinality-and-coverage.md`](../HANDOVER-qa-cardinality-and-coverage.md).**
-> Section 3 (per-source response shape) and section 4 (sweep the consumers) are
-> **built**. Section 2 (`qa = "none"`) needed nothing — `CompareMode::Ignore`
-> already did exactly that under a different name. Only section 1 (link
-> cardinality) survives, together with the parenthetical in check 1 about the
-> unmatched *direction*, which turned out to be the sharpest observation here
-> and is still unimplemented. Both moved to the successor doc.
+> **Superseded by [`HANDOVER-qa-cardinality-and-coverage.md`](HANDOVER-qa-cardinality-and-coverage.md),
+> which is itself now closed.** Everything proposed here is either built or was
+> never needed:
+>
+> - Section 3 (per-source response shape) and section 4 (sweep the consumers) —
+>   **built**.
+> - Section 2 (`qa = "none"`) — needed nothing; `CompareMode::Ignore` already
+>   did exactly that under a different name, and predates this doc.
+> - Section 1 (link cardinality) — **mis-framed**. It read
+>   `duplicate_link_values` as "the reference source has duplicates" when the
+>   code counts *rooms* sharing an id. The real problem was on the other side
+>   and was not a policy question at all: the loader silently discarded
+>   duplicate and blank-id rows. Now reported. See the successor doc.
+> - The parenthetical in check 1, about the unmatched *direction*, was the
+>   sharpest observation here and is **built** as `reference_unmatched`.
 >
 > Kept for the reasoning, not the plan. **The line below saying nothing is
 > implemented is no longer true** — treat everything past this banner as a
