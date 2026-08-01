@@ -50,6 +50,28 @@ side should shape future server endpoints.
   cadence (gated by a shallow id-list diff so they don't fight an in-progress
   selection), which is also how a newly-pushed project shows up without a
   page reload.
+- **Doors are served but not drawn — deliberately, and the fetch decision is
+  already made.** `/doors` ships with footprints, both room references and the
+  full property set, and nothing in the viewer reads it. That is scope, not an
+  oversight: doors landed as a data pipeline first, so the server side could be
+  verified against real geometry before any pixel depended on it.
+
+  When a viewer is built, **doors get their own fetch, not a ride on the 2s room
+  poll** — the `/adjacency` precedent above, and for the stronger of its two
+  reasons. `/adjacency` is on-demand because it is expensive; doors are separate
+  because they are *independently versioned and independently pushed*: a doors
+  snapshot has its own `taken_at`, its own milestone pins
+  (`door_attachments`), and its own `revision`, so folding it into the room
+  poll's payload would make one revision stand for two lineages that move apart.
+  The `revision` field on `/doors` exists for exactly the same "has anything
+  actually changed?" comparison `/rooms` uses, so a second poll costs a string
+  compare, not a re-render.
+
+  One thing a renderer will need that the server already provides and a reader
+  might not expect: **every door carries its `model_id`**, because room ids are
+  unique only within a model. Resolving a door to the rooms it connects means
+  matching within the same model — a viewer that flattens door references the
+  way `/rooms` flattens room ids would silently link the wrong rooms.
 - **Room labels: configurable, always-rendered, correctly layered.** `addLabel`
   renders `room.label` (the server-resolved, ordered field list — see
   [Server](STRATEGY-SERVER.md)'s `room_label` setting) instead of hardcoding

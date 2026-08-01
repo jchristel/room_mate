@@ -804,6 +804,47 @@ keeps working unchanged — a stopgap that flattens stored identity (raw room id
 collide across models), replaced by `/projects/{p}/models/{m}` once the UI
 addresses one model. Both are additive to fix later, not migrations.
 
+**Doors made divergence (2) load-bearing rather than cosmetic.** A door's
+`from_room`/`to_room` are room ids, and room ids are unique only *within* a
+model — so the flattening that merely made `/rooms` untidy would make a door
+reference genuinely ambiguous. Three consequences, each visible in the code:
+`GET /doors` puts `model_id` on every door (unlike `/rooms`, which carries no
+per-room model), the QA report resolves references per model and names the model
+in every finding, and ingest refuses a doors push to a model with no rooms. None
+of these is a workaround for the stopgap — they would all be right under
+`/projects/{p}/models/{m}` too — but they are why that stopgap can no longer be
+described as harmless.
+
+### Storage: one kind per entity, bytes at the trait boundary
+
+`SnapshotStore` takes **bytes plus a `SnapshotMeta`**, never a payload type;
+serde lives in a thin typed layer on `AppState`, so nothing outside `storage/`
+and `state.rs` sees the difference. The shape was forced rather than chosen:
+`AppState` holds `Box<dyn SnapshotStore>`, so the trait must stay object-safe —
+a generic `put<T: Serialize>` is out — and a `kind` parameter alone buys nothing
+while the payload type is fixed. The alternative, a parallel
+`put_doors`/`get_latest_doors`/… set, is the failure
+[Entities](STRATEGY-ENTITIES.md) Decision 3 exists to prevent, and FFE would
+make it a fourth. It is also not a new pattern here: `put_reference` has always
+been bytes in, a discriminator alongside, typed parsing above.
+
+Layout stays **asymmetric on purpose**: rooms keep `<model>/<ts>.json`, every
+other kind gets a subdirectory (`<model>/doors/<ts>.json`). Migrating existing
+room snapshots into a `rooms/` subdir would buy symmetry and risk a store nobody
+can read, against data already on disk. The subdirectory is safe because both
+model-dir scans filter on `extension == "json"` — the same additivity trick that
+makes `reference/` and `pending/` invisible.
+
+Two decisions the generalisation forced, both recorded because a later reader
+will otherwise re-open them:
+
+- **`list_models()` still means "models with *rooms*."** Widening it to "any
+  kind" would change `/rooms` and `/projects` for a doors-only model — which
+  cannot arise, because ingest refuses doors to a model with no rooms.
+- **Quarantine stays rooms-only and takes no kind.** Promotion is how a lineage
+  re-phases; a doors push has nothing to re-phase towards (see the ingest note
+  in [Index](STRATEGY.md)), so there is no second pending slot to key.
+
 ## Missing tier data is a first-class state, not an error
 
 The project has two "mismatch" cases where a reference that *should* resolve

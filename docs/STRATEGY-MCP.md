@@ -38,15 +38,16 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   **stderr only**: stdout is the JSON-RPC stream, and anything else written
   there (an errant `println!`, a stdout-default `tracing_subscriber`)
   silently corrupts the protocol.
-- **Sixteen tools: one per existing read route, two settings reads, and one
+- **Seventeen tools: one per existing read route, two settings reads, and one
   forwarded upload.**
   `list_projects`, `list_buildings`, `get_rooms` (project/building/milestone/
   property filters optional — see the property-filter bullet below),
+  `get_doors` (project/milestone/property filters, no building — see below),
   `get_validation`, `list_snapshots`,
   `get_latest_snapshot`, `get_pending_snapshot`, `list_milestones`,
   `compare_milestones`,
   `get_hierarchy_areas`, `get_adjacency`, `list_reference_snapshots`, and
-  `get_reference_snapshot` mirror the thirteen HTTP read routes (snapshot-history,
+  `get_reference_snapshot` mirror the fourteen HTTP read routes (snapshot-history,
   milestone, geometry and reference-upload endpoints: see
   [Server](STRATEGY-SERVER.md);
   `get_latest_snapshot`, `get_pending_snapshot` and `get_reference_snapshot` map
@@ -62,7 +63,24 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   complete model is exactly the failure a tool description exists to prevent.
   `get_rooms` points at `phase_by_model`; `get_validation` reports the
   disagreement as a finding under `phases`. See
-  [PLAN-phasing.md](PLAN-phasing.md).
+  [PLAN-phasing.md](PLAN-phasing.md). `get_doors` says the same thing for the
+  same reason.
+  **Doors forced three descriptions to be corrected in the same change that
+  made them wrong**, which is the rule [Entities](STRATEGY-ENTITIES.md)
+  Decision 6 sets and the reason it is worth restating here: a tool description
+  is the only documentation an agent reads, so a stale one is not a doc debt but
+  a wrong answer. `get_adjacency` said "the extractor collects no doors" — it
+  now says what the distinction *is* (two rooms can share a wall with no door in
+  it; a door can connect rooms sharing almost no wall) and points at `get_doors`.
+  `get_validation` gained its `doors` section, including that door findings are
+  deliberately **not** in the top-level `discrepancies` total, which counts
+  reference sources. `compare_milestones` gained its `doors` section, including
+  that doors are configured independently — an agent checking only the top-level
+  `comparison_key_configured` would wrongly conclude nothing was comparable.
+  **`get_doors` has no `building` parameter**, and the description says so
+  rather than staying silent: a door's building would depend on which of its two
+  rooms owns it, which is Decision 6's open question. An absent parameter an
+  agent can see explained is better than one it retries.
   **Milestone reference pinning is inherited, not re-plumbed:** `get_rooms`'s
   `milestone` filter calls the same `assemble_rooms` the HTTP route does, and
   that function resolves a milestone's pinned snapshot per source below the

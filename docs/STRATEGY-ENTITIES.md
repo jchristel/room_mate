@@ -1,36 +1,39 @@
 # RoomMate — Entities & Phasing Strategy
 
-**Status: doors are design-only; phasing is built.** It records the shape
-agreed for the pipeline's *second* primary entity — doors — and for the phase
-selection every primary entity after rooms will need, so the first
-implementation doesn't re-derive it.
+**Status: built.** Doors ship — contract, ingest, storage, read, QA, milestone
+comparison and the pyRevit exporter. Phasing shipped ahead of them. This
+document records the shape agreed for the pipeline's *second* primary entity and
+for the phase selection every primary entity after rooms needs; the sections
+below now say, per decision, what was built and where reality departed from the
+sketch.
 
-> ## ⛔ Before writing any door code, read this
+> ## What survived contact, in one place
 >
-> Doors have **prerequisites**, and they are not optional. They live in
-> **[PLAN-generalisation.md § The line in the sand](PLAN-generalisation.md#the-line-in-the-sand)**.
-> In short:
+> **The prerequisites were met.** R1 and R2 landed as their own change *before*
+> any door code, so the `Door` contract was written against a settled precedence
+> rule rather than racing it — see
+> [PLAN-generalisation.md](PLAN-generalisation.md), which carries an outcome
+> note per item. No `put_doors` was ever written beside `put`.
 >
-> - **R2 — lift the property lookup off `&Room` — lands *before* the `Door`
->   contract is final.** Its open question (does a door's instance property
->   *shadow* its type property, or is a name in both a finding?) is a **contract**
->   decision, not a refactor detail. Decide it after `Door` is written and you
->   either rewrite the type or live with the wrong answer. Decision 4 below keeps
->   the two tiers separate precisely because they are different claims.
-> - **R1 — generalise `SnapshotStore` off `RoomPayload` — lands *with* doors, not
->   after.** The moment a `put_doors` appears beside `put`, the third parallel
->   method set exists and FFE makes it a fourth. That is the exact failure
->   [Decision 3](#decision-3-doors-are-their-own-upload-type-modelled-on-rooms)
->   below was written to prevent, and far cheaper to avoid than to undo. Note the
->   constraint Decision 3 does not mention: `AppState` holds
->   `Box<dyn SnapshotStore>`, so the trait must stay **object-safe** — a generic
->   `put<T>` is out.
-> - **R4 — entity-scope `[sources.reference.*]` — lands with doors' first
->   reference source**, not before (it needs R2) and not later (a shipped table
->   that silently means "rooms" becomes a back-compat obligation).
+> **R2's open question did not resolve either way this document expected**, and
+> the answer came from the sample export rather than from first principles. The
+> rule is: **a tier wins only when it is `Present`** — walk instance then type,
+> return the first *non-empty* value. Plain shadowing hides `Door Leaf Thickness
+> = 40.0` behind a blank instance parameter on 22 of the 26 sample doors;
+> treating a name in both tiers as a finding fires on 26 of 26, because Revit
+> carries `Workset` and `Edited by` on instances and types alike. Decision 4's
+> separation is preserved by the two maps staying two maps on the wire, not by
+> making an overlap an error.
 >
-> Its words, not a paraphrase: *if doors ship without R1 and R2, this document
-> has failed and the debt is permanent — every subsequent entity pays it again.*
+> **R4 is the one prerequisite doors deliberately shipped without**, and that was
+> the plan: it lands with doors' *first reference source*, and doors shipped with
+> none. Until then `[sources.reference.*]` still means "for rooms" —
+> [Sources](STRATEGY-SOURCES.md) records the gap.
+>
+> **Three things this document asserts about the export are now stale** and are
+> corrected in place below: the door id exists, the room id space is verified,
+> and the phase ids are moot. See
+> [Blockers in the current export](#blockers-in-the-current-export).
 
 > **Decision 2 (phasing) is built, and has been rewritten here to match.** It
 > shipped ahead of doors and several details changed on contact with the code;
@@ -246,6 +249,34 @@ prompt entirely when a document has exactly one phase — which covers most mode
 
 ## Decision 3: doors are their own upload type, modelled on rooms
 
+> **Built, with two additions this section did not foresee — both ingest rules,
+> both consequences of doors being a *dependent* entity rather than a parallel
+> one.**
+>
+> - **A doors push is refused unless the target `(project, model)` lineage
+>   already has a live rooms snapshot.** Scoped to the model, not the project:
+>   room ids are unique only within a model, so rooms under a sibling model are
+>   the wrong id space and would satisfy a project-wide gate while resolving
+>   nothing.
+> - **A doors push whose phase disagrees with the lineage is refused, not
+>   quarantined.** This section says doors get "the Decision 2c phase check",
+>   which is true of the check and wrong about the remedy. Quarantine exists so a
+>   model can be re-phased by promotion; promoting a doors push would move the
+>   lineage while every rooms snapshot stayed on the old phase, stranding the
+>   rooms its references point at. So there is no doors quarantine, no second
+>   pending slot, and no 202 on `/doors`.
+>
+> Also as predicted: the storage layout is `<model>/doors/<ts>.json`, invisible
+> to both `.json`-extension model-dir scans, with a `doors` index on
+> `ModelEntry`. The `SnapshotStore` pressure point resolved as **bytes at the
+> trait boundary** rather than a `kind` parameter over a fixed payload type —
+> see [Server](STRATEGY-SERVER.md)'s storage section for why that was forced.
+>
+> One departure on the read side: **`GET /doors` takes no `?building=`**, unlike
+> the "exactly as `/rooms`" this section promises. A door's building depends on
+> which of its rooms owns it — Decision 6's open question — and a scope that
+> silently picked an answer would settle it by accident.
+
 Endpoints mirror rooms, not reference sources:
 
 - `POST /doors` and `POST /doors/stream` — same body limits, same
@@ -270,7 +301,25 @@ doors, not after FFE makes it a fourth.
 
 ## Decision 4: the door contract shape
 
-Full annotated types in `contract-doors.rs`. The decisions behind them:
+> **Built, and every bullet below held.** The types live in
+> [`src/contract/doors.rs`](../src/contract/doors.rs) — the split of
+> `contract.rs` into `contract/` that CODING-CONVENTIONS' measured-module note
+> named the door types as the trigger for. (Rooms deliberately did *not* move out
+> alongside them: nothing motivated it, and moving code for symmetry is how a
+> split stops being reviewable.)
+>
+> Three things the shipped type carries that this section does not mention:
+> `type_id` and `type_name` — the identity of the shared tier, which a future
+> type-property table would key on and a hardware schedule would join per type —
+> and **no `levels` array**, because the target model's rooms snapshot already
+> carries the level set a door's `level_id` points into, and a second copy could
+> only disagree.
+>
+> The instance-vs-type *lookup* rule, which this section rightly refuses to
+> settle here, is R2's and is stated in the summary at the top of this document.
+
+Full annotated types in [`src/contract/doors.rs`](../src/contract/doors.rs). The
+decisions behind them:
 
 - **A door is not a `Room` with different fields.** It carries a *second*
   property tier — its family type, shared across every instance of that type.
@@ -297,6 +346,20 @@ Full annotated types in `contract-doors.rs`. The decisions behind them:
 
 ## Decision 5: reference sources become entity-scoped
 
+> **Not built, on purpose — this is R4, and it is the one prerequisite doors
+> shipped without.** It must land *with* doors' first reference source: earlier
+> is a config field with no behaviour behind it, later is a back-compat
+> obligation the day someone relies on a table that silently means "rooms".
+> Doors shipped with no reference source, so nothing has started the clock.
+>
+> What the door work did settle is everything below the settings layer: the join
+> namespace stayed **flat**, and one `split_namespace` / `PropertyTiers` /
+> filter grammar now serves both entities — so R4 is a settings and wiring
+> change rather than a grammar fork. A source-qualified predicate on a door
+> today resolves `Absent` (matching nothing) rather than erroring, which is the
+> same answer a room gets for a source it did not join; the day R4 lands, that
+> predicate starts *matching* instead of changing status.
+
 `[sources.reference.<name>]` gains an optional `entity` field defaulting to
 `"rooms"`, so every existing settings file is unchanged and still means what it
 meant. `[[builtin_properties]]` gains the same field for the same reason: doors
@@ -317,6 +380,21 @@ names are therefore unique across entities, and a duplicate is a startup error.
 rather than being duplicated per entity.
 
 ## Decision 6: connectivity is a different graph from adjacency
+
+> **The correction half is done; the graph itself is not built and the open
+> question below is still open.**
+>
+> Both false claims were corrected in the same change that made them false, as
+> this section demands: `service::adjacency`'s module header and the
+> `get_adjacency` MCP description both said the extractor collects no doors, and
+> both now state what the distinction *is* and point at `get_doors`.
+>
+> `/projects/{id}/adjacency` keeps its meaning unchanged. A connectivity
+> endpoint was **not** built, and does not need to be for the obvious question:
+> every door on `/doors` names both of its rooms, so "which rooms are connected
+> by a door" is a read, not a graph computation. What a real connectivity
+> endpoint would add is the *graph* — traversal, components, path length — and
+> that is worth building when something asks for it.
 
 `service::adjacency` computes *shared wall* adjacency and says so explicitly in
 its module header and its MCP tool description — "not door connectivity (the
@@ -345,6 +423,37 @@ project policy in exactly the way `measurement_standard` is
 ([Area calculation](STRATEGY-AREA-CALCULATION.md)).
 
 ## Settings changes
+
+> **What shipped is the bottom half of this block, and deliberately not the
+> top.** `[doors]` exists, but carries `comparison_key` and
+> `comparison_properties` — the door counterparts of the room settings of the
+> same name, needed by milestone comparison — **not** `room_attribution`,
+> `reconcile_room_reference` or `door_label`. The first two depend on which of a
+> door's two rooms owns it, and a setting with a default would answer Decision
+> 6's open question by accident; `door_label` has no viewer to feed.
+>
+> A third pin map arrived that this block does not mention:
+> `[[milestones]] door_attachments`, model id → doors snapshot id. A *separate*
+> map from `attachments` rather than a reuse of it, because rooms and doors are
+> pushed independently and their snapshot ids do not correspond — pinning "the
+> nearest doors snapshot" to a rooms pin would silently pair data that never
+> coexisted.
+>
+> The `[sources.reference.hardware]` and `[[builtin_properties]] entity`
+> examples below are R4, and are still design — see Decision 5.
+>
+> ```toml
+> # As shipped, on the House A sample project:
+> [doors]
+> comparison_key = "$id"
+> comparison_properties = ["$to_room", "$from_room", "Mark"]
+>
+> [[milestones]]
+> name = "Rooms and doors"
+> date = "2026-07-29"
+> attachments      = { "…model…" = "2026-07-24T23:19:10.227000Z" }
+> door_attachments = { "…model…" = "2026-07-29T20:03:41Z" }
+> ```
 
 ```toml
 # Which phase a push is scoped to is NOT configured -- it is chosen at export
@@ -377,6 +486,16 @@ by_source = { revit = "Mark" }
 
 ## MCP surface
 
+> **Built, with one tool instead of two.** `get_doors` shipped; a
+> `list_door_snapshots` did **not**, because doors' snapshot ids were folded into
+> the existing `/projects/{id}/snapshots` response rather than given a route of
+> their own — and this file's own rule is one tool per HTTP *read route*, so no
+> new route means no new tool. A documented departure, not an omission.
+>
+> The three descriptions this section says must be edited in the same change all
+> were, and `get_validation`/`compare_milestones` each gained a doors section
+> beyond what is listed here. The header count went 16 → 17.
+
 `bin/mcp.rs`' module header declares one tool per HTTP read route, and skipping
 that is how the two front doors drift ([MCP](STRATEGY-MCP.md)). Doors add
 `get_doors` and `list_door_snapshots`, both thin adapters over the same
@@ -393,30 +512,51 @@ Three descriptions need editing in the same change, not later:
 
 ## Blockers in the current export
 
-Three, all extractor-side, all blocking the contract:
+> **All three are resolved, and two of them were never as bad as this section
+> claimed.** Kept with corrections rather than deleted: two were assertions about
+> the data that turned out to be wrong, and "we checked, and here is what was
+> actually there" is worth more than a section that quietly disappears. A fourth
+> problem this section did not anticipate is added at the end — it was the only
+> one that changed the contract.
 
-1. **No door id.** The record's keys are `phasing`, `data_type`,
-   `super_component_id`, `instance_properties`, `associated_elements`,
-   `revit_model`, `from_room`, `level`, `to_room`, `type_properties`,
-   `design_set_and_option`, `polygon`. Nothing identifies the element. `Mark` is
-   not unique (one door in the sample is `"None"`); `IfcGUID` is an instance
-   property, not identity. Fix: `str(el.Id.Value)` at extraction, per the
-   ElementId discipline. Storage keys, connectivity edges, and every reference
-   join are blocked on this.
-2. **`phase_id` is unresolvable as shipped.** There is no phase table in the
-   file (top level is `date processed`, `file name`, `door`), and the names live
-   in a different shape — `phasing.created` is `"New Construction"` while room
-   refs carry the integer `3`. Decision 2 fixes this by carrying `{ id, name }`
-   for the *selected* phase on the envelope.
-3. **Unit mismatch within one record.** `polygon.outer_loop` is decimal feet
-   (~22–26, matching `Room.loops`) while instance and type properties are
-   millimetres (`FrameDepth: 100.0`). Geometry stays feet; properties stay raw
-   strings and are the settings layer's problem. Stated here because otherwise
-   someone will "normalize" one of them.
+1. ~~**No door id.**~~ **Stale — there is one.** A later duHast carries it at
+   `instance_properties.id`, the same place `translate_room` reads a room's id.
+   26 unique values across the sample, colliding with no room id. The rest of the
+   original point stands and is why the id was needed: `Mark` is not unique (one
+   door in the sample is `"None"`) and `IfcGUID` is an instance property, not
+   identity.
+2. ~~**`phase_id` is unresolvable as shipped.**~~ **True, and now moot.** There
+   is still no phase table in the file, and `phasing.created` is
+   `"New Construction"` while room refs carry the integer `3`. The fix is not
+   the one this section proposed — Decision 2 dropped the `{ id, name }` pair and
+   carries a bare name. The extractor instead reads the room references straight
+   from the Revit API (`FamilyInstance.FromRoom[phase]`, which takes the phase
+   and answers exactly one room), so nothing ever needs to resolve `phase_id`.
+   That is also what makes the reference genuinely one-to-one, as `Door`'s
+   `Option<String>` claims.
+3. **Unit mismatch within one record — unchanged, and still a trap.**
+   `polygon.outer_loop` is decimal feet (~22–26, matching `Room.loops`) while
+   instance and type properties are millimetres (`FrameDepth: 100.0`). Geometry
+   stays feet; properties stay raw strings and are the settings layer's problem.
+   Stated here because otherwise someone will "normalize" one of them.
+4. **The one this section missed: a degenerate footprint that looks real.** Two
+   of the 26 doors (both family type `2040x620x40`, no 3D geometry) carry
+   `outer_loop` coordinates of **±1e30** — Revit's *uninitialized*
+   `BoundingBoxXYZ`, whose min is `+1e30` and max `-1e30`. duHast's own "did we
+   get a box" and "is the loop non-empty" guards both pass, so the bad value
+   arrives looking like a plausible footprint rather than an absent one. Pushed
+   as-is it hands every consumer a polygon 1e30 feet across — the
+   million-foot-spike class from [Area calculation](STRATEGY-AREA-CALCULATION.md).
+   The producer recognises the sentinel and sends **no loops**; the door is still
+   pushed, because both of these carry valid room references and are therefore
+   real doors QA must see. `Door.loops` is optional for exactly this reason.
 
-**To verify before building:** that `from_room[].room_id` (e.g. `2626842`) is
-the same id space as `Room.id`, which `translate_room` sources from
-`instance_properties["id"]`. If those diverge, the door→room join has no key.
+**Verified, and it holds:** `from_room[].room_id` *is* the same id space as
+`Room.id`. All 22 room ids referenced by the sample doors resolve against the
+House A rooms snapshot from the same model. The door→room join has its key —
+and, because room ids are unique only *within* a model, that join is
+model-scoped everywhere it appears (ingest gate, QA resolution, `model_id` on
+every `/doors` row).
 
 Also worth a look while the export is being changed: `associated_elements` is
 `[]` and `design_set_and_option` is `{"option_name": "-", "set_name": "Main
@@ -430,23 +570,46 @@ design against yet.
 Per [Index](STRATEGY.md)'s rule that a change touching more than one layer
 updates every doc it touches:
 
-| Doc | What it gains |
+All done, in the same pass that marked this document built:
+
+| Doc | What it gained |
 | --- | --- |
-| [Index](STRATEGY.md) | `phase` on the upload envelope; the door contract alongside v5; doors as the third upload type |
-| [Sources](STRATEGY-SOURCES.md) | the phase prompt and the extractor-side filter; the door export shape; replace the "no doors entity" boundary note with a pointer here |
-| [Server](STRATEGY-SERVER.md) | the `/doors` routes, the storage kind, the `SnapshotStore` generalization, the phase check, `[doors]` settings |
-| [Browser](STRATEGY-BROWSER.md) | whether doors ride the 2s room poll or their own fetch — by the `/adjacency` precedent, their own |
-| [MCP](STRATEGY-MCP.md) | the two new tools and the three corrected descriptions |
-| [Conventions](CODING-CONVENTIONS.md) | nothing — every rule it states already covers this work |
+| [Index](STRATEGY.md) | ✅ doors as the third upload type, its independent `schema_version`, and the two ingest preconditions a dependent entity needs |
+| [Sources](STRATEGY-SOURCES.md) | ✅ the "no doors entity" boundary note replaced — it is now a *gap* R4 closes, not a boundary, and the note says what the door work already settled |
+| [Server](STRATEGY-SERVER.md) | ✅ the storage kind and the bytes-at-the-boundary trait, plus why the flat-merge stopgap stopped being harmless once room ids became a door's foreign key |
+| [Browser](STRATEGY-BROWSER.md) | ✅ doors are served and not drawn, and the fetch decision is recorded: their own poll, for a stronger reason than `/adjacency`'s |
+| [MCP](STRATEGY-MCP.md) | ✅ `get_doors`, the corrected `get_adjacency`, and why a stale tool description is a wrong answer rather than a doc debt |
+| [Conventions](CODING-CONVENTIONS.md) | nothing — every rule it states already covered this work, and the one thing it predicted (door types trigger the `contract/` split) happened as written |
 
 ## Deferred
 
+Still open after doors shipped:
+
+- **R4 — entity-scoped reference sources.** The one prerequisite doors shipped
+  without, on purpose; lands with doors' first reference source (Decision 5).
+- **Which room owns a door.** Decision 6's open question, and the reason
+  `[doors]` has no `room_attribution` and `/doors` has no `?building=`. Nothing
+  built so far assumes an answer, which is what keeps it cheap to decide later.
+- **Any door viewer.** `/doors` is served and nothing draws it
+  ([Browser](STRATEGY-BROWSER.md)).
 - **Multi-phase comparison.** Explicitly out of scope (Decision 2).
-- **Door connectivity graph.** The endpoint and algorithm (Decision 6).
-- **Design options** as a second variant axis.
+- **Door connectivity graph.** The endpoint and algorithm (Decision 6) — noting
+  that the simple question ("which rooms does a door connect") is already a read
+  off `/doors`.
+- **Design options** as a second variant axis. Still no varying sample data:
+  all 26 doors remain `{"option_name": "-", "set_name": "Main Model"}`.
 - **Type-property deduplication.** `type_properties` rides per instance today;
   a shared type table is a payload-size optimization to take when measured, not
-  before.
-- **FFE**, the next axis-1 entity. If it needs anything beyond the phase
-  envelope and a `kind`-parameterized store, that is a sign one of the
-  decisions above was too narrow.
+  before. Measured figure to start from: the House A doors snapshot is 414 KB
+  for 26 doors, and `type_id` is on the wire ready to key a shared table.
+- **Verifying the extractor against Revit.** The doors exporter is verified by
+  running its real translation over a captured export; the `get_FromRoom`
+  accessor and the `OST_Doors` collector need a live document. Same standing as
+  the room extractor's phase filter.
+- **FFE**, the next axis-1 entity. **The bet this document made is now
+  testable**: if FFE needs anything beyond the phase envelope, a
+  `kind`-parameterized store and a `PropertyTiers` impl, one of the decisions
+  above was too narrow. Doors needed exactly two things past that list — the
+  rooms-first ingest gate and the model-scoped reference resolution — and both
+  are consequences of being a *dependent* entity. FFE that hangs off rooms will
+  need them too; FFE that stands alone will not.
