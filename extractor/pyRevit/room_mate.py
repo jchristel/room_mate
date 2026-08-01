@@ -35,10 +35,12 @@ from Autodesk.Revit.DB import (
 )
 
 from duHast.Revit.Rooms.Export.to_data_room import get_all_room_data
+from duHast.Revit.Doors.Export.to_data_door import get_all_door_data
 from duHast.Revit.Levels.Export.to_data_level_building import get_all_level_data
 from duHast.Revit.Common.Geometry.geometry import get_coordinate_system_translation_and_rotation
 from duHast.Utilities.Objects.result import Result
 from duHast.Data.Objects.Collectors import data_room as dr
+from duHast.Data.Objects.Collectors import data_door as dd
 from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 from duHast.pyRevit.UI.doc_selector import pick_document
@@ -49,6 +51,7 @@ from post_rooms import (
     coordinate_system_to_affine,
     boundary_location_to_room_boundary,
 )
+from post_doors import post_doors_stream
 
 
 def choose_project(forms):
@@ -200,14 +203,19 @@ def choose_phase(selected_docs, forms):
     return selected or None
 
 
-def rooms_in_phase(doc, phase_name):
-    """The element ids of `doc`'s rooms that exist in `phase_name`, as strings
-    matching the ids the export carries.
+def elements_in_phase(doc, phase_name, category):
+    """The element ids of `doc`'s elements of `category` that exist in
+    `phase_name`, as strings matching the ids the export carries.
 
     The filter runs here, client-side, because only the live document has the
     phase ordering `exists_in_phase` needs — the server never re-evaluates the
     predicate, which is why the ordered phase list is not on the wire at all.
     It also means strictly *less* extraction, the axis that actually pays.
+
+    Generalised over the category when doors arrived: `CreatedPhaseId` and
+    `DemolishedPhaseId` are `Element` members, so the predicate was never
+    room-specific and duplicating it per entity would have been two places to
+    get the range test wrong.
 
     Raises when the document has no phase of that name: a model that cannot be
     scoped to the chosen phase must fail loudly rather than push everything."""
@@ -225,15 +233,94 @@ def rooms_in_phase(doc, phase_name):
     allowed = set()
     collector = (
         FilteredElementCollector(doc)
-        .OfCategory(BuiltInCategory.OST_Rooms)
+        .OfCategory(category)
         .WhereElementIsNotElementType()
     )
-    for room in collector:
-        created = order_by_id.get(element_id_str(room.CreatedPhaseId))
-        demolished = order_by_id.get(element_id_str(room.DemolishedPhaseId))
+    for element in collector:
+        created = order_by_id.get(element_id_str(element.CreatedPhaseId))
+        demolished = order_by_id.get(element_id_str(element.DemolishedPhaseId))
         if exists_in_phase(created, demolished, selected):
-            allowed.add(element_id_str(room.Id))
+            allowed.add(element_id_str(element.Id))
     return allowed
+
+
+def rooms_in_phase(doc, phase_name):
+    """The room ids in `phase_name`. A named wrapper so the call site reads as
+    what it means rather than as a category constant."""
+    return elements_in_phase(doc, phase_name, BuiltInCategory.OST_Rooms)
+
+
+def doors_in_phase(doc, phase_name):
+    """The door ids in `phase_name`."""
+    return elements_in_phase(doc, phase_name, BuiltInCategory.OST_Doors)
+
+
+def phase_by_name(doc, phase_name):
+    """This document's `Phase` object for `phase_name`.
+
+    Needed because `FamilyInstance.FromRoom` is indexed by a *Phase*, not by a
+    name or an id — and the name is what crosses between documents, so the
+    lookup has to happen per document. Raises for an unknown name, on the same
+    fail-loudly terms as `elements_in_phase`."""
+    for phase in doc.Phases:
+        if phase.Name == phase_name:
+            return phase
+    raise ValueError(
+        "model has no phase named '{}' (it has: {})".format(
+            phase_name, ", ".join(p.Name for p in doc.Phases))
+    )
+
+
+def _room_in_phase(door, phase, which):
+    """One side of a door's room reference for a given phase, as an id string,
+    or None.
+
+    `FromRoom`/`ToRoom` exist both as a parameterless property (which uses the
+    document's *current* phase — not what we want) and as a phase-indexed one.
+    IronPython reaches the indexed form through the CLR's `get_` accessor;
+    `door.FromRoom[phase]` binds to the parameterless value first on some
+    versions, so the accessor is tried first and the indexer is the fallback.
+    Same both-names-are-real discipline as `element_id_str`."""
+    accessor = getattr(door, "get_" + which, None)
+    room = accessor(phase) if accessor is not None else getattr(door, which)[phase]
+    # A door with no room on that side is a normal state (an external door), so
+    # None here is data, not a failure.
+    return element_id_str(room.Id) if room is not None else None
+
+
+def door_room_references(doc, phase_name):
+    """`{door id: (from_room_id, to_room_id)}` for every door in `doc`, read
+    from the Revit API for the chosen phase.
+
+    **Read here rather than taken from the duHast export, deliberately.** The
+    export carries `from_room`/`to_room` as arrays with one entry per phase,
+    tagged with a `phase_id` that appears nowhere else in the file and cannot
+    be resolved against anything on the wire — the blocker STRATEGY-ENTITIES
+    records. `FromRoom[phase]` takes the phase and answers exactly one room, so
+    asking Revit is both correct and simpler than reconciling an array against
+    a phase table that is not there. It is also what makes the reference
+    genuinely one-to-one, which is what the contract's `Option<String>` claims.
+
+    A door whose room lookup raises is recorded as having neither reference
+    rather than aborting the model: one unreadable door must not cost the other
+    hundreds, and the server's QA reports it as a door with no room reference —
+    visible, in the place a reader would look."""
+    phase = phase_by_name(doc, phase_name)
+    references = {}
+    collector = (
+        FilteredElementCollector(doc)
+        .OfCategory(BuiltInCategory.OST_Doors)
+        .WhereElementIsNotElementType()
+    )
+    for door in collector:
+        try:
+            references[element_id_str(door.Id)] = (
+                _room_in_phase(door, phase, "FromRoom"),
+                _room_in_phase(door, phase, "ToRoom"),
+            )
+        except Exception:
+            references[element_id_str(door.Id)] = (None, None)
+    return references
 
 
 def rooms_export_entry(doc, uiapp, output, forms):
@@ -487,4 +574,58 @@ def export_and_post_model(selected_doc, project, phase_name, return_value, pb):
         return_value.update_sep(
             False,
             "{}: push failed ({}): {}".format(selected_doc.Title, status, text),
+        )
+        # The doors push below would be refused anyway when the rooms push was
+        # the model's first (the server requires rooms before doors), and
+        # pushing doors against rooms that failed to land is not something to
+        # attempt on a hunch. Stop here for this model; the caller carries on
+        # with the next one.
+        return
+
+    # Doors, after rooms and only after rooms. The server refuses a doors push
+    # to a model with no rooms -- a door's from_room/to_room are room ids, and
+    # room ids are unique only within one model -- so the order is a hard
+    # requirement, not a preference.
+    export_and_post_doors(selected_doc, envelope, phase_name, return_value)
+
+
+def export_and_post_doors(selected_doc, envelope, phase_name, return_value):
+    """Export one model's doors and push them, reusing the room push's already
+    built `envelope` (identity, phase, model_to_shared) so the two pushes cannot
+    disagree about what model or phase they describe.
+
+    Failures are recorded and swallowed rather than raised: the rooms push has
+    already succeeded by the time this runs, and losing that because the door
+    half failed would be the wrong trade. The run still ends red."""
+    try:
+        allowed_door_ids = doors_in_phase(selected_doc, phase_name)
+        # Read from the Revit API, not from the export -- see
+        # `door_room_references`.
+        room_references = door_room_references(selected_doc, phase_name)
+
+        door_data = get_all_door_data(selected_doc)
+        dic_door_data = {dd.DataDoor.data_type: door_data}
+        dic_door_data.update(copy.deepcopy(envelope))
+        json_formatted_doors = build_json_for_file(dic_door_data, "{}".format(selected_doc.Title))
+    except Exception as e:
+        return_value.update_sep(
+            False, "{}: door export failed: {}".format(selected_doc.Title, e)
+        )
+        return
+
+    ok, status, text = post_doors_stream(
+        json_formatted_doors, room_references, allowed_door_ids=allowed_door_ids
+    )
+    if ok:
+        return_value.append_message(
+            "{}: doors accepted ({})".format(selected_doc.Title, text)
+        )
+    else:
+        # There is no 202 here: unlike rooms, a doors push whose phase
+        # disagrees with the model is REFUSED rather than quarantined, because
+        # activating it would re-phase the model while its rooms stayed behind.
+        # So any non-2xx is a real failure with a message worth surfacing.
+        return_value.update_sep(
+            False,
+            "{}: doors push failed ({}): {}".format(selected_doc.Title, status, text),
         )
