@@ -1,9 +1,36 @@
 # RoomMate — Entities & Phasing Strategy
 
-**Status: doors are design-only; phasing is being built.** It records the shape
+**Status: doors are design-only; phasing is built.** It records the shape
 agreed for the pipeline's *second* primary entity — doors — and for the phase
 selection every primary entity after rooms will need, so the first
 implementation doesn't re-derive it.
+
+> ## ⛔ Before writing any door code, read this
+>
+> Doors have **prerequisites**, and they are not optional. They live in
+> **[PLAN-generalisation.md § The line in the sand](PLAN-generalisation.md#the-line-in-the-sand)**.
+> In short:
+>
+> - **R2 — lift the property lookup off `&Room` — lands *before* the `Door`
+>   contract is final.** Its open question (does a door's instance property
+>   *shadow* its type property, or is a name in both a finding?) is a **contract**
+>   decision, not a refactor detail. Decide it after `Door` is written and you
+>   either rewrite the type or live with the wrong answer. Decision 4 below keeps
+>   the two tiers separate precisely because they are different claims.
+> - **R1 — generalise `SnapshotStore` off `RoomPayload` — lands *with* doors, not
+>   after.** The moment a `put_doors` appears beside `put`, the third parallel
+>   method set exists and FFE makes it a fourth. That is the exact failure
+>   [Decision 3](#decision-3-doors-are-their-own-upload-type-modelled-on-rooms)
+>   below was written to prevent, and far cheaper to avoid than to undo. Note the
+>   constraint Decision 3 does not mention: `AppState` holds
+>   `Box<dyn SnapshotStore>`, so the trait must stay **object-safe** — a generic
+>   `put<T>` is out.
+> - **R4 — entity-scope `[sources.reference.*]` — lands with doors' first
+>   reference source**, not before (it needs R2) and not later (a shipped table
+>   that silently means "rooms" becomes a back-compat obligation).
+>
+> Its words, not a paraphrase: *if doors ship without R1 and R2, this document
+> has failed and the debt is permanent — every subsequent entity pays it again.*
 
 > **Decision 2 (phasing) is built, and has been rewritten here to match.** It
 > shipped ahead of doors and several details changed on contact with the code;
