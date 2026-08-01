@@ -13,12 +13,26 @@
 //! IronPython/CLR seam); numeric `ElementId`s are parsed to `i64` only here,
 //! server-side, where the width is safe. See STRATEGY.md "Expand the room
 //! properties contract".
+//!
+//! **This file holds the shared envelope, the geometry primitives, the property
+//! machinery, and rooms; [`doors`] holds doors.** The split happened when the
+//! door types arrived, which is exactly the trigger CODING-CONVENTIONS.md's
+//! measured-module note named for it. Rooms have deliberately *not* been moved
+//! out alongside doors: nothing motivates that yet, and moving a file's worth of
+//! code with no reason to is how a split stops being reviewable. What is shared
+//! stays here and is imported by `doors`, so neither entity carries a private
+//! copy of the envelope — see STRATEGY-ENTITIES.md Decision 1's list of what
+//! generalizes.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::settings::BuiltinPropertyDef;
+
+pub mod doors;
+
+pub use doors::{Door, DoorPayload, DoorStreamEnvelope, SUPPORTED_DOOR_SCHEMA};
 
 /// A 2D point in Revit model space. Units are decimal feet, Y points UP.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
