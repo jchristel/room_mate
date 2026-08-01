@@ -191,6 +191,7 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
+            doors: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }

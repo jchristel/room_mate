@@ -121,6 +121,13 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "AreaPolicy::is_default")]
     pub areas: AreaPolicy,
 
+    /// Door policy for this project (see `DoorPolicy`). Defaulted and skipped
+    /// when empty, so a project file predating doors is unchanged on disk and
+    /// unchanged in meaning. A table, so it is declared after the scalars for
+    /// the TOML ordering reason `comparison_key` documents.
+    #[serde(default, skip_serializing_if = "DoorPolicy::is_default")]
+    pub doors: DoorPolicy,
+
     /// Ordered classification tiers, outermost first. Empty if the section is
     /// omitted (a project with no classification defined).
     #[serde(default)]
@@ -244,6 +251,56 @@ pub enum MeasurementStandard {
 /// as the default gap tolerance. Those were previously two separate constants
 /// (`areas::MAX_WALL_FT` and `adjacency::WALL_MAX_FT`) holding the same physical
 /// number in two modules — a live drift risk this type removes.
+/// One project's **door** policy: how doors are matched and compared across
+/// milestones.
+///
+/// Its own section rather than reusing the top-level `comparison_key` /
+/// `comparison_properties`, because those name *room* properties. A door's
+/// vocabulary is a different one that merely overlaps in spelling — `Mark` on a
+/// door and `Mark` on a room are different properties that happen to share a
+/// name ([Entities](../../docs/STRATEGY-ENTITIES.md) Decision 1) — so one shared
+/// setting would silently mean two things.
+///
+/// Deliberately narrow. Decision 6's `room_attribution` and
+/// `reconcile_room_reference` are **not** here: both depend on which of a door's
+/// two rooms owns it, which is an open question, and a setting with a default
+/// would answer it by accident.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct DoorPolicy {
+    /// The door property whose value identifies "the same door" across
+    /// milestones — the door counterpart of `Settings::comparison_key`, and
+    /// `None` (the default) is a real, reachable state that reports "not
+    /// configured" rather than falling back to anything.
+    ///
+    /// `"$id"` is usually the right answer, and is worth stating because it is
+    /// *not* the right answer for rooms: a door's ElementId is stable across
+    /// pushes of the same model, so it identifies the same physical leaf, while
+    /// a room comparison keys on an authored Number precisely because room ids
+    /// are not meaningful to the people reading the diff. There is still no
+    /// default — a project that renumbers doors between milestones wants `Mark`,
+    /// and guessing wrong produces a diff that looks authoritative and is wrong.
+    ///
+    /// A scalar declared before `comparison_properties` per the TOML ordering
+    /// rule in CODING-CONVENTIONS.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparison_key: Option<String>,
+
+    /// Ordered door property names compared across milestones, resolved in the
+    /// same vocabulary the `/doors` filter uses — so `$to_room` and `$from_room`
+    /// are comparable, which is how "this door moved between rooms" becomes a
+    /// reported difference with no machinery of its own.
+    #[serde(default)]
+    pub comparison_properties: Vec<String>,
+}
+
+impl DoorPolicy {
+    /// Whether this policy is entirely unset — used to keep an untouched
+    /// `[doors]` section out of a written settings file, same as `AreaPolicy`.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct AreaPolicy {
     /// What the reported area figure *means*. `None` (the default) is an honest

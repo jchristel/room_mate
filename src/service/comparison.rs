@@ -38,6 +38,7 @@ use crate::contract::{date_match, numeric_match, PropertyPresence};
 use crate::settings::{BuiltinPropertyDef, CompareMode, FieldType, ReferenceFieldConfig};
 use crate::state::AppState;
 
+use super::doors::{self as doors_service, DoorResponse, DoorScope};
 use super::rooms::{assemble_rooms, resolve_presence, source_joined, RoomResponse, RoomScope};
 use super::ServiceError;
 
@@ -131,6 +132,84 @@ pub struct ComparisonResponse {
     pub baseline_duplicate_key_values: Vec<DuplicateKeyValue>,
     /// One entry per compared milestone, in the order given.
     pub comparisons: Vec<MilestoneComparison>,
+    /// The same diff over the project's **doors** (see `DoorComparisonReport`).
+    ///
+    /// A nested report rather than five more top-level fields, and configured
+    /// independently of the room comparison: a project may compare rooms and not
+    /// doors, or the reverse, and folding the two "is it configured" flags into
+    /// one would make either answer a lie about the other.
+    pub doors: DoorComparisonReport,
+}
+
+/// One door present in both the baseline and a compared milestone (matched by
+/// the configured door key) that has at least one property difference or
+/// missing property.
+///
+/// No `unjoined_sources`, unlike `ChangedRoom`: doors carry no joined reference
+/// sources yet (R4), so there is no join for a door to lose.
+#[derive(Serialize)]
+pub struct ChangedDoor {
+    pub key: String,
+    /// The baseline door's own id, for display.
+    pub door_id: String,
+    /// **And the model it belongs to.** A door id is unique only within one
+    /// model, so an id alone would not identify the element a reader is being
+    /// asked to go and look at — the same reason the QA report carries it.
+    pub model_id: String,
+    pub differences: Vec<PropertyDifference>,
+    pub missing_properties: Vec<MissingProperty>,
+}
+
+/// The diff of one compared milestone's doors against the baseline's.
+#[derive(Serialize)]
+pub struct DoorMilestoneComparison {
+    pub milestone: String,
+    /// Door-key values present in this milestone but not the baseline.
+    pub doors_added: Vec<String>,
+    /// Door-key values present in the baseline but not this milestone.
+    pub doors_removed: Vec<String>,
+    pub changed_doors: Vec<ChangedDoor>,
+    /// This milestone's own ambiguous door keys, excluded from the diff above.
+    pub duplicate_key_values: Vec<DuplicateKeyValue>,
+}
+
+/// The doors half of a project's milestone comparison.
+///
+/// **Configured separately from rooms**, via `[doors] comparison_key` and
+/// `[doors] comparison_properties`. Reusing the room settings would have been
+/// smaller and wrong: `Mark` on a door and `Mark` on a room are different
+/// properties that happen to share a spelling, so one shared key would silently
+/// mean two things.
+///
+/// A project that compares rooms but not doors gets
+/// `comparison_key_configured: false` here and a full room diff beside it —
+/// a normal state, not an error, and the reason the two flags are separate.
+#[derive(Serialize)]
+pub struct DoorComparisonReport {
+    pub comparison_key_configured: bool,
+    /// The door property matched on. `None` iff `comparison_key_configured` is
+    /// false.
+    pub comparison_key: Option<String>,
+    /// The comparable door property set (from settings), echoed for the client.
+    pub compared_properties: Vec<String>,
+    /// The baseline side's own ambiguous door keys, computed once.
+    pub baseline_duplicate_key_values: Vec<DuplicateKeyValue>,
+    /// One entry per compared milestone, in the order given.
+    pub comparisons: Vec<DoorMilestoneComparison>,
+}
+
+impl DoorComparisonReport {
+    /// The "no door comparison key configured" result. Distinct from the room
+    /// one so a project can have exactly one of the two configured.
+    fn not_configured() -> Self {
+        Self {
+            comparison_key_configured: false,
+            comparison_key: None,
+            compared_properties: vec![],
+            baseline_duplicate_key_values: vec![],
+            comparisons: vec![],
+        }
+    }
 }
 
 impl ComparisonResponse {
@@ -146,6 +225,7 @@ impl ComparisonResponse {
             compared_properties: vec![],
             baseline_duplicate_key_values: vec![],
             comparisons: vec![],
+            doors: DoorComparisonReport::not_configured(),
         }
     }
 }
@@ -342,6 +422,171 @@ fn diff_room(
     })
 }
 
+/// A door-key value → the single door that resolved it. Doors whose key value
+/// is shared are excluded and surfaced as `DuplicateKeyValue`s instead; doors
+/// resolving no key value at all can't be matched and are dropped.
+type DoorKeyIndex<'a> = BTreeMap<String, &'a DoorResponse>;
+
+/// Index one milestone's doors by their resolved key value, pulling out any
+/// value shared by more than one door.
+///
+/// **The duplicate guard matters more here than for rooms**, because the
+/// obvious door key (`$id`) is unique per model but *not* across models: a
+/// project merging two linked models can legitimately have the same door
+/// ElementId twice, and matching those across milestones would diff two
+/// unrelated leaves against each other. Reported rather than guessed.
+fn index_doors_by_key<'a>(
+    doors: &'a [DoorResponse],
+    key_prop: &str,
+    known: &std::collections::BTreeSet<String>,
+    builtin: &[BuiltinPropertyDef],
+) -> (DoorKeyIndex<'a>, Vec<DuplicateKeyValue>) {
+    let mut groups: BTreeMap<String, Vec<&DoorResponse>> = BTreeMap::new();
+    for door in doors {
+        if let PropertyPresence::Present(value) = doors_service::resolve_presence(door, key_prop, known, builtin) {
+            groups.entry(value).or_default().push(door);
+        }
+    }
+
+    let mut index = DoorKeyIndex::new();
+    let mut duplicates = Vec::new();
+    for (value, matched) in groups {
+        if matched.len() > 1 {
+            duplicates.push(DuplicateKeyValue { value, room_ids: matched.iter().map(|d| d.door.id.clone()).collect() });
+        } else {
+            index.insert(value, matched[0]);
+        }
+    }
+    (index, duplicates)
+}
+
+/// Compare one common door over the comparable property set, enumerated from
+/// the *baseline* — the same asymmetry `diff_room` applies, and for the same
+/// reason: only a property the baseline door actually has is comparable.
+///
+/// Values are compared with `values_agree` under an unqualified source: a door
+/// carries no joined reference data, so there is no per-source date rung to
+/// select and both sides came through the same Revit export at different times.
+fn diff_door(
+    key: &str,
+    baseline: &DoorResponse,
+    other: &DoorResponse,
+    properties: &[String],
+    known: &std::collections::BTreeSet<String>,
+    builtin: &[BuiltinPropertyDef],
+) -> Option<ChangedDoor> {
+    let mut differences = Vec::new();
+    let mut missing_properties = Vec::new();
+
+    for property in properties {
+        let PropertyPresence::Present(baseline_value) =
+            doors_service::resolve_presence(baseline, property, known, builtin)
+        else {
+            continue;
+        };
+        match doors_service::resolve_presence(other, property, known, builtin) {
+            PropertyPresence::Absent => {
+                missing_properties.push(MissingProperty { property: property.clone(), baseline_value })
+            }
+            PropertyPresence::Empty => differences.push(PropertyDifference {
+                property: property.clone(),
+                baseline_value,
+                other_value: String::new(),
+            }),
+            PropertyPresence::Present(other_value) => {
+                if !values_agree(&baseline_value, &other_value, None, None) {
+                    differences.push(PropertyDifference { property: property.clone(), baseline_value, other_value });
+                }
+            }
+        }
+    }
+
+    if differences.is_empty() && missing_properties.is_empty() {
+        return None; // unchanged door — omitted from the report
+    }
+    Some(ChangedDoor {
+        key: key.to_string(),
+        door_id: baseline.door.id.clone(),
+        model_id: baseline.model_id.clone(),
+        differences,
+        missing_properties,
+    })
+}
+
+/// The doors half of `compare_milestones`, run over the same baseline and
+/// `others` as the rooms half.
+///
+/// Doors come from `assemble_doors`, so a milestone's *pinned doors snapshot*
+/// (`Milestone::door_attachments`) is what gets diffed — the same "a new
+/// consumer of machinery that already exists" discipline the rooms comparison
+/// follows, rather than a second resolution path.
+fn compare_doors(
+    state: &AppState,
+    bundle: &crate::state::ProjectSettings,
+    project: &str,
+    baseline: &str,
+    others: &[String],
+) -> Result<DoorComparisonReport, ServiceError> {
+    let Some(key_prop) = bundle.doors.comparison_key.clone() else {
+        return Ok(DoorComparisonReport::not_configured());
+    };
+    let properties = bundle.doors.comparison_properties.clone();
+    let builtin = &bundle.builtin_properties;
+    let known: std::collections::BTreeSet<String> = bundle.reference.keys().cloned().collect();
+
+    /// One milestone's full door set for a project: no property filter, because
+    /// a comparison is only meaningful over the whole scope on both sides.
+    /// `service::doors`' counterpart of `scope` below.
+    fn door_scope<'a>(project: &'a str, milestone: &'a str) -> DoorScope<'a> {
+        DoorScope { project: Some(project), milestone: Some(milestone), ..Default::default() }
+    }
+
+    let baseline_doors = doors_service::assemble_doors(state, &door_scope(project, baseline))?
+        .map(|r| r.doors)
+        .unwrap_or_default();
+    let (baseline_index, baseline_duplicates) = index_doors_by_key(&baseline_doors, &key_prop, &known, builtin);
+
+    let mut comparisons = Vec::new();
+    for other in others {
+        if other == baseline {
+            continue;
+        }
+        let other_doors = doors_service::assemble_doors(state, &door_scope(project, other))?
+            .map(|r| r.doors)
+            .unwrap_or_default();
+        let (other_index, other_duplicates) = index_doors_by_key(&other_doors, &key_prop, &known, builtin);
+
+        let doors_added: Vec<String> =
+            other_index.keys().filter(|k| !baseline_index.contains_key(*k)).cloned().collect();
+        let doors_removed: Vec<String> =
+            baseline_index.keys().filter(|k| !other_index.contains_key(*k)).cloned().collect();
+
+        let changed_doors: Vec<ChangedDoor> = baseline_index
+            .iter()
+            .filter_map(|(key, base)| {
+                let other_door = other_index.get(key)?;
+                diff_door(key, base, other_door, &properties, &known, builtin)
+            })
+            .collect();
+
+        comparisons.push(DoorMilestoneComparison {
+            milestone: other.clone(),
+            doors_added,
+            doors_removed,
+            changed_doors,
+            duplicate_key_values: other_duplicates,
+        });
+    }
+
+    Ok(DoorComparisonReport {
+        comparison_key_configured: true,
+        comparison_key: Some(key_prop),
+        compared_properties: properties,
+        baseline_duplicate_key_values: baseline_duplicates,
+        comparisons,
+    })
+}
+
 /// One milestone's full room set for a project: no building narrowing and no
 /// property filter, because a comparison is only meaningful over the whole
 /// scope on both sides of the diff.
@@ -370,8 +615,13 @@ pub fn compare_milestones(
     let Some(bundle) = registry.settings_for(project) else {
         return Ok(ComparisonResponse::not_configured(baseline));
     };
+    // Doors are configured independently, so they are compared before the room
+    // key check below rather than after it: a project that compares doors but
+    // has no *room* comparison key still gets its door diff, instead of the
+    // whole response collapsing to "not configured".
+    let doors = compare_doors(state, bundle, project, baseline, others)?;
     let Some(key_prop) = bundle.comparison_key.clone() else {
-        return Ok(ComparisonResponse::not_configured(baseline));
+        return Ok(ComparisonResponse { doors, ..ComparisonResponse::not_configured(baseline) });
     };
     let properties = bundle.comparison_properties.clone();
     let builtin = &bundle.builtin_properties;
@@ -434,13 +684,16 @@ pub fn compare_milestones(
         compared_properties: properties,
         baseline_duplicate_key_values: baseline_duplicates,
         comparisons,
+        doors,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{CustomValue, Level, Model, Project, Room, RoomPayload, Snapshot, SUPPORTED_SCHEMA};
+    use crate::contract::{
+        CustomValue, Door, DoorPayload, Level, Model, Project, Room, RoomPayload, Snapshot, SUPPORTED_SCHEMA,
+    };
     use crate::settings::Milestone;
     use crate::state::ProjectSettings;
     use crate::storage::FsStore;
@@ -520,6 +773,7 @@ mod tests {
             comparison_key: comparison_key.map(|s| s.to_string()),
             comparison_properties: comparison_properties.iter().map(|s| s.to_string()).collect(),
             areas: Default::default(),
+            doors: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
@@ -1009,6 +1263,260 @@ mod tests {
             })
             .collect();
         assert!(reported.is_empty(), "two renderings of one instant are not a change, got {reported:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---------- doors ----------
+
+    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>, props: &[(&str, &str)]) -> Door {
+        let mut properties = BTreeMap::new();
+        for (k, v) in props {
+            properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+        }
+        Door {
+            id: id.to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            from_room: from_room.map(str::to_string),
+            to_room: to_room.map(str::to_string),
+            type_id: "t1".to_string(),
+            type_name: "Single".to_string(),
+            properties,
+            type_properties: BTreeMap::new(),
+        }
+    }
+
+    fn doors_at(model_id: &str, taken_at: &str, doors: Vec<Door>) -> DoorPayload {
+        DoorPayload {
+            schema_version: crate::contract::SUPPORTED_DOOR_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: taken_at.to_string() },
+            phase: Some("New Construction".to_string()),
+            model_to_shared: None,
+            doors,
+        }
+    }
+
+    /// A bundle whose milestones pin *doors* snapshots, with a door comparison
+    /// key and property set configured.
+    fn door_bundle(key: Option<&str>, properties: &[&str], pins: &[(&str, &str)]) -> ProjectSettings {
+        let milestones = pins
+            .iter()
+            .map(|(name, ts)| Milestone {
+                name: name.to_string(),
+                date: "2026-06-30".to_string(),
+                reference_snapshots: BTreeMap::new(),
+                attachments: BTreeMap::new(),
+                door_attachments: BTreeMap::from([("m1".to_string(), ts.to_string())]),
+            })
+            .collect();
+        ProjectSettings {
+            doors: crate::settings::DoorPolicy {
+                comparison_key: key.map(str::to_string),
+                comparison_properties: properties.iter().map(|s| s.to_string()).collect(),
+            },
+            ..make_bundle(None, &[], milestones)
+        }
+    }
+
+    /// The core door diff: added, removed, a value difference, and a missing
+    /// property, against one baseline — the door mirror of
+    /// `test_compare_added_removed_changed_missing`.
+    #[test]
+    fn test_compare_doors_added_removed_changed_missing() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let bundle = door_bundle(Some("$id"), &["Mark", "Finish"], &[("Base", base_ts), ("Later", later_ts)]);
+        let (state, dir) = state_with(bundle, "doors-core");
+
+        state
+            .set_door_snapshot(doors_at(
+                "m1",
+                base_ts,
+                vec![
+                    make_door("d1", Some("r1"), Some("r2"), &[("Mark", "29"), ("Finish", "Paint")]),
+                    make_door("d2", Some("r3"), None, &[("Mark", "33")]),
+                ],
+            ))
+            .unwrap();
+        state
+            .set_door_snapshot(doors_at(
+                "m1",
+                later_ts,
+                vec![
+                    // d1: Mark changed, Finish gone (missing on the other side)
+                    make_door("d1", Some("r1"), Some("r2"), &[("Mark", "30")]),
+                    // d3 is new; d2 is gone
+                    make_door("d3", Some("r4"), None, &[("Mark", "40")]),
+                ],
+            ))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        let doors = &result.doors;
+        assert!(doors.comparison_key_configured);
+        assert_eq!(doors.comparison_key.as_deref(), Some("$id"));
+
+        let diff = &doors.comparisons[0];
+        assert_eq!(diff.doors_added, vec!["d3".to_string()]);
+        assert_eq!(diff.doors_removed, vec!["d2".to_string()]);
+        assert_eq!(diff.changed_doors.len(), 1);
+
+        let changed = &diff.changed_doors[0];
+        assert_eq!(changed.door_id, "d1");
+        assert_eq!(changed.model_id, "m1", "the door id alone would not identify the element");
+        assert_eq!(changed.differences[0].property, "Mark");
+        assert_eq!(changed.differences[0].baseline_value, "29");
+        assert_eq!(changed.differences[0].other_value, "30");
+        assert_eq!(changed.missing_properties[0].property, "Finish");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The door-specific change worth having.** A door that moved between
+    /// rooms is a difference on `$to_room` — which falls out of the room
+    /// references being ordinary comparable fields, with no machinery of its
+    /// own.
+    #[test]
+    fn test_compare_doors_reports_a_door_that_moved_between_rooms() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let bundle = door_bundle(Some("$id"), &["$from_room", "$to_room"], &[("Base", base_ts), ("Later", later_ts)]);
+        let (state, dir) = state_with(bundle, "doors-moved");
+
+        state
+            .set_door_snapshot(doors_at("m1", base_ts, vec![make_door("d1", Some("r1"), Some("r2"), &[])]))
+            .unwrap();
+        state
+            .set_door_snapshot(doors_at("m1", later_ts, vec![make_door("d1", Some("r1"), Some("r9"), &[])]))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        let changed = &result.doors.comparisons[0].changed_doors[0];
+        assert_eq!(changed.differences.len(), 1, "only the side that moved is a difference");
+        assert_eq!(changed.differences[0].property, "$to_room");
+        assert_eq!(changed.differences[0].baseline_value, "r2");
+        assert_eq!(changed.differences[0].other_value, "r9");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A door that became external — it lost its `to_room` entirely — is a
+    /// *missing property*, not a difference against an empty value. The two
+    /// mean different things, exactly as they do for rooms.
+    #[test]
+    fn test_compare_doors_losing_a_room_reference_is_a_missing_property() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let bundle = door_bundle(Some("$id"), &["$to_room"], &[("Base", base_ts), ("Later", later_ts)]);
+        let (state, dir) = state_with(bundle, "doors-external");
+
+        state
+            .set_door_snapshot(doors_at("m1", base_ts, vec![make_door("d1", Some("r1"), Some("r2"), &[])]))
+            .unwrap();
+        state
+            .set_door_snapshot(doors_at("m1", later_ts, vec![make_door("d1", Some("r1"), None, &[])]))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        let changed = &result.doors.comparisons[0].changed_doors[0];
+        assert!(changed.differences.is_empty());
+        assert_eq!(changed.missing_properties[0].property, "$to_room");
+        assert_eq!(changed.missing_properties[0].baseline_value, "r2");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An unchanged door is omitted, same as an unchanged room.
+    #[test]
+    fn test_compare_doors_omits_an_unchanged_door() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let bundle = door_bundle(Some("$id"), &["Mark"], &[("Base", base_ts), ("Later", later_ts)]);
+        let (state, dir) = state_with(bundle, "doors-unchanged");
+
+        let same = || vec![make_door("d1", Some("r1"), Some("r2"), &[("Mark", "29")])];
+        state.set_door_snapshot(doors_at("m1", base_ts, same())).unwrap();
+        state.set_door_snapshot(doors_at("m1", later_ts, same())).unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        let diff = &result.doors.comparisons[0];
+        assert!(diff.changed_doors.is_empty() && diff.doors_added.is_empty() && diff.doors_removed.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A key value shared by two doors is ambiguous and excluded from the diff,
+    /// reported instead. This is reachable with the obvious key: `$id` is
+    /// unique per *model*, not across the models a project merges.
+    #[test]
+    fn test_compare_doors_reports_ambiguous_keys() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let bundle = door_bundle(Some("$type_name"), &["Mark"], &[("Base", base_ts), ("Later", base_ts)]);
+        let (state, dir) = state_with(bundle, "doors-dupe");
+
+        state
+            .set_door_snapshot(doors_at(
+                "m1",
+                base_ts,
+                vec![
+                    make_door("d1", Some("r1"), None, &[]),
+                    make_door("d2", Some("r2"), None, &[]),
+                ],
+            ))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        let dupes = &result.doors.baseline_duplicate_key_values;
+        assert_eq!(dupes.len(), 1, "both doors share the type name");
+        assert_eq!(dupes[0].room_ids, vec!["d1".to_string(), "d2".to_string()]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The two halves are configured independently.** A project comparing
+    /// doors but with no *room* comparison key still gets its door diff, rather
+    /// than the whole response collapsing to "not configured".
+    #[test]
+    fn test_doors_compare_even_when_rooms_have_no_comparison_key() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let later_ts = "2026-07-01T00:00:00Z";
+        let bundle = door_bundle(Some("$id"), &["Mark"], &[("Base", base_ts), ("Later", later_ts)]);
+        let (state, dir) = state_with(bundle, "doors-only");
+
+        state
+            .set_door_snapshot(doors_at("m1", base_ts, vec![make_door("d1", None, None, &[("Mark", "29")])]))
+            .unwrap();
+        state
+            .set_door_snapshot(doors_at("m1", later_ts, vec![make_door("d1", None, None, &[("Mark", "30")])]))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        assert!(!result.comparison_key_configured, "no room key");
+        assert!(result.comparisons.is_empty());
+        assert!(result.doors.comparison_key_configured, "doors are configured separately");
+        assert_eq!(result.doors.comparisons[0].changed_doors.len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The converse: a project comparing rooms but not doors gets a full room
+    /// diff and an honest "not configured" for doors.
+    #[test]
+    fn test_rooms_compare_when_doors_have_no_comparison_key() {
+        let base_ts = "2026-06-01T00:00:00Z";
+        let bundle = make_bundle(Some("Number"), &["Area"], vec![milestone("Base", "m1", base_ts)]);
+        let (state, dir) = state_with(bundle, "rooms-only");
+        state
+            .set_snapshot(payload_at("m1", base_ts, vec![make_room("r1", &[("Number", "101"), ("Area", "10")])]))
+            .unwrap();
+
+        let result = compare_milestones(&state, "p1", "Base", &["Later".to_string()]).unwrap();
+        assert!(result.comparison_key_configured);
+        assert!(!result.doors.comparison_key_configured);
+        assert!(result.doors.comparisons.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
