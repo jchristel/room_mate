@@ -444,15 +444,20 @@ fn resolve_raw_name<'a>(canonical_name: &'a str, source: &str, builtin_defs: &'a
         .unwrap_or(canonical_name)
 }
 
-/// The three states a room property can be in — distinguished because they
+/// The three states an entity property can be in — distinguished because they
 /// mean different things for data-quality reporting: `Absent` means the
-/// property was never extracted from Revit for this room at all (a mapping
+/// property was never extracted from Revit for this entity at all (a mapping
 /// typo or a parameter the extractor never wired up — a setup problem worth
 /// flagging loudly), while `Empty` means the property exists but nobody has
-/// filled in a value yet (an ordinary per-room gap).
+/// filled in a value yet (an ordinary per-entity gap).
+///
+/// The distinction has to survive tiering (see `PropertyTiers`): "absent from
+/// every tier" and "present but blank in every tier" stay different findings,
+/// which is why `property_presence` accumulates rather than returning on the
+/// first tier that carries the name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropertyPresence {
-    /// No property of the resolved raw name exists on this room at all.
+    /// No property of the resolved raw name exists on this entity at all.
     Absent,
     /// The property exists but its value is an empty string.
     Empty,
@@ -460,40 +465,96 @@ pub enum PropertyPresence {
     Present(String),
 }
 
-/// Look up a room property by its *canonical* name, resolving it to the
+/// An entity's property maps in precedence order, highest first.
+///
+/// **This exists because a door has two tiers and a room has one.** A door
+/// carries its own instance properties *and* its family type's, shared across
+/// every instance of that type, and the two are different claims — "this leaf
+/// is 820 wide" versus "every door of this type is 820 wide"
+/// (STRATEGY-ENTITIES.md Decision 4). Flattening them into one map at the
+/// contract level would lose that distinction permanently, so the tiers stay
+/// separate on the type and this trait is how a *lookup* walks them.
+///
+/// Rejected: taking `&BTreeMap<String, CustomValue>` directly. It is the cheap
+/// fix — these functions only ever needed the map — but a flat map cannot
+/// express tier order, so doors would have needed their own parallel lookup and
+/// the precedence rule would have lived in two places
+/// (PLAN-generalisation.md R2).
+pub trait PropertyTiers {
+    /// This entity's property maps, **highest precedence first**.
+    fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>>;
+}
+
+/// A room is single-tier: it has no type-level properties, so there is nothing
+/// for a lookup to fall through to. Every pre-doors caller therefore keeps
+/// exactly the behaviour it had.
+impl PropertyTiers for Room {
+    fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>> {
+        vec![&self.properties]
+    }
+}
+
+/// Look up an entity property by its *canonical* name, resolving it to the
 /// source-specific raw property name first (see `resolve_raw_name`), then
-/// reporting which of the three `PropertyPresence` states it's in. Used where
-/// the absent/empty distinction matters (data-quality reporting); most
-/// callers just want `lookup_property`'s collapsed `Option<String>`.
+/// reporting which of the three `PropertyPresence` states it's in across the
+/// entity's tiers. Used where the absent/empty distinction matters
+/// (data-quality reporting); most callers just want `lookup_property`'s
+/// collapsed `Option<String>`.
+///
+/// **A tier wins only when it is `Present`.** Walking the tiers and taking the
+/// first that merely *carries* the name would be plain shadowing — the
+/// conventional Revit reading — and it is wrong on real data: in the sample
+/// door export, `Door Leaf Thickness` is a blank instance parameter on 22 of 26
+/// doors while the family type states `40.0`, so shadowing would hide the only
+/// real value behind an empty one. A blank instance parameter is an unfilled
+/// field, not an assertion that the type's value does not apply.
+///
+/// **A name in both tiers is not a finding.** The alternative reading — treat a
+/// collision as a data-quality signal — was rejected against the same data:
+/// `Workset` and `Edited by` collide on *every* door because Revit carries them
+/// on instances and types alike, so the check would fire on 26 of 26 doors and
+/// mean nothing. Decision 4's separation is preserved by the two maps staying
+/// two maps on the wire, not by making an overlap an error.
 pub fn property_presence(
-    room: &Room,
+    entity: &impl PropertyTiers,
     canonical_name: &str,
     source: &str,
     builtin_defs: &[BuiltinPropertyDef],
 ) -> PropertyPresence {
     let raw_name = resolve_raw_name(canonical_name, source, builtin_defs);
-    match room.properties.get(raw_name) {
-        None => PropertyPresence::Absent,
-        Some(v) if v.value.is_empty() => PropertyPresence::Empty,
-        Some(v) => PropertyPresence::Present(v.value.clone()),
+    // `Empty` is remembered rather than returned, so a lower tier still gets
+    // the chance to supply a real value — and so "blank everywhere" is still
+    // reported as `Empty` rather than decaying to `Absent`.
+    let mut seen_empty = false;
+    for tier in entity.tiers() {
+        match tier.get(raw_name) {
+            None => continue,
+            Some(v) if v.value.is_empty() => seen_empty = true,
+            Some(v) => return PropertyPresence::Present(v.value.clone()),
+        }
+    }
+    if seen_empty {
+        PropertyPresence::Empty
+    } else {
+        PropertyPresence::Absent
     }
 }
 
-/// Look up a room property by its *canonical* name (e.g. "Area"), resolving it
-/// to the source-specific raw property name via `builtin_defs` before reading
-/// the room's flat property map. Used by both the dRofus join and the
+/// Look up an entity property by its *canonical* name (e.g. "Area"), resolving
+/// it to the source-specific raw property name via `builtin_defs` before
+/// reading the entity's property tiers. Used by both the dRofus join and the
 /// classifier so the lookup strategy is consistent and lives in one place.
 ///
 /// Returns `None` when the resolved property is absent or holds an empty
 /// value — i.e. collapses `PropertyPresence::Absent`/`Empty` together. A thin
 /// wrapper over `property_presence` so the two can never drift apart.
 pub fn lookup_property(
-    room: &Room,
+    entity: &impl PropertyTiers,
     canonical_name: &str,
     source: &str,
     builtin_defs: &[BuiltinPropertyDef],
 ) -> Option<String> {
-    match property_presence(room, canonical_name, source, builtin_defs) {
+    match property_presence(entity, canonical_name, source, builtin_defs) {
         PropertyPresence::Present(v) => Some(v),
         PropertyPresence::Absent | PropertyPresence::Empty => None,
     }
@@ -1079,6 +1140,106 @@ mod tests {
             property_presence(&room, "Filled", "revit", &[]),
             PropertyPresence::Present("25.5".to_string())
         );
+    }
+
+    /// A stand-in for the two-tier entity doors will be: an instance map that
+    /// takes precedence over a type map. Defined here rather than waiting for
+    /// `Door` so the tier *rule* is pinned by the change that introduces it —
+    /// the rule is a contract decision, and a decision with no test is one the
+    /// next reader is free to re-derive differently.
+    struct TwoTier {
+        instance: BTreeMap<String, CustomValue>,
+        type_properties: BTreeMap<String, CustomValue>,
+    }
+
+    impl PropertyTiers for TwoTier {
+        fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>> {
+            vec![&self.instance, &self.type_properties]
+        }
+    }
+
+    fn two_tier(instance: &[(&str, &str)], type_properties: &[(&str, &str)]) -> TwoTier {
+        let map = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), CustomValue { value: v.to_string(), storage_type: None }))
+                .collect()
+        };
+        TwoTier { instance: map(instance), type_properties: map(type_properties) }
+    }
+
+    /// The precedence rule: a higher tier wins when it has a real value, and
+    /// the lower tier is never consulted for a name the instance already
+    /// answers.
+    #[test]
+    fn test_property_presence_prefers_the_higher_tier() {
+        let door = two_tier(&[("Workset", "1258")], &[("Workset", "4411")]);
+        assert_eq!(
+            property_presence(&door, "Workset", "revit", &[]),
+            PropertyPresence::Present("1258".to_string())
+        );
+    }
+
+    /// **The case that decided the rule.** `Door Leaf Thickness` is a blank
+    /// instance parameter on 22 of the 26 doors in the sample export while the
+    /// family type states a real value — so plain shadowing (first tier that
+    /// carries the name wins) would hide `40.0` behind an empty string on
+    /// almost every door. A blank instance parameter is an unfilled field, not
+    /// a claim that the type's value does not apply.
+    #[test]
+    fn test_blank_higher_tier_does_not_shadow_a_real_lower_tier_value() {
+        let door = two_tier(&[("Door Leaf Thickness", "")], &[("Door Leaf Thickness", "40.0")]);
+        assert_eq!(
+            property_presence(&door, "Door Leaf Thickness", "revit", &[]),
+            PropertyPresence::Present("40.0".to_string())
+        );
+    }
+
+    /// The `Absent`/`Empty` distinction has to survive tiering, or the QA
+    /// report loses the difference between "nobody wired this parameter up"
+    /// and "nobody has filled it in". Blank in every tier is `Empty`; missing
+    /// from every tier is `Absent` — and blank in one tier with the other
+    /// silent is still `Empty`, not `Absent`.
+    #[test]
+    fn test_tiering_preserves_absent_versus_empty() {
+        let blank_both = two_tier(&[("Finish", "")], &[("Finish", "")]);
+        assert_eq!(property_presence(&blank_both, "Finish", "revit", &[]), PropertyPresence::Empty);
+
+        let blank_instance_only = two_tier(&[("Finish", "")], &[]);
+        assert_eq!(property_presence(&blank_instance_only, "Finish", "revit", &[]), PropertyPresence::Empty);
+
+        let blank_type_only = two_tier(&[], &[("Finish", "")]);
+        assert_eq!(property_presence(&blank_type_only, "Finish", "revit", &[]), PropertyPresence::Empty);
+
+        let neither = two_tier(&[("Other", "x")], &[("Another", "y")]);
+        assert_eq!(property_presence(&neither, "Finish", "revit", &[]), PropertyPresence::Absent);
+    }
+
+    /// Canonical-name resolution runs *before* the tier walk, so one resolved
+    /// raw name is looked for in every tier — a canonical name must not mean
+    /// one property on the instance and another on the type.
+    #[test]
+    fn test_canonical_resolution_applies_to_every_tier() {
+        let door = two_tier(&[], &[("Fläche", "25.5")]);
+        let defs = vec![BuiltinPropertyDef {
+            canonical: "Area".to_string(),
+            by_source: HashMap::from([("revit_de".to_string(), "Fläche".to_string())]),
+        }];
+        assert_eq!(lookup_property(&door, "Area", "revit_de", &defs), Some("25.5".to_string()));
+    }
+
+    /// A room is single-tier, which is what makes R2 a no-op for every
+    /// pre-doors caller — the walk has exactly one map to look in.
+    #[test]
+    fn test_room_exposes_exactly_one_tier() {
+        let room = Room {
+            id: "r1".into(),
+            name: "Office".into(),
+            level_id: "lvl1".into(),
+            loops: vec![],
+            properties: BTreeMap::new(),
+        };
+        assert_eq!(room.tiers().len(), 1);
     }
 
     /// `lookup_property`'s existing collapsed behavior must survive the
