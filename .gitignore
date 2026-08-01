@@ -25,7 +25,18 @@ target
 # meant for .NET build-output directories, not Rust source directories.
 !src/bin/
 
+# The snapshot store is local runtime data -- ignored, with ONE deliberate
+# exception: the House A sample set is published so a fresh clone has real
+# pushed data to run against (26 rooms, two snapshots, ~300 KB). Every other
+# project under data/snapshots is somebody's local push and stays out.
+#
+# Git cannot re-include a path whose parent directory is excluded, so the
+# exception has to be unpicked one level at a time -- hence the alternating
+# exclude/negate pairs below rather than a single `!data/snapshots/House A/`.
 data/*
+!data/snapshots/
+data/snapshots/*
+!data/snapshots/House A/
 /scripts/__pycache__
 
 # NOT ignored, deliberately: `.mcp.json` (the Claude Code MCP registration for

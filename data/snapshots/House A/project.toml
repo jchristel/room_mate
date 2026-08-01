@@ -1,0 +1,11 @@
+name = "House A"
+
+[models."Building_BF_Framing_jan.r.christel"]
+name = "Building_BF_Framing_jan.r.christel"
+snapshots = [
+    "2026-07-15T11:18:58.186000Z",
+    "2026-07-24T23:19:10.227000Z",
+]
+doors = []
+
+[reference_snapshots]
