@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio_util::io::StreamReader;
 
-use crate::contract::{ModelToShared, Room, RoomBoundary, RoomPayload, StreamEnvelope, SUPPORTED_SCHEMA};
+use crate::contract::{
+    Door, DoorPayload, DoorStreamEnvelope, ModelToShared, Room, RoomBoundary, RoomPayload, StreamEnvelope,
+    SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
+};
 use crate::service::adjacency;
 use crate::service::areas;
 use crate::service::comparison::{self, ComparisonResponse};
@@ -63,18 +66,21 @@ fn validate_id(kind: &str, id: &str) -> Result<(), (StatusCode, String)> {
 /// this runs, so the id checked here is always the one the store will key on.
 ///
 /// Takes already-parsed identity fields (not a payload) so the streaming
-/// route can run it from the envelope line alone, before reading any rooms.
+/// route can run it from the envelope line alone, before reading any rooms —
+/// and so the doors routes can share it despite carrying a different payload
+/// type and their own, independently-versioned `supported_schema`.
 fn validate_ingest(
     state: &Shared,
     schema_version: u32,
+    supported_schema: u32,
     project_id: &str,
     model_id: &str,
     taken_at: &str,
 ) -> Result<(), (StatusCode, String)> {
-    if schema_version != SUPPORTED_SCHEMA {
+    if schema_version != supported_schema {
         return Err((
             StatusCode::UNPROCESSABLE_ENTITY,
-            format!("schema_version {schema_version} not supported; this server speaks {SUPPORTED_SCHEMA}"),
+            format!("schema_version {schema_version} not supported; this server speaks {supported_schema}"),
         ));
     }
     if state.settings().settings_for(project_id).is_none() {
@@ -194,6 +200,7 @@ pub async fn ingest_rooms(
     validate_ingest(
         &state,
         payload.schema_version,
+        SUPPORTED_SCHEMA,
         &payload.project.id,
         &payload.model.id,
         &payload.snapshot.taken_at,
@@ -362,6 +369,7 @@ pub async fn ingest_rooms_stream(
     validate_ingest(
         &state,
         envelope.schema_version,
+        SUPPORTED_SCHEMA,
         &envelope.project.id,
         &envelope.model.id,
         &envelope.snapshot.taken_at,
@@ -417,6 +425,209 @@ pub async fn ingest_rooms_stream(
             }),
         )
     })
+}
+
+/// The doors half of the ingest contract: the two checks a doors push has that
+/// a rooms push does not, applied after `validate_ingest` and before anything
+/// is stored.
+///
+/// **1. The model must already have rooms.** A door's `from_room`/`to_room` are
+/// `Room.id`s, and room ids are unique only *within* a model — so a doors push
+/// to a model with no rooms stores references nothing can ever resolve. Scoped
+/// to the `(project, model)` lineage rather than the project for exactly that
+/// reason: rooms under a *sibling* model are the wrong id space, so they would
+/// satisfy a project-wide gate while resolving nothing.
+///
+/// **2. The phase must match the lineage, and disagreement is refused.** This is
+/// where doors deliberately diverge from rooms. A rooms push that disagrees is
+/// quarantined and promotable, because promotion is how a model re-phases
+/// (PLAN-phasing.md "D6"). A doors push has no such story: promoting it would
+/// move the lineage's phase while every rooms snapshot stayed on the old one,
+/// stranding the very rooms its references point at. There is nothing worth
+/// activating, so — like an unphased push — it is refused outright.
+///
+/// A doors push naming **no** phase is refused for the same reason a rooms one
+/// is: its doors were never filtered by the phase range test, so they are
+/// unfiltered mixed-phase content.
+///
+/// A lineage with **no** phase yet accepts the push and is phased by it, exactly
+/// as a first phased rooms push would. That is the live case for a model whose
+/// rooms were pushed before phasing existed: its rooms snapshot keeps reporting
+/// itself unphased (it was), and the QA phase report keeps saying so.
+fn check_doors_ingest(state: &Shared, key: &ModelKey, pushed: Option<&str>) -> Result<(), (StatusCode, String)> {
+    let has_rooms = state.has_room_snapshot(key).map_err(|e| {
+        tracing::error!("failed to read rooms index: {e:#}");
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read rooms index: {e}"))
+    })?;
+    if !has_rooms {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "no rooms have been pushed for {}/{}, so this model's doors have nothing to link to. \
+                 Push rooms for this model first — a door's from_room/to_room are room ids, and room \
+                 ids are unique only within one model.",
+                key.project_id, key.model_id
+            ),
+        ));
+    }
+
+    let Some(pushed) = pushed else {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "doors push for {}/{} carries no phase, which indicates an extractor predating phase support; \
+                 its doors were never filtered to a phase. Update the extractor.",
+                key.project_id, key.model_id
+            ),
+        ));
+    };
+
+    let lineage = state.model_phase(key).map_err(|e| {
+        tracing::error!("failed to read lineage phase: {e:#}");
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read model phase: {e}"))
+    })?;
+    match lineage {
+        None => Ok(()),
+        Some(stored) if crate::contract::phases_agree(Some(pushed), Some(&stored)) => Ok(()),
+        Some(stored) => Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "doors push for {}/{} is phase {pushed:?} while the model is {stored:?}. \
+                 Unlike a rooms push, a disagreeing doors push is not quarantined: activating it would \
+                 re-phase the model while its rooms stayed on {stored:?}, leaving these doors' room \
+                 references pointing at rooms from another phase. Re-phase the model with a rooms push \
+                 first, then push its doors.",
+                key.project_id, key.model_id
+            ),
+        )),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct DoorIngestResponse {
+    pub accepted: bool,
+    pub door_count: usize,
+    /// The snapshot id this push was stored under — echoed back (or minted) on
+    /// the same terms as `IngestResponse::snapshot_taken_at`.
+    pub snapshot_taken_at: String,
+    pub snapshot_id_generated: bool,
+}
+
+/// Revit posts door data here. Mirrors `ingest_rooms` — same envelope
+/// resolution, same pre-flight — plus `check_doors_ingest`.
+///
+/// **There is no quarantine branch and so no 202**, unlike rooms: a doors push
+/// either goes live or is refused. See `check_doors_ingest` for why.
+pub async fn ingest_doors(
+    State(state): State<Shared>,
+    Json(mut payload): Json<DoorPayload>,
+) -> Result<(StatusCode, Json<DoorIngestResponse>), (StatusCode, String)> {
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut payload.snapshot);
+    payload.phase = crate::contract::normalize_phase(payload.phase.as_deref());
+    validate_ingest(
+        &state,
+        payload.schema_version,
+        SUPPORTED_DOOR_SCHEMA,
+        &payload.project.id,
+        &payload.model.id,
+        &payload.snapshot.taken_at,
+    )?;
+    let key = ModelKey::from_door_payload(&payload);
+    check_doors_ingest(&state, &key, payload.phase.as_deref())?;
+    warn_on_transform_drift(payload.model_to_shared.as_ref(), &payload.project.id, &payload.model.id);
+
+    let count = payload.doors.len();
+    let snapshot_taken_at = payload.snapshot.taken_at.clone();
+    tracing::info!("received {} door(s)", count);
+
+    state.set_door_snapshot(payload).map_err(|e| {
+        tracing::error!("failed to store doors snapshot: {e:#}");
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store doors snapshot: {e}"))
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(DoorIngestResponse { accepted: true, door_count: count, snapshot_taken_at, snapshot_id_generated }),
+    ))
+}
+
+/// Streaming doors ingest (NDJSON), the counterpart to `ingest_rooms_stream`:
+/// line 1 is the envelope, every following line is one `Door`.
+///
+/// Doors are far fewer than rooms per model, so this is not load-bearing the way
+/// the rooms stream is. It exists so a producer can use one transport for both
+/// pushes rather than branching per entity — and so the two paths stay provably
+/// equivalent, which the tests assert.
+pub async fn ingest_doors_stream(
+    State(state): State<Shared>,
+    body: Body,
+) -> Result<(StatusCode, Json<DoorIngestResponse>), (StatusCode, String)> {
+    let stream = body.into_data_stream().map(|r| r.map_err(std::io::Error::other));
+    let reader = StreamReader::new(stream);
+    let mut lines = reader.lines();
+
+    let envelope_line = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+        .ok_or((StatusCode::BAD_REQUEST, "empty body".into()))?;
+
+    let mut envelope: DoorStreamEnvelope =
+        serde_json::from_str(&envelope_line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad envelope: {e}")))?;
+
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
+    envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
+    validate_ingest(
+        &state,
+        envelope.schema_version,
+        SUPPORTED_DOOR_SCHEMA,
+        &envelope.project.id,
+        &envelope.model.id,
+        &envelope.snapshot.taken_at,
+    )?;
+    // Decided from the envelope alone, before a single door line is read — a
+    // push that will be refused should cost the producer one line.
+    let key = ModelKey { project_id: envelope.project.id.clone(), model_id: envelope.model.id.clone() };
+    check_doors_ingest(&state, &key, envelope.phase.as_deref())?;
+    warn_on_transform_drift(envelope.model_to_shared.as_ref(), &envelope.project.id, &envelope.model.id);
+
+    let mut doors: Vec<Door> = Vec::new();
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+    {
+        if line.trim().is_empty() {
+            continue; // tolerate a trailing blank line
+        }
+        let door: Door =
+            serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad door line: {e}")))?;
+        doors.push(door);
+    }
+
+    let count = doors.len();
+    tracing::info!("streamed {} door(s)", count);
+
+    let snapshot_taken_at = envelope.snapshot.taken_at.clone();
+    let payload = DoorPayload {
+        schema_version: envelope.schema_version,
+        project: envelope.project,
+        model: envelope.model,
+        snapshot: envelope.snapshot,
+        phase: envelope.phase,
+        model_to_shared: envelope.model_to_shared,
+        doors,
+    };
+
+    state.set_door_snapshot(payload).map_err(|e| {
+        tracing::error!("failed to store doors snapshot: {e:#}");
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store doors snapshot: {e}"))
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(DoorIngestResponse { accepted: true, door_count: count, snapshot_taken_at, snapshot_id_generated }),
+    ))
 }
 
 /// `ServiceError` -> `(StatusCode, String)`, the same message-carrying error
@@ -1343,5 +1554,248 @@ mod tests {
         let of = |model: &str| stored.iter().find(|(k, _)| k.model_id == model).expect("stored").1.room_boundary;
         assert_eq!(of("buffered"), Some(RoomBoundary::FinishFace));
         assert_eq!(of("streamed"), Some(RoomBoundary::Centreline), "the stream path carries it too");
+    }
+
+    // ---------- doors ingest ----------
+
+    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>) -> Door {
+        Door {
+            id: id.to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            from_room: from_room.map(str::to_string),
+            to_room: to_room.map(str::to_string),
+            type_id: "t1".to_string(),
+            type_name: "Single".to_string(),
+            properties: BTreeMap::new(),
+            type_properties: BTreeMap::new(),
+        }
+    }
+
+    fn door_payload(project: &str, model: &str, ts: &str, phase: Option<&str>) -> DoorPayload {
+        DoorPayload {
+            schema_version: SUPPORTED_DOOR_SCHEMA,
+            project: Project { id: project.to_string(), name: "P".to_string() },
+            model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: ts.to_string() },
+            phase: phase.map(str::to_string),
+            model_to_shared: None,
+            doors: vec![make_door("d1", Some("r1"), None)],
+        }
+    }
+
+    /// A state whose `p1/m1` lineage already has rooms in `phase` — the
+    /// precondition every accepted doors push needs.
+    async fn state_with_rooms(phase: Option<&str>) -> Shared {
+        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        state
+            .set_snapshot(RoomPayload {
+                schema_version: SUPPORTED_SCHEMA,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                phase: phase.map(str::to_string),
+                model_to_shared: None,
+                room_boundary: None,
+                levels: vec![],
+                rooms: vec![make_room("r1", "Room A")],
+            })
+            .unwrap();
+        state
+    }
+
+    /// The happy path: doors land in their own storage slot, leaving the rooms
+    /// snapshot exactly as it was.
+    #[tokio::test]
+    async fn test_ingest_doors_stores_alongside_rooms() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
+
+        let (status, body) = ingest_doors(State(state.clone()), Json(payload)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.accepted);
+        assert_eq!(body.door_count, 1);
+        assert!(!body.snapshot_id_generated);
+
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let stored = state.all_door_snapshots().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].1.doors[0].from_room.as_deref(), Some("r1"));
+        // The rooms lineage is untouched: same snapshot, same single id.
+        assert_eq!(state.list_snapshot_ids(&key).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
+        assert_eq!(state.list_door_snapshot_ids(&key).unwrap(), vec!["2026-02-01T00:00:00Z".to_string()]);
+    }
+
+    /// **The rooms-first gate.** Without rooms in this model there is nothing a
+    /// door's `from_room`/`to_room` could resolve against, so the push is
+    /// refused rather than stored to dangle.
+    #[tokio::test]
+    async fn test_doors_push_to_a_model_without_rooms_is_refused() {
+        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
+
+        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("no rooms have been pushed"), "{message}");
+        assert!(state.all_door_snapshots().unwrap().is_empty(), "nothing was stored");
+    }
+
+    /// The gate is scoped to the `(project, model)` lineage, not the project.
+    /// Rooms under a *sibling* model are a different room-id space, so they
+    /// cannot satisfy it — a project-wide gate would accept this push and leave
+    /// every reference unresolvable.
+    #[tokio::test]
+    async fn test_rooms_under_a_sibling_model_do_not_satisfy_the_gate() {
+        let state = state_with_rooms(Some("New Construction")).await; // rooms on m1
+        let payload = door_payload("p1", "m2", "2026-02-01T00:00:00Z", Some("New Construction"));
+
+        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("p1/m2"), "names the model that lacks rooms: {message}");
+    }
+
+    /// **Doors diverge from rooms here.** A rooms push whose phase disagrees is
+    /// quarantined and promotable; a doors push is refused, because promoting it
+    /// would re-phase the lineage while the rooms stayed behind, leaving these
+    /// doors pointing at another phase's rooms.
+    #[tokio::test]
+    async fn test_doors_push_with_a_disagreeing_phase_is_refused_not_quarantined() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("Existing"));
+
+        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("Existing") && message.contains("New Construction"), "{message}");
+        assert!(state.all_door_snapshots().unwrap().is_empty());
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert!(state.pending_snapshot(&key).unwrap().is_none(), "never quarantined");
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"), "lineage unmoved");
+    }
+
+    /// Phase folding is the contract's, not a second implementation: a doors
+    /// push differing only in case and surrounding whitespace agrees.
+    #[tokio::test]
+    async fn test_doors_phase_comparison_folds_case_and_whitespace() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("  new CONSTRUCTION "));
+
+        let (status, _) = ingest_doors(State(state.clone()), Json(payload)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    /// A doors push carrying no phase is refused, exactly as a rooms one is:
+    /// unfiltered doors are a mix of every phase and there is no safe default.
+    #[tokio::test]
+    async fn test_doors_push_without_a_phase_is_refused() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", None);
+
+        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("carries no phase"), "{message}");
+    }
+
+    /// An **unphased** lineage — a model whose rooms were pushed before phasing
+    /// existed — accepts a doors push and is phased by it, exactly as a first
+    /// phased rooms push would phase it. This is the live case for the House A
+    /// sample, whose stored rooms snapshot carries no phase.
+    #[tokio::test]
+    async fn test_doors_push_phases_an_unphased_lineage() {
+        let state = state_with_rooms(None).await;
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert_eq!(state.model_phase(&key).unwrap(), None);
+
+        let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
+        let (status, _) = ingest_doors(State(state.clone()), Json(payload)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
+
+        // The rooms snapshot still reports itself unphased — it was, and a later
+        // doors push does not retroactively relabel what was stored.
+        let stored = state.all_snapshots().unwrap();
+        assert_eq!(stored[0].1.phase, None);
+    }
+
+    /// Doors version independently of rooms: a payload stamped with the *room*
+    /// schema is refused, and the message names the doors schema so a producer
+    /// is told which number it should be sending.
+    #[tokio::test]
+    async fn test_doors_push_with_the_room_schema_version_is_refused() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let mut payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
+        payload.schema_version = SUPPORTED_SCHEMA;
+
+        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains(&format!("this server speaks {SUPPORTED_DOOR_SCHEMA}")), "{message}");
+    }
+
+    /// A blank `taken_at` is minted server-side and reported, the same
+    /// `ensure_taken_at` contract rooms have — not a second implementation.
+    #[tokio::test]
+    async fn test_doors_push_mints_a_blank_snapshot_id() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = door_payload("p1", "m1", "", Some("New Construction"));
+
+        let (_, body) = ingest_doors(State(state.clone()), Json(payload)).await.expect("accepted");
+        assert!(body.snapshot_id_generated);
+        assert!(crate::contract::validate_snapshot_id(&body.snapshot_taken_at).is_ok());
+    }
+
+    /// The buffered and streamed doors routes must store identical results —
+    /// which route a producer picked cannot change what is stored, the same
+    /// lockstep rule the rooms pair has.
+    #[tokio::test]
+    async fn test_doors_stream_matches_the_buffered_path() {
+        let state = state_with_rooms(Some("New Construction")).await;
+
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"model":{"id":"m1","name":"M","source":"revit"},"#,
+            r#""snapshot":{"taken_at":"2026-02-01T00:00:00Z"},"phase":"New Construction"}"#,
+            "\n",
+            r#"{"id":"d1","level_id":"1","loops":[],"from_room":"r1","type_id":"t1","type_name":"Single"}"#,
+            "\n",
+            "\n", // a trailing blank line is tolerated, as on the rooms stream
+        );
+        let (status, streamed) = ingest_doors_stream(State(state.clone()), Body::from(body)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(streamed.door_count, 1);
+
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let stored = state.get_door_snapshot(&key, "2026-02-01T00:00:00Z").unwrap().expect("stored");
+        let door = &stored.doors[0];
+        assert_eq!(door.id, "d1");
+        assert_eq!(door.from_room.as_deref(), Some("r1"));
+        assert_eq!(door.to_room, None, "an external door streams as None, not an error");
+    }
+
+    /// The stream route refuses on the envelope line alone, before reading any
+    /// door lines — a push that will be refused should cost the producer one
+    /// line, not the whole body.
+    #[tokio::test]
+    async fn test_doors_stream_refuses_from_the_envelope_alone() {
+        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"model":{"id":"m1","name":"M","source":"revit"},"#,
+            r#""snapshot":{"taken_at":"2026-02-01T00:00:00Z"},"phase":"New Construction"}"#,
+            "\n",
+            r#"{"this is not a door and is never parsed"#, // malformed on purpose
+        );
+
+        let (status, message) = ingest_doors_stream(State(state.clone()), Body::from(body)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "the gate ran, not the line parser");
+        assert!(message.contains("no rooms have been pushed"), "{message}");
+    }
+
+    /// An unregistered project is refused for doors exactly as for rooms — a
+    /// project must be onboarded before it can push anything.
+    #[tokio::test]
+    async fn test_doors_push_to_an_unregistered_project_is_refused() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = door_payload("nope", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
+
+        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("no settings configured"), "{message}");
     }
 }
