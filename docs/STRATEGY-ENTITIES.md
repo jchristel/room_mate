@@ -148,7 +148,8 @@ This document originally proposed carrying `{ id, name }`, with the id kept for
 display and debugging. **The id was dropped.** Once the name is the identity, the
 id is a field nothing reads — and this doc's own 2b argument applies to it: an
 unread field drifts. It was also the least trustworthy value available.
-`doors.json`'s `from_room[].phase_id` is `3`, low enough to be an *index* into
+the raw export's (`scripts/fixtures/doors-raw.json`) `from_room[].phase_id` is `3`,
+low enough to be an *index* into
 `doc.Phases` rather than an ElementId, in which case it is not stable across
 models and is useless even for display. Carrying a field that is unread *and*
 possibly wrong is the worst of both, so `phase` is a bare string on the wire:
@@ -170,7 +171,7 @@ created <= selected  AND  (demolished is invalid  OR  demolished > selected)
 
 Filtering on `created == selected` would drop every element built in an earlier
 phase and still standing — on a phased model, most of them. This will not show
-up in testing against the current sample: all 26 doors in `doors.json` carry
+up in testing against the current sample: all 26 doors in the raw export carry
 `demolished: "Invalid phase id."`, so equality and the range test agree there.
 
 The `<=` needs a **phase ordering**, and only the document has one. Two

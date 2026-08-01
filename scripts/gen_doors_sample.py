@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Translate the raw duHast door export (`docs/doors.json`) into the server's
+"""Translate the raw duHast door export (`scripts/fixtures/doors-raw.json`) into the server's
 v1 doors contract, for pushing at House A.
 
 This is the *server-side* twin of `extractor/pyRevit/post_doors.py`: same
@@ -24,7 +24,7 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-RAW = os.path.join(ROOT, "docs", "doors.json")
+RAW = os.path.join(ROOT, "scripts", "fixtures", "doors-raw.json")
 OUT = os.path.join(ROOT, "data", "house-a-doors.json")
 
 SCHEMA_VERSION = 1
