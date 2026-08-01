@@ -1,11 +1,11 @@
 # Plan — actioning the three open handovers
 
 Review of `HANDOVER-area-label-sizing.md`, `HANDOVER-comparison-sources.md` and
-`HANDOVER-ui-layout.md` against the [STRATEGY docs](STRATEGY.md) and the code
+`HANDOVER-ui-layout.md` against the [STRATEGY docs](../STRATEGY.md) and the code
 they describe, a priority per item by **impact**, and an ordered plan working
 highest to lowest.
 
-Every step follows [CODING-CONVENTIONS.md](CODING-CONVENTIONS.md); the rules
+Every step follows [CODING-CONVENTIONS.md](../CODING-CONVENTIONS.md); the rules
 that actually bind here are called out per item rather than restated.
 
 ---
@@ -26,7 +26,7 @@ Verified: `renderAreasOverlay` sets a flat `baseFont` from `zone.fitted`
 ([:801-803](static/index.html:801)). The proposed code is correct and
 self-contained.
 
-**Conflict with [Browser](STRATEGY-BROWSER.md) — must be reconciled, not
+**Conflict with [Browser](../STRATEGY-BROWSER.md) — must be reconciled, not
 ignored.** That doc records removing an identical `fontSize < baseFont * 0.25`
 cutoff from room labels as a *bug fix*: "labels no longer silently disappear on
 small rooms — the old cutoff (a floor-wide threshold that dropped a label
@@ -139,18 +139,18 @@ sequenced early here rather than at its handover's position 4.
 
 ### Doc hygiene found while reviewing
 
-- **Broken links.** [STRATEGY.md](STRATEGY.md) (twice) and
-  [Browser](STRATEGY-BROWSER.md) point at `docs/HANDOVER-georeferencing.md`; the
+- **Broken links.** [STRATEGY.md](../STRATEGY.md) (twice) and
+  [Browser](../STRATEGY-BROWSER.md) point at `docs/HANDOVER-georeferencing.md`; the
   file is at `docs/Superseded/HANDOVER-georeferencing.md`.
-- **Stale index.** [docs/README.md](README.md) lists
+- **Stale index.** [docs/README.md](../README.md) lists
   `settings-infrastructure-handoff.md` under "Implementation notes"; it lives in
   `Superseded/`. The three open handovers are not indexed at all.
 - **Undocumented shipped feature.** The header room search (query input, field
   picker, `.match`/`.dim` rendering) is built in `index.html` but has no bullet
-  in [Browser](STRATEGY-BROWSER.md)'s Implemented list. The ui-layout target
+  in [Browser](../STRATEGY-BROWSER.md)'s Implemented list. The ui-layout target
   header includes search, so this gap must close when that work lands.
 - **No conventions coverage for `static/`.**
-  [CODING-CONVENTIONS.md](CODING-CONVENTIONS.md) is Rust-only; `index.html` is
+  [CODING-CONVENTIONS.md](../CODING-CONVENTIONS.md) is Rust-only; `index.html` is
   2,020 lines and the restructure will grow it. Not a blocker — flagged so the
   question is asked deliberately rather than answered by accretion.
 
@@ -271,8 +271,8 @@ the original design property and must not regress.
 - Unqualified properties behave exactly as before (regression guard).
 - Bad namespace → rejected at load **and** on save, with the right message.
 
-**Docs:** [Server](STRATEGY-SERVER.md) gains the comparison-reads-joined-sources
-fact and the new load-time validation; [Sources](STRATEGY-SOURCES.md)'s "a
+**Docs:** [Server](../STRATEGY-SERVER.md) gains the comparison-reads-joined-sources
+fact and the new load-time validation; [Sources](../STRATEGY-SOURCES.md)'s "a
 joined source is queryable under its `[sources.<name>]` key" bullet gains
 comparison as its second consumer. Commit message calls out the migration
 direction for out-of-repo configs.
@@ -314,8 +314,8 @@ label still appears (the case that motivates the whole change); a multi-project
 unscoped read carries one entry per project, not a merged list; a milestone with
 a pinned dRofus snapshot reports the *pinned* label set.
 
-**Docs:** [Server](STRATEGY-SERVER.md)'s `/rooms` description;
-[Sources](STRATEGY-SOURCES.md)'s `all_labels` note gains its second consumer.
+**Docs:** [Server](../STRATEGY-SERVER.md)'s `/rooms` description;
+[Sources](../STRATEGY-SOURCES.md)'s `all_labels` note gains its second consumer.
 
 ### P3 — Labels toggle
 
@@ -347,7 +347,7 @@ Handover H3 step 6 — the original request, and independent of everything else.
   persisted flag beside an unpersisted one is the inconsistency that confuses
   the next reader.
 
-**Docs:** [Browser](STRATEGY-BROWSER.md) Implemented. Note the level-of-detail
+**Docs:** [Browser](../STRATEGY-BROWSER.md) Implemented. Note the level-of-detail
 tie-in while it is fresh: once `paintLevel` takes `showLabels`, the label half
 of the open fitted-view LOD item has its mechanism in place — an automatic mode
 would drive the same flag from zoom rather than a button.
@@ -390,7 +390,7 @@ Handover H1, applied as written. Two edits to `index.html`:
    footprints are not), and skip the label below `baseFont * 0.25`. The `>=`
    guard subsumes the degenerate-ring case — no separate zero check.
 
-**Do not skip the doc update.** Add a bullet to [Browser](STRATEGY-BROWSER.md)
+**Do not skip the doc update.** Add a bullet to [Browser](../STRATEGY-BROWSER.md)
 recording that tier labels *do* carry a suppression threshold and *why* that is
 not the room-label bug being reinstated: **the areas summary panel names every
 group, so a suppressed tier label loses no information; a suppressed room label
@@ -440,7 +440,7 @@ viewing, which is what zones are actually used for, is untouched. A future
 multi-project comparator gets **its own page**, following the established
 `comparison.html` / `settings.html` pattern; it can borrow `paintLevel` and the
 zone machinery, and its real blocker is the cross-project alignment transform
-[Server](STRATEGY-SERVER.md) describes, not UI.
+[Server](../STRATEGY-SERVER.md) describes, not UI.
 
 **The one genuinely open question** — does anything else depend on per-zone
 scope? — surfaces here. `persistSelection`'s `zones[0]` special case
@@ -534,7 +534,7 @@ layout. P2 is its prerequisite.
   one-dimensional case of the same idea — rather than inventing a second
   pattern.
 - **Grouped column headers, not an interleaved flat table.**
-  [Sources](STRATEGY-SOURCES.md) keeps dRofus as a separate sub-object precisely
+  [Sources](../STRATEGY-SOURCES.md) keeps dRofus as a separate sub-object precisely
   because the two have different lifecycles and provenance; the grid preserves
   that separation visibly. An unmatched room simply has no `drofus` key —
   render empty cells, not an error.
@@ -605,12 +605,12 @@ real changes.
 Ten minutes, any time a doc is already open.
 
 - Repoint `docs/HANDOVER-georeferencing.md` to `Superseded/` in
-  [STRATEGY.md](STRATEGY.md) (two places) and [Browser](STRATEGY-BROWSER.md).
-- [docs/README.md](README.md): move `settings-infrastructure-handoff.md` to the
+  [STRATEGY.md](../STRATEGY.md) (two places) and [Browser](../STRATEGY-BROWSER.md).
+- [docs/README.md](../README.md): move `settings-infrastructure-handoff.md` to the
   Superseded note, and index the three open handovers plus this plan.
-- Add the room-search bullet to [Browser](STRATEGY-BROWSER.md)'s Implemented
+- Add the room-search bullet to [Browser](../STRATEGY-BROWSER.md)'s Implemented
   list — it ships today and the P6/P7 header restructure assumes it.
-- Decide whether [CODING-CONVENTIONS.md](CODING-CONVENTIONS.md) should say
+- Decide whether [CODING-CONVENTIONS.md](../CODING-CONVENTIONS.md) should say
   anything about the `static/` layer before P8 grows `index.html` further.
 
 ---
@@ -619,9 +619,9 @@ Ten minutes, any time a doc is already open.
 
 - **Handovers move to `Superseded/` when their work lands**, matching the 23
   files already there. `HANDOVER-ui-layout.md` says so explicitly — and
-  [Browser](STRATEGY-BROWSER.md) absorbs its outcome at that point.
+  [Browser](../STRATEGY-BROWSER.md) absorbs its outcome at that point.
 - **A change touching more than one layer updates every doc it touches** —
-  [STRATEGY.md](STRATEGY.md) names that as the cost of the doc split. P1 touches
+  [STRATEGY.md](../STRATEGY.md) names that as the cost of the doc split. P1 touches
   Server and Sources; P2 touches Server, Sources and Browser; P3/P5 touch
   Browser.
 - **Annotate the *why*, not the what** (§91). Every non-obvious decision in this
@@ -643,4 +643,4 @@ Ten minutes, any time a doc is already open.
 - **The multi-project comparator** — its own page when it comes, not a mode flag
   on the viewer.
 - **`SnapshotStore::put_streaming`** and the other deferred server items — named
-  in [Server](STRATEGY-SERVER.md), untouched by any of these three handovers.
+  in [Server](../STRATEGY-SERVER.md), untouched by any of these three handovers.
