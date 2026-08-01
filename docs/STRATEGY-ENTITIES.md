@@ -40,8 +40,8 @@ sketch.
 > rather than leave the original sketch standing behind a warning, 2a and 2c now
 > describe what exists and say what they replaced. **[PLAN-phasing.md](PLAN-phasing.md)
 > carries the full rationale** and is authoritative if the two ever drift. The
-> rest of this document — Decisions 1 and 3 through 6 — is untouched and still
-> design-only.
+> The same treatment has since been applied to Decisions 3 through 6, each of
+> which now carries what shipped and where it departed from the sketch.
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Server](STRATEGY-SERVER.md) ·
@@ -408,19 +408,52 @@ almost no wall. It is a second edge set, not a refinement of the first —
 `/projects/{id}/adjacency` keeps its meaning and connectivity gets its own
 endpoint when it is built.
 
-### Open question: which room owns a door
+### Which room owns a door — **decided, not yet built**
 
-Unresolved, and flagged here so it does not get decided twice by accident. For
-area rollups, hierarchy scoping, and door schedules, "the room this door belongs
-to" has at least four defensible answers: the `to_room`, the `from_room`, both
-(the door counts twice), or neither (a door belongs to the *boundary*, not a
-room). The sample data offers a fifth: a `Door Room Reference` instance property
-(`"00.09"`) that looks like an authored room number and may disagree with the
-geometric `to_room`.
+**The rule: a door belongs to the room it opens into. If there is no `to_room`,
+it belongs to the room it opens *from*. If there is neither, it is homeless.**
 
-Whatever is chosen, the choice belongs in `[doors]` settings, not in code — it is
-project policy in exactly the way `measurement_standard` is
+This is a **precedence chain**, which is not one of the four answers this section
+originally offered (`to_room`, `from_room`, both, neither). That matters: each of
+those four is a single pick that leaves external doors either mis-attributed or
+unattributed, whereas the chain attributes every door that has any room at all
+and names the remainder rather than hiding it. "Homeless" is a **reported
+state**, not an error and not a zero — the same "signal, not error" stance an
+unresolved reference gets, and it is already what QA reports as
+`doors_without_room_reference`.
+
+Measured on the House A sample before writing it down:
+
+| | |
+| --- | --- |
+| Attributed via `to_room` | 23 of 26 |
+| Attributed via `from_room` (external, no `to_room`) | 3 |
+| Homeless | 0 |
+| Rooms owning at least one door | 21 of 26 |
+
+**The authored fifth candidate is a reconciliation input, not the rule.** The
+`Door Room Reference` instance property agrees with the chain on **22 of 26**
+doors and disagrees on 4 — and the disagreements have a pattern worth knowing
+before anyone trusts either side blindly: three of the four are doors where the
+chain picks an **exterior or circulation space** (`BACKYARD AND SIDE SOUTH`,
+`HALL`) while the modeller authored the *served* room. That is exactly what
+`reconcile_room_reference` is for, and it now has a demonstrated job rather than
+a hypothetical one.
+
+**The caveat that decides how far to trust the default.** Revit's
+`FromRoom`/`ToRoom` follow the door instance's *orientation*, not the leaf swing
+— flipping a door in the model swaps them. So "the room it opens into" is a
+**modelling convention**, reliable exactly as far as doors were inserted
+consistently, which is why this stays project policy with an override rather
+than becoming a hard-coded rule. Same reasoning as `measurement_standard`
 ([Area calculation](STRATEGY-AREA-CALCULATION.md)).
+
+Not built. What it would take: `[doors] room_attribution` (default
+`to_room_then_from_room`, with `to_room` / `from_room` / `both` / `none` as the
+alternatives this section already enumerated), an `owner_room` on the `/doors`
+read, a homeless count on the QA report, and `reconcile_room_reference` to
+surface the four disagreements above. Nothing shipped so far assumes an answer,
+so none of it is a migration.
 
 ## Settings changes
 
@@ -461,11 +494,14 @@ project policy in exactly the way `measurement_standard` is
 
 [doors]
 # Which of a door's two room references is authoritative for rollups and
-# schedules (Decision 6's open question). No default -- an unset value means
-# "do not attribute doors to rooms", which is honest rather than arbitrary.
-room_attribution = "to_room"   # to_room | from_room | both | none
+# schedules. DECIDED (see Decision 6), not yet built. The default is a precedence CHAIN,
+# not one of the single picks: the room the door opens into, else the one it
+# opens from, else homeless.
+room_attribution = "to_room_then_from_room"
+# to_room_then_from_room | to_room | from_room | both | none
 # Whether an authored room reference that disagrees with the geometric one is a
-# validation finding or ignored.
+# validation finding or ignored. Not hypothetical: on the House A sample the
+# authored `Door Room Reference` disagrees with the chain on 4 of 26 doors.
 reconcile_room_reference = true
 
 # Ordered properties shown on a door in the viewer -- mirrors room_label.
@@ -587,9 +623,15 @@ Still open after doors shipped:
 
 - **R4 — entity-scoped reference sources.** The one prerequisite doors shipped
   without, on purpose; lands with doors' first reference source (Decision 5).
-- **Which room owns a door.** Decision 6's open question, and the reason
-  `[doors]` has no `room_attribution` and `/doors` has no `?building=`. Nothing
-  built so far assumes an answer, which is what keeps it cheap to decide later.
+- **Door ownership: decided, not built.** A door belongs to the room it opens
+  into, falling back to the room it opens from, and is otherwise *homeless* — a
+  precedence chain rather than any of the four single picks Decision 6 first
+  offered. Measured on House A: 23 via `to_room`, 3 via `from_room`, 0 homeless.
+  Still needs `[doors] room_attribution`, an `owner_room` on `/doors`, a homeless
+  count on QA, and `reconcile_room_reference` — which has a demonstrated job: the
+  authored `Door Room Reference` disagrees with the chain on 4 of 26 doors, three
+  of them where the chain picks an exterior or circulation space over the served
+  room. `/doors` still has no `?building=` until this is built.
 - **Any door viewer.** `/doors` is served and nothing draws it
   ([Browser](STRATEGY-BROWSER.md)).
 - **Multi-phase comparison.** Explicitly out of scope (Decision 2).
