@@ -31,7 +31,7 @@ use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
 use crate::service::validation::ValidationResponse;
-use crate::service::{milestones, projects, reference, rooms, snapshots, validation, ServiceError};
+use crate::service::{doors, milestones, projects, reference, rooms, snapshots, validation, ServiceError};
 use crate::state::{ModelKey, Shared};
 
 /// Reject a project/model id that can't safely become a filesystem path
@@ -831,6 +831,53 @@ pub async fn get_rooms(
 
 /// Data-quality report for the header's validation panel — see
 /// `service::validation::compute_project_validation`.
+#[derive(Debug, Deserialize)]
+pub struct DoorsQuery {
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<String>,
+    /// Comma-separated property predicates, same grammar as `RoomsQuery::filter`
+    /// — plus the door intrinsics `$id`, `$type_id`, `$type_name`, `$level_id`,
+    /// `$from_room` and `$to_room`.
+    #[serde(default)]
+    pub filter: Option<String>,
+}
+
+/// The doors read. Mirrors `get_rooms`, minus `?building=` — a door's building
+/// depends on which of its rooms owns it, which is an open design question
+/// (`service::doors`' module doc).
+pub async fn get_doors(
+    State(state): State<Shared>,
+    Query(query): Query<DoorsQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    // The same registry-wide source vocabulary `/rooms` parses against, even
+    // though no door carries a joined source yet: parsing a filter differently
+    // per entity would fork the grammar, and `drofus.NetArea` on a door resolves
+    // to `Absent` (matching nothing) rather than erroring. See
+    // `impl FilterTarget for DoorResponse`.
+    let known = state.settings().known_reference_sources();
+    let filter = query
+        .filter
+        .as_deref()
+        .map(|s| rooms::RoomFilter::parse_query(s, &known))
+        .transpose()
+        .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
+        .filter(|f| !f.is_empty());
+
+    let scope = doors::DoorScope {
+        project: query.project.as_deref(),
+        milestone: query.milestone.as_deref(),
+        filter: filter.as_ref(),
+    };
+    let result = doors::assemble_doors(&state, &scope).map_err(map_service_error)?;
+
+    match result {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(Json(result).into_response()),
+    }
+}
+
 pub async fn get_project_validation(
     State(state): State<Shared>,
     Path(project_id): Path<String>,
