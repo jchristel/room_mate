@@ -31,16 +31,19 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 - **R4 (entity-scope `[sources.reference.*]`) is still open**, and lands with
   doors' first reference source — not before, not later (back-compat
   obligation). Doors shipped with none, so it stays open.
-- **Door ownership is decided but not built**: a door belongs to the room it
-  opens *into*, else the room it opens *from*, else it is **homeless** — a
-  precedence chain, not one of the four single picks the docs first offered.
-  Nothing built assumes it yet, which is why `[doors]` has no
-  `room_attribution` and `/doors` no `?building=`. Two things to keep in mind
-  when building it: Revit's `to_room` follows the door's *orientation*, not the
-  leaf swing (flipping swaps it), so this is project policy with an override,
-  never a hard-coded rule; and the authored `Door Room Reference` disagrees with
-  the chain on 4 of the 26 House A doors — mostly where the chain picks an
-  exterior or circulation space over the served room.
+- **Door ownership: a door belongs to the room it opens *into*, else the room it
+  opens *from*, else it is homeless.** `[doors] room_attribution`, default
+  `to_room_then_from_room`. Derived at read time, never stored, so changing the
+  policy changes every answer and rewrites nothing. `owner_rooms` on `/doors` is
+  a **list** (the `both` policy attributes twice) and **empty means homeless** —
+  a reported state, which is also why a homeless door matches no `?building=`.
+  Trust it exactly as far as the model is consistent: Revit's `to_room` follows
+  the door's *orientation*, not the leaf swing, so flipping a door swaps it.
+  That is why it is policy with an override, never a rule in code.
+- **`room_reference_property` reconciles the modeller against the geometry**,
+  and finds real disagreements: 4 of the 26 House A doors, mostly where the
+  geometry picks an exterior or circulation space over the served room. Absent
+  means the check is **off**, not clean — the QA response says which.
 
 ## Traps in the door export
 
