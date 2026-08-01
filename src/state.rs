@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
 
-use crate::contract::RoomPayload;
+use crate::contract::{DoorPayload, RoomPayload};
 use crate::reference::ReferenceData;
 use crate::settings::{
     BuiltinPropertyDef, HierarchyExclusion, HierarchyTier, Milestone, ReferenceFieldConfig, TestData,
@@ -51,6 +51,27 @@ fn parse_rooms(key: &ModelKey, bytes: &[u8]) -> anyhow::Result<RoomPayload> {
         .with_context(|| format!("malformed rooms snapshot for {}/{}", key.project_id, key.model_id))
 }
 
+/// `rooms_meta`'s counterpart for doors. Deliberately a second small function
+/// rather than a trait over the two payloads: they share five of six fields
+/// today, but the moment a third entity's meta differs at all, a trait would
+/// have to grow an escape hatch — and there is nothing here to reuse but six
+/// field reads.
+fn doors_meta<'a>(key: &'a ModelKey, payload: &'a DoorPayload) -> SnapshotMeta<'a> {
+    SnapshotMeta {
+        kind: SnapshotKind::Doors,
+        key,
+        project_name: &payload.project.name,
+        model_name: &payload.model.name,
+        taken_at: &payload.snapshot.taken_at,
+        phase: payload.phase.as_deref(),
+    }
+}
+
+fn parse_doors(key: &ModelKey, bytes: &[u8]) -> anyhow::Result<DoorPayload> {
+    serde_json::from_slice(bytes)
+        .with_context(|| format!("malformed doors snapshot for {}/{}", key.project_id, key.model_id))
+}
+
 /// Composite key identifying one storage bucket: a model within a project.
 ///
 /// Keyed on the *ids* (immutable, machine-chosen — the Revit GUID and the
@@ -68,6 +89,13 @@ impl ModelKey {
     /// Pull the key out of a payload's identity envelope. Centralised so every
     /// call site keys the same way — state and storage agree on "the key".
     pub fn from_payload(payload: &RoomPayload) -> Self {
+        Self { project_id: payload.project.id.clone(), model_id: payload.model.id.clone() }
+    }
+
+    /// The same, off a doors payload. Both entities ride the same identity
+    /// envelope, so both key identically — which is what makes a door's
+    /// `from_room` resolvable against the rooms of the model it was pushed to.
+    pub fn from_door_payload(payload: &DoorPayload) -> Self {
         Self { project_id: payload.project.id.clone(), model_id: payload.model.id.clone() }
     }
 }
@@ -320,6 +348,53 @@ impl AppState {
         self.store
             .all_latest_raw(SnapshotKind::Rooms)
             .and_then(|raw| raw.into_iter().map(|(key, bytes)| parse_rooms(&key, &bytes).map(|p| (key, p))).collect())
+    }
+
+    /// Store a pushed doors payload — `set_snapshot`'s counterpart, and the
+    /// same thin serde layer over the byte-level store.
+    pub fn set_door_snapshot(&self, payload: DoorPayload) -> anyhow::Result<()> {
+        let key = ModelKey::from_door_payload(&payload);
+        let json = serde_json::to_vec_pretty(&payload).context("could not serialise doors snapshot")?;
+        self.store.put_raw(&doors_meta(&key, &payload), &json)
+    }
+
+    /// Every model's latest doors snapshot. A model with rooms but no doors
+    /// contributes nothing — the normal state for a project that has not pushed
+    /// doors, not an error.
+    pub fn all_door_snapshots(&self) -> anyhow::Result<Vec<(ModelKey, DoorPayload)>> {
+        self.store
+            .all_latest_raw(SnapshotKind::Doors)
+            .and_then(|raw| raw.into_iter().map(|(key, bytes)| parse_doors(&key, &bytes).map(|p| (key, p))).collect())
+    }
+
+    /// One model's doors snapshot ids, ascending.
+    pub fn list_door_snapshot_ids(&self, key: &ModelKey) -> anyhow::Result<Vec<String>> {
+        self.store.list_snapshot_ids(SnapshotKind::Doors, key)
+    }
+
+    /// One specific stored doors snapshot by id — the milestone read path.
+    pub fn get_door_snapshot(&self, key: &ModelKey, taken_at: &str) -> anyhow::Result<Option<DoorPayload>> {
+        self.store
+            .get_snapshot_raw(SnapshotKind::Doors, key, taken_at)?
+            .map(|bytes| parse_doors(key, &bytes))
+            .transpose()
+    }
+
+    /// Whether this `(project, model)` lineage has at least one live rooms
+    /// snapshot — the precondition for accepting a doors push.
+    ///
+    /// **Scoped to the model, not the project**, because that is the scope in
+    /// which the question means anything: room ids are unique only *within* a
+    /// model, so a door's `from_room`/`to_room` can only ever be resolved
+    /// against its own model's rooms. A doors push to a model with none would
+    /// store references that nothing could ever resolve.
+    ///
+    /// Answered from the snapshot index, never by opening a snapshot file — the
+    /// same discipline `get_phase` follows, so the gate costs a manifest read.
+    /// A quarantined rooms push does not count: it is invisible to every read
+    /// path, so its rooms are not there to resolve against either.
+    pub fn has_room_snapshot(&self, key: &ModelKey) -> anyhow::Result<bool> {
+        Ok(!self.store.list_snapshot_ids(SnapshotKind::Rooms, key)?.is_empty())
     }
 
     /// The phase one model's lineage is declared to be in — see
