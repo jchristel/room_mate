@@ -38,7 +38,7 @@ definition of done, and each landed on its own.
 *Landed.* Before this, the viewer had **no room selection at all**: rooms carried
 a hover `<title>` ([index.html:1008](static/index.html:1008)) and nothing more.
 That was the exact prerequisite blocking the right-hand inspector —
-[HANDOVER-ui-layout.md](Superseded/HANDOVER-ui-layout.md) Decision 3 records it as "not
+[HANDOVER-ui-layout.md](HANDOVER-ui-layout.md) Decision 3 records it as "not
 buildable yet: the viewer has hover `<title>` tooltips, not click selection".
 **That block is now lifted**; the inspector is buildable whenever someone wants
 it.
@@ -87,7 +87,7 @@ drift eventually.
 
 ## Why this earns its own endpoint
 
-[STRATEGY-BROWSER.md](STRATEGY-BROWSER.md) already names "an adjacency graph"
+[STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) already names "an adjacency graph"
 as the canonical example of derived data that should **not** ride inside
 `/rooms`. It passes the test there on both counts:
 
@@ -107,7 +107,7 @@ project-scoped form here matches the `/areas` precedent and is the one to build
 — the strategy doc gets corrected on landing, not the route.
 
 This is also the second real geometry-processing service, after `areas`.
-[STRATEGY.md](STRATEGY.md) flags adjacency graphs specifically as the kind of
+[STRATEGY.md](../STRATEGY.md) flags adjacency graphs specifically as the kind of
 work that finally makes the Rust server's performance advantage *real* rather
 than potential. Worth noting in the module header.
 
@@ -130,7 +130,7 @@ existing HTTP read route ([mcp.rs:2](src/bin/mcp.rs:2)), and
 example: a thin adapter over the same one service function the HTTP handler
 calls. Skipping it is how the two front doors start to drift.
 
-Follow the existing conventions ([CODING-CONVENTIONS.md](CODING-CONVENTIONS.md)):
+Follow the existing conventions ([CODING-CONVENTIONS.md](../CODING-CONVENTIONS.md)):
 
 - `service/` is **transport-agnostic**. `adjacency.rs` imports `geo` and
   `crate::contract`; never `axum` or `rmcp`. Each handler is a thin adapter that
@@ -185,7 +185,7 @@ document, and the extractor does not put it on the contract.
 - **Centreline** — neighbouring rooms tile edge-to-edge and their shared
   boundaries are **coincident**. Perpendicular distance is `0`, up to float
   noise. This is what `areas` assumed
-  ([HANDOVER-hierarchy-areas.md](Superseded/HANDOVER-hierarchy-areas.md)), what
+  ([HANDOVER-hierarchy-areas.md](HANDOVER-hierarchy-areas.md)), what
   every fixture generator in `scripts/` produces
   ([gen_big_plate.py:80](scripts/gen_big_plate.py:80) steps by `CELL_W` with
   no gap), and what `areas`' dissolve tests assert
@@ -274,7 +274,7 @@ locks that the index changed only the speed, not the answer.
 > when every level in scope is centreline, which is what this brief wanted a
 > slider for. `WALL_MAX_LIMIT_FT`, the 5 ft range guard on a *request*, is still
 > here and still a constant. The other three tolerances below are unchanged.
-> See [STRATEGY-AREA-CALCULATION.md](STRATEGY-AREA-CALCULATION.md).
+> See [STRATEGY-AREA-CALCULATION.md](../STRATEGY-AREA-CALCULATION.md).
 
 Four constants, all in **model units (decimal feet)**, all requiring a doc
 comment giving the reasoning:
@@ -436,7 +436,7 @@ cannot fling a node off-screen.
 
 ### Why canvas here, when the plan stays SVG
 
-[STRATEGY-BROWSER.md](STRATEGY-BROWSER.md) names two triggers for leaving SVG:
+[STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) names two triggers for leaving SVG:
 element count on screen, and a need for continuous animation. Be clear about
 which one applies, because only one does.
 
@@ -578,7 +578,7 @@ which constrains the types today:
       - *Which boundary regime the model uses* — no longer a per-model discovery.
         It is declared on the upload envelope (`room_boundary`), resolved per
         level, and echoed on `/areas`. See
-        [STRATEGY-AREA-CALCULATION.md](STRATEGY-AREA-CALCULATION.md) §2.
+        [STRATEGY-AREA-CALCULATION.md](../STRATEGY-AREA-CALCULATION.md) §2.
       - *Record the value that worked so the default can be baked in* — the
         default is no longer a constant in this module. `WALL_MAX_FT` is gone;
         the number is `[areas] max_wall_thickness`, declared per project and
@@ -716,16 +716,16 @@ view to room granularity.
 
 ## Docs to update on landing
 
-Per [STRATEGY.md](STRATEGY.md), a change touching more than one layer updates
+Per [STRATEGY.md](../STRATEGY.md), a change touching more than one layer updates
 every doc it touches. This one touches the service layer, the HTTP and MCP
 adapters, and the browser:
 
-- **[STRATEGY-BROWSER.md](STRATEGY-BROWSER.md)** — add the graph mode to
+- **[STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md)** — add the graph mode to
   "Implemented"; correct the `/adjacencies` reference to the shipped
   `/projects/{id}/adjacency`; record canvas as the first renderer to leave SVG
   and *why* (the animation trigger, not element count).
-- **[STRATEGY-SERVER.md](STRATEGY-SERVER.md)** — the new endpoint alongside
+- **[STRATEGY-SERVER.md](../STRATEGY-SERVER.md)** — the new endpoint alongside
   `/areas`.
-- **[STRATEGY-MCP.md](STRATEGY-MCP.md)** — the new tool.
-- **[docs/README.md](README.md)** — move this handover from "Open handovers" to
+- **[STRATEGY-MCP.md](../STRATEGY-MCP.md)** — the new tool.
+- **[docs/README.md](../README.md)** — move this handover from "Open handovers" to
   `Superseded/`, and update the ui-layout row once click-selection lands.

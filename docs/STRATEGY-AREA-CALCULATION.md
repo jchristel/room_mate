@@ -192,7 +192,7 @@ adjacency but no hierarchy. The construction here is effectively a nested
 (laminar) family of sets over the wall zone, indexed by tree depth.
 
 Two places the literature has a better answer that was not taken, both recorded
-with citations in the handover's References section:
+with citations in [the adjacency handover](Superseded/HANDOVER-adjacency.md)'s References section:
 
 - **Junction handling.** A generalized Voronoi / straight-skeleton decomposition
   (Aichholzer & Aurenhammer, COCOON '96) would partition a junction exactly and
@@ -235,13 +235,48 @@ with citations in the handover's References section:
   replaced rather than measured. This is now **one value driving two services**
   (`areas` sizes its wall zone by it, `adjacency` defaults its gap tolerance from
   it), so it is probably the highest-leverage open item here. House A measures
-  0.317 ft wall gaps, so 0.5 ft is the obvious candidate for it — but see
-  [HANDOVER-adjacency.md](HANDOVER-adjacency.md), because raising the value is
-  what risks adjacency false positives, and that is where the consequences of
-  getting it wrong show up first.
+  0.317 ft wall gaps, so 0.5 ft is the obvious candidate for it — but see the
+  next item, because raising the value is what risks adjacency false positives,
+  and that is where the consequences of getting it wrong show up first.
+- **Two adjacency false-positive checks, needing a model this repo does not
+  have.** Migrated here from `HANDOVER-adjacency.md` when that document was
+  superseded — everything else in it landed, and this is the one thing left. At
+  a realistic tolerance, confirm `service::adjacency` does **not** report
+
+  1. two rooms merely *facing each other across a corridor* as adjacent, and
+  2. two rooms bridged *through* a thin service room (a riser or shaft narrower
+     than the tolerance) sitting between them.
+
+  **Neither has an `areas` analogue, and that asymmetry is the reason this is
+  open.** `service::areas` rules both out *structurally* — a close at `gap/2`
+  provably cannot fill a gap wider than `gap`, and the wall zone contains no
+  rooms — whereas adjacency answers both with a segment-pair test plus a
+  midpoint-in-third-room occlusion check, which unit tests cover and nothing
+  else does.
+
+  **House A cannot settle either, despite being real finish-face data**, and it
+  is worth recording why so nobody spends an afternoon rediscovering it. It is a
+  26-room detached house: no double-loaded corridor, no duct riser. A `wall_max`
+  sweep saturates —
+
+  | `wall_max` (ft) | 0 | 0.5 | 1.5 | 3 | 5 |
+  |---|---|---|---|---|---|
+  | edges | 34 | 47 | 51 | 51 | 51 |
+
+  — so no pair of rooms sits 1.5–5 ft apart. There is nothing at corridor
+  distance to wrongly bridge even deliberately, and a clean run would be clean
+  because the hazard is absent, not because the algorithm handled it. That is a
+  test that cannot fail, which is worth no confidence.
+
+  **What is worth doing now and needs no new model:** an adjacency diagnostic
+  shaped like `scripts/check_areas.py` — for each reported edge, measure the true
+  gap between the two room polygons and flag any exceeding a plausible wall, plus
+  any with a third room's polygon between them. Against House A that gives a real
+  finish-face regression baseline and evidence for setting `max_wall_thickness`.
+  It does not tick 1 and 2, which want a hospital-scale finish-face export.
 - **Residual chamfers**: 3 on House A, 2 on `sample-project`, 14 on the synthetic
   `showcase`, all ≤1.06 ft and cosmetic. Two fixes were tried and reverted with
-  measurements; see the handover DoD. Try short-edge elimination or a miter limit
+  measurements; see [the adjacency handover](Superseded/HANDOVER-adjacency.md)'s DoD. Try short-edge elimination or a miter limit
   before the T-vertex fix.
 - **Verification**: `scripts/check_areas.py` — six checks (spikes, area ratio,
   true sibling overlap, invented edge directions, ring validity, tier

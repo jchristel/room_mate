@@ -35,11 +35,15 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 ## Open handovers
 
-**One.** Everything else has landed and moved to [Superseded](Superseded/).
+**None.** Every handover has landed and moved to [Superseded](Superseded/).
 
-| Document | Status |
-|---|---|
-| [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested. **Two false-positive checks left** — that the graph does not link rooms across a corridor, or through a thin service room — and they need a hospital-scale finish-face export this repo does not have. House A cannot settle them: a `wall_max` sweep on it saturates at 1.5 ft, so there is nothing at corridor distance to wrongly bridge. The item's other three asks are done or moved to [Area calculation](STRATEGY-AREA-CALCULATION.md) |
+That is a statement about *handovers*, not about outstanding work — open items
+now live in the strategy doc that owns them rather than in a brief that
+outlived its build. The last to move, `HANDOVER-adjacency.md`, is the example:
+its two remaining false-positive checks went into
+[Area calculation](STRATEGY-AREA-CALCULATION.md)'s "Open" section, beside the
+`max_wall_thickness` value whose choice is what creates the risk they test.
+Keeping them in a superseded brief would have buried a live item in an archive.
 
 Handoff documents whose work has fully landed live in
 [Superseded](Superseded/), and so does one **plan**:
