@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::contract::{
-    date_match, lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload,
+    date_match, lookup_property, numeric_match, property_presence, DoorPayload, PropertyPresence, Room, RoomPayload,
 };
 use crate::reference::ReferenceData;
 use crate::settings::{BuiltinPropertyDef, CompareMode, FieldType, ReferenceFieldConfig};
@@ -222,6 +222,13 @@ pub struct ValidationResponse {
     /// and every other finding here is a room-versus-source reconciliation.
     /// This one is a room-versus-room problem.
     pub phases: PhaseReport,
+    /// Whether this project's doors link to rooms that actually exist (see
+    /// `DoorReport`).
+    ///
+    /// Top-level for the same reason `phases` is: `sources` is keyed by
+    /// reference-source name, and this is a door-versus-room problem with no
+    /// source in it.
+    pub doors: DoorReport,
 }
 
 /// Which phase each of a project's models is on, and whether they agree.
@@ -250,6 +257,96 @@ pub struct PhaseReport {
     pub disagree: bool,
 }
 
+/// Which side of a door a room reference sits on. A typed field rather than a
+/// bare string so a consumer grouping by side cannot be defeated by a spelling,
+/// and so adding a third side (there isn't one) would be a compile error rather
+/// than a silently-unhandled value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoorSide {
+    FromRoom,
+    ToRoom,
+}
+
+/// One door that references no room on either side.
+#[derive(Debug, Serialize)]
+pub struct DoorWithoutRoom {
+    /// **Carried on every door finding**, because a door id — like a room id —
+    /// is unique only within one model. A bare door id would be ambiguous the
+    /// moment a project has two models, and unresolvable back to an element.
+    pub model_id: String,
+    pub door_id: String,
+}
+
+/// One door room reference that names a room this model does not have.
+#[derive(Debug, Serialize)]
+pub struct UnresolvedRoomReference {
+    pub model_id: String,
+    pub door_id: String,
+    pub side: DoorSide,
+    /// The room id the door names, which nothing in this model's rooms matches.
+    pub room_id: String,
+}
+
+/// Door discrepancy tallies, so a consumer needn't re-sum the lists.
+#[derive(Debug, Default, Serialize)]
+pub struct DoorDiscrepancyCounts {
+    pub total: usize,
+    pub doors_without_room_reference: usize,
+    pub doors_unresolved_room: usize,
+}
+
+/// Whether this project's doors link to rooms that actually exist.
+///
+/// **Two findings, and one deliberate non-finding.**
+///
+/// A door with **neither** side set references no room at all — it cannot be
+/// attributed, scheduled, or used as a connectivity edge, so it is a finding.
+///
+/// A door naming a room this model does not have is a finding for a different
+/// reason: the reference is *there* but dangling. It is the state a re-push
+/// produces when rooms and doors drift apart — doors pushed against one rooms
+/// snapshot, rooms then re-pushed without them — and nothing else would notice,
+/// because the door itself is perfectly well-formed.
+///
+/// A door with exactly **one** side set is **not** a finding. That is an
+/// external door, and it is a normal state the contract carries deliberately
+/// (`Door::from_room`); 6 of the 26 doors in the House A sample are one-sided,
+/// so flagging them would put a 23% false-positive rate on the first real data
+/// this ever saw. It is counted, so a reader can see the shape of the model,
+/// and left out of `discrepancies`.
+///
+/// **References resolve within one model, never across the project.** Room ids
+/// are unique only within a model, so a door in model A naming room `2621156`
+/// is asking about *A's* room `2621156` — a same-numbered room in model B is a
+/// different room, and matching against it would turn a real dangling reference
+/// into a false clean bill.
+///
+/// Reported, never rejected: "signal, not error", the same stance an unmatched
+/// reference key gets.
+#[derive(Debug, Default, Serialize)]
+pub struct DoorReport {
+    /// Doors examined across every model in this project. `0` covers both "no
+    /// doors pushed" and "doors pushed but empty" — neither is an error, and a
+    /// project that has never pushed doors simply has an empty report.
+    pub total_doors: usize,
+    /// Doors referencing no room on either side.
+    pub doors_without_room_reference: Vec<DoorWithoutRoom>,
+    /// Room references naming a room the door's own model does not have. One
+    /// entry per dangling *side*, so a door dangling on both appears twice —
+    /// they are two broken references, and a reader fixing them fixes two.
+    pub doors_unresolved_room: Vec<UnresolvedRoomReference>,
+    /// Doors with a room on exactly one side — external doors. **Informational,
+    /// not a discrepancy**; see the type doc for why.
+    pub doors_external: usize,
+    /// Tallies for the two findings above. Deliberately **not** added into
+    /// `ValidationResponse::discrepancies`, which is documented as the sum
+    /// across reference *sources* — a door is not a source, and folding it in
+    /// would make that number mean two different things. Same separation
+    /// `phases` has.
+    pub discrepancies: DoorDiscrepancyCounts,
+}
+
 impl ValidationResponse {
     /// The "nothing configured" answer: no sources, no rooms counted, no
     /// discrepancies. Callers return this rather than an error — see
@@ -260,6 +357,7 @@ impl ValidationResponse {
             total_rooms: 0,
             discrepancies: DiscrepancyCounts::default(),
             phases: PhaseReport::default(),
+            doors: DoorReport::default(),
         }
     }
 }
@@ -285,6 +383,83 @@ fn phase_report(project_id: &str, stored: &[(ModelKey, RoomPayload)]) -> PhaseRe
     let distinct: std::collections::BTreeSet<Option<String>> =
         by_model.values().map(|p| p.as_ref().map(|s| s.trim().to_lowercase())).collect();
     PhaseReport { by_model, disagree: distinct.len() > 1 }
+}
+
+/// Reconcile one project's doors against its rooms — see `DoorReport`.
+///
+/// Rooms are indexed **per model** rather than into one project-wide set, which
+/// is the whole correctness argument here: a project-wide set would silently
+/// resolve a door in model A against a same-numbered room in model B and report
+/// a dangling reference as clean.
+///
+/// Both sides are read off the stored *snapshots*, so this reports on the data
+/// actually being served: doors pushed against an older rooms snapshot that has
+/// since been replaced show up here, which is the drift case nothing else
+/// notices.
+fn door_report(
+    project_id: &str,
+    stored_rooms: &[(ModelKey, RoomPayload)],
+    stored_doors: &[(ModelKey, DoorPayload)],
+) -> DoorReport {
+    let rooms_by_model: BTreeMap<&str, BTreeSet<&str>> = stored_rooms
+        .iter()
+        .filter(|(_, payload)| payload.project.id == project_id)
+        .map(|(key, payload)| {
+            (
+                key.model_id.as_str(),
+                payload.rooms.iter().map(|r| r.id.as_str()).collect::<BTreeSet<&str>>(),
+            )
+        })
+        .collect();
+
+    let mut report = DoorReport::default();
+    for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
+        // A model with doors but no rooms snapshot cannot resolve anything.
+        // Ingest refuses to create that state, so reaching it means the rooms
+        // were removed from the store by hand — every reference then dangles,
+        // which is the honest answer rather than a special case.
+        let rooms = rooms_by_model.get(key.model_id.as_str());
+        for door in &payload.doors {
+            report.total_doors += 1;
+            let sides = [
+                (DoorSide::FromRoom, door.from_room.as_deref()),
+                (DoorSide::ToRoom, door.to_room.as_deref()),
+            ];
+
+            match (door.from_room.as_deref(), door.to_room.as_deref()) {
+                (None, None) => {
+                    report
+                        .doors_without_room_reference
+                        .push(DoorWithoutRoom { model_id: key.model_id.clone(), door_id: door.id.clone() });
+                    // Nothing to resolve — a door with no references cannot also
+                    // have a dangling one, so it is reported once, not twice.
+                    continue;
+                }
+                // Exactly one side: an external door. Counted, never flagged.
+                (Some(_), None) | (None, Some(_)) => report.doors_external += 1,
+                (Some(_), Some(_)) => {}
+            }
+
+            for (side, room_id) in sides {
+                let Some(room_id) = room_id else { continue };
+                if !rooms.is_some_and(|ids| ids.contains(room_id)) {
+                    report.doors_unresolved_room.push(UnresolvedRoomReference {
+                        model_id: key.model_id.clone(),
+                        door_id: door.id.clone(),
+                        side,
+                        room_id: room_id.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    report.discrepancies = DoorDiscrepancyCounts {
+        total: report.doors_without_room_reference.len() + report.doors_unresolved_room.len(),
+        doors_without_room_reference: report.doors_without_room_reference.len(),
+        doors_unresolved_room: report.doors_unresolved_room.len(),
+    };
+    report
 }
 
 /// The declaration for one dRofus field label, if the settings carry one.
@@ -628,9 +803,16 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // reconciling against nothing can still be serving two phases at once, and
     // that is exactly the project nobody would otherwise be watching.
     let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
+    let stored_doors = state.all_door_snapshots().map_err(ServiceError::Internal)?;
 
     let mut response = ValidationResponse::nothing_to_reconcile();
+    // Both of these are room-versus-room and door-versus-room findings that owe
+    // nothing to reference data, so they are computed *before* the no-sources
+    // bail below — a project reconciling against nothing can still be serving
+    // two phases at once, or serving doors that link to rooms it no longer has,
+    // and that is exactly the project nobody would otherwise be watching.
     response.phases = phase_report(project_id, &stored);
+    response.doors = door_report(project_id, &stored, &stored_doors);
     if loaded.is_empty() {
         return Ok(response);
     }
@@ -1345,6 +1527,182 @@ mod tests {
             result.sources.keys().collect::<Vec<_>>(),
             vec!["drofus"],
             "the unloaded source contributes nothing"
+        );
+    }
+
+    // ---------- doors ----------
+
+    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>) -> crate::contract::Door {
+        crate::contract::Door {
+            id: id.to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            from_room: from_room.map(str::to_string),
+            to_room: to_room.map(str::to_string),
+            type_id: "t1".to_string(),
+            type_name: "Single".to_string(),
+            properties: BTreeMap::new(),
+            type_properties: BTreeMap::new(),
+        }
+    }
+
+    fn make_doors(project_id: &str, model_id: &str, doors: Vec<crate::contract::Door>) -> (ModelKey, DoorPayload) {
+        let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.to_string() };
+        let payload = DoorPayload {
+            schema_version: crate::contract::SUPPORTED_DOOR_SCHEMA,
+            project: Project { id: project_id.to_string(), name: "P".to_string() },
+            model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
+            model_to_shared: None,
+            doors,
+        };
+        (key, payload)
+    }
+
+    fn rooms_for(project_id: &str, model_id: &str, room_ids: &[&str]) -> (ModelKey, RoomPayload) {
+        let (_, mut payload) = make_payload(project_id, room_ids.iter().map(|id| make_room(id, "R", &[])).collect());
+        payload.model.id = model_id.to_string();
+        (ModelKey { project_id: project_id.to_string(), model_id: model_id.to_string() }, payload)
+    }
+
+    /// The clean case: every reference resolves, nothing is reported, and the
+    /// one-sided door is counted as external rather than flagged.
+    #[test]
+    fn test_door_report_clean_project() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1", "r2"])];
+        let doors = vec![make_doors(
+            "p1",
+            "m1",
+            vec![
+                make_door("d1", Some("r1"), Some("r2")),
+                make_door("d2", None, Some("r1")),
+            ],
+        )];
+
+        let report = door_report("p1", &rooms, &doors);
+        assert_eq!(report.total_doors, 2);
+        assert_eq!(report.doors_external, 1, "the one-sided door is external");
+        assert_eq!(report.discrepancies.total, 0, "an external door is not a discrepancy");
+    }
+
+    /// **The finding the whole report exists for, half one.** A door with
+    /// neither side set references no room at all.
+    #[test]
+    fn test_door_with_no_room_reference_is_flagged() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
+
+        let report = door_report("p1", &rooms, &doors);
+        assert_eq!(report.discrepancies.doors_without_room_reference, 1);
+        assert_eq!(report.doors_without_room_reference[0].door_id, "d1");
+        assert_eq!(report.doors_without_room_reference[0].model_id, "m1");
+        assert_eq!(report.doors_external, 0, "no sides at all is not 'external'");
+        assert!(report.doors_unresolved_room.is_empty(), "reported once, not twice");
+    }
+
+    /// **Half two.** A reference naming a room this model does not have — the
+    /// drift case a re-push produces, which nothing else would notice because
+    /// the door itself is well-formed.
+    #[test]
+    fn test_door_referencing_a_missing_room_is_flagged_per_side() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let doors = vec![make_doors(
+            "p1",
+            "m1",
+            vec![make_door("d1", Some("gone"), Some("also-gone"))],
+        )];
+
+        let report = door_report("p1", &rooms, &doors);
+        assert_eq!(report.discrepancies.doors_unresolved_room, 2, "two broken references, two entries");
+        let sides: Vec<DoorSide> = report.doors_unresolved_room.iter().map(|u| u.side).collect();
+        assert_eq!(sides, vec![DoorSide::FromRoom, DoorSide::ToRoom]);
+        assert_eq!(report.doors_unresolved_room[0].room_id, "gone");
+    }
+
+    /// **The correctness argument for indexing rooms per model.** A door in
+    /// `m1` naming `r1` must not be resolved by a same-numbered room in `m2`:
+    /// room ids are unique only within a model, so those are different rooms,
+    /// and a project-wide set would report this dangling reference as clean.
+    #[test]
+    fn test_a_same_numbered_room_in_another_model_does_not_resolve() {
+        let rooms = vec![rooms_for("p1", "m1", &["other"]), rooms_for("p1", "m2", &["r1"])];
+        let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), None)])];
+
+        let report = door_report("p1", &rooms, &doors);
+        assert_eq!(report.discrepancies.doors_unresolved_room, 1, "m2's r1 is a different room");
+        assert_eq!(report.doors_unresolved_room[0].model_id, "m1");
+    }
+
+    /// Another project's doors are not this project's problem — the same
+    /// scoping every other check here applies.
+    #[test]
+    fn test_door_report_is_scoped_to_the_project() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"]), rooms_for("p2", "m1", &["x"])];
+        let doors = vec![
+            make_doors("p1", "m1", vec![make_door("d1", Some("r1"), None)]),
+            make_doors("p2", "m1", vec![make_door("d2", None, None)]),
+        ];
+
+        let report = door_report("p1", &rooms, &doors);
+        assert_eq!(report.total_doors, 1);
+        assert_eq!(report.discrepancies.total, 0, "p2's broken door is not counted here");
+    }
+
+    /// A project that has never pushed doors gets an empty report, not an
+    /// error and not a missing field — the same "normal state" stance a
+    /// configured-but-unuploaded reference source gets.
+    #[test]
+    fn test_no_doors_is_an_empty_report() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let report = door_report("p1", &rooms, &[]);
+        assert_eq!(report.total_doors, 0);
+        assert_eq!(report.discrepancies.total, 0);
+    }
+
+    /// Doors whose model has lost its rooms entirely: ingest refuses to create
+    /// that state, so reaching it means the rooms were removed from the store by
+    /// hand. Every reference then dangles, which is the honest answer.
+    #[test]
+    fn test_doors_whose_model_has_no_rooms_all_dangle() {
+        let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
+        let report = door_report("p1", &[], &doors);
+        assert_eq!(report.discrepancies.doors_unresolved_room, 2);
+    }
+
+    /// The door report reaches the response even when the project configures no
+    /// reference source at all — it is a door-versus-room finding that owes
+    /// nothing to reference data, and a project reconciling against nothing is
+    /// exactly the one nobody would otherwise be watching.
+    #[test]
+    fn test_door_report_survives_the_no_sources_bail() {
+        let bundle = crate::state::ProjectSettings {
+            reference: BTreeMap::new(),
+            hierarchy: vec![],
+            builtin_properties: vec![],
+            room_label: vec![],
+            milestones: vec![],
+            comparison_key: None,
+            comparison_properties: vec![],
+            areas: Default::default(),
+            hierarchy_exclusions: vec![],
+        };
+        let state = AppState::new(
+            Box::new(crate::storage::MemStore::new()),
+            std::collections::HashMap::from([("p1".to_string(), bundle)]),
+            None,
+        );
+        let (_, rooms) = rooms_for("p1", "m1", &["r1"]);
+        state.set_snapshot(rooms).unwrap();
+        let (_, doors) = make_doors("p1", "m1", vec![make_door("d1", None, None)]);
+        state.set_door_snapshot(doors).unwrap();
+
+        let result = compute_project_validation(&state, "p1").unwrap();
+        assert!(result.sources.is_empty(), "no reference source configured");
+        assert_eq!(result.doors.discrepancies.doors_without_room_reference, 1, "reported anyway");
+        assert_eq!(
+            result.discrepancies.total, 0,
+            "door findings stay out of the cross-source total, which counts sources"
         );
     }
 }
