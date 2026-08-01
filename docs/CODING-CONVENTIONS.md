@@ -93,7 +93,7 @@ Two of the long-standing eleven are still worth naming specifically:
   `type_complexity`.
 
 ## `static/` has no conventions yet — and that is now the open question
-These rules are Rust-only. `PLAN-handover-actioning.md`'s P10 flagged that gap
+These rules are Rust-only. `Superseded/PLAN-handover-actioning.md`'s P10 flagged that gap
 and deliberately left it a question rather than answering it by accretion, when
 `index.html` was 2,020 lines. It is now **4,211** (3,511 of them one inline
 `<script>`; measured 2026-08-01), and two extractions have happened since without a rule prompting

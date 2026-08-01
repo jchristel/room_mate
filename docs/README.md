@@ -22,11 +22,10 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | Document | Description |
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
-| [Plan: handover actioning](PLAN-handover-actioning.md) | **Closed — P1 through P10 all landed**, and all three handovers it reviews are in `Superseded/`. Kept as the record of how the UI restructure was sequenced and what was deliberately not built; it is history, not a work list |
 | [Plan: phasing](PLAN-phasing.md) | **Built (P1–P7), extractor half unverified against Revit.** The ten decisions behind Revit phase support and the phases that implemented them, plus an "As built" section recording where the result departs from the plan |
 | [Plan: generalisation](PLAN-generalisation.md) | **R1, R2 and R3 done; only R4 remains.** Four seams that grew room-shaped because rooms were the only primary entity. The two doors prerequisites landed ahead of any door code — read R2's outcome note for the tier-precedence rule the `Door` contract is written against (a tier wins only when it is `Present`), and R1's for why `list_models()` still means "models with rooms". R4 stays open until doors grow a reference source |
 
-> **Reading either document above: do not trust their `file.rs:NNN` deep
+> **Reading either plan above: do not trust their `file.rs:NNN` deep
 > links.** Both pin line numbers, and the files have moved underneath them —
 > spot-checked 2026-07-26, most now land on unrelated code (e.g.
 > `areas.rs:270` was cited as "`/areas` has no `revision` field" and is now
@@ -43,9 +42,12 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | [Room adjacency graph](HANDOVER-adjacency.md) | Built and tested. **Two false-positive checks left** — that the graph does not link rooms across a corridor, or through a thin service room — and they need a hospital-scale finish-face export this repo does not have. House A cannot settle them: a `wall_max` sweep on it saturates at 1.5 ft, so there is nothing at corridor distance to wrongly bridge. The item's other three asks are done or moved to [Area calculation](STRATEGY-AREA-CALCULATION.md) |
 
 Handoff documents whose work has fully landed live in
-[Superseded](Superseded/) — most recently `HANDOVER-ui-layout.md` (every
-decision built, the inspector last), `HANDOVER-room-inspector.md` and
-`HANDOVER-culling-disable-switch.md`.
+[Superseded](Superseded/), and so does one **plan**:
+`PLAN-handover-actioning.md`, closed with P1 through P10 all landed and every
+handover it reviewed superseded alongside it. It is kept as the record of how
+the UI restructure was sequenced and what was deliberately *not* built. The
+other two plans stay live because each still carries an open item — R4 for
+generalisation, the unverified extractor half for phasing.
 
 Three of those are worth knowing about even though they are superseded,
 because each leaves something recorded rather than pending:
