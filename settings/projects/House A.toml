@@ -6,7 +6,6 @@ room_label = [
     "$name",
     "$id",
 ]
-milestones = []
 colour_plans = []
 
 [sources]
@@ -14,3 +13,43 @@ colour_plans = []
 [[hierarchy]]
 name = "Department"
 name_property = "Department"
+
+# Doors, the project's second primary entity. This project is the doors sample:
+# its rooms and its doors come from the same Revit model, so every door's
+# from_room/to_room resolves against rooms already in the store.
+#
+# `$id` as the comparison key, which is the right answer HERE and worth saying
+# why, because it is the wrong answer for rooms: a door's ElementId is stable
+# across pushes of the same model, so it identifies the same physical leaf. A
+# project that renumbers doors between milestones would want `Mark` instead.
+#
+# Comparing the two room references is the point -- a door that moved between
+# rooms shows up as a `$to_room` difference, and one that lost a reference
+# entirely as a missing property.
+[doors]
+comparison_key = "$id"
+comparison_properties = [
+    "$to_room",
+    "$from_room",
+    "Mark",
+]
+
+# Two milestones over the data actually in the store. The first predates the
+# doors push and deliberately pins NO doors: a model a milestone doesn't pin
+# contributes nothing, so comparing the two reports every door as added, which
+# is the honest answer for "doors did not exist at this milestone" and is worth
+# having in the sample rather than hiding.
+#
+# Room and door pins are separate maps because rooms and doors are pushed
+# independently -- their snapshot ids do not correspond, and pinning "the
+# nearest" would pair data that never coexisted.
+[[milestones]]
+name = "Rooms only"
+date = "2026-07-15"
+attachments = { "Building_BF_Framing_jan.r.christel" = "2026-07-15T11:18:58.186000Z" }
+
+[[milestones]]
+name = "Rooms and doors"
+date = "2026-07-29"
+attachments = { "Building_BF_Framing_jan.r.christel" = "2026-07-24T23:19:10.227000Z" }
+door_attachments = { "Building_BF_Framing_jan.r.christel" = "2026-07-29T20:03:41Z" }
