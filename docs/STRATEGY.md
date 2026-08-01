@@ -31,13 +31,15 @@ design docs: one for data the user authors, one for the entities beyond rooms:
   milestones, and served. An application of the upload-envelope and
   snapshot-store patterns to input that cannot be re-derived; read it before
   building any of that.
-- **[Entities](STRATEGY-ENTITIES.md)** — *design settled, not built.* What makes
-  something a primary entity rather than a reference source, what the
-  rooms/doors pair proves generalizes and what stays per-entity work, and how a
-  Revit phase scopes a push. Doors are the first entity after rooms and FFE is
-  the next, so this is the doc that decides how much of the second one is free.
-  Its phasing half **is** being built — see
-  [PLAN-phasing.md](PLAN-phasing.md), which supersedes several of its details.
+- **[Entities](STRATEGY-ENTITIES.md)** — *built.* What makes something a primary
+  entity rather than a reference source, what the rooms/doors pair proves
+  generalizes and what stays per-entity work, and how a Revit phase scopes a
+  push. Doors shipped as the first entity after rooms; FFE is the next, and this
+  is the doc that records how much of it is already free. Its phasing half was
+  built first — see [PLAN-phasing.md](PLAN-phasing.md), which supersedes several
+  of its details. **Decision 6's open question — which of a door's two rooms
+  owns it — is still open**, and doors deliberately shipped without answering
+  it.
 - **[Security](STRATEGY-SECURITY.md)** — the threat model for the near-future
   shift from a loopback-only bind to a LAN-reachable server: what a hostile
   local-network user can and cannot do, and the invariants (no delete route,
@@ -269,8 +271,32 @@ resolved through the same `ensure_taken_at` / `validate_snapshot_id` pair,
 omittable, and echoed back (`snapshot_taken_at` / `snapshot_id_generated`)
 like every other ingest.
 
-Rooms and dRofus are the two upload types that ship today. The same envelope is
-designed to carry **user-authored** kinds next — manually drawn room
+**Doors are the third upload type**, and the first to test whether the envelope
+generalizes to a second *primary entity* rather than to reference data. It does:
+`POST /doors` carries the identical `project` / `model` / `snapshot` / `phase`
+envelope and resolves it through the same `ensure_taken_at` /
+`validate_snapshot_id` / `normalize_phase` functions — not reimplementations.
+What did **not** generalize is exactly what
+[Entities](STRATEGY-ENTITIES.md) Decision 1 predicted would not: geometry
+semantics, connectivity, and which canonical property names exist at all.
+
+Two things doors added that rooms did not have, both worth knowing before the
+fourth upload type:
+
+- **Its own `schema_version`, starting at 1.** Versioning doors against the room
+  contract's v6 would couple two things that move independently — a change to
+  the room property tiers has nothing to say about doors, and a shared number
+  would force every room producer to re-release over a doors-only change.
+- **Ingest preconditions of its own.** A doors push is refused unless the target
+  `(project, model)` lineage already has a live rooms snapshot, because a door's
+  `from_room`/`to_room` are room ids and room ids are unique only *within* a
+  model. And unlike a rooms push, one whose phase disagrees with the lineage is
+  **refused rather than quarantined** — promoting it would re-phase the model
+  while its rooms stayed behind, stranding the very rooms those references point
+  at. A dependent entity does not get to move the thing it depends on.
+
+Rooms, dRofus and doors are the three upload types that ship today. The same
+envelope is designed to carry **user-authored** kinds next — manually drawn room
 connections and uploaded documents — each a snapshotted stream under the
 existing store, milestone-pinnable exactly as `drofus_snapshot` already is.
 That generalization (storage layout, hierarchy scopes, the read-time join) is

@@ -14,7 +14,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | [Sources](STRATEGY-SOURCES.md) | Data sources strategy |
 | [MCP](STRATEGY-MCP.md) | Model Context Protocol integration strategy |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data & documents — connections, PDFs, hierarchy scopes _(design settled, not built)_ |
-| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, what generalizes from rooms to doors and FFE, and how a Revit phase scopes a push _(doors not built; its phasing half is — see the plan below)_ |
+| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, what generalizes from rooms to doors and FFE, and how a Revit phase scopes a push _(**built** — each decision now records what shipped and where it departed from the sketch; read its "Deferred" list for what is still open, chiefly R4 and which room owns a door)_ |
 | [Security](STRATEGY-SECURITY.md) | Threat model for the LAN-reachable deployment: trust boundary, invariants, settings backups, rate limiting |
 
 ## Implementation notes

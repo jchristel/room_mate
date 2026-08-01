@@ -9,8 +9,8 @@ primary entity (doors, then FFE) arrived.
 
 ## The line in the sand
 
-Doors are next. These were the terms — **R1 and R2 have now been met**, ahead of
-any door code, as their own change:
+**Doors have shipped.** These were the terms — R1 and R2 were met ahead of any
+door code, as their own change:
 
 - ~~**R2 lands before doors' contract is final.**~~ **Done.** Its open question —
   whether a door's instance property shadows its type property — was a *contract*
@@ -21,12 +21,15 @@ any door code, as their own change:
   than with: no `put_doors` ever existed alongside `put`, so the third parallel
   method set [Entities](STRATEGY-ENTITIES.md) Decision 3 warns about was never
   written and there is nothing to undo.
-- **R4 lands with doors' first reference source** — still open, and still not
-  yet. It needs R2 (now available) but must not land before there is a door
-  reference source to scope, and not after (a shipped `[sources.reference.*]`
-  that silently means "rooms" becomes a back-compat obligation the day someone
-  relies on it). The first doors work deliberately ships no reference source, so
-  R4 stays where it is.
+- **R4 lands with doors' first reference source** — **still open, correctly.**
+  It needs R2 (now available) but must not land before there is a door reference
+  source to scope, and not after (a shipped `[sources.reference.*]` that
+  silently means "rooms" becomes a back-compat obligation the day someone relies
+  on it). Doors shipped with no reference source, so nothing has started that
+  clock. What the door work did do is remove the *hard* part: the join namespace
+  stayed flat and one `split_namespace` / `PropertyTiers` / filter grammar now
+  serves both entities, so R4 is a settings and wiring change rather than a
+  grammar fork.
 
 If doors ship without R1 and R2, this document has failed and the debt is
 permanent — every subsequent entity pays it again. That was the line, and it

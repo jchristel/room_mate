@@ -4,11 +4,10 @@ Revit → Rust → browser room data pipeline. The **reasoning** lives in
 [`docs/`](docs/README.md) — this file holds only what is expensive to get wrong
 and impossible to infer from the code. Don't duplicate the docs here; link them.
 
-## Doors: prerequisites met, two rules to keep
+## Doors are built — the rules that outlive the build
 
-R1 and R2 landed ahead of any door code
-([PLAN-generalisation.md](docs/PLAN-generalisation.md), outcome notes on each).
-What survives from that gate:
+Doors ship end to end (contract, ingest, storage, `/doors`, QA, milestone
+comparison, pyRevit exporter). What is expensive to rediscover:
 
 - **Property lookup is tiered, and a tier wins only when it is `Present`.**
   `lookup_property`/`property_presence` take `&impl PropertyTiers`; a door
@@ -21,9 +20,29 @@ What survives from that gate:
   that is the exact parallel-method-set failure R1 was written to prevent.
   `AppState` holds `Box<dyn SnapshotStore>`, so the trait must stay
   **object-safe**: a generic `put<T>` is out.
+- **A room id is unique only within a model, and a door's `from_room`/`to_room`
+  are room ids.** So the door→room join is model-scoped *everywhere*: ingest
+  refuses doors to a model with no rooms, QA resolves references per model, and
+  every `/doors` row carries `model_id`. A project-scoped shortcut anywhere here
+  turns a dangling reference into a false clean bill.
+- **Doors never re-phase a lineage.** A rooms push that disagrees on phase is
+  quarantined and promotable; a doors push is **refused**. Promoting it would
+  move the lineage while the rooms stayed behind.
 - **R4 (entity-scope `[sources.reference.*]`) is still open**, and lands with
   doors' first reference source — not before, not later (back-compat
-  obligation). The first doors work ships none, so it stays open.
+  obligation). Doors shipped with none, so it stays open. So does "which room
+  owns a door": nothing built assumes an answer, and `[doors]` has no
+  `room_attribution` and `/doors` no `?building=` for that reason.
+
+## Traps in the door export
+
+- **`±1e30` is not geometry.** duHast returns Revit's *uninitialized*
+  `BoundingBoxXYZ` for a door family with no 3D geometry, and its own guards
+  pass, so it arrives looking plausible. The producer drops it and sends empty
+  `loops`; the door is still pushed, because it has real room references.
+- **Never read `from_room`/`to_room` from the export.** They are per-phase
+  arrays tagged with a `phase_id` that resolves against nothing on the wire. The
+  extractor reads `FamilyInstance.FromRoom[phase]` from the Revit API instead.
 
 ## Which document wins
 

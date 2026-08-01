@@ -368,18 +368,33 @@ name most projects configure.
   project that simply doesn't configure a source another project does is
   **recognized but absent** for an unscoped query across both, not an error
   — same `presence_of` arm, no special case needed.
-- **`[sources.reference.*]` currently means "reference sources *for
-  rooms*."** The join, filter, and comparison machinery above all resolve
-  onto an assembled *room* — nothing in this module joins onto any other
-  entity. A door schedule needs a *doors entity* first, not just another
-  entry under this table: it joins by a door key onto a door, not a room,
-  and no door entity exists yet (`/rooms` assembles rooms and nothing else).
-  Adding `[sources.reference.doors]` today would parse and load, then
-  silently no-op — configured but joined nowhere. This table generalizes
-  cleanly to *more room-keyed sources* (the extension point above); it does
-  **not** generalize to *sources keyed on a different entity* without that
-  entity existing first. See `docs/Superseded/HANDOVER-reference-sources.md`
-  for the full two-axis breakdown.
+- **`[sources.reference.*]` still means "reference sources *for rooms*" — and
+  now the doors entity exists, so that is a gap rather than a boundary.** The
+  join, filter, and comparison machinery above all resolve onto an assembled
+  *room*. A door schedule joins by a door key onto a door, and
+  `service::doors` performs no reference join at all: a source-qualified
+  predicate on a door resolves `Absent` (matching nothing) rather than
+  erroring, which is the same answer a room gets for a source it did not join.
+  Adding `[sources.reference.hardware]` today would still parse, load, and
+  silently no-op.
+
+  **What closes this is R4** ([Generalisation](PLAN-generalisation.md#r4--reference-sources-are-implicitly-for-rooms)),
+  the one prerequisite doors deliberately shipped without: both this table and
+  `[[builtin_properties]]` gain an optional `entity` defaulting to `"rooms"`,
+  and an unknown entity becomes a loud startup failure. It was held back on
+  purpose — it must land *with doors' first reference source*, not before (a
+  config field with no behaviour behind it) and not after (a shipped table that
+  silently means "rooms" becomes a back-compat obligation the day someone
+  relies on it). Doors shipped with no reference source, so the clock has not
+  started.
+
+  What the door work did settle is the *vocabulary*: the join namespace stays
+  flat (`hardware.FireRating`, never `doors.hardware.FireRating`) and one
+  `split_namespace` already serves both entities, so R4 is a settings and
+  wiring change rather than a grammar fork. See
+  [Entities](STRATEGY-ENTITIES.md) Decision 5 and
+  `docs/Superseded/HANDOVER-reference-sources.md` for the full two-axis
+  breakdown.
 - **The frontend discovers sources from the data, not a fixed list.**
   `static/settings.html` edits `Sources.reference` as a repeatable list of
   cards (add/remove by name — no reorder, since it's map-keyed, not
