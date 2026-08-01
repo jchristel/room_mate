@@ -76,6 +76,24 @@ pub struct RoomResponse {
     /// the /rooms JSON is byte-for-byte unchanged.
     #[serde(skip)]
     pub source: String,
+
+    /// The owning `(project, model)`, on the same skip-serialized terms as
+    /// `source` above and for the same kind of reason: a downstream service
+    /// consumer needs it and the viewer does not, so the `/rooms` JSON stays
+    /// byte-for-byte unchanged.
+    ///
+    /// **`service::doors` is what needs it, and the need is a correctness one.**
+    /// A door's building is its owning room's building, so resolving a building
+    /// scope for doors means indexing these rooms by the room ids doors
+    /// reference — and room ids are unique only *within* a model. Without the
+    /// model here, that index would be keyed on a bare room id and would happily
+    /// resolve a door in one model against a same-numbered room in another.
+    /// `project_id` rides along because the settings bundle that decides which
+    /// hierarchy tier is "Building" is per project.
+    #[serde(skip)]
+    pub project_id: String,
+    #[serde(skip)]
+    pub model_id: String,
 }
 
 /// Resolve one room's label fields from the configured, ordered name list.
@@ -121,6 +139,7 @@ fn assemble_room(
     effective_reference: &BTreeMap<String, &ReferenceData>,
     room: &Room,
     source: &str,
+    key: &ModelKey,
 ) -> RoomResponse {
     // One join per configured source: read its link property off the room,
     // look up the record. A source with no match for this room contributes
@@ -139,7 +158,15 @@ fn assemble_room(
 
     let label = resolve_label_fields(room, &bundle.room_label, source, &bundle.builtin_properties);
 
-    RoomResponse { room: room.clone(), reference, classification, label, source: source.to_string() }
+    RoomResponse {
+        room: room.clone(),
+        reference,
+        classification,
+        label,
+        source: source.to_string(),
+        project_id: key.project_id.clone(),
+        model_id: key.model_id.clone(),
+    }
 }
 
 /// Sentinel `building` key for rooms whose "Building" tier didn't resolve —
@@ -1060,7 +1087,7 @@ fn assemble_scoped_rooms(
         let assembled: Vec<RoomResponse> = matching_rooms
             .into_iter()
             .map(|room| {
-                let mut response = assemble_room(bundle, &effective_reference, room, &payload.model.source);
+                let mut response = assemble_room(bundle, &effective_reference, room, &payload.model.source, key);
                 if let Some(canonical_id) =
                     level_remap.get(&(key.project_id.clone(), key.model_id.clone(), room.level_id.clone()))
                 {
@@ -1934,6 +1961,8 @@ mod tests {
             classification: vec![],
             label: vec![],
             source: "revit".to_string(),
+            project_id: "p1".to_string(),
+            model_id: "m1".to_string(),
         }
     }
 

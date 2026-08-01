@@ -28,6 +28,11 @@ name_property = "Department"
 # entirely as a missing property.
 [doors]
 comparison_key = "$id"
+# A door belongs to the room it opens into, else the one it opens from, else it
+# is homeless. The default, stated explicitly here because this is the sample.
+room_attribution = "to_room_then_from_room"
+# Reconcile the modeller's authored reference against the attributed room.
+room_reference_property = "Door Room Reference"
 comparison_properties = [
     "$to_room",
     "$from_room",

@@ -835,6 +835,11 @@ pub async fn get_rooms(
 pub struct DoorsQuery {
     #[serde(default)]
     pub project: Option<String>,
+    /// Opaque building key from `/projects/{id}/buildings` — a door's building
+    /// is its owning room's, so this became answerable when
+    /// `[doors] room_attribution` decided which room owns a door.
+    #[serde(default)]
+    pub building: Option<String>,
     #[serde(default)]
     pub milestone: Option<String>,
     /// Comma-separated property predicates, same grammar as `RoomsQuery::filter`
@@ -867,6 +872,7 @@ pub async fn get_doors(
 
     let scope = doors::DoorScope {
         project: query.project.as_deref(),
+        building: query.building.as_deref(),
         milestone: query.milestone.as_deref(),
         filter: filter.as_ref(),
     };

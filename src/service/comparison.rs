@@ -1316,6 +1316,7 @@ mod tests {
             doors: crate::settings::DoorPolicy {
                 comparison_key: key.map(str::to_string),
                 comparison_properties: properties.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
             },
             ..make_bundle(None, &[], milestones)
         }

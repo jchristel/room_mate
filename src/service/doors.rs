@@ -8,11 +8,11 @@
 //! and no level dedup — a door's `level_id` points into the level set its
 //! model's *rooms* snapshot already carries, so there is nothing here to merge.
 //!
-//! No `?building=` either. A door's building would have to come from the rooms
-//! it connects, and *which* room owns a door is
-//! [Entities](../../docs/STRATEGY-ENTITIES.md) Decision 6's open question. A
-//! scope that silently picked one answer would settle that question by accident;
-//! leaving it out keeps it open.
+//! `?building=` **is** supported, and was the last thing to arrive: a door's
+//! building is its *owning* room's building, so the scope only became
+//! answerable once `[doors] room_attribution` settled
+//! [Entities](../../docs/STRATEGY-ENTITIES.md) Decision 6. Before that, any
+//! answer would have settled that question by accident.
 
 use std::collections::BTreeMap;
 
@@ -43,6 +43,21 @@ pub struct DoorResponse {
     pub project_id: String,
     /// The model this door came from — the scope its room references resolve in.
     pub model_id: String,
+
+    /// The room(s) this door is attributed to under the project's
+    /// `[doors] room_attribution` policy, in policy order.
+    ///
+    /// **A list, and empty means homeless.** A list because the `both` policy
+    /// attributes a door between two rooms twice — which is the point of that
+    /// policy for area rollups — and one shape that covers all five policies
+    /// beats an `Option` plus a special case. Empty is a *reported state*, not a
+    /// missing value: it means either the door names no room at all, or the
+    /// policy declined to use the reference it has (`to_room` against a door
+    /// that only opens *from* somewhere). QA distinguishes the two.
+    ///
+    /// Derived at read time from the stored references, never stored: changing
+    /// the policy changes every answer immediately and rewrites nothing.
+    pub owner_rooms: Vec<String>,
 
     /// The owning model's `Model.source` (e.g. "revit"), for canonical property
     /// resolution. Not wire shape, same as `RoomResponse::source`.
@@ -118,11 +133,20 @@ pub fn resolve_presence(
     }
 }
 
-/// Everything that narrows a doors read. Mirrors `RoomScope` minus `building` —
-/// see the module doc for why that one is absent rather than unimplemented.
+/// Everything that narrows a doors read.
 #[derive(Default)]
 pub struct DoorScope<'a> {
     pub project: Option<&'a str>,
+    /// Opaque building key, as for rooms — **a door's building is its owning
+    /// room's building.** This became answerable only once
+    /// `[doors] room_attribution` decided which room owns a door; before that,
+    /// any answer would have settled Decision 6 by accident.
+    ///
+    /// A **homeless door matches no building**, which is the honest reading and
+    /// worth stating: it is not evidence the door belongs elsewhere, only that
+    /// nothing attributes it, so it drops out of a building-scoped view exactly
+    /// as a room with no classification does.
+    pub building: Option<&'a str>,
     pub milestone: Option<&'a str>,
     pub filter: Option<&'a RoomFilter>,
 }
@@ -159,6 +183,47 @@ fn doors_revision(scoped: &[(ModelKey, DoorPayload)]) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     parts.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+/// `(model id, room id)` → that room's building key, for the rooms in scope.
+///
+/// **Built by calling `assemble_rooms`, not by re-deriving classification.** A
+/// door's building has to mean exactly what a room's building means, or a
+/// building-scoped doors read and a building-scoped rooms read would disagree
+/// about the same building — so this asks the same function `/rooms` does, with
+/// the same project and milestone scope and deliberately *no* building filter
+/// (the filtering happens per door, against the door's owner).
+///
+/// Keyed on the pair because room ids are unique only within a model.
+fn building_by_room(
+    state: &AppState,
+    scope: &DoorScope<'_>,
+) -> Result<BTreeMap<(String, String), String>, ServiceError> {
+    let rooms = super::rooms::assemble_rooms(
+        state,
+        &super::rooms::RoomScope { project: scope.project, milestone: scope.milestone, ..Default::default() },
+    )?;
+    let Some(rooms) = rooms else {
+        return Ok(BTreeMap::new());
+    };
+
+    let registry = state.settings();
+    let mut out = BTreeMap::new();
+    for room in &rooms.rooms {
+        let Some(tier) = registry
+            .settings_for(&room.project_id)
+            .and_then(|b| super::rooms::building_tier_index(&b.hierarchy))
+        else {
+            continue; // a project with no "Building" tier answers no building
+        };
+        if let Some(value) = room.classification.get(tier) {
+            out.insert(
+                (room.model_id.clone(), room.room.id.clone()),
+                super::rooms::building_key(&value.code, &value.name),
+            );
+        }
+    }
+    Ok(out)
 }
 
 /// Merge every stored model's doors into one payload, scoped by `DoorScope`.
@@ -219,6 +284,15 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
     let mut phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>> = BTreeMap::new();
     let mut doors: Vec<DoorResponse> = Vec::new();
 
+    // A door's building is its owning room's building, so a building scope needs
+    // the rooms classified. Resolved **only when a building filter is actually
+    // given** — it is a second storage read plus a classification pass, and the
+    // overwhelmingly common doors read does not need it.
+    let building_of_room = match scope.building {
+        Some(_) => building_by_room(state, scope)?,
+        None => BTreeMap::new(),
+    };
+
     // Phase 2 — derive the response doors, applying the property filter *after*
     // assembly so a predicate sees the same resolved vocabulary a consumer does.
     for (key, payload) in &scoped {
@@ -227,18 +301,32 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
             .or_default()
             .insert(key.model_id.clone(), payload.phase.clone());
 
-        let builtin: &[BuiltinPropertyDef] = registry
-            .settings_for(&payload.project.id)
-            .map(|b| b.builtin_properties.as_slice())
-            .unwrap_or_default();
+        let bundle = registry.settings_for(&payload.project.id);
+        let builtin: &[BuiltinPropertyDef] = bundle.map(|b| b.builtin_properties.as_slice()).unwrap_or_default();
+        let attribution = bundle.map(|b| b.doors.room_attribution).unwrap_or_default();
 
         for door in &payload.doors {
             let response = DoorResponse {
+                owner_rooms: attribution
+                    .owners(door.from_room.as_deref(), door.to_room.as_deref())
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
                 door: door.clone(),
                 project_id: payload.project.id.clone(),
                 model_id: payload.model.id.clone(),
                 source: payload.model.source.clone(),
             };
+            // A homeless door matches no building — see `DoorScope::building`.
+            // Room ids are unique only within a model, so the lookup is keyed on
+            // the pair, never the bare room id.
+            if let Some(wanted) = scope.building
+                && !response.owner_rooms.iter().any(|room| {
+                    building_of_room.get(&(key.model_id.clone(), room.clone())).is_some_and(|b| b == wanted)
+                })
+            {
+                continue;
+            }
             if scope.filter.is_none_or(|f| f.matches(&response, builtin)) {
                 doors.push(response);
             }
@@ -489,6 +577,135 @@ mod tests {
             .unwrap();
         let after = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap().revision;
         assert_ne!(first, after, "a new snapshot moves it");
+    }
+
+    /// `owner_rooms` on the read follows the project's policy, and an empty
+    /// list is the homeless signal rather than a missing field.
+    #[test]
+    fn test_owner_rooms_follows_the_configured_policy() {
+        let doors = vec![
+            make_door("both", Some("r1"), Some("r2"), &[]),
+            make_door("from-only", Some("r3"), None, &[]),
+            make_door("homeless", None, None, &[]),
+        ];
+
+        let owners_for = |policy: crate::settings::RoomAttribution| {
+            let mut settings = bundle();
+            settings.doors.room_attribution = policy;
+            let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), settings)]), None);
+            state
+                .set_door_snapshot(DoorPayload {
+                    schema_version: SUPPORTED_DOOR_SCHEMA,
+                    project: Project { id: "p1".to_string(), name: "P".to_string() },
+                    model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                    snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
+                    phase: Some("New Construction".to_string()),
+                    model_to_shared: None,
+                    doors: doors.clone(),
+                })
+                .unwrap();
+            let r = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+            r.doors.into_iter().map(|d| (d.door.id, d.owner_rooms)).collect::<BTreeMap<_, _>>()
+        };
+
+        // The decided default: opens-into, else opens-from, else homeless.
+        let chain = owners_for(crate::settings::RoomAttribution::ToRoomThenFromRoom);
+        assert_eq!(chain["both"], vec!["r2".to_string()]);
+        assert_eq!(chain["from-only"], vec!["r3".to_string()]);
+        assert!(chain["homeless"].is_empty());
+
+        // A narrower policy leaves the from-only door homeless.
+        let strict = owners_for(crate::settings::RoomAttribution::ToRoom);
+        assert_eq!(strict["both"], vec!["r2".to_string()]);
+        assert!(strict["from-only"].is_empty());
+
+        // `both` is why this is a list: one door, two owners, to_room first.
+        let both = owners_for(crate::settings::RoomAttribution::Both);
+        assert_eq!(both["both"], vec!["r2".to_string(), "r1".to_string()]);
+        assert_eq!(both["from-only"], vec!["r3".to_string()], "one-sided doors still yield one owner");
+    }
+
+    /// **`?building=` scopes doors by their OWNING room's building** — the
+    /// capability the attribution decision unlocked.
+    ///
+    /// Also pins the two rules that make it correct: a homeless door matches no
+    /// building (it is not evidence of belonging elsewhere), and the lookup is
+    /// keyed on `(model, room)` so a same-numbered room in another model cannot
+    /// resolve it — the collision this codebase guards everywhere doors touch
+    /// room ids.
+    #[test]
+    fn test_building_scope_follows_the_owning_room() {
+        let mut settings = bundle();
+        settings.hierarchy = vec![crate::settings::HierarchyTier {
+            name: "Building".to_string(),
+            code_property: None,
+            name_property: Some("Building".to_string()),
+        }];
+        let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), settings)]), None);
+
+        // Two models, each with a room id "r1" — in DIFFERENT buildings.
+        let room = |id: &str, building: &str| crate::contract::Room {
+            id: id.to_string(),
+            name: id.to_string(),
+            level_id: "1".to_string(),
+            loops: vec![],
+            properties: BTreeMap::from([(
+                "Building".to_string(),
+                CustomValue { value: building.to_string(), storage_type: None },
+            )]),
+        };
+        for (model, building) in [("m1", "North"), ("m2", "South")] {
+            state
+                .set_snapshot(crate::contract::RoomPayload {
+                    schema_version: crate::contract::SUPPORTED_SCHEMA,
+                    project: Project { id: "p1".to_string(), name: "P".to_string() },
+                    model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+                    snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                    phase: Some("New Construction".to_string()),
+                    model_to_shared: None,
+                    room_boundary: None,
+                    levels: vec![],
+                    rooms: vec![room("r1", building)],
+                })
+                .unwrap();
+        }
+        // m1's door owns m1's r1 (North); m2's door owns m2's r1 (South).
+        for model in ["m1", "m2"] {
+            state
+                .set_door_snapshot(DoorPayload {
+                    schema_version: SUPPORTED_DOOR_SCHEMA,
+                    project: Project { id: "p1".to_string(), name: "P".to_string() },
+                    model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+                    snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
+                    phase: Some("New Construction".to_string()),
+                    model_to_shared: None,
+                    doors: vec![
+                        make_door(&format!("{model}-owned"), None, Some("r1"), &[]),
+                        make_door(&format!("{model}-homeless"), None, None, &[]),
+                    ],
+                })
+                .unwrap();
+        }
+
+        let in_building = |key: &str| {
+            let r = assemble_doors(&state, &DoorScope { building: Some(key), ..Default::default() })
+                .unwrap()
+                .unwrap();
+            r.doors.into_iter().map(|d| d.door.id).collect::<BTreeSet<_>>()
+        };
+
+        assert_eq!(
+            in_building("|North"),
+            BTreeSet::from(["m1-owned".to_string()]),
+            "m2's door owns m2's r1, which is South — a same-numbered room in another model must not resolve it"
+        );
+        assert_eq!(in_building("|South"), BTreeSet::from(["m2-owned".to_string()]));
+        assert!(in_building("|Nowhere").is_empty());
+
+        // Both homeless doors are absent from every building, and present when
+        // no building is asked for — the filter excludes them, nothing else does.
+        let all = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        assert_eq!(all.doors.len(), 4, "unscoped, homeless doors are served normally");
     }
 
     /// A milestone serves the doors snapshot it pins, not the model's latest.

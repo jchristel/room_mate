@@ -95,6 +95,11 @@ struct GetDoorsParams {
     /// Scope the merge to one project id. Omit to merge every stored model.
     #[serde(default)]
     project: Option<String>,
+    /// Opaque building key from `list_buildings`. A door's building is the
+    /// building of the room it is attributed to, so a door attributed to no
+    /// room ("homeless") matches no building. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
     /// Milestone name from `list_milestones`: serve the doors snapshots that
     /// milestone pins instead of each model's latest. Omit for latest.
     #[serde(default)]
@@ -366,7 +371,7 @@ impl RoommateMcp {
                           Room references are model-scoped: a room id is unique only within one model, so resolve 'from_room'/'to_room' against rooms of the SAME 'model_id' \
                           this door carries. get_validation's 'doors' section reports the ones that resolve to nothing. \
                           Doors carry no joined reference sources yet, so a source-prefixed filter (e.g. 'drofus.') matches no door rather than erroring. \
-                          There is no building scope here, unlike get_rooms: a door's building would depend on which of its two rooms owns it, which is deliberately undecided. \
+                          Each door also carries 'owner_rooms': the room(s) it is attributed to under the project's [doors] room_attribution policy, whose default is 'the room it opens                           into, else the room it opens from'. An EMPTY owner_rooms means the door is homeless -- a reported state, not missing data -- and a homeless door matches                           no 'building' filter. It is a list because the 'both' policy attributes a door between two rooms twice. \
                           IMPORTANT -- like get_rooms, results are scoped to ONE Revit phase per model, named in 'phase_by_model'. Do not read them as a complete door schedule."
     )]
     fn get_doors(&self, Parameters(p): Parameters<GetDoorsParams>) -> Result<CallToolResult, McpError> {
@@ -375,6 +380,7 @@ impl RoommateMcp {
             rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
         let scope = doors::DoorScope {
             project: p.project.as_deref(),
+            building: p.building.as_deref(),
             milestone: p.milestone.as_deref(),
             filter: Some(&filter).filter(|f| !f.is_empty()),
         };
@@ -475,7 +481,7 @@ impl RoommateMcp {
                        naming no room on either side, and 'doors_unresolved_room' lists room references naming a room the door's own model does not have (one entry per dangling \
                        side, each carrying model_id, door_id, side and room_id). References resolve WITHIN one model, because room ids are unique only within a model. \
                        A door with a room on exactly one side is an EXTERNAL door -- normal, counted under 'doors_external', and deliberately not a discrepancy. \
-                       Door findings have their own 'doors.discrepancies' and are NOT included in the top-level 'discrepancies', which counts reference sources only."
+                       Door findings have their own 'doors.discrepancies' and are NOT included in the top-level 'discrepancies', which counts reference sources only. \n                       'doors.room_attribution' echoes the policy deciding which room owns a door (default: the room it opens into, else the one it opens from, else homeless); \n                       'doors_unattributed' lists doors that name a room the policy declines to use, which is a policy consequence rather than a data gap and is empty under the default. \n                       'room_reference_mismatches' lists doors whose AUTHORED room reference disagrees with the attributed room -- reported, never corrected, since the geometry and \n                       the modeller are making different claims. It is empty when [doors] room_reference_property is unset, which means the check is OFF, not clean."
     )]
     fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;

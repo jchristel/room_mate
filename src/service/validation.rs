@@ -28,7 +28,7 @@ use crate::contract::{
     date_match, lookup_property, numeric_match, property_presence, DoorPayload, PropertyPresence, Room, RoomPayload,
 };
 use crate::reference::ReferenceData;
-use crate::settings::{BuiltinPropertyDef, CompareMode, FieldType, ReferenceFieldConfig};
+use crate::settings::{BuiltinPropertyDef, CompareMode, DoorPolicy, FieldType, ReferenceFieldConfig, RoomAttribution};
 use crate::state::{AppState, ModelKey};
 
 use super::ServiceError;
@@ -288,12 +288,34 @@ pub struct UnresolvedRoomReference {
     pub room_id: String,
 }
 
+/// One door whose **authored** room reference disagrees with the room the
+/// project's `room_attribution` policy actually attributes it to.
+///
+/// Reported, never corrected: the two are different claims — the geometry says
+/// where the door is, the authored value says which room the modeller considers
+/// it to serve — and there is no general rule for which is right. On the House A
+/// sample the disagreements are mostly doors where the geometry picks an
+/// exterior or circulation space over the served room.
+#[derive(Debug, Serialize)]
+pub struct RoomReferenceMismatch {
+    pub model_id: String,
+    pub door_id: String,
+    /// The value of the door property named by `[doors] room_reference_property`.
+    pub authored: String,
+    /// The room the policy attributed the door to, and its resolved `Number` —
+    /// which is what `authored` is compared against.
+    pub attributed_room_id: String,
+    pub attributed_room_number: String,
+}
+
 /// Door discrepancy tallies, so a consumer needn't re-sum the lists.
 #[derive(Debug, Default, Serialize)]
 pub struct DoorDiscrepancyCounts {
     pub total: usize,
     pub doors_without_room_reference: usize,
     pub doors_unresolved_room: usize,
+    pub doors_unattributed: usize,
+    pub room_reference_mismatches: usize,
 }
 
 /// Whether this project's doors link to rooms that actually exist.
@@ -339,6 +361,28 @@ pub struct DoorReport {
     /// Doors with a room on exactly one side — external doors. **Informational,
     /// not a discrepancy**; see the type doc for why.
     pub doors_external: usize,
+    /// The attribution policy in force, echoed so a reader can tell whether
+    /// `doors_unattributed` below is a data problem or a policy consequence.
+    pub room_attribution: RoomAttribution,
+    /// Doors that **name a room but the policy declines to use it** — a
+    /// `to_room`-only policy against a door that opens *from* somewhere and into
+    /// nowhere.
+    ///
+    /// Deliberately excludes doors already in `doors_without_room_reference`, so
+    /// the two lists never double-count the same door. Under the default chain
+    /// this is therefore **always empty**: the chain uses whatever reference
+    /// exists, so the only unattributed doors are the ones with no reference at
+    /// all. A non-empty list means the configured policy is narrower than the
+    /// data, which is a legitimate choice worth being able to see.
+    pub doors_unattributed: Vec<DoorWithoutRoom>,
+    /// Doors whose authored room reference disagrees with the attributed room.
+    /// Empty when `[doors] room_reference_property` is unset — the check is
+    /// off, which is not the same as clean, and the setting is echoed on the
+    /// response so a reader can tell.
+    pub room_reference_mismatches: Vec<RoomReferenceMismatch>,
+    /// The door property the reconciliation read, or `None` when the check is
+    /// disabled.
+    pub room_reference_property: Option<String>,
     /// Tallies for the two findings above. Deliberately **not** added into
     /// `ValidationResponse::discrepancies`, which is documented as the sum
     /// across reference *sources* — a door is not a source, and folding it in
@@ -400,6 +444,8 @@ fn door_report(
     project_id: &str,
     stored_rooms: &[(ModelKey, RoomPayload)],
     stored_doors: &[(ModelKey, DoorPayload)],
+    policy: &DoorPolicy,
+    builtin_defs: &[BuiltinPropertyDef],
 ) -> DoorReport {
     let rooms_by_model: BTreeMap<&str, BTreeSet<&str>> = stored_rooms
         .iter()
@@ -412,7 +458,24 @@ fn door_report(
         })
         .collect();
 
-    let mut report = DoorReport::default();
+    // The rooms themselves, for the authored-reference reconciliation: it needs
+    // the attributed room's `Number`, which the id set above cannot supply.
+    // Keyed on `(model, room)` for the reason every door lookup here is —
+    // a room id is unique only within its model.
+    let room_by_model: BTreeMap<(&str, &str), (&Room, &str)> = stored_rooms
+        .iter()
+        .filter(|(_, payload)| payload.project.id == project_id)
+        .flat_map(|(key, payload)| {
+            payload
+                .rooms
+                .iter()
+                .map(move |r| ((key.model_id.as_str(), r.id.as_str()), (r, payload.model.source.as_str())))
+        })
+        .collect();
+
+    let mut report = DoorReport { room_attribution: policy.room_attribution, ..DoorReport::default() };
+    report.room_reference_property = policy.room_reference_property.clone();
+
     for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
         // A model with doors but no rooms snapshot cannot resolve anything.
         // Ingest refuses to create that state, so reaching it means the rooms
@@ -451,11 +514,67 @@ fn door_report(
                     });
                 }
             }
+
+            // Attribution. This door HAS a reference (the no-reference case
+            // `continue`d above), so an empty result means the configured policy
+            // declined to use it — a policy consequence, reported separately
+            // from a data gap so the two are never confused.
+            let owners = policy.room_attribution.owners(door.from_room.as_deref(), door.to_room.as_deref());
+            if owners.is_empty() {
+                report
+                    .doors_unattributed
+                    .push(DoorWithoutRoom { model_id: key.model_id.clone(), door_id: door.id.clone() });
+                continue;
+            }
+
+            // Reconcile the authored reference against the attributed room's
+            // Number, when the project names a property to read it from.
+            // Compared against the FIRST owner: under `both` the door is
+            // attributed twice and an authored value can only ever name one of
+            // them, so agreeing with either is agreement.
+            // A blank value, or the literal "None" Revit stringifies an unset
+            // parameter as, is "not authored" rather than an authored empty —
+            // the same reading `lookup_property` gives a blank property.
+            let Some(authored) = policy
+                .room_reference_property
+                .as_deref()
+                .and_then(|p| door.properties.get(p))
+                .map(|v| v.value.trim())
+                .filter(|v| !v.is_empty() && *v != "None")
+            else {
+                continue;
+            };
+
+            let matched = owners.iter().any(|room_id| {
+                room_by_model
+                    .get(&(key.model_id.as_str(), *room_id))
+                    .and_then(|(room, source)| lookup_property(*room, "Number", source, builtin_defs))
+                    .is_some_and(|number| number.trim() == authored)
+            });
+            if !matched {
+                let first = owners[0];
+                let number = room_by_model
+                    .get(&(key.model_id.as_str(), first))
+                    .and_then(|(room, source)| lookup_property(*room, "Number", source, builtin_defs))
+                    .unwrap_or_default();
+                report.room_reference_mismatches.push(RoomReferenceMismatch {
+                    model_id: key.model_id.clone(),
+                    door_id: door.id.clone(),
+                    authored: authored.to_string(),
+                    attributed_room_id: first.to_string(),
+                    attributed_room_number: number,
+                });
+            }
         }
     }
 
     report.discrepancies = DoorDiscrepancyCounts {
-        total: report.doors_without_room_reference.len() + report.doors_unresolved_room.len(),
+        total: report.doors_without_room_reference.len()
+            + report.doors_unresolved_room.len()
+            + report.doors_unattributed.len()
+            + report.room_reference_mismatches.len(),
+        doors_unattributed: report.doors_unattributed.len(),
+        room_reference_mismatches: report.room_reference_mismatches.len(),
         doors_without_room_reference: report.doors_without_room_reference.len(),
         doors_unresolved_room: report.doors_unresolved_room.len(),
     };
@@ -812,7 +931,7 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // two phases at once, or serving doors that link to rooms it no longer has,
     // and that is exactly the project nobody would otherwise be watching.
     response.phases = phase_report(project_id, &stored);
-    response.doors = door_report(project_id, &stored, &stored_doors);
+    response.doors = door_report(project_id, &stored, &stored_doors, &bundle.doors, &bundle.builtin_properties);
     if loaded.is_empty() {
         return Ok(response);
     }
@@ -1548,6 +1667,20 @@ mod tests {
         }
     }
 
+    fn door_with(
+        id: &str,
+        from_room: Option<&str>,
+        to_room: Option<&str>,
+        props: &[(&str, &str)],
+    ) -> crate::contract::Door {
+        let mut door = make_door(id, from_room, to_room);
+        for (k, v) in props {
+            door.properties
+                .insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+        }
+        door
+    }
+
     fn make_doors(project_id: &str, model_id: &str, doors: Vec<crate::contract::Door>) -> (ModelKey, DoorPayload) {
         let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.to_string() };
         let payload = DoorPayload {
@@ -1582,7 +1715,7 @@ mod tests {
             ],
         )];
 
-        let report = door_report("p1", &rooms, &doors);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
         assert_eq!(report.total_doors, 2);
         assert_eq!(report.doors_external, 1, "the one-sided door is external");
         assert_eq!(report.discrepancies.total, 0, "an external door is not a discrepancy");
@@ -1595,7 +1728,7 @@ mod tests {
         let rooms = vec![rooms_for("p1", "m1", &["r1"])];
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
 
-        let report = door_report("p1", &rooms, &doors);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
         assert_eq!(report.discrepancies.doors_without_room_reference, 1);
         assert_eq!(report.doors_without_room_reference[0].door_id, "d1");
         assert_eq!(report.doors_without_room_reference[0].model_id, "m1");
@@ -1615,7 +1748,7 @@ mod tests {
             vec![make_door("d1", Some("gone"), Some("also-gone"))],
         )];
 
-        let report = door_report("p1", &rooms, &doors);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
         assert_eq!(report.discrepancies.doors_unresolved_room, 2, "two broken references, two entries");
         let sides: Vec<DoorSide> = report.doors_unresolved_room.iter().map(|u| u.side).collect();
         assert_eq!(sides, vec![DoorSide::FromRoom, DoorSide::ToRoom]);
@@ -1631,7 +1764,7 @@ mod tests {
         let rooms = vec![rooms_for("p1", "m1", &["other"]), rooms_for("p1", "m2", &["r1"])];
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), None)])];
 
-        let report = door_report("p1", &rooms, &doors);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
         assert_eq!(report.discrepancies.doors_unresolved_room, 1, "m2's r1 is a different room");
         assert_eq!(report.doors_unresolved_room[0].model_id, "m1");
     }
@@ -1646,9 +1779,124 @@ mod tests {
             make_doors("p2", "m1", vec![make_door("d2", None, None)]),
         ];
 
-        let report = door_report("p1", &rooms, &doors);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
         assert_eq!(report.total_doors, 1);
         assert_eq!(report.discrepancies.total, 0, "p2's broken door is not counted here");
+    }
+
+    /// **The decided default.** A door opening into a room is attributed to it;
+    /// one that only opens *from* somewhere falls back to that; one with neither
+    /// is homeless and is already reported as having no room reference, not
+    /// double-reported as unattributed.
+    #[test]
+    fn test_default_attribution_is_to_room_then_from_room() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1", "r2", "r3"])];
+        let doors = vec![make_doors(
+            "p1",
+            "m1",
+            vec![
+                make_door("both", Some("r1"), Some("r2")),
+                make_door("to-only", None, Some("r2")),
+                make_door("from-only", Some("r3"), None),
+                make_door("homeless", None, None),
+            ],
+        )];
+        let policy = DoorPolicy::default();
+        let report = door_report("p1", &rooms, &doors, &policy, &[]);
+
+        let owners = |from: Option<&str>, to: Option<&str>| {
+            policy.room_attribution.owners(from, to).iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(owners(Some("r1"), Some("r2")), vec!["r2"], "opens INTO wins over opens from");
+        assert_eq!(owners(None, Some("r2")), vec!["r2"]);
+        assert_eq!(owners(Some("r3"), None), vec!["r3"], "falls back to opens-from");
+        assert!(owners(None, None).is_empty(), "homeless");
+
+        assert_eq!(report.discrepancies.doors_without_room_reference, 1);
+        assert!(
+            report.doors_unattributed.is_empty(),
+            "the chain uses whatever exists, so nothing is unattributed for policy reasons"
+        );
+    }
+
+    /// A **narrower** policy leaves doors unattributed that the chain would
+    /// have attributed — reported separately from a data gap, because it is a
+    /// policy consequence rather than a missing reference.
+    #[test]
+    fn test_a_narrower_policy_reports_unattributed_doors_separately() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let doors = vec![make_doors(
+            "p1",
+            "m1",
+            vec![
+                make_door("from-only", Some("r1"), None),
+                make_door("homeless", None, None),
+            ],
+        )];
+        let policy = DoorPolicy { room_attribution: RoomAttribution::ToRoom, ..Default::default() };
+        let report = door_report("p1", &rooms, &doors, &policy, &[]);
+
+        assert_eq!(report.doors_unattributed.len(), 1);
+        assert_eq!(report.doors_unattributed[0].door_id, "from-only");
+        assert_eq!(
+            report.discrepancies.doors_without_room_reference, 1,
+            "the homeless door is not double-counted"
+        );
+        assert_eq!(
+            report.room_attribution,
+            RoomAttribution::ToRoom,
+            "the policy is echoed so the count is readable"
+        );
+    }
+
+    /// `both` attributes a door between two rooms twice — the reason
+    /// `owner_rooms` is a list rather than an `Option`.
+    #[test]
+    fn test_both_policy_attributes_twice() {
+        let owners = RoomAttribution::Both.owners(Some("r1"), Some("r2"));
+        assert_eq!(owners, vec!["r2", "r1"], "to_room first, then from_room");
+        assert!(RoomAttribution::None.owners(Some("r1"), Some("r2")).is_empty(), "none attributes nothing");
+    }
+
+    /// **The reconciliation.** An authored room reference that disagrees with
+    /// the attributed room is a finding; one that agrees is silent; and the
+    /// check is off entirely when no property is named.
+    #[test]
+    fn test_authored_room_reference_is_reconciled_against_the_attributed_room() {
+        let mut rooms = rooms_for("p1", "m1", &[]);
+        rooms.1.rooms = vec![
+            make_room("r1", "SERVED", &[("Number", "01.07")]),
+            make_room("r2", "HALL", &[("Number", "01.12")]),
+        ];
+        let doors = vec![make_doors(
+            "p1",
+            "m1",
+            vec![
+                // Attributed to r2 (opens into), authored says r1 — a mismatch.
+                door_with("disagrees", Some("r1"), Some("r2"), &[("Door Room Reference", "01.07")]),
+                // Attributed to r2, authored agrees.
+                door_with("agrees", Some("r1"), Some("r2"), &[("Door Room Reference", "01.12")]),
+                // Revit's unset-parameter spelling is "not authored", not a mismatch.
+                door_with("unset", Some("r1"), Some("r2"), &[("Door Room Reference", "None")]),
+            ],
+        )];
+
+        let off = door_report("p1", &[rooms.clone()], &doors, &DoorPolicy::default(), &[]);
+        assert!(off.room_reference_mismatches.is_empty(), "no property named — the check is off");
+        assert!(off.room_reference_property.is_none());
+
+        let policy = DoorPolicy {
+            room_reference_property: Some("Door Room Reference".to_string()),
+            ..Default::default()
+        };
+        let on = door_report("p1", &[rooms], &doors, &policy, &[]);
+        assert_eq!(on.room_reference_mismatches.len(), 1);
+        let m = &on.room_reference_mismatches[0];
+        assert_eq!(m.door_id, "disagrees");
+        assert_eq!(m.authored, "01.07");
+        assert_eq!(m.attributed_room_id, "r2");
+        assert_eq!(m.attributed_room_number, "01.12");
+        assert_eq!(on.discrepancies.room_reference_mismatches, 1);
     }
 
     /// A project that has never pushed doors gets an empty report, not an
@@ -1657,7 +1905,7 @@ mod tests {
     #[test]
     fn test_no_doors_is_an_empty_report() {
         let rooms = vec![rooms_for("p1", "m1", &["r1"])];
-        let report = door_report("p1", &rooms, &[]);
+        let report = door_report("p1", &rooms, &[], &DoorPolicy::default(), &[]);
         assert_eq!(report.total_doors, 0);
         assert_eq!(report.discrepancies.total, 0);
     }
@@ -1668,7 +1916,7 @@ mod tests {
     #[test]
     fn test_doors_whose_model_has_no_rooms_all_dangle() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
-        let report = door_report("p1", &[], &doors);
+        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[]);
         assert_eq!(report.discrepancies.doors_unresolved_room, 2);
     }
 

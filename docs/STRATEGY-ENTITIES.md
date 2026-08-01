@@ -408,7 +408,7 @@ almost no wall. It is a second edge set, not a refinement of the first —
 `/projects/{id}/adjacency` keeps its meaning and connectivity gets its own
 endpoint when it is built.
 
-### Which room owns a door — **decided, not yet built**
+### Which room owns a door — **decided and built**
 
 **The rule: a door belongs to the room it opens into. If there is no `to_room`,
 it belongs to the room it opens *from*. If there is neither, it is homeless.**
@@ -448,22 +448,37 @@ consistently, which is why this stays project policy with an override rather
 than becoming a hard-coded rule. Same reasoning as `measurement_standard`
 ([Area calculation](STRATEGY-AREA-CALCULATION.md)).
 
-Not built. What it would take: `[doors] room_attribution` (default
-`to_room_then_from_room`, with `to_room` / `from_room` / `both` / `none` as the
-alternatives this section already enumerated), an `owner_room` on the `/doors`
-read, a homeless count on the QA report, and `reconcile_room_reference` to
-surface the four disagreements above. Nothing shipped so far assumes an answer,
-so none of it is a migration.
+**As built.** `[doors] room_attribution` (default `to_room_then_from_room`, with
+the four single picks as alternatives); `owner_rooms` on every `/doors` row — a
+**list**, because `both` attributes a door twice, and empty means homeless;
+`?building=` on `/doors`, which a door answers through its owning room and which
+only became askable once this was decided; and two QA findings —
+`doors_unattributed` (the door names a room the policy declines to use, empty
+under the default chain) and `room_reference_mismatches`.
+
+Two shapes departed from the sketch above, both for the same reason — the sketch
+assumed a single owner:
+
+- `owner_rooms` is a list, not the `owner_room` first proposed.
+- `reconcile_room_reference = true` became
+  **`room_reference_property = "Door Room Reference"`**. A bool would have needed
+  the property name hard-coded, and which parameter carries an authored room
+  reference is a family-and-office convention, not a fact about doors. One field
+  says both that the check is wanted and what it reads — and absent means the
+  check is **off**, which the QA response states rather than leaving to look like
+  "clean".
+
+Attribution is derived at read time and never stored, so changing the policy
+changes every answer immediately and rewrites nothing.
 
 ## Settings changes
 
-> **What shipped is the bottom half of this block, and deliberately not the
-> top.** `[doors]` exists, but carries `comparison_key` and
-> `comparison_properties` — the door counterparts of the room settings of the
-> same name, needed by milestone comparison — **not** `room_attribution`,
-> `reconcile_room_reference` or `door_label`. The first two depend on which of a
-> door's two rooms owns it, and a setting with a default would answer Decision
-> 6's open question by accident; `door_label` has no viewer to feed.
+> **`[doors]` now carries four keys: `comparison_key`,
+> `comparison_properties`, `room_attribution` and `room_reference_property`.**
+> The first two arrived with milestone comparison; the last two with the
+> ownership decision (Decision 6), which is why this block's
+> `reconcile_room_reference` is superseded — see there for why a property name
+> beat a bool. `door_label` is still absent: it has no viewer to feed.
 >
 > A third pin map arrived that this block does not mention:
 > `[[milestones]] door_attachments`, model id → doors snapshot id. A *separate*
@@ -493,16 +508,16 @@ so none of it is a migration.
 # time and rides the envelope (Decision 2). Nothing here declares it.
 
 [doors]
-# Which of a door's two room references is authoritative for rollups and
-# schedules. DECIDED (see Decision 6), not yet built. The default is a precedence CHAIN,
-# not one of the single picks: the room the door opens into, else the one it
-# opens from, else homeless.
+# Which room a door belongs to. The DEFAULT is a precedence chain, not one of
+# the single picks: the room it opens into, else the one it opens from, else
+# homeless.
 room_attribution = "to_room_then_from_room"
 # to_room_then_from_room | to_room | from_room | both | none
-# Whether an authored room reference that disagrees with the geometric one is a
-# validation finding or ignored. Not hypothetical: on the House A sample the
-# authored `Door Room Reference` disagrees with the chain on 4 of 26 doors.
-reconcile_room_reference = true
+
+# The door property carrying an AUTHORED room reference, reconciled against the
+# room the policy attributed the door to. Absent = check off. Not hypothetical:
+# on the House A sample this disagrees with the attributed room on 4 of 26.
+room_reference_property = "Door Room Reference"
 
 # Ordered properties shown on a door in the viewer -- mirrors room_label.
 door_label = ["$mark", "Door Type"]
@@ -623,15 +638,13 @@ Still open after doors shipped:
 
 - **R4 — entity-scoped reference sources.** The one prerequisite doors shipped
   without, on purpose; lands with doors' first reference source (Decision 5).
-- **Door ownership: decided, not built.** A door belongs to the room it opens
-  into, falling back to the room it opens from, and is otherwise *homeless* — a
-  precedence chain rather than any of the four single picks Decision 6 first
-  offered. Measured on House A: 23 via `to_room`, 3 via `from_room`, 0 homeless.
-  Still needs `[doors] room_attribution`, an `owner_room` on `/doors`, a homeless
-  count on QA, and `reconcile_room_reference` — which has a demonstrated job: the
-  authored `Door Room Reference` disagrees with the chain on 4 of 26 doors, three
-  of them where the chain picks an exterior or circulation space over the served
-  room. `/doors` still has no `?building=` until this is built.
+- ~~**Door ownership.**~~ **Decided and built** (Decision 6) — including
+  `?building=` on `/doors`, which a door answers through its owning room. What
+  remains open underneath it is a *data* question rather than a design one: the
+  authored `Door Room Reference` disagrees with the attributed room on 4 of the
+  26 House A doors, and QA now reports them. Three are doors where the geometry
+  picks an exterior or circulation space over the served room, which is worth
+  someone deciding about — but it is a modelling call, not a pipeline one.
 - **Any door viewer.** `/doors` is served and nothing draws it
   ([Browser](STRATEGY-BROWSER.md)).
 - **Multi-phase comparison.** Explicitly out of scope (Decision 2).

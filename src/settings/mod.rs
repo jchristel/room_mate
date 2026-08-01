@@ -265,6 +265,56 @@ pub enum MeasurementStandard {
 /// `reconcile_room_reference` are **not** here: both depend on which of a door's
 /// two rooms owns it, which is an open question, and a setting with a default
 /// would answer it by accident.
+/// Which of a door's two room references attributes it to a room, for area
+/// rollups, hierarchy scoping and door schedules
+/// ([Entities](../../docs/STRATEGY-ENTITIES.md) Decision 6).
+///
+/// **The default is a precedence chain, not a single pick**, and that is the
+/// decision rather than a convenience. Each single pick leaves external doors
+/// either mis-attributed or unattributed; the chain attributes every door that
+/// has any room at all and leaves the rest *named* rather than silently absent.
+///
+/// **Trust it exactly as far as the model was drawn consistently.** Revit's
+/// `FromRoom`/`ToRoom` follow the door instance's *orientation*, not the leaf
+/// swing — flipping a door swaps them. So "the room it opens into" is a
+/// modelling convention, which is why this is project policy with an override
+/// rather than a rule in code, the same stance `measurement_standard` takes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomAttribution {
+    /// The room the door opens *into*, falling back to the one it opens *from*.
+    /// A door with neither is **homeless** — a reported state, not an error.
+    #[default]
+    ToRoomThenFromRoom,
+    /// Strictly the room it opens into. A door with only a `from_room` is
+    /// homeless under this policy even though it has a reference.
+    ToRoom,
+    /// Strictly the room it opens from.
+    FromRoom,
+    /// Both, so a door between two rooms is attributed twice. The reason
+    /// `owner_rooms` is a list rather than an `Option`.
+    Both,
+    /// Never attribute a door to a room — every door is homeless, by choice.
+    None,
+}
+
+impl RoomAttribution {
+    /// The rooms this policy attributes one door to, in order, skipping absent
+    /// references. Empty means homeless.
+    ///
+    /// The single place the chain is expressed, so the read path, the QA report
+    /// and any future rollup cannot disagree about what a door belongs to.
+    pub fn owners<'a>(&self, from_room: Option<&'a str>, to_room: Option<&'a str>) -> Vec<&'a str> {
+        match self {
+            RoomAttribution::ToRoomThenFromRoom => to_room.or(from_room).into_iter().collect(),
+            RoomAttribution::ToRoom => to_room.into_iter().collect(),
+            RoomAttribution::FromRoom => from_room.into_iter().collect(),
+            RoomAttribution::Both => [to_room, from_room].into_iter().flatten().collect(),
+            RoomAttribution::None => vec![],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct DoorPolicy {
     /// The door property whose value identifies "the same door" across
@@ -284,6 +334,36 @@ pub struct DoorPolicy {
     /// rule in CODING-CONVENTIONS.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comparison_key: Option<String>,
+
+    /// Which room a door belongs to (see `RoomAttribution`).
+    ///
+    /// **This has a default, reversing what Decision 6 originally proposed.**
+    /// That section argued for no default, on the grounds that an unset value
+    /// meaning "do not attribute" is honest rather than arbitrary. The argument
+    /// was sound for a *single pick* — choosing `to_room` on a project's behalf
+    /// would silently mis-attribute every external door. It stops holding for
+    /// the chain, which attributes only what the model actually states and names
+    /// the rest; and the attribution is derived at read time, never stored, so a
+    /// project that disagrees changes one line and loses nothing.
+    #[serde(default)]
+    pub room_attribution: RoomAttribution,
+
+    /// The door property carrying an **authored** room reference (in the sample
+    /// export, `"Door Room Reference"`), reconciled against the room
+    /// `room_attribution` actually picked. Absent — the default — disables the
+    /// check.
+    ///
+    /// **A property name rather than the `reconcile_room_reference = true`
+    /// Decision 6 sketched.** A bool would have needed the property name
+    /// hard-coded, and which parameter carries this is a family-and-office
+    /// convention, not a fact about doors. One field states both that the check
+    /// is wanted and what it reads.
+    ///
+    /// It is worth turning on: on the House A sample the authored value
+    /// disagrees with the attributed room on 4 of 26 doors, three of them where
+    /// the geometry picks an exterior or circulation space over the served room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_reference_property: Option<String>,
 
     /// Ordered door property names compared across milestones, resolved in the
     /// same vocabulary the `/doors` filter uses — so `$to_room` and `$from_room`
