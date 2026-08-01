@@ -411,7 +411,12 @@ impl RoommateMcp {
                        An empty 'sources' map means the project reconciles against nothing -- normal, not an error. \
                        Separately from any reference source, 'phases' reports which Revit phase each of the project's models was filtered to ('by_model') and whether they \
                        disagree ('disagree'). A true 'disagree' means /rooms is merging rooms from two different phases into one plan that will nonetheless look complete; \
-                       an unphased model (null) counts as a distinct value there, since its rooms were never filtered at all. This is reported, never rejected."
+                       an unphased model (null) counts as a distinct value there, since its rooms were never filtered at all. This is reported, never rejected. \
+                       Also separate from any reference source, 'doors' reports whether the project's doors link to rooms that exist: 'doors_without_room_reference' lists doors \
+                       naming no room on either side, and 'doors_unresolved_room' lists room references naming a room the door's own model does not have (one entry per dangling \
+                       side, each carrying model_id, door_id, side and room_id). References resolve WITHIN one model, because room ids are unique only within a model. \
+                       A door with a room on exactly one side is an EXTERNAL door -- normal, counted under 'doors_external', and deliberately not a discrepancy. \
+                       Door findings have their own 'doors.discrepancies' and are NOT included in the top-level 'discrepancies', which counts reference sources only."
     )]
     fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;
