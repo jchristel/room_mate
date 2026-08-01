@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Renderer POC — Canvas2D</title>
+<link rel="stylesheet" href="poc.css">
+</head>
+<body>
+<header>
+  <h1>Canvas2D</h1>
+  <p>Raw <code>CanvasRenderingContext2D</code>. Shared dataset, shared spatial index,
+     shared cull, shared label policy, shared pick — only the draw layer differs
+     from <a href="index-gl.html">the WebGL page</a>.</p>
+  <button id="run">Run sweep</button>
+</header>
+
+<canvas id="c"></canvas>
+<div id="report"><p class=meta>Press <b>Run sweep</b>. Expect several minutes; the
+tab will be busy and the canvas will look frantic — that is the point.</p></div>
+
+<script src="vendor/flatbush.js"></script>
+<!-- The ?v= is a cache-buster, and it is not decoration: some embedded browsers
+     reload the HTML on navigate but keep the previously parsed scripts, which
+     means editing gen.js/harness.js and re-running silently measures the old
+     code. Bump it after any edit to those two files. -->
+<script src="gen.js?v=4"></script>
+<script src="harness.js?v=4"></script>
+<script>
+(function () {
+  "use strict";
+  var H = POCHarness;
+
+  var canvas = document.getElementById("c");
+  var dpr = window.devicePixelRatio || 1;
+  canvas.style.width = H.VIEW_W + "px";
+  canvas.style.height = H.VIEW_H + "px";
+  canvas.width = Math.round(H.VIEW_W * dpr);
+  canvas.height = Math.round(H.VIEW_H * dpr);
+
+  // Palette as CSS strings, resolved once. Rebuilding these per frame would be
+  // measuring string concatenation, not rendering.
+  var FILL = H.PALETTE.map(function (c) { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; });
+  var STROKE = "#33404d";
+  var LABEL_A = "#12181e";
+  var LABEL_B = "#4a5a68";
+
+  function createRenderer(rooms, index, canvas) {
+    var ctx = canvas.getContext("2d");
+    var xs = rooms.xs, ys = rooms.ys, offsets = rooms.offsets;
+    var bbox = rooms.bbox, colour = rooms.colour, cxA = rooms.cx, cyA = rooms.cy;
+
+    function draw(visible, cam, showLabels) {
+      // Geometry is drawn under the camera transform rather than by
+      // transforming every vertex in JS. That is the idiomatic Canvas2D way and
+      // the fair one -- hand-transforming vertices would be measuring this
+      // file's arithmetic instead of the renderer. Y is flipped in the matrix
+      // (world is Y-up, screen Y-down), exactly as the shipped SVG viewer does
+      // it via its viewBox.
+      var s = cam.scale * dpr;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#f6f7f8";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.setTransform(s, 0, 0, -s, dpr * (H.VIEW_W / 2 - cam.x * cam.scale),
+                                     dpr * (H.VIEW_H / 2 + cam.y * cam.scale));
+      ctx.lineWidth = 1 / cam.scale; // one CSS pixel, whatever the zoom
+      ctx.strokeStyle = STROKE;
+
+      var i, id, a, b, p;
+      for (i = 0; i < visible.length; i++) {
+        id = visible[i];
+        a = offsets[id];
+        b = offsets[id + 1];
+        ctx.beginPath();
+        ctx.moveTo(xs[a], ys[a]);
+        for (p = a + 1; p < b; p++) ctx.lineTo(xs[p], ys[p]);
+        ctx.closePath();
+        ctx.fillStyle = FILL[colour[id]];
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      if (!showLabels) return 0;
+
+      // Text is drawn unscaled, in two passes. Two passes because switching
+      // `ctx.font` is expensive and interleaving it per label is a pathological
+      // pattern no competent implementation would ship -- sinking Canvas2D on
+      // an avoidable mistake would make the comparison worthless. So: every
+      // primary line, then every accent line, two font assignments total.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      var ox = H.VIEW_W / 2 - cam.x * cam.scale;
+      var oy = H.VIEW_H / 2 + cam.y * cam.scale;
+      var minPx = H.LABEL_MIN_PX;
+      var drawn = 0;
+
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "600 11px system-ui, sans-serif";
+      ctx.fillStyle = LABEL_A;
+      for (i = 0; i < visible.length; i++) {
+        id = visible[i];
+        if ((bbox[id * 4 + 2] - bbox[id * 4]) * cam.scale < minPx) continue;
+        ctx.fillText(rooms.labelOf(id)[0], cxA[id] * cam.scale + ox, oy - cyA[id] * cam.scale - 6);
+        drawn++;
+      }
+      ctx.font = "9px system-ui, sans-serif";
+      ctx.fillStyle = LABEL_B;
+      for (i = 0; i < visible.length; i++) {
+        id = visible[i];
+        if ((bbox[id * 4 + 2] - bbox[id * 4]) * cam.scale < minPx) continue;
+        ctx.fillText(rooms.labelOf(id)[1], cxA[id] * cam.scale + ox, oy - cyA[id] * cam.scale + 6);
+      }
+      return drawn;
+    }
+
+    // Canvas2D defers rasterization too, so the timed region has to force it.
+    // A 1x1 readback is the cheapest way to make the pipeline drain, and it is
+    // the Canvas2D counterpart of the WebGL page's gl.finish().
+    function sync() { ctx.getImageData(0, 0, 1, 1); }
+
+    return { draw: draw, sync: sync, dispose: function () {} };
+  }
+
+  var el = document.getElementById("report");
+  // Exposed so a single demo frame can be drawn from the console, for hosts
+  // that drop the query string on a file:// URL.
+  window.POC_demo = function () { return H.runDemo(createRenderer, canvas, el); };
+
+  if (H.isDemo) {
+    H.runDemo(createRenderer, canvas, el);
+  } else {
+    document.getElementById("run").addEventListener("click", function () {
+      this.disabled = true;
+      H.runSweep(createRenderer, canvas, function (r) {
+        r.meta.renderer = "Canvas2D (raw CanvasRenderingContext2D)";
+        H.renderReport(r, el);
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>

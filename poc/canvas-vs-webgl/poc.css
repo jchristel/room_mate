@@ -1,0 +1,48 @@
+/* Shared chrome for both POC pages. Deliberately plain: nothing here should
+   cost a frame or distract from the tables. */
+
+body {
+  margin: 0;
+  padding: 1.2rem;
+  font: 13px/1.5 system-ui, sans-serif;
+  color: #1a2028;
+  background: #fff;
+}
+
+header { max-width: 70ch; }
+h1 { font-size: 1.1rem; margin: 0 0 0.3rem; }
+h2 { font-size: 1rem; margin: 1.4rem 0 0.2rem; }
+h3 { font-size: 0.85rem; margin: 1rem 0 0.3rem; text-transform: uppercase; letter-spacing: 0.06em; color: #4a5a68; }
+p { margin: 0 0 0.6rem; }
+code { background: #eef1f4; padding: 0.05rem 0.3rem; border-radius: 3px; }
+
+button {
+  font: inherit;
+  padding: 0.4rem 1rem;
+  margin-bottom: 0.8rem;
+  cursor: pointer;
+}
+button:disabled { cursor: default; opacity: 0.5; }
+
+canvas {
+  display: block;
+  border: 1px solid #c8d0d8;
+  background: #f6f7f8;
+}
+
+.meta { color: #4a5a68; font-size: 0.85em; }
+.done { color: #1d6b3a; font-weight: 600; }
+
+/* Wide tables scroll in their own container rather than pushing the page. */
+#report { margin-top: 1rem; overflow-x: auto; }
+
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.82em; }
+th, td { padding: 0.25rem 0.55rem; text-align: right; border-bottom: 1px solid #e4e8ec; }
+th { text-align: right; font-weight: 600; color: #4a5a68; vertical-align: bottom; }
+td:first-child, th:first-child { text-align: left; }
+
+/* The only colour that carries meaning: whether the rung held the pre-stated
+   budget on the pan phase. */
+tr.under td { background: #f2f9f4; }
+tr.over td { background: #fdf3f2; }
+tr.stopped td { background: #fff8e6; text-align: left; font-style: italic; }

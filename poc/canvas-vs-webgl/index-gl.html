@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Renderer POC — WebGL (regl)</title>
+<link rel="stylesheet" href="poc.css">
+</head>
+<body>
+<header>
+  <h1>WebGL (regl)</h1>
+  <p>Minimal regl, no scene graph. Shared dataset, shared spatial index, shared
+     cull, shared label policy, shared pick — only the draw layer differs from
+     <a href="index-2d.html">the Canvas2D page</a>. Text goes through a glyph
+     atlas, which is the cost the brief wants on the scale.</p>
+  <button id="run">Run sweep</button>
+</header>
+
+<canvas id="c"></canvas>
+<div id="report"><p class=meta>Press <b>Run sweep</b>. Expect several minutes; the
+tab will be busy and the canvas will look frantic — that is the point.</p></div>
+
+<script src="vendor/flatbush.js"></script>
+<script src="vendor/regl.min.js"></script>
+<!-- The ?v= is a cache-buster, and it is not decoration: some embedded browsers
+     reload the HTML on navigate but keep the previously parsed scripts, which
+     means editing gen.js/harness.js and re-running silently measures the old
+     code. Bump it after any edit to those two files. -->
+<script src="gen.js?v=4"></script>
+<script src="harness.js?v=4"></script>
+<script>
+(function () {
+  "use strict";
+  var H = POCHarness;
+
+  var canvas = document.getElementById("c");
+  var dpr = window.devicePixelRatio || 1;
+  canvas.style.width = H.VIEW_W + "px";
+  canvas.style.height = H.VIEW_H + "px";
+  canvas.width = Math.round(H.VIEW_W * dpr);
+  canvas.height = Math.round(H.VIEW_H * dpr);
+
+  // One regl instance for the whole page. Creating a context per rung would
+  // walk straight into the browser's live-context limit part-way up the ladder,
+  // and the sweep would die for a reason that has nothing to do with rendering.
+  var regl = null;
+  var glCtx = null;
+  function getRegl() {
+    if (!regl) {
+      // The context is created here rather than left to regl so this file keeps
+      // a handle on it: sync() needs gl.finish(), and reaching into regl's
+      // internals for it would be a private field that can vanish.
+      glCtx = canvas.getContext("webgl", {
+        antialias: true, alpha: false, preserveDrawingBuffer: false
+      });
+      if (!glCtx) throw new Error("no WebGL context");
+      regl = createREGL({
+        gl: glCtx,
+        // uint32 indices: at the top of the ladder a rung is tens of millions
+        // of vertices, far past what uint16 can address. Universally available,
+        // but requested explicitly so a missing extension fails loudly here
+        // rather than as corrupted geometry.
+        extensions: ["OES_element_index_uint"]
+      });
+    }
+    return regl;
+  }
+
+  // ------------------------------------------------------------- glyph atlas
+  //
+  // This is the whole reason WebGL text is not free. Canvas2D calls fillText
+  // and is done; WebGL has to rasterize the glyphs once into a texture and then
+  // rebuild a quad mesh every frame, because the labels move with the camera.
+  // Built once for the page, not per rung -- it does not depend on the data.
+  //
+  // One atlas at a single size, scaled per line, rather than one atlas per font
+  // size. That is the normal tradeoff and it costs a little crispness at small
+  // sizes; an SDF atlas is the usual next step and is deliberately not built
+  // here, since the POC is measuring the cheap end of WebGL text, not the best
+  // possible one.
+  var ATLAS_SIZE = 32;
+  var ATLAS_PAD = 4;
+  var FIRST_CHAR = 32, LAST_CHAR = 126;
+  var atlas = null;
+
+  function buildAtlas() {
+    var count = LAST_CHAR - FIRST_CHAR + 1;
+    var cols = 16;
+    var rows = Math.ceil(count / cols);
+    var cellW = ATLAS_SIZE + ATLAS_PAD * 2;
+    var cellH = ATLAS_SIZE + ATLAS_PAD * 2;
+    var cv = document.createElement("canvas");
+    cv.width = cols * cellW;
+    cv.height = rows * cellH;
+    var g = cv.getContext("2d");
+    g.font = ATLAS_SIZE + "px system-ui, sans-serif";
+    g.textBaseline = "middle";
+    g.textAlign = "left";
+    g.fillStyle = "#fff";
+
+    var advance = new Float32Array(count);
+    var u0 = new Float32Array(count), v0 = new Float32Array(count);
+    var u1 = new Float32Array(count), v1 = new Float32Array(count);
+
+    for (var i = 0; i < count; i++) {
+      var ch = String.fromCharCode(FIRST_CHAR + i);
+      var col = i % cols, row = (i / cols) | 0;
+      var x = col * cellW + ATLAS_PAD;
+      var y = row * cellH + cellH / 2;
+      g.fillText(ch, x, y);
+      advance[i] = g.measureText(ch).width;
+      u0[i] = (col * cellW) / cv.width;
+      v0[i] = (row * cellH) / cv.height;
+      u1[i] = ((col + 1) * cellW) / cv.width;
+      v1[i] = ((row + 1) * cellH) / cv.height;
+    }
+
+    return {
+      canvas: cv, advance: advance, u0: u0, v0: v0, u1: u1, v1: v1,
+      cellW: cellW, cellH: cellH
+    };
+  }
+
+  function textWidth(str, px) {
+    var w = 0, s = px / ATLAS_SIZE;
+    for (var i = 0; i < str.length; i++) {
+      var c = str.charCodeAt(i) - FIRST_CHAR;
+      if (c >= 0 && c <= LAST_CHAR - FIRST_CHAR) w += atlas.advance[c];
+    }
+    return w * s;
+  }
+
+  // ------------------------------------------------------------------ colour
+  var PAL = new Float32Array(H.PALETTE.length * 3);
+  H.PALETTE.forEach(function (c, i) {
+    PAL[i * 3] = c[0] / 255; PAL[i * 3 + 1] = c[1] / 255; PAL[i * 3 + 2] = c[2] / 255;
+  });
+
+  function createRenderer(rooms, index, canvas) {
+    var regl = getRegl();
+    if (!atlas) atlas = buildAtlas();
+
+    var n = rooms.count;
+    var offsets = rooms.offsets;
+    var totalVerts = offsets[n];
+
+    // Vertex layout: each room contributes its centroid followed by its ring.
+    // The centroid is a real vertex because the fill is a fan anchored there
+    // rather than at vertex 0 -- which is what makes the fan a correct cover for
+    // every polygon gen.js produces (they are star-shaped about their centroid),
+    // and what lets this page skip an earcut dependency entirely.
+    var vCount = n + totalVerts;
+    var pos = new Float32Array(vCount * 2);
+    var col = new Uint8Array(vCount * 3);
+    // Triangles: k per room, 3 indices each -> 3 * totalVerts.
+    // Edges: k per room, 2 indices each -> 2 * totalVerts.
+    var fillIdx = new Uint32Array(totalVerts * 3);
+    var lineIdx = new Uint32Array(totalVerts * 2);
+
+    var xs = rooms.xs, ys = rooms.ys, colour = rooms.colour;
+    for (var i = 0; i < n; i++) {
+      var a = offsets[i], b = offsets[i + 1], k = b - a;
+      var base = a + i; // centroid slot for room i
+      var r = PAL[colour[i] * 3] * 255, gg = PAL[colour[i] * 3 + 1] * 255, bb = PAL[colour[i] * 3 + 2] * 255;
+
+      pos[base * 2] = rooms.cx[i];
+      pos[base * 2 + 1] = rooms.cy[i];
+      col[base * 3] = r; col[base * 3 + 1] = gg; col[base * 3 + 2] = bb;
+
+      for (var j = 0; j < k; j++) {
+        var v = base + 1 + j;
+        pos[v * 2] = xs[a + j];
+        pos[v * 2 + 1] = ys[a + j];
+        col[v * 3] = r; col[v * 3 + 1] = gg; col[v * 3 + 2] = bb;
+
+        var nxt = base + 1 + ((j + 1) % k);
+        var f = (a + j) * 3;
+        fillIdx[f] = base; fillIdx[f + 1] = v; fillIdx[f + 2] = nxt;
+        var e = (a + j) * 2;
+        lineIdx[e] = v; lineIdx[e + 1] = nxt;
+      }
+    }
+
+    var posBuf = regl.buffer({ data: pos, usage: "static" });
+    var colBuf = regl.buffer({ data: col, usage: "static", type: "uint8" });
+    var fillAll = regl.elements({ data: fillIdx, primitive: "triangles", type: "uint32" });
+    var lineAll = regl.elements({ data: lineIdx, primitive: "lines", type: "uint32" });
+
+    // Scratch for the culled subset, grown by doubling rather than allocated at
+    // full size -- at the top of the ladder the full size is hundreds of MB that
+    // the pan phase never touches.
+    var fillScratch = new Uint32Array(1 << 16);
+    var lineScratch = new Uint32Array(1 << 16);
+    var fillSub = regl.elements({ data: fillScratch, primitive: "triangles", type: "uint32", usage: "dynamic" });
+    var lineSub = regl.elements({ data: lineScratch, primitive: "lines", type: "uint32", usage: "dynamic" });
+
+    function grow(arr, need) {
+      var len = arr.length;
+      while (len < need) len *= 2;
+      return len === arr.length ? arr : new Uint32Array(len);
+    }
+
+    var atlasTex = regl.texture({
+      data: atlas.canvas, min: "linear", mag: "linear", flipY: false, premultiplyAlpha: false
+    });
+
+    // Text mesh: [x, y, u, v] per vertex, six vertices per glyph. Rebuilt every
+    // frame, because that is what moving labels cost. Sized for the worst case
+    // the pan phase can produce -- roughly 200 labels of two lines each, call it
+    // 9k glyphs -- with room to spare, since silently truncating the text would
+    // hand WebGL a cheaper frame than Canvas2D is drawing.
+    var textCap = 1 << 17;
+    var textData = new Float32Array(textCap * 4);
+    var textBuf = regl.buffer({ data: textData, usage: "dynamic" });
+
+    var drawGeom = regl({
+      vert: [
+        "precision highp float;",
+        "attribute vec2 position;",
+        "attribute vec3 colour;",
+        "uniform vec2 camPos; uniform float scale; uniform vec2 viewport;",
+        "uniform float useOverride; uniform vec3 overrideColour;",
+        "varying vec3 vColour;",
+        "void main() {",
+        "  vec2 s = (position - camPos) * scale;",
+        // World is Y-up and clip space is Y-up, so no flip is needed here --
+        // unlike the Canvas2D page, which flips in its matrix.
+        "  gl_Position = vec4(s.x / (viewport.x * 0.5), s.y / (viewport.y * 0.5), 0.0, 1.0);",
+        "  vColour = mix(colour, overrideColour, useOverride);",
+        "}"
+      ].join("\n"),
+      frag: [
+        "precision highp float;",
+        "varying vec3 vColour;",
+        "void main() { gl_FragColor = vec4(vColour, 1.0); }"
+      ].join("\n"),
+      attributes: {
+        position: posBuf,
+        colour: { buffer: colBuf, normalized: true }
+      },
+      elements: regl.prop("elements"),
+      count: regl.prop("count"),
+      uniforms: {
+        camPos: regl.prop("camPos"),
+        scale: regl.prop("scale"),
+        viewport: [H.VIEW_W, H.VIEW_H],
+        useOverride: regl.prop("useOverride"),
+        overrideColour: regl.prop("overrideColour")
+      },
+      depth: { enable: false }
+    });
+
+    var drawText = regl({
+      vert: [
+        "precision highp float;",
+        "attribute vec4 xyuv;",
+        "uniform vec2 viewport;",
+        "varying vec2 vUV;",
+        "void main() {",
+        // Text is positioned in CSS pixels with the origin top-left, so this one
+        // does flip Y on the way into clip space.
+        "  vec2 c = vec2(xyuv.x / viewport.x * 2.0 - 1.0, 1.0 - xyuv.y / viewport.y * 2.0);",
+        "  gl_Position = vec4(c, 0.0, 1.0);",
+        "  vUV = xyuv.zw;",
+        "}"
+      ].join("\n"),
+      frag: [
+        "precision highp float;",
+        "uniform sampler2D atlas; uniform vec3 colour;",
+        "varying vec2 vUV;",
+        "void main() {",
+        "  float a = texture2D(atlas, vUV).a;",
+        "  if (a < 0.02) discard;",
+        "  gl_FragColor = vec4(colour, a);",
+        "}"
+      ].join("\n"),
+      attributes: { xyuv: { buffer: textBuf, offset: 0, stride: 16 } },
+      count: regl.prop("count"),
+      // Both colour passes live in one buffer, so the accent pass draws from a
+      // vertex offset rather than re-uploading its own mesh.
+      offset: regl.prop("offset"),
+      uniforms: {
+        viewport: [H.VIEW_W, H.VIEW_H],
+        atlas: atlasTex,
+        colour: regl.prop("colour")
+      },
+      blend: {
+        enable: true,
+        func: { srcRGB: "src alpha", srcAlpha: 1, dstRGB: "one minus src alpha", dstAlpha: 1 }
+      },
+      depth: { enable: false }
+    });
+
+    // Append one line of text, centred on (cx, cy) in CSS pixels.
+    function pushLine(str, cx, cy, px, at) {
+      var s = px / ATLAS_SIZE;
+      var w = textWidth(str, px);
+      var x = cx - w / 2;
+      var half = (atlas.cellH * s) / 2;
+      var padX = ATLAS_PAD * s;
+      for (var i = 0; i < str.length; i++) {
+        var c = str.charCodeAt(i) - FIRST_CHAR;
+        if (c < 0 || c > LAST_CHAR - FIRST_CHAR) continue;
+        var adv = atlas.advance[c] * s;
+        var x0 = x - padX, x1 = x0 + atlas.cellW * s;
+        var y0 = cy - half, y1 = cy + half;
+        var a0 = atlas.u0[c], b0 = atlas.v0[c], a1 = atlas.u1[c], b1 = atlas.v1[c];
+        var d = at * 4;
+        textData[d] = x0; textData[d + 1] = y0; textData[d + 2] = a0; textData[d + 3] = b0;
+        textData[d + 4] = x1; textData[d + 5] = y0; textData[d + 6] = a1; textData[d + 7] = b0;
+        textData[d + 8] = x1; textData[d + 9] = y1; textData[d + 10] = a1; textData[d + 11] = b1;
+        textData[d + 12] = x0; textData[d + 13] = y0; textData[d + 14] = a0; textData[d + 15] = b0;
+        textData[d + 16] = x1; textData[d + 17] = y1; textData[d + 18] = a1; textData[d + 19] = b1;
+        textData[d + 20] = x0; textData[d + 21] = y1; textData[d + 22] = a0; textData[d + 23] = b1;
+        at += 6;
+        x += adv;
+      }
+      return at;
+    }
+
+    var bbox = rooms.bbox, cxA = rooms.cx, cyA = rooms.cy;
+
+    function draw(visible, cam, showLabels) {
+      regl.clear({ color: [0.965, 0.969, 0.973, 1], depth: 1 });
+
+      var elemFill, elemLine, cntFill, cntLine;
+
+      // Fitted view: essentially everything is on screen, so draw the whole
+      // static buffer and skip rebuilding an index list. This is the structural
+      // advantage retained GPU buffers have and Canvas2D structurally cannot
+      // have -- it is not a thumb on the scale, it is the thing being measured.
+      if (visible.length >= n * 0.98) {
+        elemFill = fillAll; cntFill = totalVerts * 3;
+        elemLine = lineAll; cntLine = totalVerts * 2;
+      } else {
+        var needV = 0;
+        for (var q = 0; q < visible.length; q++) {
+          needV += offsets[visible[q] + 1] - offsets[visible[q]];
+        }
+        if (needV * 3 > fillScratch.length) {
+          fillScratch = grow(fillScratch, needV * 3);
+          lineScratch = grow(lineScratch, needV * 2);
+        }
+        var fo = 0, lo = 0;
+        for (var i = 0; i < visible.length; i++) {
+          var id = visible[i], a = offsets[id], b = offsets[id + 1];
+          fillScratch.set(fillIdx.subarray(a * 3, b * 3), fo); fo += (b - a) * 3;
+          lineScratch.set(lineIdx.subarray(a * 2, b * 2), lo); lo += (b - a) * 2;
+        }
+        fillSub({ data: fillScratch.subarray(0, fo), primitive: "triangles", type: "uint32" });
+        lineSub({ data: lineScratch.subarray(0, lo), primitive: "lines", type: "uint32" });
+        elemFill = fillSub; cntFill = fo;
+        elemLine = lineSub; cntLine = lo;
+      }
+
+      drawGeom({
+        elements: elemFill, count: cntFill, camPos: [cam.x, cam.y], scale: cam.scale,
+        useOverride: 0, overrideColour: [0, 0, 0]
+      });
+      drawGeom({
+        elements: elemLine, count: cntLine, camPos: [cam.x, cam.y], scale: cam.scale,
+        useOverride: 1, overrideColour: [0.2, 0.25, 0.3]
+      });
+
+      if (!showLabels) return 0;
+
+      var ox = H.VIEW_W / 2 - cam.x * cam.scale;
+      var oy = H.VIEW_H / 2 + cam.y * cam.scale;
+      var minPx = H.LABEL_MIN_PX;
+      var at = 0, drawn = 0, primaryEnd = 0;
+
+      // Two passes over the mesh so the two colours are two draw calls rather
+      // than a per-label uniform change: primary lines first, then accent lines.
+      for (var t = 0; t < visible.length; t++) {
+        var rid = visible[t];
+        if ((bbox[rid * 4 + 2] - bbox[rid * 4]) * cam.scale < minPx) continue;
+        if ((at + 512) * 4 > textData.length) break; // mesh cap; reported via drawn
+        at = pushLine(rooms.labelOf(rid)[0], cxA[rid] * cam.scale + ox,
+                      oy - cyA[rid] * cam.scale - 6, 11, at);
+        drawn++;
+      }
+      primaryEnd = at;
+      for (var t2 = 0; t2 < visible.length; t2++) {
+        var rid2 = visible[t2];
+        if ((bbox[rid2 * 4 + 2] - bbox[rid2 * 4]) * cam.scale < minPx) continue;
+        if ((at + 512) * 4 > textData.length) break;
+        at = pushLine(rooms.labelOf(rid2)[1], cxA[rid2] * cam.scale + ox,
+                      oy - cyA[rid2] * cam.scale + 6, 9, at);
+      }
+
+      if (at > 0) {
+        textBuf.subdata(textData.subarray(0, at * 4));
+        if (primaryEnd > 0) {
+          drawText({ count: primaryEnd, offset: 0, colour: [0.07, 0.09, 0.12] });
+        }
+        if (at > primaryEnd) {
+          drawText({ count: at - primaryEnd, offset: primaryEnd,
+                     colour: [0.29, 0.35, 0.41] });
+        }
+      }
+      return drawn;
+    }
+
+    // gl.finish() blocks until the GPU has actually finished, so the timed
+    // region in harness.js covers real completion rather than the time to queue
+    // commands. It costs a pipeline stall every frame, which makes every WebGL
+    // number here conservative -- the wrong direction to cheat in.
+    function sync() { glCtx.finish(); }
+
+    function dispose() {
+      posBuf.destroy(); colBuf.destroy();
+      fillAll.destroy(); lineAll.destroy();
+      fillSub.destroy(); lineSub.destroy();
+      atlasTex.destroy(); textBuf.destroy();
+      pos = col = fillIdx = lineIdx = fillScratch = lineScratch = textData = null;
+    }
+
+    return { draw: draw, sync: sync, dispose: dispose };
+  }
+
+  var el = document.getElementById("report");
+  // Exposed so a single demo frame can be drawn from the console, for hosts
+  // that drop the query string on a file:// URL.
+  window.POC_demo = function () { return H.runDemo(createRenderer, canvas, el); };
+
+  if (H.isDemo) {
+    H.runDemo(createRenderer, canvas, el);
+  } else {
+    document.getElementById("run").addEventListener("click", function () {
+      this.disabled = true;
+      H.runSweep(createRenderer, canvas, function (r) {
+        r.meta.renderer = "WebGL (regl 2.1.0, glyph-atlas text)";
+        H.renderReport(r, el);
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>
