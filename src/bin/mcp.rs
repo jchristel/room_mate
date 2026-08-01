@@ -3,10 +3,10 @@
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
-//! `get_reference_snapshot` --
+//! `get_reference_snapshot`, `get_doors` --
 //! plus two settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`) and the one forwarded
-//! mutation (`upload_reference`, below). Sixteen in total; keep this list and
+//! mutation (`upload_reference`, below). Seventeen in total; keep this list and
 //! STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
 //! `roommate::service` -- parse params, call one service function, serialize
 //! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
@@ -45,7 +45,7 @@ use rmcp::{
 use roommate::bootstrap::build_state;
 use roommate::default_http_addr;
 use roommate::service::{
-    adjacency, areas, comparison, milestones, projects, reference, rooms, snapshots, validation, ServiceError,
+    adjacency, areas, comparison, doors, milestones, projects, reference, rooms, snapshots, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -86,6 +86,26 @@ struct GetRoomsParams {
     /// with no joined record for that source at all -- never matches, negative
     /// operators included. Quote a value containing spaces if in doubt.
     /// Omit for no filter.
+    #[serde(default)]
+    filter: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetDoorsParams {
+    /// Scope the merge to one project id. Omit to merge every stored model.
+    #[serde(default)]
+    project: Option<String>,
+    /// Milestone name from `list_milestones`: serve the doors snapshots that
+    /// milestone pins instead of each model's latest. Omit for latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Property predicates, ALL of which must hold (AND), one per element:
+    /// ["$to_room=2621156", "Mark=29"]. Same operators as get_rooms' filter.
+    /// An unqualified name reads the door's own properties, instance tier then
+    /// family type tier; the intrinsics are $id, $type_id, $type_name,
+    /// $level_id, $from_room and $to_room. A door missing the property never
+    /// matches, negative operators included -- so an external door (null on one
+    /// side) does not match "$to_room!=x" either. Omit for no filter.
     #[serde(default)]
     filter: Vec<String>,
 }
@@ -334,6 +354,39 @@ impl RoommateMcp {
         }
     }
 
+    /// Merges every stored model's doors, optionally scoped -- see
+    /// `service::doors::assemble_doors`. Same `None` -> plain-text handling as
+    /// `get_rooms`, for the same reason.
+    #[tool(
+        description = "Fetch merged doors across stored models, optionally scoped by project id, milestone name, and property filter. Each door carries its own instance \
+                          properties AND its family type's properties, its footprint, its level, and BOTH room references: 'from_room' and 'to_room'. \
+                          A null on one side is an EXTERNAL door -- a normal state, not missing data. Use '$from_room=<room id>' or '$to_room=<room id>' in the filter to ask \
+                          which doors touch a given room; the other intrinsics are $id, $type_id, $type_name and $level_id, and any other unqualified name reads the door's \
+                          properties, INSTANCE tier first then the family TYPE tier (a blank instance value does not hide the type's). \
+                          Room references are model-scoped: a room id is unique only within one model, so resolve 'from_room'/'to_room' against rooms of the SAME 'model_id' \
+                          this door carries. get_validation's 'doors' section reports the ones that resolve to nothing. \
+                          Doors carry no joined reference sources yet, so a source-prefixed filter (e.g. 'drofus.') matches no door rather than erroring. \
+                          There is no building scope here, unlike get_rooms: a door's building would depend on which of its two rooms owns it, which is deliberately undecided. \
+                          IMPORTANT -- like get_rooms, results are scoped to ONE Revit phase per model, named in 'phase_by_model'. Do not read them as a complete door schedule."
+    )]
+    fn get_doors(&self, Parameters(p): Parameters<GetDoorsParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = doors::DoorScope {
+            project: p.project.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+        };
+        let result = doors::assemble_doors(&self.state, &scope).map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no doors have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
     /// Lists one project's milestones (named dated snapshot pins) -- see
     /// `service::milestones::list_milestones`.
     #[tool(
@@ -447,7 +500,7 @@ impl RoommateMcp {
     /// validation, so the two front doors cannot disagree on what a valid
     /// `wall_max` is.
     #[tool(
-        description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and any joined reference records, each flattened under its source name) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, not door connectivity (the extractor collects no doors). The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor."
+        description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and any joined reference records, each flattened under its source name) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, NOT door connectivity: two rooms can share a wall with no door in it, and a door can connect two rooms sharing almost no wall. Doors ARE collected — use get_doors, where every door names its from_room and to_room — but they are a separate edge set over the same rooms, not a refinement of this graph. The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor."
     )]
     fn get_adjacency(&self, Parameters(p): Parameters<AdjacencyParams>) -> Result<CallToolResult, McpError> {
         let result = adjacency::assemble_adjacency(

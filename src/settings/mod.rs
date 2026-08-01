@@ -715,6 +715,18 @@ pub struct Milestone {
     /// validated here — settings can't see storage.
     #[serde(default)]
     pub attachments: BTreeMap<String, String>,
+    /// The same, for this milestone's **doors** snapshots: model id → snapshot
+    /// id. A separate map rather than a second use of `attachments`, because
+    /// rooms and doors are pushed independently and their snapshot ids do not
+    /// correspond — pinning a milestone to a rooms snapshot says nothing about
+    /// which doors snapshot was current at the time, and guessing "the nearest"
+    /// would silently pair data that never coexisted.
+    ///
+    /// A model with no entry contributes no doors to this milestone's view,
+    /// exactly as `attachments` governs its rooms. `default` keeps every
+    /// milestone authored before doors existed valid, as one that pins none.
+    #[serde(default)]
+    pub door_attachments: BTreeMap<String, String>,
 }
 
 impl Milestone {
@@ -733,13 +745,21 @@ impl Milestone {
                 self.date
             );
         }
-        for (model_id, taken_at) in &self.attachments {
-            if model_id.trim().is_empty() {
-                anyhow::bail!("milestone '{}' has an attachment with an empty model id", self.name);
+        // Both pin maps get the same shape check — an id that is not a valid
+        // RFC3339-UTC snapshot id can never name a stored snapshot, so it is a
+        // startup-loud error rather than a read that silently finds nothing.
+        for (label, pins) in [
+            ("attachment", &self.attachments),
+            ("door attachment", &self.door_attachments),
+        ] {
+            for (model_id, taken_at) in pins {
+                if model_id.trim().is_empty() {
+                    anyhow::bail!("milestone '{}' has an {} with an empty model id", self.name, label);
+                }
+                crate::contract::validate_snapshot_id(taken_at).map_err(|e| {
+                    anyhow::anyhow!("milestone '{}', {} for model '{}': {}", self.name, label, model_id, e)
+                })?;
             }
-            crate::contract::validate_snapshot_id(taken_at).map_err(|e| {
-                anyhow::anyhow!("milestone '{}', attachment for model '{}': {}", self.name, model_id, e)
-            })?;
         }
         // Same rule as an attachments pin: a valid RFC3339-UTC snapshot id.
         // Existence is not checkable here (settings can't see storage).
@@ -841,6 +861,7 @@ mod tests {
             date: date.to_string(),
             reference_snapshots: Default::default(),
             attachments: Default::default(),
+            door_attachments: Default::default(),
         }
     }
 

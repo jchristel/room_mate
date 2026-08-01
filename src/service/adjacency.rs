@@ -9,10 +9,19 @@
 //!
 //! **What "adjacent" means here:** two rooms share a wall. Their outer
 //! boundaries run parallel, sit within a wall-thickness gap of each other, and
-//! overlap along that wall by more than a trivial length. Nothing about doors —
-//! the extractor does not collect door elements, so door *connectivity* is a
-//! separate, later question (see the handover's extension points). Same level
-//! only.
+//! overlap along that wall by more than a trivial length. Same level only.
+//!
+//! **This is not door connectivity, and doors now exist.** This module used to
+//! say the extractor collected no doors; it does, and `/doors` serves them with
+//! `from_room`/`to_room` on every one. That does not make this graph a
+//! connectivity graph, and the distinction is now load-bearing rather than
+//! hypothetical: two rooms can share a wall with no door in it, and a door can
+//! connect two rooms sharing almost no wall. **It is a second edge set over the
+//! same rooms, not a refinement of this one**
+//! ([Entities](../../docs/STRATEGY-ENTITIES.md) Decision 6), so this endpoint
+//! keeps its meaning unchanged and connectivity gets its own when it is built.
+//! Anyone wanting "which rooms are connected by a door" today can read it off
+//! `/doors` directly — every door names both of its rooms.
 //!
 //! **The load-bearing subtlety: two boundary regimes.** Revit's
 //! `SpatialElementBoundaryLocation` decides where a room's boundary sits, and

@@ -466,6 +466,7 @@ mod tests {
             date: "2026-06-30".to_string(),
             reference_snapshots: BTreeMap::new(),
             attachments: BTreeMap::from([(model_id.to_string(), taken_at.to_string())]),
+            door_attachments: BTreeMap::new(),
         }
     }
 
