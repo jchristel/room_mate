@@ -1,30 +1,36 @@
 # RoomMate — Generalisation plan
 
-**Status: R3 done. R1, R2 and R4 are prerequisites for doors — see
-[The line in the sand](#the-line-in-the-sand).** Four structural items surfaced
-by reviewing the codebase after phasing shipped. Each is a generalisation the
-codebase deferred one entity too long; none is a defect today, and three of the
-four become blocking the moment a second primary entity (doors, then FFE)
-arrives.
+**Status: R1, R2 and R3 done. R4 remains, and lands with doors' first reference
+source — see [The line in the sand](#the-line-in-the-sand).** Four structural
+items surfaced by reviewing the codebase after phasing shipped. Each is a
+generalisation the codebase deferred one entity too long; none was a defect at
+the time of writing, and three of the four became blocking the moment a second
+primary entity (doors, then FFE) arrived.
 
 ## The line in the sand
 
-Doors are next. These are the terms:
+Doors are next. These were the terms — **R1 and R2 have now been met**, ahead of
+any door code, as their own change:
 
-- **R2 lands before doors' contract is final.** Its open question — whether a
-  door's instance property shadows its type property — is a *contract* decision,
-  not a refactor detail. Deciding it after `Door` is written means rewriting the
-  type or living with the wrong answer.
-- **R1 lands with doors, not after.** The moment a `put_doors` appears beside
-  `put`, the third parallel set exists and FFE makes it a fourth. That is the
-  precise failure [Entities](STRATEGY-ENTITIES.md) Decision 3 was written to
-  prevent, and it is much cheaper to avoid than to undo.
-- **R4 lands with doors' first reference source**, not before (it needs R2) and
-  not later (a shipped `[sources.reference.*]` that silently means "rooms"
-  becomes a back-compat obligation the day someone relies on it).
+- ~~**R2 lands before doors' contract is final.**~~ **Done.** Its open question —
+  whether a door's instance property shadows its type property — was a *contract*
+  decision, not a refactor detail, and it is now
+  [settled below](#r2--the-propertyjoin-path-is-room-typed) against the sample
+  export rather than from first principles.
+- ~~**R1 lands with doors, not after.**~~ **Done**, and in fact before rather
+  than with: no `put_doors` ever existed alongside `put`, so the third parallel
+  method set [Entities](STRATEGY-ENTITIES.md) Decision 3 warns about was never
+  written and there is nothing to undo.
+- **R4 lands with doors' first reference source** — still open, and still not
+  yet. It needs R2 (now available) but must not land before there is a door
+  reference source to scope, and not after (a shipped `[sources.reference.*]`
+  that silently means "rooms" becomes a back-compat obligation the day someone
+  relies on it). The first doors work deliberately ships no reference source, so
+  R4 stays where it is.
 
 If doors ship without R1 and R2, this document has failed and the debt is
-permanent — every subsequent entity pays it again. That is the line.
+permanent — every subsequent entity pays it again. That was the line, and it
+held.
 
 R3 is done: [see below](#r3--the-toml-ordering-footgun-is-documented-not-designed-out)
 — and it did not go as planned, which is recorded there.
@@ -47,7 +53,42 @@ now.** R1, R2 and R4 are prerequisites for a second entity and buy nothing
 before it. Doing them speculatively would be the same mistake in the other
 direction.
 
-## R1 — `SnapshotStore` is typed on `RoomPayload`
+## R1 — `SnapshotStore` is typed on `RoomPayload` — **DONE**
+
+> **Outcome: shipped as proposed**, bytes at the trait boundary and serde in a
+> thin layer on `AppState`. `SnapshotMeta` is the one addition the sketch below
+> missed: a store that takes bytes still has a manifest to maintain, so the five
+> facts it can no longer read out of the payload (kind, key, project and model
+> display names, snapshot id, phase) are passed back explicitly. Bundling them
+> beat six positional arguments for the same reason `RoomScope` is a struct.
+>
+> The three decisions this section said were worth writing down, as resolved:
+>
+> - **`SnapshotKind` is a closed enum** — as proposed, and it carries its own
+>   `dir_component`, so the asymmetric layout is decided in exactly one place.
+> - **Layout stays asymmetric** — as proposed. Nothing on disk moved.
+> - **`list_models()` keeps meaning "models with room snapshots".** This was the
+>   open question. The answer falls out of a doors ingest rule rather than from
+>   the store: a doors push to a model with no live rooms snapshot is refused,
+>   because room ids are unique only within a model and a door's
+>   `from_room`/`to_room` would have nothing to resolve against. A doors-only
+>   model is therefore unreachable, and widening `list_models` would only add a
+>   case that cannot occur.
+>
+> Two consequences worth knowing that the plan did not anticipate:
+>
+> - **Quarantine stayed rooms-only and takes no `kind`.** Promotion is what
+>   re-phases a lineage; promoting a doors push would move the lineage while
+>   every room snapshot stayed on the old phase, stranding the very rooms the
+>   doors point at. So a doors push whose phase disagrees is refused outright
+>   rather than quarantined, and there is no second pending slot.
+> - **`MemStore` now round-trips through serde** where it used to clone, since
+>   it stores bytes too. That is a fidelity gain — the volatile store exercises
+>   the same serialization path as the persistent one — and it immediately
+>   surfaced an f64 ULP shift in a handler assertion that had been comparing a
+>   `model_to_shared` matrix bit-exactly.
+
+**What follows is the original analysis.**
 
 **The problem.** `put`, `get_latest`, `all_latest` and `get_snapshot` all name
 `RoomPayload` concretely. A doors payload has nowhere to go. The obvious fix —
@@ -95,7 +136,42 @@ store's own existing shape to its other half.
 **Effort:** medium. Blast radius is mostly inside `storage/` and `state.rs`.
 **Unblocks:** doors and FFE storage. Nothing else.
 
-## R2 — the property/join path is `&Room`-typed
+## R2 — the property/join path is `&Room`-typed — **DONE**
+
+> **Outcome: the trait shipped as proposed; the precedence question did not go
+> either way this section expected.** Measuring it against the sample export
+> before deciding turned out to be the whole value of the item — both candidate
+> answers are wrong on real data.
+>
+> **A tier wins only when it is `Present`.** `lookup_property` walks instance
+> then type and returns the first tier holding a *non-empty* value.
+>
+> - Plain shadowing — first tier *carrying* the name wins, the conventional
+>   Revit reading and what this section's `tiers()` sketch implements — fails on
+>   `Door Leaf Thickness`: it is a blank instance parameter on **22 of the 26**
+>   doors in the sample while the family type states `40.0`. Shadowing would hide
+>   the only real value behind an empty string on almost every door, which is
+>   exactly the value a hardware schedule joins against.
+> - Treating a name in both tiers as a **finding** — the reading
+>   [Entities](STRATEGY-ENTITIES.md) Decision 4 might suggest — fails harder:
+>   `Workset` and `Edited by` collide on **26 of 26** doors, because Revit
+>   carries them on instances and types alike. A check that fires on everything
+>   reports nothing.
+>
+> Decision 4's separation is preserved by `properties` and `type_properties`
+> staying two maps on the wire, not by making an overlap an error. A blank
+> instance parameter is an unfilled field, not an assertion that the type's
+> value does not apply.
+>
+> **`Absent`/`Empty` survives tiering**, as this section required: blank in every
+> tier is `Empty`, missing from every tier is `Absent`, and blank in one tier
+> with the other silent is `Empty`. `Empty` is accumulated rather than returned
+> on sight, which is what gives a lower tier its chance.
+>
+> No call site changed — `&impl PropertyTiers` accepts `&Room` as it stood — so
+> the refactor half was free and the decision was the whole cost, as predicted.
+
+**What follows is the original analysis.**
 
 **The problem.** `lookup_property`, `property_presence`
 ([contract.rs](../src/contract.rs)), and the join/filter machinery in
@@ -232,12 +308,15 @@ target a non-room entity is a config field with no behaviour behind it.
 | | Item | Effort | Do it when |
 | --- | --- | --- | --- |
 | 1 | ~~**R3** TOML shape assertions~~ | low | **done** — hazard measured away, guard shipped |
-| 2 | **R2** tiered property trait | medium-low | **before doors' contract is final** |
-| 3 | **R1** `SnapshotKind` store | medium | **with doors**; parallel to R2 |
-| 4 | **R4** entity-scoped settings | low-medium | with doors' first reference source |
+| 2 | ~~**R2** tiered property trait~~ | medium-low | **done** — landed before any door code; the precedence rule is the outcome, not the trait |
+| 3 | ~~**R1** `SnapshotKind` store~~ | medium | **done** — landed alongside R2, before doors rather than with them |
+| 4 | **R4** entity-scoped settings | low-medium | with doors' first reference source — **still open** |
 
-R1 and R2 are independent of each other and can run in parallel; both are
-prerequisites for doors. R4 depends on R2. R3 depends on nothing.
+R1 and R2 were independent of each other and shipped together as one
+prerequisite change, ahead of doors rather than alongside them: doing them first
+meant the door contract could be written against a settled precedence rule
+instead of racing it. R4 depends on R2 (now available) but is gated on there
+being a door reference source to scope. R3 depended on nothing.
 
 ## What is deliberately not here
 
