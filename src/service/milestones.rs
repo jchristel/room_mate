@@ -75,6 +75,7 @@ mod tests {
             date: date.to_string(),
             reference_snapshots: BTreeMap::new(),
             attachments: BTreeMap::from([("m1".to_string(), "2026-01-01T00:00:00Z".to_string())]),
+            door_attachments: BTreeMap::new(),
         }
     }
 

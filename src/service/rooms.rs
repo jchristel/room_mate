@@ -452,13 +452,41 @@ pub fn source_joined(room: &RoomResponse, source: &str) -> bool {
     room.reference.contains_key(source)
 }
 
-/// Resolve one predicate's field against an assembled room, collapsed for
+/// What a `RoomFilter` predicate can be resolved against.
+///
+/// One filter grammar, two entities. The `?filter=` syntax, the operators, the
+/// quoting rule and the numeric tolerance are all properties of the *query*, not
+/// of what is being queried — so doors reuse every one of them and supply only
+/// the one thing that genuinely differs: how a field name becomes a value.
+///
+/// Deliberately narrow. It resolves a *presence*, not a value, so the
+/// Absent/Empty distinction survives for any future consumer that needs it, and
+/// so the "a missing field never matches, for any operator" rule stays stated
+/// once in `RoomFilter::matches` rather than per implementor.
+pub trait FilterTarget {
+    /// Resolve one already-split field to its three-state presence. `source` is
+    /// the joined-data-source namespace (`None` for the entity's own
+    /// vocabulary), never `Model.source`.
+    fn presence(&self, source: Option<&str>, property: &str, builtin_defs: &[BuiltinPropertyDef]) -> PropertyPresence;
+}
+
+impl FilterTarget for RoomResponse {
+    fn presence(&self, source: Option<&str>, property: &str, builtin_defs: &[BuiltinPropertyDef]) -> PropertyPresence {
+        presence_of(self, source, property, builtin_defs)
+    }
+}
+
+/// Resolve one predicate's field against a filter target, collapsed for
 /// matching. Returns `None` for absent *and* empty, exactly as
-/// `lookup_property` does — which is what makes "a room missing the field
+/// `lookup_property` does — which is what makes "an entity missing the field
 /// never matches" fall out of `RoomFilter::matches` for every operator rather
 /// than being special-cased per operator.
-fn resolve_field(room: &RoomResponse, predicate: &Predicate, builtin_defs: &[BuiltinPropertyDef]) -> Option<String> {
-    match presence_of(room, predicate.source.as_deref(), &predicate.property, builtin_defs) {
+fn resolve_field<T: FilterTarget>(
+    target: &T,
+    predicate: &Predicate,
+    builtin_defs: &[BuiltinPropertyDef],
+) -> Option<String> {
+    match target.presence(predicate.source.as_deref(), &predicate.property, builtin_defs) {
         PropertyPresence::Present(v) => Some(v),
         PropertyPresence::Absent | PropertyPresence::Empty => None,
     }
@@ -539,15 +567,18 @@ impl RoomFilter {
         self.predicates.is_empty()
     }
 
-    /// Does this assembled room satisfy every predicate? A field that resolves
+    /// Does this assembled entity satisfy every predicate? A field that resolves
     /// to nothing fails *every* operator, negative ones included: "this room has
     /// no Department" is not evidence that its Department differs from
     /// Cardiology, and for a joined source an unmatched link key is a signal,
     /// not a value.
-    fn matches(&self, room: &RoomResponse, builtin_defs: &[BuiltinPropertyDef]) -> bool {
+    ///
+    /// Generic over `FilterTarget` so rooms and doors share one matcher — the
+    /// rule above is the subtle part, and it must not exist twice.
+    pub(crate) fn matches<T: FilterTarget>(&self, target: &T, builtin_defs: &[BuiltinPropertyDef]) -> bool {
         self.predicates
             .iter()
-            .all(|p| resolve_field(room, p, builtin_defs).is_some_and(|actual| p.holds(&actual)))
+            .all(|p| resolve_field(target, p, builtin_defs).is_some_and(|actual| p.holds(&actual)))
     }
 }
 
@@ -1178,6 +1209,7 @@ mod tests {
                         .map(|s| std::collections::BTreeMap::from([("drofus".to_string(), s.to_string())]))
                         .unwrap_or_default(),
                     attachments: std::collections::BTreeMap::from([("m1".to_string(), pinned_ts.to_string())]),
+                    door_attachments: std::collections::BTreeMap::new(),
                 }],
                 ..make_bundle("Number")
             },
@@ -1650,6 +1682,7 @@ mod tests {
                     .map(|s| std::collections::BTreeMap::from([("drofus".to_string(), s.to_string())]))
                     .unwrap_or_default(),
                 attachments: std::collections::BTreeMap::from([("m1".to_string(), pinned_ts.to_string())]),
+                door_attachments: std::collections::BTreeMap::new(),
             }],
             ..make_bundle("Number")
         }
@@ -2354,6 +2387,7 @@ mod tests {
                         drofus_ts.to_string(),
                     )]),
                     attachments: std::collections::BTreeMap::from([("m1".to_string(), model_ts.to_string())]),
+                    door_attachments: std::collections::BTreeMap::new(),
                 }],
                 ..make_bundle("Number")
             },
