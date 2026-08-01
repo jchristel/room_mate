@@ -4,21 +4,26 @@ Revit → Rust → browser room data pipeline. The **reasoning** lives in
 [`docs/`](docs/README.md) — this file holds only what is expensive to get wrong
 and impossible to infer from the code. Don't duplicate the docs here; link them.
 
-## ⛔ Before starting doors
+## Doors: prerequisites met, two rules to keep
 
-Doors have prerequisites, in
-[PLAN-generalisation.md § The line in the sand](docs/PLAN-generalisation.md#the-line-in-the-sand):
+R1 and R2 landed ahead of any door code
+([PLAN-generalisation.md](docs/PLAN-generalisation.md), outcome notes on each).
+What survives from that gate:
 
-- **R2 (lift the property lookup off `&Room`) lands *before* the `Door` contract
-  is final.** Its open question — does a door's instance property *shadow* its
-  type property, or is a name in both a finding? — is a **contract** decision.
-  Decide it after `Door` is written and you rewrite the type.
-- **R1 (generalise `SnapshotStore` off `RoomPayload`) lands *with* doors.** The
-  moment `put_doors` appears beside `put`, the third parallel method set exists
-  and FFE makes it a fourth. `AppState` holds `Box<dyn SnapshotStore>`, so the
-  trait must stay **object-safe** — a generic `put<T>` is out.
-- **R4 (entity-scope `[sources.reference.*]`) lands with doors' first reference
-  source** — not before (needs R2), not later (back-compat obligation).
+- **Property lookup is tiered, and a tier wins only when it is `Present`.**
+  `lookup_property`/`property_presence` take `&impl PropertyTiers`; a door
+  yields instance-then-type. A *blank* instance parameter does not shadow a real
+  type value — `Door Leaf Thickness` is blank on 22 of 26 sample doors while the
+  type says `40.0`. A name in both tiers is **not** a finding: `Workset` and
+  `Edited by` collide on all 26.
+- **The store takes bytes plus a `SnapshotMeta`, never a payload type.** Serde
+  lives in a thin layer on `AppState`. Don't add a typed `put_doors` beside it —
+  that is the exact parallel-method-set failure R1 was written to prevent.
+  `AppState` holds `Box<dyn SnapshotStore>`, so the trait must stay
+  **object-safe**: a generic `put<T>` is out.
+- **R4 (entity-scope `[sources.reference.*]`) is still open**, and lands with
+  doors' first reference source — not before, not later (back-compat
+  obligation). The first doors work ships none, so it stays open.
 
 ## Which document wins
 

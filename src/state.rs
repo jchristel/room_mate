@@ -21,7 +21,35 @@ use crate::reference::ReferenceData;
 use crate::settings::{
     BuiltinPropertyDef, HierarchyExclusion, HierarchyTier, Milestone, ReferenceFieldConfig, TestData,
 };
-use crate::storage::SnapshotStore;
+use crate::storage::{SnapshotKind, SnapshotMeta, SnapshotStore};
+
+/// The store-side description of a rooms push, derived from the payload.
+///
+/// This function *is* the typed layer `SnapshotStore` gave up: the store takes
+/// bytes and needs five facts alongside them, and these are where those five
+/// facts come from for rooms. Kept next to `parse_rooms` so the two halves of
+/// the round-trip are read together.
+fn rooms_meta<'a>(key: &'a ModelKey, payload: &'a RoomPayload) -> SnapshotMeta<'a> {
+    SnapshotMeta {
+        kind: SnapshotKind::Rooms,
+        key,
+        project_name: &payload.project.name,
+        model_name: &payload.model.name,
+        taken_at: &payload.snapshot.taken_at,
+        phase: payload.phase.as_deref(),
+    }
+}
+
+/// Parse stored bytes back into a `RoomPayload`, naming the model in the error.
+///
+/// The store used to name the *file path* here, which it can no longer do. The
+/// model key is the better identifier anyway: it is what a reader would search
+/// the settings and the manifest for, and it stays meaningful for a store that
+/// has no paths at all.
+fn parse_rooms(key: &ModelKey, bytes: &[u8]) -> anyhow::Result<RoomPayload> {
+    serde_json::from_slice(bytes)
+        .with_context(|| format!("malformed rooms snapshot for {}/{}", key.project_id, key.model_id))
+}
 
 /// Composite key identifying one storage bucket: a model within a project.
 ///
@@ -282,12 +310,16 @@ impl AppState {
     /// just forwards. Shared by the push handler and the startup seed so the two
     /// paths can't drift.
     pub fn set_snapshot(&self, payload: RoomPayload) -> anyhow::Result<()> {
-        self.store.put(&payload)
+        let key = ModelKey::from_payload(&payload);
+        let json = serde_json::to_vec_pretty(&payload).context("could not serialise snapshot")?;
+        self.store.put_raw(&rooms_meta(&key, &payload), &json)
     }
 
     /// Every model's latest snapshot, for the `/rooms` merge.
     pub fn all_snapshots(&self) -> anyhow::Result<Vec<(ModelKey, RoomPayload)>> {
-        self.store.all_latest()
+        self.store
+            .all_latest_raw(SnapshotKind::Rooms)
+            .and_then(|raw| raw.into_iter().map(|(key, bytes)| parse_rooms(&key, &bytes).map(|p| (key, p))).collect())
     }
 
     /// The phase one model's lineage is declared to be in — see
@@ -298,33 +330,53 @@ impl AppState {
     }
 
     /// Quarantine a push whose phase disagrees with the lineage's — see
-    /// `SnapshotStore::put_pending`. Stored but not live, awaiting an explicit
-    /// promotion.
+    /// `SnapshotStore::put_pending_raw`. Stored but not live, awaiting an
+    /// explicit promotion.
     pub fn set_pending_snapshot(&self, key: &ModelKey, payload: &RoomPayload) -> anyhow::Result<()> {
-        self.store.put_pending(key, payload)
+        let json = serde_json::to_vec_pretty(payload).context("could not serialise pending snapshot")?;
+        self.store
+            .put_pending_raw(key, &payload.snapshot.taken_at, payload.phase.as_deref(), &json)
     }
 
     /// The quarantined push waiting on one model, if any — see
-    /// `SnapshotStore::get_pending`.
+    /// `SnapshotStore::get_pending_raw`.
     pub fn pending_snapshot(&self, key: &ModelKey) -> anyhow::Result<Option<RoomPayload>> {
-        self.store.get_pending(key)
+        self.store.get_pending_raw(key)?.map(|bytes| parse_rooms(key, &bytes)).transpose()
     }
 
     /// Make a quarantined push live, re-phasing the lineage — see
     /// `SnapshotStore::promote_pending`. The one deliberate way a model's phase
     /// changes after it is first set.
+    ///
+    /// The parse happens *here* rather than in the store because promoting is
+    /// defined in terms of the pending payload's own phase, and the store sees
+    /// only bytes. Reading it first also means a corrupt quarantined file fails
+    /// before anything is written, leaving it intact and retryable.
     pub fn promote_pending_snapshot(&self, key: &ModelKey) -> anyhow::Result<Option<RoomPayload>> {
-        self.store.promote_pending(key)
+        let Some(payload) = self.pending_snapshot(key)? else {
+            return Ok(None);
+        };
+        if self.store.promote_pending(&rooms_meta(key, &payload))? {
+            Ok(Some(payload))
+        } else {
+            // The quarantine was cleared between the read above and the
+            // promotion — report it as "nothing was pending", the same answer
+            // the caller would have got had it arrived a moment later.
+            Ok(None)
+        }
     }
 
     /// One model's snapshot ids, ascending — see `SnapshotStore::list_snapshot_ids`.
     pub fn list_snapshot_ids(&self, key: &ModelKey) -> anyhow::Result<Vec<String>> {
-        self.store.list_snapshot_ids(key)
+        self.store.list_snapshot_ids(SnapshotKind::Rooms, key)
     }
 
-    /// One specific stored snapshot by id — see `SnapshotStore::get_snapshot`.
+    /// One specific stored snapshot by id — see `SnapshotStore::get_snapshot_raw`.
     pub fn get_snapshot(&self, key: &ModelKey, taken_at: &str) -> anyhow::Result<Option<RoomPayload>> {
-        self.store.get_snapshot(key, taken_at)
+        self.store
+            .get_snapshot_raw(SnapshotKind::Rooms, key, taken_at)?
+            .map(|bytes| parse_rooms(key, &bytes))
+            .transpose()
     }
 
     /// Direct access to the store, for callers that need to pass it on

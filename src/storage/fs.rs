@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::{ProjectManifest, SnapshotStore, PENDING_DIR, PENDING_FILE, REFERENCE_DIR};
-use crate::contract::RoomPayload;
+use super::{ProjectManifest, SnapshotKind, SnapshotMeta, SnapshotStore, PENDING_DIR, PENDING_FILE, REFERENCE_DIR};
 use crate::state::ModelKey;
 
 /// Filesystem-backed store rooted at a configured directory.
@@ -111,6 +110,19 @@ impl FsStore {
         self.project_dir(project_id).join(model_id)
     }
 
+    /// Where one kind's snapshots live for a model: the model dir itself for
+    /// rooms, a subdirectory of it for every other kind. The asymmetry is
+    /// deliberate and explained in the module doc; `dir_component` is the only
+    /// place it is decided, so both the read and write paths agree by
+    /// construction.
+    fn kind_dir(&self, kind: SnapshotKind, key: &ModelKey) -> PathBuf {
+        let dir = self.model_dir(&key.project_id, &key.model_id);
+        match kind.dir_component() {
+            Some(sub) => dir.join(sub),
+            None => dir,
+        }
+    }
+
     fn reference_dir(&self, project_id: &str, source: &str) -> PathBuf {
         self.project_dir(project_id).join(REFERENCE_DIR).join(source)
     }
@@ -200,74 +212,94 @@ impl FsStore {
         String::from_utf8(bytes).unwrap_or_else(|_| stem.to_string())
     }
 
-    fn read_payload(path: &Path) -> Result<RoomPayload> {
-        let raw = fs::read_to_string(path).with_context(|| format!("could not read snapshot: {}", path.display()))?;
-        serde_json::from_str(&raw).with_context(|| format!("malformed snapshot: {}", path.display()))
+    /// Every `.json` filename directly inside `dir`, or an empty list when the
+    /// directory doesn't exist. Shared by the two scans that need it so
+    /// "a snapshot file is a `.json` file, and subdirectories are not snapshots"
+    /// is stated once — that rule is what keeps `doors/`, `pending/` and
+    /// `reference/` invisible to the room scans.
+    fn snapshot_filenames(dir: &Path) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        if !dir.exists() {
+            return Ok(out);
+        }
+        for entry in fs::read_dir(dir).with_context(|| format!("could not read snapshot dir: {}", dir.display()))? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json")
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                out.push(name.to_string());
+            }
+        }
+        Ok(out)
+    }
+
+    fn read_bytes(path: &Path) -> Result<Vec<u8>> {
+        fs::read(path).with_context(|| format!("could not read snapshot: {}", path.display()))
     }
 }
 
 impl SnapshotStore for FsStore {
-    fn put(&self, payload: &RoomPayload) -> Result<()> {
+    fn put_raw(&self, meta: &SnapshotMeta<'_>, json: &[u8]) -> Result<()> {
         // Upsert: one path handles all three cases — unknown project, unknown
         // model under a known project, or a re-push of a known model. `create_dir_all`
         // and the manifest `entry(...).or_default()` are each idempotent, so no
         // branching on "does this exist yet" is needed.
-        let project_id = &payload.project.id;
-        let model_id = &payload.model.id;
+        let SnapshotMeta { kind, key, project_name, model_name, taken_at, phase } = *meta;
+        let project_id = &key.project_id;
+        let model_id = &key.model_id;
 
-        // 1. Ensure the model dir exists. `create_dir_all` also makes the parent
-        //    project dir when the project is brand new — the unknown-project case.
-        let model_dir = self.model_dir(project_id, model_id);
-        fs::create_dir_all(&model_dir)
-            .with_context(|| format!("could not create model dir: {}", model_dir.display()))?;
+        // 1. Ensure the kind's dir exists. `create_dir_all` also makes the model
+        //    and project dirs when either is brand new — the unknown-project and
+        //    unknown-model cases, and for a non-rooms kind the subdirectory too.
+        let dir = self.kind_dir(kind, key);
+        fs::create_dir_all(&dir).with_context(|| format!("could not create snapshot dir: {}", dir.display()))?;
 
         // 2. Upsert the authoritative manifest: refresh the project display name,
         //    insert this model if absent (`or_default` = the unknown-model case),
-        //    update its name, and index this snapshot id (insert-if-absent, kept
-        //    sorted so ascending == chronological for RFC3339-UTC ids). Rewritten
-        //    every push so the manifest always mirrors what's on disk — which
-        //    also backfills a pre-`snapshots`-field manifest one push at a time.
+        //    update its name, and index this snapshot id in *this kind's* list
+        //    (insert-if-absent, kept sorted so ascending == chronological for
+        //    RFC3339-UTC ids). Rewritten every push so the manifest always
+        //    mirrors what's on disk — which also backfills a pre-`snapshots`-field
+        //    manifest one push at a time.
         let mut manifest = self.read_manifest(project_id)?;
-        manifest.name = payload.project.name.clone();
+        manifest.name = project_name.to_string();
         let entry = manifest.models.entry(model_id.clone()).or_default();
-        entry.name = payload.model.name.clone();
+        entry.name = model_name.to_string();
         // Record the lineage's phase on the first phased push, and never
         // overwrite it afterwards. The ingest handler is the real gate — a
-        // disagreeing push is quarantined before it ever reaches `put` — but
-        // expressing immutability structurally here means no future caller can
-        // re-phase a model by accident. `promote_pending` is the one deliberate
-        // way past it.
+        // disagreeing rooms push is quarantined and a disagreeing doors push is
+        // refused, both before ever reaching here — but expressing immutability
+        // structurally means no future caller can re-phase a model by accident.
+        // `promote_pending` is the one deliberate way past it.
         if entry.phase.is_none() {
-            entry.phase = payload.phase.clone();
+            entry.phase = phase.map(str::to_string);
         }
-        if !entry.snapshots.contains(&payload.snapshot.taken_at) {
-            entry.snapshots.push(payload.snapshot.taken_at.clone());
-            entry.snapshots.sort();
+        let index = entry.index_mut(kind);
+        if !index.iter().any(|id| id == taken_at) {
+            index.push(taken_at.to_string());
+            index.sort();
         }
         self.write_manifest(project_id, &manifest)?;
 
         // 3. Write the snapshot under its own timestamped filename — never
-        //    overwriting a prior one, so the model dir accumulates full history.
+        //    overwriting a prior one, so the dir accumulates full history.
         //    A same-`taken_at` re-push is skipped, not overwritten: the client
         //    stamps sub-second precision, so a collision means a genuinely
         //    re-sent payload, and even that must not silently destroy history.
-        let file = model_dir.join(Self::snapshot_filename(&payload.snapshot.taken_at));
+        let file = dir.join(Self::snapshot_filename(taken_at));
         if file.exists() {
             tracing::warn!("snapshot already exists, skipping: {}", file.display());
             return Ok(());
         }
-        let json = serde_json::to_string_pretty(payload).context("could not serialise snapshot")?;
-        write_atomic(&file, json.as_bytes())
-            .with_context(|| format!("could not write snapshot: {}", file.display()))?;
+        write_atomic(&file, json).with_context(|| format!("could not write snapshot: {}", file.display()))?;
 
-        tracing::info!("stored snapshot {}/{} @ {}", project_id, model_id, payload.snapshot.taken_at);
+        tracing::info!("stored {} snapshot {}/{} @ {}", kind.label(), project_id, model_id, taken_at);
         Ok(())
     }
 
-    fn get_latest(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
-        let dir = self.model_dir(&key.project_id, &key.model_id);
-        match Self::latest_snapshot_file(&dir)? {
-            Some(path) => Ok(Some(Self::read_payload(&path)?)),
+    fn get_latest_raw(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>> {
+        match Self::latest_snapshot_file(&self.kind_dir(kind, key))? {
+            Some(path) => Ok(Some(Self::read_bytes(&path)?)),
             None => Ok(None),
         }
     }
@@ -326,48 +358,36 @@ impl SnapshotStore for FsStore {
         Ok(out)
     }
 
-    fn all_latest(&self) -> Result<Vec<(ModelKey, RoomPayload)>> {
-        // The manifest-backed index supplies the keys, `get_latest` reads each
-        // key's newest snapshot — the manifest is the index, the snapshots the
-        // record, exactly as the module doc claims. A manifest entry whose dir
-        // holds no snapshots yet (or was deleted by hand) simply yields
-        // nothing for that key.
+    fn all_latest_raw(&self, kind: SnapshotKind) -> Result<Vec<(ModelKey, Vec<u8>)>> {
+        // The manifest-backed index supplies the keys, `get_latest_raw` reads
+        // each key's newest snapshot — the manifest is the index, the snapshots
+        // the record, exactly as the module doc claims. A manifest entry whose
+        // dir holds no snapshots of this kind yet (or was deleted by hand)
+        // simply yields nothing for that key.
         let mut out = Vec::new();
         for key in self.list_models()? {
-            if let Some(payload) = self.get_latest(&key)? {
-                out.push((key, payload));
+            if let Some(bytes) = self.get_latest_raw(kind, &key)? {
+                out.push((key, bytes));
             }
         }
         Ok(out)
     }
 
-    fn list_snapshot_ids(&self, key: &ModelKey) -> Result<Vec<String>> {
-        // The manifest's `snapshots` list is the index; the directory is the
-        // record. Same reconciliation stance as `list_models`: on
-        // disagreement the filesystem wins — a file the manifest doesn't
-        // index is included (with a best-effort id recovered from its name,
-        // since the sanitised filename lost its `:`), and a manifest id with
-        // no file behind it is dropped. Both are warned about, so drift is
-        // noticeable rather than silent.
+    fn list_snapshot_ids(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Vec<String>> {
+        // The manifest's per-kind index list; the directory is the record. Same
+        // reconciliation stance as `list_models`: on disagreement the filesystem
+        // wins — a file the manifest doesn't index is included (with a
+        // best-effort id recovered from its name, since the sanitised filename
+        // lost its `:`), and a manifest id with no file behind it is dropped.
+        // Both are warned about, so drift is noticeable rather than silent.
         let indexed = self
             .read_manifest(&key.project_id)?
             .models
             .get(&key.model_id)
-            .map(|m| m.snapshots.clone())
+            .map(|m| m.index(kind).clone())
             .unwrap_or_default();
 
-        let dir = self.model_dir(&key.project_id, &key.model_id);
-        let mut on_disk: Vec<String> = Vec::new();
-        if dir.exists() {
-            for entry in fs::read_dir(&dir).with_context(|| format!("could not read model dir: {}", dir.display()))? {
-                let path = entry?.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json")
-                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
-                {
-                    on_disk.push(name.to_string());
-                }
-            }
-        }
+        let mut on_disk = Self::snapshot_filenames(&self.kind_dir(kind, key))?;
 
         let mut ids = Vec::new();
         for id in indexed {
@@ -377,7 +397,8 @@ impl SnapshotStore for FsStore {
                 ids.push(id);
             } else {
                 tracing::warn!(
-                    "manifest lists snapshot {:?} for {}/{} but no file exists — dropping it (filesystem wins)",
+                    "manifest lists {} snapshot {:?} for {}/{} but no file exists — dropping it (filesystem wins)",
+                    kind.label(),
                     id,
                     key.project_id,
                     key.model_id
@@ -388,7 +409,8 @@ impl SnapshotStore for FsStore {
             let stem = filename.strip_suffix(".json").unwrap_or(&filename);
             let id = Self::id_from_file_stem(stem);
             tracing::warn!(
-                "snapshot file {}/{}/{} is missing from project.toml — including it as {:?} (filesystem wins)",
+                "{} snapshot file {}/{}/{} is missing from project.toml — including it as {:?} (filesystem wins)",
+                kind.label(),
                 key.project_id,
                 key.model_id,
                 filename,
@@ -400,12 +422,12 @@ impl SnapshotStore for FsStore {
         Ok(ids)
     }
 
-    fn get_snapshot(&self, key: &ModelKey, taken_at: &str) -> Result<Option<RoomPayload>> {
-        let path = self.model_dir(&key.project_id, &key.model_id).join(Self::snapshot_filename(taken_at));
+    fn get_snapshot_raw(&self, kind: SnapshotKind, key: &ModelKey, taken_at: &str) -> Result<Option<Vec<u8>>> {
+        let path = self.kind_dir(kind, key).join(Self::snapshot_filename(taken_at));
         if !path.exists() {
             return Ok(None);
         }
-        Ok(Some(Self::read_payload(&path)?))
+        Ok(Some(Self::read_bytes(&path)?))
     }
 
     fn get_phase(&self, key: &ModelKey) -> Result<Option<String>> {
@@ -416,47 +438,40 @@ impl SnapshotStore for FsStore {
             .and_then(|m| m.phase.clone()))
     }
 
-    fn put_pending(&self, key: &ModelKey, payload: &RoomPayload) -> Result<()> {
+    fn put_pending_raw(&self, key: &ModelKey, taken_at: &str, phase: Option<&str>, json: &[u8]) -> Result<()> {
         let file = self.pending_file(key);
         let dir = file.parent().expect("pending file always has a parent dir");
         fs::create_dir_all(dir).with_context(|| format!("could not create pending dir: {}", dir.display()))?;
-        let json = serde_json::to_string_pretty(payload).context("could not serialise pending snapshot")?;
-        // Overwrite, unlike `put`: there is exactly one pending slot per model
-        // and the newest quarantined push is the only one worth promoting.
-        write_atomic(&file, json.as_bytes())
-            .with_context(|| format!("could not write pending snapshot: {}", file.display()))?;
-        tracing::info!(
-            "quarantined push {}/{} @ {} (phase {:?})",
-            key.project_id,
-            key.model_id,
-            payload.snapshot.taken_at,
-            payload.phase
-        );
+        // Overwrite, unlike `put_raw`: there is exactly one pending slot per
+        // model and the newest quarantined push is the only one worth promoting.
+        write_atomic(&file, json).with_context(|| format!("could not write pending snapshot: {}", file.display()))?;
+        tracing::info!("quarantined push {}/{} @ {} (phase {:?})", key.project_id, key.model_id, taken_at, phase);
         Ok(())
     }
 
-    fn get_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
+    fn get_pending_raw(&self, key: &ModelKey) -> Result<Option<Vec<u8>>> {
         let file = self.pending_file(key);
         if !file.exists() {
             return Ok(None);
         }
-        Ok(Some(Self::read_payload(&file)?))
+        Ok(Some(Self::read_bytes(&file)?))
     }
 
-    fn promote_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
-        let Some(payload) = self.get_pending(key)? else {
-            return Ok(None);
+    fn promote_pending(&self, meta: &SnapshotMeta<'_>) -> Result<bool> {
+        let key = meta.key;
+        let Some(json) = self.get_pending_raw(key)? else {
+            return Ok(false);
         };
 
-        // Store it as a normal snapshot first, reusing `put` rather than
-        // reimplementing the write + index. `put` leaves the existing phase
+        // Store it as a normal snapshot first, reusing `put_raw` rather than
+        // reimplementing the write + index. `put_raw` leaves the existing phase
         // alone (it only fills an absent one), which is why the re-phase below
         // is a separate, explicit step rather than a side effect.
-        self.put(&payload)?;
+        self.put_raw(meta, &json)?;
 
         let mut manifest = self.read_manifest(&key.project_id)?;
         if let Some(entry) = manifest.models.get_mut(&key.model_id) {
-            entry.phase = payload.phase.clone();
+            entry.phase = meta.phase.map(str::to_string);
         }
         self.write_manifest(&key.project_id, &manifest)?;
 
@@ -470,10 +485,10 @@ impl SnapshotStore for FsStore {
             "promoted pending push {}/{} @ {}; lineage phase is now {:?}",
             key.project_id,
             key.model_id,
-            payload.snapshot.taken_at,
-            payload.phase
+            meta.taken_at,
+            meta.phase
         );
-        Ok(Some(payload))
+        Ok(true)
     }
 
     fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> Result<bool> {
@@ -584,9 +599,84 @@ impl SnapshotStore for FsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{Model, Project, Snapshot, SUPPORTED_SCHEMA};
+    use crate::contract::{Model, Project, RoomPayload, Snapshot, SUPPORTED_SCHEMA};
     use crate::storage::{MemStore, ModelEntry};
     use std::collections::BTreeMap;
+
+    /// The typed façade `AppState` puts over this byte-level trait, duplicated
+    /// into the test module (house rule: a shared helper is duplicated per
+    /// module, not hoisted).
+    ///
+    /// It exists because what these tests are *about* — history, indexing,
+    /// quarantine, phase immutability — is stated in payloads. Rewriting every
+    /// assertion in `Vec<u8>` would bury the behaviour under serde noise, and
+    /// the serde half is exercised by `state.rs`'s own callers regardless.
+    trait TypedStore {
+        fn put(&self, payload: &RoomPayload) -> Result<()>;
+        fn get_latest(&self, key: &ModelKey) -> Result<Option<RoomPayload>>;
+        fn all_latest(&self) -> Result<Vec<(ModelKey, RoomPayload)>>;
+        fn get_snapshot(&self, key: &ModelKey, taken_at: &str) -> Result<Option<RoomPayload>>;
+        fn put_pending(&self, key: &ModelKey, payload: &RoomPayload) -> Result<()>;
+        fn get_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>>;
+        fn promote(&self, key: &ModelKey) -> Result<Option<RoomPayload>>;
+    }
+
+    fn meta<'a>(key: &'a ModelKey, payload: &'a RoomPayload) -> SnapshotMeta<'a> {
+        SnapshotMeta {
+            kind: SnapshotKind::Rooms,
+            key,
+            project_name: &payload.project.name,
+            model_name: &payload.model.name,
+            taken_at: &payload.snapshot.taken_at,
+            phase: payload.phase.as_deref(),
+        }
+    }
+
+    impl<S: SnapshotStore + ?Sized> TypedStore for S {
+        fn put(&self, payload: &RoomPayload) -> Result<()> {
+            let key = ModelKey::from_payload(payload);
+            self.put_raw(&meta(&key, payload), &serde_json::to_vec(payload)?)
+        }
+
+        fn get_latest(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
+            self.get_latest_raw(SnapshotKind::Rooms, key)?
+                .map(|b| Ok(serde_json::from_slice(&b)?))
+                .transpose()
+        }
+
+        fn all_latest(&self) -> Result<Vec<(ModelKey, RoomPayload)>> {
+            self.all_latest_raw(SnapshotKind::Rooms)?
+                .into_iter()
+                .map(|(k, b)| Ok((k, serde_json::from_slice(&b)?)))
+                .collect()
+        }
+
+        fn get_snapshot(&self, key: &ModelKey, taken_at: &str) -> Result<Option<RoomPayload>> {
+            self.get_snapshot_raw(SnapshotKind::Rooms, key, taken_at)?
+                .map(|b| Ok(serde_json::from_slice(&b)?))
+                .transpose()
+        }
+
+        fn put_pending(&self, key: &ModelKey, payload: &RoomPayload) -> Result<()> {
+            self.put_pending_raw(
+                key,
+                &payload.snapshot.taken_at,
+                payload.phase.as_deref(),
+                &serde_json::to_vec(payload)?,
+            )
+        }
+
+        fn get_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
+            self.get_pending_raw(key)?.map(|b| Ok(serde_json::from_slice(&b)?)).transpose()
+        }
+
+        fn promote(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
+            let Some(payload) = self.get_pending(key)? else {
+                return Ok(None);
+            };
+            Ok(self.promote_pending(&meta(key, &payload))?.then_some(payload))
+        }
+    }
 
     fn payload(project: &str, model: &str, ts: &str) -> RoomPayload {
         RoomPayload {
@@ -650,7 +740,10 @@ mod tests {
 
         let latest = store.get_latest(&key).unwrap().expect("the live snapshot");
         assert_eq!(latest.snapshot.taken_at, "2026-01-01T10:00:00Z", "the pending push is not the latest");
-        assert_eq!(store.list_snapshot_ids(&key).unwrap(), vec!["2026-01-01T10:00:00Z".to_string()]);
+        assert_eq!(
+            store.list_snapshot_ids(SnapshotKind::Rooms, &key).unwrap(),
+            vec!["2026-01-01T10:00:00Z".to_string()]
+        );
         assert_eq!(store.all_latest().unwrap().len(), 1);
         assert!(store.get_snapshot(&key, "2026-06-01T10:00:00Z").unwrap().is_none());
         // The lineage's phase is untouched by a quarantined push.
@@ -696,12 +789,16 @@ mod tests {
         store.put(&phased("p", "m", "2026-01-01T10:00:00Z", "New Construction")).unwrap();
         store.put_pending(&key, &phased("p", "m", "2026-06-01T10:00:00Z", "Existing")).unwrap();
 
-        let promoted = store.promote_pending(&key).unwrap().expect("something was pending");
+        let promoted = store.promote(&key).unwrap().expect("something was pending");
         assert_eq!(promoted.snapshot.taken_at, "2026-06-01T10:00:00Z");
 
         assert_eq!(store.get_phase(&key).unwrap().as_deref(), Some("Existing"), "the lineage re-phased");
         assert_eq!(store.get_latest(&key).unwrap().unwrap().snapshot.taken_at, "2026-06-01T10:00:00Z");
-        assert_eq!(store.list_snapshot_ids(&key).unwrap().len(), 2, "both snapshots are history now");
+        assert_eq!(
+            store.list_snapshot_ids(SnapshotKind::Rooms, &key).unwrap().len(),
+            2,
+            "both snapshots are history now"
+        );
         assert!(store.get_pending(&key).unwrap().is_none(), "the quarantine is cleared");
 
         // The pre-existing snapshot keeps its own phase: the manifest is the
@@ -721,7 +818,148 @@ mod tests {
         let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
 
         store.put(&phased("p", "m", "2026-01-01T10:00:00Z", "New Construction")).unwrap();
-        assert!(store.promote_pending(&key).unwrap().is_none());
+        assert!(store.promote(&key).unwrap().is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A doors push described to the store. The bytes stay opaque in these
+    /// tests — there is no `Door` type yet, and the store's job is precisely to
+    /// keep two kinds' bytes apart without knowing what either means.
+    fn doors_meta<'a>(key: &'a ModelKey, taken_at: &'a str) -> SnapshotMeta<'a> {
+        SnapshotMeta {
+            kind: SnapshotKind::Doors,
+            key,
+            project_name: "P",
+            model_name: "M",
+            taken_at,
+            phase: Some("New Construction"),
+        }
+    }
+
+    /// **The additivity claim R1 rests on.** Both model-dir scans filter on
+    /// `extension == "json"`, so a `doors/` subdirectory must be completely
+    /// invisible to the rooms read paths — otherwise a doors push would show up
+    /// as room history and, worse, could be returned as the latest *room*
+    /// snapshot. This is the same property `pending/` and `reference/` rely on,
+    /// asserted for the kind that is about to start using it.
+    #[test]
+    fn test_doors_snapshots_are_invisible_to_the_rooms_read_paths() {
+        let dir = std::env::temp_dir().join(format!("roommate-doors-invisible-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put(&payload("p", "m", "2026-01-01T10:00:00Z")).unwrap();
+        // A doors push with a *later* id: if the scans leaked, this is the one
+        // that would wrongly win as "latest rooms".
+        store.put_raw(&doors_meta(&key, "2026-06-01T10:00:00Z"), b"{\"doors\":[]}").unwrap();
+
+        assert_eq!(
+            store.get_latest(&key).unwrap().expect("rooms").snapshot.taken_at,
+            "2026-01-01T10:00:00Z",
+            "a later doors push must not become the latest rooms snapshot"
+        );
+        assert_eq!(
+            store.list_snapshot_ids(SnapshotKind::Rooms, &key).unwrap(),
+            vec!["2026-01-01T10:00:00Z".to_string()],
+            "doors ids are not rooms history"
+        );
+        assert!(store.get_snapshot(&key, "2026-06-01T10:00:00Z").unwrap().is_none());
+        assert_eq!(store.all_latest().unwrap().len(), 1);
+
+        // The doors dir really is where it is claimed to be, so the invisibility
+        // above is the extension filter doing its job rather than the push
+        // having silently gone nowhere.
+        assert!(dir.join("p").join("m").join("doors").is_dir());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Rooms and doors are independent slots for one model: each kind reads back
+    /// its own bytes, and the model itself is still listed exactly once — a
+    /// model is one model however many kinds it carries.
+    #[test]
+    fn test_rooms_and_doors_are_independent_slots() {
+        let dir = std::env::temp_dir().join(format!("roommate-doors-slots-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put(&payload("p", "m", "2026-01-01T10:00:00Z")).unwrap();
+        store.put_raw(&doors_meta(&key, "2026-01-01T10:00:00Z"), b"{\"doors\":[1]}").unwrap();
+
+        assert_eq!(
+            store.get_latest_raw(SnapshotKind::Doors, &key).unwrap().as_deref(),
+            Some(&b"{\"doors\":[1]}"[..])
+        );
+        assert_eq!(store.list_snapshot_ids(SnapshotKind::Doors, &key).unwrap().len(), 1);
+        assert_eq!(store.list_models().unwrap().len(), 1, "one model, two kinds");
+
+        // The manifest indexes each kind in its own list.
+        let manifest = store.read_manifest("p").unwrap();
+        let entry = &manifest.models["m"];
+        assert_eq!(entry.snapshots, vec!["2026-01-01T10:00:00Z".to_string()]);
+        assert_eq!(entry.doors, vec!["2026-01-01T10:00:00Z".to_string()]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The history and duplicate-skip rules are trait behaviour, not a rooms
+    /// special case: doors accumulate history under their own ids, and a
+    /// re-sent `taken_at` is skipped rather than overwriting what is there.
+    #[test]
+    fn test_doors_snapshots_keep_history_and_skip_duplicates() {
+        let dir = std::env::temp_dir().join(format!("roommate-doors-history-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put_raw(&doors_meta(&key, "2026-01-01T10:00:00Z"), b"first").unwrap();
+        store.put_raw(&doors_meta(&key, "2026-01-02T10:00:00Z"), b"second").unwrap();
+        store.put_raw(&doors_meta(&key, "2026-01-02T10:00:00Z"), b"resent").unwrap();
+
+        assert_eq!(
+            store.list_snapshot_ids(SnapshotKind::Doors, &key).unwrap(),
+            vec!["2026-01-01T10:00:00Z".to_string(), "2026-01-02T10:00:00Z".to_string()],
+        );
+        assert_eq!(
+            store.get_latest_raw(SnapshotKind::Doors, &key).unwrap().as_deref(),
+            Some(&b"second"[..]),
+            "a duplicate id is skipped, never overwritten"
+        );
+        assert_eq!(
+            store
+                .get_snapshot_raw(SnapshotKind::Doors, &key, "2026-01-01T10:00:00Z")
+                .unwrap()
+                .as_deref(),
+            Some(&b"first"[..]),
+            "history is kept"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A doors push to an unphased lineage sets the lineage's phase, and a later
+    /// one cannot move it — the immutability backstop is a property of the
+    /// lineage, not of the kind that happened to establish it.
+    #[test]
+    fn test_doors_push_obeys_lineage_phase_immutability() {
+        let dir = std::env::temp_dir().join(format!("roommate-doors-phase-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        store.put(&payload("p", "m", "2026-01-01T10:00:00Z")).unwrap();
+        assert_eq!(store.get_phase(&key).unwrap(), None, "the rooms push declared no phase");
+
+        store.put_raw(&doors_meta(&key, "2026-02-01T10:00:00Z"), b"doors").unwrap();
+        assert_eq!(store.get_phase(&key).unwrap().as_deref(), Some("New Construction"));
+
+        let mut later = doors_meta(&key, "2026-03-01T10:00:00Z");
+        later.phase = Some("Existing");
+        store.put_raw(&later, b"doors").unwrap();
+        assert_eq!(
+            store.get_phase(&key).unwrap().as_deref(),
+            Some("New Construction"),
+            "immutable once set, whichever kind set it"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -784,6 +1022,7 @@ mod tests {
                     name: "M".to_string(),
                     phase: None,
                     snapshots: vec!["2026-01-01T10:00:00Z".to_string()],
+                    doors: vec![],
                 },
             )]),
             reference_snapshots: BTreeMap::new(),
@@ -813,13 +1052,13 @@ mod tests {
 
         let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
         assert_eq!(
-            store.list_snapshot_ids(&key).unwrap(),
+            store.list_snapshot_ids(SnapshotKind::Rooms, &key).unwrap(),
             vec!["2026-01-01T10:00:00Z".to_string(), "2026-01-02T10:00:00Z".to_string()]
         );
 
         // Unknown model: empty, not an error.
         let unknown = ModelKey { project_id: "p".into(), model_id: "nope".into() };
-        assert!(store.list_snapshot_ids(&unknown).unwrap().is_empty());
+        assert!(store.list_snapshot_ids(SnapshotKind::Rooms, &unknown).unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -847,6 +1086,7 @@ mod tests {
                     name: "M".to_string(),
                     phase: None,
                     snapshots: vec!["2026-01-02T10:00:00Z".to_string(), "2026-01-03T10:00:00Z".to_string()],
+                    doors: vec![],
                 },
             )]),
             reference_snapshots: BTreeMap::new(),
@@ -855,7 +1095,7 @@ mod tests {
 
         let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
         assert_eq!(
-            store.list_snapshot_ids(&key).unwrap(),
+            store.list_snapshot_ids(SnapshotKind::Rooms, &key).unwrap(),
             vec!["2026-01-01T10:00:00Z".to_string(), "2026-01-02T10:00:00Z".to_string()],
             "un-indexed file recovered (with its ':' restored), phantom id dropped"
         );
