@@ -1057,7 +1057,7 @@ mod tests {
         // Nothing was stored -- neither live nor quarantined.
         let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
         assert!(state.list_snapshot_ids(&key).unwrap().is_empty());
-        assert!(state.store().get_pending(&key).unwrap().is_none(), "a refused push is not quarantined");
+        assert!(state.pending_snapshot(&key).unwrap().is_none(), "a refused push is not quarantined");
     }
 
     /// A whitespace-only phase is the same case as an absent one: `normalize_phase`
@@ -1137,7 +1137,7 @@ mod tests {
         assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
         assert_eq!(state.list_snapshot_ids(&key).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
         // But the push is retrievable for promotion.
-        let pending = state.store().get_pending(&key).unwrap().expect("quarantined");
+        let pending = state.pending_snapshot(&key).unwrap().expect("quarantined");
         assert_eq!(pending.phase.as_deref(), Some("Existing"));
     }
 
@@ -1271,7 +1271,17 @@ mod tests {
 
         let stored = state.all_snapshots().unwrap();
         let (_, payload) = stored.iter().find(|(k, _)| k.model_id == "m1").expect("stored");
-        assert_eq!(payload.model_to_shared.expect("carried through").matrix, matrix);
+        // Compared with tolerance, not bit-exactly: storage takes bytes now, so
+        // even `MemStore` round-trips the payload through JSON, and a ~1e7 grid
+        // coordinate picks up ULP-scale drift crossing that boundary. Absolute
+        // 1e-6 is sub-micron in feet. Same reason (and same tolerance) as
+        // `contract::tests::test_model_to_shared_round_trips_and_defaults_to_none`
+        // — what this test is about is that the transform survives ingest at
+        // all, not that f64 is exact through serde.
+        let stored_matrix = payload.model_to_shared.expect("carried through").matrix;
+        for (a, b) in stored_matrix.iter().zip(matrix.iter()) {
+            assert!((a - b).abs() < 1e-6, "transform drifted through storage: {a} vs {b}");
+        }
     }
 
     /// A `model_to_shared` whose linear part isn't a pure rotation (here a 2×
