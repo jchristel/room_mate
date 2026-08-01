@@ -104,6 +104,7 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
+            doors: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let registry = std::collections::HashMap::from([("p1".to_string(), bundle)]);

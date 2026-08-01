@@ -404,7 +404,13 @@ impl RoommateMcp {
         description = "Compare milestones for one project: one baseline milestone versus each of the others (a star diff, not all-pairs). \
                           Reports rooms added and removed relative to the baseline, and per-property differences on rooms present in both, \
                           over the project's configured comparison property set. Rooms are matched by the project's user-defined comparison_key \
-                          property (its own setting, NOT any reference source's link property); if none is configured the result is comparison_key_configured: false."
+                          property (its own setting, NOT any reference source's link property); if none is configured the result is comparison_key_configured: false. \
+                          A separate 'doors' section reports the same diff over the project's DOORS -- doors_added, doors_removed and changed_doors, each changed door carrying \
+                          its model_id because a door id is unique only within one model. Doors are configured independently, by [doors] comparison_key and [doors] \
+                          comparison_properties, so a project can compare rooms and not doors or the reverse: check 'doors.comparison_key_configured' separately from the \
+                          top-level one. Comparing '$to_room'/'$from_room' is how a door that MOVED between rooms shows up; losing a room reference entirely is reported as a \
+                          missing property rather than a difference against an empty value. Doors come from the snapshots a milestone pins in door_attachments, which are \
+                          separate pins from the rooms ones."
     )]
     fn compare_milestones(
         &self,
@@ -770,6 +776,7 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
+            doors: Default::default(),
             hierarchy_exclusions: vec![],
         };
         Arc::new(AppState::new(

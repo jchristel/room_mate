@@ -93,6 +93,31 @@ impl FilterTarget for DoorResponse {
     }
 }
 
+/// Resolve one comparable/filterable field name against an assembled door, in
+/// the same `source.property` vocabulary `/doors`' filter parses.
+///
+/// The door counterpart of `rooms::resolve_presence`, and it exists for the
+/// identical reason: "what can I write before the dot" must have one answer
+/// across filtering and comparison, or a name that filters correctly would
+/// silently diff as nothing. It returns only the presence, not the resolved
+/// namespace — a door has no joined sources to react to per source, which is
+/// the one thing that genuinely differs from the rooms version.
+pub fn resolve_presence(
+    door: &DoorResponse,
+    field: &str,
+    known: &std::collections::BTreeSet<String>,
+    builtin: &[BuiltinPropertyDef],
+) -> PropertyPresence {
+    match super::rooms::split_namespace(field, known) {
+        super::rooms::NamespaceSplit::Joined { source, property } => door.presence(Some(&source), property, builtin),
+        super::rooms::NamespaceSplit::Unqualified(name) => door.presence(None, name, builtin),
+        // Rejected at settings load and filter parse, so unreachable through
+        // either configured path — degrades to "nothing to compare" rather than
+        // panicking, the same discipline `rooms::resolve_presence` follows.
+        super::rooms::NamespaceSplit::UnknownSource(_) => PropertyPresence::Absent,
+    }
+}
+
 /// Everything that narrows a doors read. Mirrors `RoomScope` minus `building` —
 /// see the module doc for why that one is absent rather than unimplemented.
 #[derive(Default)]
@@ -264,6 +289,7 @@ mod tests {
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
+            doors: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
