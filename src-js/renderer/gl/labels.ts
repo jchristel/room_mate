@@ -39,16 +39,19 @@ export interface LabelStyle {
   fontFamily: string;
 }
 
-/** One room's label: a container holding the primary line plus any accent
- *  lines, positioned at the room's centroid in flipped world space. */
+/**
+ * One room's label: a container holding the primary line plus any accent lines,
+ * positioned at the room's centroid in flipped world space.
+ *
+ * Carried no bounds. It used to, for a viewport cull that has since been
+ * deleted (see `GlPlanRenderer.cull`) — and those bounds were themselves wrong,
+ * being the room's bbox re-centred on its CENTROID, which is not the same point
+ * for any room that is not symmetric. Nothing reads them now, so they are gone
+ * rather than left as a trap for whoever adds level-of-detail later.
+ */
 export interface RoomLabel {
   room: Room;
   node: Container;
-  /** World-space bbox of the room, so the viewport query can skip it. */
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
 }
 
 /**
@@ -112,14 +115,7 @@ export function buildLabels(
     });
 
     container.addChild(node);
-    labels.push({
-      room,
-      node,
-      minX: c.x - box.w / 2,
-      minY: c.y - box.h / 2,
-      maxX: c.x + box.w / 2,
-      maxY: c.y + box.h / 2,
-    });
+    labels.push({ room, node });
   }
 
   return { container, labels };

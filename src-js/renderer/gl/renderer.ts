@@ -27,6 +27,7 @@ import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
 import { buildLabels, type RoomLabel } from "./labels.js";
 import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js";
 import { RoomIndex } from "./spatial.js";
+import { fitViewToAspect } from "./viewport.js";
 
 /** Stroke widths, in CSS pixels — the same numbers the stylesheet uses, so the
  *  two renderers can be compared without converting anything. */
@@ -202,40 +203,32 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#render();
   }
 
+  /**
+   * NOTHING IS CULLED, and that is a measured conclusion rather than an
+   * omission.
+   *
+   * Geometry never needed it: fills, grid, holes and outlines are four draw
+   * calls whatever the room count, so hiding some of them saves nothing.
+   *
+   * Labels looked like they would need it — one scene object per room, 5,046 of
+   * them on `big-plate` — and they had a cull, and it was deleted. Once the
+   * label container became a render group, a fitted view with EVERY label
+   * visible (the cull's worst case, since nothing is off-screen to hide) cost
+   * 0 ms p50 / 1 ms p95 against a 16 ms budget. A cull cannot improve on a
+   * frame that is already 16x inside budget; it can only add per-frame work and
+   * a second copy of the viewport maths to keep in step with the projection.
+   *
+   * It failed to keep in step, which is how this was found: the cull tested
+   * against the raw `zone.view` while the projection used the aspect-corrected
+   * one, so it hid labels that were plainly on screen. Deleting it removes that
+   * whole class of bug rather than fixing one instance.
+   *
+   * The method stays because the seam has it and the SVG renderer needs it. If
+   * level-of-detail is ever wanted, the Flatbush index is already here and
+   * already answers viewport queries — but measurement should ask for it first.
+   */
   cull(): void {
-    // Geometry is NOT culled, and that is the headline result rather than an
-    // omission: fills, grid, holes and outlines are four draw calls whatever the
-    // room count, so hiding some of them saves nothing measurable. Labels are
-    // one scene object per room and do cost, so they are what the index culls.
-    if (this.#labels.length === 0) return;
-
-    const v = this.#view;
-    const mx = v.w * 0.2;
-    const my = v.h * 0.2;
-    const x0 = v.x - mx;
-    const y0 = v.y - my;
-    const x1 = v.x + v.w + mx;
-    const y1 = v.y + v.h + my;
-
-    // ONLY WRITE WHAT CHANGES. Assigning `visible` on a Pixi object dirties the
-    // scene graph whether or not the value differs, so a blind pass over every
-    // label costs the same at a fitted view -- where nothing is off-screen and
-    // the cull can achieve nothing -- as it does zoomed in. Measured at 5,046
-    // rooms that was ~20 ms per frame of pure waste, which is most of a frame
-    // budget spent to change nothing. Same shape as the SVG cull's rule for the
-    // same reason: it too only toggles a unit whose state actually flips.
-    let changed = false;
-    const enabled = this.#cullEnabled();
-    for (const l of this.#labels) {
-      const want =
-        !enabled || !(l.maxX < x0 || l.minX > x1 || l.maxY < y0 || l.minY > y1);
-      if (l.node.visible !== want) {
-        l.node.visible = want;
-        changed = true;
-      }
-    }
-    // Re-rendering an unchanged scene is the other half of the same waste.
-    if (changed) this.#render();
+    // Intentionally empty. See above.
   }
 
   applyHighlight(state: HighlightState): void {
@@ -335,8 +328,13 @@ export class GlPlanRenderer implements PlanRenderer {
     // correct under any CSS sizing.
     const r = this.#canvas.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) return null;
-    const wx = this.#view.x + ((clientX - r.left) / r.width) * this.#view.w;
-    const wy = this.#view.y + ((clientY - r.top) / r.height) * this.#view.h;
+    // The ASPECT-CORRECTED view, not `zone.view` — the same rect the projection
+    // uses. Using the raw view here would put the pick a few percent off
+    // everywhere and further off towards the edges, which reads as "clicking
+    // sometimes selects the wrong room" rather than as a projection bug.
+    const eff = this.#effectiveView();
+    const wx = eff.x + ((clientX - r.left) / r.width) * eff.w;
+    const wy = eff.y + ((clientY - r.top) / r.height) * eff.h;
     return this.#index.roomAt(wx, wy);
   }
 
@@ -481,13 +479,24 @@ export class GlPlanRenderer implements PlanRenderer {
       this.#labels = [];
     }
 
-    this.setAreasActive(this.#areasActive);
+    // ORDER MATTERS, and getting it wrong is not subtle: the projection uniforms
+    // must be pushed BEFORE anything renders. `setAreasActive` renders, and
+    // `cull` renders only when a visibility flag actually changed — so with
+    // `#pushView` last, the final frame of a repaint was drawn with the previous
+    // level's uniforms and the zone showed a black panel until the next pan
+    // happened to call `setView`. "Level switch shows nothing until you drag" is
+    // what that looks like from outside.
     this.#pushView();
+    this.setAreasActive(this.#areasActive);
     this.cull();
     // A repaint rebuilds `#entries`, so the marks point at rooms that no longer
     // exist. Re-derived here, which is the GL equivalent of `renderLevel`
     // re-applying the selection class after `paintLevel` rebuilt every node.
     this.#drawMarks();
+    // Unconditional, because none of the calls above is guaranteed to have
+    // rendered. A repaint that draws nothing is the one outcome this method
+    // must never have.
+    this.#render();
   }
 
   /**
@@ -567,24 +576,54 @@ export class GlPlanRenderer implements PlanRenderer {
     return p;
   }
 
+  /**
+   * `zone.view` widened to the canvas's aspect ratio, which is what actually
+   * gets projected.
+   *
+   * THE SVG VIEWBOX DOES NOT STRETCH. `preserveAspectRatio` defaults to
+   * `xMidYMid meet`, so SVG scales uniformly by the smaller axis and letterboxes
+   * the rest — the plan keeps its proportions whatever shape the zone is. A GL
+   * projection that maps the view rect onto the full canvas instead stretches
+   * the drawing, badly on a wide short zone, and every room comes out the wrong
+   * shape.
+   *
+   * It is not only a cosmetic mismatch. `zone.view` is shared with the SVG
+   * overlay — the selection and hover marks, and the whole areas overlay — which
+   * letterboxes because it is real SVG. If GL stretched and SVG did not, the two
+   * layers would disagree about where every room is, and a selection outline
+   * would sit beside the room it names.
+   *
+   * So the aspect correction happens ONCE, here, and everything that converts
+   * between world and screen goes through it: the projection uniform, the label
+   * transform, and the pick.
+   */
+  #effectiveView(): Rect {
+    const app = this.#app;
+    if (!app) return this.#view;
+    return fitViewToAspect(this.#view, app.renderer.width, app.renderer.height);
+  }
+
   #pushView(): void {
     const app = this.#app;
     if (!app) return;
     const pxW = app.renderer.width;
     const pxH = app.renderer.height;
     const dpr = app.renderer.resolution;
-    this.#grid?.setView(this.#view, pxW, pxH, dpr);
-    this.#holeLines?.setView(this.#view, pxW, pxH, dpr);
-    this.#outlines?.setView(this.#view, pxW, pxH, dpr);
-    this.#fills?.setView(this.#view, pxW, pxH);
+    const eff = this.#effectiveView();
+    this.#grid?.setView(eff, pxW, pxH, dpr);
+    this.#holeLines?.setView(eff, pxW, pxH, dpr);
+    this.#outlines?.setView(eff, pxW, pxH, dpr);
+    this.#fills?.setView(eff, pxW, pxH);
     // Labels live in world space, so the scene transform carries them. This is
     // the ONE place a container transform is used, and it is correct here
-    // precisely because label text SHOULD scale with the view.
+    // precisely because label text SHOULD scale with the view — unlike strokes,
+    // which must not (see lines.ts).
     if (this.#labelContainer) {
-      const sx = pxW / dpr / this.#view.w;
-      const sy = pxH / dpr / this.#view.h;
-      this.#labelContainer.scale.set(sx, sy);
-      this.#labelContainer.position.set(-this.#view.x * sx, -this.#view.y * sy);
+      // ONE scale for both axes, from the aspect-corrected rect. Two different
+      // scales here would stretch the glyphs even with the geometry corrected.
+      const s = pxW / dpr / eff.w;
+      this.#labelContainer.scale.set(s, s);
+      this.#labelContainer.position.set(-eff.x * s, -eff.y * s);
     }
   }
 
