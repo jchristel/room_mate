@@ -21,7 +21,8 @@ it belongs to:
 |---|---|
 | [`extractor/`](extractor) | The **producer**. `pyRevit/` holds the IronPython that runs inside Revit and pushes to the server. |
 | [`src/`](src) | The **Rust server** — ingest, storage, the dRofus join, classification, and the geometry services (`areas`, `adjacency`). Two binaries: the axum HTTP server and an MCP server over the same read logic. |
-| [`static/`](static) | The **browser viewer** — plain HTML/CSS/JS, no build step. |
+| [`static/`](static) | The **browser viewer** — HTML/CSS/JS served as-is, plus `vendor/renderer.bundle.js`, which is **generated and committed** so a fresh clone runs with no node installed. |
+| [`src-js/`](src-js) | The viewer's **WebGL plan renderer** — TypeScript, built by Vite into `static/vendor/`. Where new frontend code lands; see [Coding Conventions](docs/CODING-CONVENTIONS.md). |
 | [`settings/`](settings) | Server config, and one TOML per project (classification tiers, sources, area policy). |
 | [`scripts/`](scripts) | Dev tooling run *against* this repo: fixture generators, `fixtures/` (sample data to push or upload), and `check_areas.py`, the areas diagnostic. Not shipped. |
 | [`docs/`](docs) | Strategy docs, coding conventions, and handovers (landed ones in `docs/Superseded/`). |

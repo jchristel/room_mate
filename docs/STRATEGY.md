@@ -21,8 +21,9 @@ design docs: one for data the user authors, one for the entities beyond rooms:
   DIN 277. Its own doc because it is the one place where the *definition of the
   output* is contested rather than read off the model — two designs were
   reversed over exactly that. Read it before quoting an area to anyone external.
-- **[Browser](STRATEGY-BROWSER.md)** — the SVG viewer: rendering strategy,
-  UI growth path, endpoint design from the fetch side.
+- **[Browser](STRATEGY-BROWSER.md)** — the plan viewer (WebGL, with a thin SVG
+  overlay and an SVG export): rendering strategy, UI growth path, endpoint
+  design from the fetch side.
 - **[MCP](STRATEGY-MCP.md)** — the stdio MCP server: a second, tool-based
   front door onto the same read-side logic the server exposes over HTTP.
 - **[Authored](STRATEGY-AUTHORED.md)** — *design settled, not built.* How

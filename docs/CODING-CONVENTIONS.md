@@ -95,7 +95,12 @@ Two of the long-standing eleven are still worth naming specifically:
 ## `static/` — the frontend now has a toolchain, and a migration direction
 `Superseded/PLAN-handover-actioning.md`'s P10 flagged the missing-rule gap and
 deliberately left it a question rather than answering it by accretion, when
-`index.html` was 2,020 lines. It is now **4,211** (3,511 of them one inline
+`index.html` was 2,020 lines. It is now **4,369** — and the direction of travel
+finally changed: the renderer work moved ~600 lines out into **2,150 lines of
+TypeScript in `src-js/`** (measured 2026-08-02, excluding tests), so the page
+grew while the code it owns shrank. That is the migration rule below working,
+not a line count to chase. Before that split it was 4,211 (3,511 of them one
+inline
 `<script>`), and two extractions happened without a rule prompting them —
 `common.js` (the palette and the classification-path vocabulary, moved because
 two views disagreeing about a group's identity is worse than either being
@@ -106,7 +111,7 @@ different concern — not to hit a line count.**
 
 What has changed is the constraint that made anything more aggressive expensive.
 The zero-build vanilla rule was a **proof-of-concept-stage decision and is
-retired** (docs/PLAN-webgl-renderer.md, "The premise that changed"). The
+retired** (docs/Superseded/PLAN-webgl-renderer.md, "The premise that changed"). The
 frontend now has:
 
 - **`src-js/` — TypeScript, built by Vite, `npm run build`.** Where new frontend

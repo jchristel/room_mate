@@ -5,13 +5,19 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md) ·
 [Entities](STRATEGY-ENTITIES.md) · [Security](STRATEGY-SECURITY.md)
 
-The SVG viewer: how it renders, how it's expected to grow, and how the fetch
+The plan viewer: how it renders, how it's expected to grow, and how the fetch
 side should shape future server endpoints.
 
 ## Implemented
 
-- **SVG floor-plan rendering.** Draws room outlines per level from the
-  `/rooms` payload.
+- **Floor-plan rendering — WebGL, with a thin SVG overlay.** Rooms, voids,
+  outlines, the grid and the labels are drawn by PixiJS into a canvas
+  (`src-js/renderer/gl/`); a transparent `<svg>` on top carries the areas
+  footprints and the selection mark, and owns the pointer. The `.svg` **export**
+  is still built by an SVG painter (`src-js/renderer/svg/paint.ts`) that shares
+  its appearance decisions with the renderer but not its code path — see
+  "Renderer" below for the measurement that forced the move, and "The hybrid's
+  one invariant" for the rule the two layers have to keep.
 - **Global scope pickers: project, milestone, building — the single-project
   viewer.** One set of header `<select>`s carrying the scope of the whole
   page (see [Server](STRATEGY-SERVER.md)'s `/projects` /
@@ -89,6 +95,17 @@ side should shape future server endpoints.
   per-room interleaved loop let a later room's opaque polygon paint over an
   earlier room's label whenever their screen-space boxes were anywhere
   close, which got worse on bigger plans with more rooms.
+
+  **Both halves survived the move to WebGL, and the second one had to be
+  re-established rather than inherited.** The `label` field rule is unchanged and
+  now typed (`Room.label`: absent → name/id, present-but-empty → render nothing)
+  with tests on both states. The layering is a container order in the GL scene
+  instead of a DOM order — labels are the last child, so they draw over every
+  fill — and the same question came back a third time when the hover highlight
+  had to be placed *below* them. On screen labels are `BitmapText` from a shared
+  glyph atlas; the export still emits real `<text>`, which is why the `.svg` file
+  remains the selectable, searchable artefact (see the accessibility acceptance
+  under "Renderer").
 - **Bottom region, band 1: results.** Tabular output lives in a page-level
   region below the plans, not in overlays covering them (HANDOVER-ui-layout
   Decision 2). It holds one block per computed result — QA and hierarchy
@@ -559,7 +576,7 @@ Goal is a richer browser tool run locally (not a desktop app). The strategy:
   came in as plain DOM. What finally broke it was not a *feature* but the
   **renderer** — a WebGL plan layer needs polygon triangulation with holes, a
   glyph atlas and batched draw calls, all solved problems that must not be
-  written again here (docs/HANDOVER-webgl-renderer.md). Third-party code implies
+  written again here (docs/Superseded/HANDOVER-webgl-renderer.md). Third-party code implies
   npm implies a build.
 
   Note *which* signal fired, because it is not the one this bullet predicted.
@@ -570,7 +587,7 @@ Goal is a richer browser tool run locally (not a desktop app). The strategy:
   second has been answered.
 - **A build step is not a framework, and this is still not one.** What landed is
   Vite + TypeScript over `src-js/`, emitting one committed IIFE that
-  `index.html`'s existing inline script calls (docs/PLAN-webgl-renderer.md).
+  `index.html`'s existing inline script calls (docs/Superseded/PLAN-webgl-renderer.md).
   There is no component model, no router, no virtual DOM, and no reactive store.
   The fork below is therefore still open — the toolchain does not pre-commit it,
   though it does lower the cost of the JS-framework branch and raise the
@@ -742,9 +759,65 @@ serving a different consumer (a hierarchy browser) than the room render.
 
   The consequence, stated plainly: **a browser without WebGL now shows no plan.**
   That was accepted deliberately when the plan was written
-  ([PLAN-webgl-renderer.md](PLAN-webgl-renderer.md), "Departures"), on the
-  grounds that two live renderers is a permanent tax on every future frontend
-  change.
+  ([PLAN-webgl-renderer.md](Superseded/PLAN-webgl-renderer.md), "Departures"), on
+  the grounds that two live renderers is a permanent tax on every future
+  frontend change.
+
+### The hybrid's one invariant
+
+The plan is two layers — a WebGL canvas with a transparent `<svg>` over it — and
+**they must agree about coordinates and about paint order.** Nothing enforces
+that, and the DOM will actively mislead you about it, so it is written here once
+rather than left in the three comments where it was each discovered.
+
+Every bug this produced was the same shape: *a property SVG gave away for free
+that has to be reconstructed once the plan is a canvas with an overlay on top.*
+
+- **Aspect.** A `viewBox` defaults to `preserveAspectRatio: xMidYMid meet` —
+  uniform scale, letterboxed. A GL projection has no such default and will
+  stretch the view rect onto the whole canvas. `fitViewToAspect` reproduces the
+  SVG rule for GL, and the projection, the label transform and the pick all read
+  it. The overlay is given the **raw** view, because SVG applies the correction
+  itself; correcting it twice is the other way to get this wrong.
+- **Coordinate space.** The overlay draws in world coordinates, so it needs its
+  `viewBox` kept in step by the renderer. An `<svg>` without one is in *pixel*
+  space, and every footprint collapses into the top-left corner.
+- **Paint order.** DOM order does not decide it. The canvas is
+  `position: absolute` and CSS paints positioned elements after non-positioned
+  ones regardless of document order, so the layers carry **explicit z-indices**
+  (canvas 0, svg 1, empty 2, busy 4, tip 5).
+
+**Why the tests could not catch these:** `pointer-events: none` on the canvas
+removes it from hit-testing but not from painting, so `document.elementFromPoint`
+happily reports the `<svg>` as topmost while the canvas is drawing over it. A
+DOM assertion cannot see a paint-order fault. Check these with **pixel readback**
+— render and read in one synchronous turn, because a WebGL drawing buffer is
+cleared once the compositor presents it.
+
+### What belongs on the overlay
+
+The original rule was "things there are dozens of, not thousands" — a
+performance test. It is the wrong one, and following it put the hover highlight
+on the overlay where it covered the label of the room being pointed at.
+
+**The rule is occlusion, not size: the overlay is for marks that add pixels
+without removing any.** A selection stroke with `fill: none` composites
+harmlessly over anything; an opaque hover fill cannot, and belongs in the GL
+layer directly above the fills, below the outlines and labels.
+
+On that rule the overlay currently earns its place carrying two things:
+
+- **The areas overlay**, which is the real justification. Even-odd paths with
+  interior rings, per-group colour through a `--area-colour` custom property,
+  `.area-poly.selected` styling, hit-testing off `dataset.areaKey`, and its own
+  labels — dozens of shapes, no performance problem, and moving it to GL would
+  buy a multi-ring triangulator and a custom-property emulation for nothing.
+- **The selection mark**, one stroke, which keeps the stylesheet as the single
+  definition of how selection looks.
+
+**When to revisit:** if the areas overlay ever has to scale past dozens, or if a
+fourth ordering bug appears. Either is evidence the overlay has stopped paying
+for itself — an abstract preference for one technology is not.
 - **Coordinates and units.** Revit internal units are decimal feet, Y-up; SVG
   is Y-down — handled by flipping Y when building geometry. Absolute units do
   not matter while the viewer auto-fits, but they will once dimensions, a scale

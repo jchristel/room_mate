@@ -1,5 +1,31 @@
 # HANDOVER — Replace the SVG plan renderer with WebGL
 
+> **Superseded — built, and the number it was commissioned to move has moved.**
+> A fitted pan of `big-plate` went from **733 ms p95 to 1 ms**, against the
+> ≤16 ms budget this document set. The live pointer is
+> [STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) "Renderer"; how it was built is
+> [PLAN-webgl-renderer.md](PLAN-webgl-renderer.md), superseded beside this.
+>
+> **Two of its decisions did not survive contact, and both are worth knowing:**
+>
+> - **Decision 1's criterion was wrong**, though its conclusion held. "Put the
+>   things there are dozens of on the SVG overlay" is a performance test, and it
+>   grouped selection with hover because both are one room. They are not alike:
+>   a selection stroke has `fill: none` and composites harmlessly, an opaque
+>   hover fill hides whatever is under it — which is what it did to the label of
+>   the room being pointed at. The rule is **occlusion, not size**.
+> - **DoD item 5 could not hold as written.** It wanted the renderer flag kept
+>   as a re-measurement handle *and* P6 to delete the live SVG path; with the
+>   path gone there is nothing to flip to. Resolved by keeping the capability
+>   without the code — `measureSvgPaint()` times the export painter — and by
+>   accepting that a browser without WebGL shows no plan.
+>
+> Its warnings were mostly right, and two were not: labels were indeed not the
+> bottleneck, but *constructing* 5,046 of them costs ~1.1 s of a level build;
+> and DPR turned out barely to matter, because the frame is four draw calls
+> rather than anything fill-bound. What it did not anticipate at all was the
+> hardest part — non-scaling strokes, which no scene graph provides.
+
 **Status:** design settled, not built. Reviewed against `static/index.html`
 (4,287 lines) on 2026-08-02.
 **Audience:** the session that implements it.
