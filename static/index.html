@@ -885,11 +885,13 @@ const MISMATCH_COLOUR = "#d73027";  // red:   outside tolerance
 // These are classic <script> tags, not modules, so this binding is reachable
 // from the devtools console:  CULL_ENABLED = false; zones.forEach(cullZone)
 //
-// NOTE: this suppresses hide/show ONLY. Cull *units* are still collected,
-// because three other features walk `zone.cullUnits` — `roomAtNode`
-// (click-to-select), `applySelection` and `applyHighlight`. Disabling culling by
-// not collecting them would break room selection and search, which looks nothing
-// like a culling change. See STRATEGY-BROWSER.md, "Rendering" §2.
+// NOTE: this suppresses hide/show ONLY. The renderer's per-room index is still
+// built, because three other features read it — the click pick, the selection
+// mark and the search highlight. Disabling culling by not indexing would break
+// room selection and search, which looks nothing like a culling change. The
+// index now lives inside the renderer (src-js/renderer/svg/renderer.ts), so
+// that coupling is structural rather than a convention anyone has to remember.
+// See STRATEGY-BROWSER.md, "Rendering" §2.
 let CULL_ENABLED = true;
 // date-range: a date after near_date is "future" — a fixed blue, separate from
 // the green→red near/far ramp (the RdYlGn scheme has no blue of its own).
@@ -1088,22 +1090,26 @@ function colourForRoom(room, plan, ctx) {
 
 // ============================ per-zone render ============================
 
+// Everything below goes through `zone.renderer` — the seam
+// (src-js/renderer/seam.ts), implemented today by the SVG code that has always
+// drawn the plan and, from P3, by a WebGL one alongside it.
+//
+// The seam owns what there are THOUSANDS of: fills, holes, outlines, labels,
+// the cull, the pick, and the selection/hover marks. It does NOT own the areas
+// overlay — dozens of footprints, staying SVG, `renderAreasOverlay` untouched
+// (HANDOVER-webgl-renderer.md, Decision 1).
+
 function setViewBox(zone) {
-  zone.svg.setAttribute("viewBox", `${zone.view.x} ${zone.view.y} ${zone.view.w} ${zone.view.h}`);
+  zone.renderer.setView(zone.view);
   scheduleCull(zone); // hide/show rooms for the new view (throttled to a frame)
 }
 
-// Viewport culling MOVED to src-js/renderer/cull.ts (`roomBBox` moved with the
-// geometry). This adapter keeps the zone-shaped call the rest of the page makes,
-// and keeps `CULL_ENABLED` a page-level console handle -- the module takes the
-// flag as an argument rather than reading a global, so a test can drive both
-// states without touching the page.
-//
-// Measured value, for anyone tempted to delete it: 16.5 ms/frame with culling
-// against 912 ms without, on `big-plate`
+// Kept as a page-level function because `CULL_ENABLED` is a console handle and
+// this is what a reader reaches for. Measured value, for anyone tempted to
+// delete it: 16.5 ms/frame with culling against 912 ms without, on `big-plate`
 // (Superseded/HANDOVER-culling-disable-switch.md).
 function cullZone(zone) {
-  PlanRenderer.cull(zone.cullUnits || [], zone.view, { enabled: CULL_ENABLED });
+  zone.renderer.cull();
 }
 
 // One cull per animation frame, so a burst of wheel/drag events (each calling
@@ -1174,16 +1180,14 @@ function setZoneEmpty(zone, state, levelName = "") {
 }
 
 function renderLevel(zone, payload, levelId, { refit = true } = {}) {
-  const plan = zone.svg;
-  // These two lines are ONE operation and must stay adjacent: `cullUnits` is the
-  // index of what is currently in `plan`, so emptying the plan without emptying
-  // the index leaves units pointing at detached nodes. Every early return below
-  // used to skip the reset — switching to a level with no rooms (House A's LEVEL
-  // 02) left the previous level's 14 units live against 0 drawn polygons, so
-  // `roomAtNode` could resolve a click to a room that is not on screen and
-  // `cullZone` spent its passes toggling `display` on nodes in no document.
-  plan.replaceChildren();
-  zone.cullUnits = [];
+  // Clearing the drawing and clearing the index behind it are ONE operation,
+  // and the renderer now guarantees that rather than each caller remembering
+  // it. Every early return below used to skip the reset — switching to a level
+  // with no rooms (House A's LEVEL 02) left the previous level's 14 units live
+  // against 0 drawn polygons, so a click could resolve to a room that was not
+  // on screen and the cull spent its passes toggling `display` on nodes in no
+  // document. `dispose()` here is that same reset, named for what it does.
+  zone.renderer.dispose();
   const rooms = roomsOnLevel(payload, levelId);
   // Set from the one place that knows, and in BOTH directions — a level with
   // rooms must clear a message left by the last one.
@@ -1204,20 +1208,23 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
   }
   if (!zone.fitted) return; // no established frame yet (unbounded first render)
 
-  paintLevel(plan, rooms, zone.fitted, {   // repopulates the array reset above
-    colourPlan: zone.activeColourPlan,   // presentation: per zone
+  // The colour plan resolves to a `colourFor` callback here, for the reason
+  // given on the export's own adapter: the palette lives in common.js, which
+  // the bundle cannot import, so the precedence rule is in the module and the
+  // hex lookup stays with the palette.
+  const plan = zone.activeColourPlan;                // presentation: per zone
+  const colourCtx = plan ? buildColourContext(rooms, plan) : null;
+  zone.renderer.paint(rooms, zone.fitted, {
+    colourFor: plan ? (room) => colourForRoom(room, plan, colourCtx) : undefined,
     errorRoomIds,                        // data-quality state: global
     showErrors,                          // follows the QA block's expansion (global)
-    cullUnits: zone.cullUnits,
     matchRoomIds: searchMatchIds,        // one payload -> one match set
     searchActive,
     showLabels: showRoomLabels,
   });
-  cullZone(zone); // hide off-screen rooms for the current view straight away
-  // `paintLevel` built fresh nodes, so the selection class is gone with the old
-  // ones. Re-applied here rather than threaded through paintLevel's options
-  // because the SVG export shares that function and must never carry a
-  // selection stroke into a saved file.
+  // The renderer culls to the current view and re-applies its own selection as
+  // part of painting, so neither is a caller's responsibility any more. The
+  // page still owns the AREAS half of selection, below.
   applySelection(zone);
 
   // Re-add the areas overlay on top: renderLevel is the single choke point every
@@ -2148,7 +2155,11 @@ function renderAreasOverlay(zone) {
   const svg = zone.svg;
   const existing = svg.querySelector(".areas-overlay");
   if (existing) existing.remove();
-  svg.classList.toggle("areas-active", zone.areasMode);
+  // Ghosting the rooms beneath the footprints is a CROSS-LAYER rule: the
+  // overlay is SVG, the rooms are the renderer's, and once they are GL this
+  // stops being a CSS class and becomes a uniform. Routed through the seam now
+  // so that change lands in one place. Easy to miss; visibly wrong when missed.
+  zone.renderer.setAreasActive(zone.areasMode);
   if (!zone.areasMode || !areasData) return;
 
   const groups = activeAreaGroups(zone);
@@ -3014,14 +3025,13 @@ function computeMatches() {
   searchMatchIds = ids;
 }
 
-// Fast path: toggle `.match`/`.dim` on the already-rendered nodes via the
-// cull-unit room->nodes map (nodes[0] = room polygon, rest = holes + label).
+// Fast path, and the property that must survive the WebGL swap: search state is
+// applied to what is ALREADY drawn, never by re-rendering. A search can match
+// thousands of rooms and a keystroke must not re-upload a level -- under SVG
+// that means toggling classes, under GL it means writing a vertex attribute,
+// and the seam is what lets the caller stop caring which.
 function applyHighlight(zone) {
-  for (const u of (zone.cullUnits || [])) {
-    const isMatch = searchActive && searchMatchIds && searchMatchIds.has(u.room.id);
-    u.nodes[0].classList.toggle("match", !!isMatch);
-    for (let i = 0; i < u.nodes.length; i++) u.nodes[i].classList.toggle("dim", searchActive && !isMatch);
-  }
+  zone.renderer.applyHighlight({ searchActive, matchRoomIds: searchMatchIds });
 }
 
 // ============================ selection ============================
@@ -3045,9 +3055,11 @@ function applyHighlight(zone) {
 // OFF the other kind's nodes when the selection moves between kinds, and a
 // linear pass over a level's nodes is free at any rate a click can reach.
 function applySelection(zone) {
-  const roomId = roomSelection();
-  for (const u of (zone.cullUnits || []))
-    u.nodes[0].classList.toggle("selected", !!roomId && u.room.id === roomId);
+  // Rooms are the renderer's: it holds the index and, once the plan is GL, will
+  // draw the selected outline into a thin SVG overlay instead of toggling a
+  // class. Footprints are NOT -- the areas overlay stays SVG and stays outside
+  // the seam, so the page keeps that half itself.
+  zone.renderer.setSelection(roomSelection() || null);
 
   const areaId = selection && selection.kind === "area" ? selection.id : null;
   for (const p of zone.svg.querySelectorAll(".area-poly"))
@@ -3083,10 +3095,8 @@ function selectArea(areaId, zoneId = null) {
 // every polygon: `paintLevel` is shared verbatim with the SVG export, and an
 // export has no business carrying selection plumbing. One linear scan per click
 // is free at any room count a click rate can reach.
-function roomAtNode(zone, node) {
-  if (!node) return null;
-  const unit = (zone.cullUnits || []).find(u => u.nodes.includes(node));
-  return unit ? unit.room : null;
+function roomAtPoint(zone, clientX, clientY) {
+  return zone.renderer.roomAt(clientX, clientY);
 }
 
 // The footprint a plan click landed on, or null. Unlike rooms this DOES read an
@@ -3523,14 +3533,22 @@ function wireInteractions(zone) {
       // A click on empty space (the grid, or the bare canvas) clears the
       // selection — the same gesture that sets it should be able to unset it.
       //
-      // Rooms first, then footprints. With areas off only the first can match;
-      // with areas on the overlay is what the pointer actually hits, because it
-      // draws on top and the rooms below it are ghosted to 0.16 — clicking what
-      // you can see is the rule. Selecting a room under a footprint means
-      // turning that zone's Areas off, which is per-zone, so a second zone can
-      // hold the room view at the same time.
-      const room = roomAtNode(zone, downNode);
-      const area = room ? null : areaAtNode(zone, downNode);
+      // FOOTPRINTS ARE TESTED FIRST, and that is not a reversal of the old
+      // "rooms first" rule — it is the same rule, now stated instead of
+      // inherited. The old order worked because with areas on, the node under
+      // the pointer WAS the footprint, so the room lookup returned null on its
+      // own. Once the plan is GL there is no room node to miss, so the
+      // precedence has to be written down: clicking what you can SEE is the
+      // rule, and the overlay is what you see, because it draws on top with the
+      // rooms ghosted to 0.16 beneath it. Selecting a room under a footprint
+      // means turning that zone's Areas off, which is per-zone, so a second
+      // zone can hold the room view at the same time.
+      //
+      // The pick uses the coordinates captured at pointerdown, not the live
+      // ones: `setPointerCapture` retargets every later event to the <svg>, and
+      // by pointerup the pointer may have drifted within CLICK_SLOP_PX.
+      const area = areaAtNode(zone, downNode);
+      const room = area ? null : roomAtPoint(zone, downAt.x, downAt.y);
       if (room) selectRoom(room.id, zone.id);
       else selectArea(area ? areaKey(area) : null, area ? zone.id : null);
     }
@@ -3620,7 +3638,7 @@ function createZone() {
     view: { x: 0, y: 0, w: 100, h: 100 },
     fitted: { x: 0, y: 0, w: 100, h: 100 },
     activeLevelId: null,
-    cullUnits: null,   // per-room {bbox, nodes} for viewport culling on pan/zoom
+    renderer: null,    // the plan renderer (seam); assigned just below
     _cullRaf: 0,       // pending requestAnimationFrame id, throttles the cull
     // presentation state — everything a zone still owns
     activeColourPlan: null,
@@ -3637,6 +3655,11 @@ function createZone() {
     },
   };
 
+  // The renderer is built before anything can paint, and reads CULL_ENABLED
+  // through a getter rather than a captured value so flipping the flag from the
+  // console takes effect on the next pass instead of needing a reload.
+  zone.renderer = new PlanRenderer.SvgPlanRenderer(zone.svg, { cullEnabled: () => CULL_ENABLED });
+
   wireZoneControls(zone);
   wireInteractions(zone);
   zonesEl.appendChild(root);
@@ -3647,6 +3670,11 @@ function createZone() {
 function removeZone() {
   if (zones.length <= 1) return;
   const zone = zones.pop();
+  // Dispose BEFORE detaching the DOM. Harmless for SVG, load-bearing for GL: a
+  // WebGL context is a capped resource (browsers allow ~16 and silently kill
+  // the oldest past the limit), so a zone that is closed without releasing one
+  // eventually blanks a different zone with no error anyone can act on.
+  zone.renderer.dispose();
   zone.root.remove();
   setLayout();
 }
