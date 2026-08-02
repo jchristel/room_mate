@@ -21,15 +21,12 @@ export {
   pointsAttr,
   roomBBox,
 } from "./geometry.js";
-export { cull } from "./cull.js";
 export { addLabel, paintLevel } from "./svg/paint.js";
-export { SvgPlanRenderer } from "./svg/renderer.js";
 export { GlPlanRenderer } from "./gl/renderer.js";
 export { RoomIndex } from "./gl/spatial.js";
 export { parseColour, readPalette, withAlpha } from "./gl/colour.js";
 
-export type { CullUnit, PaintOptions } from "./svg/paint.js";
-export type { SvgRendererOptions } from "./svg/renderer.js";
+export type { PaintOptions } from "./svg/paint.js";
 export type { GlRendererOptions } from "./gl/renderer.js";
 export type { HighlightState, PaintRequest, PlanRenderer } from "./seam.js";
 export type {
@@ -48,4 +45,4 @@ export type {
 /** Build stamp, so a stale committed bundle is visible from the console rather
  *  than inferred from behaviour. CI gates on a rebuild-and-diff, but a human
  *  debugging a checkout wants to ask the page directly. */
-export const version = "0.5.0-p5";
+export const version = "1.0.0";

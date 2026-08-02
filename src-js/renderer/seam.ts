@@ -1,10 +1,23 @@
 // The renderer seam: everything a zone asks of whatever draws its plan.
 //
-// This interface exists so the SVG renderer and the WebGL one can be swapped
-// under a running page and compared on the same data in the same session. Its
-// real value is in the STEP BEFORE that swap — implementing it first with the
-// existing SVG code changes no behaviour at all, which is what keeps P3 from
-// being a thousand-line diff nobody can read.
+// There is ONE implementation now (../gl/renderer.ts). The interface earned its
+// place before that was true: it existed so the SVG renderer and the WebGL one
+// could be swapped under a running page and compared on the same data in the
+// same session, which is what kept the WebGL change from being a thousand-line
+// diff nobody could read.
+//
+// It is kept rather than inlined because it is the contract that says what a
+// plan renderer OWES the page — paint, pan, highlight, mark, pick, dispose —
+// independently of how any of it is drawn. That was worth writing down while
+// two implementations disagreed about the how, and it is still worth having
+// written down now that the surviving one is several files of shaders and
+// buffers whose entry points would otherwise be guesswork.
+//
+// Note what is NOT here any more: `cull()`. Viewport culling was an SVG
+// necessity — the DOM charges per element per frame — and the WebGL renderer
+// has nothing to cull, because its frame is four draw calls regardless of room
+// count. It went with the SVG path rather than surviving as a no-op nobody
+// could delete.
 //
 // Two rules about what belongs here, both from HANDOVER-webgl-renderer.md's
 // Decision 1 (hybrid, only the bulk layer moves):
@@ -48,10 +61,6 @@ export interface PlanRenderer {
 
   /** Pan/zoom. Must NOT rebuild geometry — this is the per-frame path. */
   setView(view: Rect): void;
-
-  /** Re-apply the viewport cull for the current view. Separate from `setView`
-   *  because callers throttle it to a frame. */
-  cull(): void;
 
   /** Search match/dim, as a state change over already-drawn rooms. */
   applyHighlight(state: HighlightState): void;

@@ -1,4 +1,4 @@
-// The WebGL plan renderer: the second implementation of the P2 seam.
+// The WebGL plan renderer, and now the only one.
 //
 // Reading order, because the layering is the design:
 //
@@ -9,8 +9,9 @@
 //   labels -> BitmapText, one container per room
 //
 // Four draw calls plus the labels, whatever the room count. That is the whole
-// point: the fitted view — what the viewer shows on load, and where the cull
-// culls nothing — stops scaling with the plate.
+// point: the fitted view — what the viewer shows on load, and the case viewport
+// culling could never help, because nothing is off screen to hide — stops
+// scaling with the plate.
 //
 // WEBGL, NOT WEBGPU. Pixi v8 offers both, but a WebGPU path needs every shader
 // written a second time in WGSL, and the shaders here are the least
@@ -59,7 +60,6 @@ interface RoomEntry {
 }
 
 export interface GlRendererOptions {
-  cullEnabled?: (() => boolean) | undefined;
   /** Element whose custom properties carry the palette. Defaults to
    *  `document.documentElement`. */
   themeRoot?: HTMLElement | undefined;
@@ -86,7 +86,6 @@ export interface GlRendererOptions {
 
 export class GlPlanRenderer implements PlanRenderer {
   readonly #canvas: HTMLCanvasElement;
-  readonly #cullEnabled: () => boolean;
   readonly #themeRoot: HTMLElement;
   readonly #overlay: SVGElement | null;
   readonly #resolution: number;
@@ -118,7 +117,6 @@ export class GlPlanRenderer implements PlanRenderer {
 
   constructor(canvas: HTMLCanvasElement, opts: GlRendererOptions = {}) {
     this.#canvas = canvas;
-    this.#cullEnabled = opts.cullEnabled ?? (() => true);
     this.#themeRoot = opts.themeRoot ?? document.documentElement;
     this.#overlay = opts.overlay ?? null;
     this.#resolution = opts.resolution ?? window.devicePixelRatio ?? 1;
@@ -218,34 +216,6 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#overlay?.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
     this.#pushView();
     this.#render();
-  }
-
-  /**
-   * NOTHING IS CULLED, and that is a measured conclusion rather than an
-   * omission.
-   *
-   * Geometry never needed it: fills, grid, holes and outlines are four draw
-   * calls whatever the room count, so hiding some of them saves nothing.
-   *
-   * Labels looked like they would need it — one scene object per room, 5,046 of
-   * them on `big-plate` — and they had a cull, and it was deleted. Once the
-   * label container became a render group, a fitted view with EVERY label
-   * visible (the cull's worst case, since nothing is off-screen to hide) cost
-   * 0 ms p50 / 1 ms p95 against a 16 ms budget. A cull cannot improve on a
-   * frame that is already 16x inside budget; it can only add per-frame work and
-   * a second copy of the viewport maths to keep in step with the projection.
-   *
-   * It failed to keep in step, which is how this was found: the cull tested
-   * against the raw `zone.view` while the projection used the aspect-corrected
-   * one, so it hid labels that were plainly on screen. Deleting it removes that
-   * whole class of bug rather than fixing one instance.
-   *
-   * The method stays because the seam has it and the SVG renderer needs it. If
-   * level-of-detail is ever wanted, the Flatbush index is already here and
-   * already answers viewport queries — but measurement should ask for it first.
-   */
-  cull(): void {
-    // Intentionally empty. See above.
   }
 
   applyHighlight(state: HighlightState): void {
@@ -505,7 +475,6 @@ export class GlPlanRenderer implements PlanRenderer {
     // what that looks like from outside.
     this.#pushView();
     this.setAreasActive(this.#areasActive);
-    this.cull();
     // A repaint rebuilds `#entries`, so the marks point at rooms that no longer
     // exist. Re-derived here, which is the GL equivalent of `renderLevel`
     // re-applying the selection class after `paintLevel` rebuilt every node.
