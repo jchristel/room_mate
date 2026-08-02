@@ -1,0 +1,26 @@
+{
+  "name": "roommate-frontend",
+  "private": true,
+  "type": "module",
+  "description": "Build for the viewer's plan renderer. See docs/PLAN-webgl-renderer.md.",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "// test": "--passWithNoTests until P1 lands the first suite; drop the flag then.",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "earcut": "^3.2.3",
+    "flatbush": "^4.6.2",
+    "pixi.js": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/earcut": "^3.0.0",
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
+  }
+}

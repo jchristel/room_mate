@@ -209,8 +209,10 @@ side should shape future server endpoints.
   other delivery channel, and reusing the settings read endpoint adds zero
   server surface. `ColourPlan.active` sets the picker's default; "No colour"
   always overrides, so it's a default, not a forced application. Palettes are a
-  hand-picked JS constant of ColorBrewer schemes (no d3/npm — the page stays a
-  zero-build vanilla layer), sampled piecewise-linearly. Fill is applied as an
+  hand-picked JS constant of ColorBrewer schemes in `common.js`, sampled
+  piecewise-linearly. (Originally "no d3/npm, the page stays zero-build"; npm
+  now exists, but the constant stays — it is eight literal arrays shared with
+  `graph.js`, and a dependency would buy nothing.) Fill is applied as an
   inline `style.fill` (a `fill` *presentation attribute* loses to the `.room`
   CSS rule; inline style wins), precedence selected-plan > error highlight >
   default `--fill`; "No colour" leaves the class fill untouched, preserving
@@ -488,8 +490,10 @@ side should shape future server endpoints.
   `static/common.js` — which also now carries the selection-persistence helpers
   (`seedProjectId`/`persistSelection`, loaded by all three pages including the
   viewer; see "Selection persistence" below). Both are served by the same
-  `ServeDir`, so it stays a zero-build vanilla layer; page-specific CSS/JS stays
-  inline per page.
+  `ServeDir`; page-specific CSS/JS stays inline per page. These files are still
+  hand-written classic scripts — the build step added in 2026-08 covers
+  `src-js/` only, and `common.js` in particular stays out of it because four
+  pages load it (see "UI growth").
 - **Selection persistence (URL + localStorage).** The three pages are separate
   static documents linked by plain `<a href>`, so a navigation drops all
   in-memory state; previously each reseeded to `projects[0]`, so viewer → settings
@@ -549,12 +553,29 @@ Goal is a richer browser tool run locally (not a desktop app). The strategy:
 - **Keep axum as a pure JSON API. This is the load-bearing decision.** The
   server emits data over HTTP, never HTML, and never assumes what the UI looks
   like. Holding this line keeps every later choice reversible and local.
-- **Grow the vanilla JS until it actually hurts** — and that takes longer than
-  expected. More endpoints, a properties panel on click, filters, search,
-  synchronized views can all be plain DOM against the current setup. The real
-  signal to adopt a framework is not a feature but a feeling: manually writing
-  the same state into several DOM places and watching them drift. Adopting one
-  earlier is toolchain overhead for no payoff.
+- **~~Grow the vanilla JS until it actually hurts~~ — it now hurts, and a
+  toolchain landed (2026-08-02).** The advice was right for longer than
+  expected: endpoints, the inspector, filters, search and synchronized views all
+  came in as plain DOM. What finally broke it was not a *feature* but the
+  **renderer** — a WebGL plan layer needs polygon triangulation with holes, a
+  glyph atlas and batched draw calls, all solved problems that must not be
+  written again here (docs/HANDOVER-webgl-renderer.md). Third-party code implies
+  npm implies a build.
+
+  Note *which* signal fired, because it is not the one this bullet predicted.
+  The predicted one was a feeling — the same state written into several DOM
+  places, drifting. That never arrived. The actual trigger was a hard capability
+  the page could not reach without dependencies. Worth recording: the framework
+  question and the toolchain question turned out to be separate, and only the
+  second has been answered.
+- **A build step is not a framework, and this is still not one.** What landed is
+  Vite + TypeScript over `src-js/`, emitting one committed IIFE that
+  `index.html`'s existing inline script calls (docs/PLAN-webgl-renderer.md).
+  There is no component model, no router, no virtual DOM, and no reactive store.
+  The fork below is therefore still open — the toolchain does not pre-commit it,
+  though it does lower the cost of the JS-framework branch and raise the
+  relative cost of the Rust+WASM one, which would now be a second toolchain
+  rather than the first.
 - **When it hurts, the fork is JS framework vs. Rust+WASM.** Behind axum, either
   a JS framework (Svelte gentlest, React most-supported) or a Rust+WASM one
   (Leptos / Dioxus). The project tilts toward **Leptos / Dioxus**: the Rust

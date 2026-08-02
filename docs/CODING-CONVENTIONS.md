@@ -92,20 +92,42 @@ Two of the long-standing eleven are still worth naming specifically:
   (`ScopedPayload`, `LinkValueIndex`) — it reads better *and* silences clippy's
   `type_complexity`.
 
-## `static/` has no conventions yet — and that is now the open question
-These rules are Rust-only. `Superseded/PLAN-handover-actioning.md`'s P10 flagged that gap
-and deliberately left it a question rather than answering it by accretion, when
+## `static/` — the frontend now has a toolchain, and a migration direction
+`Superseded/PLAN-handover-actioning.md`'s P10 flagged the missing-rule gap and
+deliberately left it a question rather than answering it by accretion, when
 `index.html` was 2,020 lines. It is now **4,211** (3,511 of them one inline
-`<script>`; measured 2026-08-01), and two extractions have happened since without a rule prompting
-them — `common.js` (the palette and the classification-path vocabulary, moved
-because two views disagreeing about a group's identity is worse than either
-being arbitrary) and `graph.js` (moved because the concern boundary is a
-different renderer). Both were pulled by a *specific* argument, which is the
-honest pattern so far: **extract when two consumers must agree, or when the
-boundary is a genuinely different concern — not to hit a line count.** The
-zero-build vanilla constraint (STRATEGY-BROWSER) is what makes anything more
-aggressive expensive. If a rule is ever written down, that is the one the code
-already follows.
+`<script>`), and two extractions happened without a rule prompting them —
+`common.js` (the palette and the classification-path vocabulary, moved because
+two views disagreeing about a group's identity is worse than either being
+arbitrary) and `graph.js` (moved because the concern boundary is a different
+renderer). Both were pulled by a *specific* argument, and that remains the rule:
+**extract when two consumers must agree, or when the boundary is a genuinely
+different concern — not to hit a line count.**
+
+What has changed is the constraint that made anything more aggressive expensive.
+The zero-build vanilla rule was a **proof-of-concept-stage decision and is
+retired** (docs/PLAN-webgl-renderer.md, "The premise that changed"). The
+frontend now has:
+
+- **`src-js/` — TypeScript, built by Vite, `npm run build`.** Where new frontend
+  code lands. `strict`, plus `noUncheckedIndexedAccess` and
+  `exactOptionalPropertyTypes`, because the viewer's behaviour already turns on
+  distinctions those flags enforce — `room.label` absent (fall back to name/id)
+  versus present-but-empty (properties didn't resolve, stay blank) is the one
+  that bites.
+- **`static/vendor/renderer.bundle.js` is generated and committed.** So a fresh
+  clone plus `cargo run` serves a working viewer with no node installed. Edit
+  the source, run `npm run build`, commit the result; `.github/workflows/frontend.yml`
+  rebuilds and fails on any diff. A committed artifact with no gate drifts, and
+  the failure is silent — a stale renderer with no error anyone can act on.
+- **Tests are co-located**: `foo.ts` beside `foo.test.ts`. The Rust rule below
+  says "never a `tests/` tree", and its *spirit* is tests beside what they
+  exercise; co-location honours it rather than contradicting it.
+- **The migration is incremental, by design.** `index.html`'s inline script and
+  `common.js`/`graph.js` stay JavaScript. The standing rule is that **each
+  frontend change moves the module it touches** into `src-js/` — not a big-bang
+  conversion, which on code with no test coverage is a refactor of shared
+  mutable globals wearing a translation's clothes.
 
 ## Dependency direction is the seam
 - `service/` is transport-agnostic: it never imports `axum`, `rmcp`, or

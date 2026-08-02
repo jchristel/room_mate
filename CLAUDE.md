@@ -79,6 +79,18 @@ All three are CI gates; clippy runs with `-D warnings`, so a warning is a
 failure. Frontend changes are verified by driving the page, not by reading the
 diff — a bug shipped this week was only visible after expanding a panel.
 
+**Touched `src-js/`?** Then also:
+
+```
+npm run typecheck && npm test && npm run build
+```
+
+`npm run build` is not optional. `static/vendor/renderer.bundle.js` is a
+**generated file that is committed** (so a fresh clone plus `cargo run` works
+with no node installed), and `.github/workflows/frontend.yml` rebuilds it and
+fails if the committed copy disagrees. Forgetting it means a red PR, or worse a
+green one serving a stale renderer.
+
 ## House rules the code won't tell you
 
 - **Tests are inline** — `#[cfg(test)] mod tests` at the bottom of the file they

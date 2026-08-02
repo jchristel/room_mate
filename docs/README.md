@@ -37,11 +37,16 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 - **[WebGL renderer](HANDOVER-webgl-renderer.md)** — replace the SVG plan
   renderer with WebGL (PixiJS), keeping the SVG export, the areas overlay and
-  today's interaction behaviour. Designed, not built. The case for it is one
-  number: the *fitted* view, which is what the viewer shows on load, costs
-  4.3 µs/room on Canvas2D against ~40 ns on WebGL, so Canvas2D would miss the
-  frame budget on the `big-plate` fixture today. Pan is not the reason — viewport
-  culling already fixed that.
+  today's interaction behaviour. The case for it is one number: the *fitted*
+  view, which is what the viewer shows on load, costs 4.3 µs/room on Canvas2D
+  against ~40 ns on WebGL, so Canvas2D would miss the frame budget on the
+  `big-plate` fixture today. Pan is not the reason — viewport culling already
+  fixed that.
+  **Being built now, to [PLAN-webgl-renderer.md](PLAN-webgl-renderer.md)** —
+  read that one for how, and for the two places it deliberately departs from the
+  handover. It also records the decision that reaches furthest past this
+  feature: the frontend's zero-build constraint is retired, and `src-js/`
+  (TypeScript, Vite) is where new frontend code lands. P0 (toolchain) is in.
 
 Everything else has landed and moved to [Superseded](Superseded/).
 
