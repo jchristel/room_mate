@@ -1,0 +1,77 @@
+// The renderer seam: everything a zone asks of whatever draws its plan.
+//
+// This interface exists so the SVG renderer and the WebGL one can be swapped
+// under a running page and compared on the same data in the same session. Its
+// real value is in the STEP BEFORE that swap — implementing it first with the
+// existing SVG code changes no behaviour at all, which is what keeps P3 from
+// being a thousand-line diff nobody can read.
+//
+// Two rules about what belongs here, both from HANDOVER-webgl-renderer.md's
+// Decision 1 (hybrid, only the bulk layer moves):
+//
+//   - Things there are THOUSANDS of are behind the seam: fills, holes,
+//     outlines, labels, the cull and the pick.
+//   - Things there are DOZENS of are not: the areas overlay stays SVG and stays
+//     entirely outside this interface. `renderAreasOverlay` and `areaAtNode` are
+//     untouched by the whole exercise.
+//
+// `setSelection` and `setHover` sit inside the seam even though each concerns
+// exactly ONE room, and that is deliberate: today they toggle a CSS class on a
+// node, and after P4 the GL renderer draws them into a thin SVG overlay
+// instead. Same call site, two implementations — which is the entire point of
+// having a seam.
+
+import type { Rect, Room } from "./types.js";
+
+/** Search state, applied WITHOUT a re-render. Preserving that property is an
+ *  explicit obligation: a search can match thousands of rooms, and a keystroke
+ *  must not re-upload a level. */
+export interface HighlightState {
+  searchActive: boolean;
+  matchRoomIds: ReadonlySet<string> | null;
+}
+
+/** Everything needed to draw a level. Mirrors the appearance context plus the
+ *  toggles that are page state rather than per-room state. */
+export interface PaintRequest {
+  colourFor?: ((room: Room) => string | null) | undefined;
+  errorRoomIds?: ReadonlySet<string> | null | undefined;
+  showErrors?: boolean | undefined;
+  matchRoomIds?: ReadonlySet<string> | null | undefined;
+  searchActive?: boolean | undefined;
+  showLabels?: boolean | undefined;
+}
+
+export interface PlanRenderer {
+  /** Draw a level, framed to `fitted`. Replaces whatever was drawn before. */
+  paint(rooms: readonly Room[], fitted: Rect, opts?: PaintRequest): void;
+
+  /** Pan/zoom. Must NOT rebuild geometry — this is the per-frame path. */
+  setView(view: Rect): void;
+
+  /** Re-apply the viewport cull for the current view. Separate from `setView`
+   *  because callers throttle it to a frame. */
+  cull(): void;
+
+  /** Search match/dim, as a state change over already-drawn rooms. */
+  applyHighlight(state: HighlightState): void;
+
+  /** The one selected room, or `null`. Never drawn into an export. */
+  setSelection(roomId: string | null): void;
+
+  /** The one hovered room, or `null`. */
+  setHover(roomId: string | null): void;
+
+  /** Areas mode ghosts the rooms beneath the footprint overlay. A cross-layer
+   *  rule: the overlay is SVG, the rooms may be GL, and it is easy to miss and
+   *  visibly wrong when missed. */
+  setAreasActive(on: boolean): void;
+
+  /** The room under a viewport point, or `null` for empty space. */
+  roomAt(clientX: number, clientY: number): Room | null;
+
+  /** Release everything held. For the GL renderer this frees a WebGL context,
+   *  which browsers cap (commonly ~16) and silently kill the oldest of past the
+   *  limit — a blanked zone with no error anyone can act on. */
+  dispose(): void;
+}

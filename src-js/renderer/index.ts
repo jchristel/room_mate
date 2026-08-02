@@ -23,8 +23,11 @@ export {
 } from "./geometry.js";
 export { cull } from "./cull.js";
 export { addLabel, paintLevel } from "./svg/paint.js";
+export { SvgPlanRenderer } from "./svg/renderer.js";
 
 export type { CullUnit, PaintOptions } from "./svg/paint.js";
+export type { SvgRendererOptions } from "./svg/renderer.js";
+export type { HighlightState, PaintRequest, PlanRenderer } from "./seam.js";
 export type {
   AppearanceContext,
   ClassificationTier,
@@ -41,4 +44,4 @@ export type {
 /** Build stamp, so a stale committed bundle is visible from the console rather
  *  than inferred from behaviour. CI gates on a rebuild-and-diff, but a human
  *  debugging a checkout wants to ask the page directly. */
-export const version = "0.1.0-p1";
+export const version = "0.2.0-p2";
