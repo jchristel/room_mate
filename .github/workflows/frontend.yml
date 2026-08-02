@@ -1,0 +1,62 @@
+# The viewer's plan renderer is TypeScript, built by Vite. Its own workflow
+# rather than a job inside rust.yml: that file is named for, and reasons about,
+# a Rust toolchain on two platforms, and a node job sitting in it would make the
+# name a lie. rust.yml's `audit` job is a separate CONCERN but still Rust; this
+# is a separate toolchain.
+name: Frontend
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # ubuntu only. Everything here is a determinism check on a JS bundle, not
+  # platform behaviour -- rust.yml's Windows leg exists for path code, which
+  # this has none of.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        # Pinned to the major the toolchain was developed against, not "lts/*":
+        # a silent major bump is exactly the kind of thing that turns the
+        # rebuild-and-diff below red for a reason unrelated to anyone's change.
+        node-version: "24"
+        cache: npm
+
+    # `ci`, not `install`: it installs exactly what package-lock.json pins and
+    # fails if the lockfile disagrees with package.json. That is what makes the
+    # rebuild-and-diff at the end of this job mean anything -- rebuilding with
+    # freely-resolved dependency versions would prove nothing about the artifact
+    # a contributor committed.
+    - name: Install
+      run: npm ci
+
+    - name: Typecheck
+      run: npm run typecheck
+
+    - name: Test
+      run: npm test
+
+    - name: Build
+      run: npm run build
+
+    # THE reason this workflow exists. static/vendor/renderer.bundle.js is a
+    # generated file that is deliberately COMMITTED, so a fresh clone plus
+    # `cargo run` serves a working viewer with no node installed. That
+    # convenience is only safe with a gate: a committed artifact and no
+    # freshness check drift apart, and the failure is silent -- a stale renderer
+    # with no error anyone can act on, which is the same shape of bug as a
+    # browser quietly killing a WebGL context.
+    #
+    # The message names the fix because whoever trips this is usually someone
+    # who edited src-js/ and never ran the build, not someone debugging CI.
+    - name: Committed bundle is current
+      run: |
+        if ! git diff --exit-code --stat -- static/vendor/; then
+          echo "::error::static/vendor/ is stale. Run 'npm run build' and commit the result."
+          exit 1
+        fi

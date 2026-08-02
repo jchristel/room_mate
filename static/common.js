@@ -1,7 +1,14 @@
-// Shared browser helpers for the roommate pages. Kept tiny and dependency-free
-// (STRATEGY-BROWSER.md: vanilla JS, no build step). Served from static/ by
-// axum's ServeDir and loaded as a classic <script> BEFORE each page's own
-// <script>, so these are plain globals — no module wiring.
+// Shared browser helpers for the roommate pages. Kept tiny and dependency-free,
+// served from static/ by axum's ServeDir and loaded as a classic <script>
+// BEFORE each page's own <script>, so these are plain globals — no module
+// wiring.
+//
+// "No build step" USED to be the reason for that shape. It no longer is: the
+// frontend has a Vite/TypeScript toolchain (docs/PLAN-webgl-renderer.md), and
+// this file stays a classic script for a narrower reason — it is loaded by four
+// pages (index, graph, settings, comparison), so converting it would drag all
+// four into needing the bundle for no benefit. See CODING-CONVENTIONS.md,
+// "`static/`".
 //
 // settings.html and comparison.html both talk to the same settings API in the
 // same shape, so the two helpers below were byte-identical copies in each page.

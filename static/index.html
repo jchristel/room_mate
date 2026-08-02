@@ -701,6 +701,15 @@
      hundred lines of index.html: it is the page's second renderer (canvas, not
      SVG) and the file boundary is where the concern boundary is. -->
 <script src="graph.js"></script>
+<!-- The plan renderer, and the one file on this page that is BUILT rather than
+     written: TypeScript in src-js/, bundled by Vite, committed at
+     static/vendor/ so a fresh clone plus `cargo run` still serves a working
+     viewer with no node installed. Edit the source, run `npm run build`, commit
+     the result -- CI rebuilds it and fails if the two disagree.
+     A classic <script>, not type="module", deliberately: it must finish
+     executing before the inline script below runs, and a module would defer
+     past it. See docs/PLAN-webgl-renderer.md. -->
+<script src="vendor/renderer.bundle.js"></script>
 <script>
 const SVG = "http://www.w3.org/2000/svg";
 const zonesEl = document.getElementById("zones");

@@ -35,11 +35,24 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 ## Open handovers
 
-**None.** Every handover has landed and moved to [Superseded](Superseded/).
+- **[WebGL renderer](HANDOVER-webgl-renderer.md)** — replace the SVG plan
+  renderer with WebGL (PixiJS), keeping the SVG export, the areas overlay and
+  today's interaction behaviour. The case for it is one number: the *fitted*
+  view, which is what the viewer shows on load, costs 4.3 µs/room on Canvas2D
+  against ~40 ns on WebGL, so Canvas2D would miss the frame budget on the
+  `big-plate` fixture today. Pan is not the reason — viewport culling already
+  fixed that.
+  **Being built now, to [PLAN-webgl-renderer.md](PLAN-webgl-renderer.md)** —
+  read that one for how, and for the two places it deliberately departs from the
+  handover. It also records the decision that reaches furthest past this
+  feature: the frontend's zero-build constraint is retired, and `src-js/`
+  (TypeScript, Vite) is where new frontend code lands. P0 (toolchain) is in.
+
+Everything else has landed and moved to [Superseded](Superseded/).
 
 That is a statement about *handovers*, not about outstanding work — open items
-now live in the strategy doc that owns them rather than in a brief that
-outlived its build. The last to move, `HANDOVER-adjacency.md`, is the example:
+otherwise live in the strategy doc that owns them rather than in a brief that
+outlived its build. `HANDOVER-adjacency.md` is the example:
 its two remaining false-positive checks went into
 [Area calculation](STRATEGY-AREA-CALCULATION.md)'s "Open" section, beside the
 `max_wall_thickness` value whose choice is what creates the risk they test.
