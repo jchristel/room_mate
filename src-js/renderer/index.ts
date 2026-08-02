@@ -48,4 +48,4 @@ export type {
 /** Build stamp, so a stale committed bundle is visible from the console rather
  *  than inferred from behaviour. CI gates on a rebuild-and-diff, but a human
  *  debugging a checkout wants to ask the page directly. */
-export const version = "0.3.0-p3";
+export const version = "0.5.0-p5";

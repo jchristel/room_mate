@@ -72,6 +72,15 @@ export interface GlRendererOptions {
    * lives on this element and is not touched by the renderer at all.
    */
   overlay?: SVGElement | undefined;
+  /**
+   * Backing-store scale. Defaults to `devicePixelRatio`, which is what should
+   * ship.
+   *
+   * Overridable because the POC measured at DPR 1 and a retina display roughly
+   * 4x's fill cost, so "what does this cost at DPR 2" is a question that has to
+   * be answerable on a DPR 1 development machine rather than assumed.
+   */
+  resolution?: number | undefined;
 }
 
 export class GlPlanRenderer implements PlanRenderer {
@@ -79,6 +88,7 @@ export class GlPlanRenderer implements PlanRenderer {
   readonly #cullEnabled: () => boolean;
   readonly #themeRoot: HTMLElement;
   readonly #overlay: SVGElement | null;
+  readonly #resolution: number;
 
   #app: Application | null = null;
   #ready: Promise<void>;
@@ -110,6 +120,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#cullEnabled = opts.cullEnabled ?? (() => true);
     this.#themeRoot = opts.themeRoot ?? document.documentElement;
     this.#overlay = opts.overlay ?? null;
+    this.#resolution = opts.resolution ?? window.devicePixelRatio ?? 1;
     this.#palette = readPalette(this.#themeRoot);
     this.#ready = this.#init();
   }
@@ -130,7 +141,7 @@ export class GlPlanRenderer implements PlanRenderer {
       // Size the backing store by DPR, the way static/graph.js already does.
       // The POC measured at DPR 1 and a retina display roughly 4x's fill cost,
       // so this is the number to report a measurement against.
-      resolution: window.devicePixelRatio || 1,
+      resolution: this.#resolution,
       autoDensity: true,
       // The plan only redraws when something changes -- a pan, a repaint, a
       // search keystroke -- so there is no animation to drive and a ticker would
@@ -197,11 +208,7 @@ export class GlPlanRenderer implements PlanRenderer {
     // room count, so hiding some of them saves nothing measurable. Labels are
     // one scene object per room and do cost, so they are what the index culls.
     if (this.#labels.length === 0) return;
-    if (!this.#cullEnabled()) {
-      for (const l of this.#labels) l.node.visible = true;
-      this.#render();
-      return;
-    }
+
     const v = this.#view;
     const mx = v.w * 0.2;
     const my = v.h * 0.2;
@@ -209,9 +216,26 @@ export class GlPlanRenderer implements PlanRenderer {
     const y0 = v.y - my;
     const x1 = v.x + v.w + mx;
     const y1 = v.y + v.h + my;
-    for (const l of this.#labels)
-      l.node.visible = !(l.maxX < x0 || l.minX > x1 || l.maxY < y0 || l.minY > y1);
-    this.#render();
+
+    // ONLY WRITE WHAT CHANGES. Assigning `visible` on a Pixi object dirties the
+    // scene graph whether or not the value differs, so a blind pass over every
+    // label costs the same at a fitted view -- where nothing is off-screen and
+    // the cull can achieve nothing -- as it does zoomed in. Measured at 5,046
+    // rooms that was ~20 ms per frame of pure waste, which is most of a frame
+    // budget spent to change nothing. Same shape as the SVG cull's rule for the
+    // same reason: it too only toggles a unit whose state actually flips.
+    let changed = false;
+    const enabled = this.#cullEnabled();
+    for (const l of this.#labels) {
+      const want =
+        !enabled || !(l.maxX < x0 || l.minX > x1 || l.maxY < y0 || l.minY > y1);
+      if (l.node.visible !== want) {
+        l.node.visible = want;
+        changed = true;
+      }
+    }
+    // Re-rendering an unchanged scene is the other half of the same waste.
+    if (changed) this.#render();
   }
 
   applyHighlight(state: HighlightState): void {
@@ -443,6 +467,15 @@ export class GlPlanRenderer implements PlanRenderer {
       });
       this.#labelContainer = built.container;
       this.#labels = built.labels;
+      // A RENDER GROUP, and this is a budget decision rather than a tidy-up.
+      //
+      // Pan and zoom move this container, and without a render group Pixi
+      // re-derives the world transform of every descendant each frame -- 5,046
+      // label nodes at plate scale, measured at ~20 ms per frame, which is most
+      // of a 16 ms budget spent recomputing positions that all moved by the same
+      // amount. A render group makes the container's own transform the thing
+      // that changes and leaves the children's local transforms alone.
+      built.container.enableRenderGroup();
       this.#root.addChild(built.container);
     } else {
       this.#labels = [];

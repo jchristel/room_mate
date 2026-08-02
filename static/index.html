@@ -958,7 +958,19 @@ let CULL_ENABLED = true;
 // Deliberately NOT persisted, same argument as the cull switch: a reload always
 // returns to the default, so nobody can leave the viewer on the wrong renderer
 // and file the difference as a bug.
-let RENDERER = "svg";
+//
+// DEFAULT FLIPPED TO WEBGL 2026-08-02, on the measurement below rather than on
+// preference. `big-plate`, 5,046 rooms/level, fitted view — the case the viewer
+// shows on load, and the one culling can do nothing for:
+//
+//     fitted pan, p95     SVG 733 ms   ->   WebGL 1 ms  (DPR 1)
+//                                           WebGL 2 ms  (DPR 2)
+//     build + layout      SVG 1,175 ms ->   WebGL 1,155 ms
+//
+// Budget was <=16 ms p95. See STRATEGY-BROWSER.md, "Renderer", for the method
+// and the full table, and flip this back to "svg" to re-measure rather than
+// taking any of it on faith.
+let RENDERER = "webgl";
 // date-range: a date after near_date is "future" — a fixed blue, separate from
 // the green→red near/far ramp (the RdYlGn scheme has no blue of its own).
 const FUTURE_COLOUR = "#2c7fb8";
