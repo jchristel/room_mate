@@ -199,6 +199,23 @@ export class GlPlanRenderer implements PlanRenderer {
 
   setView(view: Rect): void {
     this.#view = view;
+    // THE OVERLAY NEEDS THE VIEWBOX TOO, and it is set from the RAW view rather
+    // than the aspect-corrected one -- deliberately.
+    //
+    // The SVG layer above the canvas is not decoration: it carries the areas
+    // overlay, the selection mark and the hover mark, all drawn in world
+    // coordinates. An <svg> with no viewBox is in PIXEL space, so a footprint at
+    // x=27, y=-50 lands in a few pixels at the top-left corner and reads as
+    // "areas stopped working" or "the selection outline vanished" -- which is
+    // exactly what it did, because the SVG renderer used to set this and the GL
+    // one did not.
+    //
+    // Raw, not corrected, because SVG applies `preserveAspectRatio: xMidYMid
+    // meet` to a viewBox itself -- the same uniform-scale-and-centre that
+    // `fitViewToAspect` reproduces for GL. Feeding it the already-corrected rect
+    // would apply the correction twice. The two layers land together precisely
+    // because each is given the input its own coordinate system expects.
+    this.#overlay?.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
     this.#pushView();
     this.#render();
   }
