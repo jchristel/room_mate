@@ -15,9 +15,17 @@
 
 /** GLSL, injected into every vertex shader. `uView` is (x, y, w, h) in the
  *  flipped world space — the same four numbers as the SVG viewBox. */
+// highp is spelled out on both uniforms deliberately. Pixi emits a declaration
+// for every uniform in a group into BOTH shader stages, whose default float
+// precisions differ, so an unqualified uniform fails to LINK with "Precisions
+// of uniform 'x' differ between VERTEX and FRAGMENT shaders" — and that
+// surfaces as "Attribute ... is not present in the shader" for every attribute,
+// which points nowhere near the cause. highp also matters on its own merits
+// here: uView carries world coordinates in feet, and mediump would quantise a
+// large plate visibly.
 export const PROJECTION_GLSL = /* glsl */ `
-uniform vec4 uView;    // x, y, w, h  -- flipped world space
-uniform vec2 uPxSize;  // drawing-buffer size in DEVICE pixels
+uniform highp vec4 uView;    // x, y, w, h  -- flipped world space
+uniform highp vec2 uPxSize;  // drawing-buffer size in DEVICE pixels
 
 vec2 worldToNdc(vec2 world) {
   float nx = (world.x - uView.x) / uView.z * 2.0 - 1.0;

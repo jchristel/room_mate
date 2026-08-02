@@ -37,7 +37,20 @@ in float aWidthPx;  // FULL stroke width in CSS pixels
 
 ${PROJECTION_GLSL}
 
-uniform float uDpr;
+// highp SPELLED OUT, and it is required, not tidiness.
+//
+// Pixi emits a declaration for every uniform in the group into BOTH stages, and
+// the two stages have different default float precisions. An unqualified float
+// therefore becomes highp in one and mediump in the other, and GL refuses to
+// link: "Precisions of uniform 'uDpr' differ between VERTEX and FRAGMENT
+// shaders". Setting preferredVertexPrecision/preferredFragmentPrecision on the
+// program does NOT fix it -- those are preferences the device may decline. An
+// explicit qualifier in the source cannot be overridden.
+//
+// The failure is worth recognising by sight, because it names the wrong thing:
+// a link error surfaces as "Attribute aP0 is not present in the shader" for
+// every attribute in the geometry, which reads like a geometry bug.
+uniform highp float uDpr;
 
 out vec4 vColor;
 out float vAlongPx;
@@ -79,8 +92,12 @@ in float vAlongPx;
 // 'uDpr' differ between VERTEX and FRAGMENT shaders", and every attribute then
 // reported as missing. Keeping each uniform in exactly one stage avoids the
 // whole class of problem.
-uniform float uDashPeriodPx; // 0 disables dashing
-uniform float uDashOnPx;
+// All highp, matching the vertex stage -- see the note on uDpr there.
+uniform highp float uDashPeriodPx; // 0 disables dashing
+uniform highp float uDashOnPx;
+// Areas-mode ghosting, applied to the whole layer. See fills.ts.
+uniform highp float uLayerAlpha;
+uniform highp float uDpr;
 
 out vec4 finalColor;
 
@@ -89,7 +106,8 @@ void main() {
     if (mod(vAlongPx, uDashPeriodPx) > uDashOnPx) discard;
   }
   // Premultiplied, which is what Pixi's default blend state expects.
-  finalColor = vec4(vColor.rgb * vColor.a, vColor.a);
+  float a = vColor.a * uLayerAlpha;
+  finalColor = vec4(vColor.rgb * a, a);
 }
 `;
 
@@ -155,6 +173,12 @@ export class LineBatch {
     const buffer = new Buffer({ data, usage: BufferUsage.VERTEX | BufferUsage.COPY_DST });
     const geometry = new Geometry({
       attributes: {
+        // `aPosition` is an ALIAS of aP0 -- same buffer, same offset, no extra
+        // storage. Pixi's Mesh reads `geometry.getBuffer("aPosition")` when it
+        // computes bounds, so a geometry without one is a mesh the scene graph
+        // cannot measure. Aliasing aP0 is exact for closed rings, since every
+        // ring vertex is some segment's start point.
+        aPosition: { buffer, format: "float32x2", stride: STRIDE * 4, offset: 0 },
         aP0: { buffer, format: "float32x2", stride: STRIDE * 4, offset: 0 },
         aP1: { buffer, format: "float32x2", stride: STRIDE * 4, offset: 2 * 4 },
         aSide: { buffer, format: "float32", stride: STRIDE * 4, offset: 4 * 4 },
@@ -172,10 +196,29 @@ export class LineBatch {
       uDpr: { value: 1, type: "f32" },
       uDashPeriodPx: { value: on > 0 ? on + off : 0, type: "f32" },
       uDashOnPx: { value: on, type: "f32" },
+      uLayerAlpha: { value: 1, type: "f32" },
     });
 
     const shader = new Shader({
-      glProgram: GlProgram.from({ vertex: VERTEX, fragment: FRAGMENT, name: "plan-lines" }),
+      glProgram: GlProgram.from({
+        vertex: VERTEX,
+        fragment: FRAGMENT,
+        name: "plan-lines",
+        // BOTH stages at highp, and this is not tuning -- without it the
+        // program does not LINK.
+        //
+        // Pixi declares an entire uniform group in both the vertex and the
+        // fragment shader, whichever stage actually reads a given uniform. The
+        // two stages get different default precisions, so any float in the
+        // group ends up declared `highp` in one and `mediump` in the other, and
+        // GL rejects that with "Precisions of uniform 'x' differ between VERTEX
+        // and FRAGMENT shaders". The failure then reports as "Attribute aP0 is
+        // not present in the shader" for every attribute, which points nowhere
+        // near the cause -- so it is worth knowing that a wall of missing
+        // -attribute warnings usually means a failed link, not a bad geometry.
+        preferredVertexPrecision: "highp",
+        preferredFragmentPrecision: "highp",
+      }),
       resources: { planLines: uniforms },
     });
 
@@ -230,6 +273,10 @@ export class LineMesh {
     // fragment shader, so `uDpr` stays a vertex-only uniform. See FRAGMENT.
     this.#uniforms["uDashOnPx"] = this.#dashOnCss * dpr;
     this.#uniforms["uDashPeriodPx"] = this.#dashPeriodCss > 0 ? this.#dashPeriodCss * dpr : 0;
+  }
+
+  setLayerAlpha(a: number): void {
+    this.#uniforms["uLayerAlpha"] = a;
   }
 
   /** Rewrite the colour and width of a vertex range, then mark the buffer
