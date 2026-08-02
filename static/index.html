@@ -204,6 +204,15 @@
   .zone-canvas { position: relative; overflow: hidden; min-height: 0; }
   .zone-canvas svg { width: 100%; height: 100%; display: block; cursor: grab; }
   .zone-canvas svg:active { cursor: grabbing; }
+  /* The WebGL plan layer sits UNDER the <svg>, which stays in the DOM for the
+     areas overlay, the selection/hover marks and every pointer handler. The svg
+     keeps its own background transparent, so the two read as one drawing.
+     `pointer-events: none` because the svg above owns the pointer -- the canvas
+     receiving a click would break the capture the drag/click distinction needs. */
+  .zone-canvas canvas.plan-gl {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    display: block; pointer-events: none;
+  }
 
   .grid line { stroke: var(--rule); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
 
@@ -893,6 +902,25 @@ const MISMATCH_COLOUR = "#d73027";  // red:   outside tolerance
 // that coupling is structural rather than a convention anyone has to remember.
 // See STRATEGY-BROWSER.md, "Rendering" §2.
 let CULL_ENABLED = true;
+
+// Which renderer draws the plan: "svg" (the original) or "webgl" (PixiJS).
+//
+// Module-level and console-reachable, exactly like CULL_ENABLED above and for
+// the same reason — it is the handle a re-measurement is run from, not a
+// feature toggle. `Superseded/HANDOVER-culling-disable-switch.md` is the
+// precedent, including its method: flip it, drive the same interaction on the
+// same fixture, compare frame times.
+//
+//   RENDERER = "webgl"; location.reload()
+//
+// Both implementations satisfy the same seam, so everything downstream is
+// identical either way. Read once per zone at construction, so changing it
+// needs a reload rather than leaving half the zones on each renderer.
+//
+// Deliberately NOT persisted, same argument as the cull switch: a reload always
+// returns to the default, so nobody can leave the viewer on the wrong renderer
+// and file the difference as a bug.
+let RENDERER = "svg";
 // date-range: a date after near_date is "future" — a fixed blue, separate from
 // the green→red near/far ramp (the RdYlGn scheme has no blue of its own).
 const FUTURE_COLOUR = "#2c7fb8";
@@ -3639,6 +3667,7 @@ function createZone() {
     fitted: { x: 0, y: 0, w: 100, h: 100 },
     activeLevelId: null,
     renderer: null,    // the plan renderer (seam); assigned just below
+    canvas: null,      // the GL layer's canvas, when RENDERER === "webgl"
     _cullRaf: 0,       // pending requestAnimationFrame id, throttles the cull
     // presentation state — everything a zone still owns
     activeColourPlan: null,
@@ -3658,7 +3687,27 @@ function createZone() {
   // The renderer is built before anything can paint, and reads CULL_ENABLED
   // through a getter rather than a captured value so flipping the flag from the
   // console takes effect on the next pass instead of needing a reload.
-  zone.renderer = new PlanRenderer.SvgPlanRenderer(zone.svg, { cullEnabled: () => CULL_ENABLED });
+  //
+  // WHICH renderer is the flag's job (see RENDERER). Both implement the same
+  // seam, so everything downstream of here is identical either way — which is
+  // the entire reason P2 existed before P3.
+  if (RENDERER === "webgl") {
+    // The canvas goes UNDER the <svg>, which stays in the DOM and keeps pointer
+    // handling, the areas overlay, and (from P4) the selection and hover marks.
+    // That is Decision 1's hybrid, in one line of layout.
+    zone.canvas = document.createElement("canvas");
+    zone.canvas.className = "plan-gl";
+    zone.svg.parentNode.insertBefore(zone.canvas, zone.svg);
+    zone.renderer = new PlanRenderer.GlPlanRenderer(zone.canvas, { cullEnabled: () => CULL_ENABLED });
+    // The GL context is created asynchronously. Repaint once it exists, or the
+    // first level lands on a renderer with no context and silently draws
+    // nothing — which looks exactly like a broken payload.
+    zone.renderer.ready.then(() => {
+      if (currentPayload && zone.activeLevelId) renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
+    });
+  } else {
+    zone.renderer = new PlanRenderer.SvgPlanRenderer(zone.svg, { cullEnabled: () => CULL_ENABLED });
+  }
 
   wireZoneControls(zone);
   wireInteractions(zone);
@@ -3674,15 +3723,35 @@ function removeZone() {
   // WebGL context is a capped resource (browsers allow ~16 and silently kill
   // the oldest past the limit), so a zone that is closed without releasing one
   // eventually blanks a different zone with no error anyone can act on.
+  //
+  // `dispose()` clears a LEVEL; `destroy()` releases the context. Both, in that
+  // order, because only the second is what the cap counts.
   zone.renderer.dispose();
+  zone.renderer.destroy?.();
   zone.root.remove();
   setLayout();
 }
+
+// Hard ceiling on open zones, and it exists for the GL renderer specifically.
+// Browsers cap live WebGL contexts (commonly ~16) and silently kill the OLDEST
+// past the limit — so an unbounded `+ zone` would blank an earlier zone with no
+// error, no exception, and nothing a user could act on. 8 leaves headroom for
+// graph.js's canvas and for other tabs on the same GPU process.
+//
+// Applied to both renderers rather than only to GL: a cap that appears when you
+// flip a flag is a behaviour difference between the two paths, and the point of
+// the flag is that everything except the drawing is identical.
+//
+// If the cap ever bites in practice, the escape hatch is one canvas across the
+// whole zone strip with a gl.viewport/scissor per zone, rather than a context
+// each. That is a bigger change and is not needed yet.
+const MAX_ZONES = 8;
 
 // The grid column count follows the zone count, capped at 3 (rows wrap beyond).
 function setLayout() {
   zonesEl.style.gridTemplateColumns = `repeat(${Math.min(zones.length, 3)}, 1fr)`;
   document.getElementById("removeZone").disabled = zones.length <= 1;
+  document.getElementById("addZone").disabled = zones.length >= MAX_ZONES;
 }
 
 // ============================ polling loop ============================
@@ -3745,6 +3814,7 @@ scopeEls.milestone.addEventListener("change", () => {
 });
 
 document.getElementById("addZone").addEventListener("click", () => {
+  if (zones.length >= MAX_ZONES) return; // see MAX_ZONES; the button is disabled too
   const zone = createZone();
   setLayout();
   // Catch the new zone up from the globals — no refetch needed: the payload
