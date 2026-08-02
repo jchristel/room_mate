@@ -1,6 +1,11 @@
 # PLAN — Implementing the WebGL plan renderer
 
-**Status:** planned, not started. Written 2026-08-02 against
+**Status: P0–P5 built and merged; the WebGL renderer is the default. P6 is all
+that remains.** The measured outcome lives in
+[STRATEGY-BROWSER.md](STRATEGY-BROWSER.md) "Renderer" — a fitted pan of
+`big-plate` went from 733 ms p95 to 1 ms, against a ≤16 ms budget — along with
+the accessibility acceptance and the re-measurement handle. Written 2026-08-02
+against
 [`HANDOVER-webgl-renderer.md`](HANDOVER-webgl-renderer.md), which commissions
 this work and remains authoritative on *what must not break*.
 

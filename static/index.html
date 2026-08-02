@@ -265,6 +265,28 @@
     transform: translate(0.6rem, 0.6rem);
   }
   .plan-tip.hidden { display: none; }
+
+  /* Shown while a large level is being built. Covers the plan rather than
+     sitting beside it, because the thing underneath during a rebuild is either
+     the PREVIOUS level or nothing, and both are misleading. */
+  .plan-busy {
+    position: absolute; inset: 0; z-index: 4;
+    display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--paper) 78%, transparent);
+    font-family: var(--mono); font-size: 0.78rem; color: var(--ink);
+    letter-spacing: 0.08em;
+  }
+  .plan-busy.hidden { display: none; }
+  .plan-busy span::after {
+    content: ""; display: inline-block; width: 0.6rem;
+    animation: plan-busy-dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes plan-busy-dots { 0% { content: ""; } 100% { content: "..."; } }
+  /* Respect a reduced-motion preference: the message alone still says what is
+     happening, which is the whole job. */
+  @media (prefers-reduced-motion: reduce) {
+    .plan-busy span::after { animation: none; }
+  }
   .dim { opacity: 0.15; }
   .hole { fill: var(--paper); stroke: var(--ink); stroke-width: 1;
           stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
@@ -737,6 +759,8 @@
              free. Present for both renderers, but only the WebGL one uses it:
              the SVG renderer still has real <title> elements. -->
         <div class="plan-tip hidden"></div>
+        <!-- Shown while a large level is being built. See `paintWithBusy`. -->
+        <div class="plan-busy hidden"><span>Drawing plan…</span></div>
       </div>
     </div>
   </template>
@@ -958,7 +982,19 @@ let CULL_ENABLED = true;
 // Deliberately NOT persisted, same argument as the cull switch: a reload always
 // returns to the default, so nobody can leave the viewer on the wrong renderer
 // and file the difference as a bug.
-let RENDERER = "svg";
+//
+// DEFAULT FLIPPED TO WEBGL 2026-08-02, on the measurement below rather than on
+// preference. `big-plate`, 5,046 rooms/level, fitted view — the case the viewer
+// shows on load, and the one culling can do nothing for:
+//
+//     fitted pan, p95     SVG 733 ms   ->   WebGL 1 ms  (DPR 1)
+//                                           WebGL 2 ms  (DPR 2)
+//     build + layout      SVG 1,175 ms ->   WebGL 1,155 ms
+//
+// Budget was <=16 ms p95. See STRATEGY-BROWSER.md, "Renderer", for the method
+// and the full table, and flip this back to "svg" to re-measure rather than
+// taking any of it on faith.
+let RENDERER = "webgl";
 // date-range: a date after near_date is "future" — a fixed blue, separate from
 // the green→red near/far ramp (the RdYlGn scheme has no blue of its own).
 const FUTURE_COLOUR = "#2c7fb8";
@@ -1245,6 +1281,47 @@ function setZoneEmpty(zone, state, levelName = "") {
   el.replaceChildren(title, detail);
 }
 
+// Above this many rooms on a level, show a busy panel while the plan is built.
+//
+// A ROOM COUNT, not a duration, and that is forced rather than chosen. The
+// build is synchronous — triangulating and uploading a level blocks the main
+// thread — so the usual "show it only if the work takes longer than 150 ms"
+// timer can never fire: nothing runs during the block, including timers. The
+// decision has to be made BEFORE the work starts, and room count is the only
+// thing known then that correlates with cost.
+//
+// 1,000 sits between the two regimes rather than in the middle of either.
+// Measured: House A (12) and the showcase levels (~50) are imperceptible, the
+// 299-room synthetic is still under ~100 ms, and `big-plate` at 5,046 takes
+// ~1.3 s. Nothing real sits near the line, so a wrong call on either side of it
+// costs a barely-visible flash or a barely-noticeable wait.
+const BUSY_ROOM_THRESHOLD = 1000;
+
+// Run a level build with a busy panel in front of it.
+//
+// The `requestAnimationFrame` is the load-bearing part: showing the panel only
+// changes the DOM, and the browser will not PAINT that change until the current
+// task yields. Calling the build straight afterwards would block through the
+// whole thing and the panel would appear and vanish having never been seen. So
+// the panel goes up, the frame is handed back, and the build runs on the next
+// one.
+//
+// Below the threshold the build runs INLINE and synchronously — deliberately.
+// Deferring every level by a frame would make the common case worse to save a
+// flash nobody sees, and it would change the ordering that callers of
+// `renderLevel` rely on.
+function paintWithBusy(zone, roomCount, build) {
+  if (roomCount < BUSY_ROOM_THRESHOLD) { build(); return; }
+  const busy = zone.els.busy;
+  if (!busy) { build(); return; }
+  busy.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      try { build(); } finally { busy.classList.add("hidden"); }
+    });
+  });
+}
+
 function renderLevel(zone, payload, levelId, { refit = true } = {}) {
   // Clearing the drawing and clearing the index behind it are ONE operation,
   // and the renderer now guarantees that rather than each caller remembering
@@ -1280,23 +1357,27 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
   // hex lookup stays with the palette.
   const plan = zone.activeColourPlan;                // presentation: per zone
   const colourCtx = plan ? buildColourContext(rooms, plan) : null;
-  zone.renderer.paint(rooms, zone.fitted, {
-    colourFor: plan ? (room) => colourForRoom(room, plan, colourCtx) : undefined,
-    errorRoomIds,                        // data-quality state: global
-    showErrors,                          // follows the QA block's expansion (global)
-    matchRoomIds: searchMatchIds,        // one payload -> one match set
-    searchActive,
-    showLabels: showRoomLabels,
+  paintWithBusy(zone, rooms.length, () => {
+    zone.renderer.paint(rooms, zone.fitted, {
+      colourFor: plan ? (room) => colourForRoom(room, plan, colourCtx) : undefined,
+      errorRoomIds,                        // data-quality state: global
+      showErrors,                          // follows the QA block's expansion (global)
+      matchRoomIds: searchMatchIds,        // one payload -> one match set
+      searchActive,
+      showLabels: showRoomLabels,
+    });
+    // Inside the deferred build, not after it: on a large level these run a
+    // frame later than the surrounding code, and re-applying a selection to a
+    // level that has not been painted yet marks nothing.
+    applySelection(zone);
+    if (zone.areasMode) renderAreasOverlay(zone);
   });
-  // The renderer culls to the current view and re-applies its own selection as
-  // part of painting, so neither is a caller's responsibility any more. The
-  // page still owns the AREAS half of selection, below.
-  applySelection(zone);
-
-  // Re-add the areas overlay on top: renderLevel is the single choke point every
-  // re-render (poll, colour, validation, level switch) passes through, so this
-  // one call keeps the footprints painted without each caller knowing about them.
-  if (zone.areasMode) renderAreasOverlay(zone);
+  // NOTE: `applySelection` and `renderAreasOverlay` are called INSIDE the build
+  // above, not after it. renderLevel is the single choke point every re-render
+  // (poll, colour, validation, level switch) passes through, so that one call
+  // site keeps the footprints painted without each caller knowing about them —
+  // but on a large level the build is deferred a frame, and running either of
+  // them out here would apply them to a plan that has not been drawn yet.
 }
 
 // `addLabel` moved to src-js/renderer/svg/paint.ts (aliased above). The
@@ -3770,6 +3851,7 @@ function createZone() {
       meta: q(".meta"),
       empty: q(".empty"),
       tip: q(".plan-tip"),
+      busy: q(".plan-busy"),
     },
   };
 

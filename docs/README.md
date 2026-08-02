@@ -42,11 +42,17 @@ design decisions behind the Revit → Rust → browser room data pipeline.
   against ~40 ns on WebGL, so Canvas2D would miss the frame budget on the
   `big-plate` fixture today. Pan is not the reason — viewport culling already
   fixed that.
-  **Being built now, to [PLAN-webgl-renderer.md](PLAN-webgl-renderer.md)** —
-  read that one for how, and for the two places it deliberately departs from the
-  handover. It also records the decision that reaches furthest past this
-  feature: the frontend's zero-build constraint is retired, and `src-js/`
-  (TypeScript, Vite) is where new frontend code lands. P0 (toolchain) is in.
+  **Built and shipped as the default (P0–P5), to
+  [PLAN-webgl-renderer.md](PLAN-webgl-renderer.md)** — read that one for how,
+  and for the two places it deliberately departs from the handover. The measured
+  result is in [STRATEGY-BROWSER.md](STRATEGY-BROWSER.md) "Renderer": a fitted
+  pan of `big-plate` went from **733 ms p95 to 1 ms**, against a ≤16 ms budget.
+  `RENDERER = "svg"` still puts the old renderer back for re-measurement. Only
+  P6 (delete the live SVG path) remains.
+
+  It also records the decision that reaches furthest past this feature: the
+  frontend's zero-build constraint is retired, and `src-js/` (TypeScript, Vite)
+  is where new frontend code lands.
 
 Everything else has landed and moved to [Superseded](Superseded/).
 

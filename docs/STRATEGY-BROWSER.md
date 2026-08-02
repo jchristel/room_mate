@@ -657,15 +657,72 @@ serving a different consumer (a hierarchy browser) than the room render.
   `applyHighlight` all walk them. Re-measured 2026-07-25 with it:
   **16.5 ms/frame on vs 912 ms/frame off** — culling still earns its place, so
   the "delete it if it has been made redundant" branch stays unexercised.
-- **Fitted-view cost at very high room counts — still open.** Culling helps only
-  when geometry is off-screen; a *fitted* view of a 5,000-room level still paints
-  everything (~0.5 s+/frame), so the remaining lever there is level-of-detail
-  (drop labels / merge rooms when the whole plate is on screen), not culling.
-  The label half now has its mechanism: `paintLevel` takes a `showLabels` flag
-  (see the labels toggle above), so an automatic LOD mode is "drive that flag
-  from zoom level" rather than new plumbing. The
-  grid is also not yet capped to the visible region — minor next to the rooms, but
-  the same idea. Both deferred pending need.
+- **Fitted-view cost at very high room counts — CLOSED 2026-08-02, by moving the
+  plan to WebGL.** This was the item that justified the whole renderer exercise:
+  culling helps only when geometry is off-screen, so a *fitted* view of a
+  5,000-room level painted everything at ~0.5 s+/frame, and a fitted view is what
+  the viewer shows on load because it auto-fits.
+
+  Measured on `big-plate` (5,046 rooms/level, 718 of them with voids), same data,
+  same machine, same interaction — a scripted pan, frame times sorted:
+
+  | | SVG | WebGL (DPR 1) | WebGL (DPR 2) |
+  |---|---|---|---|
+  | **fitted pan, p50** | 534 ms | **0 ms** | **0 ms** |
+  | **fitted pan, p95** | 733 ms | **1 ms** | **2 ms** |
+  | zoomed pan, p95 | (see culling above) | 3 ms | 2 ms |
+  | build + first paint | 1,175 ms | 1,155 ms | 988 ms |
+
+  Budget, set before measuring, was **≤16 ms p95 on a fitted view at the target
+  DPR, labels and pick included**. Held with two orders of magnitude to spare.
+
+  Three things about that table are worth more than the headline:
+
+  **DPR barely matters here, which was not the expectation.** The POC measured at
+  DPR 1 and warned that a retina display roughly 4×'s fill cost. It does not show
+  up, because this renderer is not fill-bound at these counts — the frame is four
+  draw calls and a handful of uniform writes.
+
+  **Build cost is a wash, not a regression.** An earlier reading of this made
+  WebGL look 4× worse, by comparing its full build against `paintLevel`'s JS time
+  alone (179 ms) while ignoring that the browser then spends ~1 s laying out and
+  painting 26,451 SVG nodes. Compared end to end the two are within 2%. Roughly
+  1.1 s of the WebGL side is constructing 5,046 `BitmapText` objects; geometry
+  alone is ~180 ms. If level-switch latency ever needs attention, that is where
+  it is, and the fix is folding glyphs into the same attribute mesh the fills use.
+
+  **Most of the win came from one line, found by measuring rather than reasoning.**
+  The first WebGL numbers were 23 ms p50 / 36 ms p95 at the fitted view — over
+  budget. The cost was Pixi re-deriving the world transform of all 5,046 label
+  nodes every frame, all of which move by the same amount. Marking the label
+  container as a render group took it to 0/1 ms. Nothing about the geometry, the
+  shaders or the index changed.
+
+  Level-of-detail beyond this is **not needed and not built**. The grid is still
+  not capped to the visible region either. Revisit only if measurement says so.
+- **What moving to WebGL cost, recorded as an acceptance rather than left to be
+  discovered.** Room labels are now pixels in a canvas, not `<text>` nodes. They
+  are therefore **not selectable, not searchable with the browser's own find, and
+  not exposed to a screen reader**. `static/graph.js` already made and stated the
+  same trade for the adjacency graph, but the plan is a much bigger surface and
+  the loss is correspondingly bigger, so it is written down here as a decision
+  taken with the number in front of us — not as something noticed later.
+
+  Three things blunt it, and none of them undo it: the **SVG export** still
+  produces real `<text>`, so the selectable/searchable artefact exists on demand
+  and is what leaves the browser; the **inspector** shows the selected room's
+  properties as ordinary DOM; and **search** matches server-side data rather than
+  rendered glyphs, so finding a room by name still works — it is the browser's
+  own Ctrl+F over the plan that does not.
+
+  Per-room tooltips survived the move but had to be rebuilt: every room polygon
+  carried an SVG `<title>` that the browser drew for free, and WebGL has no
+  equivalent, so a DOM tooltip is driven by the hover pick instead. Same text.
+- **`RENDERER` is the re-measurement handle**, module-level and console-reachable
+  beside `CULL_ENABLED`, unpersisted for the same reason. `RENDERER = "svg";
+  location.reload()` puts the SVG renderer back so the table above can be
+  re-derived rather than believed. Both implementations satisfy one seam
+  (`src-js/renderer/seam.ts`), so nothing but the drawing differs between them.
 - **Coordinates and units.** Revit internal units are decimal feet, Y-up; SVG
   is Y-down — handled by flipping Y when building geometry. Absolute units do
   not matter while the viewer auto-fits, but they will once dimensions, a scale
