@@ -815,57 +815,18 @@ async function fetchJson(url) {
 }
 
 // ======================= pure geometry helpers =======================
-// These never touched a global and don't now — they take data and return
-// data/elements, so they're shared across every zone unchanged.
-
-function flip(p) { return { x: p.x, y: -p.y }; }
-
-function bounds(rooms) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const r of rooms)
-    for (const loop of r.loops)
-      for (const raw of loop.points) {
-        const p = flip(raw);
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
-      }
-  if (!isFinite(minX)) return null;
-  return { minX, minY, maxX, maxY };
-}
-
-function loopBox(loop) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const raw of loop.points) {
-    const p = flip(raw);
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-  }
-  return { w: maxX - minX, h: maxY - minY };
-}
-
-function pointsAttr(loop) {
-  return loop.points.map(raw => { const p = flip(raw); return `${p.x},${p.y}`; }).join(" ");
-}
-
-function centroid(loop) {
-  const pts = loop.points.map(flip);
-  let a = 0, cx = 0, cy = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i], q = pts[(i + 1) % pts.length];
-    const cross = p.x * q.y - q.x * p.y;
-    a += cross; cx += (p.x + q.x) * cross; cy += (p.y + q.y) * cross;
-  }
-  if (Math.abs(a) < 1e-9) {
-    const n = pts.length;
-    return { x: pts.reduce((s, p) => s + p.x, 0) / n, y: pts.reduce((s, p) => s + p.y, 0) / n };
-  }
-  a *= 0.5;
-  return { x: cx / (6 * a), y: cy / (6 * a) };
-}
+// These MOVED to src-js/renderer/geometry.ts and are re-bound here under their
+// original names, so the ~20 call sites below read exactly as they did.
+//
+// Why they moved: the WebGL renderer needs the same flip, the same bboxes and
+// the same fitted frame as the SVG export, and a second copy of that arithmetic
+// is a drift waiting to happen. They are also pure, which made them the
+// cheapest possible first thing to put under test — see geometry.test.ts,
+// including the degenerate-ring case that would otherwise place a label at NaN.
+//
+// The coordinate rule they encode is unchanged and still load-bearing: payload
+// data is Y-up, everything from here down is Y-down.
+const { flip, bounds, loopBox, pointsAttr, centroid, roomBBox, fittedBounds, addLabel } = PlanRenderer;
 
 // Build the ordered list of levels to show. Prefer the payload's `levels`
 // array (ordered by elevation on the server); fall back to deriving from
@@ -884,18 +845,6 @@ function levelsForPayload(payload) {
 
 function roomsOnLevel(payload, levelId) {
   return (payload.rooms || []).filter(r => (r.level_id || "unknown") === levelId);
-}
-
-function line(x1, y1, x2, y2) {
-  const l = document.createElementNS(SVG, "line");
-  l.setAttribute("x1", x1); l.setAttribute("y1", y1);
-  l.setAttribute("x2", x2); l.setAttribute("y2", y2);
-  return l;
-}
-function titleEl(text) {
-  const t = document.createElementNS(SVG, "title");
-  t.textContent = text;
-  return t;
 }
 
 // ============================ colour plans ============================
@@ -1144,57 +1093,17 @@ function setViewBox(zone) {
   scheduleCull(zone); // hide/show rooms for the new view (throttled to a frame)
 }
 
-// A room's bounding box in the SVG's (Y-flipped) coordinate space — the same
-// space as `zone.view`/the viewBox — computed from the outer loop's points, NOT
-// from getBBox (which forces a synchronous layout). Stored once at paint time.
-function roomBBox(room) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const raw of room.loops[0].points) {
-    const p = flip(raw);
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-  }
-  return { minX, minY, maxX, maxY };
-}
-
-// Viewport culling: hide rooms whose bbox is outside the current view (plus a
-// margin so panning doesn't pop edges), show them again when they re-enter. SVG
-// clips but does not cull — every element still costs per frame — so at a few
-// thousand rooms a zoomed-in view is unusable without this. Only toggles a unit's
-// nodes when its on/off state actually changes, so steady-state panning touches
-// just the handful crossing the boundary, not the whole level.
+// Viewport culling MOVED to src-js/renderer/cull.ts (`roomBBox` moved with the
+// geometry). This adapter keeps the zone-shaped call the rest of the page makes,
+// and keeps `CULL_ENABLED` a page-level console handle -- the module takes the
+// flag as an argument rather than reading a global, so a test can drive both
+// states without touching the page.
+//
+// Measured value, for anyone tempted to delete it: 16.5 ms/frame with culling
+// against 912 ms without, on `big-plate`
+// (Superseded/HANDOVER-culling-disable-switch.md).
 function cullZone(zone) {
-  const units = zone.cullUnits;
-  if (!units || units.length === 0) return;
-
-  // Kill switch (see CULL_ENABLED). Restore anything a previous pass hid, then
-  // do nothing. The restore loop is the load-bearing half: flipping the flag
-  // mid-session must not strand rooms with display:none from the last enabled
-  // pass. Guarded here rather than at the two call sites so every current and
-  // future caller is covered by one branch.
-  if (!CULL_ENABLED) {
-    for (const u of units) {
-      if (u.hidden) {
-        for (const n of u.nodes) n.style.display = "";
-        u.hidden = false;
-      }
-    }
-    return;
-  }
-
-  const v = zone.view;
-  const mx = v.w * 0.2, my = v.h * 0.2; // keep a 20%-of-view margin loaded
-  const x0 = v.x - mx, y0 = v.y - my, x1 = v.x + v.w + mx, y1 = v.y + v.h + my;
-  for (const u of units) {
-    const off = u.maxX < x0 || u.minX > x1 || u.maxY < y0 || u.minY > y1;
-    if (off !== u.hidden) {
-      const d = off ? "none" : "";
-      for (const n of u.nodes) n.style.display = d;
-      u.hidden = off;
-    }
-  }
+  PlanRenderer.cull(zone.cullUnits || [], zone.view, { enabled: CULL_ENABLED });
 }
 
 // One cull per animation frame, so a burst of wheel/drag events (each calling
@@ -1204,98 +1113,28 @@ function scheduleCull(zone) {
   zone._cullRaf = requestAnimationFrame(() => { zone._cullRaf = 0; cullZone(zone); });
 }
 
-// Fitted bounds (padded) that frame a level's rooms. Both the on-screen refit
-// and the SVG export frame to this, so the two can never disagree. Null when the
-// rooms have no drawable geometry.
-function fittedBounds(rooms) {
-  const b = bounds(rooms);
-  if (!b) return null;
-  const w = b.maxX - b.minX, h = b.maxY - b.minY;
-  const pad = Math.max(w, h) * 0.04 || 1;
-  return { x: b.minX - pad, y: b.minY - pad, w: w + 2 * pad, h: h + 2 * pad };
-}
+// `fittedBounds` moved with the geometry (aliased above).
 
-// Pure painter: appends grid + room polygons + labels for one level into `svg`,
-// framed to `fitted`. Reads nothing from a zone or module global — the colour
-// plan, error set, and error toggle are passed in — so the live renderer and the
-// SVG export share exactly one body and can't drift.
-// When `cullUnits` (an array) is passed, each room's nodes + precomputed bbox are
-// collected into it so the live view can hide off-screen rooms on pan/zoom
-// (viewport culling). The SVG export passes none — an exported file needs every
-// room, and a detached node has no view to cull against.
+// The appearance decision and the SVG painter MOVED to
+// src-js/renderer/appearance.ts and src-js/renderer/svg/paint.ts.
+//
+// This adapter exists for ONE reason: the colour plan. The painter takes a
+// `colourFor(room)` callback rather than a plan, because the palette lives in
+// `common.js` -- a classic script four pages load, which the bundle cannot
+// import. So the precedence rule (plan beats error beats default) is in the
+// typed module and tested; which hex a value maps to stays here, where the
+// palette is. Resolving the plan's per-level context once, here, also keeps it
+// out of the per-room path.
+//
+// Verified byte-identical to the previous inline painter across 15 scenarios
+// (two levels x plain/no-labels/search/errors/combined, plus all five colour
+// plan modes) before the old body was deleted.
 function paintLevel(svg, rooms, fitted, { colourPlan = null, errorRoomIds = null, showErrors = false, cullUnits = null, matchRoomIds = null, searchActive = false, showLabels = true } = {}) {
-  const baseFont = Math.max(fitted.w, fitted.h) * 0.02;
-
-  const g = document.createElementNS(SVG, "g");
-  g.setAttribute("class", "grid");
-  const step = 5;
-  for (let gx = Math.ceil(fitted.x / step) * step; gx < fitted.x + fitted.w; gx += step)
-    g.appendChild(line(gx, fitted.y, gx, fitted.y + fitted.h));
-  for (let gy = Math.ceil(fitted.y / step) * step; gy < fitted.y + fitted.h; gy += step)
-    g.appendChild(line(fitted.x, gy, fitted.x + fitted.w, gy));
-  svg.appendChild(g);
-
-  // Precompute the active plan's per-level scale context once (not per room).
   const colourCtx = colourPlan ? buildColourContext(rooms, colourPlan) : null;
-
-  // A room's cull unit: its precomputed (flipped) bbox + every node that must
-  // hide/show together. Keyed by room across the two paint passes so the label
-  // (pass 2) joins the same unit as the polygons (pass 1).
-  const units = cullUnits ? new Map() : null;
-
-  // Two passes, not one: every room's polygons first, then every room's label.
-  // SVG has no reliable z-index — paint order is DOM order — so appending all
-  // polygons before any label guarantees labels always sit on top.
-  for (const room of rooms) {
-    if (!room.loops || room.loops.length === 0) continue;
-
-    // Search state per room: a match gets `.match` (accent outline); when a
-    // search is active every non-match gets `.dim` (rooms, holes and label), so
-    // matches stand out. Composes with the `.error` highlight and colour-plan
-    // fills — `.match` is a stroke, `.dim` is opacity.
-    const isMatch = searchActive && matchRoomIds && matchRoomIds.has(room.id);
-    const dimmed = searchActive && !isMatch;
-
-    const outer = document.createElementNS(SVG, "polygon");
-    outer.setAttribute("points", pointsAttr(room.loops[0]));
-    let cls = "room";
-    if (showErrors && errorRoomIds && errorRoomIds.has(room.id)) cls += " error";
-    if (isMatch) cls += " match";
-    if (dimmed) cls += " dim";
-    outer.setAttribute("class", cls);
-    // Fill precedence: an active colour plan wins over the error highlight and
-    // the default --fill. Inline style beats the `.room` CSS rule; a
-    // presentation attribute would lose to it. This inline fill is a resolved
-    // literal, so it survives serialization into an exported .svg unchanged.
-    if (colourPlan) outer.style.fill = colourForRoom(room, colourPlan, colourCtx);
-    outer.appendChild(titleEl(room.name || room.id));
-    svg.appendChild(outer);
-
-    const nodes = units ? [outer] : null;
-    for (let i = 1; i < room.loops.length; i++) {
-      const hole = document.createElementNS(SVG, "polygon");
-      hole.setAttribute("points", pointsAttr(room.loops[i]));
-      hole.setAttribute("class", dimmed ? "hole dim" : "hole");
-      svg.appendChild(hole);
-      if (nodes) nodes.push(hole);
-    }
-    if (units) units.set(room, { room, ...roomBBox(room), nodes, hidden: false });
-  }
-
-  // Labels off skips the pass entirely (omitting elements beats styling them
-  // away — an exported file then simply has no <text> nodes). Cull units are
-  // unaffected: the label is always the LAST node pushed, so dropping it only
-  // shortens the tail — applyHighlight's nodes[0] (the pass-1 room polygon)
-  // and cullZone's plain iteration both survive either way.
-  if (showLabels) for (const room of rooms) {
-    if (!room.loops || room.loops.length === 0) continue;
-    const label = addLabel(svg, room, baseFont);
-    if (!label) continue;
-    if (searchActive && !(matchRoomIds && matchRoomIds.has(room.id))) label.classList.add("dim");
-    if (units) units.get(room).nodes.push(label);
-  }
-
-  if (cullUnits) for (const u of units.values()) cullUnits.push(u);
+  PlanRenderer.paintLevel(svg, rooms, fitted, {
+    colourFor: colourPlan ? (room) => colourForRoom(room, colourPlan, colourCtx) : undefined,
+    errorRoomIds, showErrors, cullUnits, matchRoomIds, searchActive, showLabels,
+  });
 }
 
 // The canvas overlay says one of three DIFFERENT things, and collapsing them
@@ -1387,44 +1226,11 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
   if (zone.areasMode) renderAreasOverlay(zone);
 }
 
-// `room.label` is the server-resolved, ordered field list (settings.toml's
-// `room_label`) — the browser renders whatever it's given. First field is the
-// primary line; further fields stack below as smaller accent lines. `label`
-// present-but-empty means the configured properties didn't resolve (respect
-// it); `label` missing (an older payload) falls back to name/id.
-function addLabel(svg, room, baseFont) {
-  const fields = room.label !== undefined ? room.label : [room.name || room.id].filter(Boolean);
-  if (fields.length === 0) return null;
-
-  const box = loopBox(room.loops[0]);
-  const longest = fields.reduce((n, f) => Math.max(n, String(f).length), 1);
-  const widthLimited = (box.w * 0.9) / longest / 0.6;
-  const heightLimited = (box.h * 0.8) / (1 + 0.7 * (fields.length - 1));
-  const fontSize = Math.min(baseFont, widthLimited, heightLimited);
-  if (!(fontSize > 0)) return null;
-
-  const c = centroid(room.loops[0]);
-  const label = document.createElementNS(SVG, "text");
-  label.setAttribute("class", "label");
-  label.setAttribute("x", c.x);
-  label.setAttribute("y", c.y);
-  label.setAttribute("font-size", fontSize);
-
-  fields.forEach((text, i) => {
-    const span = document.createElementNS(SVG, "tspan");
-    span.setAttribute("x", c.x);
-    span.textContent = text;
-    if (i > 0) {
-      span.setAttribute("class", "tag");
-      span.setAttribute("dy", "1.2em");
-      span.setAttribute("font-size", fontSize * 0.7);
-    }
-    label.appendChild(span);
-  });
-
-  svg.appendChild(label);
-  return label;
-}
+// `addLabel` moved to src-js/renderer/svg/paint.ts (aliased above). The
+// three-state `label` rule it encodes -- absent falls back to name/id,
+// present-but-empty renders nothing -- is now typed (`Room.label`) and covered
+// by tests, because the two empty-ish states looking identical on screen is a
+// bug in whichever direction it happens.
 
 // Populate this zone's level picker, highest elevation first.
 function buildLevelControl(zone, payload, levels) {
