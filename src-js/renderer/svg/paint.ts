@@ -1,35 +1,28 @@
-// The SVG painter. Appends grid + room polygons + labels for one level into an
-// `<svg>`, framed to `fitted`.
+// The SVG painter for the **export**, and nothing else.
 //
-// Reads nothing from a zone or a module global — the colour plan, error set and
-// toggles all arrive as arguments — which is what lets the live view and the
-// `.svg` export share one body. From P6 this is the EXPORT-ONLY painter and the
-// live view is WebGL, but the sharing constraint does not relax: the export's
-// output is the thing a golden test pins, and the GL renderer is expected to
-// agree with it about every appearance decision (see ../appearance.ts).
+// It used to draw the live plan as well, and its doc comment used to explain
+// that the two shared one body so they "can't drift". That sharing is over: the
+// screen is WebGL (../gl/renderer.ts) and this builds the `.svg` file a user
+// downloads. Saying so plainly matters, because a comment describing a
+// relationship that no longer exists is worse than no comment — it sends the
+// next reader looking for a live path that was deleted.
+//
+// What replaced the sharing is ../appearance.ts. Both painters resolve a room's
+// appearance through `resolveRoomAppearance`, so the DECISION still has exactly
+// one definition even though there are now two emitters. That is the thing that
+// must not drift; the emitting was never the risk.
+//
+// Still reads nothing from a zone or a module global — every input arrives as
+// an argument — which is what lets `buildLevelSvgFile` hand it a detached
+// element and get a self-contained document back.
 
 import { holeClassName, resolveRoomAppearance, roomClassName } from "../appearance.js";
-import { centroid, loopBox, pointsAttr, roomBBox } from "../geometry.js";
-import type { AppearanceContext, Extent, Rect, Room, RoomAppearance } from "../types.js";
+import { centroid, loopBox, pointsAttr } from "../geometry.js";
+import type { AppearanceContext, Rect, Room, RoomAppearance } from "../types.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** One room's cull unit: its precomputed flipped bbox plus every node that has
- *  to hide and show together. */
-export interface CullUnit extends Extent {
-  room: Room;
-  /** `nodes[0]` is ALWAYS the outer polygon — `applyHighlight` and
-   *  `applySelection` both index it directly. Holes follow, and the label is
-   *  always LAST, so dropping the label pass only shortens the tail. */
-  nodes: SVGElement[];
-  hidden: boolean;
-}
-
 export interface PaintOptions extends AppearanceContext {
-  /** When supplied, one unit per room is collected into it so the live view can
-   *  cull on pan/zoom. The export passes none: an exported file needs every
-   *  room, and a detached node has no view to cull against. */
-  cullUnits?: CullUnit[] | null | undefined;
   showLabels?: boolean | undefined;
 }
 
@@ -106,7 +99,7 @@ export function paintLevel(
   fitted: Rect,
   opts: PaintOptions = {},
 ): void {
-  const { cullUnits = null, showLabels = true } = opts;
+  const { showLabels = true } = opts;
   const doc = svg.ownerDocument;
   const baseFont = Math.max(fitted.w, fitted.h) * 0.02;
 
@@ -119,11 +112,10 @@ export function paintLevel(
     g.appendChild(line(doc, fitted.x, gy, fitted.x + fitted.w, gy));
   svg.appendChild(g);
 
-  // Keyed by room across the two passes, so the label (pass 2) joins the same
-  // unit as the polygons (pass 1), and so the appearance decision is made ONCE
-  // per room rather than once per pass — `colourFor` is caller-supplied and
-  // resolving a colour plan twice for every room is real work at plate scale.
-  const units = new Map<Room, CullUnit>();
+  // Keyed by room across the two passes, so the appearance decision is made
+  // ONCE per room rather than once per pass — `colourFor` is caller-supplied,
+  // and resolving a colour plan twice for every room is real work at plate
+  // scale (an export of `big-plate` covers 5,046 of them).
   const appearances = new Map<Room, RoomAppearance>();
 
   // TWO passes, not one: every room's polygons first, then every room's label.
@@ -146,15 +138,12 @@ export function paintLevel(
     outer.appendChild(titleEl(doc, room.name || room.id));
     svg.appendChild(outer);
 
-    const nodes: SVGElement[] = [outer];
     for (let i = 1; i < loops.length; i++) {
       const hole = doc.createElementNS(SVG_NS, "polygon");
       hole.setAttribute("points", pointsAttr(loops[i]!));
       hole.setAttribute("class", holeClassName(appearance));
       svg.appendChild(hole);
-      nodes.push(hole);
     }
-    if (cullUnits) units.set(room, { room, ...roomBBox(room), nodes, hidden: false });
   }
 
   // Labels off skips the pass entirely. Omitting elements beats styling them
@@ -165,9 +154,6 @@ export function paintLevel(
       const label = addLabel(svg, room, baseFont);
       if (!label) continue;
       if (appearances.get(room)?.dim) label.classList.add("dim");
-      units.get(room)?.nodes.push(label);
     }
   }
-
-  if (cullUnits) for (const u of units.values()) cullUnits.push(u);
 }

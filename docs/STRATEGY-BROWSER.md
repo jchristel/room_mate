@@ -647,16 +647,25 @@ serving a different consumer (a hierarchy browser) than the room render.
   (5,046 rooms/level): a deep zoomed-in pan went from **~595 ms/frame (~2 fps)** to
   **4–15 ms/frame** (only the ~12–40 on-screen rooms drawn), verified to restore
   every room on zoom-out and to leave the export at full room count.
-  A **debug kill switch** (`CULL_ENABLED`, a module-level `let` beside
-  `MATCH_COLOUR`) turns the hide/show off so this can be re-measured rather than
-  taken on faith whenever the renderer changes — see
-  [HANDOVER-culling-disable-switch.md](Superseded/HANDOVER-culling-disable-switch.md). It is
-  console-only and unpersisted on purpose, so nobody leaves it off and files the
-  slowness as a bug, and it suppresses hide/show **only**: cull units are still
-  collected, because `roomAtNode` (click-to-select), `applySelection` and
-  `applyHighlight` all walk them. Re-measured 2026-07-25 with it:
-  **16.5 ms/frame on vs 912 ms/frame off** — culling still earns its place, so
-  the "delete it if it has been made redundant" branch stays unexercised.
+  A **debug kill switch** (`CULL_ENABLED`) turned the hide/show off so this
+  could be re-measured rather than taken on faith whenever the renderer changed
+  — see
+  [HANDOVER-culling-disable-switch.md](Superseded/HANDOVER-culling-disable-switch.md).
+  Re-measured 2026-07-25 with it: **16.5 ms/frame on vs 912 ms/frame off**.
+
+  **All of the above is now history, and the switch took its own advice.** That
+  handover said to delete culling if something ever made it redundant rather
+  than leave it switched on, and the WebGL renderer did exactly that: a frame is
+  four draw calls whatever the room count, so there is nothing off-screen worth
+  hiding and no per-element cost to avoid. Culling, its kill switch, the cull
+  units `paintLevel` used to collect and the `roomBBox`-per-room index that fed
+  them are all deleted (2026-08-02). The *spatial* index survives in a different
+  form and for a different job — a Flatbush R-tree answering the pick, in
+  `src-js/renderer/gl/spatial.ts`.
+
+  Worth keeping the number, because it is the honest reason the feature existed:
+  912 ms/frame was real, and on SVG the cull was worth every line. It stopped
+  being worth them when the thing it was compensating for went away.
 - **Fitted-view cost at very high room counts — CLOSED 2026-08-02, by moving the
   plan to WebGL.** This was the item that justified the whole renderer exercise:
   culling helps only when geometry is off-screen, so a *fitted* view of a
@@ -718,11 +727,24 @@ serving a different consumer (a hierarchy browser) than the room render.
   Per-room tooltips survived the move but had to be rebuilt: every room polygon
   carried an SVG `<title>` that the browser drew for free, and WebGL has no
   equivalent, so a DOM tooltip is driven by the hover pick instead. Same text.
-- **`RENDERER` is the re-measurement handle**, module-level and console-reachable
-  beside `CULL_ENABLED`, unpersisted for the same reason. `RENDERER = "svg";
-  location.reload()` puts the SVG renderer back so the table above can be
-  re-derived rather than believed. Both implementations satisfy one seam
-  (`src-js/renderer/seam.ts`), so nothing but the drawing differs between them.
+- **The SVG live renderer is deleted**, and with it the `RENDERER` flag that
+  chose between the two. Keeping a second live renderer purely so a number could
+  be re-derived would have meant maintaining it forever, and an unexercised
+  fallback rots — a fallback nobody runs is a fallback nobody knows is broken.
+
+  The *capability* survives without the code: `measureSvgPaint()` in the console
+  times the **export** painter, which has to exist anyway and builds exactly the
+  same geometry, into a detached `<svg>`. It measures DOM construction only —
+  the browser's layout and paint of those nodes is the larger half, and is what
+  a live SVG renderer additionally paid every frame — so it is a floor on the
+  SVG cost, not an estimate of it. Enough to re-derive the shape of the table
+  above, which is what the flag was for.
+
+  The consequence, stated plainly: **a browser without WebGL now shows no plan.**
+  That was accepted deliberately when the plan was written
+  ([PLAN-webgl-renderer.md](PLAN-webgl-renderer.md), "Departures"), on the
+  grounds that two live renderers is a permanent tax on every future frontend
+  change.
 - **Coordinates and units.** Revit internal units are decimal feet, Y-up; SVG
   is Y-down — handled by flipping Y when building geometry. Absolute units do
   not matter while the viewer auto-fits, but they will once dimensions, a scale

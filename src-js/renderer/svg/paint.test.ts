@@ -16,7 +16,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { fittedBounds } from "../geometry.js";
 import type { Room } from "../types.js";
-import { paintLevel, type CullUnit, type PaintOptions } from "./paint.js";
+import { paintLevel, type PaintOptions } from "./paint.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -125,29 +125,12 @@ describe("paintLevel structure", () => {
     expect(kinds.lastIndexOf("polygon")).toBeLessThan(kinds.indexOf("text"));
   });
 
-  it("collects one cull unit per drawn room, with the polygon first", () => {
-    // `applyHighlight` and `applySelection` both index nodes[0] directly.
-    const cullUnits: CullUnit[] = [];
-    const svg = paint({ cullUnits });
-    expect(cullUnits).toHaveLength(svg.querySelectorAll("polygon.room").length);
-    for (const u of cullUnits) expect(u.nodes[0]!.getAttribute("class")).toMatch(/^room/);
-  });
-
-  it("keeps the label as the LAST node of its cull unit", () => {
-    // The tail position is what lets the labels-off path simply shorten the
-    // unit instead of renumbering it.
-    const cullUnits: CullUnit[] = [];
-    paint({ cullUnits });
-    const withLabel = cullUnits.find((u) => u.room.id === "plain")!;
-    expect(withLabel.nodes.at(-1)!.tagName).toBe("text");
-  });
-
-  it("still produces well-formed units when labels are off", () => {
-    const cullUnits: CullUnit[] = [];
-    paint({ cullUnits, showLabels: false });
-    expect(cullUnits.every((u) => u.nodes.length >= 1)).toBe(true);
-    expect(cullUnits.every((u) => u.nodes[0]!.tagName === "polygon")).toBe(true);
-  });
+  // The cull-unit tests that used to sit here are gone with the cull. They
+  // asserted an index `paintLevel` built for the LIVE SVG renderer -- nodes[0]
+  // is the room polygon, the label is last -- and both the index and the
+  // renderer that read it were deleted once the plan moved to WebGL. What they
+  // protected (paint order, and labels being optional) is covered by the two
+  // tests either side of this comment and by the golden files.
 
   it("omits text nodes entirely when labels are off", () => {
     expect(paint({ showLabels: false }).querySelectorAll("text")).toHaveLength(0);
