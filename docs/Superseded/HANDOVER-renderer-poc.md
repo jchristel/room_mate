@@ -1,5 +1,24 @@
 # HANDOVER — Renderer POC: Canvas2D vs WebGL at 50k polygons
 
+> **Superseded — the POC ran, the verdict was WebGL, and the renderer built on
+> it has shipped.** Its numbers are reproduced in
+> [HANDOVER-webgl-renderer.md](HANDOVER-webgl-renderer.md) (the POC folder was
+> deliberately never on `main`); the shipped result is in
+> [STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) "Renderer".
+>
+> Its method held up where it mattered — insisting both candidates get the same
+> spatial index, and refusing a geometry-only benchmark — and both instincts
+> were vindicated: the shipped renderer uses a Flatbush index for the pick, and
+> labels turned out to dominate, though as *construction* cost rather than draw
+> cost, which no draw-time benchmark would have found.
+>
+> Two of its cautions did not survive the real build. **"Instrument DPR"**
+> anticipated retina roughly 4×-ing fill cost; measured on the real renderer it
+> barely registers, because a frame is four draw calls rather than fill-bound.
+> And the POC's own framing — that the choice was Canvas2D versus WebGL — left
+> out what actually cost the most effort: non-scaling stroke widths, which
+> neither candidate provides and which a scene graph cannot express.
+
 **Status:** not started. This is a brief, kept as one. It commissions a
 throwaway measurement, not a feature — its only deliverable is a number and a
 verdict about which renderer the viewer's next generation is built on.

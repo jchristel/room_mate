@@ -35,27 +35,8 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 ## Open handovers
 
-- **[WebGL renderer](HANDOVER-webgl-renderer.md)** — replace the SVG plan
-  renderer with WebGL (PixiJS), keeping the SVG export, the areas overlay and
-  today's interaction behaviour. The case for it is one number: the *fitted*
-  view, which is what the viewer shows on load, costs 4.3 µs/room on Canvas2D
-  against ~40 ns on WebGL, so Canvas2D would miss the frame budget on the
-  `big-plate` fixture today. Pan is not the reason — viewport culling already
-  fixed that.
-  **Built, all six phases, to [PLAN-webgl-renderer.md](PLAN-webgl-renderer.md)**
-  — read that one for how, and for the two places it deliberately departs from
-  the handover. The measured result is in
-  [STRATEGY-BROWSER.md](STRATEGY-BROWSER.md) "Renderer": a fitted pan of
-  `big-plate` went from **733 ms p95 to 1 ms**, against a ≤16 ms budget. The SVG
-  live renderer, viewport culling and the flag that chose between the two are
-  deleted; `paintLevel` survives as the **export** painter, pinned by golden
-  files, and `measureSvgPaint()` keeps the comparison re-derivable.
-
-  It also records the decision that reaches furthest past this feature: the
-  frontend's zero-build constraint is retired, and `src-js/` (TypeScript, Vite)
-  is where new frontend code lands.
-
-Everything else has landed and moved to [Superseded](Superseded/).
+**None.** The last one — the WebGL plan renderer — landed on 2026-08-02 and
+moved to [Superseded](Superseded/) with the plan that built it.
 
 That is a statement about *handovers*, not about outstanding work — open items
 otherwise live in the strategy doc that owns them rather than in a brief that
@@ -66,23 +47,33 @@ its two remaining false-positive checks went into
 Keeping them in a superseded brief would have buried a live item in an archive.
 
 Handoff documents whose work has fully landed live in
-[Superseded](Superseded/), and so does one **plan**:
-`PLAN-handover-actioning.md`, closed with P1 through P10 all landed and every
-handover it reviewed superseded alongside it. It is kept as the record of how
-the UI restructure was sequenced and what was deliberately *not* built. The
-other two plans stay live because each still carries an open item — R4 for
-generalisation, the unverified extractor half for phasing.
+[Superseded](Superseded/), and so do **two plans**: `PLAN-handover-actioning.md`,
+closed with P1 through P10 all landed and every handover it reviewed superseded
+alongside it, and `PLAN-webgl-renderer.md`, closed with P0 through P6 landed and
+both renderer handovers superseded beside it. Each is kept as the record of how
+the work was sequenced and what was deliberately *not* built. The other two
+plans stay live because each still carries an open item — R4 for generalisation,
+the unverified extractor half for phasing.
 
-Three of those are worth knowing about even though they are superseded,
+Four of those are worth knowing about even though they are superseded,
 because each leaves something recorded rather than pending:
 
 - **[Room inspector](Superseded/HANDOVER-room-inspector.md)** — step 6, a
   checkbox property picker, was deliberately not built. Hide-empty plus the name
   filter covered the cases it was for. Act on it only if the need shows up.
 - **[Viewport culling kill switch](Superseded/HANDOVER-culling-disable-switch.md)**
-  — the switch is permanent (`CULL_ENABLED` in `index.html`) and that document is
-  the method for re-measuring whenever the renderer changes. Last run:
-  **16.5 ms/frame with culling, 912 ms without.**
+  — **the switch took its own advice.** It said to delete culling if anything
+  ever made it redundant rather than leave it switched on; WebGL did, and both
+  the cull and `CULL_ENABLED` are gone (2026-08-02). The document is kept for its
+  method and its number — **16.5 ms/frame with culling, 912 ms without** — which
+  is the honest reason the feature was worth having right up until it wasn't.
+- **[WebGL plan renderer](Superseded/PLAN-webgl-renderer.md)** — records what the
+  plan got *wrong*, which is the useful half: the shader it feared was not what
+  broke the frame budget (5,046 label transforms were, fixed by one line), and
+  the label build cost it expected to be a regression is within 2% of SVG end to
+  end. What held: extract the appearance decision first, put a seam in before the
+  swap, freeze golden files for the export — those survived all six phases
+  byte-identical.
 - **[QA coverage of the secondary source](Superseded/HANDOVER-qa-cardinality-and-coverage.md)**
   — closed, but it records a mis-diagnosis worth not repeating: two drafts read
   `duplicate_link_values` as "the reference source has duplicates" when it means

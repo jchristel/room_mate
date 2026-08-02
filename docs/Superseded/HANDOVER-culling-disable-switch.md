@@ -1,11 +1,22 @@
 # HANDOVER — Viewport culling disable switch
 
-> **Superseded — built, and the question it asked is answered:** culling is
-> worth keeping, by a wide margin (**16.5 ms/frame with it, 912 ms without**,
-> `big-plate`, 2026-07-25). The switch itself is permanent and lives in
-> `index.html` as `CULL_ENABLED`; [STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md)
-> carries the live pointer. This stays as the method and the result — re-run
-> §5 and append here whenever the renderer changes.
+> **Superseded twice, and the second time this document's own instruction is
+> what closed it.**
+>
+> **2026-07-25 — the question it asked:** culling is worth keeping, by a wide
+> margin (**16.5 ms/frame with it, 912 ms without**, `big-plate`).
+>
+> **2026-08-02 — culling is deleted, and so is the switch.** §6 said to delete
+> the feature if anything ever made it redundant rather than leave it switched
+> on. Moving the plan to WebGL did: a frame is four draw calls whatever the room
+> count, so there is nothing off-screen worth hiding and no per-element cost to
+> avoid. `CULL_ENABLED`, `cullZone`, `scheduleCull` and the cull units are gone
+> — do not go looking for them in `index.html`.
+>
+> Kept for the method and the number. 912 ms/frame was real, and the cull was
+> worth every line of itself right up until the thing it compensated for went
+> away. [STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) "Renderer" carries the live
+> pointer.
 
 **Status: implemented (flag + guard, console-only), and the test run below has
 been done.** Verdict up front, since that is what this document exists to

@@ -1,8 +1,35 @@
 # PLAN — Implementing the WebGL plan renderer
 
+> **Superseded — all six phases built and merged.** The live pointers are
+> [STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) "Renderer" (the numbers, the
+> accessibility acceptance, and the hybrid's one invariant) and
+> [CODING-CONVENTIONS.md](../CODING-CONVENTIONS.md) "`static/`" (the toolchain
+> and the migration rule). This stays as the record of *why* each decision went
+> the way it did.
+>
+> **What it got wrong, recorded because the reasoning is the point:**
+>
+> - The plan predicted the screen-space line shader would be the hard part, and
+>   it was — but the thing that actually broke the frame budget was Pixi
+>   re-deriving the world transform of 5,046 label nodes every frame. One line
+>   (`enableRenderGroup`) took a fitted pan from 36 ms p95 to 1 ms.
+> - It expected the label build cost to be a regression against SVG. It is not:
+>   comparing end to end rather than against `paintLevel`'s JS time alone, the
+>   two are within 2%.
+> - `CULL_ENABLED` was said to be "untouched by any of this". It is deleted —
+>   viewport culling was an SVG necessity and a WebGL frame has nothing to cull.
+> - The migration boundary named `cullZone`, `scheduleCull` and `roomAtNode` as
+>   code to move. They were deleted instead.
+>
+> **What it got right and is worth reusing:** extracting the appearance decision
+> before touching the renderer, putting a seam in place *before* the swap, and
+> freezing golden files for the export first — those held byte-identical through
+> every one of the six phases, including two that rewrote the renderer beneath
+> them.
+
 **Status: DONE. P0–P6 built; the WebGL renderer is the only one.** The measured
 outcome lives in
-[STRATEGY-BROWSER.md](STRATEGY-BROWSER.md) "Renderer" — a fitted pan of
+[STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) "Renderer" — a fitted pan of
 `big-plate` went from 733 ms p95 to 1 ms, against a ≤16 ms budget — along with
 the accessibility acceptance and the re-measurement handle. Written 2026-08-02
 against
