@@ -51,6 +51,7 @@ export function parseColour(css: string): Rgba {
 export interface PlanPalette {
   ink: Rgba;
   fill: Rgba;
+  fillHover: Rgba;
   paper: Rgba;
   accent: Rgba;
   error: Rgba;
@@ -64,6 +65,7 @@ export function readPalette(root: HTMLElement): PlanPalette {
   return {
     ink: v("--ink", "#222222"),
     fill: v("--fill", "#dddddd"),
+    fillHover: v("--fill-hover", "#cccccc"),
     paper: v("--paper", "#ffffff"),
     accent: v("--accent", "#c8102e"),
     error: v("--error", "#ffb3b3"),

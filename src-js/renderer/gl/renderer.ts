@@ -53,10 +53,8 @@ interface RoomEntry {
   outline: { start: number; count: number } | null;
   appearanceFill: Rgba;
   /** Whether a colour plan resolved a literal fill for this room — which is
-   *  what decides if hover may change its colour. See `#drawMarks`. */
+   *  what decides if hover may change its colour. See `#drawHover`. */
   appearanceIsPlanFill: boolean;
-  /** The plan's fill as CSS, for re-applying inline on a hover mark. */
-  appearanceCss: string | null;
 }
 
 export interface GlRendererOptions {
@@ -97,6 +95,7 @@ export class GlPlanRenderer implements PlanRenderer {
 
   #grid: LineMesh | null = null;
   #fills: FillMesh | null = null;
+  #hoverMesh: FillMesh | null = null;
   #holeLines: LineMesh | null = null;
   #outlines: LineMesh | null = null;
   #labelContainer: Container | null = null;
@@ -297,12 +296,69 @@ export class GlPlanRenderer implements PlanRenderer {
   setHover(roomId: string | null): void {
     if (this.#hovered === roomId) return;
     this.#hovered = roomId;
-    this.#drawMarks();
+    this.#drawHover();
+  }
+
+  /**
+   * The hover fill, as its own small GL mesh sitting between the plan and the
+   * labels.
+   *
+   * One room, re-triangulated on each hover change — which sounds wasteful and
+   * is not: it is a handful of triangles, built only when the hovered room
+   * actually changes (`setHover` returns early otherwise) and behind an
+   * animation-frame throttle in the page. The alternative, rewriting the shared
+   * fill buffer's colours, would re-upload the whole level's vertices on every
+   * pointer move.
+   *
+   * Added BELOW the label container on purpose. That is the entire reason this
+   * is not drawn in the SVG overlay with the selection mark: the overlay is
+   * above the canvas, so an opaque hover fill there covers the label of the room
+   * being pointed at.
+   */
+  #drawHover(): void {
+    this.#hoverMesh?.destroy();
+    this.#hoverMesh = null;
+
+    const entry = this.#hovered ? this.#entries.find((e) => e.room.id === this.#hovered) : undefined;
+    // A room with a colour plan does NOT change on hover, and that is a
+    // precedence being reproduced rather than an omission: in SVG the plan's
+    // inline fill beat the `:hover` rule, so those rooms never highlighted.
+    if (!entry || entry.appearanceIsPlanFill) {
+      this.#render();
+      return;
+    }
+
+    const batch = new FillBatch();
+    // `.room.error:hover` resolves to the accent, everything else to
+    // `--fill-hover`. Same two rules the stylesheet carries.
+    const a = resolveRoomAppearance(entry.room, this.#lastPaint);
+    const colour = a.error ? this.#palette.accent : this.#palette.fillHover;
+    if (!batch.push(entry.room, colour)) {
+      this.#render();
+      return;
+    }
+    const mesh = batch.build();
+    this.#hoverMesh = mesh;
+    mesh.setLayerAlpha(this.#areasActive ? GHOST_ROOMS : 1);
+    // Directly ABOVE the fills and below everything else — hover replaces a
+    // room's FILL, nothing more. Sitting any higher covers that room's own
+    // outline and its dashed hole strokes, which measurably lost ~420 ink pixels
+    // when this went in just below the labels instead.
+    //
+    // In SVG this ordering was free: the stroke and the fill were the same
+    // element, and a stroke always paints over its own fill. Split across two
+    // meshes, the order has to be stated.
+    const fills = this.#fills;
+    const at = fills ? this.#root.getChildIndex(fills.mesh) + 1 : 0;
+    this.#root.addChildAt(mesh.mesh, Math.min(at, this.#root.children.length));
+    this.#pushView();
+    this.#render();
   }
 
   setAreasActive(on: boolean): void {
     this.#areasActive = on;
     this.#fills?.setLayerAlpha(on ? GHOST_ROOMS : 1);
+    this.#hoverMesh?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#outlines?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#holeLines?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#grid?.setLayerAlpha(on ? GHOST_ROOMS : 1);
@@ -358,11 +414,13 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#root.removeChildren();
     this.#grid?.destroy();
     this.#fills?.destroy();
+    this.#hoverMesh?.destroy();
     this.#holeLines?.destroy();
     this.#outlines?.destroy();
     this.#labelContainer?.destroy({ children: true });
     this.#grid = null;
     this.#fills = null;
+    this.#hoverMesh = null;
     this.#holeLines = null;
     this.#outlines = null;
     this.#labelContainer = null;
@@ -425,7 +483,6 @@ export class GlPlanRenderer implements PlanRenderer {
         outline,
         appearanceFill: base,
         appearanceIsPlanFill: a.fill !== null,
-        appearanceCss: a.fill,
       });
     }
     this.#entries = entries;
@@ -479,6 +536,7 @@ export class GlPlanRenderer implements PlanRenderer {
     // exist. Re-derived here, which is the GL equivalent of `renderLevel`
     // re-applying the selection class after `paintLevel` rebuilt every node.
     this.#drawMarks();
+    this.#drawHover();
     // Unconditional, because none of the calls above is guaranteed to have
     // rendered. A repaint that draws nothing is the one outcome this method
     // must never have.
@@ -517,21 +575,17 @@ export class GlPlanRenderer implements PlanRenderer {
 
     // Hover first, selection second: the selection stroke must win where a room
     // is both, which is routine (you click what you are pointing at).
-    const hovered = byId(this.#hovered);
-    if (hovered && hovered.room.id !== this.#selected) {
-      const p = this.#markPolygon(doc, hovered.room);
-      if (p) {
-        // `.room` for the shape, `hovered` for the fill swap. An inline
-        // colour-plan fill is re-applied here on purpose: in SVG an inline fill
-        // BEATS the `:hover` rule, so a room with an active colour plan does not
-        // change colour on hover. Reproducing that means reproducing the
-        // precedence, not just the hover colour.
-        p.setAttribute("class", hovered.appearanceIsPlanFill ? "room hovered" : "room hovered plain");
-        if (hovered.appearanceIsPlanFill && hovered.appearanceCss) p.style.fill = hovered.appearanceCss;
-        g.appendChild(p);
-      }
-    }
-
+    // NOTE: hover is NOT drawn here. It is a FILL, and a fill drawn into this
+    // overlay sits above the canvas — and therefore above the labels, which the
+    // canvas draws. It would hide the very label the user is pointing at.
+    //
+    // The old SVG renderer had no such problem: hover recoloured the room
+    // polygon itself, and labels were appended after every polygon, so they
+    // stayed on top. Reproducing that ordering means the hover fill belongs in
+    // the GL layer, underneath the label container — see `#drawHover`.
+    //
+    // Selection is different and does belong here: it is a STROKE with
+    // `fill: none`, so it rings the room without covering anything.
     const selected = byId(this.#selected);
     if (selected) {
       const p = this.#markPolygon(doc, selected.room);
@@ -600,6 +654,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#holeLines?.setView(eff, pxW, pxH, dpr);
     this.#outlines?.setView(eff, pxW, pxH, dpr);
     this.#fills?.setView(eff, pxW, pxH);
+    this.#hoverMesh?.setView(eff, pxW, pxH);
     // Labels live in world space, so the scene transform carries them. This is
     // the ONE place a container transform is used, and it is correct here
     // precisely because label text SHOULD scale with the view — unlike strokes,
