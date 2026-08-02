@@ -202,7 +202,25 @@
   /* The canvas region below the toolbar; holds the SVG, the empty-state note,
      and the validation panel (both absolutely positioned over the SVG). */
   .zone-canvas { position: relative; overflow: hidden; min-height: 0; }
-  .zone-canvas svg { width: 100%; height: 100%; display: block; cursor: grab; }
+  /* --- the zone's layer stack, stated explicitly ---
+     DOM order is NOT what decides this, and assuming it did was a real bug: the
+     canvas is `position: absolute` and the <svg> was `position: static`, and CSS
+     paints every positioned element AFTER every non-positioned one regardless of
+     which comes first in the document. So the canvas covered the overlay, and
+     the dashed selection outline drawn into that overlay disappeared under the
+     room fills — visible only where it overhung a fill's edge.
+     `pointer-events: none` on the canvas hid the symptom from hit-testing, so
+     `elementFromPoint` still reported the <svg> on top while the pixels said
+     otherwise.
+       0  canvas    the plan: fills, holes, outlines, labels
+       1  svg       the overlay: selection + hover marks, areas footprints
+       2  empty     "no rooms" message
+       4  busy      "drawing plan" panel, covers everything while it builds
+       5  tip       the room tooltip, above all of it */
+  .zone-canvas svg {
+    position: relative; z-index: 1;
+    width: 100%; height: 100%; display: block; cursor: grab;
+  }
   .zone-canvas svg:active { cursor: grabbing; }
   /* The WebGL plan layer sits UNDER the <svg>, which stays in the DOM for the
      areas overlay, the selection/hover marks and every pointer handler. The svg
@@ -212,6 +230,7 @@
   .zone-canvas canvas.plan-gl {
     position: absolute; inset: 0; width: 100%; height: 100%;
     display: block; pointer-events: none;
+    z-index: 0; /* see the layer stack above -- without this it paints OVER the svg */
   }
 
   .grid line { stroke: var(--rule); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
@@ -308,7 +327,7 @@
      left it displayed over every plan — the same shield bug wearing a different
      hat. Stated here rather than fought with `!important`. */
   .zone-canvas .empty:not(.hidden) {
-    position: absolute; inset: 0; display: grid; place-content: center;
+    position: absolute; inset: 0; z-index: 2; display: grid; place-content: center;
     text-align: center; gap: 0.4rem; color: var(--ink); padding: 1rem;
     /* It is a message, not a control — nothing in it is clickable. Without this
        it covers the canvas it sits on and eats pan, zoom and click, which is the
