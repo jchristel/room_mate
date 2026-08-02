@@ -19,7 +19,7 @@
 
 import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
-import { flip } from "../geometry.js";
+import { flip, pointsAttr } from "../geometry.js";
 import type { HighlightState, PaintRequest, PlanRenderer } from "../seam.js";
 import type { Rect, Room } from "../types.js";
 import { parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
@@ -43,12 +43,18 @@ const GHOST_ROOMS = 0.16;
 const GHOST_LABELS = 0.22;
 /** Grid spacing in world units, as `paintLevel` uses. */
 const GRID_STEP = 5;
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 interface RoomEntry {
   room: Room;
   fill: VertexRange | null;
   outline: { start: number; count: number } | null;
   appearanceFill: Rgba;
+  /** Whether a colour plan resolved a literal fill for this room — which is
+   *  what decides if hover may change its colour. See `#drawMarks`. */
+  appearanceIsPlanFill: boolean;
+  /** The plan's fill as CSS, for re-applying inline on a hover mark. */
+  appearanceCss: string | null;
 }
 
 export interface GlRendererOptions {
@@ -56,12 +62,23 @@ export interface GlRendererOptions {
   /** Element whose custom properties carry the palette. Defaults to
    *  `document.documentElement`. */
   themeRoot?: HTMLElement | undefined;
+  /**
+   * The SVG layer sitting above the canvas, where the SMALL things are drawn.
+   *
+   * This is the hybrid, in one argument. Selection and hover are exactly ONE
+   * room each, and drawing them here rather than in GL keeps the stylesheet as
+   * the place their appearance is defined and avoids re-uploading a vertex
+   * buffer on every click and every pointer move. The areas overlay already
+   * lives on this element and is not touched by the renderer at all.
+   */
+  overlay?: SVGElement | undefined;
 }
 
 export class GlPlanRenderer implements PlanRenderer {
   readonly #canvas: HTMLCanvasElement;
   readonly #cullEnabled: () => boolean;
   readonly #themeRoot: HTMLElement;
+  readonly #overlay: SVGElement | null;
 
   #app: Application | null = null;
   #ready: Promise<void>;
@@ -80,6 +97,7 @@ export class GlPlanRenderer implements PlanRenderer {
   #palette: PlanPalette;
   #view: Rect = { x: 0, y: 0, w: 100, h: 100 };
   #selected: string | null = null;
+  #hovered: string | null = null;
   #areasActive = false;
   /** Retained so a repaint can reproduce exactly what is on screen. */
   #rooms: readonly Room[] = [];
@@ -91,6 +109,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#canvas = canvas;
     this.#cullEnabled = opts.cullEnabled ?? (() => true);
     this.#themeRoot = opts.themeRoot ?? document.documentElement;
+    this.#overlay = opts.overlay ?? null;
     this.#palette = readPalette(this.#themeRoot);
     this.#ready = this.#init();
   }
@@ -224,11 +243,9 @@ export class GlPlanRenderer implements PlanRenderer {
   }
 
   setSelection(roomId: string | null): void {
-    // Deliberately nothing here yet. Selection is ONE room, and P4 draws it into
-    // the thin SVG overlay that keeps the existing `.room.selected` CSS rule —
-    // which is also what avoids re-uploading a GPU buffer on every click. The
-    // state is held so the overlay can read it.
+    if (this.#selected === roomId) return;
     this.#selected = roomId;
+    this.#drawMarks();
   }
 
   get selection(): string | null {
@@ -273,8 +290,10 @@ export class GlPlanRenderer implements PlanRenderer {
     };
   }
 
-  setHover(_roomId: string | null): void {
-    // Also P4, and for the same reason: one room, drawn into the overlay.
+  setHover(roomId: string | null): void {
+    if (this.#hovered === roomId) return;
+    this.#hovered = roomId;
+    this.#drawMarks();
   }
 
   setAreasActive(on: boolean): void {
@@ -304,6 +323,11 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#index = new RoomIndex([]);
     this.#rooms = [];
     this.#selected = null;
+    this.#hovered = null;
+    // The marks live in the SVG overlay, which this renderer does NOT own — so
+    // clearing the canvas would leave a selection outline floating over an empty
+    // plan. Remove them explicitly rather than trusting the caller.
+    this.#overlay?.querySelector("g.plan-marks")?.remove();
     this.#render();
   }
 
@@ -386,7 +410,14 @@ export class GlPlanRenderer implements PlanRenderer {
           W_HOLE,
         );
 
-      entries.push({ room, fill, outline, appearanceFill: base });
+      entries.push({
+        room,
+        fill,
+        outline,
+        appearanceFill: base,
+        appearanceIsPlanFill: a.fill !== null,
+        appearanceCss: a.fill,
+      });
     }
     this.#entries = entries;
 
@@ -420,6 +451,87 @@ export class GlPlanRenderer implements PlanRenderer {
     this.setAreasActive(this.#areasActive);
     this.#pushView();
     this.cull();
+    // A repaint rebuilds `#entries`, so the marks point at rooms that no longer
+    // exist. Re-derived here, which is the GL equivalent of `renderLevel`
+    // re-applying the selection class after `paintLevel` rebuilt every node.
+    this.#drawMarks();
+  }
+
+  /**
+   * Redraw the selection and hover marks into the SVG overlay.
+   *
+   * ONE `<g>`, rebuilt whole. There are at most two polygons in it, so nothing
+   * is gained by diffing — and a rebuilt group cannot get out of step with the
+   * state that produced it, which a diffed one can.
+   *
+   * The marks are appended BEFORE the areas overlay if that exists, so
+   * footprints keep drawing on top of a selected room exactly as they did when
+   * the rooms were SVG. `renderAreasOverlay` owns that element and this must not
+   * disturb it.
+   */
+  #drawMarks(): void {
+    const overlay = this.#overlay;
+    if (!overlay) return;
+    const doc = overlay.ownerDocument;
+
+    let g = overlay.querySelector<SVGGElement>("g.plan-marks");
+    if (!g) {
+      g = doc.createElementNS(SVG_NS, "g") as SVGGElement;
+      g.setAttribute("class", "plan-marks");
+      // Never a pointer target. The pick is answered by the spatial index from
+      // raw coordinates, and a mark that swallowed clicks would make the
+      // selected room unclickable — which reads as "selection is stuck".
+      g.setAttribute("pointer-events", "none");
+    }
+    g.replaceChildren();
+
+    const byId = (id: string | null) => (id ? this.#entries.find((e) => e.room.id === id) : undefined);
+
+    // Hover first, selection second: the selection stroke must win where a room
+    // is both, which is routine (you click what you are pointing at).
+    const hovered = byId(this.#hovered);
+    if (hovered && hovered.room.id !== this.#selected) {
+      const p = this.#markPolygon(doc, hovered.room);
+      if (p) {
+        // `.room` for the shape, `hovered` for the fill swap. An inline
+        // colour-plan fill is re-applied here on purpose: in SVG an inline fill
+        // BEATS the `:hover` rule, so a room with an active colour plan does not
+        // change colour on hover. Reproducing that means reproducing the
+        // precedence, not just the hover colour.
+        p.setAttribute("class", hovered.appearanceIsPlanFill ? "room hovered" : "room hovered plain");
+        if (hovered.appearanceIsPlanFill && hovered.appearanceCss) p.style.fill = hovered.appearanceCss;
+        g.appendChild(p);
+      }
+    }
+
+    const selected = byId(this.#selected);
+    if (selected) {
+      const p = this.#markPolygon(doc, selected.room);
+      if (p) {
+        // Stroke only — `fill: none` in the stylesheet — so whatever the GL
+        // layer painted underneath still shows. In SVG the selection class went
+        // onto the room polygon itself and the fill came from the same element;
+        // here the fill is a different technology, so the mark must not cover it.
+        p.setAttribute("class", "room-selected-mark");
+        g.appendChild(p);
+      }
+    }
+
+    if (g.childNodes.length === 0) {
+      g.remove();
+      return;
+    }
+    // Always FIRST, so the areas overlay (appended last by renderAreasOverlay)
+    // keeps drawing above the marks.
+    if (overlay.firstChild !== g) overlay.insertBefore(g, overlay.firstChild);
+  }
+
+  #markPolygon(doc: Document, room: Room): SVGPolygonElement | null {
+    const outer = room.loops?.[0];
+    if (!outer) return null;
+    const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
+    p.setAttribute("points", pointsAttr(outer));
+    return p;
   }
 
   #pushView(): void {

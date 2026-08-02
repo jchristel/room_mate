@@ -231,6 +231,40 @@
      independent and routinely co-occur. Stroke only, never fill: a colour plan
      fill must survive being selected. */
   .room.selected { stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3; }
+
+  /* --- marks drawn by the WebGL renderer into this SVG layer ---
+     Selection and hover are ONE room each, so they stay SVG while the thousands
+     of rooms move to GL (HANDOVER-webgl-renderer.md, Decision 1). These rules
+     MIRROR `.room.selected` and `.room:hover` above rather than reusing them,
+     for one reason each:
+       - the selection mark carries `fill: none`, because the fill it sits on is
+         painted by a different technology and must show through. In SVG the
+         class went on the room polygon itself, so the fill came free.
+       - the hover mark is a real element, so `:hover` (which needs the pointer
+         to be over THAT element) cannot drive it -- the pick does. */
+  .plan-marks .room-selected-mark {
+    fill: none; stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
+  /* `.plain` = no colour plan resolved a fill for this room. With a plan active
+     an inline fill wins over `:hover` in the SVG renderer, so a planned room
+     does not change colour on hover -- and reproducing that means reproducing
+     the precedence, not just the colour. */
+  .plan-marks .room.hovered.plain { fill: var(--fill-hover); }
+  .plan-marks .room.hovered { stroke: var(--ink); stroke-width: 1.5; }
+
+  /* Per-room tooltip. Every room polygon used to carry an SVG <title>, giving
+     the browser a native tooltip for free; WebGL has no elements and therefore
+     no equivalent, so the hover pick drives this instead. Small, but it is a
+     shipped feature that would otherwise disappear silently. */
+  .plan-tip {
+    position: absolute; z-index: 5; pointer-events: none;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.15rem 0.35rem;
+    font-family: var(--mono); font-size: 0.72rem; white-space: nowrap;
+    transform: translate(0.6rem, 0.6rem);
+  }
+  .plan-tip.hidden { display: none; }
   .dim { opacity: 0.15; }
   .hole { fill: var(--paper); stroke: var(--ink); stroke-width: 1;
           stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
@@ -699,6 +733,10 @@
           <strong>No rooms received yet</strong>
           <span>POST room JSON to <code>/rooms</code>, then this updates.</span>
         </div>
+        <!-- Replaces the per-room SVG <title> the browser used to draw for
+             free. Present for both renderers, but only the WebGL one uses it:
+             the SVG renderer still has real <title> elements. -->
+        <div class="plan-tip hidden"></div>
       </div>
     </div>
   </template>
@@ -3540,6 +3578,49 @@ function commitView(originZone, v) {
 // still drifts a pixel or two, so zero would make selection feel broken.
 const CLICK_SLOP_PX = 4;
 
+// Hover, and the per-room tooltip that used to be an SVG `<title>`.
+//
+// Under SVG both were free: the browser handled `:hover` and drew the native
+// tooltip from `<title>`. WebGL has no elements, so both become explicit — the
+// pick answers "which room", the renderer draws the mark into the overlay, and
+// the tooltip is a DOM node this function positions.
+//
+// Throttled to an animation frame. A pointermove fires far more often than the
+// screen updates, and an unthrottled pick plus DOM write per event is real work
+// for a result nobody sees.
+function updateHover(zone, e) {
+  if (zone._hoverRaf) return;
+  zone._hoverPoint = { x: e.clientX, y: e.clientY };
+  zone._hoverRaf = requestAnimationFrame(() => {
+    zone._hoverRaf = 0;
+    const p = zone._hoverPoint;
+    if (!p) return;
+    const room = zone.renderer.roomAt(p.x, p.y);
+    zone.renderer.setHover(room ? room.id : null);
+    showTip(zone, room, p);
+  });
+}
+
+function clearHover(zone) {
+  if (zone._hoverRaf) { cancelAnimationFrame(zone._hoverRaf); zone._hoverRaf = 0; }
+  zone._hoverPoint = null;
+  zone.renderer.setHover(null);
+  showTip(zone, null, null);
+}
+
+// Same text the `<title>` carried — name, else id — so nothing about what the
+// tooltip SAYS changes with the renderer.
+function showTip(zone, room, point) {
+  const tip = zone.els.tip;
+  if (!tip) return;
+  if (!room || !point) { tip.classList.add("hidden"); return; }
+  tip.textContent = room.name || room.id;
+  const host = tip.offsetParent ? tip.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
+  tip.style.left = `${point.x - host.left}px`;
+  tip.style.top = `${point.y - host.top}px`;
+  tip.classList.remove("hidden");
+}
+
 function wireInteractions(zone) {
   const svg = zone.svg;
   let dragging = false, last = null;
@@ -3584,7 +3665,7 @@ function wireInteractions(zone) {
   });
 
   svg.addEventListener("pointermove", e => {
-    if (!dragging) return;
+    if (!dragging) { updateHover(zone, e); return; }
     if (!movedFar && downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > CLICK_SLOP_PX)
       movedFar = true;
     const rect = svg.getBoundingClientRect();
@@ -3593,7 +3674,14 @@ function wireInteractions(zone) {
     v.y -= (e.clientY - last.y) / rect.height * v.h;
     last = { x: e.clientX, y: e.clientY };
     commitView(zone, v);
+    // A pan is not a hover. Dropping the mark here also stops the tooltip
+    // trailing the pointer across a drag, which reads as a stuck overlay.
+    clearHover(zone);
   });
+
+  // The pointer leaving the plan must clear both, or the last hovered room stays
+  // lit while the cursor is somewhere else entirely.
+  svg.addEventListener("pointerleave", () => clearHover(zone));
 
   svg.addEventListener("wheel", e => {
     e.preventDefault();
@@ -3681,6 +3769,7 @@ function createZone() {
       areasTier: q(".areasTier"),
       meta: q(".meta"),
       empty: q(".empty"),
+      tip: q(".plan-tip"),
     },
   };
 
@@ -3698,7 +3787,14 @@ function createZone() {
     zone.canvas = document.createElement("canvas");
     zone.canvas.className = "plan-gl";
     zone.svg.parentNode.insertBefore(zone.canvas, zone.svg);
-    zone.renderer = new PlanRenderer.GlPlanRenderer(zone.canvas, { cullEnabled: () => CULL_ENABLED });
+    // The <svg> is handed over as the OVERLAY: the renderer draws the selection
+    // and hover marks into it while the areas overlay keeps living on the same
+    // element, untouched. That is the hybrid — thousands of rooms in GL, the
+    // handful of one-off marks in SVG where the stylesheet still defines them.
+    zone.renderer = new PlanRenderer.GlPlanRenderer(zone.canvas, {
+      cullEnabled: () => CULL_ENABLED,
+      overlay: zone.svg,
+    });
     // The GL context is created asynchronously. Repaint once it exists, or the
     // first level lands on a renderer with no context and silently draws
     // nothing — which looks exactly like a broken payload.
