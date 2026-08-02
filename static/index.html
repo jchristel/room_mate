@@ -265,12 +265,11 @@
     fill: none; stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3;
     stroke-linejoin: round; vector-effect: non-scaling-stroke;
   }
-  /* `.plain` = no colour plan resolved a fill for this room. With a plan active
-     an inline fill wins over `:hover` in the SVG renderer, so a planned room
-     does not change colour on hover -- and reproducing that means reproducing
-     the precedence, not just the colour. */
-  .plan-marks .room.hovered.plain { fill: var(--fill-hover); }
-  .plan-marks .room.hovered { stroke: var(--ink); stroke-width: 1.5; }
+  /* No hover rule here on purpose. Hover is a FILL, and a fill in this overlay
+     sits above the canvas -- and so above the labels the canvas draws, hiding
+     the label of the room being pointed at. It is drawn in the GL layer beneath
+     the labels instead (gl/renderer.ts, `#drawHover`), which is the ordering the
+     SVG renderer got for free by recolouring the room polygon itself. */
 
   /* Per-room tooltip. Every room polygon used to carry an SVG <title>, giving
      the browser a native tooltip for free; WebGL has no elements and therefore
