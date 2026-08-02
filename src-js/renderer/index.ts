@@ -1,19 +1,44 @@
 // The bundle's single public surface — the one thing `static/index.html` may
-// reach for. Everything else in `src-js/` is internal to the build.
+// reach for, published as the global `PlanRenderer`.
 //
-// P0 deliberately ships this almost empty. The phase's job is to prove the
-// pipeline end to end (TypeScript compiles, Vite emits an IIFE, ServeDir serves
-// it, the page can see the global) with no behaviour attached, so that when P1
-// moves ~600 lines of real rendering code through it, a failure is unambiguously
-// in the code and not in the toolchain. See docs/PLAN-webgl-renderer.md.
+// Kept deliberately narrow. `index.html` is still ~4,000 lines of inline
+// JavaScript and TypeScript cannot see those call sites, so every name exported
+// here is an unchecked boundary. A small surface is the only thing that limits
+// how much can go wrong across it; the `.d.ts` Vite emits at least describes it.
+//
+// The migration direction (CODING-CONVENTIONS.md, "`static/`"): each frontend
+// change moves the module it touches into `src-js/`. This file grows as that
+// happens — it is not meant to stay this size, but it is meant to stay
+// deliberate.
+
+export { resolveRoomAppearance, roomClassName, holeClassName } from "./appearance.js";
+export {
+  bounds,
+  centroid,
+  fittedBounds,
+  flip,
+  loopBox,
+  pointsAttr,
+  roomBBox,
+} from "./geometry.js";
+export { cull } from "./cull.js";
+export { addLabel, paintLevel } from "./svg/paint.js";
+
+export type { CullUnit, PaintOptions } from "./svg/paint.js";
+export type {
+  AppearanceContext,
+  ClassificationTier,
+  Extent,
+  Loop,
+  Point2D,
+  PropertyValue,
+  Rect,
+  Room,
+  RoomAppearance,
+  Size,
+} from "./types.js";
 
 /** Build stamp, so a stale committed bundle is visible from the console rather
  *  than inferred from behaviour. CI gates on a rebuild-and-diff, but a human
  *  debugging a checkout wants to ask the page directly. */
-export const version = "0.0.0-p0";
-
-/** Proof the pipeline is live, called by nothing. Removed in P1, when this
- *  module starts exporting the renderer seam it exists for. */
-export function selfTest(): string {
-  return `PlanRenderer ${version}`;
-}
+export const version = "0.1.0-p1";

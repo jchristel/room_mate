@@ -1,0 +1,107 @@
+[
+ {
+  "_why": "The ordinary case, and the reference the others are read against. Two label fields -> a primary line plus one smaller accent line.",
+  "id": "plain",
+  "name": "Plain Room",
+  "level_id": "L",
+  "loops": [{ "points": [{ "x": 0, "y": 0 }, { "x": 20, "y": 0 }, { "x": 20, "y": 14 }, { "x": 0, "y": 14 }] }],
+  "label": ["Plain Room", "R-001"],
+  "properties": { "Name": { "value": "Plain Room", "storage_type": null }, "Dept": { "value": "Alpha", "storage_type": null } },
+  "classification": [{ "tier": "Department", "name": "Alpha", "undefined": false }]
+ },
+ {
+  "_why": "TWO holes, because the single-hole case cannot catch an off-by-one in the loops[1..] slice. Holes are painted over the fill and carry a dashed stroke -- a visible feature, not incidental (HANDOVER-webgl-renderer.md).",
+  "id": "two-holes",
+  "name": "Courtyard Block",
+  "level_id": "L",
+  "loops": [
+   { "points": [{ "x": 30, "y": 0 }, { "x": 60, "y": 0 }, { "x": 60, "y": 30 }, { "x": 30, "y": 30 }] },
+   { "points": [{ "x": 36, "y": 6 }, { "x": 44, "y": 6 }, { "x": 44, "y": 14 }, { "x": 36, "y": 14 }] },
+   { "points": [{ "x": 48, "y": 18 }, { "x": 54, "y": 18 }, { "x": 54, "y": 24 }, { "x": 48, "y": 24 }] }
+  ],
+  "label": ["Courtyard Block", "R-002"],
+  "properties": { "Name": { "value": "Courtyard Block", "storage_type": null }, "Dept": { "value": "Beta", "storage_type": null } },
+  "classification": [{ "tier": "Department", "name": "Beta", "undefined": false }]
+ },
+ {
+  "_why": "label PRESENT BUT EMPTY -- the configured room_label properties did not resolve. Must render NO label at all. Distinct from the next room, and the distinction is load-bearing: falling back to a name here would invent data the server deliberately withheld.",
+  "id": "label-empty",
+  "name": "Has A Name Anyway",
+  "level_id": "L",
+  "loops": [{ "points": [{ "x": 0, "y": 20 }, { "x": 20, "y": 20 }, { "x": 20, "y": 34 }, { "x": 0, "y": 34 }] }],
+  "label": [],
+  "properties": { "Name": { "value": "Has A Name Anyway", "storage_type": null } },
+  "classification": []
+ },
+ {
+  "_why": "label ABSENT (an older payload). Falls back to name. The pair with the room above is the whole point -- same visual outcome would be a bug.",
+  "id": "label-missing",
+  "name": "Fallback To Name",
+  "level_id": "L",
+  "loops": [{ "points": [{ "x": 30, "y": 40 }, { "x": 50, "y": 40 }, { "x": 50, "y": 54 }, { "x": 30, "y": 54 }] }],
+  "properties": { "Name": { "value": "Fallback To Name", "storage_type": null } },
+  "classification": []
+ },
+ {
+  "_why": "label absent AND name empty -> falls back to the id.",
+  "id": "id-only",
+  "name": "",
+  "level_id": "L",
+  "loops": [{ "points": [{ "x": 55, "y": 40 }, { "x": 70, "y": 40 }, { "x": 70, "y": 50 }, { "x": 55, "y": 50 }] }],
+  "properties": {},
+  "classification": []
+ },
+ {
+  "_why": "One label field only -> a primary line and no accent line.",
+  "id": "single-field",
+  "name": "Single",
+  "level_id": "L",
+  "loops": [{ "points": [{ "x": 0, "y": 40 }, { "x": 18, "y": 40 }, { "x": 18, "y": 52 }, { "x": 0, "y": 52 }] }],
+  "label": ["Single"],
+  "properties": { "Dept": { "value": "Alpha", "storage_type": null } },
+  "classification": [{ "tier": "Department", "name": "Alpha", "undefined": false }]
+ },
+ {
+  "_why": "A room so small its fitted font size collapses. addLabel returns null below zero, and the cull unit must still be well-formed without a label node -- the label is always the LAST node pushed, so dropping it only shortens the tail.",
+  "id": "tiny",
+  "name": "Tiny",
+  "level_id": "L",
+  "loops": [{ "points": [{ "x": 74, "y": 0 }, { "x": 74.4, "y": 0 }, { "x": 74.4, "y": 0.3 }, { "x": 74, "y": 0.3 }] }],
+  "label": ["Tiny", "R-007"],
+  "properties": {},
+  "classification": []
+ },
+ {
+  "_why": "NO loops. paintLevel skips it in both passes; it must not appear, and must not shift the label pass out of step with the polygon pass.",
+  "id": "no-geometry",
+  "name": "Geometryless",
+  "level_id": "L",
+  "loops": [],
+  "label": ["Geometryless", "R-008"],
+  "properties": {},
+  "classification": []
+ },
+ {
+  "_why": "Characters that MUST survive XML serialization into a saved .svg: ampersand, angle brackets, quotes, and a non-ASCII glyph. A golden file is the only thing that catches an escaping regression here.",
+  "id": "escaping",
+  "name": "A & B <tag> \"q\" é",
+  "level_id": "L",
+  "loops": [{ "points": [{ "x": 30, "y": 60 }, { "x": 62, "y": 60 }, { "x": 62, "y": 74 }, { "x": 30, "y": 74 }] }],
+  "label": ["A & B <tag> \"q\" é", "R&D <9>"],
+  "properties": { "Dept": { "value": "Gamma & Co", "storage_type": null } },
+  "classification": [{ "tier": "Department", "name": "Gamma & Co", "undefined": false }]
+ },
+ {
+  "_why": "A concave (L-shaped) outline, so the triangulation P3 introduces has a non-convex case in the golden set from the start.",
+  "id": "concave",
+  "name": "L Shaped",
+  "level_id": "L",
+  "loops": [{ "points": [
+   { "x": 0, "y": 60 }, { "x": 24, "y": 60 }, { "x": 24, "y": 68 },
+   { "x": 10, "y": 68 }, { "x": 10, "y": 80 }, { "x": 0, "y": 80 }
+  ] }],
+  "label": ["L Shaped", "R-010"],
+  "properties": { "Dept": { "value": "Beta", "storage_type": null } },
+  "classification": [{ "tier": "Department", "name": "Beta", "undefined": false }]
+ }
+]
