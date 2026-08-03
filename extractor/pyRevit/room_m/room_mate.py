@@ -218,10 +218,14 @@ def elements_in_phase(doc, phase_name, category):
     predicate, which is why the ordered phase list is not on the wire at all.
     It also means strictly *less* extraction, the axis that actually pays.
 
-    Generalised over the category when doors arrived: `CreatedPhaseId` and
-    `DemolishedPhaseId` are `Element` members, so the predicate was never
-    room-specific and duplicating it per entity would have been two places to
-    get the range test wrong.
+    **Doors only, despite the generic name.** It was written expecting to serve
+    every entity, on the reasoning that `CreatedPhaseId`/`DemolishedPhaseId` are
+    `Element` members so the predicate could not be room-specific. That is true
+    of the API and false of the model: a room does not span a range of phases,
+    it belongs to one, and running rooms through this returned nothing at all
+    (see `rooms_in_phase`). The name is kept because the range test genuinely is
+    category-agnostic for anything built-then-demolished; the assumption that
+    every entity works that way is what did not survive.
 
     Raises when the document has no phase of that name: a model that cannot be
     scoped to the chosen phase must fail loudly rather than push everything."""
@@ -250,12 +254,39 @@ def elements_in_phase(doc, phase_name, category):
     return allowed
 
 def rooms_in_phase(doc, phase_name):
-    
-    rooms_in_phase = []
-    rooms = get_all_rooms(doc)
-    
-    for room in rooms:
-        created_phase_name = rPhase.get_phase_name_by_id(
+    """The room ids in `phase_name`.
+
+    **Rooms do NOT go through `exists_in_phase`, and that is the one thing to
+    understand here.** The design assumed one predicate could serve every
+    entity, because `CreatedPhaseId`/`DemolishedPhaseId` are `Element` members.
+    Against a real document that produced *zero* rooms, five pushes running --
+    exactly the "the filter silently keeps nothing" failure the plan named as
+    the first thing to check.
+
+    A room is not a thing that is built in one phase and demolished in another.
+    It BELONGS to exactly one phase, named by the `ROOM_PHASE` built-in
+    parameter, so membership is an equality test rather than a range test over
+    the phase sequence. Doors keep the range test (`doors_in_phase`), and that
+    difference is real rather than an inconsistency worth tidying away.
+
+    Returns a `set`: `post_rooms.in_selected_phase` does one membership test per
+    room, so a list makes filtering a plate quadratic."""
+    order_by_name = dict((p["name"], i) for i, p in enumerate(document_phases(doc)))
+    if phase_name not in order_by_name:
+        # Fail loudly, on the same terms as `elements_in_phase`. Without this a
+        # mistyped or renamed phase yields an empty set, which is indexed,
+        # stored and served as "this model has no rooms" -- and that is not a
+        # hypothetical: it is what the five empty snapshots above looked like
+        # from the outside.
+        raise ValueError(
+            "model has no phase named '{}' (it has: {})".format(
+                phase_name, ", ".join(order_by_name.keys())
+            )
+        )
+
+    allowed = set()
+    for room in get_all_rooms(doc):
+        room_phase = rPhase.get_phase_name_by_id(
             doc,
             rParaGet.get_built_in_parameter_value(
                 room,
@@ -263,11 +294,9 @@ def rooms_in_phase(doc, phase_name):
                 rParaGet.get_parameter_value_as_element_id,
             ),
         )
-        if created_phase_name == phase_name:
-            rooms_in_phase.append(element_id_str(room.Id))
-    
-    print("Found {} rooms in phase {}".format(len(rooms_in_phase), phase_name))
-    return rooms_in_phase
+        if room_phase == phase_name:
+            allowed.add(element_id_str(room.Id))
+    return allowed
 
 
 def doors_in_phase(doc, phase_name):

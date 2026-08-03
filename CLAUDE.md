@@ -59,7 +59,7 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 
 [`docs/README.md`](docs/README.md) indexes everything. Two supersessions matter:
 
-- **Phase:** [`PLAN-phasing.md`](docs/PLAN-phasing.md) is authoritative over
+- **Phase:** [`PLAN-phasing.md`](docs/Superseded/PLAN-phasing.md) is authoritative over
   `STRATEGY-ENTITIES.md` Decision 2.
 - **Generalisation:** [`PLAN-generalisation.md`](docs/PLAN-generalisation.md)
   supplies the signatures `STRATEGY-ENTITIES.md` Decisions 3 and 5 only assert.
@@ -114,9 +114,25 @@ green one serving a stale renderer.
 - **Contract is v6 and `phase` is required.** A hand-rolled test push without it
   gets a 422 naming a stale extractor.
 
-## Open, as of 2026-08-01
+## Open, as of 2026-08-03
 
-- **The pyRevit extractor's phase filter is unverified against Revit.** Check
-  first that `FilteredElementCollector`'s element ids match the ids duHast
-  writes into the export — if they don't, the filter silently keeps nothing.
-  See [`PLAN-phasing.md`](docs/PLAN-phasing.md) "As built".
+- **Nothing refuses a push whose room list is empty.** A phase filter that
+  matched no rooms produced five stored, served snapshots reading "this model
+  has no rooms" before anyone noticed. A whole-payload-empty push is not the
+  same as a level that is legitimately empty, and ingest cannot currently tell
+  them apart. See [`STRATEGY-SERVER.md`](docs/STRATEGY-SERVER.md) "Open".
+- **R4 (entity-scope `[sources.reference.*]`) is still open** — unchanged by the
+  2026-08-03 doors push, which shipped with no reference source, so its window
+  has still not opened. See
+  [`PLAN-generalisation.md`](docs/PLAN-generalisation.md).
+
+## Phase filtering: rooms and doors are not alike
+
+Verified against Revit 2026-08-03, and it cost five empty pushes to find.
+**A room BELONGS to one phase** (`ROOM_PHASE`); a door is built in one and may
+be demolished in a later one. So rooms use an equality test
+(`room_mate.rooms_in_phase`) and doors use the range test
+(`elements_in_phase` / `exists_in_phase`). Running rooms through the range test
+returns *nothing* — silently. Both paths raise on an unknown phase name, and
+that guard is the only thing standing between a typo and another five empty
+snapshots.

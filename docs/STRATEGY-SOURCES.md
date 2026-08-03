@@ -192,7 +192,7 @@ Revit.
   common to every selected document and each document then resolves that *name*
   against its own phase ids — ids being per-document is precisely why identity
   is the name. A single common phase skips the prompt entirely, which is the
-  usual case. See [PLAN-phasing.md](PLAN-phasing.md).
+  usual case. See [PLAN-phasing.md](Superseded/PLAN-phasing.md).
 
 ## Uploads are the only origin
 
