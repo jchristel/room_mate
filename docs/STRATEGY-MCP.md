@@ -63,7 +63,7 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   complete model is exactly the failure a tool description exists to prevent.
   `get_rooms` points at `phase_by_model`; `get_validation` reports the
   disagreement as a finding under `phases`. See
-  [PLAN-phasing.md](PLAN-phasing.md). `get_doors` says the same thing for the
+  [PLAN-phasing.md](Superseded/PLAN-phasing.md). `get_doors` says the same thing for the
   same reason.
   **Doors forced three descriptions to be corrected in the same change that
   made them wrong**, which is the rule [Entities](STRATEGY-ENTITIES.md)

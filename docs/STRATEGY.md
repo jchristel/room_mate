@@ -37,7 +37,7 @@ design docs: one for data the user authors, one for the entities beyond rooms:
   generalizes and what stays per-entity work, and how a Revit phase scopes a
   push. Doors shipped as the first entity after rooms; FFE is the next, and this
   is the doc that records how much of it is already free. Its phasing half was
-  built first — see [PLAN-phasing.md](PLAN-phasing.md), which supersedes several
+  built first — see [PLAN-phasing.md](Superseded/PLAN-phasing.md), which supersedes several
   of its details. **Decision 6's open question — which of a door's two rooms
   owns it — is still open**, and doors deliberately shipped without answering
   it.
@@ -66,9 +66,11 @@ A three-part pipeline, decoupled across a process and a language boundary:
    payload keyed by `(project, model)`, persists it (or holds it in memory),
    and serves it back on request. Also serves the viewer and settings pages.
    Details: [Server](STRATEGY-SERVER.md).
-3. **Viewer (browser / SVG).** Fetches the payload, draws room outlines as a
-   floor plan, with a level slider to switch floors. Polls every 2s so a fresh
-   POST appears without a manual refresh. Details: [Browser](STRATEGY-BROWSER.md).
+3. **Viewer (browser / WebGL).** Fetches the payload and draws the floor plan on
+   a canvas, with a thin SVG overlay above it for the areas footprints and the
+   selection mark, and an SVG *export* for a file that leaves the browser. Polls
+   every 2s so a fresh POST appears without a manual refresh. Details:
+   [Browser](STRATEGY-BROWSER.md).
 
 The three are coupled only by the JSON contract over `localhost:5151`, not by
 the build. Each can evolve independently.
@@ -191,7 +193,7 @@ the Revit phase this push's rooms were filtered to, and it is the first
 document has many phases and only the user knows which is being pushed. Its
 rules — one phase per `(project, model)` lineage, immutable once set, a
 disagreeing push quarantined rather than refused — are in
-[PLAN-phasing.md](PLAN-phasing.md), with the entity-level context in
+[PLAN-phasing.md](Superseded/PLAN-phasing.md), with the entity-level context in
 [Entities](STRATEGY-ENTITIES.md).
 
 ### The upload envelope

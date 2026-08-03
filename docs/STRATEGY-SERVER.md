@@ -112,7 +112,7 @@ each module carrying its rationale in a header, all with unit tests.
   `ModelEntry.phase` in `project.toml` is the enforcement key; each snapshot's
   own file is the record, so a pre-phasing snapshot keeps reporting itself
   unphased forever rather than being retroactively relabelled. Full rationale in
-  [PLAN-phasing.md](PLAN-phasing.md).
+  [PLAN-phasing.md](Superseded/PLAN-phasing.md).
 - **Snapshot history endpoints (`GET /projects/{id}/snapshots`,
   `GET /projects/{p}/models/{m}/snapshots/latest`).** The read side of
   snapshot identity: the first lists every stored snapshot id per model of a
@@ -865,3 +865,30 @@ classification scheme is still being built out.
 definition plus the current snapshot — once rooms re-push or dRofus re-polls
 mid-session, it must recompute, the server-side twin of the dRofus join's own
 staleness note.
+
+## Open
+
+**Nothing refuses a push whose room list is empty**, and on 2026-08-03 that
+cost five snapshots. The extractor's room phase filter matched nothing (see
+[Phasing](Superseded/PLAN-phasing.md) "As built"), so five consecutive pushes
+carried `"rooms": []`. Every one was accepted, stored, indexed and served —
+`/rooms` answered with an empty array, the viewer drew an empty plan, and the
+only signal that anything was wrong was a person noticing the drawing was blank.
+
+The distinction ingest cannot currently draw is between:
+
+- **a level that is legitimately empty** — ordinary, and already a first-class
+  state the viewer names ("LEVEL 02 has no rooms"); and
+- **a whole payload that is empty** — which no real model produces. A push
+  exists because someone ran an export against a document with rooms in it; a
+  payload with none is a producer fault every time.
+
+Worth weighing rather than assuming: a `422` on an empty room list would be
+consistent with D4's stance that a push whose content was never correctly
+filtered is an error rather than data, and it fails in the direction that gets
+noticed. Against that, it is a new rejection on a shape that was previously
+legal, so it wants the same treatment D2 gave the schema bump — decide whether
+it is a contract change, and say so.
+
+The same question applies to doors, which have their own payload and their own
+filter. It did not arise there only because doors' phase predicate was correct.

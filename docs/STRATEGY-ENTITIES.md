@@ -38,7 +38,7 @@ sketch.
 > **Decision 2 (phasing) is built, and has been rewritten here to match.** It
 > shipped ahead of doors and several details changed on contact with the code;
 > rather than leave the original sketch standing behind a warning, 2a and 2c now
-> describe what exists and say what they replaced. **[PLAN-phasing.md](PLAN-phasing.md)
+> describe what exists and say what they replaced. **[PLAN-phasing.md](Superseded/PLAN-phasing.md)
 > carries the full rationale** and is authoritative if the two ever drift. The
 > The same treatment has since been applied to Decisions 3 through 6, each of
 > which now carries what shipped and where it departed from the sketch.
@@ -118,7 +118,7 @@ What does **not** generalize, and is per-entity work every time:
 
 > **Built, ahead of doors.** This section has been rewritten to describe what
 > actually shipped rather than what was first sketched;
-> [PLAN-phasing.md](PLAN-phasing.md) carries the full rationale and the ten
+> [PLAN-phasing.md](Superseded/PLAN-phasing.md) carries the full rationale and the ten
 > decisions behind it, and is authoritative where the two ever drift.
 
 Phasing landed on **rooms** first, which reverses the order this document

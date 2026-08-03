@@ -1,18 +1,27 @@
 # RoomMate — Phasing implementation plan
 
-**Status: built (P1–P7), unverified against Revit.** Records the phase design
+> **Superseded — built (P1–P7) and verified against Revit on 2026-08-03.** The
+> live pointers are [Server](../STRATEGY-SERVER.md) for the phase rules as shipped
+> and [Entities](../STRATEGY-ENTITIES.md) Decision 2, which was rewritten in place
+> to match. Kept as the record of *why* the design looks as it does — and, in
+> [As built](#as-built), of the one assumption that did not survive a real
+> document: rooms and doors need **different** phase predicates, because a room
+> belongs to a phase where a door spans a range of them. That was found exactly
+> where this plan said to look first.
+
+**Status: built (P1–P7), verified against Revit.** Records the phase design
 agreed before any code, so the implementation doesn't re-derive it and the open
 questions were open *before* the work rather than after. All seven phases have
-landed; see [As built](#as-built) for the three places the result differs from
-the plan below, and for what still needs a live Revit run to confirm.
+landed; see [As built](#as-built) for the places the result differs from the
+plan below.
 
-Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
-[Sources](STRATEGY-SOURCES.md) · [Server](STRATEGY-SERVER.md) ·
-[Entities](STRATEGY-ENTITIES.md) · [MCP](STRATEGY-MCP.md) ·
-[Conventions](CODING-CONVENTIONS.md)
+Part of the Roommate strategy docs: [Index](../STRATEGY.md) ·
+[Sources](../STRATEGY-SOURCES.md) · [Server](../STRATEGY-SERVER.md) ·
+[Entities](../STRATEGY-ENTITIES.md) · [MCP](../STRATEGY-MCP.md) ·
+[Conventions](../CODING-CONVENTIONS.md)
 
 Phases are being built **before** doors, which reverses the order
-[Entities](STRATEGY-ENTITIES.md) assumes. That doc's Decision 2 describes phase
+[Entities](../STRATEGY-ENTITIES.md) assumes. That doc's Decision 2 describes phase
 arriving *with* doors; several of its details are superseded here (see
 [What this supersedes](#what-this-supersedes)). Doors and FFE are the reason
 phasing exists, but rooms carry it first.
@@ -80,7 +89,7 @@ Trimming absorbs export whitespace. Case is absorbed too: `"NEW CONSTRUCTION"`
 and `"New Construction"` are the same phase. The **first** push's casing is what
 is stored and echoed back; later pushes' casing is discarded.
 
-This reverses [Entities](STRATEGY-ENTITIES.md) Decision 2's case-sensitive rule.
+This reverses [Entities](../STRATEGY-ENTITIES.md) Decision 2's case-sensitive rule.
 That rule was argued for a world where a mismatch was a *rejection* worth making
 loud; under D5 a mismatch quarantines the push instead, and quarantining a
 correct push over letter-case would be a bad trade.
@@ -143,7 +152,7 @@ no delete route. Instead:
 `pending/` as a subdirectory rather than a manifest flag because both model-dir
 scans filter on `extension == "json"` (`storage/fs.rs`), and a directory has no
 extension — so the quarantine is invisible to every existing scan with no change
-to them. Same additivity argument [Entities](STRATEGY-ENTITIES.md) makes for
+to them. Same additivity argument [Entities](../STRATEGY-ENTITIES.md) makes for
 `doors/`.
 
 ### D7 — Activation is an endpoint, not a settings field
@@ -189,7 +198,7 @@ important than it would be for a transient state.
   `<model>/<phase>/` would always hold exactly one subdirectory, and
   partitioning would fork a model's history into parallel timelines.
 - **No viewer display** in this change.
-- **No `contract/` split.** [Entities](STRATEGY-ENTITIES.md) called for splitting
+- **No `contract/` split.** [Entities](../STRATEGY-ENTITIES.md) called for splitting
   `contract.rs` into a directory; that was driven by the door types, which are
   not in this change. `contract.rs` stays one file.
 
@@ -217,7 +226,7 @@ field.
 
 - `ModelEntry.phase: Option<String>`, declared **after `name` and before
   `snapshots`** — the TOML ordering footgun in
-  [Conventions](CODING-CONVENTIONS.md); a scalar after a collection field lands
+  [Conventions](../CODING-CONVENTIONS.md); a scalar after a collection field lands
   inside it. `#[serde(default)]` keeps existing manifests parseable.
 - `PENDING_DIR` constant beside `REFERENCE_DIR`.
 - Trait methods for putting, reading and promoting a pending snapshot. All
@@ -269,13 +278,13 @@ The endpoint from D7, plus its handler and service function. Absent pending ⇒
 
 ### P6 — Docs and MCP
 
-- Rewrite [Entities](STRATEGY-ENTITIES.md) Decision 2 against what was actually
+- Rewrite [Entities](../STRATEGY-ENTITIES.md) Decision 2 against what was actually
   built (see below), and fix that doc's two `Superseded/` link paths.
-- [Entities](STRATEGY-ENTITIES.md) is currently an orphan — nothing links to it.
-  Add it to [Index](STRATEGY.md)'s doc list (and its "seven docs … plus one
+- [Entities](../STRATEGY-ENTITIES.md) is currently an orphan — nothing links to it.
+  Add it to [Index](../STRATEGY.md)'s doc list (and its "seven docs … plus one
   forward-looking" count), `docs/README.md`'s table, and the nav line in the
   seven sibling docs.
-- [Server](STRATEGY-SERVER.md): the pending/activate route and the phase rules.
+- [Server](../STRATEGY-SERVER.md): the pending/activate route and the phase rules.
 - `bin/mcp.rs`: `get_rooms`' description must state results are scoped to one
   phase per model, or an agent reads a partial model as a complete one. No new
   tools, so the header's "Fifteen in total" is unaffected.
@@ -295,7 +304,8 @@ prompt when a document has one phase.
 
 ## As built
 
-Three deliberate departures from the plan above, and one caveat.
+Three deliberate departures from the plan above, and one assumption that a
+real document overturned.
 
 **P4 gained a read route the plan didn't specify.** `GET
 /projects/{p}/models/{m}/snapshots/pending` sits beside the activate route,
@@ -317,19 +327,54 @@ still be serving two phases — that being exactly the project nobody is watchin
 unscoped read merges every stored project and model ids are only unique within
 one. Same shape, same reason, as `reference_labels`.
 
-**The extractor half (P7) is unverified against Revit.** `exists_in_phase` — the
-range test itself — is a pure function and was exercised directly, including the
-`created == selected` trap it exists to prevent. Everything around it
-(`doc.Phases` ordering, `CreatedPhaseId` / `DemolishedPhaseId`, the
-`OST_Rooms` collector, and whether the collector's element ids match the ids
-duHast writes into the export) has never run against a document. That id match
-is the one to check first: if it does not hold, the filter silently keeps
-nothing. `element_id_str` handles both the `.Value` and `.IntegerValue` spellings
-because this script must run on old and new Revit alike.
+**The extractor half (P7) is now verified against Revit — and the check this
+section told the next reader to run first is the one that failed.**
+
+The warning was: *if the collector's element ids do not match the ids duHast
+writes into the export, the filter silently keeps nothing.* Run against a real
+document on 2026-08-03, rooms came back **empty — five consecutive pushes of
+zero rooms**, each stored and served without complaint, while doors came back
+correct at 26 every time. That asymmetry is the whole diagnosis.
+
+**The cause was not the ids. It was the predicate.** `exists_in_phase` is a
+range test — created ≤ selected < demolished — and it is correct for anything
+that is built in one phase and may be demolished in a later one. A room is not
+such a thing. A room **belongs to exactly one phase**, named by the `ROOM_PHASE`
+built-in parameter, and asking a room when it was created and demolished does
+not return something the range test can use.
+
+So the plan's reasoning that one predicate must serve every entity — *"they are
+`Element` members, so the predicate was never room-specific and duplicating it
+per entity would have been two places to get the range test wrong"* — was right
+about the API and wrong about the model. As built:
+
+| Entity | Test | Why |
+|---|---|---|
+| **Rooms** | `ROOM_PHASE == selected` (`rooms_in_phase`) | A room belongs to one phase; there is no span to test. |
+| **Doors** | created ≤ selected < demolished (`elements_in_phase`) | A door is built, stands through later phases, and may be demolished. |
+
+That is two predicates, deliberately, and the fear of "two places to get the
+range test wrong" is answered by there being only one range test — doors' —
+still in existence.
+
+**Two things this cost that are worth carrying forward.** The first fix dropped
+the fail-loudly guard that `elements_in_phase` carries, so an unknown or
+mistyped phase name returned an empty set rather than raising — which is the
+same silent-zero failure, re-armed. It has been restored.
+
+And nothing between Revit and storage objected to a snapshot containing no
+rooms at all: it was accepted, indexed, and served as "this model has no rooms",
+five times over. A whole-payload-empty push is not the same as a level that is
+legitimately empty, and the ingest side currently cannot tell them apart. That
+is **[Server](../STRATEGY-SERVER.md)'s** question rather than this plan's, and it is
+recorded there.
+
+`element_id_str` handling both the `.Value` and `.IntegerValue` spellings did
+hold up — the script runs on old and new Revit alike, as intended.
 
 ## What this supersedes
 
-[Entities](STRATEGY-ENTITIES.md) Decision 2 has since been **rewritten in place**
+[Entities](../STRATEGY-ENTITIES.md) Decision 2 has since been **rewritten in place**
 to describe what shipped, so the two no longer disagree. The table below is the
 record of what changed between design and build — useful for understanding *why*
 the decisions look as they do, not a live warning about a stale doc:
