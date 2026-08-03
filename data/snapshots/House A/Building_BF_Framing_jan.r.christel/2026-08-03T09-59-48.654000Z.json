@@ -1,0 +1,45 @@
+{
+  "schema_version": 6,
+  "project": {
+    "id": "House A",
+    "name": "House A"
+  },
+  "model": {
+    "id": "Building_BF_Framing_jan.r.christel",
+    "name": "Building_BF_Framing_jan.r.christel",
+    "source": "revit"
+  },
+  "snapshot": {
+    "taken_at": "2026-08-03T09:59:48.654000Z"
+  },
+  "phase": "New Construction",
+  "model_to_shared": {
+    "matrix": [
+      -0.09572694300782712,
+      -0.9954076312658935,
+      0.9954076312658935,
+      -0.09572694300782712,
+      1094986.9519356785,
+      20547804.362634644
+    ]
+  },
+  "room_boundary": "finish_face",
+  "levels": [
+    {
+      "id": "1483",
+      "name": "LEVEL 00",
+      "elevation": 110250.0
+    },
+    {
+      "id": "290501",
+      "name": "LEVEL 01",
+      "elevation": 113195.0
+    },
+    {
+      "id": "1693144",
+      "name": "LEVEL 02",
+      "elevation": 116645.0
+    }
+  ],
+  "rooms": []
+}

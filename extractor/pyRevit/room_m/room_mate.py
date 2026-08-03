@@ -30,10 +30,12 @@ import datetime
 from Autodesk.Revit.DB import (
     AreaVolumeSettings,
     BuiltInCategory,
+    BuiltInParameter,
     FilteredElementCollector,
     SpatialElementType,
 )
 
+from duHast.Revit.Rooms.rooms import get_all_rooms
 from duHast.Revit.Rooms.Export.to_data_room import get_all_room_data
 from duHast.Revit.Doors.Export.to_data_door import get_all_door_data
 from duHast.Revit.Levels.Export.to_data_level_building import get_all_level_data
@@ -44,14 +46,18 @@ from duHast.Data.Objects.Collectors import data_door as dd
 from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 from duHast.pyRevit.UI.doc_selector import pick_document
+from duHast.Revit.Common import (
+    parameter_get_utils as rParaGet,
+    phases as rPhase,
+)
 
-from post_rooms import (
+from room_m.post_rooms import (
     post_payload_stream,
     fetch_projects,
     coordinate_system_to_affine,
     boundary_location_to_room_boundary,
 )
-from post_doors import post_doors_stream
+from room_m.post_doors import post_doors_stream
 
 
 def choose_project(forms):
@@ -139,14 +145,14 @@ def exists_in_phase(created, demolished, selected):
 
         created <= selected AND (demolished invalid OR demolished > selected)
 
-    `None` for `demolished` is the "invalid phase id" case — an element that was
-    never demolished — which is why an unknown index reads as "still standing"
+    `None` for `demolished` is the "invalid phase id" case - an element that was
+    never demolished - which is why an unknown index reads as "still standing"
     rather than as a failure.
 
     **Not `created == selected`.** Equality would drop every element built in an
     earlier phase and still standing, which on a phased model is most of them.
     That mistake will not show up against a single-phase model, where the two
-    agree exactly — which is what makes it worth naming here.
+    agree exactly - which is what makes it worth naming here.
 
     A `created` that resolves to no known phase excludes the element: it cannot
     be placed in the sequence, so it cannot be shown to be in scope."""
@@ -163,7 +169,7 @@ def choose_phase(selected_docs, forms):
     phases are per-document, so prompting per model would mean five dialogs for
     five models. Instead the choice is offered over the phase names *common to
     every selected document*, and each document then resolves that name against
-    its own phases (`rooms_in_phase`) — which is exactly why identity is the
+    its own phases (`rooms_in_phase`) - which is exactly why identity is the
     name and not the id.
 
     A document lacking the chosen name fails loudly later rather than being
@@ -208,7 +214,7 @@ def elements_in_phase(doc, phase_name, category):
     `phase_name`, as strings matching the ids the export carries.
 
     The filter runs here, client-side, because only the live document has the
-    phase ordering `exists_in_phase` needs — the server never re-evaluates the
+    phase ordering `exists_in_phase` needs - the server never re-evaluates the
     predicate, which is why the ordered phase list is not on the wire at all.
     It also means strictly *less* extraction, the axis that actually pays.
 
@@ -243,11 +249,25 @@ def elements_in_phase(doc, phase_name, category):
             allowed.add(element_id_str(element.Id))
     return allowed
 
-
 def rooms_in_phase(doc, phase_name):
-    """The room ids in `phase_name`. A named wrapper so the call site reads as
-    what it means rather than as a category constant."""
-    return elements_in_phase(doc, phase_name, BuiltInCategory.OST_Rooms)
+    
+    rooms_in_phase = []
+    rooms = get_all_rooms(doc)
+    
+    for room in rooms:
+        created_phase_name = rPhase.get_phase_name_by_id(
+            doc,
+            rParaGet.get_built_in_parameter_value(
+                room,
+                BuiltInParameter.ROOM_PHASE,
+                rParaGet.get_parameter_value_as_element_id,
+            ),
+        )
+        if created_phase_name == phase_name:
+            rooms_in_phase.append(element_id_str(room.Id))
+    
+    print("Found {} rooms in phase {}".format(len(rooms_in_phase), phase_name))
+    return rooms_in_phase
 
 
 def doors_in_phase(doc, phase_name):
@@ -259,7 +279,7 @@ def phase_by_name(doc, phase_name):
     """This document's `Phase` object for `phase_name`.
 
     Needed because `FamilyInstance.FromRoom` is indexed by a *Phase*, not by a
-    name or an id — and the name is what crosses between documents, so the
+    name or an id - and the name is what crosses between documents, so the
     lookup has to happen per document. Raises for an unknown name, on the same
     fail-loudly terms as `elements_in_phase`."""
     for phase in doc.Phases:
@@ -276,7 +296,7 @@ def _room_in_phase(door, phase, which):
     or None.
 
     `FromRoom`/`ToRoom` exist both as a parameterless property (which uses the
-    document's *current* phase — not what we want) and as a phase-indexed one.
+    document's *current* phase - not what we want) and as a phase-indexed one.
     IronPython reaches the indexed form through the CLR's `get_` accessor;
     `door.FromRoom[phase]` binds to the parameterless value first on some
     versions, so the accessor is tried first and the indexer is the fallback.
@@ -295,7 +315,7 @@ def door_room_references(doc, phase_name):
     **Read here rather than taken from the duHast export, deliberately.** The
     export carries `from_room`/`to_room` as arrays with one entry per phase,
     tagged with a `phase_id` that appears nowhere else in the file and cannot
-    be resolved against anything on the wire — the blocker STRATEGY-ENTITIES
+    be resolved against anything on the wire - the blocker STRATEGY-ENTITIES
     records. `FromRoom[phase]` takes the phase and answers exactly one room, so
     asking Revit is both correct and simpler than reconciling an array against
     a phase table that is not there. It is also what makes the reference
@@ -303,7 +323,7 @@ def door_room_references(doc, phase_name):
 
     A door whose room lookup raises is recorded as having neither reference
     rather than aborting the model: one unreadable door must not cost the other
-    hundreds, and the server's QA reports it as a door with no room reference —
+    hundreds, and the server's QA reports it as a door with no room reference -
     visible, in the place a reader would look."""
     phase = phase_by_name(doc, phase_name)
     references = {}
@@ -423,7 +443,6 @@ def export_and_post_model(selected_doc, project, phase_name, return_value, pb):
     # that doesn't have it raises here (caught per model) rather than pushing an
     # unfiltered, silently-wrong room set.
     allowed_room_ids = rooms_in_phase(selected_doc, phase_name)
-
     # get room data
     room_data = get_all_room_data(selected_doc)
     # get level data
