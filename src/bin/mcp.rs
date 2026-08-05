@@ -773,7 +773,16 @@ mod tests {
         let bundle = ProjectSettings {
             reference: sources
                 .iter()
-                .map(|name| (name.to_string(), roommate::state::ProjectReferenceSource { data: None, fields: vec![] }))
+                .map(|name| {
+                    (
+                        name.to_string(),
+                        roommate::state::ProjectReferenceSource {
+                            entity: roommate::settings::ReferenceEntity::Rooms,
+                            data: None,
+                            fields: vec![],
+                        },
+                    )
+                })
                 .collect(),
             hierarchy: vec![],
             builtin_properties: vec![],

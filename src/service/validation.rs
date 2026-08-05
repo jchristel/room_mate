@@ -1463,7 +1463,11 @@ mod tests {
             .map(|(name, data)| {
                 (
                     name.to_string(),
-                    crate::state::ProjectReferenceSource { data: Some(data), fields: vec![] },
+                    crate::state::ProjectReferenceSource {
+                        entity: crate::settings::ReferenceEntity::Rooms,
+                        data: Some(data),
+                        fields: vec![],
+                    },
                 )
             })
             .collect();
@@ -1618,11 +1622,19 @@ mod tests {
             (
                 "drofus".to_string(),
                 crate::state::ProjectReferenceSource {
+                    entity: crate::settings::ReferenceEntity::Rooms,
                     data: Some(make_drofus("Number", &[("1", &[])], &[])),
                     fields: vec![],
                 },
             ),
-            ("pending".to_string(), crate::state::ProjectReferenceSource { data: None, fields: vec![] }),
+            (
+                "pending".to_string(),
+                crate::state::ProjectReferenceSource {
+                    entity: crate::settings::ReferenceEntity::Rooms,
+                    data: None,
+                    fields: vec![],
+                },
+            ),
         ]);
         let bundle = crate::state::ProjectSettings {
             reference,

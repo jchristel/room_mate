@@ -1060,6 +1060,14 @@ fn assemble_scoped_rooms(
             .reference
             .iter()
             .filter_map(|(source, cfg)| {
+                // Rooms join only sources declared for rooms. A door schedule
+                // configured in the same project is not "a source with no match
+                // for this room" -- it is not this entity's source at all, and
+                // joining it would put a door's columns on a room whose link
+                // property happened to collide.
+                if cfg.entity != crate::settings::ReferenceEntity::Rooms {
+                    return None;
+                }
                 let pinned = milestone_reference
                     .get(&(key.project_id.clone(), source.clone()))
                     .and_then(|o| o.as_ref());
@@ -1195,7 +1203,11 @@ mod tests {
             Some(d) => {
                 bundle.reference.insert(
                     "drofus".to_string(),
-                    crate::state::ProjectReferenceSource { data: Some(d), fields: vec![] },
+                    crate::state::ProjectReferenceSource {
+                        entity: crate::settings::ReferenceEntity::Rooms,
+                        data: Some(d),
+                        fields: vec![],
+                    },
                 );
             }
             None => {
@@ -2351,6 +2363,7 @@ mod tests {
         p2_bundle.reference.insert(
             "doors".to_string(),
             crate::state::ProjectReferenceSource {
+                entity: crate::settings::ReferenceEntity::Rooms,
                 data: Some(make_drofus_with_record("DoorKey", "D1", "Mark", "101A")),
                 fields: vec![],
             },

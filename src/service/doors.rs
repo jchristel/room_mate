@@ -19,7 +19,8 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::contract::{Door, DoorPayload, PropertyPresence};
-use crate::settings::BuiltinPropertyDef;
+use crate::reference::{ReferenceData, ReferenceRecord};
+use crate::settings::{BuiltinPropertyDef, ReferenceEntity};
 use crate::state::{AppState, ModelKey};
 
 use super::rooms::{FilterTarget, RoomFilter};
@@ -59,6 +60,16 @@ pub struct DoorResponse {
     /// the policy changes every answer immediately and rewrites nothing.
     pub owner_rooms: Vec<String>,
 
+    /// Joined reference-source records, keyed by source name — the same shape
+    /// `RoomResponse::reference` carries, and flattened the same way so
+    /// `schedule.FireRating` reads identically on either entity.
+    ///
+    /// Only sources declaring `entity = "doors"` land here. A source with no
+    /// match for this door contributes no entry: an unmatched key is a signal,
+    /// not an error, exactly as for rooms.
+    #[serde(flatten)]
+    pub reference: BTreeMap<String, ReferenceRecord>,
+
     /// The owning model's `Model.source` (e.g. "revit"), for canonical property
     /// resolution. Not wire shape, same as `RoomResponse::source`.
     #[serde(skip)]
@@ -68,12 +79,12 @@ pub struct DoorResponse {
 /// Doors resolve the entity's own two property tiers plus a small set of
 /// intrinsics, and nothing else.
 ///
-/// **A source-qualified field always resolves `Absent`.** Doors carry no joined
-/// reference sources yet (R4), so `hardware.FireRating` on a door is not an
-/// error — it is a field this door does not have, which is exactly the answer a
-/// *room* gets for a source it did not join. Keeping it `Absent` rather than an
-/// error means the filter grammar means one thing across both entities, and the
-/// day R4 lands the same predicate starts matching instead of changing status.
+/// **Source-qualified fields resolve against this door's joined sources**, and
+/// `Absent` when it joined none — which is exactly the answer a *room* gets for
+/// a source it did not match. That equivalence was designed in before the join
+/// existed: the previous implementation returned `Absent` for every qualified
+/// field precisely so that the day R4 landed, the same predicate would start
+/// matching rather than change status. It has, and it did.
 impl FilterTarget for DoorResponse {
     fn presence(&self, source: Option<&str>, property: &str, builtin_defs: &[BuiltinPropertyDef]) -> PropertyPresence {
         /// A door's own struct fields always exist, so blank collapses to
@@ -88,7 +99,17 @@ impl FilterTarget for DoorResponse {
         }
 
         match source {
-            Some(_) => PropertyPresence::Absent,
+            // Same three-way answer `RoomResponse` gives, deliberately: source
+            // not joined and field not in the row are both `Absent`, an empty
+            // cell is `Empty`.
+            Some(name) => match self.reference.get(name) {
+                None => PropertyPresence::Absent,
+                Some(record) => match record.fields.get(property) {
+                    None => PropertyPresence::Absent,
+                    Some(v) if v.is_empty() => PropertyPresence::Empty,
+                    Some(v) => PropertyPresence::Present(v.clone()),
+                },
+            },
             None => match property {
                 "$id" => intrinsic(Some(&self.door.id)),
                 "$type_name" => intrinsic(Some(&self.door.type_name)),
@@ -305,7 +326,34 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
         let builtin: &[BuiltinPropertyDef] = bundle.map(|b| b.builtin_properties.as_slice()).unwrap_or_default();
         let attribution = bundle.map(|b| b.doors.room_attribution).unwrap_or_default();
 
+        // The doors half of R4: this project's sources declaring
+        // `entity = "doors"`, resolved once per model rather than per door.
+        // Rooms scope theirs the same way in `assemble_scoped_rooms`.
+        let door_sources: BTreeMap<&str, &ReferenceData> = bundle
+            .map(|b| {
+                b.reference
+                    .iter()
+                    .filter(|(_, cfg)| cfg.entity == ReferenceEntity::Doors)
+                    .filter_map(|(name, cfg)| Some((name.as_str(), cfg.data.as_ref()?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         for door in &payload.doors {
+            // One join per configured source: read its link property off the
+            // DOOR -- instance tier then type tier, the R2 rule -- and look up
+            // the record. `lookup_property` is the same function rooms use; a
+            // door is simply another `PropertyTiers`.
+            let reference: BTreeMap<String, ReferenceRecord> = door_sources
+                .iter()
+                .filter_map(|(name, data)| {
+                    let record =
+                        crate::contract::lookup_property(door, &data.link_property, &payload.model.source, builtin)
+                            .and_then(|key| data.by_id.get(&key).cloned())?;
+                    Some(((*name).to_string(), record))
+                })
+                .collect();
+
             let response = DoorResponse {
                 owner_rooms: attribution
                     .owners(door.from_room.as_deref(), door.to_room.as_deref())
@@ -315,6 +363,7 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
                 door: door.clone(),
                 project_id: payload.project.id.clone(),
                 model_id: payload.model.id.clone(),
+                reference,
                 source: payload.model.source.clone(),
             };
             // A homeless door matches no building — see `DoorScope::building`.
@@ -380,6 +429,110 @@ mod tests {
             doors: Default::default(),
             hierarchy_exclusions: vec![],
         }
+    }
+
+    /// **R4 end to end: a source declaring `entity = "doors"` joins onto doors.**
+    ///
+    /// Before this, `[sources.reference.<name>]` meant "for rooms" with nothing
+    /// saying so, and a source configured for anything else parsed, loaded and
+    /// joined nowhere. The filter grammar was already written for this day --
+    /// `DoorResponse::presence` answered `Absent` for every source-qualified
+    /// field specifically so the same predicate would start *matching* rather
+    /// than change status once the join existed.
+    #[tokio::test]
+    async fn test_a_doors_scoped_reference_source_joins_onto_doors() {
+        // Row 1 is labels, row 2 col 0 names the door property holding the key.
+        let csv = b"DoorRef,FireRating
+Door Mark,FireRating
+D-101,60
+";
+        let data = crate::reference::load_reference_from_bytes(csv).expect("csv loads");
+
+        let mut settings = bundle();
+        settings.reference.insert(
+            "schedule".to_string(),
+            crate::state::ProjectReferenceSource { entity: ReferenceEntity::Doors, data: Some(data), fields: vec![] },
+        );
+
+        let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), settings)]), None);
+        state
+            .set_door_snapshot(DoorPayload {
+                schema_version: SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
+                phase: Some("New Construction".to_string()),
+                model_to_shared: None,
+                doors: vec![
+                    make_door("d1", None, Some("r1"), &[("Door Mark", "D-101")]),
+                    // No matching key: an unmatched row is a signal, not an
+                    // error, so this door simply joins nothing.
+                    make_door("d2", None, Some("r1"), &[("Door Mark", "D-999")]),
+                ],
+            })
+            .unwrap();
+
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
+        let joined = result.doors.iter().find(|d| d.door.id == "d1").expect("d1");
+        assert_eq!(
+            joined.reference.get("schedule").and_then(|r| r.fields.get("FireRating")),
+            Some(&"60".to_string()),
+            "the door schedule joined onto the door"
+        );
+
+        let unmatched = result.doors.iter().find(|d| d.door.id == "d2").expect("d2");
+        assert!(unmatched.reference.is_empty(), "an unmatched key joins nothing, and is not an error");
+
+        // And the filter grammar reaches it -- the same `source.property` shape
+        // a room filter writes, which is the whole reason the namespace stayed
+        // flat rather than nesting the entity.
+        let builtin: &[BuiltinPropertyDef] = &[];
+        assert_eq!(
+            joined.presence(Some("schedule"), "FireRating", builtin),
+            PropertyPresence::Present("60".to_string())
+        );
+        assert_eq!(
+            unmatched.presence(Some("schedule"), "FireRating", builtin),
+            PropertyPresence::Absent,
+            "a door that joined nothing answers Absent, exactly as a room does"
+        );
+    }
+
+    /// The other half of the scoping: a **rooms** source must not join onto
+    /// doors. Without the entity check a door whose link property happened to
+    /// collide would pick up a room's columns.
+    #[tokio::test]
+    async fn test_a_rooms_scoped_reference_source_does_not_join_onto_doors() {
+        let csv = b"DoorRef,FireRating
+Door Mark,FireRating
+D-101,60
+";
+        let data = crate::reference::load_reference_from_bytes(csv).expect("csv loads");
+
+        let mut settings = bundle();
+        settings.reference.insert(
+            "schedule".to_string(),
+            crate::state::ProjectReferenceSource { entity: ReferenceEntity::Rooms, data: Some(data), fields: vec![] },
+        );
+
+        let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), settings)]), None);
+        state
+            .set_door_snapshot(DoorPayload {
+                schema_version: SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
+                phase: Some("New Construction".to_string()),
+                model_to_shared: None,
+                doors: vec![make_door("d1", None, Some("r1"), &[("Door Mark", "D-101")])],
+            })
+            .unwrap();
+
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
+        assert!(
+            result.doors[0].reference.is_empty(),
+            "a rooms-scoped source is not this entity's source, even when the key matches"
+        );
     }
 
     fn state_with(doors: Vec<(&str, &str, Vec<Door>)>) -> AppState {

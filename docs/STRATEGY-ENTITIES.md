@@ -12,7 +12,7 @@ sketch.
 > **The prerequisites were met.** R1 and R2 landed as their own change *before*
 > any door code, so the `Door` contract was written against a settled precedence
 > rule rather than racing it — see
-> [PLAN-generalisation.md](PLAN-generalisation.md), which carries an outcome
+> [PLAN-generalisation.md](Superseded/PLAN-generalisation.md), which carries an outcome
 > note per item. No `put_doors` was ever written beside `put`.
 >
 > **R2's open question did not resolve either way this document expected**, and

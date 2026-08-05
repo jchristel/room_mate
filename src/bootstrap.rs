@@ -154,7 +154,10 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
                 }
             },
         };
-        reference.insert(name.clone(), ProjectReferenceSource { data, fields: source_cfg.fields.clone() });
+        reference.insert(
+            name.clone(),
+            ProjectReferenceSource { entity: source_cfg.entity, data, fields: source_cfg.fields.clone() },
+        );
     }
 
     let bundle = ProjectSettings {

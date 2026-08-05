@@ -23,7 +23,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
 | [Plan: phasing](Superseded/PLAN-phasing.md) | **Built (P1–P7), extractor half unverified against Revit.** The ten decisions behind Revit phase support and the phases that implemented them, plus an "As built" section recording where the result departs from the plan |
-| [Plan: generalisation](PLAN-generalisation.md) | **R1, R2 and R3 done; only R4 remains.** Four seams that grew room-shaped because rooms were the only primary entity. The two doors prerequisites landed ahead of any door code — read R2's outcome note for the tier-precedence rule the `Door` contract is written against (a tier wins only when it is `Present`), and R1's for why `list_models()` still means "models with rooms". R4 stays open until doors grow a reference source |
+| [Plan: generalisation](Superseded/PLAN-generalisation.md) | **R1, R2 and R3 done; only R4 remains.** Four seams that grew room-shaped because rooms were the only primary entity. The two doors prerequisites landed ahead of any door code — read R2's outcome note for the tier-precedence rule the `Door` contract is written against (a tier wins only when it is `Present`), and R1's for why `list_models()` still means "models with rooms". R4 stays open until doors grow a reference source |
 
 > **Reading either plan above: do not trust their `file.rs:NNN` deep
 > links.** Both pin line numbers, and the files have moved underneath them —
@@ -47,17 +47,19 @@ its two remaining false-positive checks went into
 Keeping them in a superseded brief would have buried a live item in an archive.
 
 Handoff documents whose work has fully landed live in
-[Superseded](Superseded/), and so do **three plans**: `PLAN-handover-actioning.md`,
+[Superseded](Superseded/), and so do **all four plans**: `PLAN-handover-actioning.md`,
 closed with P1 through P10 all landed and every handover it reviewed superseded
 alongside it; `PLAN-webgl-renderer.md`, closed with P0 through P6 landed and both
 renderer handovers superseded beside it; and `PLAN-phasing.md`, closed once the
 extractor half was finally run against a real Revit document (2026-08-03) — which
-found the failure the plan had named as the first thing to check. Each is kept as
-the record of how the work was sequenced and what was deliberately *not* built.
+found the failure the plan had named as the first thing to check; and
+`PLAN-generalisation.md`, closed when R4 landed. Each is kept as the record of
+how the work was sequenced and what was deliberately *not* built.
 
-**`PLAN-generalisation.md` is the only plan still live**, because R4 has not
-fired: it must land with doors' first reference source, and doors have now
-shipped twice without one.
+**No plan is live any more.** `PLAN-generalisation.md` joined them on
+2026-08-05 when R4 landed — its "wait for doors' first reference source" trigger
+turned out to be circular, since nothing could declare such a source until the
+config could express one.
 
 Four of those are worth knowing about even though they are superseded,
 because each leaves something recorded rather than pending:

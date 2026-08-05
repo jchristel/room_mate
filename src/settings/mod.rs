@@ -753,10 +753,12 @@ pub struct Storage {
 /// configured" downstream (e.g. `ValidationResponse.drofus_configured:
 /// false`), never an error.
 ///
-/// **Currently means "reference sources for *rooms*"** — see
-/// `docs/STRATEGY-SOURCES.md`'s "Design notes on the join" for the axis
-/// boundary: a non-room entity (e.g. a door schedule) needs that entity to
-/// exist first, not just another key here.
+/// **Entity-scoped since R4.** Each source declares which primary entity it
+/// joins onto via `ReferenceSourceConfig::entity`, defaulting to `rooms` so
+/// every settings file predating the field is unchanged and still means what it
+/// meant. Before that, `[sources.reference.<name>]` meant "for rooms" with
+/// nothing saying so, and a source configured for anything else parsed, loaded
+/// and joined nowhere.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Sources {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -773,12 +775,61 @@ pub struct ReferenceSourceConfig {
     #[serde(flatten)]
     pub origin: ReferenceOrigin,
 
+    /// Which primary entity this source joins onto. Defaults to `rooms`, so
+    /// every settings file written before entity-scoping existed still means
+    /// exactly what it meant.
+    ///
+    /// **Declared before `fields`, and that is load-bearing.** A scalar emitted
+    /// *after* a sequence lands inside it when the settings file is written back
+    /// (see `test_toml_serializer_hoists_values_above_tables`), so `entity`
+    /// would silently become a member of the last field entry. R3 measured that
+    /// hazard and shipped the guard; this is the declaration order that guard
+    /// exists to protect.
+    ///
+    /// An unrecognised value is a **startup failure naming it**, not a silent
+    /// default — the whole point of the field is to retire the previous
+    /// behaviour, where `[sources.reference.doors]` parsed, loaded and joined
+    /// nowhere.
+    #[serde(default)]
+    pub entity: ReferenceEntity,
+
     /// Per-column declarations for this source's fields. See
     /// `ReferenceFieldConfig`. Empty if omitted, which is the default
     /// behavior for every column: treated as a string, numeric-adaptive
     /// comparison if both sides happen to parse as a number.
     #[serde(default)]
     pub fields: Vec<ReferenceFieldConfig>,
+}
+
+/// The primary entity a reference source joins onto.
+///
+/// **Source names stay unique across entities**, because the join namespace is
+/// flat: `schedule.FireRating`, never `doors.schedule.FireRating`. That
+/// namespace answers exactly one question — "what goes before the dot in a
+/// filter" — and the entity is already known from the endpoint, so nesting it
+/// would repeat what the URL just said and fork `split_namespace` into
+/// variable-depth parsing. Revit property names contain dots; `a.b.c` would stop
+/// having one reading.
+///
+/// Uniqueness costs nothing to enforce: the sources map is keyed by name, so
+/// two entries claiming one name is a TOML duplicate-key error before this type
+/// is ever constructed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReferenceEntity {
+    #[default]
+    Rooms,
+    Doors,
+}
+
+impl ReferenceEntity {
+    /// The wire/TOML spelling, for error messages that have to name it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReferenceEntity::Rooms => "rooms",
+            ReferenceEntity::Doors => "doors",
+        }
+    }
 }
 
 /// A reference source's data origin. `#[serde(tag = "type")]` lets the TOML
@@ -1140,5 +1191,39 @@ boundary_location = "finish_face"
             .unwrap_err()
             .to_string();
         assert!(err.contains("IPMS3"), "the message names the accepted spellings: {err}");
+    }
+
+    /// **A reference source with no `entity` still means rooms**, which is what
+    /// makes R4 a non-event for every settings file written before it.
+    #[test]
+    fn test_reference_source_entity_defaults_to_rooms() {
+        let settings: Settings =
+            toml::from_str("project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n").expect("parses");
+        assert_eq!(settings.sources.reference["drofus"].entity, ReferenceEntity::Rooms);
+    }
+
+    #[test]
+    fn test_reference_source_entity_accepts_doors() {
+        let settings: Settings = toml::from_str(
+            "project_id = \"p1\"\n\n[sources.reference.schedule]\ntype = \"upload\"\nentity = \"doors\"\n",
+        )
+        .expect("parses");
+        assert_eq!(settings.sources.reference["schedule"].entity, ReferenceEntity::Doors);
+    }
+
+    /// **An unknown entity is a loud failure naming it**, not a silent fall back
+    /// to rooms. That is the whole point of the field: before it,
+    /// `[sources.reference.doors]` parsed, loaded and joined nowhere, and the
+    /// only symptom was a source that never matched anything. Serde's own
+    /// message is the specific one, so there is no hand-rolled check.
+    #[test]
+    fn test_unknown_reference_entity_is_rejected() {
+        let err = toml::from_str::<Settings>(
+            "project_id = \"p1\"\n\n[sources.reference.s]\ntype = \"upload\"\nentity = \"windows\"\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("windows"), "names what was written: {err}");
+        assert!(err.contains("rooms") && err.contains("doors"), "names the accepted values: {err}");
     }
 }
