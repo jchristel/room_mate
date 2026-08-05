@@ -1089,7 +1089,11 @@ mod tests {
         ProjectSettings {
             reference: BTreeMap::from([(
                 "drofus".to_string(),
-                ProjectReferenceSource { data: Some(make_drofus()), fields: vec![] },
+                ProjectReferenceSource {
+                    entity: crate::settings::ReferenceEntity::Rooms,
+                    data: Some(make_drofus()),
+                    fields: vec![],
+                },
             )]),
             hierarchy: vec![],
             builtin_properties: vec![],

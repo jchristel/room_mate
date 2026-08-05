@@ -1,6 +1,24 @@
 # RoomMate — Generalisation plan
 
-**Status: R1, R2 and R3 done. R4 remains, and lands with doors' first reference
+> **Superseded — R1 through R4 all landed.** The live pointers are
+> [Entities](../STRATEGY-ENTITIES.md) Decision 5 for what entity-scoping means
+> and [Sources](../STRATEGY-SOURCES.md) for the join itself. Kept as the record
+> of why each seam was cut where it was.
+>
+> **R4's own timing rule turned out to be circular, and that is worth knowing.**
+> It said to land "with doors' first reference source — not before, not after".
+> But nobody can declare a door reference source until the config can express
+> one, so waiting for the trigger prevented the trigger. The real blocker was
+> always the one the effort line named — R2 — and R2 had shipped. Implemented
+> 2026-08-05 against no door data at all, which cost nothing: `upload_reference`
+> feeds it a CSV, and the two tests do exactly that.
+>
+> The flat-namespace decision paid for itself immediately. `DoorResponse` had
+> been written to answer `Absent` for every source-qualified field *specifically*
+> so that the day R4 landed the same predicate would start matching rather than
+> change status. It did, unchanged.
+
+**Status: R1, R2, R3 and R4 done.** R4 originally read "lands with doors' first reference
 source — see [The line in the sand](#the-line-in-the-sand).** Four structural
 items surfaced by reviewing the codebase after phasing shipped. Each is a
 generalisation the codebase deferred one entity too long; none was a defect at
@@ -19,14 +37,12 @@ door code, as their own change:
   export rather than from first principles.
 - ~~**R1 lands with doors, not after.**~~ **Done**, and in fact before rather
   than with: no `put_doors` ever existed alongside `put`, so the third parallel
-  method set [Entities](STRATEGY-ENTITIES.md) Decision 3 warns about was never
+  method set [Entities](../STRATEGY-ENTITIES.md) Decision 3 warns about was never
   written and there is nothing to undo.
-- **R4 lands with doors' first reference source** — **still open, correctly.**
-  It needs R2 (now available) but must not land before there is a door reference
-  source to scope, and not after (a shipped `[sources.reference.*]` that
-  silently means "rooms" becomes a back-compat obligation the day someone relies
-  on it). Doors shipped with no reference source, so nothing has started that
-  clock. What the door work did do is remove the *hard* part: the join namespace
+- **R4 landed 2026-08-05, without waiting for a door reference source** — the
+  rule that said to wait was circular. You cannot declare a door reference source
+  until the config can express one, so "land it with the first one" prevented
+  there ever being a first one. Its real blocker was R2, which had shipped. What the door work did do is remove the *hard* part: the join namespace
   stayed flat and one `split_namespace` / `PropertyTiers` / filter grammar now
   serves both entities, so R4 is a settings and wiring change rather than a
   grammar fork.
@@ -38,16 +54,16 @@ held.
 R3 is done: [see below](#r3--the-toml-ordering-footgun-is-documented-not-designed-out)
 — and it did not go as planned, which is recorded there.
 
-Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
-[Server](STRATEGY-SERVER.md) · [Entities](STRATEGY-ENTITIES.md) ·
-[Sources](STRATEGY-SOURCES.md) · [Conventions](CODING-CONVENTIONS.md)
+Part of the Roommate strategy docs: [Index](../STRATEGY.md) ·
+[Server](../STRATEGY-SERVER.md) · [Entities](../STRATEGY-ENTITIES.md) ·
+[Sources](../STRATEGY-SOURCES.md) · [Conventions](../CODING-CONVENTIONS.md)
 
 ## The shape of the problem
 
 Rooms were the only primary entity for the whole life of the project, so three
 load-bearing seams grew room-shaped: the store persists `RoomPayload`, the
 property lookup takes `&Room`, and reference sources implicitly mean "for
-rooms". [Entities](STRATEGY-ENTITIES.md) names all three — Decisions 3 and 5 —
+rooms". [Entities](../STRATEGY-ENTITIES.md) names all three — Decisions 3 and 5 —
 but asserts the fixes in a clause each without a signature that survives contact
 with the code. This document supplies those.
 
@@ -96,7 +112,7 @@ direction.
 **The problem.** `put`, `get_latest`, `all_latest` and `get_snapshot` all name
 `RoomPayload` concretely. A doors payload has nowhere to go. The obvious fix —
 a parallel `put_doors` set — is what
-[Entities](STRATEGY-ENTITIES.md) Decision 3 rightly rejects, since FFE would make
+[Entities](../STRATEGY-ENTITIES.md) Decision 3 rightly rejects, since FFE would make
 it a fourth.
 
 **The constraint the doc misses.** `AppState` holds `Box<dyn SnapshotStore>`
@@ -156,7 +172,7 @@ store's own existing shape to its other half.
 >   the only real value behind an empty string on almost every door, which is
 >   exactly the value a hardware schedule joins against.
 > - Treating a name in both tiers as a **finding** — the reading
->   [Entities](STRATEGY-ENTITIES.md) Decision 4 might suggest — fails harder:
+>   [Entities](../STRATEGY-ENTITIES.md) Decision 4 might suggest — fails harder:
 >   `Workset` and `Edited by` collide on **26 of 26** doors, because Revit
 >   carries them on instances and types alike. A check that fires on everything
 >   reports nothing.
@@ -179,7 +195,7 @@ store's own existing shape to its other half.
 **The problem.** `lookup_property`, `property_presence`
 ([contract.rs](../src/contract.rs)), and the join/filter machinery in
 `service::rooms` and `service::validation` all take `&Room`. Doors need the same
-resolution, and [Entities](STRATEGY-ENTITIES.md) Decision 5 covers this in one
+resolution, and [Entities](../STRATEGY-ENTITIES.md) Decision 5 covers this in one
 clause ("generalize by entity") that is in fact the largest single chunk of
 doors work.
 
@@ -207,7 +223,7 @@ and it puts tier precedence in exactly one place.
 does an instance property **shadow** a type property of the same name, or is a
 same-named property in both tiers a data-quality *finding*? Shadowing is the
 conventional Revit reading and is what `tiers()` above implements. But
-[Entities](STRATEGY-ENTITIES.md) Decision 4 keeps the tiers separate precisely
+[Entities](../STRATEGY-ENTITIES.md) Decision 4 keeps the tiers separate precisely
 because "this leaf is 820 wide" and "every door of this type is 820 wide" are
 different claims — and silently collapsing them is what that decision exists to
 prevent. Resolve before doors' contract is final, not after.
@@ -240,7 +256,7 @@ the precedence decision is the real work.
 > source-order emission, *before* settings files start being written wrong.
 > `test_project_manifest_scalars_stay_top_level` covers `project.toml`, the
 > other TOML document this server writes.
-> [Conventions](CODING-CONVENTIONS.md) now says the rule is belt-and-braces
+> [Conventions](../CODING-CONVENTIONS.md) now says the rule is belt-and-braces
 > rather than a live hazard, and points at the guard.
 >
 > The rejected alternative below (a hand-built ordered `toml::Table`) is now
@@ -253,7 +269,7 @@ applies if the guard ever fires.**
 
 **The problem.** serde emits struct fields in declaration order, and a scalar
 declared *after* a map or sub-table lands inside that table rather than the
-parent. [Conventions](CODING-CONVENTIONS.md) documents this and it has bitten
+parent. [Conventions](../CODING-CONVENTIONS.md) documents this and it has bitten
 twice (`Milestone` has two map fields, so every scalar must precede both). A
 correct settings file becomes a corrupt one on a field reorder, silently, and
 only through the save path — a reviewer sees a harmless-looking diff.
@@ -286,7 +302,7 @@ test corpus already names a source `doors`
 ([bootstrap.rs](../src/bootstrap.rs), [service/rooms.rs](../src/service/rooms.rs)),
 which will read as wrong the day a doors *entity* exists.
 
-**Proposal**, per [Entities](STRATEGY-ENTITIES.md) Decision 5:
+**Proposal**, per [Entities](../STRATEGY-ENTITIES.md) Decision 5:
 
 - both gain an optional `entity`, defaulting to `"rooms"`, so every existing
   settings file is unchanged and still means what it meant;
@@ -306,6 +322,27 @@ which will read as wrong the day a doors *entity* exists.
 **Effort:** low-medium. **Blocked by R2** — entity-scoping a join that cannot
 target a non-room entity is a config field with no behaviour behind it.
 
+**As built (2026-08-05).** `entity` on `ReferenceSourceConfig`, defaulting to
+`rooms`, declared before `fields` exactly as the R3 note above requires.
+`ProjectReferenceSource` carries it through to every read path so neither entity
+reaches back into raw settings. `assemble_scoped_rooms` filters to `rooms`;
+`assemble_doors` gained the mirror join, using the same `lookup_property` — a
+door is simply another `PropertyTiers`, which is what R2 bought. `DoorResponse`
+gained the flattened `reference` map `RoomResponse` already had.
+
+Two things did not need building. **Source-name uniqueness across entities is
+free**: the sources map is keyed by name, so two entries claiming one name is a
+TOML duplicate-key error before any of this code runs. And the **loud failure on
+an unknown entity** is serde's own message, which already names both the bad
+value and the accepted ones — no hand-rolled check, the same stance
+`measurement_standard` takes.
+
+The `doors` reference fixture in the test corpus was left alone. The rename this
+section proposed was about avoiding a *name collision* with the doors entity, and
+`hardware` was an illustration rather than a requirement — source names are
+user-chosen, exactly as `drofus` is. It is a test-readability point, not a
+prerequisite, and nothing depends on it.
+
 ## Sequencing
 
 | | Item | Effort | Do it when |
@@ -313,7 +350,7 @@ target a non-room entity is a config field with no behaviour behind it.
 | 1 | ~~**R3** TOML shape assertions~~ | low | **done** — hazard measured away, guard shipped |
 | 2 | ~~**R2** tiered property trait~~ | medium-low | **done** — landed before any door code; the precedence rule is the outcome, not the trait |
 | 3 | ~~**R1** `SnapshotKind` store~~ | medium | **done** — landed alongside R2, before doors rather than with them |
-| 4 | **R4** entity-scoped settings | low-medium | with doors' first reference source — **still open** |
+| 4 | ~~**R4** entity-scoped settings~~ | low-medium | **done** — the "wait for a door source" trigger was circular; R2 was the real gate |
 
 R1 and R2 were independent of each other and shipped together as one
 prerequisite change, ahead of doors rather than alongside them: doing them first
@@ -325,9 +362,9 @@ being a door reference source to scope. R3 depended on nothing.
 
 - **Splitting `contract.rs` into `contract/`.** Real, but driven by the door
   types rather than by any of the above — see
-  [Conventions](CODING-CONVENTIONS.md)' measured-module note.
+  [Conventions](../CODING-CONVENTIONS.md)' measured-module note.
 - **`settings/mod.rs` at 826 lines**, which that same note calls the one that
   "reads as unfinished". A genuine cleanup, unrelated to entity generalisation.
-- **Anything about doors' own shape.** [Entities](STRATEGY-ENTITIES.md)
+- **Anything about doors' own shape.** [Entities](../STRATEGY-ENTITIES.md)
   Decisions 4 and 6 own that, including the unresolved question of which room
   owns a door.

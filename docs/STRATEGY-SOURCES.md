@@ -371,22 +371,24 @@ name most projects configure.
 - **`[sources.reference.*]` still means "reference sources *for rooms*" — and
   now the doors entity exists, so that is a gap rather than a boundary.** The
   join, filter, and comparison machinery above all resolve onto an assembled
-  *room*. A door schedule joins by a door key onto a door, and
-  `service::doors` performs no reference join at all: a source-qualified
-  predicate on a door resolves `Absent` (matching nothing) rather than
-  erroring, which is the same answer a room gets for a source it did not join.
-  Adding `[sources.reference.hardware]` today would still parse, load, and
-  silently no-op.
+  *room*. A door schedule joins by a door key onto a door.
 
-  **What closes this is R4** ([Generalisation](PLAN-generalisation.md#r4--reference-sources-are-implicitly-for-rooms)),
-  the one prerequisite doors deliberately shipped without: both this table and
-  `[[builtin_properties]]` gain an optional `entity` defaulting to `"rooms"`,
-  and an unknown entity becomes a loud startup failure. It was held back on
-  purpose — it must land *with doors' first reference source*, not before (a
-  config field with no behaviour behind it) and not after (a shipped table that
-  silently means "rooms" becomes a back-compat obligation the day someone
-  relies on it). Doors shipped with no reference source, so the clock has not
-  started.
+  **Closed by R4 (2026-08-05)**
+  ([Generalisation](Superseded/PLAN-generalisation.md#r4--reference-sources-are-implicitly-for-rooms)).
+  Every source declares an `entity`, defaulting to `"rooms"` so no existing
+  settings file changed meaning, and an unknown one is a loud failure naming it.
+  `service::doors` now performs the mirror join, reading the source's
+  `link_property` off the *door* — instance tier then type tier, the same
+  `lookup_property` rooms use, because a door is simply another `PropertyTiers`.
+  A source scoped to one entity never joins the other, even when the key would
+  have matched.
+
+  R4 was originally held back to land "with doors' first reference source". That
+  rule was circular — nobody can declare a door source until the config can
+  express one — and its stated blocker (R2) had already shipped. A
+  source-qualified predicate on a door that joined nothing still resolves
+  `Absent` rather than erroring, which is the same answer a room gets for a
+  source it did not match.
 
   What the door work did settle is the *vocabulary*: the join namespace stays
   flat (`hardware.FireRating`, never `doors.hardware.FireRating`) and one

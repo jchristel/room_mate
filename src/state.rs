@@ -19,7 +19,7 @@ use anyhow::Context;
 use crate::contract::{DoorPayload, RoomPayload};
 use crate::reference::ReferenceData;
 use crate::settings::{
-    BuiltinPropertyDef, HierarchyExclusion, HierarchyTier, Milestone, ReferenceFieldConfig, TestData,
+    BuiltinPropertyDef, HierarchyExclusion, HierarchyTier, Milestone, ReferenceEntity, ReferenceFieldConfig, TestData,
 };
 use crate::storage::{SnapshotKind, SnapshotMeta, SnapshotStore};
 
@@ -161,6 +161,10 @@ pub fn is_path_safe_component(s: &str) -> bool {
 /// data it just resolved.
 #[derive(Clone)]
 pub struct ProjectReferenceSource {
+    /// Which primary entity this source joins onto — carried through from
+    /// `ReferenceSourceConfig::entity` so every read path can filter to its own
+    /// entity without reaching back into the raw settings.
+    pub entity: ReferenceEntity,
     pub data: Option<ReferenceData>,
     pub fields: Vec<ReferenceFieldConfig>,
 }

@@ -787,9 +787,14 @@ mod tests {
         data: crate::reference::ReferenceData,
         fields: Vec<ReferenceFieldConfig>,
     ) {
-        bundle
-            .reference
-            .insert("drofus".to_string(), crate::state::ProjectReferenceSource { data: Some(data), fields });
+        bundle.reference.insert(
+            "drofus".to_string(),
+            crate::state::ProjectReferenceSource {
+                entity: crate::settings::ReferenceEntity::Rooms,
+                data: Some(data),
+                fields,
+            },
+        );
     }
 
     fn payload_at(model_id: &str, taken_at: &str, rooms: Vec<Room>) -> RoomPayload {

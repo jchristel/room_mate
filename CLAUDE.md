@@ -28,9 +28,12 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 - **Doors never re-phase a lineage.** A rooms push that disagrees on phase is
   quarantined and promotable; a doors push is **refused**. Promoting it would
   move the lineage while the rooms stayed behind.
-- **R4 (entity-scope `[sources.reference.*]`) is still open**, and lands with
-  doors' first reference source — not before, not later (back-compat
-  obligation). Doors shipped with none, so it stays open.
+- **Reference sources are entity-scoped (R4, 2026-08-05).** Each declares
+  `entity`, defaulting to `rooms`. A source scoped to one entity never joins the
+  other, even when the key would match. The join namespace stays **flat** —
+  `schedule.FireRating`, never `doors.schedule.FireRating` — because the entity
+  is already known from the endpoint, so source names are unique across
+  entities. That uniqueness is free: the sources map is keyed by name.
 - **Door ownership: a door belongs to the room it opens *into*, else the room it
   opens *from*, else it is homeless.** `[doors] room_attribution`, default
   `to_room_then_from_room`. Derived at read time, never stored, so changing the
@@ -61,7 +64,7 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 
 - **Phase:** [`PLAN-phasing.md`](docs/Superseded/PLAN-phasing.md) is authoritative over
   `STRATEGY-ENTITIES.md` Decision 2.
-- **Generalisation:** [`PLAN-generalisation.md`](docs/PLAN-generalisation.md)
+- **Generalisation:** [`PLAN-generalisation.md`](docs/Superseded/PLAN-generalisation.md)
   supplies the signatures `STRATEGY-ENTITIES.md` Decisions 3 and 5 only assert.
 
 Docs pin `file.rs:NNN` line numbers that have drifted — trust the *symbol* name,
@@ -129,12 +132,10 @@ green one serving a stale renderer.
 - **Contract is v6 and `phase` is required.** A hand-rolled test push without it
   gets a 422 naming a stale extractor.
 
-## Open, as of 2026-08-03
+## Open, as of 2026-08-05
 
-- **R4 (entity-scope `[sources.reference.*]`) is still open** — unchanged by the
-  2026-08-03 doors push, which shipped with no reference source, so its window
-  has still not opened. See
-  [`PLAN-generalisation.md`](docs/PLAN-generalisation.md).
+**Nothing.** Both long-standing items closed: the extractor's phase filter is
+verified against Revit, and R4 landed.
 
 ## Phase filtering: rooms and doors are not alike
 
