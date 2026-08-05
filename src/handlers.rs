@@ -94,6 +94,53 @@ fn validate_ingest(
     validate_taken_at(taken_at)
 }
 
+/// A rooms push must carry at least one room.
+///
+/// **This is a producer fault every time, and it used to be stored in silence.**
+/// A push exists because someone ran an export against a document that has rooms
+/// in it; a payload with none means the export produced nothing, not that the
+/// model is empty. On 2026-08-03 a phase filter that matched nothing sent five
+/// consecutive zero-room pushes, and every one was accepted, indexed and served
+/// as "this model has no rooms" — the only signal was a person noticing the
+/// drawing was blank.
+///
+/// Deliberately **not** the same as an empty *level*, which is ordinary and
+/// stays a first-class state the viewer names ("LEVEL 02 has no rooms"). The
+/// distinction is whole-payload versus per-level, and only the first is
+/// impossible to arrive at honestly.
+///
+/// A 422 rather than a quarantine: quarantine exists so a *differently-phased*
+/// push can be promoted later (PLAN-phasing D6), and there is nothing here worth
+/// promoting. Same reasoning that makes an unphased push a hard reject.
+///
+/// Doors get no equivalent rule: a model with rooms and no doors is a shell, a
+/// pre-fit-out phase, or simply a floor without any — all of them legitimate.
+fn reject_empty_rooms(
+    room_count: usize,
+    project_id: &str,
+    model_id: &str,
+    phase: Option<&str>,
+) -> Result<(), (StatusCode, String)> {
+    if room_count > 0 {
+        return Ok(());
+    }
+    // Name the phase, because the filter matching nothing is what this is,
+    // nearly every time — and "0 rooms" on its own sends people looking at the
+    // server.
+    let scope = match phase {
+        Some(p) => format!("in phase '{p}'"),
+        None => "with no phase declared".to_string(),
+    };
+    Err((
+        StatusCode::UNPROCESSABLE_ENTITY,
+        format!(
+            "push for {project_id}/{model_id} contains no rooms {scope}. A push with an empty room \
+             list is a producer fault, not an empty model — check that the phase filter matched \
+             something before pushing."
+        ),
+    ))
+}
+
 /// The snapshot id rule lives in the contract (`validate_snapshot_id`:
 /// RFC3339, expressed in UTC); this is just its 422 adapter. The date-time
 /// requirement subsumes the old per-character filename-safety checks — no
@@ -210,6 +257,7 @@ pub async fn ingest_rooms(
     warn_on_transform_drift(payload.model_to_shared.as_ref(), &payload.project.id, &payload.model.id);
 
     let count = payload.rooms.len();
+    reject_empty_rooms(count, &payload.project.id, &payload.model.id, payload.phase.as_deref())?;
     let snapshot_taken_at = payload.snapshot.taken_at.clone();
     let room_boundary = resolved_boundary(&state, &payload.project.id, payload.room_boundary);
     tracing::info!("received {} room(s)", count);
@@ -396,6 +444,7 @@ pub async fn ingest_rooms_stream(
     }
 
     let count = rooms.len();
+    reject_empty_rooms(count, &envelope.project.id, &envelope.model.id, envelope.phase.as_deref())?;
     tracing::info!("streamed {} room(s)", count);
 
     let snapshot_taken_at = envelope.snapshot.taken_at.clone();
@@ -1264,7 +1313,10 @@ mod tests {
         }
 
         // A normal ISO timestamp (with its `:`) still passes, and is echoed
-        // back untouched.
+        // back untouched. Carries a room because `reject_empty_rooms` refuses an
+        // empty push outright -- the identity cases above still reach their own
+        // 422 first, since `validate_ingest` runs before the room count is
+        // looked at.
         let payload = RoomPayload {
             schema_version: SUPPORTED_SCHEMA,
             project: Project { id: "p1".to_string(), name: "P".to_string() },
@@ -1274,7 +1326,7 @@ mod tests {
             model_to_shared: None,
             room_boundary: None,
             levels: vec![],
-            rooms: vec![],
+            rooms: vec![make_room("r1", "Room 1")],
         };
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
         let (status, Json(body)) = ingest_rooms(State(state), Json(payload)).await.unwrap();
@@ -1678,6 +1730,106 @@ mod tests {
         // The rooms lineage is untouched: same snapshot, same single id.
         assert_eq!(state.list_snapshot_ids(&key).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
         assert_eq!(state.list_door_snapshot_ids(&key).unwrap(), vec!["2026-02-01T00:00:00Z".to_string()]);
+    }
+
+    /// **An empty rooms push is refused, and this is the regression it guards.**
+    ///
+    /// On 2026-08-03 an extractor whose phase filter matched nothing sent five
+    /// consecutive zero-room pushes. Every one was accepted, indexed and served
+    /// as "this model has no rooms"; the only signal anything was wrong was a
+    /// person noticing the drawing was blank.
+    ///
+    /// Both ingest paths are covered, because they count rooms in different
+    /// places — the buffered one off the deserialized payload, the streaming one
+    /// as it reads lines — and a guard on only one of them is a guard with a
+    /// documented way around it.
+    #[tokio::test]
+    async fn test_rooms_push_with_no_rooms_is_refused() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let payload = RoomPayload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
+            model_to_shared: None,
+            room_boundary: None,
+            levels: vec![],
+            rooms: vec![],
+        };
+
+        let (status, message) = ingest_rooms(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("contains no rooms"), "{message}");
+        // Names the phase, because a filter that matched nothing is what this
+        // nearly always is, and "0 rooms" alone sends people to the server.
+        assert!(message.contains("New Construction"), "message names the phase: {message}");
+        // Nothing was stored: a refused push must not leave a lineage behind.
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert!(state.list_snapshot_ids(&key).unwrap().is_empty(), "nothing stored");
+    }
+
+    /// The streaming path counts rooms separately, so it gets the guard
+    /// separately. Envelope line, then no room lines at all.
+    #[tokio::test]
+    async fn test_streamed_rooms_push_with_no_rooms_is_refused() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let envelope = serde_json::json!({
+            "schema_version": SUPPORTED_SCHEMA,
+            "project": { "id": "p1", "name": "P" },
+            "model": { "id": "m1", "name": "M", "source": "revit" },
+            "snapshot": { "taken_at": "2026-01-01T00:00:00Z" },
+            "phase": "New Construction",
+            "levels": [],
+        });
+        let body = Body::from(format!(
+            "{envelope}
+"
+        ));
+
+        let (status, message) = ingest_rooms_stream(State(state), body).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("contains no rooms"), "{message}");
+    }
+
+    /// **A doors push is refused when the model's rooms snapshot is EMPTY**, not
+    /// merely when no snapshot exists.
+    ///
+    /// This is the hole the 2026-08-03 pushes went through: the gate asked
+    /// whether a rooms snapshot *file* existed, which an empty one does. 26
+    /// doors referencing 22 distinct room ids were stored against zero rooms,
+    /// none of them resolvable — by the gate whose whole purpose is preventing
+    /// exactly that.
+    ///
+    /// `reject_empty_rooms` now stops such a snapshot being written, so this
+    /// state is only reachable through history already on disk. It is reachable,
+    /// which is why the gate reads rather than trusting the index.
+    #[tokio::test]
+    async fn test_doors_push_is_refused_when_the_rooms_snapshot_is_empty() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+
+        // Write an empty rooms snapshot directly, as the five real ones were —
+        // ingest would now refuse it, and that is the point of going round it.
+        let empty = RoomPayload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
+            model_to_shared: None,
+            room_boundary: None,
+            levels: vec![],
+            rooms: vec![],
+        };
+        state.set_snapshot(empty).unwrap();
+        assert!(!state.list_snapshot_ids(&key).unwrap().is_empty(), "a snapshot file exists");
+
+        let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
+        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("no rooms have been pushed"), "{message}");
+        assert!(state.all_door_snapshots().unwrap().is_empty(), "no doors stored");
     }
 
     /// **The rooms-first gate.** Without rooms in this model there is nothing a
