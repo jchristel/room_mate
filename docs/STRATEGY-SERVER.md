@@ -866,29 +866,41 @@ definition plus the current snapshot — once rooms re-push or dRofus re-polls
 mid-session, it must recompute, the server-side twin of the dRofus join's own
 staleness note.
 
-## Open
+## An empty rooms push is refused; an empty *level* is not
 
-**Nothing refuses a push whose room list is empty**, and on 2026-08-03 that
-cost five snapshots. The extractor's room phase filter matched nothing (see
-[Phasing](Superseded/PLAN-phasing.md) "As built"), so five consecutive pushes
-carried `"rooms": []`. Every one was accepted, stored, indexed and served —
-`/rooms` answered with an empty array, the viewer drew an empty plan, and the
-only signal that anything was wrong was a person noticing the drawing was blank.
+Closed 2026-08-05, after it cost five snapshots. The extractor's room phase
+filter matched nothing, so five consecutive pushes carried `"rooms": []`. Every
+one was accepted, stored, indexed and served — `/rooms` answered with an empty
+array, the viewer drew an empty plan, and the only signal was a person noticing
+the drawing was blank.
 
-The distinction ingest cannot currently draw is between:
+**The distinction that matters** is whole-payload versus per-level:
 
-- **a level that is legitimately empty** — ordinary, and already a first-class
-  state the viewer names ("LEVEL 02 has no rooms"); and
-- **a whole payload that is empty** — which no real model produces. A push
-  exists because someone ran an export against a document with rooms in it; a
-  payload with none is a producer fault every time.
+- **a level that is legitimately empty** is ordinary, and stays a first-class
+  state the viewer names ("LEVEL 02 has no rooms");
+- **a whole payload that is empty** is a producer fault every time. A push
+  exists because someone ran an export against a document with rooms in it.
 
-Worth weighing rather than assuming: a `422` on an empty room list would be
-consistent with D4's stance that a push whose content was never correctly
-filtered is an error rather than data, and it fails in the direction that gets
-noticed. Against that, it is a new rejection on a shape that was previously
-legal, so it wants the same treatment D2 gave the schema bump — decide whether
-it is a contract change, and say so.
+So `reject_empty_rooms` returns a **422**, on both ingest paths — the buffered
+one counts off the deserialized payload, the streaming one as it reads lines,
+and a guard on only one of them is a guard with a documented way around it. A
+422 rather than a quarantine for the same reason an unphased push is refused
+outright: quarantine exists so a *differently-phased* push can be promoted later
+(PLAN-phasing D6), and there is nothing here worth promoting.
 
-The same question applies to doors, which have their own payload and their own
-filter. It did not arise there only because doors' phase predicate was correct.
+The message **names the phase**, because a filter matching nothing is what this
+nearly always is, and "0 rooms" on its own sends people to look at the server.
+
+**Doors get no equivalent rule.** A model with rooms and no doors is a shell, a
+pre-fit-out phase, or a floor without any — all legitimate. The asymmetry is the
+point: only the rooms case is impossible to arrive at honestly.
+
+**The doors gate was fixed in the same change**, because it had the same bug one
+level down. `has_room_snapshot` asked whether a rooms snapshot *file* existed —
+which an empty one does — so those five empty snapshots satisfied the gate that
+exists to stop unresolvable door references. It let through 26 doors referencing
+22 distinct room ids, **none of which resolved**. It now reads the latest
+snapshot rather than the index: one file read per doors push, on an operation
+that already writes one, and the only way to be honest about history that is
+already on disk.
+

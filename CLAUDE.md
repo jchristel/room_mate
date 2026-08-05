@@ -106,6 +106,21 @@ green one serving a stale renderer.
 - **"Signal, not error"** — an unresolved cross-reference is usually a reported
   state, not a failure.
 
+## Empty pushes, and the two guards that were wrong
+
+- **A rooms push with no rooms is a 422**, on both ingest paths. A push exists
+  because someone exported a document that has rooms in it; an empty one is a
+  producer fault, never an empty model. Not the same as an empty *level*, which
+  is ordinary. The message names the phase, because a filter matching nothing is
+  what it nearly always is.
+- **Doors get no equivalent rule** — a model with rooms and no doors is
+  legitimate.
+- **`has_room_snapshot` reads the latest snapshot, not the index.** It used to
+  ask whether a rooms snapshot *file* existed, which an empty one does — so it
+  waved through 26 doors referencing 22 room ids, none resolvable. Reading costs
+  one file per doors push and is the only honest answer while empty snapshots
+  from before the fix are still on disk.
+
 ## Traps
 
 - **Line endings are LF**, enforced by `.gitattributes`. Writing files through a
@@ -116,11 +131,6 @@ green one serving a stale renderer.
 
 ## Open, as of 2026-08-03
 
-- **Nothing refuses a push whose room list is empty.** A phase filter that
-  matched no rooms produced five stored, served snapshots reading "this model
-  has no rooms" before anyone noticed. A whole-payload-empty push is not the
-  same as a level that is legitimately empty, and ingest cannot currently tell
-  them apart. See [`STRATEGY-SERVER.md`](docs/STRATEGY-SERVER.md) "Open".
 - **R4 (entity-scope `[sources.reference.*]`) is still open** — unchanged by the
   2026-08-03 doors push, which shipped with no reference source, so its window
   has still not opened. See
