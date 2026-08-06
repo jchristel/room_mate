@@ -46,7 +46,10 @@ data/*
 !data/snapshots/
 data/snapshots/*
 !data/snapshots/House A/
-/scripts/__pycache__
+# Anywhere, not just /scripts: the extractor is Python too, and running it (or
+# anything that imports it) drops a __pycache__ beside the source that a
+# `git add -A` will otherwise happily commit.
+__pycache__/
 
 # NOT ignored, deliberately: `.mcp.json` (the Claude Code MCP registration for
 # bin/mcp.rs) is tracked. It used to be listed here, which silently contradicted

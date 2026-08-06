@@ -16,9 +16,10 @@ What is genuinely different, and why:
   (the server refuses otherwise), and that model's rooms snapshot already
   carries the level set a door's `level_id` points into. A second copy could
   only disagree.
-- **The room references do not come from the export.** See
-  `translate_door` -- they are read from the Revit API by `room_mate.py`,
-  which is the only side that can ask the question correctly.
+- **The room references, the position and the direction do not come from the
+  export.** See `translate_door` -- all four are read from the Revit API by
+  `room_mate.py`, in one pass, which is the only side that can ask the
+  questions correctly and the only way they are guaranteed to agree.
 - **A degenerate footprint is dropped**, see `loops_from_polygon`. This is
   the one place this module actively discards data, and it has to: the bad
   value looks like real geometry.
@@ -159,13 +160,16 @@ def build_envelope(doors_source):
     return envelope
 
 
-def translate_door(door, room_references):
+def translate_door(door, placements):
     """Map one duHast door object onto the v1 `Door` shape, or return None when
     it carries no id (nothing downstream could key on it).
 
-    `room_references` is `{door id: (from_room_id, to_room_id)}`, built by
-    `room_mate.door_room_references` from the Revit API. **The export's own
-    `from_room`/`to_room` are deliberately ignored**, for two reasons:
+    `placements` is `{door id: {"from_room", "to_room", "insertion_point",
+    "normal"}}`, built by `room_mate.door_placements` from the Revit API.
+    **Everything in it is read from Revit rather than from the export**, and for
+    two different reasons.
+
+    The room references, because the export's own are unusable:
 
     1. They are arrays holding one entry per phase, tagged with a `phase_id`
        that appears nowhere else in the file and cannot be resolved against
@@ -174,7 +178,13 @@ def translate_door(door, room_references):
        room, so asking Revit is both correct and simpler than reconciling an
        array against a phase table that isn't there.
 
-    A door absent from `room_references` gets `None` on both sides rather than
+    The position and direction, because they must agree with those references.
+    `through_wall_normal` points from the from-room to the to-room, and it is
+    `FacingOrientation` -- the same orientation `ToRoom` itself follows. Read
+    from one API pass over one phase, the four values cannot describe different
+    states of the same door.
+
+    A door absent from `placements` gets `None` for all four rather than
     raising: that is the honest reading (nothing was resolved) and the server's
     QA reports it as a door with no room reference, which is exactly where a
     reader should see it."""
@@ -186,14 +196,21 @@ def translate_door(door, room_references):
 
     type_props = door.get("type_properties") or {}
     level = door.get("level") or {}
-    from_room, to_room = room_references.get(door_id, (None, None))
+    placement = placements.get(door_id) or {}
 
     return {
         "id": door_id,
         "level_id": str(level.get("id", "unknown")),
         "loops": loops_from_polygon(door.get("polygon")),
-        "from_room": from_room,
-        "to_room": to_room,
+        "from_room": placement.get("from_room"),
+        "to_room": placement.get("to_room"),
+        # Both are sent even when null. The contract accepts their absence (old
+        # snapshots predate them) but this producer states what it found either
+        # way -- "Revit had no plan direction for this door" and "this producer
+        # is too old to have looked" are different facts, and a key that is
+        # simply missing cannot tell them apart.
+        "insertion_point": placement.get("insertion_point"),
+        "through_wall_normal": placement.get("normal"),
         "type_id": str(type_props.get("id", "unknown")),
         "type_name": type_props.get("name", "Unknown Type"),
         "properties": properties_to_map(instance),
@@ -213,21 +230,21 @@ def in_selected_phase(out_door, allowed_door_ids):
     return out_door["id"] in allowed_door_ids
 
 
-def translate(doors_source, room_references, allowed_door_ids=None):
+def translate(doors_source, placements, allowed_door_ids=None):
     """Map the duHast door export onto the v1 contract as one whole payload.
     The buffered counterpart of `post_doors_stream`, kept for the same reasons
     `post_rooms.translate` is: small manual pushes and fixture generation."""
     envelope = build_envelope(doors_source)
     out_doors = []
     for door in doors_source.get(DOOR_LIST_KEY, []):
-        out_door = translate_door(door, room_references)
+        out_door = translate_door(door, placements)
         if out_door is not None and in_selected_phase(out_door, allowed_door_ids):
             out_doors.append(out_door)
     envelope["doors"] = out_doors
     return envelope
 
 
-def post_doors_stream(json_formatted_doors, room_references, url=SERVER_URL_STREAM, allowed_door_ids=None):
+def post_doors_stream(json_formatted_doors, placements, url=SERVER_URL_STREAM, allowed_door_ids=None):
     """Gzip-compress an NDJSON stream (line 1 = envelope, one line per door) to
     the server's streaming doors ingest, translating one door at a time as it
     is read off the raw export.
@@ -257,7 +274,7 @@ def post_doors_stream(json_formatted_doors, room_references, url=SERVER_URL_STRE
         write_ndjson_line(gz, envelope)
         for door in json_formatted_doors.get(DOOR_LIST_KEY, []):
             raw += 1
-            out_door = translate_door(duhast_object_to_plain(door), room_references)
+            out_door = translate_door(duhast_object_to_plain(door), placements)
             if out_door is None:
                 no_id += 1
                 continue
@@ -284,10 +301,10 @@ def post_doors_stream(json_formatted_doors, room_references, url=SERVER_URL_STRE
     return _post_content(url, content)
 
 
-def post_doors(json_formatted_doors, room_references, url=SERVER_URL, allowed_door_ids=None):
+def post_doors(json_formatted_doors, placements, url=SERVER_URL, allowed_door_ids=None):
     """Buffered counterpart of `post_doors_stream`. Returns `(ok, status, text)`."""
     doors_source = duhast_object_to_plain(json_formatted_doors)
-    contract = translate(doors_source, room_references, allowed_door_ids)
+    contract = translate(doors_source, placements, allowed_door_ids)
 
     # Guarded here rather than in `translate`, matching `post_rooms.post_payload`:
     # translating an empty door set is a legitimate thing to ask for, pushing one

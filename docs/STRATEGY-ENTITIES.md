@@ -344,6 +344,31 @@ decisions behind them:
   equivalent per-polygon copy for rooms; `model_to_shared` on the envelope is the
   one true placement. Same reasoning as
   `docs/Superseded/HANDOVER-georeferencing.md` "Fact 1".
+- **`insertion_point` and `through_wall_normal`** (added 2026-08-06 for the door
+  glyph). **Not a reversal of the bullet above** — that one drops a *model-level
+  survey transform* that was duplicated onto every door; these are genuinely
+  per-door facts that exist nowhere else on the wire.
+  - `insertion_point` (Revit `LocationPoint`) is the one thing every door has
+    whatever else is missing. `loops` is allowed to be empty and 2 of the 26
+    sample doors are, so a consumer that can only place a door by its footprint
+    cannot place those at all — they exist in QA and `/doors` but appear nowhere
+    a reader looks at a plan, which reads as "no door there" rather than "shape
+    unknown".
+  - `through_wall_normal` is a unit vector from `from_room` toward `to_room`,
+    from `FamilyInstance.FacingOrientation`. **The normal, never the tangent:**
+    the tangent would leave every consumer to rotate 90° and then decide the
+    sign, which is the ambiguity the field exists to remove. Facing is the right
+    source rather than the host wall because Revit's `to_room` follows the
+    door's *orientation* — flipping a door swaps both together, so they are two
+    readings of one fact and cannot drift from each other, or from the
+    `owner_rooms` computed from them.
+  - Both `Option` on the type and both always sent by the producer, which is not
+    a contradiction: every stored snapshot re-parses through this type at boot
+    and snapshots predating the fields are still on disk. Additive and optional,
+    so `SUPPORTED_DOOR_SCHEMA` stays at **1** — a v1 producer remains valid.
+    Absent means a consumer degrades (footprint without an arrow) rather than
+    guessing; a guessed direction is worse than none, because nothing downstream
+    can tell it from a measured one.
 
 ## Decision 5: reference sources become entity-scoped
 

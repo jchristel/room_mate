@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Loop, Model, ModelToShared, Project, PropertyTiers, Snapshot};
+use super::{CustomValue, Loop, Model, ModelToShared, Point2D, Project, PropertyTiers, Snapshot};
 
 /// One door instance, as extracted from Revit.
 ///
@@ -104,6 +104,56 @@ pub struct Door {
     /// `from_room` in every respect.
     #[serde(default)]
     pub to_room: Option<String>,
+
+    /// Where the door instance sits, in the same space as `loops` — decimal
+    /// feet, model space, Y up.
+    ///
+    /// **The one thing every door has, whatever else is missing.** `loops` is
+    /// allowed to be empty and 2 of the 26 sample doors are, so a consumer that
+    /// can only place a door by its footprint cannot place those at all — they
+    /// exist in QA and in `/doors` but nowhere a reader looks at a plan. The
+    /// insertion point is what a door-with-no-geometry can still be drawn at,
+    /// which is the difference between "we know nothing about its shape" and
+    /// "it silently is not there".
+    ///
+    /// The producer emits this for every door — it is Revit's `LocationPoint`,
+    /// which a placed `FamilyInstance` always has. `Option` here is not the
+    /// producer hedging: it is because every stored snapshot re-parses through
+    /// this type at boot, and snapshots pushed before this field existed are
+    /// still on disk. Same permissive-type / strict-producer split
+    /// `DoorPayload::phase` documents.
+    #[serde(default)]
+    pub insertion_point: Option<Point2D>,
+
+    /// A unit vector pointing **through the wall, from `from_room` toward
+    /// `to_room`** — the direction a reader would say the door leads.
+    ///
+    /// **The normal, never the tangent.** The tangent (along the wall run) would
+    /// leave every consumer to rotate it 90° and then decide the sign of that
+    /// rotation, which is precisely the ambiguity this field exists to remove. A
+    /// consumer points an arrow *along this vector directly*; there is no trig
+    /// to get wrong, and nothing to re-derive.
+    ///
+    /// Sourced from `FamilyInstance.FacingOrientation`, and that choice is what
+    /// makes the field trustworthy rather than merely convenient: Revit's
+    /// `to_room` follows the door's **orientation**, not the leaf swing, so
+    /// facing and `to_room` are two readings of one fact. Flipping a door in
+    /// Revit swaps both together. Deriving the direction from the host wall
+    /// instead would create a second source of truth that could disagree with
+    /// `to_room` — and therefore with `owner_rooms`, which is computed from it.
+    ///
+    /// Absent is a real state and consumers must degrade rather than guess: draw
+    /// the footprint, omit the arrow. A guessed direction is worse than none,
+    /// because nothing downstream can tell it from a measured one. It arrives
+    /// absent for a snapshot pushed before this field existed, and for a door
+    /// whose facing has no plan component at all (a hatch in a floor).
+    ///
+    /// Normalised by the producer. Not re-validated here — a consumer that
+    /// cares normalises defensively, and rejecting a push over a vector length
+    /// would fail a whole model's doors for something with no bearing on any
+    /// other reader.
+    #[serde(default)]
+    pub through_wall_normal: Option<Point2D>,
 
     /// The `ElementId` of the door's family type, as a string.
     ///
@@ -269,6 +319,8 @@ mod tests {
                 "to_room": "2620294",
                 "type_id": "2503229",
                 "type_name": "D199a - 1080x2945 SLD",
+                "insertion_point": { "x": 24.67, "y": -2.68 },
+                "through_wall_normal": { "x": 0.0, "y": -1.0 },
                 "properties": { "Mark": { "value": "29", "storage_type": "String" } },
                 "type_properties": { "Leaf 1 Width": { "value": "1100.0", "storage_type": "Double" } }
             }]
@@ -280,6 +332,8 @@ mod tests {
 
         let door = &payload.doors[0];
         assert_eq!(door.id, "2628382");
+        assert_eq!(door.insertion_point.as_ref().map(|p| p.x), Some(24.67));
+        assert_eq!(door.through_wall_normal.as_ref().map(|n| n.y), Some(-1.0));
         assert_eq!(door.from_room.as_deref(), Some("2621499"));
         assert_eq!(door.to_room.as_deref(), Some("2620294"));
         assert_eq!(door.type_name, "D199a - 1080x2945 SLD");
@@ -290,6 +344,78 @@ mod tests {
         let reparsed: DoorPayload = serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
         assert_eq!(reparsed.doors[0].to_room.as_deref(), Some("2620294"));
         assert_eq!(reparsed.doors[0].type_properties["Leaf 1 Width"].value, "1100.0");
+        assert_eq!(reparsed.doors[0].through_wall_normal.as_ref().map(|n| n.y), Some(-1.0));
+    }
+
+    /// **Placement is optional on the type and always sent by the producer**, and
+    /// the two are not in tension: every snapshot on disk re-parses through this
+    /// type at boot, and snapshots pushed before these fields existed are still
+    /// there. A door missing both must deserialize, not fail — the alternative
+    /// is a server that will not start against its own stored history.
+    ///
+    /// The states are independent, which is the point of testing them apart: a
+    /// door can have a position and no direction (its facing has no plan
+    /// component), and that is a door a consumer draws without an arrow rather
+    /// than one it drops.
+    #[test]
+    fn test_placement_fields_are_optional_and_independent() {
+        let base = serde_json::json!({
+            "id": "d1",
+            "level_id": "lvl1",
+            "loops": [],
+            "type_id": "t1",
+            "type_name": "Single"
+        });
+
+        // A pre-placement snapshot: neither field, still a door.
+        let old: Door = serde_json::from_value(base.clone()).unwrap();
+        assert!(old.insertion_point.is_none());
+        assert!(old.through_wall_normal.is_none());
+
+        // Placed, but no readable direction — the "rectangle/cross without an
+        // arrow" case. Never a reason to synthesise one.
+        let mut placed = base.clone();
+        placed["insertion_point"] = serde_json::json!({ "x": 1.5, "y": -2.5 });
+        let placed: Door = serde_json::from_value(placed).unwrap();
+        assert_eq!(placed.insertion_point.as_ref().map(|p| p.y), Some(-2.5));
+        assert!(placed.through_wall_normal.is_none());
+
+        // **Explicit `null`, not just an absent key** — which is what the
+        // producer actually sends. `post_doors.translate_door` writes both keys
+        // on every door whether or not Revit answered, because "Revit had no
+        // plan direction for this door" and "this producer is too old to have
+        // looked" are different facts and a missing key cannot tell them apart.
+        // A `#[serde(default)]` covers the absent key; this covers the wire.
+        let mut nulled = base.clone();
+        nulled["insertion_point"] = serde_json::Value::Null;
+        nulled["through_wall_normal"] = serde_json::Value::Null;
+        let nulled: Door = serde_json::from_value(nulled).unwrap();
+        assert!(nulled.insertion_point.is_none());
+        assert!(nulled.through_wall_normal.is_none());
+    }
+
+    /// The normal is carried as authored and **not** re-normalised or rejected
+    /// on the way in. The producer normalises; the contract's job is to deliver
+    /// what it was given, so a consumer that needs a unit vector can normalise
+    /// defensively and one that only needs a direction pays nothing.
+    ///
+    /// Pinned as a test because "the server quietly fixed it up" and "the
+    /// producer sent it right" are indistinguishable from the outside until
+    /// something depends on the difference.
+    #[test]
+    fn test_normal_is_carried_verbatim() {
+        let json = serde_json::json!({
+            "id": "d1",
+            "level_id": "lvl1",
+            "loops": [],
+            "type_id": "t1",
+            "type_name": "Single",
+            "through_wall_normal": { "x": 3.0, "y": 4.0 }
+        });
+
+        let door: Door = serde_json::from_value(json).unwrap();
+        let n = door.through_wall_normal.as_ref().unwrap();
+        assert_eq!((n.x, n.y), (3.0, 4.0));
     }
 
     /// **An external door is a normal door.** One side absent must deserialize
