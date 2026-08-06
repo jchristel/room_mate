@@ -372,10 +372,73 @@ def door_room_references(doc, phase_name):
     return references
 
 
+ROOMS = "rooms"
+DOORS = "doors"
+
+
+def entities_label(entities):
+    """The chosen entities as the noun phrase in "<...> data" -- singular, since
+    both names are regular plurals and "rooms data" reads as a typo."""
+    return " and ".join(entity[:-1] for entity in entities)
+
+
 def rooms_export_entry(doc, uiapp, output, forms):
+    """Push ROOMS AND THEN DOORS -- the full push, and the original entry point.
+
+    Kept combined under its original name deliberately. The pyRevit button that
+    calls this lives outside this repository, so narrowing this function to
+    rooms would not fail: it would keep succeeding while quietly no longer
+    pushing doors, which is the worst shape a behaviour change can take. The
+    split lives in the two siblings below instead, where wiring a new button is
+    what opts into it.
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return export_entry(doc, uiapp, output, forms, (ROOMS, DOORS))
+
+
+def rooms_only_export_entry(doc, uiapp, output, forms):
+    """Push ROOMS alone, leaving whatever doors the model already has on the
+    server untouched.
+
+    For re-pushing rooms after a plan change without paying for the door export
+    and its per-door Revit room-reference reads, which are the slow half of a
+    combined run.
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return export_entry(doc, uiapp, output, forms, (ROOMS,))
+
+
+def doors_export_entry(doc, uiapp, output, forms):
+    """Push DOORS alone, against rooms already on the server.
+
+    The reason this can exist as its own entry: a doors push carries no room
+    data, only room *ids*, so it does not need the rooms to be re-sent -- it
+    needs them to be *there*. Whether they are is the server's question, not
+    this script's, and the server already answers it (a doors push to a model
+    with no rooms is refused, naming the reason). Second-guessing that here
+    would mean this script deciding what counts as "has rooms", which is exactly
+    the check `has_room_snapshot` was fixed for getting wrong.
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return export_entry(doc, uiapp, output, forms, (DOORS,))
+
+
+def export_entry(doc, uiapp, output, forms, entities):
 
     """
-    Exports rooms from the current Revit document to a JSON file.
+    Exports `entities` from the selected Revit document(s) and pushes them.
+
+    The single run driver behind all three entry points: document selection,
+    the one project, the one phase, and the per-model loop are identical whether
+    a run pushes rooms, doors or both, so they are written once. `entities` is
+    the only thing that varies, and it varies in one place -- what
+    `export_and_post_model` attempts per model.
 
     :param doc: Current Revit model document.
     :type doc: Autodesk.Revit.DB.Document
@@ -383,6 +446,8 @@ def rooms_export_entry(doc, uiapp, output, forms):
     :type output: pyRevit.output
     :param forms: pyRevit forms.
     :type forms: pyRevit.forms
+    :param entities: which of ROOMS / DOORS this run pushes, in push order.
+    :type entities: tuple
 
     :return: Result object with status and message.
     :rtype: Result
@@ -394,7 +459,10 @@ def rooms_export_entry(doc, uiapp, output, forms):
     try:
 
         # ask user to select active or linked document
-        selected_docs = pick_document(doc, forms, button_name="Select model to collect room data from", multiselect=True)
+        selected_docs = pick_document(
+            doc, forms,
+            button_name="Select model to collect {} data from".format(entities_label(entities)),
+            multiselect=True)
         if not selected_docs or len(selected_docs) == 0:
             return_value.append_message("No document(s) selected")
             return return_value
@@ -439,7 +507,8 @@ def rooms_export_entry(doc, uiapp, output, forms):
                 pb.update_progress(model_counter, max_value=len(selected_docs))
 
                 try:
-                    export_and_post_model(selected_doc, project, phase_name, return_value, pb)
+                    export_and_post_model(
+                        selected_doc, project, phase_name, return_value, pb, entities)
                 except Exception as e:
                     return_value.update_sep(
                         False, "{}: failed with exception: {}".format(selected_doc.Title, e)
@@ -451,31 +520,65 @@ def rooms_export_entry(doc, uiapp, output, forms):
                     break
 
     except Exception as e:
-        return_value.update_sep(
-            False, "Failed to export room data with exception: {}".format(e)
-        )
-        print("Failed to export room data with exception: {}".format(e))
+        message = "Failed to export {} data with exception: {}".format(
+            entities_label(entities), e)
+        return_value.update_sep(False, message)
+        print(message)
 
     print("Finished")
 
     return return_value
 
 
-def export_and_post_model(selected_doc, project, phase_name, return_value, pb):
-    """Export one model's rooms and levels and push them to the server under
-    the picked `project` ({"id", "name"}), scoped to `phase_name`, recording the
-    outcome on `return_value`. Raises on export/envelope failures -- the caller
-    catches per model so one bad model doesn't abandon the rest."""
+def export_and_post_model(selected_doc, project, phase_name, return_value, pb, entities):
+    """Export and push one model's `entities` under the picked `project`
+    ({"id", "name"}), scoped to `phase_name`, recording the outcome on
+    `return_value`. Raises on export/envelope failures -- the caller catches per
+    model so one bad model doesn't abandon the rest.
 
-    # Resolve the run's phase against THIS document's own phases before
-    # exporting anything: the name is the identity across models, and a document
-    # that doesn't have it raises here (caught per model) rather than pushing an
-    # unfiltered, silently-wrong room set.
-    allowed_room_ids = rooms_in_phase(selected_doc, phase_name)
-    # get room data
-    room_data = get_all_room_data(selected_doc)
-    # get level data
-    level_data = get_all_level_data(selected_doc)
+    **The order in `entities` is not decoration.** A doors push to a model whose
+    rooms are not on the server is refused (a door's from_room/to_room are room
+    ids, and a room id is unique only within a model), so when a run carries
+    both, rooms go first and a failed rooms push stops the model there. That is
+    also why a failed rooms push returns instead of pressing on: pushing doors
+    against rooms that did not land is not something to attempt on a hunch.
+
+    A doors-ONLY run makes no such check and deliberately doesn't: it is asking
+    the server about rooms it did not send, and the server is the only side that
+    knows the answer."""
+    envelope = build_model_envelope(selected_doc, project, phase_name, return_value)
+
+    # A ROOMS fact, so it is read only when rooms are being pushed -- the doors
+    # contract has no field for it, and reading it for a doors-only run would
+    # spend a document read to produce a warning about a value nothing sends.
+    if ROOMS in entities:
+        add_room_boundary(selected_doc, envelope, return_value)
+
+    # Don't begin this model's export at all if a cancel landed during the
+    # previous model's post. The check that matters more is inside each push --
+    # it is the export, not this, that a user waits through long enough to give
+    # up during. The caller re-checks after this returns and stops the loop.
+    if pb.cancelled:
+        return
+
+    if ROOMS in entities:
+        if not export_and_post_rooms(selected_doc, envelope, phase_name, return_value, pb):
+            return
+
+    if DOORS in entities:
+        export_and_post_doors(selected_doc, envelope, phase_name, return_value, pb)
+
+
+def build_model_envelope(selected_doc, project, phase_name, return_value):
+    """The envelope fields BOTH pushes carry: identity, phase, and the
+    model->shared transform.
+
+    Built once per model and handed to whichever pushes run, so a combined run
+    cannot have its two halves disagree about which model, snapshot or phase
+    they describe -- and so a doors-only run builds identity by exactly the same
+    code as a combined one rather than by a second copy that could drift.
+
+    `room_boundary` is deliberately NOT here: see `add_room_boundary`."""
 
     # v4 identity envelope (STRATEGY.md "Identity"). The project block comes
     # from the run's picked project (choose_project), NOT the Revit document:
@@ -536,6 +639,21 @@ def export_and_post_model(selected_doc, project, phase_name, return_value, pb):
             "pushing without a georeference".format(selected_doc.Title, e)
         )
 
+    return envelope
+
+
+def add_room_boundary(selected_doc, envelope, return_value):
+    """Stamp the model's boundary regime onto `envelope`, if it has a readable
+    one.
+
+    Split off `build_model_envelope` rather than left beside the transform it
+    otherwise resembles, because the two are not the same kind of fact. The
+    transform places any geometry, doors included; the boundary regime only
+    tells the server how wide a wall zone between ROOMS is, and the doors
+    contract has no field to carry it. So a doors-only run skips this, and skips
+    the warnings it would otherwise emit about a value nothing on the wire would
+    have read."""
+
     # Which boundary regime this model was drawn to
     # (Superseded/HANDOVER-areas-boundary-location.md Decision 1). Read ONCE per
     # document from Area and Volume Computations, and stamped on the envelope
@@ -569,25 +687,42 @@ def export_and_post_model(selected_doc, project, phase_name, return_value, pb):
             "pushing without a declared boundary".format(selected_doc.Title, e)
         )
 
-    # a large export takes a while -- honour a cancel clicked
-    # during it before starting the (also slow) post; the caller
-    # re-checks pb.cancelled after this returns and stops the loop
-    if pb.cancelled:
-        return
 
-    # convert into a dictionary
+def export_and_post_rooms(selected_doc, envelope, phase_name, return_value, pb):
+    """Export one model's rooms and levels and push them, reusing the already
+    built `envelope`. Returns whether the push landed -- the caller gates the
+    doors push on it, and a cancel reads as "didn't land" for the same reason a
+    failure does: there are no rooms on the server to hang doors off.
+
+    Raises on export failures rather than recording them, unlike its doors
+    counterpart, and the asymmetry is intentional: nothing has been pushed for
+    this model yet when this runs, so there is no successful half to protect.
+    The caller catches per model."""
+
+    # Resolve the run's phase against THIS document's own phases before
+    # exporting anything: the name is the identity across models, and a document
+    # that doesn't have it raises here (caught per model) rather than pushing an
+    # unfiltered, silently-wrong room set.
+    allowed_room_ids = rooms_in_phase(selected_doc, phase_name)
+    # get room data
+    room_data = get_all_room_data(selected_doc)
+    # get level data
+    level_data = get_all_level_data(selected_doc)
+
+    # convert into a dictionary. The envelope is deep-copied on
+    # every use now that one envelope serves several pushes:
+    # .update() shares the nested project/model/snapshot dict
+    # instances, and no two exports may be able to
+    # cross-contaminate if anything downstream mutates its input.
     dic_room_data = {
         dr.DataRoom.data_type:room_data
     }
-    dic_room_data.update(envelope)
+    dic_room_data.update(copy.deepcopy(envelope))
 
     # add some more properties before writing to json
     json_formatted_room = build_json_for_file(dic_room_data, "{}".format(selected_doc.Title))
 
-    # convert into a dictionary. The envelope is deep-copied for
-    # this second use: .update() shares the nested project/model/
-    # snapshot dict instances, and the two exports must not be able
-    # to cross-contaminate if anything downstream mutates its input.
+    # convert into a dictionary
     dic_level_data = {
         dl.DataLevelBuilding.data_type:level_data
     }
@@ -596,12 +731,23 @@ def export_and_post_model(selected_doc, project, phase_name, return_value, pb):
     # add some more properties before writing to json
     json_formatted_level = build_json_for_file(dic_level_data, "{}".format(selected_doc.Title))
 
+    # a large export takes a while -- honour a cancel clicked during it before
+    # starting the (also slow) post; the caller re-checks pb.cancelled after
+    # this returns and stops the loop
+    if pb.cancelled:
+        return False
+
     # post to the server: gzip-compressed NDJSON stream, so a
     # >100 MB FFE export never gets buffered whole client-side or
     # server-side (see roommate's HANDOVER-streaming*.md).
     # A failed push flips the overall Result red but does NOT abort
     # the caller's loop -- one bad model shouldn't discard the other
     # models' successful pushes, the run just must not end green.
+    #
+    # A `status` of None here is not an unreachable server: `post_payload_stream`
+    # also refuses to send a push carrying no rooms at all, and reports that
+    # refusal through this same tuple. Either way it is a failed push whose
+    # message says which, so there is nothing to branch on.
     ok, status, text = post_payload_stream(
         json_formatted_room, json_formatted_level, allowed_room_ids=allowed_room_ids
     )
@@ -618,33 +764,28 @@ def export_and_post_model(selected_doc, project, phase_name, return_value, pb):
             return_value.append_message(
                 "{}: server accepted ({})".format(selected_doc.Title, text)
             )
-    else:
-        return_value.update_sep(
-            False,
-            "{}: push failed ({}): {}".format(selected_doc.Title, status, text),
-        )
-        # The doors push below would be refused anyway when the rooms push was
-        # the model's first (the server requires rooms before doors), and
-        # pushing doors against rooms that failed to land is not something to
-        # attempt on a hunch. Stop here for this model; the caller carries on
-        # with the next one.
-        return
+        return True
 
-    # Doors, after rooms and only after rooms. The server refuses a doors push
-    # to a model with no rooms -- a door's from_room/to_room are room ids, and
-    # room ids are unique only within one model -- so the order is a hard
-    # requirement, not a preference.
-    export_and_post_doors(selected_doc, envelope, phase_name, return_value)
+    return_value.update_sep(
+        False,
+        "{}: push failed ({}): {}".format(selected_doc.Title, status, text),
+    )
+    return False
 
 
-def export_and_post_doors(selected_doc, envelope, phase_name, return_value):
-    """Export one model's doors and push them, reusing the room push's already
-    built `envelope` (identity, phase, model_to_shared) so the two pushes cannot
-    disagree about what model or phase they describe.
+def export_and_post_doors(selected_doc, envelope, phase_name, return_value, pb):
+    """Export one model's doors and push them, reusing the run's already built
+    `envelope` (identity, phase, model_to_shared) so a combined run's two pushes
+    cannot disagree about what model or phase they describe.
 
-    Failures are recorded and swallowed rather than raised: the rooms push has
-    already succeeded by the time this runs, and losing that because the door
-    half failed would be the wrong trade. The run still ends red."""
+    Failures are recorded and swallowed rather than raised. In a combined run
+    the rooms push has already succeeded by the time this runs, and losing that
+    because the door half failed would be the wrong trade; in a doors-only run
+    there is nothing to protect, but recording rather than raising keeps one
+    model's failure from ending the loop either way. The run still ends red.
+
+    Note this reports a failure for a model with no doors at all -- see
+    `post_doors`'s module docstring, which owns that decision and its cost."""
     try:
         allowed_door_ids = doors_in_phase(selected_doc, phase_name)
         # Read from the Revit API, not from the export -- see
@@ -659,6 +800,12 @@ def export_and_post_doors(selected_doc, envelope, phase_name, return_value):
         return_value.update_sep(
             False, "{}: door export failed: {}".format(selected_doc.Title, e)
         )
+        return
+
+    # The per-door Revit room-reference reads above are the slow part of a doors
+    # push, so the same "cancel during the export, before the post" check the
+    # room path makes applies here -- and applies whether or not rooms ran first.
+    if pb.cancelled:
         return
 
     ok, status, text = post_doors_stream(
