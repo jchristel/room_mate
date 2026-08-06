@@ -354,14 +354,24 @@ decisions behind them:
     cannot place those at all — they exist in QA and `/doors` but appear nowhere
     a reader looks at a plan, which reads as "no door there" rather than "shape
     unknown".
-  - `through_wall_normal` is a unit vector from `from_room` toward `to_room`,
-    from `FamilyInstance.FacingOrientation`. **The normal, never the tangent:**
-    the tangent would leave every consumer to rotate 90° and then decide the
-    sign, which is the ambiguity the field exists to remove. Facing is the right
-    source rather than the host wall because Revit's `to_room` follows the
-    door's *orientation* — flipping a door swaps both together, so they are two
-    readings of one fact and cannot drift from each other, or from the
-    `owner_rooms` computed from them.
+  - `through_wall_normal` is a unit vector along the direction the door
+    **faces**, from `FamilyInstance.FacingOrientation`. **The normal, never the
+    tangent:** the tangent would leave every consumer to rotate 90° and then
+    decide the sign, which is the ambiguity the field exists to remove.
+  - **Facing is not "toward `to_room`", and this is the correction worth
+    reading.** The two usually coincide — on the 2026-08-06 House A export all
+    20 doors carrying both references put `to_room` on the `+normal` side — but
+    they are different claims. A door is attributed to the room it *serves*,
+    which the modeller decides, and that need not be the room it opens into: a
+    cupboard off a long corridor swings into the corridor and belongs to the
+    cupboard. 2 of the 26 House A doors are deliberately that shape.
+    <br>So the two values can legitimately disagree, and this is the reason the
+    field is exported rather than derived: facing cannot be recovered from the
+    room references (they may be deliberately opposite it), and the references
+    cannot be recovered from facing (they carry an intent geometry does not
+    hold). A consumer needing both needs both sent. An earlier draft of this
+    bullet claimed they "cannot drift from each other" — that was wrong, and
+    the exported data is what showed it.
   - Both `Option` on the type and both always sent by the producer, which is not
     a contradiction: every stored snapshot re-parses through this type at boot
     and snapshots predating the fields are still on disk. Additive and optional,

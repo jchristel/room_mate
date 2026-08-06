@@ -125,8 +125,8 @@ pub struct Door {
     #[serde(default)]
     pub insertion_point: Option<Point2D>,
 
-    /// A unit vector pointing **through the wall, from `from_room` toward
-    /// `to_room`** — the direction a reader would say the door leads.
+    /// A unit vector pointing **through the wall, along the direction the door
+    /// faces** — `FamilyInstance.FacingOrientation`, projected to plan.
     ///
     /// **The normal, never the tangent.** The tangent (along the wall run) would
     /// leave every consumer to rotate it 90° and then decide the sign of that
@@ -134,13 +134,28 @@ pub struct Door {
     /// consumer points an arrow *along this vector directly*; there is no trig
     /// to get wrong, and nothing to re-derive.
     ///
-    /// Sourced from `FamilyInstance.FacingOrientation`, and that choice is what
-    /// makes the field trustworthy rather than merely convenient: Revit's
-    /// `to_room` follows the door's **orientation**, not the leaf swing, so
-    /// facing and `to_room` are two readings of one fact. Flipping a door in
-    /// Revit swaps both together. Deriving the direction from the host wall
-    /// instead would create a second source of truth that could disagree with
-    /// `to_room` — and therefore with `owner_rooms`, which is computed from it.
+    /// **This is where the door faces, NOT "toward `to_room`".** The two usually
+    /// coincide — measured against the House A export, all 20 doors carrying
+    /// both references put `to_room` on the `+normal` side and `from_room`
+    /// behind — but they are different claims and a reader must not collapse
+    /// them.
+    ///
+    /// A door is attributed to the room it *serves*, which the modeller decides,
+    /// and that is not always the room it opens into. A cupboard off a long
+    /// corridor is the standard case: the door swings into the corridor and
+    /// belongs to the cupboard. 2 of the 26 House A doors are deliberately this
+    /// shape. So the arrow drawn from this vector can legitimately point away
+    /// from the room the door is attributed to, and neither value is wrong —
+    /// they answer different questions.
+    ///
+    /// Which is exactly why this field is exported rather than derived. The
+    /// facing cannot be recovered from the room references (they may be
+    /// deliberately opposite it), and the references cannot be recovered from
+    /// the facing (they carry an intent geometry does not hold). A consumer
+    /// needing both needs both sent.
+    ///
+    /// Deriving the direction from the host wall instead would have added a
+    /// *third* answer to a question that already has two legitimate ones.
     ///
     /// Absent is a real state and consumers must degrade rather than guess: draw
     /// the footprint, omit the arrow. A guessed direction is worse than none,
