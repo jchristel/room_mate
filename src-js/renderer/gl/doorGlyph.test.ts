@@ -5,6 +5,7 @@ import {
   buildDoorGlyph,
   FALLBACK_GLYPH_SIZE,
   MIN_FOOTPRINT_EXTENT,
+  MAX_ARROW_SOURCE_SIZE,
   MIN_PICK_DEPTH,
 } from "./doorGlyph.js";
 import type { Door } from "../types.js";
@@ -170,6 +171,25 @@ describe("buildDoorGlyph", () => {
     // A zero vector is not a direction: no arrow, and nothing poisoned.
     expect(g.arrow).toHaveLength(0);
     for (const v of [...g.rect, ...g.cross, g.pick.minX, g.pick.maxY]) expect(Number.isFinite(v)).toBe(true);
+  });
+
+  /** House A's garage panel-lift door is 17.75 ft across, which unclamped
+   *  produced a ~19 ft arrow that dominated the plan and read as an annotation
+   *  rather than a door marking. Ordinary doors keep their proportional arrow;
+   *  only the outliers are reined in. */
+  it("clamps the arrow on a very wide opening", () => {
+    const wide = buildDoorGlyph({
+      id: "d1",
+      loops: [{ points: [
+        { x: -9, y: -0.25 }, { x: 9, y: -0.25 }, { x: 9, y: 0.25 }, { x: -9, y: 0.25 },
+      ] }],
+      through_wall_normal: { x: 0, y: 1 },
+    })!;
+    const ys = points(wide.arrow).map((p) => p.y);
+    const reach = Math.max(...ys) - Math.min(...ys);
+    expect(reach).toBeLessThanOrEqual(MAX_ARROW_SOURCE_SIZE * 1.1 + 1e-9);
+    // The footprint itself is untouched — only the arrow is clamped.
+    expect(wide.pick.maxX - wide.pick.minX).toBeCloseTo(18, 5);
   });
 
   it("normalises a non-unit normal rather than scaling the arrow by it", () => {

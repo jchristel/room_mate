@@ -48,6 +48,23 @@ export const MIN_FOOTPRINT_EXTENT = 0.15;
 export const FALLBACK_GLYPH_SIZE = 2.0;
 
 /**
+ * The largest footprint dimension the arrow will size itself from (world
+ * units).
+ *
+ * The arrow scales with the opening so a wide door gets a long arrow and a
+ * narrow one a short arrow. Unclamped that reads badly at the extremes: House
+ * A's garage panel-lift door is 17.75 ft across, which produced a ~19 ft arrow
+ * that dominated the whole plan and looked like an annotation rather than a
+ * door marking.
+ *
+ * A cap rather than a fixed size, because the scaling is right for the doors
+ * that dominate a plan by count — it is only the rare very wide opening that
+ * needs reining in. 4 ft is a wide-ish single leaf, so every ordinary door
+ * keeps its proportional arrow and only the outliers are clamped.
+ */
+export const MAX_ARROW_SOURCE_SIZE = 4.0;
+
+/**
  * The minimum THROUGH-WALL depth of a door's click target (world units).
  *
  * A door footprint is a sliver: it is as deep as the wall and no deeper. On the
@@ -356,9 +373,11 @@ export function buildDoorGlyph(door: Door): DoorGlyph | null {
 
   const rect = usableBox ? fanTriangulate(outer!) : [];
   // Size the arrow off the footprint when there is one so it fits the opening
-  // it describes, and off the fallback constant when there is not.
+  // it describes, and off the fallback constant when there is not. Clamped, so
+  // a very wide opening does not turn its arrow into the loudest thing on the
+  // drawing — see `MAX_ARROW_SOURCE_SIZE`.
   const size = usableBox
-    ? Math.max(box.maxX - box.minX, box.maxY - box.minY)
+    ? Math.min(Math.max(box.maxX - box.minX, box.maxY - box.minY), MAX_ARROW_SOURCE_SIZE)
     : FALLBACK_GLYPH_SIZE;
   const arrow = unit ? arrowTriangles(centre, unit, size) : [];
   const cross = rect.length === 0 && arrow.length === 0 ? crossTriangles(centre, FALLBACK_GLYPH_SIZE) : [];

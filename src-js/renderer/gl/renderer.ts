@@ -4,11 +4,13 @@
 //
 //   grid   -> one LineBatch, 0.5px, solid
 //   fills  -> one FillBatch, earcut with true holes, per-vertex colour
+//   hover  -> a small FillBatch, one room, rebuilt on hover change
 //   holes  -> one LineBatch, 1px, dashed 4/3
 //   lines  -> one LineBatch, 1.5px (3px for a search match), solid
+//   doors  -> one FillBatch, every door glyph on the level
 //   labels -> BitmapText, one container per room
 //
-// Four draw calls plus the labels, whatever the room count. That is the whole
+// Five draw calls plus the labels, whatever the room OR door count. That is the whole
 // point: the fitted view — what the viewer shows on load, and the case viewport
 // culling could never help, because nothing is off screen to hide — stops
 // scaling with the plate.
@@ -109,6 +111,7 @@ export class GlPlanRenderer implements PlanRenderer {
   #grid: LineMesh | null = null;
   #fills: FillMesh | null = null;
   #hoverMesh: FillMesh | null = null;
+  #doorMesh: FillMesh | null = null;
   #holeLines: LineMesh | null = null;
   #outlines: LineMesh | null = null;
   #labelContainer: Container | null = null;
@@ -311,7 +314,14 @@ export class GlPlanRenderer implements PlanRenderer {
         fills: !!this.#fills,
         holes: !!this.#holeLines,
         outlines: !!this.#outlines,
+        doors: !!this.#doorMesh,
       },
+      // PAINT ORDER, bottom-first — the answer to "what is covering what",
+      // which is otherwise invisible from outside and cost a real bug once:
+      // doors shared the room fill mesh, and the hover fill (which must sit
+      // directly above that mesh) painted over every door in a hovered room.
+      // A layer list is the cheapest way to see that without a screenshot.
+      order: this.#root.children.map((c) => c.label || "?"),
       view: this.#view,
       rendererSize: this.#app ? [this.#app.renderer.width, this.#app.renderer.height] : null,
       resolution: this.#app?.renderer.resolution ?? null,
@@ -364,6 +374,7 @@ export class GlPlanRenderer implements PlanRenderer {
     }
     const mesh = batch.build();
     this.#hoverMesh = mesh;
+    mesh.mesh.label = "hover";
     mesh.setLayerAlpha(this.#areasActive ? GHOST_ROOMS : 1);
     // Directly ABOVE the fills and below everything else — hover replaces a
     // room's FILL, nothing more. Sitting any higher covers that room's own
@@ -384,6 +395,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#areasActive = on;
     this.#fills?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#hoverMesh?.setLayerAlpha(on ? GHOST_ROOMS : 1);
+    this.#doorMesh?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#outlines?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#holeLines?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#grid?.setLayerAlpha(on ? GHOST_ROOMS : 1);
@@ -480,12 +492,14 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#grid?.destroy();
     this.#fills?.destroy();
     this.#hoverMesh?.destroy();
+    this.#doorMesh?.destroy();
     this.#holeLines?.destroy();
     this.#outlines?.destroy();
     this.#labelContainer?.destroy({ children: true });
     this.#grid = null;
     this.#fills = null;
     this.#hoverMesh = null;
+    this.#doorMesh = null;
     this.#holeLines = null;
     this.#outlines = null;
     this.#labelContainer = null;
@@ -557,16 +571,26 @@ export class GlPlanRenderer implements PlanRenderer {
     }
     this.#entries = entries;
 
-    // DOORS GO INTO THE SAME FILL BATCH as the rooms, after them so they draw
-    // on top. That is the whole reason the glyph is baked rather than
-    // transformed at draw time: a per-door matrix would need a per-door draw
-    // call, and 26 doors would cost more state changes than the entire room
-    // layer costs at plate scale.
+    // DOORS GET THEIR OWN MESH, which is a correction to the handover's
+    // "append into the room vertex stream".
+    //
+    // Sharing the rooms' batch is what the brief asks for, and it draws
+    // correctly — until a room is hovered. The hover fill is its own small mesh
+    // inserted directly above the room fills (see `#drawHover`, which has to sit
+    // exactly there so it does not cover outlines or hole strokes), so anything
+    // sharing the room mesh is painted over by it. Hovering a room made every
+    // door inside it vanish.
+    //
+    // The cost is ONE extra draw call for the whole door layer, not one per
+    // door — which is what the brief's "no second draw call added per door"
+    // actually asks for. Baking the orientation still matters for exactly the
+    // reason it gave: a per-door matrix would mean a draw call each.
     //
     // The pick index is built from the SAME glyph objects that were just
     // drawn, so what you can click is by construction what you can see. Two
     // computations here — one for the vertices, one for the hit target — is
     // how the two come to disagree about a door in a diagonal wall.
+    const doorBatch = new FillBatch();
     const pickable: PickableDoor[] = [];
     const doorEntries: DoorEntry[] = [];
     for (const door of this.#activeDoors()) {
@@ -578,18 +602,19 @@ export class GlPlanRenderer implements PlanRenderer {
       if (!glyph) continue;
 
       const rect = glyph.rect.length
-        ? fillBatch.pushTriangles(glyph.rect, withAlpha(pal.ink, DOOR_RECT_ALPHA))
+        ? doorBatch.pushTriangles(glyph.rect, withAlpha(pal.ink, DOOR_RECT_ALPHA))
         : null;
       // Arrow and cross are mutually exclusive by construction, so one range
       // covers whichever was drawn.
       const marks = glyph.arrow.length ? glyph.arrow : glyph.cross;
-      const glyphRange = marks.length ? fillBatch.pushTriangles(marks, pal.ink) : null;
+      const glyphRange = marks.length ? doorBatch.pushTriangles(marks, pal.ink) : null;
 
       doorEntries.push({ door, rect, glyph: glyphRange });
       pickable.push({ door, ring: glyph.pickRing, box: glyph.pick });
     }
     this.#doorEntries = doorEntries;
     this.#doorIndex = new DoorIndex(pickable);
+    this.#doorMesh = doorBatch.isEmpty ? null : doorBatch.build();
 
     this.#grid = gridBatch.build();
     this.#fills = fillBatch.isEmpty ? null : fillBatch.build();
@@ -600,10 +625,15 @@ export class GlPlanRenderer implements PlanRenderer {
 
     // Paint order is child order, and it mirrors the SVG document exactly:
     // grid behind, then fills, then the strokes that sit on them, then labels.
-    if (this.#grid) this.#root.addChild(this.#grid.mesh);
-    if (this.#fills) this.#root.addChild(this.#fills.mesh);
-    if (this.#holeLines) this.#root.addChild(this.#holeLines.mesh);
-    if (this.#outlines) this.#root.addChild(this.#outlines.mesh);
+    if (this.#grid) { this.#grid.mesh.label = "grid"; this.#root.addChild(this.#grid.mesh); }
+    if (this.#fills) { this.#fills.mesh.label = "fills"; this.#root.addChild(this.#fills.mesh); }
+    if (this.#holeLines) { this.#holeLines.mesh.label = "holes"; this.#root.addChild(this.#holeLines.mesh); }
+    if (this.#outlines) { this.#outlines.mesh.label = "outlines"; this.#root.addChild(this.#outlines.mesh); }
+    // Above the outlines, so a glyph is never cut by the wall line it sits in,
+    // and above the hover mesh, so hovering a room cannot hide its doors. Below
+    // the labels, because a door covering a room's name would trade one
+    // unreadable thing for another.
+    if (this.#doorMesh) { this.#doorMesh.mesh.label = "doors"; this.#root.addChild(this.#doorMesh.mesh); }
 
     if (opts.showLabels !== false) {
       const built = buildLabels(rooms, fitted, {
@@ -621,6 +651,7 @@ export class GlPlanRenderer implements PlanRenderer {
       // of a 16 ms budget spent recomputing positions that all moved by the same
       // amount. A render group makes the container's own transform the thing
       // that changes and leaves the children's local transforms alone.
+      built.container.label = "labels";
       built.container.enableRenderGroup();
       this.#root.addChild(built.container);
     } else {
@@ -784,6 +815,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#outlines?.setView(eff, pxW, pxH, dpr);
     this.#fills?.setView(eff, pxW, pxH);
     this.#hoverMesh?.setView(eff, pxW, pxH);
+    this.#doorMesh?.setView(eff, pxW, pxH);
     // Labels live in world space, so the scene transform carries them. This is
     // the ONE place a container transform is used, and it is correct here
     // precisely because label text SHOULD scale with the view — unlike strokes,
