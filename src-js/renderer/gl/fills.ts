@@ -102,6 +102,31 @@ export class FillBatch {
     return { start, count: this.#vertexCount - start };
   }
 
+  /**
+   * Append pre-built triangles — a flat `[x0,y0, x1,y1, …]` run of independent
+   * triangles, already in flipped space.
+   *
+   * This is what lets the door glyphs share the rooms' buffer instead of adding
+   * a mesh (and so a draw call) per entity type. They arrive as triangles
+   * rather than as loops because a glyph is not a polygon: an arrow with a
+   * chevron tail is several disjoint pieces, and asking earcut to find them in
+   * one ring would be inventing a shape to fit the tool.
+   *
+   * Returns a `VertexRange` on the same terms as `push`, so a glyph can be
+   * recoloured in place by the same fast path a room uses.
+   */
+  pushTriangles(coords: readonly number[], colour: Rgba): VertexRange | null {
+    if (coords.length < 6) return null;
+    const start = this.#vertexCount;
+    const [r, g, b, a] = colour;
+    for (let i = 0; i < coords.length; i += 2) {
+      this.#verts.push(coords[i]!, coords[i + 1]!, r, g, b, a);
+      this.#indices.push(this.#vertexCount);
+      this.#vertexCount++;
+    }
+    return { start, count: this.#vertexCount - start };
+  }
+
   get isEmpty(): boolean {
     return this.#indices.length === 0;
   }

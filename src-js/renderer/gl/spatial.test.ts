@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { RoomIndex } from "./spatial.js";
-import type { Room } from "../types.js";
+import { DoorIndex, RoomIndex } from "./spatial.js";
+import { buildDoorGlyph } from "./doorGlyph.js";
+import type { Door, Room } from "../types.js";
 
 /** Payload coordinates are Y-UP; the index works in flipped (Y-down) space, so
  *  a room authored at y=0..10 is queried at y=-10..0. Getting this backwards is
@@ -83,6 +84,64 @@ describe("RoomIndex", () => {
       expect(i.search(-1, -11, 11, 1).map((r) => r.id)).toEqual(["a"]);
       expect(i.search(-1, -11, 31, 1).map((r) => r.id).sort()).toEqual(["a", "b"]);
       expect(i.search(100, 100, 200, 200)).toEqual([]);
+    });
+  });
+
+  describe("DoorIndex", () => {
+    /** A door authored at y=+5 in payload space lives at y=-5 once flipped. */
+    const door = (id: string, x0: number, y0: number, x1: number, y1: number): Door => ({
+      id,
+      loops: [{ points: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] }],
+      through_wall_normal: { x: 0, y: 1 },
+    });
+
+    /** Index a door exactly the way the renderer does — through the glyph it is
+     *  about to draw — so the test cannot pass with a pick target the renderer
+     *  would never build. */
+    const indexOf = (doors: Door[]) =>
+      new DoorIndex(
+        doors.flatMap((d) => {
+          const g = buildDoorGlyph(d);
+          return g ? [{ door: d, ring: g.pickRing, box: g.pick }] : [];
+        }),
+      );
+
+    /**
+     * THE DOUBLE FLIP, which shipped for exactly one manual test run.
+     *
+     * The glyph's pick ring is baked in flipped space, but `pointInRing` flips
+     * as it reads because rooms hand it raw payload points. Read through the
+     * default the ring lands mirrored about y=0, so every door tested as a miss
+     * — and because doors sit inside rooms, every click on a door quietly
+     * selected the room underneath it. Nothing about that reads as a coordinate
+     * bug from the outside, which is why it is pinned here by the sign of y.
+     */
+    it("hits a door at its flipped position, not its mirror", () => {
+      const i = indexOf([door("d1", 0, 4, 3, 6)]);
+      expect(i.doorAt(1.5, -5)?.id).toBe("d1");
+      expect(i.doorAt(1.5, 5)).toBeNull();
+    });
+
+    it("misses outside the footprint", () => {
+      const i = indexOf([door("d1", 0, 4, 3, 6)]);
+      expect(i.doorAt(50, -5)).toBeNull();
+    });
+
+    /** A geometry-less door is clickable through the square its arrow drew —
+     *  the door that most needs explaining must not be the one that cannot be
+     *  inspected. */
+    it("hits a door that has no footprint", () => {
+      const i = indexOf([
+        { id: "d1", loops: [], insertion_point: { x: 10, y: 20 }, through_wall_normal: { x: 0, y: 1 } },
+      ]);
+      expect(i.doorAt(10, -20)?.id).toBe("d1");
+      expect(i.doorAt(10, 20)).toBeNull();
+    });
+
+    it("is empty-safe, because a level with no doors is ordinary", () => {
+      const i = new DoorIndex([]);
+      expect(i.size).toBe(0);
+      expect(i.doorAt(0, 0)).toBeNull();
     });
   });
 });

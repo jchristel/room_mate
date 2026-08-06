@@ -265,6 +265,14 @@
     fill: none; stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3;
     stroke-linejoin: round; vector-effect: non-scaling-stroke;
   }
+  /* A door mark is SOLID and thinner than a room's dashed one. A door glyph is
+     a few feet across, so the room's 6/3 dash would resolve to two or three
+     dashes around the whole outline and read as a rendering artefact rather
+     than as a selection. Same accent colour, because it is the same state. */
+  .plan-marks .door-selected-mark {
+    fill: none; stroke: var(--accent); stroke-width: 3;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
   /* No hover rule here on purpose. Hover is a FILL, and a fill in this overlay
      sits above the canvas -- and so above the labels the canvas draws, hiding
      the label of the room being pointed at. It is drawn in the GL layer beneath
@@ -634,6 +642,7 @@
     <button class="ctl" id="removeZone" title="Remove the last zone">− zone</button>
     <button class="ctl" id="linkToggle" title="Sync zoom/pan across all zones">Link views: off</button>
     <button class="ctl on" id="labelsToggle" title="Show or hide room labels (SVG export follows)">Labels: on</button>
+    <button class="ctl on" id="doorsToggle" title="Show or hide door glyphs">Doors: on</button>
     <div class="search">
       <input id="searchInput" type="search" placeholder="Search rooms…" autocomplete="off" />
       <button class="ctl" id="fieldsToggle" title="Choose which fields to search">Fields ▾</button>
@@ -819,6 +828,13 @@ let projectId = null;
 let buildingKey = null;
 let milestone = null;        // null = Latest
 let currentPayload = null;   // the one /rooms payload every zone renders from
+// The one /doors payload, fetched and revisioned exactly like the rooms one.
+// SEPARATE from currentPayload rather than merged into it: doors are pushed
+// independently of rooms (the extractor has its own entry point for them), so
+// they change on their own schedule and a shared revision would make each
+// entity's poll re-render the other for nothing.
+let doorsPayload = null;
+let lastDoorsRevision = null;
 let lastRevision = null;     // poll change-detection cursor
 // Picker refresh guards (diff signatures so the 2s tick doesn't fight the user).
 let lastProjectIds = null;
@@ -855,6 +871,10 @@ let linkViews = false;
 // persisted: linkViews isn't either, and view prefs should persist together
 // or not at all (STRATEGY-BROWSER.md, "UI growth").
 let showRoomLabels = true;
+// Doors default to ON: a door is plan information, not an annotation, and the
+// people who asked for the glyph want it by default. Page state, not per zone,
+// matching how labels work.
+let showDoors = true;
 
 // Global room search (see the "search" section lower down): one query + one set
 // of enabled field keys, applied to every zone. `searchFields` empty means "not
@@ -889,6 +909,7 @@ let selection = null;   // { kind: "room" | "area", id, zoneId } | null
 // mistaken for a room id — feeding one to the graph would hunt for a node that
 // does not exist.
 function roomSelection() { return selection && selection.kind === "room" ? selection.id : null; }
+function doorSelection() { return selection && selection.kind === "door" ? selection.id : null; }
 
 // Anything that wants to react to a selection change registers here. Listeners
 // receive the whole `selection` object (or null), so a kind-blind listener must
@@ -1372,6 +1393,8 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       matchRoomIds: searchMatchIds,        // one payload -> one match set
       searchActive,
       showLabels: showRoomLabels,
+      doors: doorsOnLevel(levelId),
+      showDoors,
     });
     // Inside the deferred build, not after it: on a large level these run a
     // frame later than the surrounding code, and re-applying a selection to a
@@ -3214,6 +3237,7 @@ function applySelection(zone) {
   // class. Footprints are NOT -- the areas overlay stays SVG and stays outside
   // the seam, so the page keeps that half itself.
   zone.renderer.setSelection(roomSelection() || null);
+  zone.renderer.setDoorSelection(doorSelection() || null);
 
   const areaId = selection && selection.kind === "area" ? selection.id : null;
   for (const p of zone.svg.querySelectorAll(".area-poly"))
@@ -3242,6 +3266,9 @@ function selectRoom(roomId, zoneId = null) {
 }
 function selectArea(areaId, zoneId = null) {
   select(areaId ? { kind: "area", id: areaId, zoneId } : null);
+}
+function selectDoor(doorId, zoneId = null) {
+  select(doorId ? { kind: "door", id: doorId, zoneId } : null);
 }
 
 // The room a plan click landed on, or null for empty space / the grid. Resolved
@@ -3347,6 +3374,7 @@ function inspApplyFilters(entries, { hideEmpty = true } = {}) {
 const INSPECTORS = {
   room: renderRoomInspector,
   area: renderAreaInspector,
+  door: renderDoorInspector,
 };
 
 // The header every kind shares: a title, a sub-line, and the zone the click came
@@ -3393,6 +3421,74 @@ function renderInspector() {
     return;
   }
   render(host);
+}
+
+// ---- the door inspector -----------------------------------------------------
+//
+// A door's own panel rather than a redirect to the room that owns it, because
+// the two answer different questions and the door's is the one nothing else on
+// the page can answer: which rooms it joins, which room it is ATTRIBUTED to
+// under the project's policy, and its two property tiers.
+//
+// The tiers stay SPLIT, and that is the point of the section titles. "This leaf
+// is 820 wide" and "every door of this type is 820 wide" are different claims,
+// and a hardware schedule joins against the second — flattening them here would
+// throw away the distinction the contract went out of its way to keep.
+function renderDoorInspector(host) {
+  const door = (doorsPayload?.doors || []).find(d => d.id === selection.id);
+  if (!door) {
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent = `Door ${selection.id} is not in the current scope.`;
+    host.appendChild(note);
+    return;
+  }
+
+  const levelName = (currentPayload?.levels || []).find(l => l.id === door.level_id)?.name || door.level_id;
+  inspHead(host, {
+    kind: "door",
+    title: door.type_name || door.id,
+    sub: `${door.id} · ${levelName}`,
+  });
+
+  const roomName = (id) => {
+    if (!id) return "";
+    const r = (currentPayload?.rooms || []).find(x => x.id === id);
+    return r ? (r.name || r.id) : `${id} (not in scope)`;
+  };
+
+  // ---- references and attribution -------------------------------------------
+  // Every one of these has a meaningful EMPTY state, so they are spelled out
+  // rather than dropped by the hide-empty filter. "(none)" against `from` means
+  // an external door, which is ordinary; an empty owner means homeless, which is
+  // a reported state the server distinguishes from "no reference at all".
+  const refs = [
+    ["Opens from", door.from_room ? roomName(door.from_room) : "(none — external)"],
+    ["Opens into", door.to_room ? roomName(door.to_room) : "(none — external)"],
+    ["Attributed to", (door.owner_rooms || []).length
+      ? door.owner_rooms.map(roomName).join(", ")
+      : "(homeless — no room attributed)"],
+  ];
+  inspSection(host, "Rooms", refs);
+
+  // ---- what the plan is drawing ---------------------------------------------
+  // Named explicitly because a door drawn as a bare arrow, or missing entirely,
+  // otherwise looks like a rendering fault. It is the honest report of what the
+  // model carried.
+  const hasBox = !!(door.loops && door.loops.length && door.loops[0]?.points?.length);
+  const geom = [
+    ["Footprint", hasBox ? "yes" : "none — drawn from its insertion point"],
+    ["Direction", door.through_wall_normal ? "yes" : "unknown — no arrow drawn"],
+  ];
+  inspSection(host, "Geometry", geom);
+
+  const inst = Object.entries(door.properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  inst.sort((a, b) => a[0].localeCompare(b[0]));
+  inspSection(host, "Instance properties", inspApplyFilters(inst));
+
+  const type = Object.entries(door.type_properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  type.sort((a, b) => a[0].localeCompare(b[0]));
+  inspSection(host, "Type properties", inspApplyFilters(type));
 }
 
 // ---- the area (hierarchy footprint) inspector -------------------------------
@@ -3608,6 +3704,56 @@ function roomsUrl() {
   return qs ? `/rooms?${qs}` : "/rooms";
 }
 
+// The /doors URL, from the same global scope as roomsUrl.
+//
+// ONE CAVEAT WORTH KNOWING: `building` scopes a door through the room it is
+// attributed to, so a HOMELESS door — one whose owner_rooms is empty, a
+// reported state rather than an error — matches no `?building=` filter and
+// vanishes from the plan while a building is selected. That is the server's
+// documented behaviour, not something to paper over here.
+function doorsUrl() {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project", projectId);
+  if (buildingKey) params.set("building", buildingKey);
+  if (projectId && milestone) params.set("milestone", milestone);
+  const qs = params.toString();
+  return qs ? `/doors?${qs}` : "/doors";
+}
+
+// The doors on one level. Keyed the same way rooms are, and carrying the same
+// caveat: a level id is unique only WITHIN a model, so this is correct exactly
+// as far as the scope above narrowed the models — which is the same trade
+// roomsOnLevel already makes.
+function doorsOnLevel(levelId) {
+  if (!doorsPayload) return [];
+  return (doorsPayload.doors || []).filter(d => (d.level_id || "unknown") === levelId);
+}
+
+// Doors poll on their own revision, in their own try. A doors read that fails
+// or 204s must not take the rooms down with it: a model with rooms and no doors
+// is legitimate (the server says so explicitly), and the plan is still worth
+// drawing without them.
+async function pollDoors() {
+  try {
+    const res = await fetch(doorsUrl(), { cache: "no-store" });
+    if (res.status === 204) {
+      // No doors in scope. Clear rather than keep the last set — stale doors
+      // over a new project's plan is worse than none.
+      if (doorsPayload !== null) { doorsPayload = null; lastDoorsRevision = null; return true; }
+      return false;
+    }
+    if (!res.ok) return false;
+    const payload = await res.json();
+    const incoming = payload.revision ?? JSON.stringify(payload);
+    if (incoming === lastDoorsRevision) return false;
+    lastDoorsRevision = incoming;
+    doorsPayload = payload;
+    return true;
+  } catch (err) {
+    return false;   // rooms already report connection loss; one message is enough
+  }
+}
+
 // Every zone's meta line reports poll-level states (waiting / connection lost)
 // identically — they share the one fetch.
 function metaAll(text) {
@@ -3630,13 +3776,30 @@ async function poll() {
     // fires between real pushes. Fall back to a stringify only if an older
     // server omits the field, so the viewer still updates against one.
     const incoming = payload.revision ?? JSON.stringify(payload);
+    // Doors are fetched on every tick but only re-render when THEY changed.
+    // Awaited before the rooms branch so a tick that changed both paints once
+    // with both, rather than painting rooms and then immediately repainting to
+    // add the doors.
+    const doorsChanged = await pollDoors();
     if (incoming !== lastRevision) {
       lastRevision = incoming;
       ingestAll(payload); // re-fits + rebuilds level controls only on real change
+    } else if (doorsChanged) {
+      // Doors moved and rooms did not. Repaint in place: no refit, because a
+      // doors push must not throw away the user's pan and zoom.
+      redrawAllZones();
     }
   } catch (err) {
     metaAll("connection lost");
   }
+}
+
+// Repaint every zone at its current level and view. The shared tail of every
+// display-only change — a doors push, a doors toggle — none of which may refit.
+function redrawAllZones() {
+  for (const zone of zones)
+    if (currentPayload && zone.activeLevelId)
+      renderLevel(zone, currentPayload, zone.activeLevelId, { refit: false });
 }
 
 // ============================ view linking ============================
@@ -3744,9 +3907,14 @@ function wireInteractions(zone) {
       // The pick uses the coordinates captured at pointerdown, not the live
       // ones: `setPointerCapture` retargets every later event to the <svg>, and
       // by pointerup the pointer may have drifted within CLICK_SLOP_PX.
+      // Areas still win over everything, for the reason above. Below them the
+      // renderer answers rooms AND doors from one call, with doors first — a
+      // glyph is drawn over the room it serves and is much smaller, so a click
+      // inside one means the door.
       const area = areaAtNode(zone, downNode);
-      const room = area ? null : roomAtPoint(zone, downAt.x, downAt.y);
-      if (room) selectRoom(room.id, zone.id);
+      const hit = area ? null : zone.renderer.pickAt(downAt.x, downAt.y);
+      if (hit && hit.kind === "door") selectDoor(hit.door.id, zone.id);
+      else if (hit) selectRoom(hit.room.id, zone.id);
       else selectArea(area ? areaKey(area) : null, area ? zone.id : null);
     }
     downNode = null;
@@ -4002,6 +4170,17 @@ document.getElementById("linkToggle").addEventListener("click", (e) => {
   // On enabling, immediately snap every zone to the first zone's view so they
   // start aligned rather than only syncing on the next gesture.
   if (linkViews && zones.length) commitView(zones[0], zones[0].view);
+});
+
+document.getElementById("doorsToggle").addEventListener("click", (e) => {
+  showDoors = !showDoors;
+  e.target.textContent = `Doors: ${showDoors ? "on" : "off"}`;
+  e.target.classList.toggle("on", showDoors);
+  // Hiding doors must also drop the door SELECTION, or the inspector keeps
+  // describing something the plan no longer draws and the mark points at empty
+  // space. refit:false for the same reason the labels toggle uses it.
+  if (!showDoors && doorSelection()) select(null);
+  redrawAllZones();
 });
 
 document.getElementById("labelsToggle").addEventListener("click", (e) => {

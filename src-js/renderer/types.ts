@@ -49,6 +49,46 @@ export interface Room {
   classification?: ClassificationTier[];
 }
 
+/**
+ * One door, as `/doors` returns it — a SUBSET, on the same terms as `Room`.
+ *
+ * A door is not a room with different fields. The two that matter here:
+ * `loops` may be legitimately EMPTY (a door family with no 3D geometry — 2 of
+ * the 26 House A doors), and a door carries its own placement so it is still
+ * drawable when that happens.
+ */
+export interface Door {
+  id: string;
+  level_id?: string;
+  /** `loops[0]` is the footprint rectangle; the room convention verbatim.
+   *  **Empty is a real state**, not an error — see `buildDoorGlyph`. */
+  loops?: Loop[];
+  /** The room the door opens from, or absent for an external door. */
+  from_room?: string | null;
+  to_room?: string | null;
+  /** Where the door sits. Present even when `loops` is empty, which is the
+   *  whole reason a geometry-less door can still be drawn. */
+  insertion_point?: Point2D | null;
+  /**
+   * A unit vector along the direction the door **faces**, Y-up like every
+   * other point here.
+   *
+   * **Not "toward `to_room`".** They usually coincide, but a door is
+   * attributed to the room it *serves* and the modeller decides that — a
+   * cupboard off a corridor swings into the corridor and belongs to the
+   * cupboard. So an arrow drawn from this can legitimately point away from
+   * `owner_rooms`, and that is correct data rather than something to
+   * reconcile.
+   */
+  through_wall_normal?: Point2D | null;
+  type_name?: string;
+  /** Rooms this door is attributed to under the project's policy. **Empty
+   *  means homeless** — a reported state, not a missing value. */
+  owner_rooms?: string[];
+  properties?: Record<string, PropertyValue>;
+  type_properties?: Record<string, PropertyValue>;
+}
+
 /** A rectangle in the **flipped** (Y-down) space — the same space as
  *  `zone.view` and the SVG viewBox. */
 export interface Extent {

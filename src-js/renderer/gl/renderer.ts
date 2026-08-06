@@ -21,13 +21,14 @@
 import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
 import { flip, pointsAttr } from "../geometry.js";
-import type { HighlightState, PaintRequest, PlanRenderer } from "../seam.js";
-import type { Rect, Room } from "../types.js";
+import type { HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
+import type { Door, Rect, Room } from "../types.js";
 import { parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
 import { buildLabels, type RoomLabel } from "./labels.js";
 import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js";
-import { RoomIndex } from "./spatial.js";
+import { buildDoorGlyph } from "./doorGlyph.js";
+import { DoorIndex, RoomIndex, type PickableDoor } from "./spatial.js";
 import { fitViewToAspect } from "./viewport.js";
 
 /** Stroke widths, in CSS pixels — the same numbers the stylesheet uses, so the
@@ -40,6 +41,10 @@ const W_HOLE = 1;
 const HOLE_DASH: readonly [number, number] = [4, 3];
 /** `.dim { opacity: 0.15 }`. */
 const DIM_ALPHA = 0.15;
+/** The door footprint's fill, as an alpha over the ink colour. Light enough
+ *  that a room's label still reads through a door drawn over it, dark enough to
+ *  register as a solid object rather than a smudge. */
+const DOOR_RECT_ALPHA = 0.25;
 /** `svg.plan.areas-active` ghosting. */
 const GHOST_ROOMS = 0.16;
 const GHOST_LABELS = 0.22;
@@ -55,6 +60,14 @@ interface RoomEntry {
   /** Whether a colour plan resolved a literal fill for this room — which is
    *  what decides if hover may change its colour. See `#drawHover`. */
   appearanceIsPlanFill: boolean;
+}
+
+/** One drawn door: what it is, and where its pieces live in the shared buffer
+ *  so selection can recolour them without rebuilding the level. */
+interface DoorEntry {
+  door: Door;
+  rect: VertexRange | null;
+  glyph: VertexRange | null;
 }
 
 export interface GlRendererOptions {
@@ -103,9 +116,12 @@ export class GlPlanRenderer implements PlanRenderer {
 
   #entries: RoomEntry[] = [];
   #index = new RoomIndex([]);
+  #doorIndex = new DoorIndex([]);
+  #doorEntries: DoorEntry[] = [];
   #palette: PlanPalette;
   #view: Rect = { x: 0, y: 0, w: 100, h: 100 };
   #selected: string | null = null;
+  #selectedDoor: string | null = null;
   #hovered: string | null = null;
   #areasActive = false;
   /** Retained so a repaint can reproduce exactly what is on screen. */
@@ -194,6 +210,13 @@ export class GlPlanRenderer implements PlanRenderer {
     if (this.#app) this.#rebuild();
   }
 
+  /** The doors this paint was given, after the `showDoors` toggle. */
+  #activeDoors(): readonly Door[] {
+    const opts = this.#lastPaint;
+    if (opts.showDoors === false) return [];
+    return opts.doors ?? [];
+  }
+
   setView(view: Rect): void {
     this.#view = view;
     // THE OVERLAY NEEDS THE VIEWBOX TOO, and it is set from the RAW view rather
@@ -280,6 +303,8 @@ export class GlPlanRenderer implements PlanRenderer {
       rooms: this.#rooms.length,
       entries: this.#entries.length,
       indexed: this.#index.size,
+      doors: this.#doorEntries.length,
+      doorsIndexed: this.#doorIndex.size,
       labels: this.#labels.length,
       layers: {
         grid: !!this.#grid,
@@ -381,13 +406,53 @@ export class GlPlanRenderer implements PlanRenderer {
     return this.#index.roomAt(wx, wy);
   }
 
+  /** Viewport pixels -> flipped world, or `null` when the canvas has no size.
+   *  Extracted so `roomAt` and `pickAt` cannot drift on the aspect correction —
+   *  a pick a few percent off everywhere reads as "clicking selects the wrong
+   *  thing", not as a projection bug. */
+  #toWorld(clientX: number, clientY: number): { x: number; y: number } | null {
+    const r = this.#canvas.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
+    const eff = this.#effectiveView();
+    return {
+      x: eff.x + ((clientX - r.left) / r.width) * eff.w,
+      y: eff.y + ((clientY - r.top) / r.height) * eff.h,
+    };
+  }
+
+  pickAt(clientX: number, clientY: number): Pick | null {
+    const p = this.#toWorld(clientX, clientY);
+    if (!p) return null;
+    // Doors first. A door glyph is drawn over the room it serves and is far
+    // smaller, so a click inside one is a click on the door — resolving to the
+    // room instead would make a door selectable only where it happens to poke
+    // outside its own wall.
+    const door = this.#doorIndex.doorAt(p.x, p.y);
+    if (door) return { kind: "door", door };
+    const room = this.#index.roomAt(p.x, p.y);
+    return room ? { kind: "room", room } : null;
+  }
+
+  setDoorSelection(doorId: string | null): void {
+    if (this.#selectedDoor === doorId) return;
+    this.#selectedDoor = doorId;
+    this.#drawMarks();
+  }
+
+  get doorSelection(): string | null {
+    return this.#selectedDoor;
+  }
+
   dispose(): void {
     this.#destroyLayers();
     this.#entries = [];
     this.#labels = [];
     this.#index = new RoomIndex([]);
+    this.#doorIndex = new DoorIndex([]);
+    this.#doorEntries = [];
     this.#rooms = [];
     this.#selected = null;
+    this.#selectedDoor = null;
     this.#hovered = null;
     // The marks live in the SVG overlay, which this renderer does NOT own — so
     // clearing the canvas would leave a selection outline floating over an empty
@@ -434,6 +499,11 @@ export class GlPlanRenderer implements PlanRenderer {
     if (rooms.length === 0) {
       this.#entries = [];
       this.#labels = [];
+      // Doors go with them. A level with no rooms has no doors to draw either,
+      // and leaving the previous level's index in place would keep its doors
+      // clickable over an empty plan.
+      this.#doorEntries = [];
+      this.#doorIndex = new DoorIndex([]);
       this.#render();
       return;
     }
@@ -486,6 +556,40 @@ export class GlPlanRenderer implements PlanRenderer {
       });
     }
     this.#entries = entries;
+
+    // DOORS GO INTO THE SAME FILL BATCH as the rooms, after them so they draw
+    // on top. That is the whole reason the glyph is baked rather than
+    // transformed at draw time: a per-door matrix would need a per-door draw
+    // call, and 26 doors would cost more state changes than the entire room
+    // layer costs at plate scale.
+    //
+    // The pick index is built from the SAME glyph objects that were just
+    // drawn, so what you can click is by construction what you can see. Two
+    // computations here — one for the vertices, one for the hit target — is
+    // how the two come to disagree about a door in a diagonal wall.
+    const pickable: PickableDoor[] = [];
+    const doorEntries: DoorEntry[] = [];
+    for (const door of this.#activeDoors()) {
+      const glyph = buildDoorGlyph(door);
+      // `null` means the door cannot be placed at all: no footprint AND no
+      // insertion point. It is not drawn and not clickable, because there is
+      // nowhere to put it — which is a strictly better outcome than drawing it
+      // at the origin, where it would claim to be somewhere it is not.
+      if (!glyph) continue;
+
+      const rect = glyph.rect.length
+        ? fillBatch.pushTriangles(glyph.rect, withAlpha(pal.ink, DOOR_RECT_ALPHA))
+        : null;
+      // Arrow and cross are mutually exclusive by construction, so one range
+      // covers whichever was drawn.
+      const marks = glyph.arrow.length ? glyph.arrow : glyph.cross;
+      const glyphRange = marks.length ? fillBatch.pushTriangles(marks, pal.ink) : null;
+
+      doorEntries.push({ door, rect, glyph: glyphRange });
+      pickable.push({ door, ring: glyph.pickRing, box: glyph.pick });
+    }
+    this.#doorEntries = doorEntries;
+    this.#doorIndex = new DoorIndex(pickable);
 
     this.#grid = gridBatch.build();
     this.#fills = fillBatch.isEmpty ? null : fillBatch.build();
@@ -595,6 +699,31 @@ export class GlPlanRenderer implements PlanRenderer {
         // onto the room polygon itself and the fill came from the same element;
         // here the fill is a different technology, so the mark must not cover it.
         p.setAttribute("class", "room-selected-mark");
+        g.appendChild(p);
+      }
+    }
+
+    // A selected DOOR gets the same treatment, from the same group. Drawn after
+    // the room mark so it wins where a door is selected inside a selected room,
+    // which is the normal case — you select a door by clicking into a room.
+    //
+    // Its ring is the glyph's PICK ring, not the raw footprint: for a door with
+    // no geometry that is the square the arrow was drawn in, so the mark lands
+    // on the thing the user actually clicked. A mark derived from `loops` would
+    // simply not appear for those doors, which reads as "selecting that door
+    // does nothing".
+    const door = this.#selectedDoor
+      ? this.#doorEntries.find((e) => e.door.id === this.#selectedDoor)
+      : undefined;
+    if (door) {
+      const glyph = buildDoorGlyph(door.door);
+      if (glyph) {
+        const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
+        // Already flipped, and the mark layer is in flipped space — so this is
+        // written out rather than run through `pointsAttr`, which flips as it
+        // formats and would put the mark at the mirror image of the door.
+        p.setAttribute("points", glyph.pickRing.map((q) => `${q.x},${q.y}`).join(" "));
+        p.setAttribute("class", "door-selected-mark");
         g.appendChild(p);
       }
     }
