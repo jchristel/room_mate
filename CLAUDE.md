@@ -65,6 +65,16 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 - **Never read `from_room`/`to_room` from the export.** They are per-phase
   arrays tagged with a `phase_id` that resolves against nothing on the wire. The
   extractor reads `FamilyInstance.FromRoom[phase]` from the Revit API instead.
+- **Never read the door's footprint from the export either.** duHast returns
+  Revit's `BoundingBoxXYZ` *without applying its transform*, so what arrives is
+  an **axis-aligned box**, not the door's rectangle. On an orthogonal wall the
+  two coincide — which is why 24 of the 26 House A doors look right and only the
+  two in diagonal walls give it away, as an upright rectangle lying across a
+  slanted wall. **It cannot be fixed downstream:** two extents plus an unknown
+  angle is three unknowns against two measurements, degenerate at exactly 45°.
+  `room_mate.door_footprint` reads `GetOriginalGeometry()` (family space, where
+  the door *is* axis-aligned) and places its corners with `GetTransform()`. The
+  export's polygon stays as the fallback, and keeps the `±1e30` guard.
 
 ## Which document wins
 
