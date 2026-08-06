@@ -22,6 +22,14 @@ What is genuinely different, and why:
 - **A degenerate footprint is dropped**, see `loops_from_polygon`. This is
   the one place this module actively discards data, and it has to: the bad
   value looks like real geometry.
+- **An empty doors push is refused here, though the server accepts one.**
+  Deliberately stricter than `handlers.rs`, and the asymmetry is the point.
+  The server must allow zero doors, because it cannot tell a shell or a
+  pre-fit-out phase from a broken export. This side is not answering that
+  question -- it is answering "someone asked for a doors push and there are no
+  doors to push", which is worth stopping whichever of the two it turns out to
+  be. The cost is real and accepted: a model that genuinely has no doors can no
+  longer record that fact through this producer.
 
 Returns the same `(ok, status, text)` tuple shape as the room push, so the
 caller's `Result` tracking is identical for both.
@@ -36,6 +44,7 @@ from System.Net.Http.Headers import MediaTypeHeaderValue
 
 from post_rooms import (
     duhast_object_to_plain,
+    empty_push_refusal,
     loop_to_points,
     properties_to_map,
     write_ndjson_line,
@@ -226,11 +235,20 @@ def post_doors_stream(json_formatted_doors, room_references, url=SERVER_URL_STRE
     Doors are far fewer than rooms per model, so this is not load-bearing the
     way the room stream is. It is used anyway so one transport serves both
     pushes -- a producer that streamed rooms and buffered doors would be two
-    code paths to keep working for no gain. Returns `(ok, status, text)`."""
+    code paths to keep working for no gain. Returns `(ok, status, text)`.
+
+    Sends nothing when no door reaches the wire, counted as the stream is
+    written for the same reason the room path counts there -- see the module
+    docstring for why this is stricter than the server."""
     door_meta = dict(
         (key, value) for key, value in json_formatted_doors.items() if key != DOOR_LIST_KEY
     )
     envelope = build_envelope(duhast_object_to_plain(door_meta))
+
+    raw = 0
+    no_id = 0
+    out_of_phase = 0
+    written = 0
 
     out = MemoryStream()
     try:
@@ -238,13 +256,26 @@ def post_doors_stream(json_formatted_doors, room_references, url=SERVER_URL_STRE
         gz = GZipStream(out, CompressionMode.Compress)
         write_ndjson_line(gz, envelope)
         for door in json_formatted_doors.get(DOOR_LIST_KEY, []):
+            raw += 1
             out_door = translate_door(duhast_object_to_plain(door), room_references)
-            if out_door is not None and in_selected_phase(out_door, allowed_door_ids):
-                write_ndjson_line(gz, out_door)
+            if out_door is None:
+                no_id += 1
+                continue
+            if not in_selected_phase(out_door, allowed_door_ids):
+                out_of_phase += 1
+                continue
+            written += 1
+            write_ndjson_line(gz, out_door)
         gz.Close()  # MUST close to flush the gzip footer; do NOT skip
         body = out.ToArray()
     finally:
         out.Dispose()
+
+    if written == 0:
+        return empty_push_refusal("doors", envelope, raw, [
+            (no_id, "carrying no element id"),
+            (out_of_phase, "outside phase '{}'".format(envelope["phase"])),
+        ])
 
     content = ByteArrayContent(body)
     content.Headers.ContentType = MediaTypeHeaderValue("application/x-ndjson")
@@ -255,7 +286,16 @@ def post_doors_stream(json_formatted_doors, room_references, url=SERVER_URL_STRE
 
 def post_doors(json_formatted_doors, room_references, url=SERVER_URL, allowed_door_ids=None):
     """Buffered counterpart of `post_doors_stream`. Returns `(ok, status, text)`."""
-    contract = translate(duhast_object_to_plain(json_formatted_doors), room_references, allowed_door_ids)
+    doors_source = duhast_object_to_plain(json_formatted_doors)
+    contract = translate(doors_source, room_references, allowed_door_ids)
+
+    # Guarded here rather than in `translate`, matching `post_rooms.post_payload`:
+    # translating an empty door set is a legitimate thing to ask for, pushing one
+    # is not.
+    if not contract["doors"]:
+        return empty_push_refusal(
+            "doors", contract, len(doors_source.get(DOOR_LIST_KEY, [])), [])
+
     from System.Net.Http import StringContent
     from System.Text import Encoding
 

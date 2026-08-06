@@ -116,13 +116,25 @@ green one serving a stale renderer.
   producer fault, never an empty model. Not the same as an empty *level*, which
   is ordinary. The message names the phase, because a filter matching nothing is
   what it nearly always is.
-- **Doors get no equivalent rule** — a model with rooms and no doors is
-  legitimate.
+- **Doors get no equivalent rule *server-side*** — a model with rooms and no
+  doors is legitimate, and the server cannot tell that from a broken export. The
+  extractor does refuse one; see the last bullet, and note the two are answering
+  different questions rather than disagreeing.
 - **`has_room_snapshot` reads the latest snapshot, not the index.** It used to
   ask whether a rooms snapshot *file* existed, which an empty one does — so it
   waved through 26 doors referencing 22 room ids, none resolvable. Reading costs
   one file per doors push and is the only honest answer while empty snapshots
   from before the fix are still on disk.
+- **The extractor refuses empty pushes too, and for doors it is deliberately
+  stricter than the server** (`post_rooms.empty_push_refusal`, 2026-08-06). The
+  server must accept zero doors — it cannot tell a shell from a broken export.
+  The producer is answering a different question ("someone asked for a doors
+  push and there are none"), and it knows what the server never sees: how many
+  the export held and where each one went, so its message names the phase filter
+  instead of reporting a bare zero. The accepted cost: **a model with genuinely
+  no doors can no longer record that fact through this producer.** The refusal
+  rides the normal `(ok, status, text)` tuple with `status = None`, so callers
+  need no second failure channel.
 
 ## Traps
 
@@ -136,6 +148,20 @@ green one serving a stale renderer.
 
 **Nothing.** Both long-standing items closed: the extractor's phase filter is
 verified against Revit, and R4 landed.
+
+## The extractor has three entry points, and one of them is a trap
+
+`rooms_export_entry` still pushes **rooms and then doors**, despite the name.
+Its pyRevit button lives outside this repo, so narrowing it to rooms would not
+fail — it would keep succeeding while quietly no longer pushing doors. The split
+is in the two siblings instead: `rooms_only_export_entry` and
+`doors_export_entry`. All three are one line over `export_entry(..., entities)`;
+document selection, the one project and the one phase never differ.
+
+A doors-only push does **not** check that rooms are on the server first. That is
+the server's question and it already answers it; a client-side re-check would
+mean this script deciding what counts as "has rooms", which is what
+`has_room_snapshot` got wrong.
 
 ## Phase filtering: rooms and doors are not alike
 
