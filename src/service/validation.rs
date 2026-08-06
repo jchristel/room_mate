@@ -1672,6 +1672,11 @@ mod tests {
             loops: vec![],
             from_room: from_room.map(str::to_string),
             to_room: to_room.map(str::to_string),
+            // These helpers exercise references and properties, never placement,
+            // so `None` here is the honest input rather than a stub: a door with
+            // no position and no direction is a state the contract carries.
+            insertion_point: None,
+            through_wall_normal: None,
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties: BTreeMap::new(),
