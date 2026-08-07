@@ -18,6 +18,22 @@ side should shape future server endpoints.
   its appearance decisions with the renderer but not its code path — see
   "Renderer" below for the measurement that forced the move, and "The hybrid's
   one invariant" for the rule the two layers have to keep.
+- **Door glyphs — all-WebGL, and deliberately not on the SVG overlay**
+  (2026-08-07). Each door draws as its footprint with an arrow through the wall
+  along the direction it faces, baked into vertices at build time and drawn as
+  its own `FillBatch`. The overlay was the obvious home — it is where the other
+  "dozens of things" live, per the hybrid rule — and it was the wrong one:
+  doors need the same camera transform, the same triangulation and the same
+  pick as rooms, so putting them on the overlay would have meant a second
+  coordinate system to keep in sync every frame for machinery that already
+  existed. The overlay still owns the door **selection mark**, exactly as it
+  does for rooms.
+  <br>**The layer order is load-bearing**, and cost a bug to learn: the hover
+  fill is its own mesh sitting directly above the room fills, so doors sharing
+  that mesh were painted over and hovering a room made its doors vanish. Doors
+  sit above the hover layer and below the labels —
+  `grid → fills → hover → outlines → doors → labels`, which `debugState()` now
+  reports so the question is answerable without a screenshot.
 - **Global scope pickers: project, milestone, building — the single-project
   viewer.** One set of header `<select>`s carrying the scope of the whole
   page (see [Server](STRATEGY-SERVER.md)'s `/projects` /

@@ -1,5 +1,52 @@
 # HANDOVER — Door Direction Glyph (all-WebGL)
 
+> **Superseded — built and merged 2026-08-07** (#62, #64, #65). The live
+> pointers are [`gl/doorGlyph.ts`](../../src-js/renderer/gl/doorGlyph.ts) for the
+> glyph, `Door::insertion_point` / `through_wall_normal` in
+> [`contract/doors.rs`](../../src/contract/doors.rs) for the fields, and
+> [Entities](../STRATEGY-ENTITIES.md) Decision 4 for the footprint rule.
+>
+> **Every scope decision below held.** All-WebGL, chevron over circle,
+> exporter-supplied normal over viewer-derived rotation, and geometric picking
+> over colour/ID picking — none of them were revisited. What follows is what the
+> brief got wrong, which is the part worth reading.
+>
+> **"No service work; one new field."** The field was right. The rest was not:
+> the viewer knew nothing about doors at all — no type, no fetch, and a seam
+> that was room-shaped throughout — so most of the work was that plumbing.
+>
+> **Two asks were already satisfied.** The "bounding box" the brief wants
+> exported is `Door.loops`, already on the wire. And picking is
+> point-in-**polygon**, not the point-in-rectangle the brief describes — which
+> was better news, since a footprint ring feeds the room test unchanged.
+>
+> **"Append into the room vertex stream" caused a bug.** It draws correctly
+> until a room is hovered: the hover fill is its own mesh sitting directly above
+> the room fills, so anything sharing that mesh is painted over — hovering a
+> room made every door in it vanish. Doors now have their own mesh above the
+> hover layer, costing one draw call for the whole layer rather than one per
+> door, which is what the brief's own "no second draw call added per door"
+> actually asks for.
+>
+> **"Point-in-rectangle is exact and cheap" was right and unusable.** A door
+> footprint is as deep as its wall: 4 px on this plan at a fitted view, 1.2 px
+> for the garage door. Exact hit-testing against 1.2 px is a target nobody can
+> hit, and the miss resolves to the room underneath — so the door reads as
+> unselectable. The target is padded through the wall only, in the door's own
+> frame.
+>
+> **The degraded-glyph table listed "three inputs" for two**, and that slip
+> pointed at a real gap: a door with no footprint had no position on the wire at
+> all, so the "cross at the insertion point" case had nowhere to draw.
+> `insertion_point` was added for it. That case then evaporated — the two
+> geometry-less doors turned out to be a duHast measuring bug, not families
+> without geometry — so the field now earns its place on older snapshots rather
+> than the live export.
+>
+> **The footprint's rotation was the one thing nobody anticipated**, and it was
+> not fixable here: an axis-aligned box of a rotated rectangle cannot be
+> un-rotated. It was fixed upstream in duHast.
+
 **Status:** design settled, not yet built. This is a brief for a self-contained
 viewer feature: draw each door as a directional glyph inside the existing WebGL
 scene and make it clickable like a room. No service work; the one data-layer ask
