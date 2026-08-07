@@ -58,10 +58,17 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 
 ## Traps in the door export
 
-- **`±1e30` is not geometry.** duHast returns Revit's *uninitialized*
-  `BoundingBoxXYZ` for a door family with no 3D geometry, and its own guards
-  pass, so it arrives looking plausible. The producer drops it and sends empty
+- **`±1e30` is not geometry.** duHast used to return Revit's *uninitialized*
+  `BoundingBoxXYZ` for a door it could not measure, and its own guards passed,
+  so it arrived looking plausible. The producer drops it and sends empty
   `loops`; the door is still pushed, because it has real room references.
+  **Keep the guard, but do not trust the story that came with it.** It was read
+  as "these two families have no 3D geometry" — and that was never true. With
+  duHast's geometry walk fixed (2026-08-07) both `2040x620x40` doors measure
+  5.10 × 0.13 ft like any other. The sentinel was a *symptom of the bug*, not a
+  property of the families, and every current House A door has a footprint.
+  Old snapshots on disk still carry empty `loops`, which is why the guard and
+  the empty-`loops` handling stay.
 - **Never read `from_room`/`to_room` from the export.** They are per-phase
   arrays tagged with a `phase_id` that resolves against nothing on the wire. The
   extractor reads `FamilyInstance.FromRoom[phase]` from the Revit API instead.
