@@ -331,6 +331,21 @@ decisions behind them:
 - **`loops` uses the room convention verbatim** — `loops[0]` outer,
   `loops[1..]` holes, decimal feet, model space, Y-up — so one renderer and one
   `model_to_shared` transform serve both entities.
+  <br>**It is the door's ORIENTED rectangle, and the fix belonged upstream**
+  (duHast, 2026-08-07). The export used to carry a world axis-aligned box —
+  identical to the truth on an orthogonal wall, an upright rectangle across a
+  slanted one otherwise, and *unrecoverable* downstream because an axis-aligned
+  box of a rotated rectangle no longer knows the angle.
+  <br>Notably this is the one case where **"where duHast's answer is lossy, ask
+  Revit" was the wrong instinct.** The room references and the facing direction
+  are genuinely not in the export, so the extractor reads them. A footprint *is*
+  in the export — it was simply measured in the wrong frame, and re-measuring it
+  extractor-side produced a worse answer than the one being replaced (the family
+  symbol's geometry is uncut and includes the swing arc: ×9.87 through the
+  wall). It also meant the extractor discarded whatever duHast sent, so fixing
+  duHast changed nothing until the extractor stopped competing with it.
+  <br>The rule that survives: **the extractor reads from Revit what the export
+  does not contain, and does not re-measure what it does.**
 - **Single phase collapses the room references.** `from_room`/`to_room` are
   arrays in the raw export only because they carry one entry per phase (all 46
   refs in the sample are `phase_id: 3`). Under Decision 2 they become

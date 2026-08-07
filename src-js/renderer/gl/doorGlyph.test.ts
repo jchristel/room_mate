@@ -223,10 +223,33 @@ describe("buildDoorGlyph", () => {
         else if (g.rect.length) tally.rectOnly++;
         else tally.arrowOnly++;
       }
-      // 3475937 and 3479042 are the `±1e30` family: no footprint, but an
-      // insertion point and a normal, so they draw as arrows instead of
-      // vanishing. Nothing degrades to a cross, and nothing is undrawable.
-      expect(tally).toEqual({ full: 24, rectOnly: 0, arrowOnly: 2, cross: 0 });
+      // EVERY door draws a full glyph, and it took an upstream fix to get here.
+      // This used to be 24 full and 2 arrow-only, because two doors of family
+      // type `2040x620x40` arrived with no footprint at all. That turned out not
+      // to be a property of those families: duHast was returning Revit's
+      // uninitialised bounding box for them, and with its geometry walk fixed
+      // they measure 5.10 x 0.13 ft like any other door.
+      //
+      // So the degraded rows below are no longer exercised by real data. They
+      // are still reachable — an older snapshot on disk has empty loops — which
+      // is why the hand-written cases above cover them rather than relying on
+      // the export to keep producing an awkward door.
+      expect(tally).toEqual({ full: 26, rectOnly: 0, arrowOnly: 0, cross: 0 });
+    });
+
+    /** Two doors sit in diagonal walls, and their footprints are the reason the
+     *  upstream fix mattered: an axis-aligned box cannot describe them. If these
+     *  ever come back axis-aligned, the extension is running a duHast that
+     *  measures bounding boxes in world space again. */
+    it("carries genuinely oriented footprints for the diagonal doors", () => {
+      const oriented = doors.filter((d) => {
+        const pts = d.loops?.[0]?.points;
+        if (!pts) return false;
+        const xs = new Set(pts.map((p) => p.x.toFixed(6)));
+        const ys = new Set(pts.map((p) => p.y.toFixed(6)));
+        return xs.size > 2 || ys.size > 2;
+      });
+      expect(oriented.map((d) => d.id).sort()).toEqual(["3784724", "3795086"]);
     });
 
     it("emits no NaN anywhere in the real set", () => {

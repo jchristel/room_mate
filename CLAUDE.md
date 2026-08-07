@@ -58,13 +58,41 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 
 ## Traps in the door export
 
-- **`±1e30` is not geometry.** duHast returns Revit's *uninitialized*
-  `BoundingBoxXYZ` for a door family with no 3D geometry, and its own guards
-  pass, so it arrives looking plausible. The producer drops it and sends empty
+- **`±1e30` is not geometry.** duHast used to return Revit's *uninitialized*
+  `BoundingBoxXYZ` for a door it could not measure, and its own guards passed,
+  so it arrived looking plausible. The producer drops it and sends empty
   `loops`; the door is still pushed, because it has real room references.
+  **Keep the guard, but do not trust the story that came with it.** It was read
+  as "these two families have no 3D geometry" — and that was never true. With
+  duHast's geometry walk fixed (2026-08-07) both `2040x620x40` doors measure
+  5.10 × 0.13 ft like any other. The sentinel was a *symptom of the bug*, not a
+  property of the families, and every current House A door has a footprint.
+  Old snapshots on disk still carry empty `loops`, which is why the guard and
+  the empty-`loops` handling stay.
 - **Never read `from_room`/`to_room` from the export.** They are per-phase
   arrays tagged with a `phase_id` that resolves against nothing on the wire. The
   extractor reads `FamilyInstance.FromRoom[phase]` from the Revit API instead.
+- **The door's footprint IS trustworthy now, and the extractor must not
+  re-derive it** (fixed upstream in duHast, 2026-08-07). It used to arrive as a
+  world **axis-aligned** box — right on an orthogonal wall, an upright rectangle
+  lying across a slanted one otherwise. Two attempts to fix it *here* both
+  failed, and both are worth knowing so nobody writes them a third time:
+  - `GetOriginalGeometry` + `GeometryElement.GetBoundingBox()` gets the angle
+    right and the size **badly** wrong — measured ×1.97 along the wall and
+    **×9.87 through it**, every door of one type reporting an identical box.
+    That is the family *symbol*: uncut by its host, and `GetBoundingBox()`
+    counts curve objects, so the plan swing arc is in the measurement.
+  - Reconstructing the rectangle from the axis-aligned box is impossible, not
+    merely hard: two extents plus an unknown angle is three unknowns against
+    two measurements, degenerate at exactly 45°.
+
+  The real fix was in duHast (`get_oriented_bounding_box_from_family_instance`):
+  measure the *instance's* solids in the *instance's own frame*, and carry the
+  placement on the box `Transform`. **If a door footprint ever looks wrong
+  again, check which duHast the extension is running before touching
+  `room_m/`** — an extractor that computes its own footprint silently discards
+  whatever duHast sends, which is exactly how a correct duHast fix produced a
+  byte-identical bad export.
 
 ## Which document wins
 

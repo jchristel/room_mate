@@ -60,12 +60,18 @@ pub struct Door {
     /// transforms geometry, and there is nothing about a swing footprint that
     /// needs one.
     ///
-    /// **Empty is a real state — do not make this field required.** A door
-    /// family with no 3D geometry has no footprint to extract, and two of the 26
-    /// doors in the sample export are exactly that (both family type
-    /// `2040x620x40`). They still carry properties and both room references, so
-    /// they are real doors that QA and comparison must see; only their geometry
-    /// is unknown.
+    /// **Empty is a real state — do not make this field required.** A door with
+    /// no measurable footprint still carries properties and both room
+    /// references, so it is a real door QA and comparison must see; only its
+    /// geometry is unknown.
+    ///
+    /// Worth knowing how this was *mis*-read: two `2040x620x40` doors in the
+    /// House A export arrived empty, and that was taken as "these families have
+    /// no 3D geometry". They do. duHast was mis-measuring them, and with that
+    /// fixed (2026-08-07) they come through at 5.10 × 0.13 ft. No door in the
+    /// current export is empty — but snapshots pushed before the fix are still
+    /// on disk and still parse through this type, which is the reason the field
+    /// stays permissive rather than a hypothetical about families.
     ///
     /// The trap this replaced is worth naming, because the bad value looks
     /// plausible rather than absent: duHast hands back Revit's *uninitialized*
@@ -109,12 +115,17 @@ pub struct Door {
     /// feet, model space, Y up.
     ///
     /// **The one thing every door has, whatever else is missing.** `loops` is
-    /// allowed to be empty and 2 of the 26 sample doors are, so a consumer that
-    /// can only place a door by its footprint cannot place those at all — they
-    /// exist in QA and in `/doors` but nowhere a reader looks at a plan. The
-    /// insertion point is what a door-with-no-geometry can still be drawn at,
-    /// which is the difference between "we know nothing about its shape" and
-    /// "it silently is not there".
+    /// allowed to be empty, and a consumer that can only place a door by its
+    /// footprint cannot place such a door at all — it exists in QA and in
+    /// `/doors` but nowhere a reader looks at a plan. The insertion point is
+    /// what a door-with-no-geometry can still be drawn at, which is the
+    /// difference between "we know nothing about its shape" and "it silently is
+    /// not there".
+    ///
+    /// No door in the current House A export is empty (the two that once were
+    /// turned out to be a duHast measuring bug, not families without geometry),
+    /// so this now earns its place on the older snapshots still on disk rather
+    /// than on the live one.
     ///
     /// The producer emits this for every door — it is Revit's `LocationPoint`,
     /// which a placed `FamilyInstance` always has. `Option` here is not the
