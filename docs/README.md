@@ -23,7 +23,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
 | [Plan: phasing](Superseded/PLAN-phasing.md) | **Built (P1–P7), extractor half unverified against Revit.** The ten decisions behind Revit phase support and the phases that implemented them, plus an "As built" section recording where the result departs from the plan |
-| [Plan: generalisation](Superseded/PLAN-generalisation.md) | **R1, R2 and R3 done; only R4 remains.** Four seams that grew room-shaped because rooms were the only primary entity. The two doors prerequisites landed ahead of any door code — read R2's outcome note for the tier-precedence rule the `Door` contract is written against (a tier wins only when it is `Present`), and R1's for why `list_models()` still means "models with rooms". R4 stays open until doors grow a reference source |
+| [Plan: generalisation](Superseded/PLAN-generalisation.md) | **R1 through R4 all landed** (R4 on 2026-08-05). Four seams that grew room-shaped because rooms were the only primary entity. The two doors prerequisites landed ahead of any door code — read R2's outcome note for the tier-precedence rule the `Door` contract is written against (a tier wins only when it is `Present`), and R1's for why `list_models()` still means "models with rooms". R4's own trigger turned out to be circular, which its header records |
 
 > **Reading either plan above: do not trust their `file.rs:NNN` deep
 > links.** Both pin line numbers, and the files have moved underneath them —
@@ -35,8 +35,13 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 
 ## Open handovers
 
-**None.** The last one — the WebGL plan renderer — landed on 2026-08-02 and
-moved to [Superseded](Superseded/) with the plan that built it.
+**None.** The last one — the [door direction
+glyph](Superseded/HANDOVER-door-glyph.md) — landed on 2026-08-07. Read its
+header before writing another brief of that shape: every *scope decision* in it
+held, and most of its *estimates* did not. It said "no service work, one new
+field" for something whose real cost was that the viewer had no door plumbing at
+all, and two of its instructions ("append into the room vertex stream",
+"point-in-rectangle") each produced a bug that only showed up on screen.
 
 That is a statement about *handovers*, not about outstanding work — open items
 otherwise live in the strategy doc that owns them rather than in a brief that
