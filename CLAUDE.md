@@ -43,6 +43,14 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   Trust it exactly as far as the model is consistent: Revit's `to_room` follows
   the door's *orientation*, not the leaf swing, so flipping a door swaps it.
   That is why it is policy with an override, never a rule in code.
+- **A door's room is what it *serves*, not what it opens into** — and the two
+  differ on purpose. A cupboard off a long corridor swings into the corridor and
+  belongs to the cupboard; 2 of the 26 House A doors are deliberately that shape
+  (element ids `2618110`, `2626240`). So `to_room` is a **modeller's
+  assignment**, not a geometric consequence, and a door whose
+  `through_wall_normal` points away from its own `to_room` is correct data, not
+  a finding. Do not add a check that "reconciles" the two — they answer
+  different questions, which is also why both are on the wire.
 - **`room_reference_property` reconciles the modeller against the geometry**,
   and finds real disagreements: 4 of the 26 House A doors, mostly where the
   geometry picks an exterior or circulation space over the served room. Absent
