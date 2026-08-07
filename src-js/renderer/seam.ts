@@ -34,7 +34,7 @@
 // instead. Same call site, two implementations — which is the entire point of
 // having a seam.
 
-import type { Rect, Room } from "./types.js";
+import type { Door, Rect, Room } from "./types.js";
 
 /** Search state, applied WITHOUT a re-render. Preserving that property is an
  *  explicit obligation: a search can match thousands of rooms, and a keystroke
@@ -53,7 +53,28 @@ export interface PaintRequest {
   matchRoomIds?: ReadonlySet<string> | null | undefined;
   searchActive?: boolean | undefined;
   showLabels?: boolean | undefined;
+  /**
+   * The doors to draw on this level, already scoped by the caller.
+   *
+   * Carried in the paint REQUEST rather than as a second positional argument
+   * to `paint`, so every existing call site keeps working unchanged. That is
+   * not only convenience: `static/index.html` is thousands of lines of inline
+   * JavaScript that TypeScript cannot check, so a signature change there is a
+   * change no compiler would verify.
+   */
+  doors?: readonly Door[] | undefined;
+  /** Whether to draw them. Absent means yes when `doors` is non-empty — the
+   *  toggle is the page's state, and a renderer given doors and no instruction
+   *  should draw them. */
+  showDoors?: boolean | undefined;
 }
+
+/**
+ * What the pick found. A discriminated union rather than `Room | Door`, because
+ * the two share `id` and `loops` and would otherwise be told apart by
+ * duck-typing on a field that both may carry.
+ */
+export type Pick = { kind: "room"; room: Room } | { kind: "door"; door: Door };
 
 export interface PlanRenderer {
   /** Draw a level, framed to `fitted`. Replaces whatever was drawn before. */
@@ -68,6 +89,11 @@ export interface PlanRenderer {
   /** The one selected room, or `null`. Never drawn into an export. */
   setSelection(roomId: string | null): void;
 
+  /** The one selected door, or `null`. Kept separate from `setSelection`
+   *  rather than merged into a tagged argument, so the existing room call
+   *  sites in `static/index.html` are untouched by doors existing. */
+  setDoorSelection(doorId: string | null): void;
+
   /** The one hovered room, or `null`. */
   setHover(roomId: string | null): void;
 
@@ -78,6 +104,18 @@ export interface PlanRenderer {
 
   /** The room under a viewport point, or `null` for empty space. */
   roomAt(clientX: number, clientY: number): Room | null;
+
+  /**
+   * The room OR door under a viewport point, or `null`.
+   *
+   * Doors win where both are under the cursor, which is most places a door is:
+   * a door glyph is drawn over the room it serves, it is much smaller, and
+   * clicking a thing you can see should select that thing. `roomAt` is kept
+   * beside this — unchanged, still room-only — because the two existing call
+   * sites want exactly that, and widening their return type would have made
+   * every one of them handle a case it has no use for.
+   */
+  pickAt(clientX: number, clientY: number): Pick | null;
 
   /** Release everything held. For the GL renderer this frees a WebGL context,
    *  which browsers cap (commonly ~16) and silently kill the oldest of past the

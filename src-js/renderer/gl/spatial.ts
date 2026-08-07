@@ -19,17 +19,35 @@
 
 import Flatbush from "flatbush";
 import { roomBBox } from "../geometry.js";
-import type { Room } from "../types.js";
+import type { Door, Extent, Point2D, Room } from "../types.js";
 
-/** Winding-number-free even-odd test against one ring, in flipped space. */
-function pointInRing(px: number, py: number, points: readonly { x: number; y: number }[]): boolean {
+/**
+ * Winding-number-free even-odd test against one ring, in flipped space.
+ *
+ * `alreadyFlipped` says which space the RING is in — the probe is always
+ * flipped. Rooms hand over raw payload rings and this flips them as it reads,
+ * which avoids allocating a flipped copy per pick on a hot path; doors hand
+ * over the glyph's pick ring, which was flipped when the glyph was baked and
+ * must not be flipped a second time.
+ *
+ * The flag exists because the alternative — flipping in the caller — went wrong
+ * exactly once already: an already-flipped door ring read through the default
+ * lands mirrored about y=0, so every door tested as a miss and every click on a
+ * door quietly selected the room underneath it. Nothing about that looks like a
+ * coordinate bug from the outside.
+ */
+function pointInRing(
+  px: number,
+  py: number,
+  points: readonly { x: number; y: number }[],
+  alreadyFlipped = false,
+): boolean {
   let inside = false;
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
     const a = points[i]!;
     const b = points[j]!;
-    // Y is flipped on read, consistently for both the ring and the probe.
-    const ay = -a.y;
-    const by = -b.y;
+    const ay = alreadyFlipped ? a.y : -a.y;
+    const by = alreadyFlipped ? b.y : -b.y;
     if (ay > py !== by > py && px < ((b.x - a.x) * (py - ay)) / (by - ay) + a.x) inside = !inside;
   }
   return inside;
@@ -90,6 +108,69 @@ export class RoomIndex {
           break;
         }
       if (!inHole) found = room;
+    }
+    return found;
+  }
+}
+
+/** A door and the target it drew, ready to be indexed. Built by the renderer
+ *  from the glyph it is about to draw, so the thing you can click is by
+ *  construction the thing you can see — they cannot drift, because there is
+ *  only one computation. */
+export interface PickableDoor {
+  door: Door;
+  /** The pick ring, already flipped (`DoorGlyph.pickRing`). */
+  ring: readonly Point2D[];
+  /** That ring's bounding box (`DoorGlyph.pick`). */
+  box: Extent;
+}
+
+/**
+ * The door pick index — a second Flatbush tree, deliberately not a shared one.
+ *
+ * SEPARATE FROM `RoomIndex` because doors and rooms overlap by nature: a door
+ * sits in the wall of the room it serves, and on a plan its glyph is drawn over
+ * that room. One tree returning "the thing at this point" would have to rank
+ * two entity types against each other on every query. Two trees let the caller
+ * state the precedence once — doors first, because they are smaller, drawn on
+ * top, and a click inside a door glyph is a click on the door.
+ *
+ * The ring test is the same one rooms use, and for the same reason: a footprint
+ * is a rectangle in the WALL's frame, so on a diagonal wall its bounding box is
+ * much larger than the door. Answering on the box would let a door swallow
+ * clicks meant for the room around it.
+ */
+export class DoorIndex {
+  readonly #doors: readonly PickableDoor[];
+  readonly #tree: Flatbush | null;
+
+  constructor(doors: readonly PickableDoor[]) {
+    this.#doors = doors;
+    if (doors.length === 0) {
+      // Flatbush cannot be built empty, and a level with no doors is ordinary
+      // — a shell, or a pre-fit-out phase.
+      this.#tree = null;
+    } else {
+      const tree = new Flatbush(doors.length);
+      for (const d of doors) tree.add(d.box.minX, d.box.minY, d.box.maxX, d.box.maxY);
+      tree.finish();
+      this.#tree = tree;
+    }
+  }
+
+  get size(): number {
+    return this.#doors.length;
+  }
+
+  /** The door under a point in flipped world space, or `null`. Last match wins,
+   *  mirroring paint order exactly as `roomAt` does. */
+  doorAt(x: number, y: number): Door | null {
+    if (!this.#tree) return null;
+    let found: Door | null = null;
+    for (const i of this.#tree.search(x, y, x, y)) {
+      const d = this.#doors[i]!;
+      // `true`: the glyph's pick ring is already in flipped space.
+      if (pointInRing(x, y, d.ring, true)) found = d.door;
     }
     return found;
   }
