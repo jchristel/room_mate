@@ -38,7 +38,7 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   **stderr only**: stdout is the JSON-RPC stream, and anything else written
   there (an errant `println!`, a stdout-default `tracing_subscriber`)
   silently corrupts the protocol.
-- **Seventeen tools: one per existing read route, two settings reads, and one
+- **Eighteen tools: one per existing read route, three settings reads, and one
   forwarded upload.**
   `list_projects`, `list_buildings`, `get_rooms` (project/building/milestone/
   property filters optional — see the property-filter bullet below),
@@ -104,12 +104,29 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   the choices named rather than guessed, since silently picking the first
   would answer confidently about the wrong dataset. Authoring a pin stays HTTP/settings-UI only (the read-only stance
   below), though `get_project_settings` exposes the raw pins for reading.
-  `list_project_settings` / `get_project_settings` reuse `settings_api`'s
+  `list_project_settings` / `get_project_settings` / `resolve_project_settings`
+  reuse `settings_api`'s
   transport-agnostic read core (see [Server](STRATEGY-SERVER.md)'s settings
   API bullet); they parse the TOML files fresh per call, so a change saved
   through the HTTP settings UI shows in them immediately — while this
   process's own `get_rooms`/`get_validation` still run on the registry
-  loaded at its startup. Settings tools are read-only by design: this is a
+  loaded at its startup.
+  **`resolve_project_settings` is the third, and it exists because the two id
+  spaces differ.** `get_project_settings` answers about a *file* — the one whose
+  `project_id` is X — and never falls back, which is what makes it the right
+  tool for reading before an edit. But an agent holding a *payload* project id
+  from `list_projects` has an id no settings file need declare, so the strict
+  lookup fails for a project that is nonetheless being served settings.
+  `resolve_project_settings` mirrors `GET /api/settings/resolve/{id}` and the
+  viewer's own resolution: exact match, else the `is_default` file. It stays a
+  separate tool rather than a flag, exactly as the two HTTP routes stay separate
+  — collapsing them would let the two front doors disagree about what "get this
+  project's settings" means. The response names the file the settings came from,
+  so a fallback is visible rather than silent.
+  **It was also the last parity gap**: until it landed, `bin/mcp.rs` and this
+  document both claimed one tool per HTTP read route while one route had none —
+  the kind of quiet overclaim `scripts/weekly_review.py` now checks on every run.
+  Settings tools are read-only by design: this is a
   separate process from the HTTP server, so a write from here could not
   hot-swap that server's in-memory registry — the file and the serving
   process would silently disagree until a restart. Mutation stays behind the

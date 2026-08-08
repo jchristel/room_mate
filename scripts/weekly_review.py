@@ -276,7 +276,7 @@ def check_mcp_parity(findings: Findings) -> None:
         "/projects/{id}/reference/{source}/latest": "get_reference_snapshot",
         "/api/settings/projects": "list_project_settings",
         "/api/settings/projects/{id}": "get_project_settings",
-        "/api/settings/resolve/{id}": None,
+        "/api/settings/resolve/{id}": "resolve_project_settings",
     }
     for route in routes:
         tool = mapping.get(route, "?")

@@ -4,10 +4,13 @@
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors` --
-//! plus two settings *reads* off `settings_api`'s transport-agnostic core
-//! (`list_project_settings`, `get_project_settings`) and the one forwarded
-//! mutation (`upload_reference`, below). Seventeen in total; keep this list and
-//! STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
+//! plus three settings *reads* off `settings_api`'s transport-agnostic core
+//! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
+//! and the one forwarded mutation (`upload_reference`, below). Eighteen in
+//! total, and "one per existing HTTP read route" is now literally true -- it was
+//! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
+//! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
+//! and STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
 //! `roommate::service` -- parse params, call one service function, serialize
 //! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
 //! second transport over the same domain layer.
@@ -661,6 +664,34 @@ impl RoommateMcp {
     fn get_project_settings(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let (file, settings) = settings_api::get_project_file(&dir, &p.project_id).map_err(settings_to_mcp_error)?;
+        json_result(&serde_json::json!({ "file": file, "settings": settings }))
+    }
+
+    /// One project's settings resolved the way the *viewer* resolves them:
+    /// exact `project_id` match, else the file marked `is_default` -- see
+    /// `settings_api::resolve_project_file`.
+    ///
+    /// A separate tool rather than a flag on `get_project_settings`, mirroring
+    /// the two separate HTTP routes and for the same reason: the fallback must
+    /// not be reachable from the path an editor reads before it writes, where
+    /// loading the default and saving it back would overwrite the wrong file.
+    /// An agent has no such write path here -- both are reads -- but collapsing
+    /// them would make the MCP surface disagree with the HTTP one about what
+    /// "get this project's settings" means, and the two front doors answering
+    /// the same question differently is the thing the service seam exists to
+    /// prevent.
+    #[tool(
+        description = "Get the settings that APPLY to one project id, falling back to the default settings file when no file declares that id. \
+                          Use this when the id came from room or door DATA -- a payload project id, as returned by list_projects -- rather than from a settings file: \
+                          the two id spaces differ, so get_project_settings can legitimately report 'not found' for a project that is nonetheless being served settings. \
+                          Prefer get_project_settings when you mean 'the settings file whose project_id is X': it answers about a FILE and never falls back. \
+                          The response names the file the settings actually came from, so a fallback is visible rather than silent -- a 'file' unrelated to the id you \
+                          passed means the default answered, and the values you are reading are not authored for that project."
+    )]
+    fn resolve_project_settings(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let (file, settings) =
+            settings_api::resolve_project_file(&dir, &p.project_id).map_err(settings_to_mcp_error)?;
         json_result(&serde_json::json!({ "file": file, "settings": settings }))
     }
 
