@@ -1,0 +1,50 @@
+# Known-benign hits for `scripts/weekly_review.py`, each with the reason it is
+# benign. The reason is the point of the file: an ignore list with no reasons
+# becomes a place to hide findings, and nobody can later tell an entry that is
+# still true from one that stopped being true.
+#
+# The check asks "does this identifier exist anywhere in the tree?", so anything
+# naming an *external* API, a *past* design, or an *unbuilt* one answers no
+# while being perfectly correct prose. Those are the three shapes below.
+#
+# Adding an entry is the normal outcome of a review, not an admission of
+# defeat — the goal is that next week's run is quieter than this week's, so a
+# genuine finding is visible instead of buried.
+
+[symbols]
+
+# --- External APIs the docs cite by name. Not ours, never will be. ---
+"Int64" = "Revit API type, in STRATEGY.md's parameter-storage discussion"
+"IntegerValue" = "Revit API ElementId member"
+"ActiveProjectLocation" = "Revit API, in the georeferencing discussion"
+"IfcRelSpaceBoundary" = "IFC schema entity, cited in the area-standards comparison"
+"BitmapText" = "PixiJS class, cited in the renderer strategy"
+"FormData" = "browser DOM API"
+"HttpClient" = "IronPython/.NET, used by the extractor's transport discussion"
+"StringContent" = ".NET, same discussion"
+
+# --- Prose that happens to match an identifier shape. ---
+"Comments" = "prose — the English word, in STRATEGY-ENTITIES' authored-data list"
+"DELETE" = "prose — the HTTP verb, in STRATEGY-SECURITY's method table"
+
+# --- Deliberately illustrative placeholders. ---
+"foo.rs" = "CODING-CONVENTIONS' worked example of a module split; not a real file"
+"crate::foo::Bar" = "same worked example"
+"foo.ts" = "CODING-CONVENTIONS:128's 'foo.ts beside foo.test.ts' co-location example"
+
+# --- Designs recorded but not built. Absence is the documented state. ---
+"DocumentIndex" = "STRATEGY-AUTHORED is flagged 'design settled, not built'"
+
+# --- History written on purpose: the doc names an old symbol to explain a
+#     rename or a split. Deleting these names would make the docs worse, not
+#     better.
+#
+#     These are SCOPED (`symbol@doc`) rather than global, so the same name used
+#     as a live reference in some other document is still reported. A bare
+#     `contract.rs` key would have silenced the genuine STRATEGY.md:206 hit that
+#     the 2026-08-08 review found. ---
+"DrofusRecord" = "STRATEGY-SOURCES:65 explains 'ReferenceRecord, renamed from DrofusData/DrofusRecord'"
+"BuiltinProperties" = "STRATEGY-SOURCES:236 describes a v3 design that was reconsidered"
+"DrofusSource@STRATEGY-SERVER.md" = "names the pre-generalisation type to explain what ReferenceOrigin replaced"
+"contract.rs@CODING-CONVENTIONS.md" = "the measured-module note records the pre-split size and that the split happened"
+"contract.rs@STRATEGY-ENTITIES.md" = "Decision 4 says 'the former contract.rs' to name the split doors triggered"

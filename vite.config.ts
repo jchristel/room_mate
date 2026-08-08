@@ -8,7 +8,7 @@ import { resolve } from "node:path";
 //
 // That shape is deliberate and is the reason the migration is reviewable: the
 // page keeps its inline script, and the typed renderer arrives beside it rather
-// than replacing it. See docs/PLAN-webgl-renderer.md, "The migration boundary".
+// than replacing it. See docs/Superseded/PLAN-webgl-renderer.md, "The migration boundary".
 export default defineConfig({
   build: {
     lib: {

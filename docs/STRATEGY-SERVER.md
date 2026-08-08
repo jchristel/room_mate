@@ -469,7 +469,9 @@ each module carrying its rationale in a header, all with unit tests.
   validated (source-native, vary — an unresolvable name just renders grey
   client-side, the `room_label` precedent). The mode/colouring enums are internally-tagged struct variants
   (`ColourMode` on `kind`, `Colouring` on `style`), which round-trip through
-  toml exactly like `DrofusSource` — verified by `test_settings_toml_round_trip`.
+  toml exactly like `ReferenceOrigin` (the `#[serde(tag = "type")]` enum that
+  replaced the old `DrofusSource` when sources were generalised) — verified by
+  `test_settings_toml_round_trip`.
 
 - **Area policy (`[areas]` in project settings) — the two facts Revit does not
   know.** The opposite of colour plans: the server *uses* every field, so it
@@ -655,8 +657,9 @@ each module carrying its rationale in a header, all with unit tests.
   `qa = "ignore"` is not (it says whether the QA pass checks one, and
   comparison has its own explicit property list).
 
-- **dRofus upload ingest (`POST /projects/{id}/drofus`) + snapshotted
-  storage.** The previously-deferred dRofus-as-snapshotted-source (see
+- **Reference-source upload ingest (`POST /projects/{id}/reference/{source}`) +
+  snapshotted storage.** The previously-deferred dRofus-as-snapshotted-source,
+  since generalised to any configured source (see
   [Sources](STRATEGY-SOURCES.md) for the source-model side). Raw `text/csv`
   body — the `/rooms/stream` raw-body precedent, no multipart dependency —
   with the snapshot id as `?taken_at=`, resolved/validated/echoed through the
@@ -679,10 +682,10 @@ each module carrying its rationale in a header, all with unit tests.
   older backfill correctly doesn't displace a newer one). Bootstrap
   consequence: the store is constructed *before* the project bundles load,
   and `load_project_bundle` takes it as a parameter, since an
-  `upload`-sourced project hydrates its dRofus data from the store. Read
-  side: `GET /projects/{id}/drofus/snapshots` (soft-empty listing) and
-  `GET /projects/{id}/drofus/latest` (parsed summary, 404 when none) via a
-  new `service/drofus.rs`, both also exposed as MCP tools (see
+  `upload`-sourced project hydrates its reference data from the store. Read
+  side: `GET /projects/{id}/reference/{source}/snapshots` (soft-empty listing)
+  and `GET /projects/{id}/reference/{source}/latest` (parsed summary, 404 when
+  none) via `service/reference.rs`, both also exposed as MCP tools (see
   [MCP](STRATEGY-MCP.md)).
 
 **Deferred (design settled, not built):** snapshot delete UI (the history

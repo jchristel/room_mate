@@ -7,41 +7,24 @@ for the phase selection every primary entity after rooms needs; the sections
 below now say, per decision, what was built and where reality departed from the
 sketch.
 
-> ## What survived contact, in one place
+> **Two supersessions govern this document.**
+> [PLAN-phasing.md](Superseded/PLAN-phasing.md) carries the full rationale behind
+> Decision 2 and is authoritative wherever the two drift.
+> [PLAN-generalisation.md](Superseded/PLAN-generalisation.md) carries an outcome
+> note per prerequisite — R1 through R4, all landed — and is where the reasoning
+> behind the seams doors were built on lives. R1 and R2 landed as their own
+> change *before* any door code, so the `Door` contract was written against a
+> settled precedence rule rather than racing it; no `put_doors` was ever written
+> beside `put`.
 >
-> **The prerequisites were met.** R1 and R2 landed as their own change *before*
-> any door code, so the `Door` contract was written against a settled precedence
-> rule rather than racing it — see
-> [PLAN-generalisation.md](Superseded/PLAN-generalisation.md), which carries an outcome
-> note per item. No `put_doors` was ever written beside `put`.
->
-> **R2's open question did not resolve either way this document expected**, and
-> the answer came from the sample export rather than from first principles. The
-> rule is: **a tier wins only when it is `Present`** — walk instance then type,
-> return the first *non-empty* value. Plain shadowing hides `Door Leaf Thickness
-> = 40.0` behind a blank instance parameter on 22 of the 26 sample doors;
-> treating a name in both tiers as a finding fires on 26 of 26, because Revit
-> carries `Workset` and `Edited by` on instances and types alike. Decision 4's
-> separation is preserved by the two maps staying two maps on the wire, not by
-> making an overlap an error.
->
-> **R4 is the one prerequisite doors deliberately shipped without**, and that was
-> the plan: it lands with doors' *first reference source*, and doors shipped with
-> none. Until then `[sources.reference.*]` still means "for rooms" —
-> [Sources](STRATEGY-SOURCES.md) records the gap.
->
-> **Three things this document asserts about the export are now stale** and are
-> corrected in place below: the door id exists, the room id space is verified,
-> and the phase ids are moot. See
-> [Blockers in the current export](#blockers-in-the-current-export).
-
-> **Decision 2 (phasing) is built, and has been rewritten here to match.** It
-> shipped ahead of doors and several details changed on contact with the code;
-> rather than leave the original sketch standing behind a warning, 2a and 2c now
-> describe what exists and say what they replaced. **[PLAN-phasing.md](Superseded/PLAN-phasing.md)
-> carries the full rationale** and is authoritative if the two ever drift. The
-> The same treatment has since been applied to Decisions 3 through 6, each of
-> which now carries what shipped and where it departed from the sketch.
+> **A "what survived contact" summary used to sit here and has been retired.**
+> Every decision below now carries its own *as built* note saying what shipped
+> and where it departed from the sketch, which is where a reader looking at a
+> decision will actually be. A summary duplicating six of those had to be kept in
+> step with all six, and was not: it went on describing R4 as unbuilt for three
+> days after it landed. The one rule that lived *only* in that summary — R2's
+> tier precedence, **a tier wins only when it is `Present`** — now sits in
+> Decision 4, which is the decision it constrains.
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Sources](STRATEGY-SOURCES.md) · [Server](STRATEGY-SERVER.md) ·
@@ -62,7 +45,7 @@ lands](#where-the-rest-of-this-lands).
 
 ## The problem this answers
 
-[Sources](STRATEGY-SOURCES.md) already names the boundary this doc crosses:
+[Sources](STRATEGY-SOURCES.md) named the boundary this doc crosses:
 
 > `[sources.reference.*]` currently means "reference sources *for rooms*." A
 > door schedule needs a *doors entity* first, not just another entry under this
@@ -70,12 +53,14 @@ lands](#where-the-rest-of-this-lands).
 
 `docs/Superseded/HANDOVER-reference-sources.md` calls that **axis 1** (the model isn't only
 rooms) and distinguishes it from **axis 2** (multiple reference sources for one
-entity). Axis 2 has shipped — `[sources.reference.<name>]`, the
-`/projects/{id}/reference/{source}` routes, `ProjectReferenceSource`. Axis 1 has
-not: `/rooms` assembles rooms and nothing else, so a door schedule has nothing
-to attach to.
+entity). Axis 2 shipped first — `[sources.reference.<name>]`, the
+`/projects/{id}/reference/{source}` routes, `ProjectReferenceSource` — while
+axis 1 had nothing: `/rooms` assembled rooms and nothing else, so a door
+schedule had nothing to attach to. **Both have since shipped**, and the boundary
+quoted above closed with R4 (2026-08-05): a reference source now declares which
+entity it is for, defaulting to `"rooms"`.
 
-Doors are the first axis-1 entity. FFE is the next. Getting the generalization
+Doors were the first axis-1 entity. FFE is the next. Getting the generalization
 right once is cheaper than getting it wrong twice.
 
 ## Decision 1: what makes something a primary entity
@@ -273,10 +258,20 @@ prompt entirely when a document has exactly one phase — which covers most mode
 > trait boundary** rather than a `kind` parameter over a fixed payload type —
 > see [Server](STRATEGY-SERVER.md)'s storage section for why that was forced.
 >
-> One departure on the read side: **`GET /doors` takes no `?building=`**, unlike
-> the "exactly as `/rooms`" this section promises. A door's building depends on
-> which of its rooms owns it — Decision 6's open question — and a scope that
-> silently picked an answer would settle it by accident.
+> One departure on the read side, **since closed**: `GET /doors` first shipped
+> without `?building=`, unlike the "exactly as `/rooms`" this section promises.
+> A door's building depends on which of its rooms owns it — at the time
+> Decision 6's open question — and a scope filter that silently picked an answer
+> would have settled that by accident. Deciding it is what made the parameter
+> askable, so `/doors` now matches this section's promise after all: a door
+> answers `?building=` through its owning room, and a homeless door matches no
+> building at all. See Decision 6's "As built".
+>
+> Worth keeping rather than deleting, because it is the cheap version of a
+> recurring trade: a scope filter is a *question*, and a question whose answer
+> depends on an undecided policy is better refused than guessed. The parameter
+> arriving late cost nothing; a `?building=` that had quietly meant `to_room`
+> would have been a wrong answer nobody could see.
 
 Endpoints mirror rooms, not reference sources:
 
@@ -303,7 +298,7 @@ doors, not after FFE makes it a fourth.
 ## Decision 4: the door contract shape
 
 > **Built, and every bullet below held.** The types live in
-> [`src/contract/doors.rs`](../src/contract/doors.rs) — the split of
+> [`src/contract/doors.rs`](../src/contract/doors.rs) — the split of the former
 > `contract.rs` into `contract/` that CODING-CONVENTIONS' measured-module note
 > named the door types as the trigger for. (Rooms deliberately did *not* move out
 > alongside them: nothing motivated it, and moving code for symmetry is how a
@@ -316,8 +311,17 @@ doors, not after FFE makes it a fourth.
 > carries the level set a door's `level_id` points into, and a second copy could
 > only disagree.
 >
-> The instance-vs-type *lookup* rule, which this section rightly refuses to
-> settle here, is R2's and is stated in the summary at the top of this document.
+> **The instance-vs-type lookup rule, which this section rightly refuses to
+> settle, is R2's — and it did not resolve either way this document expected.**
+> The answer came from the sample export rather than from first principles:
+> **a tier wins only when it is `Present`** — walk instance then type, return the
+> first *non-empty* value. Plain shadowing hides `Door Leaf Thickness = 40.0`
+> behind a blank instance parameter on 22 of the 26 sample doors; treating a name
+> present in both tiers as a *finding* fires on 26 of 26, because Revit carries
+> `Workset` and `Edited by` on instances and types alike. This section's
+> separation of the two tiers survives that, and it survives it the right way:
+> the two maps stay two maps **on the wire**, rather than an overlap between them
+> being made an error.
 
 Full annotated types in [`src/contract/doors.rs`](../src/contract/doors.rs). The
 decisions behind them:
@@ -687,8 +691,12 @@ All done, in the same pass that marked this document built:
 
 Still open after doors shipped:
 
-- **R4 — entity-scoped reference sources.** The one prerequisite doors shipped
-  without, on purpose; lands with doors' first reference source (Decision 5).
+- ~~**R4 — entity-scoped reference sources.**~~ **Landed 2026-08-05**
+  ([Sources](STRATEGY-SOURCES.md)). Doors shipped without it on purpose, to land
+  with their first reference source — but that trigger turned out to be
+  **circular**, since nothing could declare such a source until the config could
+  express one. Every source now declares an `entity`, defaulting to `"rooms"`, so
+  a source scoped to one entity never joins the other.
 - ~~**Door ownership.**~~ **Decided and built** (Decision 6) — including
   `?building=` on `/doors`, which a door answers through its owning room. What
   remains open underneath it is a *data* question rather than a design one: the

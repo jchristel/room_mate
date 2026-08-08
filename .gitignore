@@ -3,7 +3,7 @@
 debug
 target
 
-# Frontend toolchain (docs/PLAN-webgl-renderer.md). Only the INSTALL tree is
+# Frontend toolchain (docs/Superseded/PLAN-webgl-renderer.md). Only the INSTALL tree is
 # ignored -- `package-lock.json` is tracked, and so is the build output at
 # static/vendor/renderer.bundle.js. That artifact is committed deliberately, so
 # a fresh clone plus `cargo run` serves a working viewer with no node

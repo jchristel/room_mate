@@ -1,6 +1,6 @@
 {
   // Scoped to `src-js/` only. `static/`'s inline and classic scripts stay
-  // untyped JavaScript on purpose (docs/PLAN-webgl-renderer.md, "The migration
+  // untyped JavaScript on purpose (docs/Superseded/PLAN-webgl-renderer.md, "The migration
   // boundary"), so `checkJs` is off and `include` never reaches them — a
   // half-checked legacy file reports noise nobody has agreed to fix.
   "compilerOptions": {
