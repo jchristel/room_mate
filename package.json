@@ -2,7 +2,7 @@
   "name": "roommate-frontend",
   "private": true,
   "type": "module",
-  "description": "Build for the viewer's plan renderer. See docs/PLAN-webgl-renderer.md.",
+  "description": "Build for the viewer's plan renderer. See docs/Superseded/PLAN-webgl-renderer.md.",
   "scripts": {
     "build": "vite build",
     "dev": "vite",

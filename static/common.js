@@ -4,7 +4,7 @@
 // wiring.
 //
 // "No build step" USED to be the reason for that shape. It no longer is: the
-// frontend has a Vite/TypeScript toolchain (docs/PLAN-webgl-renderer.md), and
+// frontend has a Vite/TypeScript toolchain (docs/Superseded/PLAN-webgl-renderer.md), and
 // this file stays a classic script for a narrower reason — it is loaded by four
 // pages (index, graph, settings, comparison), so converting it would drag all
 // four into needing the bundle for no benefit. See CODING-CONVENTIONS.md,

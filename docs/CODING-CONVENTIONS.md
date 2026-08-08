@@ -18,34 +18,46 @@ write it" that sits underneath.
 - A type's inherent `impl { fn validate() }` stays *with the type*; only
   standalone free functions move to a sibling file (see `settings/`).
 
-**Where the codebase actually stands (measured 2026-08-01, after phasing).**
-Eleven modules are past the ~500 real-line trigger — `service/rooms.rs` (1,099),
-`service/areas.rs` (1,086), `settings/mod.rs` (826), `service/adjacency.rs`
-(763), `handlers.rs` (744), `bin/mcp.rs` (692), `service/validation.rs` (646),
-`contract.rs` (615), `storage/fs.rs` (583), `settings_api.rs` (511). That is not
-automatically a defect: the trigger is "worth a second look", not a limit. But
-only `adjacency.rs` writes down *why* it declined to split, and a rule nothing is
-measured against stops being a rule.
+**Where the codebase actually stands (re-measured 2026-08-08, after doors).**
+Twelve modules are past the ~500 real-line trigger — `service/rooms.rs` (1,165),
+`service/areas.rs` (1,086), `handlers.rs` (1,057), `settings/mod.rs` (1,034),
+`service/validation.rs` (947), `service/adjacency.rs` (772), `bin/mcp.rs` (762),
+`service/comparison.rs` (690), `contract/mod.rs` (690), `storage/fs.rs` (598),
+`state.rs` (532), `settings_api.rs` (511). That is not automatically a defect:
+the trigger is "worth a second look", not a limit. But only `adjacency.rs`
+writes down *why* it declined to split, and a rule nothing is measured against
+stops being a rule.
 
-Three moved materially since the last measurement, all from phase support, and
-each is a different answer:
+**These figures are now checked rather than merely recorded.**
+`scripts/weekly_review.py` re-measures every number above and reports any that
+has drifted more than 10%, counting non-test lines as everything before the
+first `#[cfg(test)]`. That check exists because the previous set sat here from
+2026-08-01 until it had drifted as far as +47% (`service/validation.rs`) and was
+naming a file that no longer existed (`contract.rs`) — which is precisely the
+failure the paragraph above warns about, committed by the paragraph itself.
+
+Three moved materially in the phasing change that preceded the 2026-08-01
+measurement, all for the same reason, and each is a different answer:
 
 - **`handlers.rs` (586 → 744)** absorbed the ingest phase rules (`decide_phase`,
   `store_or_quarantine`) plus the pending routes. Ingest is the one part of this
   file with no `service/` counterpart — it has no derive logic worth sharing with
   MCP, which exposes no ingest — so it accretes here by design. The seam if it
   ever splits is obvious and clean: ingest versus the read adapters.
-- **`contract.rs` (519 → 615)** took the phase field and its two helpers.
-  [Entities](STRATEGY-ENTITIES.md) called for splitting this into `contract/`
-  when doors land, and that argument still holds — doors are a *distinct entity*,
-  a natural seam rather than a mechanical one. Phase alone did not justify it.
+- **`contract.rs` (519 → 615) took the phase field and its two helpers, and has
+  since split.** [Entities](STRATEGY-ENTITIES.md) called for splitting it into
+  `contract/` when doors landed, and that is what happened: `contract/mod.rs`
+  (690) plus `contract/doors.rs` (321). Doors were a *distinct entity* — a
+  natural seam rather than a mechanical one — which is why they justified the
+  split and phase alone had not.
 - **`storage/fs.rs` (→ 583)** is newly over the trigger, from the pending-snapshot
   quarantine. It stays whole: it is one impl of one trait, and splitting an impl
   from its trait contract would separate the rules from the code that keeps them.
 
-Two of the long-standing eleven are still worth naming specifically:
+Two of the long-standing twelve are still worth naming specifically:
 
-- **`settings/mod.rs` at 804 lines is the one that reads as unfinished.** The
+- **`settings/mod.rs` at 1,034 lines is the one that reads as unfinished**, and
+  it has grown ~25% since it was first named here. The
   `settings/` split was done — and is cited above as the worked example — yet
   `mod.rs` kept the bulk rather than becoming the thin re-export the pattern
   describes. The types are already grouped by concern in the file (area policy,

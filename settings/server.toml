@@ -1,6 +1,6 @@
 # Sample roommate server-wide settings: storage backend + dev seed. Split out
 # of the old single settings.toml (see
-# ../docs/HANDOVER-per-project-settings.md) because these two are properties
+# ../docs/Superseded/HANDOVER-per-project-settings.md) because these two are properties
 # of the running server, not of any one project -- per-project classification
 # rules and dRofus sources now live one file per project under ./projects/.
 #

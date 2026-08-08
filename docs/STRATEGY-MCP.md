@@ -42,7 +42,7 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   forwarded upload.**
   `list_projects`, `list_buildings`, `get_rooms` (project/building/milestone/
   property filters optional — see the property-filter bullet below),
-  `get_doors` (project/milestone/property filters, no building — see below),
+  `get_doors` (project/building/milestone/property filters — see below),
   `get_validation`, `list_snapshots`,
   `get_latest_snapshot`, `get_pending_snapshot`, `list_milestones`,
   `compare_milestones`,
@@ -77,10 +77,18 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   reference sources. `compare_milestones` gained its `doors` section, including
   that doors are configured independently — an agent checking only the top-level
   `comparison_key_configured` would wrongly conclude nothing was comparable.
-  **`get_doors` has no `building` parameter**, and the description says so
-  rather than staying silent: a door's building would depend on which of its two
-  rooms owns it, which is Decision 6's open question. An absent parameter an
-  agent can see explained is better than one it retries.
+  **`get_doors` gained its `building` parameter when door ownership was
+  decided** ([Entities](STRATEGY-ENTITIES.md) Decision 6). It shipped without
+  one, and the description said so rather than staying silent — a door's
+  building depends on which of its two rooms owns it, and until that was settled
+  a scope filter would have decided it by accident. The principle then was that
+  an absent parameter an agent can see explained is better than one it retries.
+  **The same principle now governs what the description must say about the
+  parameter that exists**: a door attributed to no room — "homeless", an empty
+  `owner_rooms` — matches **no** building, so a building-scoped door query
+  silently omits them. That is a reported state rather than missing data, and an
+  agent that does not know it reads the omission as a data gap. Absence and
+  presence both need explaining; only the sentence changed.
   **Milestone reference pinning is inherited, not re-plumbed:** `get_rooms`'s
   `milestone` filter calls the same `assemble_rooms` the HTTP route does, and
   that function resolves a milestone's pinned snapshot per source below the
@@ -151,11 +159,16 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
   reference data loaded at *its* startup (registries aren't shared), while
   `list_reference_snapshots`/`get_reference_snapshot` read the shared store fresh
   and see the new upload immediately.
-- **`ServiceError` → `McpError` mapping.** `NotFound`/`BadInput` both become
-  `McpError::invalid_params` (MCP's tool-call error surface has no direct
-  404/400 split); `Internal` becomes `McpError::internal_error`. Required
-  giving `ServiceError` real `Display`/`Error` impls (previously `Debug`-only,
-  since nothing needed to stringify it before this).
+- **`ServiceError` → `McpError` mapping.** `Invalid` becomes
+  `McpError::invalid_params`, `Internal` becomes `McpError::internal_error` —
+  the MCP counterpart of the HTTP adapter's 400/500 split, mapped in each
+  adapter rather than in the domain layer. **There is no `NotFound` variant to
+  map**, and that is the design rather than an omission: a service that finds
+  nothing returns `Option::None`, which each adapter renders its own way (HTTP
+  404 or 204, a short plain-text block over MCP, whose tool-call error surface
+  has no status-code equivalent). Required giving `ServiceError` real
+  `Display`/`Error` impls (previously `Debug`-only, since nothing needed to
+  stringify it before this).
 - **`RoomsResult` derives `Serialize`; "nothing pushed yet" is not a field
   on it.** `assemble_rooms` returns `Option<RoomsResult>` — the old
   `store_empty` bool (a transport concern smuggled through the domain type;
@@ -207,22 +220,31 @@ Superseded/HANDOVER-service-layer.md for the extraction itself.
 
 ## Open items / things to watch
 
-- **F&E validation reuse gap applies here too.** The deferred-reuse note in
-  [Server](STRATEGY-SERVER.md) (`compute_validation` not routing through
-  `assemble_room`'s join) is unaffected by MCP existing — the MCP tool calls
-  the same `service::validation::compute_project_validation` the HTTP route
-  does, so whatever that function does or doesn't reuse is inherited as-is.
-- **New `service/` capabilities are a tool away, not a rewrite.** Per the
-  handover doc's whole premise: shortest path, F&E, drawings each become one
-  `service/` file, one HTTP route, and (optionally) one `#[tool]` method
-  here — none of the three touches the others. `get_adjacency` is the most
-  recent worked example, added alongside `service::adjacency` and its HTTP route
-  in the same move and sharing even the tolerance validation (`check_wall_max`
-  lives in the service, and both front doors call it before any room merge), so
-  the two cannot disagree on what a valid `wall_max` is.
-- **No resources or prompts exposed**, only tools — matches the handover
-  doc's "read side ... as tools" scope. Worth revisiting if an MCP client
-  wants to browse stored snapshots as resources rather than calling a tool
-  per query, but nothing today motivates it. (Host *packaging*, which used to be
-  the other open item here, is now done — see Implemented /
-  [mcp-host-setup.md](mcp-host-setup.md).)
+**One.**
+
+- **No resources or prompts exposed**, only tools — which matches the original
+  "read side … as tools" scope rather than falling short of it. Worth revisiting
+  if an MCP client wants to browse stored snapshots as *resources* instead of
+  calling a tool per query, but nothing today motivates it.
+
+Three items have left this list, and what closed each is worth more than the
+entry was:
+
+- **Host packaging** shipped — see Implemented and
+  [mcp-host-setup.md](mcp-host-setup.md).
+- **The F&E validation reuse gap was never an MCP item.** The tool calls the same
+  `service::validation::compute_project_validation` the HTTP route does, so
+  whatever that function reuses is inherited unchanged. The live note belongs to
+  [Server](STRATEGY-SERVER.md), and keeping a second copy here meant two places
+  to update for a gap that only ever existed in one.
+- **"A new `service/` capability is a tool away, not a rewrite" stopped being a
+  thing to watch and became a demonstrated property.** Each becomes one
+  `service/` file, one HTTP route, and optionally one `#[tool]` method, none
+  touching the others. `get_adjacency` was the first worked example — added
+  alongside `service::adjacency` and its HTTP route in a single move, sharing
+  even the tolerance validation (`check_wall_max` lives in the service, so the
+  two front doors cannot disagree on what a valid `wall_max` is). **Doors then
+  proved it at the scale of an entire second entity**: `get_doors` is one method
+  over `service::doors`, and the only MCP-specific work doors demanded was
+  correcting three tool *descriptions* — which is the claim above holding, and
+  also the reminder that descriptions are the part that does not come for free.

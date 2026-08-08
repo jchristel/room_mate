@@ -203,7 +203,7 @@ envelope**: the identity every upload type carries, rooms being the first.
 Any future upload (FFE, etc.) associates back to room data by exactly two
 keys — the snapshot id and the room id — so it must ride the same envelope
 and resolve its snapshot id through the same contract functions
-(`ensure_taken_at` / `validate_snapshot_id` in `contract.rs`), never a
+(`ensure_taken_at` / `validate_snapshot_id` in `contract/mod.rs`), never a
 reimplementation.
 
 The snapshot id (`snapshot.taken_at`) is an **RFC3339 date-time expressed in

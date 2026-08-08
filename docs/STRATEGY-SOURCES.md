@@ -30,7 +30,7 @@ Revit.
   change — the seam that matters once names diverge across sources (a second
   producer, or a non-English Revit UI). No entry for a name/source falls back
   to matching the name verbatim, which is exactly today's single-source
-  behaviour. Implemented server-side (`settings.rs`, `contract.rs`'s
+  behaviour. Implemented server-side (`settings/`, `contract/mod.rs`'s
   `lookup_property`; see [Server](STRATEGY-SERVER.md)), but it exists entirely
   because sources vary — that's why it's documented here.
 - **`model.source`.** Every payload declares which producer created it (e.g.
