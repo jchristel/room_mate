@@ -31,7 +31,7 @@ import { buildLabels, type RoomLabel } from "./labels.js";
 import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js";
 import { buildDoorGlyph } from "./doorGlyph.js";
 import { DoorIndex, RoomIndex, type PickableDoor } from "./spatial.js";
-import { fitViewToAspect } from "./viewport.js";
+import { fitViewToAspect, labelTransform } from "./viewport.js";
 
 /** Stroke widths, in CSS pixels — the same numbers the stylesheet uses, so the
  *  two renderers can be compared without converting anything. */
@@ -182,8 +182,13 @@ export class GlPlanRenderer implements PlanRenderer {
       const fit = () => {
         const w = Math.max(1, parent.clientWidth);
         const h = Math.max(1, parent.clientHeight);
-        if (w === app.renderer.width / app.renderer.resolution && h === app.renderer.height / app.renderer.resolution)
-          return;
+        // Compared in CSS pixels, on both sides. `renderer.width` is ALREADY
+        // CSS pixels (see `#pushView`), so the old `/ resolution` here was
+        // asking whether the parent was 1/DPR of the canvas -- a question that
+        // is trivially "no" at DPR 1 and accidentally "yes" whenever a zone
+        // happens to land on that ratio, which skipped the resize and left the
+        // canvas at Pixi's default 800x600 inside it.
+        if (w === app.renderer.width && h === app.renderer.height) return;
         app.renderer.resize(w, h);
         this.#pushView();
         this.#render();
@@ -806,26 +811,42 @@ export class GlPlanRenderer implements PlanRenderer {
   #pushView(): void {
     const app = this.#app;
     if (!app) return;
-    const pxW = app.renderer.width;
-    const pxH = app.renderer.height;
+    // `renderer.width` COUNTS CSS PIXELS, NOT DEVICE PIXELS. It is
+    // `view.texture.frame.width` — the logical size — while the drawing buffer
+    // is that times the resolution. Reading it the other way is invisible at
+    // DPR 1 and wrong at every other DPR, which is exactly how it shipped: it
+    // put CSS pixels into `uPxSize` (documented as device pixels, and the space
+    // lines.ts measures stroke widths in, so every stroke and dash came out DPR
+    // times too thick) and divided by the resolution a second time for the
+    // labels (so each label sat at 1/DPR of its correct distance from the
+    // canvas corner — a room's name several rooms away from its room).
+    //
+    // Both units are in the names below, because the two are the same number on
+    // the machine most of this gets looked at on.
+    const cssW = app.renderer.width;
+    const cssH = app.renderer.height;
     const dpr = app.renderer.resolution;
+    const devW = cssW * dpr;
+    const devH = cssH * dpr;
     const eff = this.#effectiveView();
-    this.#grid?.setView(eff, pxW, pxH, dpr);
-    this.#holeLines?.setView(eff, pxW, pxH, dpr);
-    this.#outlines?.setView(eff, pxW, pxH, dpr);
-    this.#fills?.setView(eff, pxW, pxH);
-    this.#hoverMesh?.setView(eff, pxW, pxH);
-    this.#doorMesh?.setView(eff, pxW, pxH);
+    this.#grid?.setView(eff, devW, devH, dpr);
+    this.#holeLines?.setView(eff, devW, devH, dpr);
+    this.#outlines?.setView(eff, devW, devH, dpr);
+    this.#fills?.setView(eff, devW, devH);
+    this.#hoverMesh?.setView(eff, devW, devH);
+    this.#doorMesh?.setView(eff, devW, devH);
     // Labels live in world space, so the scene transform carries them. This is
     // the ONE place a container transform is used, and it is correct here
     // precisely because label text SHOULD scale with the view — unlike strokes,
     // which must not (see lines.ts).
+    //
+    // CSS pixels, because that is the unit Pixi's stage is in: the resolution is
+    // applied below the stage, where it maps onto the drawing buffer. See
+    // `labelTransform`, which has no DPR parameter for that reason.
     if (this.#labelContainer) {
-      // ONE scale for both axes, from the aspect-corrected rect. Two different
-      // scales here would stretch the glyphs even with the geometry corrected.
-      const s = pxW / dpr / eff.w;
-      this.#labelContainer.scale.set(s, s);
-      this.#labelContainer.position.set(-eff.x * s, -eff.y * s);
+      const t = labelTransform(eff, cssW);
+      this.#labelContainer.scale.set(t.scale, t.scale);
+      this.#labelContainer.position.set(t.x, t.y);
     }
   }
 
