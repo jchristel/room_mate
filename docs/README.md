@@ -14,7 +14,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | [Sources](STRATEGY-SOURCES.md) | Data sources strategy |
 | [MCP](STRATEGY-MCP.md) | Model Context Protocol integration strategy |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data & documents — connections, PDFs, hierarchy scopes _(design settled, not built)_ |
-| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, what generalizes from rooms to doors and FFE, and how a Revit phase scopes a push _(**built** — each decision now records what shipped and where it departed from the sketch; read its "Deferred" list for what is still open, chiefly R4 and which room owns a door)_ |
+| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, what generalizes from rooms to doors and FFE, and how a Revit phase scopes a push _(**built** — each decision now records what shipped and where it departed from the sketch; read its "Deferred" list for what is still open, chiefly the doors exporter's verification against a live Revit document and a door connectivity graph. R4 and door ownership both closed and are struck through there)_ |
 | [Security](STRATEGY-SECURITY.md) | Threat model for the LAN-reachable deployment: trust boundary, invariants, settings backups, rate limiting |
 
 ## Implementation notes
@@ -22,7 +22,7 @@ design decisions behind the Revit → Rust → browser room data pipeline.
 | Document | Description |
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
-| [Plan: phasing](Superseded/PLAN-phasing.md) | **Built (P1–P7), extractor half unverified against Revit.** The ten decisions behind Revit phase support and the phases that implemented them, plus an "As built" section recording where the result departs from the plan |
+| [Plan: phasing](Superseded/PLAN-phasing.md) | **Built (P1–P7) and closed** — the extractor half was run against a real Revit document on 2026-08-03, which found the failure the plan had named as the first thing to check. The ten decisions behind Revit phase support and the phases that implemented them, plus an "As built" section recording where the result departs from the plan |
 | [Plan: generalisation](Superseded/PLAN-generalisation.md) | **R1 through R4 all landed** (R4 on 2026-08-05). Four seams that grew room-shaped because rooms were the only primary entity. The two doors prerequisites landed ahead of any door code — read R2's outcome note for the tier-precedence rule the `Door` contract is written against (a tier wins only when it is `Present`), and R1's for why `list_models()` still means "models with rooms". R4's own trigger turned out to be circular, which its header records |
 
 > **Reading either plan above: do not trust their `file.rs:NNN` deep

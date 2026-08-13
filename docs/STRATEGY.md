@@ -38,9 +38,11 @@ design docs: one for data the user authors, one for the entities beyond rooms:
   push. Doors shipped as the first entity after rooms; FFE is the next, and this
   is the doc that records how much of it is already free. Its phasing half was
   built first — see [PLAN-phasing.md](Superseded/PLAN-phasing.md), which supersedes several
-  of its details. **Decision 6's open question — which of a door's two rooms
-  owns it — is still open**, and doors deliberately shipped without answering
-  it.
+  of its details. **Decision 6's question — which of a door's two rooms owns it
+  — is decided and built** (2026-08-06): `[doors] room_attribution`, a
+  precedence chain defaulting to the room a door opens *into*, else the one it
+  opens *from*, else homeless. Derived at read time and never stored, so
+  changing the policy changes every answer and rewrites nothing.
 - **[Security](STRATEGY-SECURITY.md)** — the threat model for the near-future
   shift from a loopback-only bind to a LAN-reachable server: what a hostile
   local-network user can and cannot do, and the invariants (no delete route,

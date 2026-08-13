@@ -72,28 +72,29 @@ side should shape future server endpoints.
   cadence (gated by a shallow id-list diff so they don't fight an in-progress
   selection), which is also how a newly-pushed project shows up without a
   page reload.
-- **Doors are served but not drawn — deliberately, and the fetch decision is
-  already made.** `/doors` ships with footprints, both room references and the
-  full property set, and nothing in the viewer reads it. That is scope, not an
-  oversight: doors landed as a data pipeline first, so the server side could be
-  verified against real geometry before any pixel depended on it.
+- **Doors get their own fetch, not a ride on the 2s room poll.** `pollDoors()`
+  builds `/doors` from the same global scope `roomsUrl()` uses, and runs in its
+  own `try` so a doors read that fails or 204s cannot take the rooms down with
+  it — a model with rooms and no doors is legitimate. The split follows the
+  `/adjacency` precedent above but for the stronger of its two reasons:
+  `/adjacency` is on-demand because it is *expensive*; doors are separate
+  because they are *independently versioned and independently pushed*. A doors
+  snapshot has its own `taken_at`, its own milestone pins (`door_attachments`)
+  and its own `revision`, so folding it into the room poll's payload would make
+  one revision stand for two lineages that move apart. The second poll costs a
+  string compare, not a re-render: `/doors`'s `revision` answers exactly the
+  "has anything actually changed?" question `/rooms`'s does.
 
-  When a viewer is built, **doors get their own fetch, not a ride on the 2s room
-  poll** — the `/adjacency` precedent above, and for the stronger of its two
-  reasons. `/adjacency` is on-demand because it is expensive; doors are separate
-  because they are *independently versioned and independently pushed*: a doors
-  snapshot has its own `taken_at`, its own milestone pins
-  (`door_attachments`), and its own `revision`, so folding it into the room
-  poll's payload would make one revision stand for two lineages that move apart.
-  The `revision` field on `/doors` exists for exactly the same "has anything
-  actually changed?" comparison `/rooms` uses, so a second poll costs a string
-  compare, not a re-render.
+  **This was decided and written down while doors were served and nothing drew
+  them**, which was scope rather than oversight — the pipeline was verified
+  against real geometry before any pixel depended on it. The glyphs (above)
+  landed on 2026-08-07 onto exactly this fetch shape, unchanged.
 
-  One thing a renderer will need that the server already provides and a reader
-  might not expect: **every door carries its `model_id`**, because room ids are
-  unique only within a model. Resolving a door to the rooms it connects means
-  matching within the same model — a viewer that flattens door references the
-  way `/rooms` flattens room ids would silently link the wrong rooms.
+  One thing the renderer needs that a reader might not expect: **every door
+  carries its `model_id`**, because room ids are unique only within a model.
+  Resolving a door to the rooms it connects means matching within the same
+  model — a viewer that flattens door references the way `/rooms` flattens room
+  ids would silently link the wrong rooms.
 - **Room labels: configurable, always-rendered, correctly layered.** `addLabel`
   renders `room.label` (the server-resolved, ordered field list — see
   [Server](STRATEGY-SERVER.md)'s `room_label` setting) instead of hardcoding

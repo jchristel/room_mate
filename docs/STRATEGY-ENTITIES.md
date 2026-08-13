@@ -401,29 +401,43 @@ decisions behind them:
 
 ## Decision 5: reference sources become entity-scoped
 
-> **Not built, on purpose — this is R4, and it is the one prerequisite doors
-> shipped without.** It must land *with* doors' first reference source: earlier
-> is a config field with no behaviour behind it, later is a back-compat
-> obligation the day someone relies on a table that silently means "rooms".
-> Doors shipped with no reference source, so nothing has started the clock.
+> **Built 2026-08-05 — this is R4, the last of the four generalisation
+> prerequisites and the one doors shipped without.** `ReferenceSourceConfig::entity`
+> carries it, defaulting to `rooms`.
 >
-> What the door work did settle is everything below the settings layer: the join
-> namespace stayed **flat**, and one `split_namespace` / `PropertyTiers` /
-> filter grammar now serves both entities — so R4 is a settings and wiring
-> change rather than a grammar fork. A source-qualified predicate on a door
-> today resolves `Absent` (matching nothing) rather than erroring, which is the
-> same answer a room gets for a source it did not join; the day R4 lands, that
-> predicate starts *matching* instead of changing status.
+> **The trigger this section set was circular, and that is the transferable
+> part.** It said R4 must land *with* doors' first reference source — earlier
+> being a config field with no behaviour behind it, later being a back-compat
+> obligation the day someone relied on a table that silently meant "rooms". But
+> nothing could *declare* a doors reference source until the config could
+> express one, so the clock it was waiting on could never start. A trigger that
+> names a downstream event has to be checked against whether that event can
+> occur while the thing it gates is still unbuilt.
+>
+> **What this section predicted about scope held exactly.** R4 was a settings
+> and wiring change rather than a grammar fork: the join namespace stayed
+> **flat**, and one `split_namespace` / `PropertyTiers` / filter grammar serves
+> both entities. The source-qualified predicate that used to resolve `Absent` on
+> a door — matching nothing, the same answer a room gets for a source it did not
+> join — now *matches* instead, which is the change of behaviour the field was
+> holding back.
+>
+> One thing the sketch did not anticipate: **`entity` has to be declared before
+> `fields`**. A scalar emitted after a sequence lands *inside* it when settings
+> are written back, so the field would silently become a member of the last
+> field entry. R3 had already measured that hazard and shipped the guard
+> (`test_toml_serializer_hoists_values_above_tables`); R4 is the first field
+> whose declaration order depends on it.
 
-`[sources.reference.<name>]` gains an optional `entity` field defaulting to
+`[sources.reference.<name>]` carries an optional `entity` field defaulting to
 `"rooms"`, so every existing settings file is unchanged and still means what it
-meant. `[[builtin_properties]]` gains the same field for the same reason: doors
+meant. `[[builtin_properties]]` carries the same field for the same reason: doors
 have their own `Mark`, `Level` and `Comments`, canonical names that collide with
 room ones under a different meaning.
 
-This is what retires the trap `docs/Superseded/HANDOVER-reference-sources.md` flagged and
+This is what retired the trap `docs/Superseded/HANDOVER-reference-sources.md` flagged and
 [Sources](STRATEGY-SOURCES.md) documented — that adding `[sources.reference.doors]`
-today parses, loads, and then silently no-ops, configured but joined nowhere. With
+parsed, loaded, and then silently no-opped, configured but joined nowhere. With
 `entity` present, an unjoinable configuration is a **loud startup failure**
 naming the unknown entity, per "loud startup over silent no-op".
 
@@ -533,7 +547,14 @@ changes every answer immediately and rewrites nothing.
 > The first two arrived with milestone comparison; the last two with the
 > ownership decision (Decision 6), which is why this block's
 > `reconcile_room_reference` is superseded — see there for why a property name
-> beat a bool. `door_label` is still absent: it has no viewer to feed.
+> beat a bool. `door_label` is **still absent, but no longer for the reason
+> first written here** — that it had no viewer to feed. The viewer landed
+> (2026-08-07) and does not label doors on the plan: a selected door's
+> properties render as DOM in the inspector, which answers "what is this door"
+> without adding text to the canvas. The label build is the measured build-cost
+> hot spot on a large level ([Browser](STRATEGY-BROWSER.md)), so per-door on-plan
+> text is a cost to take deliberately, not a gap to close by default. It is
+> ordinary unbuilt viewer work now, blocked on nothing.
 >
 > A third pin map arrived that this block does not mention:
 > `[[milestones]] door_attachments`, model id → doors snapshot id. A *separate*
@@ -543,7 +564,8 @@ changes every answer immediately and rewrites nothing.
 > coexisted.
 >
 > The `[sources.reference.hardware]` and `[[builtin_properties]] entity`
-> examples below are R4, and are still design — see Decision 5.
+> examples below are R4, which **landed 2026-08-05** — they are config the
+> loader parses, not a sketch. See Decision 5.
 >
 > ```toml
 > # As shipped, on the House A sample project:
@@ -683,7 +705,7 @@ All done, in the same pass that marked this document built:
 | [Index](STRATEGY.md) | ✅ doors as the third upload type, its independent `schema_version`, and the two ingest preconditions a dependent entity needs |
 | [Sources](STRATEGY-SOURCES.md) | ✅ the "no doors entity" boundary note replaced — it is now a *gap* R4 closes, not a boundary, and the note says what the door work already settled |
 | [Server](STRATEGY-SERVER.md) | ✅ the storage kind and the bytes-at-the-boundary trait, plus why the flat-merge stopgap stopped being harmless once room ids became a door's foreign key |
-| [Browser](STRATEGY-BROWSER.md) | ✅ doors are served and not drawn, and the fetch decision is recorded: their own poll, for a stronger reason than `/adjacency`'s |
+| [Browser](STRATEGY-BROWSER.md) | ✅ the fetch decision — their own poll, for a stronger reason than `/adjacency`'s — which is what shipped when the glyphs landed on 2026-08-07. The "served but not drawn" note this row originally recorded is gone with the thing it described |
 | [MCP](STRATEGY-MCP.md) | ✅ `get_doors`, the corrected `get_adjacency`, and why a stale tool description is a wrong answer rather than a doc debt |
 | [Conventions](CODING-CONVENTIONS.md) | nothing — every rule it states already covered this work, and the one thing it predicted (door types trigger the `contract/` split) happened as written |
 
@@ -704,8 +726,13 @@ Still open after doors shipped:
   26 House A doors, and QA now reports them. Three are doors where the geometry
   picks an exterior or circulation space over the served room, which is worth
   someone deciding about — but it is a modelling call, not a pipeline one.
-- **Any door viewer.** `/doors` is served and nothing draws it
-  ([Browser](STRATEGY-BROWSER.md)).
+- ~~**Any door viewer.**~~ **Built 2026-08-07** — each door draws as its
+  footprint with an arrow through the wall, in the WebGL renderer rather than on
+  the SVG overlay (`src-js/renderer/gl/doorGlyph.ts`), selectable and with its
+  own inspector ([Browser](STRATEGY-BROWSER.md)). The fetch prediction this
+  document made held: doors poll separately on their own `revision`, because
+  they are independently versioned and independently pushed. What is *not* built
+  is labelling — see `door_label` under [Settings changes](#settings-changes).
 - **Multi-phase comparison.** Explicitly out of scope (Decision 2).
 - **Door connectivity graph.** The endpoint and algorithm (Decision 6) — noting
   that the simple question ("which rooms does a door connect") is already a read
@@ -718,8 +745,12 @@ Still open after doors shipped:
   for 26 doors, and `type_id` is on the wire ready to key a shared table.
 - **Verifying the extractor against Revit.** The doors exporter is verified by
   running its real translation over a captured export; the `get_FromRoom`
-  accessor and the `OST_Doors` collector need a live document. Same standing as
-  the room extractor's phase filter.
+  accessor and the `OST_Doors` collector need a live document. **This is now the
+  only unverified half** — the room extractor's phase filter used to share this
+  standing and was run against a real Revit document on 2026-08-03, which found
+  the failure [PLAN-phasing.md](Superseded/PLAN-phasing.md) had named as the
+  first thing to check. That is the argument for doing the same here rather than
+  the reassurance that someone else is in the same position.
 - **FFE**, the next axis-1 entity. **The bet this document made is now
   testable**: if FFE needs anything beyond the phase envelope, a
   `kind`-parameterized store and a `PropertyTiers` impl, one of the decisions
