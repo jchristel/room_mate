@@ -45,6 +45,5 @@
 #     the 2026-08-08 review found. ---
 "DrofusRecord" = "STRATEGY-SOURCES:65 explains 'ReferenceRecord, renamed from DrofusData/DrofusRecord'"
 "BuiltinProperties" = "STRATEGY-SOURCES:236 describes a v3 design that was reconsidered"
-"DrofusSource@STRATEGY-SERVER.md" = "names the pre-generalisation type to explain what ReferenceOrigin replaced"
 "contract.rs@CODING-CONVENTIONS.md" = "the measured-module note records the pre-split size and that the split happened"
 "contract.rs@STRATEGY-ENTITIES.md" = "Decision 4 says 'the former contract.rs' to name the split doors triggered"

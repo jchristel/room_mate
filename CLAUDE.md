@@ -96,15 +96,16 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 
 ## Which document wins
 
-[`docs/README.md`](docs/README.md) indexes everything. Two supersessions matter:
+[`docs/README.md`](docs/README.md) indexes everything. **The strategy docs hold
+only what is *not* built; the code documents what is.** Shipping a feature
+includes deleting its description from the strategy doc — and does *not* mean
+growing the doc comment to compensate. The rule and its failure modes are in
+[`CODING-CONVENTIONS.md`](docs/CODING-CONVENTIONS.md) under "Code documents what
+is built"; read it before adding prose to a `STRATEGY-*.md`.
 
-- **Phase:** [`PLAN-phasing.md`](docs/Superseded/PLAN-phasing.md) is authoritative over
-  `STRATEGY-ENTITIES.md` Decision 2.
-- **Generalisation:** [`PLAN-generalisation.md`](docs/Superseded/PLAN-generalisation.md)
-  supplies the signatures `STRATEGY-ENTITIES.md` Decisions 3 and 5 only assert.
-
-Docs pin `file.rs:NNN` line numbers that have drifted — trust the *symbol* name,
-search for it, never jump to the line.
+`docs/Superseded/` is an archive — nothing there is live, live docs do not link
+into it, and it pins `file.rs:NNN` line numbers that have drifted. Trust the
+*symbol* name, search for it, never jump to the line.
 
 ## Verify before claiming done
 

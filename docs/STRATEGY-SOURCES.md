@@ -5,425 +5,92 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md) ·
 [Entities](STRATEGY-ENTITIES.md) · [Security](STRATEGY-SECURITY.md)
 
-Everything that supplies raw data into the pipeline: the Revit/pyRevit
-producer, and reference sources (external data joined onto rooms; dRofus is
-the one most projects configure, but the pipeline is keyed on N of them).
-Two different origins, same discipline — extract raw, let the server
-interpret. See the [Index](STRATEGY.md) for the "Revit extracts, Rust
-processes" principle and its disciplines (extract-dumb, ElementId
-stringification, schema versioning), which apply to every source, not just
-Revit.
+Everything that supplies raw data into the pipeline: the Revit/pyRevit producer,
+and reference sources (external data joined onto an entity; dRofus is the one
+most projects configure, but the pipeline is keyed on N of them).
 
-## Implemented
+**Open work only.** The producer, the loader, the join, the two-header CSV
+format and the entity-scoped source model all ship, and each carries its
+rationale where it is built — `src/reference.rs`, `src/service/rooms.rs`,
+`src/settings/`, and `extractor/pyRevit/`. What follows is what is *not* built,
+plus the two rules that govern the next source rather than the current ones.
 
-- **Room properties: a flat, source-native map (v5).** `Room.properties:
-  Map<String, { value, storage_type }>` — one bag per room, keyed by whatever
-  property name the producer's own source uses. Replaces the original v3
-  typed `builtin`/`custom` split, which assumed Revit's parameter set was a
-  fixed, guaranteed schema — an assumption that stops holding the moment a
-  second source (e.g. IFC, whose property sets are optional and
-  exporter-dependent) becomes plausible. `CustomValue::as_f64` does lazy,
-  best-effort numeric coercion, content-first, hint-guided.
-- **Settings-driven canonical property mapping.** `[[builtin_properties]]`
-  (`canonical`, `by_source: {source → raw name}`) resolves a stable name like
-  `"Area"` to the right raw property name per producer, without a Rust code
-  change — the seam that matters once names diverge across sources (a second
-  producer, or a non-English Revit UI). No entry for a name/source falls back
-  to matching the name verbatim, which is exactly today's single-source
-  behaviour. Implemented server-side (`settings/`, `contract/mod.rs`'s
-  `lookup_property`; see [Server](STRATEGY-SERVER.md)), but it exists entirely
-  because sources vary — that's why it's documented here.
-- **`model.source`.** Every payload declares which producer created it (e.g.
-  `"revit"`) — the key the mapping above resolves against. A plain string, not
-  a closed Rust enum: adding a source is a settings-file change, not a
-  recompile.
-- **`room_boundary`: the extractor now reads one *document* setting.** Until
-  this, the extractor read only elements. It now also reports the document's
-  `SpatialElementBoundaryLocation` — whether room boundaries sit on wall
-  centrelines or finish faces — as an optional envelope field, per model. This
-  stays inside "keep the extractor dumb on purpose" (STRATEGY.md): reading a
-  document option is *extraction*, not computation, and it is the second
-  document-level fact to ride the envelope after `model_to_shared`. Why it has
-  to come from the source rather than be configured: the source **already knows
-  it authoritatively**, and a project can legitimately mix both regimes because
-  each linked model carries its own setting — so a project-level declaration
-  could only ever be a fallback, which is exactly what `[areas]
-  boundary_location` is. Consumed by `service::areas` (which sizes its wall zone
-  by it) and `service::adjacency` (which defaults its gap tolerance from it); an
-  extractor that does not send it is a normal state, not a defect. Produced in
-  `extractor/pyRevit/` (`room_mate.py` reads it per document, `post_rooms.py`
-  maps it to the wire): Revit's four boundary locations collapse to the
-  contract's two, because the only thing downstream cares about is whether
-  neighbouring rooms tile or are separated by a real gap. See
-  [Server](STRATEGY-SERVER.md).
-- **Reference-source loader + join, generalized to N named sources.**
-  `Sources.reference: BTreeMap<String, ReferenceSourceConfig>` — the map key
-  IS the join namespace (`[sources.reference.drofus]`, `[sources.reference.doors]`,
-  ...), replacing what used to be a single hardcoded `drofus` field. Each
-  source's CSV is a two-header-row export read into a keyed map (`by_id:
-  BTreeMap<String, ReferenceRecord>`, in `src/reference.rs` — `ReferenceData`/
-  `ReferenceRecord`, renamed from `DrofusData`/`DrofusRecord` when this
-  generalized); joined onto rooms at `/rooms` response assembly as its own
-  sub-object per source, leaving the stored snapshot raw. `RoomResponse`
-  flattens both `room` and its `reference: BTreeMap<String, ReferenceRecord>`
-  onto the same JSON object, so a room's wire shape carries one top-level key
-  per *joined* source (`room.drofus`, `room.doors`, ...) exactly as the
-  single-source shape did before — a project with only dRofus configured is
-  byte-identical on the wire to before this generalized. `ReferenceOrigin`
-  (`#[serde(tag = "type")]`) now has **one** live variant, `Upload`; an `Api`
-  variant later still slots in with no other consumer touched. (`File { path }`
-  survives as a deserializable migration tripwire only — see "Uploads are the
-  only origin" below.) The loader itself is **byte-source-agnostic**
-  (`load_reference_from_reader`, with a bytes wrapper; the bytes path
-  strips a leading UTF-8 BOM, which Excel CSV exports routinely carry and the
-  csv crate does not strip) — which source feeds it is dispatched per entry
-  in `bootstrap::load_project_bundle`, where the store is in scope. Row 2's
-  non-link columns are also retained, as `reconciliation: BTreeMap<String,
-  String>` (reference field label → the Revit property it corresponds to) —
-  see [Server](STRATEGY-SERVER.md)'s data validation report, which runs it
-  once per configured source.
-- **A reference source as an uploaded, snapshotted source (`type =
-  "upload"`).** A project declaring `[sources.reference.<name>] type =
-  "upload"` takes that source's data from `POST /projects/{id}/reference/{name}`
-  (raw `text/csv` body, drag-and-drop on the settings page or any HTTP
-  client). The pre-generalization `/projects/{id}/drofus` aliases existed only
-  until `settings.html` moved over, and have since been deleted — their sole
-  remaining function was to hardcode the string `"drofus"` in the router;
-  each accepted upload is stored as a dated snapshot in the `SnapshotStore`
-  (`<root>/<project>/reference/<name>/<taken_at>.csv`), the latest one
-  hydrated at startup and hot-swapped in after each upload. The snapshot id
-  rides the shared upload envelope's rules via `?taken_at=` (see
-  [Index](STRATEGY.md)). A project with the upload source but no upload yet
-  is a legitimate "not configured yet" state, not a startup error — its
-  `fields` get shape-only validation until the first CSV supplies a label
-  set. `Milestone.reference_snapshots: BTreeMap<String, String>` (source name
-  → pinned snapshot id) is the storage groundwork milestones use to pin a
-  source's data as it stood at a milestone — dRofus was the first (and for a
-  long time only) entry; it's now one key among however many sources a
-  project configures.
-- **Per-source, per-column type/QA declarations (`ReferenceSourceConfig.fields`).**
-  Each reference source owns its own field list — a project with two sources
-  (say dRofus and a door schedule) declares two independent column
-  vocabularies, not one shared list. One declaration per column — `label`
-  (matches row 1), an optional `type` (`string` default, `numeric`, or
-  `date`), an optional `format` (required, and only meaningful, when `type =
-  "date"` — a chrono strftime-style pattern, since a reference export
-  typically hands dates back as formatted text, e.g. `"6/29/2026 5:01:01 PM
-  +10:00"`, not a structured value), an optional `revit_format` (a second
-  strftime pattern for the *Revit* side of a date comparison, when the room
-  property renders dates differently from the reference column — absent
-  means `format` covers both sides), and an optional `qa` override (`exact`
-  forces string comparison even when both sides parse as numbers; `ignore`
-  excludes the column from comparison *and* the coverage report entirely).
-  Deliberately **one** table answering "what is this column" per source, not
-  two: the QA override started life as its own standalone list
-  (`drofus_field_overrides`/`CompareMode`) until a colour-rooms-by-date
-  feature idea came up that needs to actually parse a column's type, not
-  just skip it in QA — a second, separate "what is this column" table would
-  only have drifted from the first, so the override was folded into this
-  more general per-column declaration instead. `type`/`format`/`revit_format`
-  now have their first consumer: [Server](STRATEGY-SERVER.md)'s validation
-  report parses a `date`-declared column's values with the declared
-  pattern(s) and compares the parsed instants instead of the raw strings
-  (the colour-rooms-by-date viewer feature that motivated typing the column
-  is still unbuilt, and the validation report itself is still dRofus-only —
-  see the capability boundary below). Everything is validated at startup,
-  per source: a `date` field needs a `format`, a `format`/`revit_format` on
-  anything else is almost certainly a mistake, each pattern must be a valid
-  strftime string, and every `label` must actually exist in that source's
-  loaded CSV.
-- **Transport: HTTP POST to localhost.** Revit add-ins run in-process on .NET;
-  POST is simplest, most debuggable, language-agnostic, and the same
-  `HttpClient` carries over to a future C# add-in. Alternatives considered:
-  WebSocket (only if the server needs to push updates back), named pipe
-  (lowest latency, more fiddly cross-language), file watch (crude but simple).
-  The cost the split adds is **serialization overhead** — extract, JSON-encode,
-  send, decode — almost always worth it for the decoupling, but the thing to
-  measure on a huge model.
-- **Snapshot id is the producer's to state, the server's to fill.** The
-  upload envelope's `snapshot.taken_at` (an RFC3339 UTC date-time — see
-  [Index](STRATEGY.md) "The upload envelope") may be omitted, in which case
-  the server mints one at ingest and reports it in the response. The Revit
-  producer keeps supplying its own deliberately: its timestamp says when the
-  model was *read*, which receipt time can't. A future upload type with no
-  meaningful read-time just leaves it blank.
-- **Gzip + NDJSON streaming push (`post_rooms.py`).** FFE exports run >100 MB
-  uncompressed, too large to hold as one JSON string client-side or buffer
-  whole server-side. `post_payload_stream` (the path `room_mate.py` actually
-  calls) never builds a second full `rooms` list or one giant `json.dumps`
-  string: it gzip-compresses a line-delimited stream — one envelope line
-  (`build_envelope`), then one line per room, translated (`translate_room`)
-  and written as each is read off the duHast export — straight to
-  `POST /rooms/stream`. Peak memory is therefore one room, not the whole
-  export (see [Server](STRATEGY-SERVER.md)'s matching streaming-ingest note).
-  The older fully-buffered `translate()`/`post_payload` pair (whole payload in
-  one dict, one `StringContent` POST to `/rooms`) is kept only because it's
-  what regenerates `settings/test_snapshot.json` and suits small/manual
-  pushes — `translate()` is now `build_envelope` + a loop over
-  `translate_room`, so both paths share one translation, not two to keep in
-  sync.
-- **The model→shared transform is stamped on the envelope, not per room.** The
-  duHast export carries the shared-coordinate placement on *every* geometry
-  object (`DataGeometryBase.translation_coord` / `rotation_coord`), but it's one
-  document-level `ProjectLocation` fact repeated. `room_mate.py` reads it once
-  per model (`get_coordinate_system_translation_and_rotation(doc)`), reduces it
-  to the 2D affine, and puts it on the envelope as `model_to_shared` (see
-  [Index](STRATEGY.md) "The upload envelope"); `translate_room` therefore
-  deliberately drops the per-polygon copy, keeping room geometry raw model-space
-  points. Because it rides the envelope, the streaming path carries it on line 1
-  with no per-room scan. Georeferencing Phase 1 — see
-  `docs/Superseded/HANDOVER-georeferencing.md`.
-- **The phase filter runs in the extractor, and is the one thing the user is
-  asked.** "Does this element exist in phase X" is a range test over the
-  document's phase *sequence* —
-  `created <= selected AND (demolished invalid OR demolished > selected)` — and
-  only the live document has that sequence, so `room_mate.rooms_in_phase` runs
-  it and the server never re-evaluates it. That is also why the ordered phase
-  list is deliberately **not** on the wire: it would be a field nothing reads.
-  The push then declares the phase name it filtered to, and the server requires
-  it (contract v6).
+## Deferred
 
-  Two things worth not re-deriving. **The test is a range, not an equality** —
-  `created == selected` would drop every room built in an earlier phase and
-  still standing, which on a phased model is most of them, and the two agree
-  exactly on a single-phase model, so the mistake would not show up in testing.
-  And **the prompt is once per run, not once per model**: `pick_document` is
-  multiselect while phases are per-document, so `choose_phase` offers the names
-  common to every selected document and each document then resolves that *name*
-  against its own phase ids — ids being per-document is precisely why identity
-  is the name. A single common phase skips the prompt entirely, which is the
-  usual case. See [PLAN-phasing.md](Superseded/PLAN-phasing.md).
+- **An `Api` reference origin.** `ReferenceOrigin` is a tagged enum with one
+  live variant, `Upload`. A polled API source — dRofus queried live rather than
+  exported to CSV — slots in as a second variant with no other consumer touched.
+  That possibility is why the loader is byte-source-agnostic and why the join
+  sits at response assembly rather than at load: a live poll changes *when* the
+  data arrives, and nothing else. It is also the case the separate `reference`
+  sub-object was shaped for — fusing a source into `properties` would couple two
+  things with different refresh lifecycles into one bag.
 
-## Uploads are the only origin
+- **A second producer.** Everything about name resolution exists because sources
+  vary — `model.source` on the envelope, the `[[builtin_properties]]`
+  `by_source` map, the fallback to matching a name verbatim. None of it has a
+  second producer yet, so none of it has been exercised against one. IFC is the
+  motivating candidate, and the trap it is built for is in "What a second source
+  breaks" below.
 
-A reference source's data arrives **only** by upload, stored as a dated
-snapshot in the `SnapshotStore`. There used to be a second way in — `type =
-"file"`, a CSV path in the settings file that the server read at every boot —
-and it is gone.
+- **Incremental extraction.** See "Extraction is the dominant cost" below. Only
+  worth attacking if near-live updates while modelling are wanted.
 
-It was the stand-in for uploads before uploads existed. Once both worked, it
-was a second path to the same place with a worse story on every axis:
+## Extraction is the dominant cost, and that decides the optimization axis
 
-- **No history.** An overwritten CSV is simply gone. An upload is a dated
-  snapshot, which is what lets a milestone pin the data as it stood then.
-- **No validate-before-store.** An upload is parsed and checked against the
-  source's declared fields *before* anything is written, so a bad CSV is
-  rejected at the door. A `file` source was only discovered to be bad at the
-  next boot — and since a stored artifact is hydrated at every boot, that is
-  precisely when it is most expensive.
-- **It made the server read a path on the caller's behalf**, which is what
-  turned `/api/settings/reference-check` into an unauthenticated arbitrary-file
-  read. See [Security](STRATEGY-SECURITY.md).
+Measured: ~840 rooms exported in ~11 s, about 13 ms/room — normal-to-good for
+Revit boundary extraction, and almost entirely Revit API time, single-threaded on
+Revit's main thread because it must be. Serialization, POST and server storage
+are milliseconds against it.
 
-`ReferenceOrigin::File { path }` still *deserializes*, purely so
-`bootstrap::load_project_bundle` can reject it by name and print the migration
-— replace the `type`/`path` lines with `type = "upload"`, then upload the CSV
-once — rather than leaving serde to answer "unknown variant `file`". Nothing
-loads it. A settings file written before the change fails the boot loudly with
-instructions, which is the "loud startup over silent no-op" rule applied to a
-removal.
+So **the real optimization axis for the slow side is extracting less, or
+incrementally** — fewer parameters, skipping rooms that cannot matter, pulling
+only what changed since the last snapshot (the snapshot hierarchy leaves that
+door open). It is *not* server-side speed or language choice. The phase filter is
+the shipped instance of this rule: it is strictly less extraction.
 
-`scripts/fixtures/drofus-sample.csv` is the two-row sample the shipped
-`sample-project` used to point at; upload it once to give that project data:
+This is the source-side half of [Index](STRATEGY.md)'s "measure where the seconds
+actually go", and it is the reason a "just compute one thing here, the data is
+right there" change to the extractor is nearly always the wrong trade.
 
-```bash
-curl --data-binary @scripts/fixtures/drofus-sample.csv -H 'Content-Type: text/csv' \
-  http://127.0.0.1:5151/projects/sample-project/reference/drofus
-```
+## What a second source breaks, and why the fix is settings rather than types
 
-## Why sources need reconciling, not just parsing
+A typed struct of built-in properties made sense while Revit's Room schema was
+the only schema: Revit guarantees a fixed set of built-in parameters on every
+Room, so a non-`Option` typed field was a correct model, not merely a convenient
+one. **That guarantee is not transferable.** IFC property sets are optional and
+exporter-dependent — the same concept, say area, can live in
+`Pset_SpaceCommon.NetFloorArea` from one tool, be named differently by another,
+or be absent entirely. "Guaranteed present" stops being true even for what feels
+like a core field.
 
-A typed `BuiltinProperties` struct (v3) made sense while Revit's Room schema
-was the only schema: Revit guarantees a fixed set of built-in parameters on
-every Room, so a non-`Option` typed field was a correct, not just convenient,
-model. That guarantee is *not* transferable to a second source. IFC property
-sets (Psets) are optional and exporter-dependent — the same concept (e.g.
-area) can live in `Pset_SpaceCommon.NetFloorArea` from one tool, be named
-differently, or be absent from another. So "guaranteed present" stops being
-true even for what feels like a core field.
+Hence the shape the wire and the settings already have: one flat, source-native
+property map, with reconciliation pushed to a per-source name table in settings
+rather than into Rust types. **Adding a source is a settings-file change — a new
+`by_source` entry per canonical property — not a new struct field and not a
+recompile.** The tradeoff is real and worth restating so nobody tries to undo it:
+a compile-time guarantee was traded for a runtime-resolved name, but that
+guarantee was never something a second source could promise, so keeping it in the
+type system was enforcing a fiction.
 
-That's why the wire shape moved to one flat, source-native map, with
-reconciliation pushed to a settings-driven, per-source name table rather than
-Rust types: a second source is a settings-file change (a new `by_source` entry
-per canonical property, keyed by that source's name), not a new struct field.
-The tradeoff is real — `properties.builtin.area: f64` was a compile-time
-guarantee; a flat map with a runtime-resolved name is not — but that guarantee
-was never something IFC (or any second source) could actually promise, so
-keeping it in the type system was enforcing a fiction.
+The same rule governs a new *reference* source: the extension point is one line
+of settings. The recognized-namespace set is computed from the settings files at
+load time rather than compiled in, and the namespace is reserved in the filter
+grammar rather than inferred — an unknown prefix is a parse error naming every
+known source, never a silent fallback to a room property, so a raw property
+literally named `Newsource.Field` cannot quietly change meaning the day that
+source is added.
 
-## Reference: the reference-source CSV format
+## Two joins that report rather than fail
 
-Every `File`/`Upload` reference source is CSV, not JSON — this is a
-format-of-origin choice each such source makes, not something JSON-native
-inputs need. dRofus is the first instance and still the running example:
+Both are built; they are here because they are *states a reader will meet* and
+will otherwise mistake for bugs.
 
-```
-DrofusRoomId,   NetArea,     Department,  ...   ← row 1: dRofus property names
-RevitDrofusKey, d_net_area,  d_dept,      ...   ← row 2: matching Revit param names
-<key value>,    <value>,     <value>,     ...   ← row 3+: data
-```
-
-The two header rows are the join spec and must both be retained:
-
-- **Row 2, column 0** names the Revit room property whose *value* holds this
-  source's linking id — constant for the whole file, read once at load
-  (`ReferenceData.link_property`).
-- **Row 1** is this source's field labels — the display layer for the joined
-  data, and retained in full as `ReferenceData.all_labels` regardless of
-  whether row 2 mapped a given column (needed so [Server](STRATEGY-SERVER.md)'s
-  coverage report can show an unmapped column as "not checked" rather than
-  omitting it silently; its second consumer is `/rooms`' per-project,
-  per-source `reference_labels` — see Server — which serves the full column
-  set to tabular clients that could otherwise only union per-room joined
-  fields). Row 2's other columns are the Revit param
-  names those fields correspond to, kept for reconciliation.
-
-The link is a direct value match and each source's ids are unique, so the
-loader builds a flat `Map<String, ReferenceRecord>` per source — no collision
-handling needed.
-
-**The capability boundary is closed.** For a while `/rooms`' label set and
-`/projects/{id}/validation`'s whole report resolved specifically against the
-source named `"drofus"` — a deliberate scope-out when the settings/loader/join
-layers first generalized to N sources. A second configured source was
-joinable, filterable and comparable (`doors.Mark=101A` worked end to end) but
-got no QA report, and could not show a column that matched zero rooms in
-scope, because there was no `doors_labels` to fall back on.
-
-Both are now per source:
-
-- **`/rooms` carries `reference_labels`**, keyed by project id and then by
-  source name. Source has to be part of the address because two sources may
-  both declare a label called `NetArea`.
-- **`ValidationResponse` carries `sources`**, one `SourceValidation` per
-  configured source, each with its own `link_property`, discrepancy lists and
-  `field_coverage`, plus a cross-source `discrepancies` total. Each source
-  declares its own link property, so "which rooms resolved no link value" is a
-  different question per source and cannot share a list.
-- **Both sides of the join are checked, and the questions are not symmetric.**
-  On the rooms: duplicate link ids (`duplicate_link_values`), rooms with no
-  value set (`rooms_missing_link_value`), rooms whose id finds no record
-  (`rooms_unmatched`). On the source: records no room reaches
-  (`reference_unmatched`), ids used by more than one row
-  (`reference_duplicate_ids`), rows with no id at all
-  (`reference_blank_id_rows`).
-- **The source-side checks exist because the loader is lossy.** `by_id` keeps
-  one record per id, so a repeated id overwrites the row before it
-  (last-write-wins) and a blank id skips the row entirely. Both are recorded at
-  load (`ReferenceData::duplicate_ids` / `blank_id_rows`) because nothing
-  downstream can detect them — `record_count` is already the deduplicated
-  number, and a surviving record still matches its room, so it is neither
-  unmatched nor a mismatch. Surfaced at upload (where the operator is looking at
-  the file), as a `tracing::warn!` (the loader also runs at boot), and in the QA
-  report. Last-write-wins is kept deliberately: there is no better arbitrary
-  winner, so the fix is to report the arbitrariness rather than pick
-  differently.
-
-No source is privileged anywhere on the read path — `"drofus"` is simply the
-name most projects configure.
-
-**Design notes on the join:**
-
-- **Store raw, join late.** The parsed map sits in server state; it's attached
-  at `/rooms` assembly, never at load — keeps `/rooms` the raw-geometry
-  endpoint and leaves the Revit snapshot untouched.
-- **Separate sub-object, not merged into `properties` — a lifecycle
-  decision.** dRofus will eventually be polled mid-session for fresh data,
-  independent of the Revit push. Fusing it into `properties` would couple two
-  different-lifecycle things into one bag; a separate sub-object keeps the
-  seam where that future refresh boundary actually is.
-- **Unmatched key is a signal, not an error.** A room with no linking value
-  just gets no dRofus data. A key present on the room but absent from the map
-  is a useful mismatch — the two exports saw different model state, same
-  diagnostic role as the room↔level join below.
-- **A joined source is queryable under its `[sources.reference.<name>]`
-  key.** `/rooms`' property filter (see [Server](STRATEGY-SERVER.md))
-  namespaces a predicate's field as `<source>.<label>` — `drofus.NetArea>20`
-  — where `<source>` is exactly a key of `Sources.reference`, so "what goes
-  before the dot" has the same answer as the settings file. Milestone
-  comparison's `comparison_key` / `comparison_properties` (see Server) are
-  the **second consumer** of the same vocabulary — a name that filters
-  correctly also compares correctly, resolved through the same
-  `rooms::split_namespace` / `rooms::resolve_presence`, never a
-  re-derivation. **The extension point a new source touches is one line of
-  settings, nothing else in Rust:** the recognized-namespace set isn't a
-  compiled constant anymore (the old `rooms::JOINED_SOURCES: &[&str]` is
-  gone) — `SettingsRegistry::known_reference_sources()` computes it at
-  settings-load time as the union of every `reference` key across every
-  project's settings, and `split_namespace` / `Predicate::parse` /
-  `presence_of` / `source_joined` all take that `&BTreeSet<String>` as a
-  parameter instead of reading a global. `presence_of`'s single generic arm
-  (`room.reference.get(source)`) already covers every source there ever
-  will be, matched or not. The namespace is still reserved in the grammar
-  rather than inferred — an unknown prefix is a parse error naming every
-  known source (and, for the persisted comparison settings, a loud
-  settings-load/save rejection), never a silent fallback to a room property,
-  so a raw property literally named `Newsource.Field` can't quietly change
-  meaning the day that source is added. The filter runs on the *assembled*
-  room (after the join) precisely so a source's fields are reachable at all;
-  consistent with "unmatched key is a signal", a room whose link value
-  matched no record fails every predicate on that source, negative operators
-  included — and comparison reports that unmatched state per room
-  (`unjoined_sources`), not as one missing value per configured field. A
-  project that simply doesn't configure a source another project does is
-  **recognized but absent** for an unscoped query across both, not an error
-  — same `presence_of` arm, no special case needed.
-- **`[sources.reference.*]` still means "reference sources *for rooms*" — and
-  now the doors entity exists, so that is a gap rather than a boundary.** The
-  join, filter, and comparison machinery above all resolve onto an assembled
-  *room*. A door schedule joins by a door key onto a door.
-
-  **Closed by R4 (2026-08-05)**
-  ([Generalisation](Superseded/PLAN-generalisation.md#r4--reference-sources-are-implicitly-for-rooms)).
-  Every source declares an `entity`, defaulting to `"rooms"` so no existing
-  settings file changed meaning, and an unknown one is a loud failure naming it.
-  `service::doors` now performs the mirror join, reading the source's
-  `link_property` off the *door* — instance tier then type tier, the same
-  `lookup_property` rooms use, because a door is simply another `PropertyTiers`.
-  A source scoped to one entity never joins the other, even when the key would
-  have matched.
-
-  R4 was originally held back to land "with doors' first reference source". That
-  rule was circular — nobody can declare a door source until the config can
-  express one — and its stated blocker (R2) had already shipped. A
-  source-qualified predicate on a door that joined nothing still resolves
-  `Absent` rather than erroring, which is the same answer a room gets for a
-  source it did not match.
-
-  What the door work did settle is the *vocabulary*: the join namespace stays
-  flat (`hardware.FireRating`, never `doors.hardware.FireRating`) and one
-  `split_namespace` already serves both entities, so R4 is a settings and
-  wiring change rather than a grammar fork. See
-  [Entities](STRATEGY-ENTITIES.md) Decision 5 and
-  `docs/Superseded/HANDOVER-reference-sources.md` for the full two-axis
-  breakdown.
-- **The frontend discovers sources from the data, not a fixed list.**
-  `static/settings.html` edits `Sources.reference` as a repeatable list of
-  cards (add/remove by name — no reorder, since it's map-keyed, not
-  ordered), each owning its own type/path-or-upload and `fields`.
-  `static/index.html` and `static/comparison.html` never hardcode a source
-  name: they take every source named in `reference_labels` for the current
-  project, plus any shaped like `{fields: {...}}` on a room's own flattened
-  keys (see `detectReferenceSources` in `index.html`). The first half is what
-  makes a source with zero matched rooms in scope still appear; the second
-  covers the unscoped multi-project merge, where another project's source
-  rides along on its own rooms and its vocabulary belongs elsewhere.
-
-## Open items / things to watch
-
-- **Extraction is the dominant cost (measured).** ~840 rooms exported in ~11s
-  (~13ms/room) — normal-to-good for Revit boundary extraction, and almost
-  entirely Revit API time: single-threaded on Revit's main thread because it
-  must be. Serialization, POST, and server storage are milliseconds against
-  this. The real optimization axis for the slow side is **extracting less or
-  incrementally** (fewer params, skip unneeded rooms, pull only changed rooms
-  since the last snapshot — the snapshot hierarchy leaves that door open), not
-  server-side speed or language choice. Only worth attacking if near-live
-  updates while modeling are wanted.
-- **Room ↔ level join.** Each room's `level.id` must match an `id` in the level
+- **Room ↔ level.** Each room's `level_id` must match an `id` in the level
   export. A mismatch surfaces as rooms landing on a fallback level named by raw
-  id — a useful signal that the two collectors saw different model state.
-- **Level ordering source.** The viewer's slider orders by the level export's
-  `elevation` field (real elevations, in mm), not by `offset_from_level` (the
-  room's offset from its level, which was always 0.0 and useless for
-  ordering).
+  id — a signal that the two collectors saw different model state, not an error.
+- **An unmatched reference key.** A room with no link value simply gets no
+  joined data; a key present on the room but absent from the source's map is a
+  useful mismatch of the same kind. Consistently with that, a room whose link
+  value matched nothing fails **every** predicate on that source, negative
+  operators included: "no value" is not evidence that the value differs.

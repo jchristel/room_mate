@@ -1,81 +1,46 @@
 # Roommate — Architecture & Strategy
 
-Notes capturing the design decisions behind the Revit → Rust → browser room
-viewer. Written as a reference to come back to, not a spec. Split along the
-pipeline's own boundaries, so each can be read (and changed) without pulling in
-the others — seven docs describing what ships today, plus two forward-looking
-design docs: one for data the user authors, one for the entities beyond rooms:
+The index to the strategy docs, plus the principles that govern what gets built
+next. **These documents record outstanding work and the rules that constrain it,
+not what already ships** — what ships is documented where it is implemented, in
+`src/` module headers, `src-js/`, `extractor/pyRevit/`, and `CLAUDE.md` for the
+invariants that are expensive to rediscover.
 
-- **This doc** — the pipeline overview, the core split principle that governs
-  all three layers, and the current wire contract they all share.
-- **[Sources](STRATEGY-SOURCES.md)** — everything that supplies raw data:
-  the Revit/pyRevit producer and the reference sources joined onto rooms
-  (dRofus is the one most projects configure; the pipeline is keyed on N of
-  them). What each extracts, its raw format, and how the server reconciles
-  property names across sources.
-- **[Server](STRATEGY-SERVER.md)** — the Rust/axum process: data model,
-  storage, classification, settings.
-- **[Area calculation](STRATEGY-AREA-CALCULATION.md)** — how a room set becomes
-  a per-tier area figure: the two boundary regimes, the wall zone, what a wall
-  belongs to, and how the result relates (and does not relate) to IPMS 3 and
-  DIN 277. Its own doc because it is the one place where the *definition of the
-  output* is contested rather than read off the model — two designs were
-  reversed over exactly that. Read it before quoting an area to anyone external.
-- **[Browser](STRATEGY-BROWSER.md)** — the plan viewer (WebGL, with a thin SVG
-  overlay and an SVG export): rendering strategy, UI growth path, endpoint
-  design from the fetch side.
-- **[MCP](STRATEGY-MCP.md)** — the stdio MCP server: a second, tool-based
-  front door onto the same read-side logic the server exposes over HTTP.
-- **[Authored](STRATEGY-AUTHORED.md)** — *design settled, not built.* How
-  data the user authors — manual room connections, uploaded documents and their
-  extracted text — and its hierarchy scopes will be stored, pinned by
-  milestones, and served. An application of the upload-envelope and
-  snapshot-store patterns to input that cannot be re-derived; read it before
-  building any of that.
-- **[Entities](STRATEGY-ENTITIES.md)** — *built.* What makes something a primary
-  entity rather than a reference source, what the rooms/doors pair proves
-  generalizes and what stays per-entity work, and how a Revit phase scopes a
-  push. Doors shipped as the first entity after rooms; FFE is the next, and this
-  is the doc that records how much of it is already free. Its phasing half was
-  built first — see [PLAN-phasing.md](Superseded/PLAN-phasing.md), which supersedes several
-  of its details. **Decision 6's question — which of a door's two rooms owns it
-  — is decided and built** (2026-08-06): `[doors] room_attribution`, a
-  precedence chain defaulting to the room a door opens *into*, else the one it
-  opens *from*, else homeless. Derived at read time and never stored, so
-  changing the policy changes every answer and rewrites nothing.
+- **This doc** — the split principle that governs all three layers, and the
+  disciplines that keep it clean.
+- **[Sources](STRATEGY-SOURCES.md)** — the Revit/pyRevit producer and the
+  reference sources joined onto an entity. Open: an API-polled origin, a second
+  producer, incremental extraction — plus why extraction cost decides the
+  optimization axis.
+- **[Server](STRATEGY-SERVER.md)** — the Rust/axum process. Open: deferred
+  endpoints and storage backends, an owning level above project, a coordinate
+  datum shared across projects.
+- **[Area calculation](STRATEGY-AREA-CALCULATION.md)** — what the area figure
+  means and how it relates to IPMS 3 and DIN 277. Its own doc because it is the
+  one place where the *definition of the output* is contested rather than read
+  off the model, and two designs were reversed over exactly that. **Read it
+  before quoting an area to anyone external.**
+- **[Browser](STRATEGY-BROWSER.md)** — the plan viewer. Open: serving and then
+  consuming the placement transform, level-of-detail, the framework fork — plus
+  the hybrid renderer's coordinate/paint-order invariant.
+- **[MCP](STRATEGY-MCP.md)** — the stdio MCP server. Open: resources and prompts,
+  document tools.
+- **[Authored](STRATEGY-AUTHORED.md)** — *nothing here is built.* How data the
+  user authors — manual room connections, uploaded documents, their extracted
+  text, and the hierarchy scopes that bind them — will be stored, pinned by
+  milestones, and served. Read it before building any of that.
+- **[Entities](STRATEGY-ENTITIES.md)** — what makes something a primary entity
+  rather than a reference source, and what a second entity proved comes for free.
+  Open: the door connectivity graph, design options, FFE.
 - **[Security](STRATEGY-SECURITY.md)** — the threat model for the near-future
-  shift from a loopback-only bind to a LAN-reachable server: what a hostile
-  local-network user can and cannot do, and the invariants (no delete route,
-  settings backups, rate limiting) that keep it that way. Read it before
-  widening the bind past `127.0.0.1`.
+  shift from a loopback bind to a LAN-reachable server. Mostly unbuilt by design.
+  **Read it before widening the bind past `127.0.0.1`.**
 
-A change that touches more than one layer (the v5 property rework did all
-three) should update every doc it touches — that's the cost of the split, and
-worth it for how much easier each doc is to read in isolation the rest of the
-time.
+Implementation rules live in [Coding Conventions](CODING-CONVENTIONS.md).
 
-
-## What exists today
-
-A three-part pipeline, decoupled across a process and a language boundary:
-
-1. **Producer (IronPython / pyRevit).** Extracts room outlines and level data
-   from a Revit model, translates them into a versioned JSON contract, and
-   POSTs to the local server. Declares which producer it is (`model.source`,
-   e.g. `"revit"`) so the server can resolve property names correctly if a
-   second source (e.g. IFC) ever joins Revit. Details: [Sources](STRATEGY-SOURCES.md).
-2. **Server (Rust / axum).** Receives the JSON, holds every model's latest
-   payload keyed by `(project, model)`, persists it (or holds it in memory),
-   and serves it back on request. Also serves the viewer and settings pages.
-   Details: [Server](STRATEGY-SERVER.md).
-3. **Viewer (browser / WebGL).** Fetches the payload and draws the floor plan on
-   a canvas, with a thin SVG overlay above it for the areas footprints and the
-   selection mark, and an SVG *export* for a file that leaves the browser. Polls
-   every 2s so a fresh POST appears without a manual refresh. Details:
-   [Browser](STRATEGY-BROWSER.md).
-
-The three are coupled only by the JSON contract over `localhost:5151`, not by
-the build. Each can evolve independently.
+A change touching more than one layer should update every doc it touches — that
+is the cost of the split, and worth it for how much easier each doc is to read in
+isolation the rest of the time.
 
 ## The core architectural principle: Revit extracts, Rust processes
 
@@ -84,225 +49,70 @@ Rust side does **all processing**. The reasoning matters more than the rule:
 
 - **Revit's API is the one thing that cannot be moved or parallelized.** It is
   single-threaded by design and must be called from Revit's main thread, via
-  in-process IronPython (Python 2.7 on the CLR — interpreted, effectively no
-  JIT for hot loops, no real threading). Whatever touches the live model is
-  stuck on the slow side regardless of anything else.
+  in-process IronPython (Python 2.7 on the CLR — interpreted, effectively no JIT
+  for hot loops, no real threading). Whatever touches the live model is stuck on
+  the slow side regardless of anything else.
 - Therefore the win is to make that side do **as little as possible**: pull raw
-  geometry and properties, serialize, hand off. Every piece of logic kept off
-  the Revit side is logic that escapes the single-threaded, interpreted
-  constraint.
-- Rust is the place where the project is free: compiled, multicore (rayon makes
-  data-parallel geometry near-trivial at scale), strongly typed, and decoupled
-  from a Revit session. Processing server-side means geometry algorithms can run
-  without Revit open, be unit-tested in isolation, and reprocess stored payloads
-  without re-extracting.
+  geometry and properties, serialize, hand off. Every piece of logic kept off the
+  Revit side is logic that escapes the single-threaded, interpreted constraint.
+- Rust is where the project is free: compiled, multicore, strongly typed, and
+  decoupled from a Revit session. Processing server-side means geometry
+  algorithms run without Revit open, are unit-testable in isolation, and can
+  reprocess stored payloads without re-extracting.
 
 ### Disciplines that keep the split clean
 
 - **Keep the extractor dumb on purpose.** Resist computing "just one thing" in
-  IronPython because the data is right there. Every computed field there is
-  logic in the slow language, untested, and duplicated if Rust needs it too.
-  Extract raw inputs (loops, ids, level refs, raw properties); derive everything
-  downstream.
-- **The contract carries raw data, not interpreted data.** Send coordinates,
-  not computed areas. Send level ids and elevations, not pre-sorted orderings.
-  The more the JSON is primitives, the less the two sides are coupled to each
-  other's assumptions.
-- **Version the schema.** Practised through v1 → v5 so far. A mismatch surfaces
-  loudly (HTTP 422) instead of silently misrendering.
-- **Ids and `ElementId` values are 64-bit ints at the source, strings in the
-  contract.** Revit 2024+ made `ElementId` 64-bit (`Int64`); IronPython 2.7 can
-  truncate a large id across the CLR boundary, especially via the deprecated
-  32-bit `IntegerValue`, which fails silently with a wrapped number rather than
-  an error. Rule: read `.Value` and `str()` it at extraction, never touch
-  `IntegerValue`; the contract carries `id`, `level_id`, and any
-  ElementId-storage custom property as `String` for exactly this reason. Rust
-  parses to `i64` only where it actually needs the number, where the width is
-  safe.
+  IronPython because the data is right there. Every computed field there is logic
+  in the slow language, untested, and duplicated if Rust needs it too. Extract
+  raw inputs; derive everything downstream. (Reading a *document setting* is
+  extraction, not computation — that is why the boundary regime rides the
+  envelope.)
+- **The contract carries raw data, not interpreted data.** Send coordinates, not
+  computed areas. Send level ids and elevations, not pre-sorted orderings. The
+  more the JSON is primitives, the less the two sides are coupled to each other's
+  assumptions.
+- **Version the schema, and know what forces a bump.** An *optional* additive
+  field does not: a payload that was valid stays valid and means the same thing.
+  A field that becomes **required at ingest** does, because a previously-valid
+  payload now errors — which is exactly the test a bump exists for. Strictness
+  belongs in the handler and permissiveness in the type, since stored snapshots
+  re-parse at every boot and a hard requirement there would stop the server
+  hydrating its own store.
+- **Ids and `ElementId` values are 64-bit ints at the source, strings on the
+  wire.** Revit 2024+ made `ElementId` 64-bit; IronPython 2.7 can truncate a
+  large id across the CLR boundary — especially via the deprecated 32-bit
+  `IntegerValue`, which fails *silently* with a wrapped number rather than an
+  error. Read `.Value` and `str()` it at extraction, never touch `IntegerValue`,
+  and parse to `i64` server-side only where the width is safe.
+- **Every upload type rides the same envelope**, and resolves its snapshot id
+  through the same `contract::ensure_taken_at` / `validate_snapshot_id` pair —
+  never a reimplementation. A raw-body upload with nowhere to put a `taken_at`
+  passes it as a query parameter and obeys the same rules. This is the rule that
+  makes a *new* upload kind cheap, and it is the one most likely to be quietly
+  broken by a kind that "doesn't quite fit".
 
 ### A caveat to stay honest about
 
-Moving computation to Rust only speeds up computation that is *in* Rust. The
-current pipeline does almost no processing — it deserializes, stores, serves.
-The likely real bottleneck on a large model is the Revit extraction itself,
-which Rust's speed does nothing for. The Rust performance advantage is
-**potential, not yet realised**; it becomes real only when actual heavy geometry
-(adjacency graphs, polygon boolean ops, spatial indexing, room merging across
-linked models, simplification) is pushed server-side.
+**Before optimizing, measure where the seconds actually go.** Measured so far:
+~840 rooms extracted in ~11 s, almost entirely Revit API time — so agonizing over
+a 50 ms Rust algorithm while extraction runs for eleven seconds is the wrong end
+of the pipe. See [Sources](STRATEGY-SOURCES.md) for what that implies for the
+slow side.
 
-**Before optimizing, measure where the seconds actually go** — Revit collection,
-transport, or server processing. If extraction is 8 seconds, agonizing over a
-50ms Rust algorithm is the wrong end. (Measured: ~840 rooms in ~11s, ~13ms/room,
-almost entirely Revit API time — see [Sources](STRATEGY-SOURCES.md).)
+The Rust performance argument stopped being theoretical once real geometry
+arrived, and the way it played out is the template. Adjacency's naive O(n²)
+pairing was left in place *until measured*, measured at ~22 s on a 5,000-room
+level, and then given a uniform bounding-box grid — dropping it to ~2.5 s, most
+of which is the shared room assembly it calls first. Rayon was still not reached
+for: the grid removed the quadratic term, and threading a near-linear pass would
+trade determinism for little.
 
 Two related notes:
 
 - "Old language" is not the real issue; *interpreted and CLR-hosted* is. The
   reason to reach for Rust is compiled performance plus real threads, not age.
-- Parallelism has a threshold. Threading a few hundred rooms can be slower than
-  a tight single-threaded loop once overhead is counted. Rayon pays off at scale
-  (thousands of independent elements). Measure before parallelizing.
-
-## Current contract (v6 — shipped)
-
-```json
-{
-  "schema_version": 6,
-  "project":  { "id": "p1", "name": "Hospital Job" },
-  "model":    { "id": "<revit-guid>", "name": "Project1-ARCH", "source": "revit" },
-  "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
-  "phase": "New Construction",
-  "model_to_shared": { "matrix": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] },
-  "room_boundary": "finish_face",
-  "levels": [
-    { "id": "311", "name": "Level 0", "elevation": 0.0 }
-  ],
-  "rooms": [
-    {
-      "id": "324772",
-      "name": "Room 1",
-      "level_id": "311",
-      "loops": [
-        { "points": [ { "x": 0.0, "y": 0.0 } ] }
-      ],
-      "properties": {
-        "Number": { "value": "101", "storage_type": "String" },
-        "Area": { "value": "25.5", "storage_type": "Double" },
-        "d_dept_code": { "value": "D02", "storage_type": "String" }
-      }
-    }
-  ]
-}
-```
-
-Convention: `loops[0]` is the outer boundary, `loops[1..]` are holes. Room
-`properties` is one flat map keyed by the producer's own raw property names —
-why it's shaped this way, and how the server reconciles names across sources,
-is in [Sources](STRATEGY-SOURCES.md). The `(project.id, model.id)` pair is the
-store key; ids are immutable, names are display-only — see
-[Server](STRATEGY-SERVER.md) for the full data model. On the `/rooms`
-*response* (not the push), each room additionally carries a `drofus` sub-object
-when its link key matched, and a `classification` path — both derived at
-response assembly, never stored (see Server and Sources respectively).
-
-`model_to_shared` is the optional per-model placement transform and
-`room_boundary` the optional per-model boundary regime — see [The upload
-envelope](#the-upload-envelope) below.
-
-`phase` is **required** and is the reason the contract went v5 → v6. It names
-the Revit phase this push's rooms were filtered to, and it is the first
-*authored* envelope field: the other two are read off the document, but a
-document has many phases and only the user knows which is being pushed. Its
-rules — one phase per `(project, model)` lineage, immutable once set, a
-disagreeing push quarantined rather than refused — are in
-[PLAN-phasing.md](Superseded/PLAN-phasing.md), with the entity-level context in
-[Entities](STRATEGY-ENTITIES.md).
-
-### The upload envelope
-
-`schema_version` / `project` / `model` / `snapshot` together are the **upload
-envelope**: the identity every upload type carries, rooms being the first.
-Any future upload (FFE, etc.) associates back to room data by exactly two
-keys — the snapshot id and the room id — so it must ride the same envelope
-and resolve its snapshot id through the same contract functions
-(`ensure_taken_at` / `validate_snapshot_id` in `contract/mod.rs`), never a
-reimplementation.
-
-The snapshot id (`snapshot.taken_at`) is an **RFC3339 date-time expressed in
-UTC** (`Z` or `+00:00`; anything else is a 422) — a real date-time by
-definition, lexically sortable so newest-is-lexical-max holds everywhere, and
-structurally incapable of smuggling a path escape. It is also **omittable**:
-a payload that leaves `snapshot` (or just `taken_at`) out asks the server to
-mint the id at ingest. Either way the ingest response reports the resolved id
-(`snapshot_taken_at`, plus `snapshot_id_generated` — which says whether the
-server minted that id, not whether a snapshot was stored) so the pusher can
-attach follow-up uploads to that exact snapshot. This relaxation did not bump the
-schema version: every previously-valid v5 payload is still valid and means
-the same thing.
-
-**`model_to_shared` — the per-model placement transform (optional).** A model's
-room polygons are stored in Revit *model space* (decimal feet, Y-up). This field
-carries the 2D affine `[a, b, c, d, e, f]` (`shared_x = a·x + c·y + e`,
-`shared_y = b·x + d·y + f`) that maps those points into the project's **shared
-coordinate system** — one transform per model, since it's a document-level
-`ProjectLocation` fact (the *same* relationship on every room), so it rides the
-envelope, not each polygon. It exists on two independent grounds: it puts every
-room of a model into one common frame (which cross-model comparison needs — see
-[Server](STRATEGY-SERVER.md) "A common coordinate frame"), and, when a project
-is survey-registered, shared space *is* real-world grid space, which is what
-later makes a map underlay placeable. It carries **no unit conversion** — a
-rigid-body placement, so `|det|` of its linear part is ≈ 1 (ingest *warns*, never
-rejects, on drift). Optional and defaulted (`Option<ModelToShared>`): an
-un-placed model omits it and still renders via auto-fit exactly as before, so —
-like the omittable snapshot id — adding it did **not** bump the schema. The
-producer reads it once per model from `ActiveProjectLocation` and stamps it on
-the envelope. This is Phase 1 of the georeferencing track; Phases 2–3 (the
-`survey_registered` opt-in and the map underlay) build on it — see
-`docs/Superseded/HANDOVER-georeferencing.md`.
-
-**`room_boundary` — the per-model boundary regime (optional).** Revit's
-`SpatialElementBoundaryLocation` decides where a room's boundary sits, and both
-settings occur in real models: at **`centreline`** neighbouring rooms tile
-edge-to-edge with the walls inside them, at **`finish_face`** rooms float inside
-their walls and neighbours are separated by roughly a partition's thickness.
-Nothing on the wire used to say which, so `service::areas` had to *guess*, and
-sized its morphological close for the worst case — which is what produced
-bevelled corners, 45° chamfers, a million-foot spike and overlapping sibling
-footprints. Every one of those is downstream of the guess: on a centreline model
-the correct close radius is **zero**, so declaring the regime does not merely
-improve a tolerance, it deletes the whole artifact class for that half of the
-world.
-
-Like `model_to_shared` this is a **document-level fact stamped once per model**,
-and per model rather than per project precisely because a project legitimately
-mixes both — each linked model carries its own document setting. Also like it:
-optional and defaulted, so every pre-declaration payload stays valid and means
-what it always did, and **no schema bump**. An absent value falls back to the
-project's `[areas] boundary_location` and then to finish face (the conservative
-reading — a close still runs). The ingest response echoes the *resolved* regime
-(`room_boundary`), so a producer that sent nothing can see what the server
-assumed on its behalf. What the number then *means* — the measurement standard
-and the wall-thickness ceiling — is project policy, not a model fact, and lives
-in settings; see [Server](STRATEGY-SERVER.md).
-
-The **dRofus CSV upload** (`POST /projects/{id}/drofus` — see
-[Sources](STRATEGY-SOURCES.md) and [Server](STRATEGY-SERVER.md)) is the
-second upload type, and shows which half of the envelope generalizes: it has
-no model (dRofus is project-scoped reference data, joined by link value, not
-associated to rooms via snapshot+room ids), so it carries no JSON envelope at
-all — but its snapshot id rides the same rules exactly. The raw CSV body has
-nowhere to put a `taken_at`, so it travels as a `?taken_at=` query param,
-resolved through the same `ensure_taken_at` / `validate_snapshot_id` pair,
-omittable, and echoed back (`snapshot_taken_at` / `snapshot_id_generated`)
-like every other ingest.
-
-**Doors are the third upload type**, and the first to test whether the envelope
-generalizes to a second *primary entity* rather than to reference data. It does:
-`POST /doors` carries the identical `project` / `model` / `snapshot` / `phase`
-envelope and resolves it through the same `ensure_taken_at` /
-`validate_snapshot_id` / `normalize_phase` functions — not reimplementations.
-What did **not** generalize is exactly what
-[Entities](STRATEGY-ENTITIES.md) Decision 1 predicted would not: geometry
-semantics, connectivity, and which canonical property names exist at all.
-
-Two things doors added that rooms did not have, both worth knowing before the
-fourth upload type:
-
-- **Its own `schema_version`, starting at 1.** Versioning doors against the room
-  contract's v6 would couple two things that move independently — a change to
-  the room property tiers has nothing to say about doors, and a shared number
-  would force every room producer to re-release over a doors-only change.
-- **Ingest preconditions of its own.** A doors push is refused unless the target
-  `(project, model)` lineage already has a live rooms snapshot, because a door's
-  `from_room`/`to_room` are room ids and room ids are unique only *within* a
-  model. And unlike a rooms push, one whose phase disagrees with the lineage is
-  **refused rather than quarantined** — promoting it would re-phase the model
-  while its rooms stayed behind, stranding the very rooms those references point
-  at. A dependent entity does not get to move the thing it depends on.
-
-Rooms, dRofus and doors are the three upload types that ship today. The same
-envelope is designed to carry **user-authored** kinds next — manually drawn room
-connections and uploaded documents — each a snapshotted stream under the
-existing store, milestone-pinnable exactly as `drofus_snapshot` already is.
-That generalization (storage layout, hierarchy scopes, the read-time join) is
-worked out in [Authored](STRATEGY-AUTHORED.md); it is design, not yet built.
+- **Parallelism has a threshold.** Threading a few hundred rooms can be slower
+  than a tight single-threaded loop once overhead is counted. Rayon pays off at
+  scale — thousands of independent elements. Measure before parallelizing, and
+  prefer removing an asymptotic term to adding threads.

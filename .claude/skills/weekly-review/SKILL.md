@@ -105,11 +105,25 @@ The script checks docs against *code*, never against each other.
 evidence; `STRATEGY-SOURCES.md` marks R4 **Closed**. Both look authoritative in
 isolation. Worth one pass over any pair of docs the week's work touched.
 
-### 5. Is anything in `docs/` finished enough to supersede?
+### 5. Did something ship this week whose description is still in a strategy doc?
 
-The `Superseded/` discipline works well — check whether a live doc's
-"Open items" section is down to nothing, or whether an in-flight scaffolding
-block ("What survived contact") has outlived the build it was written for.
+`CODING-CONVENTIONS.md`'s "Code documents what is built" rule: a strategy doc
+holds only what is *not* built, so deleting the description is part of shipping
+the feature. This is the question the whole rule rests on, because the failure is
+silent — the prose stays accurate for a while, then quietly stops being, and
+nothing flags the moment it turns.
+
+Take the week's shipped work and ask, per item: **does a `STRATEGY-*.md` still
+describe how this works?** If yes, delete that section; check the module header
+carries the rationale first, but do not mirror the section into the header to
+compensate.
+
+Two related shapes worth the same pass:
+
+- an in-flight scaffolding block ("What survived contact", "As built") that has
+  outlived the build it was written for;
+- a brief in `Superseded/` still holding a live open item — it should have moved
+  into the strategy doc that owns it when the brief was retired.
 
 ---
 
