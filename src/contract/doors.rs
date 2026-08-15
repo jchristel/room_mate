@@ -8,8 +8,8 @@
 //! geometry primitives (`Loop`, `Point2D`), and the property machinery
 //! (`CustomValue`, `PropertyTiers`, `lookup_property`) all stay in `mod.rs` and
 //! are used from here — a door does not get its own copy of any of them, which
-//! is the whole point of [Entities](../../docs/STRATEGY-ENTITIES.md) Decision 1's
-//! "what generalizes" list.
+//! is the whole point of [Entities](../../docs/STRATEGY-ENTITIES.md)'s
+//! "what generalizes" list under "What makes something a primary entity".
 //!
 //! What does *not* generalize, and so lives here: the room references, the
 //! two-tier property split, and the doors schema version.
@@ -55,8 +55,7 @@ pub struct Door {
     /// the outer loop, `loops[1..]` are holes, points are decimal feet in model
     /// space, Y up.
     ///
-    /// Identical on purpose ([Entities](../../docs/STRATEGY-ENTITIES.md)
-    /// Decision 4): a second convention would fork every consumer that draws or
+    /// Identical on purpose: a second convention would fork every consumer that draws or
     /// transforms geometry, and there is nothing about a swing footprint that
     /// needs one.
     ///
@@ -209,7 +208,7 @@ pub struct Door {
     /// **This is the door's defining structural difference from a room.**
     /// "This leaf is 820 wide" and "every door of this type is 820 wide" are
     /// different claims, and a hardware schedule joins against the second
-    /// ([Entities](../../docs/STRATEGY-ENTITIES.md) Decision 4). Flattening the
+    /// Flattening the
     /// two would lose that distinction at the contract level, permanently and
     /// irrecoverably.
     ///
@@ -236,8 +235,8 @@ impl PropertyTiers for Door {
 /// Carries the **same upload envelope** as `RoomPayload` — `project`, `model`,
 /// `snapshot`, `phase` — resolved through the same `ensure_taken_at` /
 /// `validate_snapshot_id` / `normalize_phase` functions rather than
-/// reimplementations. That is [Entities](../../docs/STRATEGY-ENTITIES.md)
-/// Decision 1's first "what generalizes" item, and the reason a doors push needs
+/// reimplementations. That is the first item on [Entities](../../docs/STRATEGY-ENTITIES.md)'s
+/// "what generalizes" list, and the reason a doors push needs
 /// no new identity concepts at all.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoorPayload {
@@ -313,7 +312,8 @@ pub struct DoorStreamEnvelope {
 /// will move separately: a change to the room property tiers has nothing to say
 /// about doors, and bumping both would force every room producer to re-release
 /// over a doors-only change (and vice versa). Two entities, two version lines
-/// ([Entities](../../docs/STRATEGY-ENTITIES.md) Decision 4).
+/// — the per-entity half of [Entities](../../docs/STRATEGY-ENTITIES.md)'s
+/// "what does not generalize".
 ///
 /// Starting at 1 rather than at 6 is the other half of that: a shared starting
 /// number would imply a shared history these two do not have.
@@ -561,7 +561,7 @@ mod tests {
     }
 
     /// Doors version independently of rooms. If this ever reads as equal, the
-    /// two version lines have been coupled — which is the thing Decision 4 says
+    /// two version lines have been coupled — which is the thing this type says
     /// not to do.
     #[test]
     fn test_door_schema_is_independent_of_the_room_schema() {

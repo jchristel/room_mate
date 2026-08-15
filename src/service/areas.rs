@@ -87,8 +87,8 @@
 //! nothing to fill. The wall zone is empty, no close runs, and a footprint is
 //! the plain union of its rooms. Bevels, chamfers, spikes and sibling overlaps
 //! cannot arise, because the operation that produces them never executes. That
-//! is the payoff of declaring the regime rather than guessing it — see
-//! STRATEGY-AREA-CALCULATION.md §2, "The two regimes".
+//! is the payoff of declaring the regime rather than guessing it (see
+//! `contract::RoomBoundary`).
 //!
 //! **History / reversed decisions.** An earlier version stripped *every*
 //! interior ring, so enclosed open space always counted as area, and it only
@@ -101,8 +101,9 @@
 //! Every artifact (bevelled corners, 45° chamfers, a million-foot spike,
 //! sibling overlaps) then had to be arbitrated after the fact. The wall zone
 //! replaces the arbitration with a partition: we were using an area operator to
-//! answer a topology question. See STRATEGY-AREA-CALCULATION.md §3, "The wall
-//! zone", and §4 for why the ownership rule falls out as a theorem.
+//! answer a topology question. Why the ownership rule then falls out as a
+//! theorem rather than a policy is above, under "Why this gets the ownership
+//! rule right for free".
 //!
 //! ## Cost, measured rather than assumed
 //!
@@ -1304,7 +1305,8 @@ mod tests {
 
     /// **Both regimes describe the same building, and they agree on it** — the
     /// same 30×10 plate drawn two ways measures 300 ft² either way. That is the
-    /// claim of Decision 1, and this test is what would catch a regression in it.
+    /// claim the two regimes make together, and this test is what would catch a
+    /// regression in it.
     ///
     /// The departments *do not* agree, and that is correct rather than a
     /// shortfall worth tolerating: a centreline room's boundary sits in the

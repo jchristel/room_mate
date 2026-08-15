@@ -301,15 +301,16 @@ def check_mcp_parity(findings: Findings) -> None:
 
 
 # --------------------------------------------------------------------------
-# Check 4 — measured line counts in CODING-CONVENTIONS.md
+# Check 4 — modules past the split trigger
 # --------------------------------------------------------------------------
 
 def real_lines(path: Path) -> int:
     """Non-test lines: everything before the first `#[cfg(test)]`.
 
-    The convention doc judges module size by non-test lines but does not state
-    how it counted. This proxy is stated here so the comparison is honest about
-    being approximate, which is why the tolerance below is generous.
+    The convention judges module size by non-test lines but does not state how
+    it counted. This proxy is stated here so the number is honest about being
+    approximate — it is a "worth a second look" threshold, not a limit, so being
+    a few lines out either way changes nothing.
     """
     text = path.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(text):
@@ -318,42 +319,132 @@ def real_lines(path: Path) -> int:
     return len(text)
 
 
-def check_measured_numbers(findings: Findings, tolerance: float = 0.10) -> None:
-    doc = ROOT / "docs/CODING-CONVENTIONS.md"
-    text = doc.read_text(encoding="utf-8")
+SPLIT_TRIGGER = 500
+
+
+def check_long_modules(findings: Findings, ignores: dict) -> None:
+    """Modules past CODING-CONVENTIONS' ~500 real-line split trigger.
+
+    **This measures the code, not a sentence about the code.** It used to do the
+    latter: the doc carried a hand-copied census of twelve modules and their
+    sizes, and this check re-verified the numbers. That was backwards twice over
+    — the doc held a data table whose only purpose was to be checked, and the
+    check could only ever confirm a transcription. It also degraded silently:
+    delete the table and the check reports OK having examined nothing.
+
+    So the question asked here is the one the *rule* cares about — which modules
+    are over the trigger and have not been judged — and the answer comes from
+    `src/`. Being over it is **not a defect**; the trigger is "worth a second
+    look", not a limit. A module judged and kept whole goes in
+    `weekly_review_ignore.toml` under `[modules]` with the reason, exactly as a
+    benign symbol does, and the rule asks that the same reason live in the
+    module header where the next reader of that file will find it.
+    """
+    skip = ignores.get("modules", {})
     hits: list[str] = []
 
-    for m in re.finditer(r"`([a-z_/]+\.rs)`\s*\((\d[\d,]*)\)", text):
-        name, claimed = m.group(1), int(m.group(2).replace(",", ""))
-        lineno = text[: m.start()].count("\n") + 1
-        # Resolve by exact path under `src/` first. Falling back to a bare
-        # basename match would resolve `settings/mod.rs` to whichever `mod.rs`
-        # came first -- it silently compared against `contract/mod.rs` and
-        # reported a -16% drift that did not exist.
-        exact = ROOT / "src" / name
-        if exact.is_file():
-            target = exact
-        else:
-            same_name = [p for p in (ROOT / "src").rglob("*.rs") if p.name == Path(name).name]
-            target = same_name[0] if len(same_name) == 1 else None
-        if target is None:
-            hits.append(f"CODING-CONVENTIONS.md:{lineno:<4} `{name}` ({claimed}) -- file no longer exists")
+    for path in sorted((ROOT / "src").rglob("*.rs")):
+        rel = path.relative_to(ROOT / "src").as_posix()
+        if rel in skip:
             continue
-        actual = real_lines(target)
-        if abs(actual - claimed) > claimed * tolerance:
-            drift = (actual - claimed) / claimed * 100
-            hits.append(f"CODING-CONVENTIONS.md:{lineno:<4} `{name}` says {claimed}, measures ~{actual} ({drift:+.0f}%)")
+        count = real_lines(path)
+        if count > SPLIT_TRIGGER:
+            hits.append(f"src/{rel:<28} ~{count} real lines -- split candidate, or record why not")
 
     findings.add(
-        "Measured line counts that have drifted",
+        "Modules past the ~500-line split trigger, unjudged",
         hits,
-        f"within +/-{tolerance:.0%}",
+        f"{len(skip)} judged and recorded in the ignore file",
+    )
+
+
+# --------------------------------------------------------------------------
+# Check 5 — section references that no longer resolve
+# --------------------------------------------------------------------------
+
+# `Decision 4`, `§6`, `R4` — the three shapes this repo uses to name a section
+# of a document. Deliberately not "any heading text": prose quotes headings
+# loosely ("the storage section"), and matching that would report paraphrase as
+# rot.
+SECTION_TOKEN = re.compile(r"Decision\s+\d+|§\s?\d+|\bR\d\b")
+DOC_NAME = re.compile(r"\b([A-Z][A-Za-z0-9_-]*\.md)\b")
+
+# Comment leaders, so a citation wrapped across two `///` lines reads as one
+# span. Without this the check sees "STRATEGY-ENTITIES.md)" and "Decision 4" as
+# unrelated, which is exactly how the real ones were written.
+COMMENT_LEADER = re.compile(r"^\s*(?://!|///|//|#|\*)?\s?")
+
+
+def flattened(path: Path) -> str:
+    lines = [COMMENT_LEADER.sub("", ln) for ln in path.read_text(encoding="utf-8").splitlines()]
+    return " ".join(lines)
+
+
+def check_section_refs(findings: Findings, ignores: dict) -> None:
+    """A live doc is cited by name plus a section it no longer contains.
+
+    **This is the gap that let the strategy-doc cleanup break ~20 citations
+    silently.** Check 2 verifies that a cited `.md` path resolves; nothing
+    verified that `STRATEGY-ENTITIES.md Decision 4` named a section that still
+    existed. Deleting the section left the path valid and the sentence wrong,
+    which is the worst combination — it reads as a working reference.
+
+    Only a **qualified** reference is reported: one naming a live doc and a
+    section token that document does not contain. An *unqualified* token ("the
+    thing Decision 4 says") was tried and dropped — this repo's prose reasonably
+    names the document once and then uses the bare token for a paragraph, so the
+    check reported 25 hits of which nearly all read fine in context. Permanent
+    noise is the fastest way to get a tool like this ignored (see the header).
+
+    `Superseded/` is never the target: an archived brief keeps its own section
+    numbering, and check 2 already owns whether the path resolves at all.
+    """
+    skip = set(ignores.get("sections", {}).keys())
+    live = {p.name: p.read_text(encoding="utf-8") for p in live_docs()}
+    hits: list[str] = []
+
+    scan: list[Path] = [ROOT / "CLAUDE.md"]
+    for tree in SOURCE_TREES:
+        scan.extend(
+            p for p in (ROOT / tree).rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES
+        )
+    scan.extend(live_docs())
+
+    for path in scan:
+        rel = path.relative_to(ROOT).as_posix()
+        # The checker names these tokens as its own examples, so scanning it
+        # reports the description of the check as an instance of the fault.
+        if rel in EXCLUDED_FILES or path == Path(__file__).resolve():
+            continue
+        try:
+            text = flattened(path)
+        except UnicodeDecodeError:
+            continue
+
+        for m in SECTION_TOKEN.finditer(text):
+            token = " ".join(m.group(0).split())
+            # The nearest document named before this token, within a window wide
+            # enough to span a wrapped sentence but not a whole paragraph.
+            before = text[max(0, m.start() - 220) : m.start()]
+            docs = DOC_NAME.findall(before)
+            if not docs:
+                continue
+            target = docs[-1]
+            if target not in live or f"{token}@{rel}" in skip:
+                continue
+            if token not in live[target]:
+                hits.append(f"{rel:<30} cites {target} `{token}` -- no such section")
+
+    findings.add(
+        "Section references that no longer resolve",
+        sorted(set(hits)),
+        f"{len(skip)} known-benign entr(y/ies) ignored",
     )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--only", choices=["symbols", "paths", "mcp", "numbers"], help="run one check")
+    ap.add_argument("--only", choices=["symbols", "paths", "mcp", "modules", "sections"], help="run one check")
     args = ap.parse_args()
 
     ignores = load_ignores()
@@ -369,8 +460,10 @@ def main() -> int:
         check_paths(findings)
     if args.only in (None, "mcp"):
         check_mcp_parity(findings)
-    if args.only in (None, "numbers"):
-        check_measured_numbers(findings)
+    if args.only in (None, "modules"):
+        check_long_modules(findings, ignores)
+    if args.only in (None, "sections"):
+        check_section_refs(findings, ignores)
 
     return findings.report()
 

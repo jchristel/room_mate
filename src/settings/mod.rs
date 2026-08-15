@@ -244,7 +244,8 @@ pub enum MeasurementStandard {
 /// so it rides the upload envelope. Which measurement standard applies is
 /// **contractual**, and the width above which a gap stops being a wall and
 /// becomes a void is a **project judgement** — neither is discoverable from the
-/// model, so both live here. See STRATEGY-AREA-CALCULATION.md §6.
+/// model, so both live here. What the resulting number may be *called* is
+/// STRATEGY-AREA-CALCULATION.md, "Relationship to measurement standards".
 ///
 /// `max_wall_thickness` is deliberately **one quantity with two consumers**:
 /// `service::areas` sizes its wall zone by it and `service::adjacency` uses it
@@ -258,16 +259,17 @@ pub enum MeasurementStandard {
 /// `comparison_properties`, because those name *room* properties. A door's
 /// vocabulary is a different one that merely overlaps in spelling — `Mark` on a
 /// door and `Mark` on a room are different properties that happen to share a
-/// name ([Entities](../../docs/STRATEGY-ENTITIES.md) Decision 1) — so one shared
-/// setting would silently mean two things.
+/// name — so one shared setting would silently mean two things. That is the
+/// "which canonical property names exist at all" item on
+/// [Entities](../../docs/STRATEGY-ENTITIES.md)'s "what does not generalize" list.
 ///
-/// Deliberately narrow. Decision 6's `room_attribution` and
-/// `reconcile_room_reference` are **not** here: both depend on which of a door's
-/// two rooms owns it, which is an open question, and a setting with a default
-/// would answer it by accident.
+/// The settings that depend on *which* of a door's two rooms owns it —
+/// `room_attribution` and `room_reference_property` — waited for that question
+/// to be answered rather than shipping with a default that would have settled
+/// it by accident. Both now live on `DoorPolicy`.
 /// Which of a door's two room references attributes it to a room, for area
-/// rollups, hierarchy scoping and door schedules
-/// ([Entities](../../docs/STRATEGY-ENTITIES.md) Decision 6).
+/// rollups, hierarchy scoping and door schedules. The attribution rule itself
+/// is in `CLAUDE.md`.
 ///
 /// **The default is a precedence chain, not a single pick**, and that is the
 /// decision rather than a convenience. Each single pick leaves external doors
@@ -337,8 +339,8 @@ pub struct DoorPolicy {
 
     /// Which room a door belongs to (see `RoomAttribution`).
     ///
-    /// **This has a default, reversing what Decision 6 originally proposed.**
-    /// That section argued for no default, on the grounds that an unset value
+    /// **This has a default, reversing what the design originally proposed.**
+    /// That sketch argued for no default, on the grounds that an unset value
     /// meaning "do not attribute" is honest rather than arbitrary. The argument
     /// was sound for a *single pick* — choosing `to_room` on a project's behalf
     /// would silently mis-attribute every external door. It stops holding for
@@ -353,8 +355,8 @@ pub struct DoorPolicy {
     /// `room_attribution` actually picked. Absent — the default — disables the
     /// check.
     ///
-    /// **A property name rather than the `reconcile_room_reference = true`
-    /// Decision 6 sketched.** A bool would have needed the property name
+    /// **A property name rather than the `reconcile_room_reference = true` the
+    /// design first sketched.** A bool would have needed the property name
     /// hard-coded, and which parameter carries this is a family-and-office
     /// convention, not a fact about doors. One field states both that the check
     /// is wanted and what it reads.
@@ -397,8 +399,8 @@ pub struct AreaPolicy {
     /// **Zero is not how you say "centreline".** That is the *regime*, declared
     /// per model on the envelope, and it collapses the effective gap to zero
     /// (see `wall_gap_ft`). Conflating the two would make a project-wide policy
-    /// value override a per-model fact — the exact mistake Decision 1 exists to
-    /// prevent. `adjacency`'s `?wall_max=0` request parameter is a different
+    /// value override a per-model fact — the exact mistake declaring the regime
+    /// per model exists to prevent. `adjacency`'s `?wall_max=0` request parameter is a different
     /// thing again: a caller asking one question, not a project declaring policy.
     #[serde(default = "AreaPolicy::default_max_wall_thickness")]
     pub max_wall_thickness: f64,
@@ -482,7 +484,7 @@ impl AreaPolicy {
     /// The gap this regime implies, in feet — the one number `areas` closes by
     /// and `adjacency` defaults to. Centreline rooms already touch, so there is
     /// nothing to bridge and nothing to fill: zero, not a small number. That
-    /// zero is the whole payoff of Decision 1 — at radius zero the morphological
+    /// zero is the whole payoff of declaring the regime — at radius zero the morphological
     /// close is the identity, so bevels, chamfers, spikes and sibling overlaps
     /// cannot arise at all rather than merely being smaller.
     pub fn wall_gap_ft(&self, boundary: crate::contract::RoomBoundary) -> f64 {
@@ -1128,7 +1130,7 @@ mod tests {
     /// Regime resolution is three levels, most authoritative first: the model's
     /// own declaration beats the project fallback, which beats finish face. The
     /// first of those is the load-bearing one — a project fallback that could
-    /// override a model that states its own regime would defeat Decision 1.
+    /// override a model that states its own regime would defeat the declaration.
     #[test]
     fn test_area_policy_resolve_boundary_precedence() {
         use crate::contract::RoomBoundary::{Centreline, FinishFace};

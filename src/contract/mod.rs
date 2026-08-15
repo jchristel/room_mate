@@ -21,8 +21,8 @@
 //! out alongside doors: nothing motivates that yet, and moving a file's worth of
 //! code with no reason to is how a split stops being reviewable. What is shared
 //! stays here and is imported by `doors`, so neither entity carries a private
-//! copy of the envelope — see STRATEGY-ENTITIES.md Decision 1's list of what
-//! generalizes.
+//! copy of the envelope — see STRATEGY-ENTITIES.md, "What makes something a
+//! primary entity", for the list of what generalizes.
 
 use std::collections::BTreeMap;
 
@@ -276,7 +276,9 @@ impl ModelToShared {
 /// million-foot spike, sibling overlaps — is downstream of that guess. Declaring
 /// the regime does not merely improve the tolerance: on a centreline model the
 /// close radius collapses to zero and the entire artifact class cannot arise.
-/// See STRATEGY-AREA-CALCULATION.md §2, "The two regimes".
+/// The two regimes and what each implies are in `service::areas`' module
+/// header; what the resulting number may be *called* is
+/// STRATEGY-AREA-CALCULATION.md.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomBoundary {
@@ -412,7 +414,7 @@ pub struct StreamEnvelope {
 /// did (an un-placed model, rendered via auto-fit).
 ///
 /// Still 5 after the optional `room_boundary` envelope field
-/// (STRATEGY-AREA-CALCULATION.md §2) joined it, on the same
+/// (see `RoomBoundary`) joined it, on the same
 /// `model_to_shared` precedent: absent it defaults to `None`, and a payload
 /// that omits it means exactly what it did before — a model whose regime the
 /// server infers from project policy rather than reads.
@@ -485,7 +487,7 @@ pub enum PropertyPresence {
 /// carries its own instance properties *and* its family type's, shared across
 /// every instance of that type, and the two are different claims — "this leaf
 /// is 820 wide" versus "every door of this type is 820 wide"
-/// (STRATEGY-ENTITIES.md Decision 4). Flattening them into one map at the
+/// (see `contract::doors`). Flattening them into one map at the
 /// contract level would lose that distinction permanently, so the tiers stay
 /// separate on the type and this trait is how a *lookup* walks them.
 ///
@@ -527,7 +529,7 @@ impl PropertyTiers for Room {
 /// collision as a data-quality signal — was rejected against the same data:
 /// `Workset` and `Edited by` collide on *every* door because Revit carries them
 /// on instances and types alike, so the check would fire on 26 of 26 doors and
-/// mean nothing. Decision 4's separation is preserved by the two maps staying
+/// mean nothing. The tier separation is preserved by the two maps staying
 /// two maps on the wire, not by making an overlap an error.
 pub fn property_presence(
     entity: &impl PropertyTiers,

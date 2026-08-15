@@ -18,7 +18,7 @@
 //! hypothetical: two rooms can share a wall with no door in it, and a door can
 //! connect two rooms sharing almost no wall. **It is a second edge set over the
 //! same rooms, not a refinement of this one**
-//! ([Entities](../../docs/STRATEGY-ENTITIES.md) Decision 6), so this endpoint
+//! ([Entities](../../docs/STRATEGY-ENTITIES.md), "Deferred"), so this endpoint
 //! keeps its meaning unchanged and connectivity gets its own when it is built.
 //! Anyone wanting "which rooms are connected by a door" today can read it off
 //! `/doors` directly — every door names both of its rooms.

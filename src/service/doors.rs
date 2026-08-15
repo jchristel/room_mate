@@ -10,9 +10,9 @@
 //!
 //! `?building=` **is** supported, and was the last thing to arrive: a door's
 //! building is its *owning* room's building, so the scope only became
-//! answerable once `[doors] room_attribution` settled
-//! [Entities](../../docs/STRATEGY-ENTITIES.md) Decision 6. Before that, any
-//! answer would have settled that question by accident.
+//! answerable once `[doors] room_attribution` settled which room owns a door
+//! (the attribution rule is in `CLAUDE.md`). Before that, any answer would have
+//! settled that question by accident.
 
 use std::collections::BTreeMap;
 
@@ -161,7 +161,7 @@ pub struct DoorScope<'a> {
     /// Opaque building key, as for rooms — **a door's building is its owning
     /// room's building.** This became answerable only once
     /// `[doors] room_attribution` decided which room owns a door; before that,
-    /// any answer would have settled Decision 6 by accident.
+    /// any answer would have settled the ownership question by accident.
     ///
     /// A **homeless door matches no building**, which is the honest reading and
     /// worth stating: it is not evidence the door belongs elsewhere, only that
