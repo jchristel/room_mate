@@ -133,18 +133,24 @@ green one serving a stale renderer.
 
 ## House rules the code won't tell you
 
-- **Tests are inline** — `#[cfg(test)] mod tests` at the bottom of the file they
-  exercise, never a `tests/` tree. A shared helper is duplicated per module
-  rather than hoisted.
-- **Doc comments carry the *rationale*** — why this seam, what breaks otherwise,
-  what was rejected. Not a restatement of the what. This is the single most
-  visible house style; matching ordinary Rust terseness reads as foreign.
+The rules in short form, so nothing here is violated mid-task by not having read
+another file. Each is stated in full, with its reasoning, in
+[`CODING-CONVENTIONS.md`](docs/CODING-CONVENTIONS.md) — go there before arguing
+with one, not here.
+
+- **Tests are inline**, never a `tests/` tree; a shared helper is duplicated per
+  module rather than hoisted.
+- **Doc comments carry the *rationale***, not a restatement of the what. This is
+  the single most visible house style; matching ordinary Rust terseness reads as
+  foreign.
 - **`service/` is transport-agnostic** — never imports `axum` or `rmcp`.
-  `handlers.rs` (HTTP) and `bin/mcp.rs` (MCP) are thin adapters over it, and
-  `bin/mcp.rs` keeps one tool per HTTP *read* route (update its count when you
-  add one).
+  `handlers.rs` and `bin/mcp.rs` are thin adapters over it, and `bin/mcp.rs`
+  keeps one tool per HTTP *read* route (update its count when you add one).
 - **"Signal, not error"** — an unresolved cross-reference is usually a reported
   state, not a failure.
+- **Line endings are LF**; see Traps below for the one way that goes wrong here.
+- **A module past ~500 real lines is a split candidate**, not a violation — but
+  if it stays whole, say why in its header.
 
 ## Empty pushes, and the two guards that were wrong
 

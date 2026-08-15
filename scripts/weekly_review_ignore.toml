@@ -45,5 +45,19 @@
 #     the 2026-08-08 review found. ---
 "DrofusRecord" = "STRATEGY-SOURCES:65 explains 'ReferenceRecord, renamed from DrofusData/DrofusRecord'"
 "BuiltinProperties" = "STRATEGY-SOURCES:236 describes a v3 design that was reconsidered"
-"contract.rs@CODING-CONVENTIONS.md" = "the measured-module note records the pre-split size and that the split happened"
 "contract.rs@STRATEGY-ENTITIES.md" = "Decision 4 says 'the former contract.rs' to name the split doors triggered"
+
+# Modules past CODING-CONVENTIONS' ~500 real-line split trigger that have been
+# judged and kept whole. Being over the trigger is not a defect — it is "worth a
+# second look" — so this section records the second look, and an entry here is a
+# claim that the same reason is (or should be) in the module's own header, where
+# the next reader of that file will find it.
+#
+# An entry is NOT a permanent exemption. Delete it if the module's shape changes
+# and the argument stops holding.
+
+[modules]
+
+"handlers.rs" = "ingest is the one part with no service/ counterpart (MCP exposes none), so it accretes here by design; the seam if it ever splits is ingest versus the read adapters"
+"storage/fs.rs" = "one impl of one trait — splitting the impl from its trait contract would separate the rules from the code that keeps them"
+"contract/mod.rs" = "already split once, when doors triggered it; rooms deliberately did not move out alongside them, and its header says why"

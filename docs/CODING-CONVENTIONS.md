@@ -18,55 +18,32 @@ write it" that sits underneath.
 - A type's inherent `impl { fn validate() }` stays *with the type*; only
   standalone free functions move to a sibling file (see `settings/`).
 
-**Where the codebase actually stands (re-measured 2026-08-08, after doors).**
-Twelve modules are past the ~500 real-line trigger — `service/rooms.rs` (1,165),
-`service/areas.rs` (1,086), `handlers.rs` (1,057), `settings/mod.rs` (1,034),
-`service/validation.rs` (947), `service/adjacency.rs` (772), `bin/mcp.rs` (762),
-`service/comparison.rs` (690), `contract/mod.rs` (690), `storage/fs.rs` (598),
-`state.rs` (532), `settings_api.rs` (511). That is not automatically a defect:
-the trigger is "worth a second look", not a limit. But only `adjacency.rs`
-writes down *why* it declined to split, and a rule nothing is measured against
-stops being a rule.
+**Being over the trigger is not a defect — but it has to be *judged*, and the
+judgement has to be written down.** `scripts/weekly_review.py` measures `src/`
+and reports every module past the trigger that has not been. A module judged and
+kept whole goes in `weekly_review_ignore.toml` under `[modules]` with its reason,
+and that same reason belongs in the module header, where the next reader of the
+file will find it.
 
-**These figures are now checked rather than merely recorded.**
-`scripts/weekly_review.py` re-measures every number above and reports any that
-has drifted more than 10%, counting non-test lines as everything before the
-first `#[cfg(test)]`. That check exists because the previous set sat here from
-2026-08-01 until it had drifted as far as +47% (`service/validation.rs`) and was
-naming a file that no longer existed (`contract.rs`) — which is precisely the
-failure the paragraph above warns about, committed by the paragraph itself.
+This used to be a hand-copied census of twelve modules and their sizes, with the
+script re-verifying the numbers. It drifted to +47% and named a deleted file
+before anyone noticed — the exact failure this section warns about, committed by
+the section itself. Measure the code, never a sentence about the code.
 
-Three moved materially in the phasing change that preceded the 2026-08-01
-measurement, all for the same reason, and each is a different answer:
+Three modules carry a recorded judgement today. The rest of the backlog is
+whatever the check reports; two of them are worth naming because the answer is
+known and only the writing-down is missing:
 
-- **`handlers.rs` (586 → 744)** absorbed the ingest phase rules (`decide_phase`,
-  `store_or_quarantine`) plus the pending routes. Ingest is the one part of this
-  file with no `service/` counterpart — it has no derive logic worth sharing with
-  MCP, which exposes no ingest — so it accretes here by design. The seam if it
-  ever splits is obvious and clean: ingest versus the read adapters.
-- **`contract.rs` (519 → 615) took the phase field and its two helpers, and has
-  since split.** [Entities](STRATEGY-ENTITIES.md) called for splitting it into
-  `contract/` when doors landed, and that is what happened: `contract/mod.rs`
-  (690) plus `contract/doors.rs` (321). Doors were a *distinct entity* — a
-  natural seam rather than a mechanical one — which is why they justified the
-  split and phase alone had not.
-- **`storage/fs.rs` (→ 583)** is newly over the trigger, from the pending-snapshot
-  quarantine. It stays whole: it is one impl of one trait, and splitting an impl
-  from its trait contract would separate the rules from the code that keeps them.
-
-Two of the long-standing twelve are still worth naming specifically:
-
-- **`settings/mod.rs` at 1,034 lines is the one that reads as unfinished**, and
-  it has grown ~25% since it was first named here. The
-  `settings/` split was done — and is cited above as the worked example — yet
-  `mod.rs` kept the bulk rather than becoming the thin re-export the pattern
-  describes. The types are already grouped by concern in the file (area policy,
-  dRofus field config, hierarchy, milestones, colour plans), so the seams exist.
+- **`settings/mod.rs` reads as unfinished.** The `settings/` split was done — it
+  is the worked example above — yet `mod.rs` kept the bulk rather than becoming
+  the thin re-export the pattern describes. The types are already grouped by
+  concern in the file (area policy, reference field config, hierarchy,
+  milestones, colour plans), so the seams exist.
 - **`areas.rs` and `rooms.rs` are cohesive by argument, not by accident** — one
-  geometry pipeline and one assembly pipeline respectively, each with an
-  invariant only checkable by reading the parts together. If they stay whole,
-  say so in the header the way `adjacency.rs` does, so the next reader knows it
-  was decided rather than deferred.
+  geometry pipeline and one assembly pipeline, each with an invariant only
+  checkable by reading the parts together. That argument has never been written
+  into either header, so the next reader cannot tell it was decided rather than
+  deferred. Writing it is the whole task.
 
 ## Tests
 - Unit tests live **inline** as `#[cfg(test)] mod tests` at the bottom of the
@@ -104,27 +81,21 @@ Two of the long-standing twelve are still worth naming specifically:
   (`ScopedPayload`, `LinkValueIndex`) — it reads better *and* silences clippy's
   `type_complexity`.
 
-## `static/` — the frontend now has a toolchain, and a migration direction
-`Superseded/PLAN-handover-actioning.md`'s P10 flagged the missing-rule gap and
-deliberately left it a question rather than answering it by accretion, when
-`index.html` was 2,020 lines. It is now **4,369** — and the direction of travel
-finally changed: the renderer work moved ~600 lines out into **2,150 lines of
-TypeScript in `src-js/`** (measured 2026-08-02, excluding tests), so the page
-grew while the code it owns shrank. That is the migration rule below working,
-not a line count to chase. Before that split it was 4,211 (3,511 of them one
-inline
-`<script>`), and two extractions happened without a rule prompting them —
-`common.js` (the palette and the classification-path vocabulary, moved because
-two views disagreeing about a group's identity is worse than either being
-arbitrary) and `graph.js` (moved because the concern boundary is a different
-renderer). Both were pulled by a *specific* argument, and that remains the rule:
-**extract when two consumers must agree, or when the boundary is a genuinely
-different concern — not to hit a line count.**
+## `static/` — the frontend toolchain and its migration direction
+**Extract when two consumers must agree, or when the boundary is a genuinely
+different concern — not to hit a line count.** The two extractions that happened
+before any rule prompted them were each pulled by a specific argument, and they
+are the two shapes: `common.js` (the palette and the classification-path
+vocabulary, because two views disagreeing about a group's identity is worse than
+either being arbitrary) and `graph.js` (because the concern boundary is a
+different renderer).
 
-What has changed is the constraint that made anything more aggressive expensive.
-The zero-build vanilla rule was a **proof-of-concept-stage decision and is
-retired** (docs/Superseded/PLAN-webgl-renderer.md, "The premise that changed"). The
-frontend now has:
+Page size is deliberately **not** the trigger, and reading it as one inverts the
+answer: `index.html` grew while the code it owns shrank, because the renderer
+work moved out into `src-js/`. That is the migration rule working.
+
+The zero-build vanilla rule was a proof-of-concept-stage decision and is
+**retired**. The frontend now has:
 
 - **`src-js/` — TypeScript, built by Vite, `npm run build`.** Where new frontend
   code lands. `strict`, plus `noUncheckedIndexedAccess` and
@@ -163,14 +134,14 @@ surface, not a hard failure — pick the shape that fits:
 - **soft-empty** (unknown/unregistered project → `[]`/`204`, not `404`);
 - **skip + warn** (a milestone pin to a since-deleted snapshot → drop that
   model, log it);
-- **fall back + warn** (a milestone's dRofus pin that's missing/unparseable →
-  join the current dRofus instead).
-An unmatched dRofus key, a room↔level mismatch, and a partially-classified room
-are all diagnostic signals, not errors.
+- **fall back + warn** (a milestone's reference pin that is missing or
+  unparseable → join that source's current data instead).
+An unmatched reference key, a room↔level mismatch, and a partially-classified
+room are all diagnostic signals, not errors.
 
 ## Loud startup over silent no-op
 - Config mistakes fail the boot with a **specific** message (an unkeyable
-  hierarchy tier, a `drofus_fields` label the CSV never declared, a malformed
+  hierarchy tier, a reference `fields` label the CSV never declared, a malformed
   strftime pattern) rather than silently misbehaving on the first request.
 - The settings-save path re-runs the **exact** startup validation
   (`bootstrap::load_project_bundle`) before installing a file, so a file the API
@@ -186,7 +157,7 @@ are all diagnostic signals, not errors.
   never a reimplementation. Any new upload type rides the same envelope.
 - **Validate uploaded data before storing it** — a stored artifact is hydrated
   at every boot, so accepting a bad one turns a bad upload into a failed
-  startup. (See the dRofus upload path.)
+  startup. (See the reference-source upload path.)
 
 ## Line endings
 - `*.rs`, `*.py`, and config files are **LF** in the working tree, enforced by
@@ -228,27 +199,20 @@ carries the rationale, this one says that is therefore the only place it goes.
   brief is retired, its surviving open items move into the strategy doc that
   owns them first.
 
-## TOML footgun (serialize side) — now guarded, not live
-- **The rule stays: declare scalar and inline-array fields before any
-  map/`Vec<Struct>` field** (e.g. `Milestone.name`/`date` before
-  `reference_snapshots` and `attachments`; every scalar must precede *both* of
-  those). Free to follow, and it is the shape the structs already have.
-- **But it no longer bites, and that was worth measuring.** The hazard is that a
-  value emitted *after* a `[table]` header parses back as a key inside that
-  table — the value survives, it just moves, which is why round-trip tests that
-  compare values cannot see it. Under `toml 0.8` the serializer emits **all**
-  value-typed fields before any table regardless of declaration order, so the
-  hazard is currently unreachable. Verified against both write paths
-  (`settings_api::save_project` and `FsStore::write_manifest`, both
-  `to_string_pretty`) and against `to_string`.
-- **`settings_api::tests::test_toml_serializer_hoists_values_above_tables` is
-  the guard.** It serializes a struct declared in deliberately the wrong order
-  and asserts the values still land top level, so the day a `toml` upgrade, a
-  move to `toml_edit`, or a hand-rolled writer restores source-order emission,
-  it fails *before* settings files start being written wrong.
-  `test_project_manifest_scalars_stay_top_level` does the same for
-  `project.toml`, whose corruption fails every read and the next boot while the
-  snapshots beside it stay intact.
-- The reason to keep both the rule and the test: a discipline nothing measures
-  is one nobody can tell has stopped being necessary — and, worse, one nobody
-  notices has started being necessary again.
+## TOML footgun (serialize side)
+- **Declare scalar and inline-array fields before any map/`Vec<Struct>` field**
+  (e.g. `Milestone.name`/`date` before `reference_snapshots` and `attachments`).
+  Free to follow, and it is the shape the structs already have.
+- **The hazard is silent when it bites**: a value emitted *after* a `[table]`
+  header parses back as a key inside that table. The value survives, it just
+  moves — which is why a round-trip test comparing values cannot see it.
+- **Keep the rule even though the current `toml` cannot break it.** The
+  serializer hoists all value-typed fields above every table regardless of
+  declaration order, so the hazard is presently unreachable — but a version
+  bump, a move to `toml_edit`, or a hand-rolled writer restores it. Two guards
+  (`test_toml_serializer_hoists_values_above_tables`,
+  `test_project_manifest_scalars_stay_top_level`) fail the day that happens,
+  which is *before* settings files start being written wrong.
+- The general form, and the reason both the rule and the guards stay: a
+  discipline nothing measures is one nobody can tell has stopped being
+  necessary — and, worse, one nobody notices has started being necessary again.

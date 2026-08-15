@@ -248,8 +248,8 @@ impl ModelEntry {
 /// `fn put<T: Serialize>` is out. Adding a `kind` parameter while the payload
 /// type stayed `RoomPayload` would have accomplished nothing. The alternative,
 /// a parallel `put_doors`/`get_latest_doors`/… set, is precisely what
-/// STRATEGY-ENTITIES.md Decision 3 exists to prevent: it would be the third
-/// such set, and FFE would make it a fourth. (PLAN-generalisation.md R1.)
+/// the bytes-at-the-trait-boundary rule exists to prevent (`CLAUDE.md`): it
+/// would be the third such set, and FFE would make it a fourth.
 ///
 /// It is also not a new pattern here — `put_reference` has always been bytes in,
 /// a discriminator alongside, and typed parsing above. R1 applied the store's
