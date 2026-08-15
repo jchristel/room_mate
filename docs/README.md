@@ -4,11 +4,10 @@ Design and strategy documentation for the Revit → Rust → browser room data
 pipeline.
 
 **The strategy docs record outstanding work and the rules that constrain it, not
-what already ships.** What ships is documented where it is implemented: module
-headers in `src/` and `src-js/`, the extractor in `extractor/pyRevit/`, and
-`CLAUDE.md` for the invariants that are expensive to rediscover. If a strategy
-doc starts describing a built feature, that description has become a second copy
-free to drift from the first — delete it rather than maintain it.
+what already ships** — that lives in the module headers, which already carry the
+rationale. The rule, and the ways it gets broken, are one section of
+[Coding Conventions](CODING-CONVENTIONS.md): "Code documents what is built; a
+strategy doc documents what is not".
 
 ## Strategy
 

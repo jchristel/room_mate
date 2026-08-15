@@ -96,13 +96,15 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 
 ## Which document wins
 
-[`docs/README.md`](docs/README.md) indexes everything. The strategy docs record
-**outstanding work only** — what ships is documented where it is implemented, so
-a strategy doc that describes a built feature has drifted by definition.
-`docs/Superseded/` is an archive: nothing there is live, and the strategy docs
-deliberately no longer link into it.
+[`docs/README.md`](docs/README.md) indexes everything. **The strategy docs hold
+only what is *not* built; the code documents what is.** Shipping a feature
+includes deleting its description from the strategy doc — and does *not* mean
+growing the doc comment to compensate. The rule and its failure modes are in
+[`CODING-CONVENTIONS.md`](docs/CODING-CONVENTIONS.md) under "Code documents what
+is built"; read it before adding prose to a `STRATEGY-*.md`.
 
-The archive pins `file.rs:NNN` line numbers that have drifted — trust the
+`docs/Superseded/` is an archive — nothing there is live, live docs do not link
+into it, and it pins `file.rs:NNN` line numbers that have drifted. Trust the
 *symbol* name, search for it, never jump to the line.
 
 ## Verify before claiming done

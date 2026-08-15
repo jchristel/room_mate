@@ -200,6 +200,34 @@ are all diagnostic signals, not errors.
   this seam, why this fallback, what would break otherwise) — the thing a future
   reader can't recover from the code alone.
 
+## Code documents what is built; a strategy doc documents what is not
+The other half of "Annotate the why", and the rule that decides *which file* a
+piece of prose belongs in. Read the two together: the first says the code
+carries the rationale, this one says that is therefore the only place it goes.
+
+- **A strategy doc holds only what is *not* built** — deferred work, designs
+  settled but unimplemented, and the rules that constrain what gets built next.
+  Anything else in one is a second copy of the module header, free to drift from
+  it, and it does: the docs went on naming a `drofus` module for weeks after the
+  rename, and described the plan renderer as "SVG today" a fortnight after it
+  moved to WebGL.
+- **So when a feature ships, deleting its description from the strategy doc is
+  part of that change**, not tidy-up for later. What survives the deletion is
+  whatever the code cannot state — an open question, a rejected alternative, a
+  constraint on the next change, a definition contested outside this repo (the
+  measurement standards are the type specimen).
+- **This is not a licence to grow the doc comments.** They are already thorough;
+  the point is that the prose beside them is redundant, not that more prose is
+  needed. Before deleting a section, *check* the relevant header carries the
+  rationale — usually it already does. If it genuinely doesn't, add the one
+  sentence it lacks and delete the section regardless. Never mirror a doc
+  section into a header wholesale to make the deletion feel safe: that recreates
+  the duplication one file to the left.
+- **`docs/Superseded/` is an archive, and live docs do not link into it.** A
+  live item cited from a superseded brief is a live item nobody finds. When a
+  brief is retired, its surviving open items move into the strategy doc that
+  owns them first.
+
 ## TOML footgun (serialize side) — now guarded, not live
 - **The rule stays: declare scalar and inline-array fields before any
   map/`Vec<Struct>` field** (e.g. `Milestone.name`/`date` before
