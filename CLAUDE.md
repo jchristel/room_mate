@@ -96,15 +96,14 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 
 ## Which document wins
 
-[`docs/README.md`](docs/README.md) indexes everything. Two supersessions matter:
+[`docs/README.md`](docs/README.md) indexes everything. The strategy docs record
+**outstanding work only** — what ships is documented where it is implemented, so
+a strategy doc that describes a built feature has drifted by definition.
+`docs/Superseded/` is an archive: nothing there is live, and the strategy docs
+deliberately no longer link into it.
 
-- **Phase:** [`PLAN-phasing.md`](docs/Superseded/PLAN-phasing.md) is authoritative over
-  `STRATEGY-ENTITIES.md` Decision 2.
-- **Generalisation:** [`PLAN-generalisation.md`](docs/Superseded/PLAN-generalisation.md)
-  supplies the signatures `STRATEGY-ENTITIES.md` Decisions 3 and 5 only assert.
-
-Docs pin `file.rs:NNN` line numbers that have drifted — trust the *symbol* name,
-search for it, never jump to the line.
+The archive pins `file.rs:NNN` line numbers that have drifted — trust the
+*symbol* name, search for it, never jump to the line.
 
 ## Verify before claiming done
 

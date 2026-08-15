@@ -1,149 +1,42 @@
 # RoomMate — Area calculation
 
-How a room set becomes a per-tier area figure, why that is harder than it looks,
-and what the number does and does not mean.
+What the area figure means, how it relates to the published measurement
+standards, and what is still open.
 
 This has its own document because it is the only part of the pipeline where the
 **definition of the output is contested**. Everywhere else the server reports
 what the model says; here it has to decide what a wall belongs to, and reasonable
-standards disagree. Two prior designs were reversed before this one, both because
-the definition was implicit — so the definition is written down first, and the
-algorithm second.
+standards disagree. **The algorithm is not described here** — it lives in
+`src/service/areas.rs`, whose module header carries the wall zone, the ownership
+theorem and the junction correction in full. This document carries the part no
+code comment can settle: what the number may be *called*, and what is unfinished.
 
-- Implementation: `src/service/areas.rs`. Endpoint: `GET /projects/{id}/areas`
-  (see [Server](STRATEGY-SERVER.md)).
-- The regime it depends on rides the upload envelope (see [STRATEGY.md](STRATEGY.md)
-  "The upload envelope") and its policy lives in project settings.
-- Design history and the measured before/after:
-  [HANDOVER-areas-boundary-location.md](Superseded/HANDOVER-areas-boundary-location.md).
+## The three properties everything else is subordinate to
 
----
-
-## 1. What the number is
-
-An **aggregated room footprint**: room area, plus the wall bands the group
-encloses, minus genuine voids. It is **not** net room area and **not** a
-standards-defined gross. Whether it coincides with a standard depends on the
-model's boundary regime — see §6, which is the section to read before quoting a
-figure to anyone external.
-
-Three properties are non-negotiable, and everything else is subordinate to them:
+Any change to `service::areas` is measured against these, so they are stated here
+rather than only asserted by a test:
 
 1. **Measured, never summed.** Each tier's area is the area of that tier's own
    polygon. Summing children mishandles the wall between them, in whichever
    direction the convention pushes it.
 2. **Exactly additive.** `parent = Σ children + the bands the parent is the
-   first tier to enclose`. Asserted to 0.05 ft² by
-   `test_tier_areas_are_exactly_additive`. An area schedule that does not add up
-   is not an area schedule.
+   first tier to enclose`, asserted to 0.05 ft². An area schedule that does not
+   add up is not an area schedule.
 3. **No double counting.** No two groups at one tier may claim the same square
    foot, and no wall may be counted at two tiers.
 
-## 2. The two regimes, and why the server cannot guess
+Additivity is the constraint that is *not* in the geometry literature (see
+below), and it is the one most likely to be broken by a well-meant local fix.
 
-Revit's `SpatialElementBoundaryLocation` decides where a room's boundary sits:
+## Relationship to measurement standards — read before quoting a figure
 
-- **Centreline** — rooms tile edge-to-edge. Each room polygon already contains
-  **half of every wall bounding it**. There is no gap and nothing to fill.
-- **Finish face** — rooms float inside their walls. Neighbours are separated by
-  roughly a partition's thickness, and a room polygon contains **none** of its
-  walls.
+The number is an **aggregated room footprint**: room area, plus the wall bands
+the group encloses, minus genuine voids. It is **not** net room area and **not**
+a standards-defined gross. `measurement_standard` is declared per project and
+echoed on every response, because an area figure without its definition is what
+standards exist to prevent.
 
-A single project mixes both, because the setting is per document and a project
-has several linked models. Sizing one tolerance for both is what the first two
-designs did, and every artifact they produced — bevelled corners, 45° chamfers,
-a 1,052,070 ft spike, overlapping siblings — was downstream of that guess.
-
-So the regime is **declared, not inferred**: `room_boundary` on the upload
-envelope, per model — the extractor reads the document's Area and Volume
-Computations setting once per model and stamps it
-(`extractor/pyRevit/room_mate.py`; Revit's four boundary locations collapse to
-these two, since only "is there a gap" matters here) — resolved per *level* (level dedup can put two models on one
-level; a disagreement widens to finish face). A centreline level runs at gap
-**zero** — the close is never invoked, and the artifact class cannot arise
-because the operation that produces it does not execute.
-
-When the declared regime contradicts the measured room gaps, the server **logs
-and continues**. It cannot know which of the two is wrong, and refusing to answer
-would remove the view that makes the problem visible.
-
-## 3. The wall zone
-
-One object, built once per level:
-
-```text
-wall_zone = (close(all rooms, gap/2) ∪ all rooms) − all rooms
-```
-
-It is every gap narrow enough to be a wall, and nothing else. Three properties
-fall out of that sentence rather than being enforced:
-
-- **It contains no room.** A group's share is a subset of it, so a footprint can
-  never reach inside a neighbour's room. This deleted a dedicated clip pass.
-- **It contains no void wider than `gap`.** A close at radius `gap/2` cannot
-  bridge anything wider, so a courtyard, atrium or lightwell is never in the set.
-  "Wider than a wall stays open" is arithmetic, not a rule — which is why the
-  earlier erode-to-empty void classifier is gone.
-- **Its outer boundary is the rooms' own exact boundary** wherever it faces open
-  space, because the original geometry is unioned back before the subtraction.
-  There are no chipped corners to repair.
-
-A group's share is whatever its **own** rooms close over, intersected with that
-ceiling:
-
-```text
-fill(P)      = close(rooms under P, gap/2) ∩ wall_zone
-footprint(P) = rooms under P ∪ fill(P)
-```
-
-## 4. Why the ownership rule is a theorem, not a policy
-
-The design rule is *a wall between two groups belongs to neither; it fills at
-their common ancestor.* That is not layered on top of the formula — it is what
-the formula computes. Writing `φ` for the close:
-
-- **`φ` is increasing** (`X ⊆ Y ⟹ φ(X) ⊆ φ(Y)`). Applied to
-  `rooms(P) ⊆ rooms(parent)`, that gives `fill(P) ⊆ fill(parent)` — the nesting
-  that makes areas additive.
-- **`φ` does not distribute over union**: `φ(X ∪ Y) ⊇ φ(X) ∪ φ(Y)`, strictly
-  wherever a gap between `X` and `Y` closes. **That strict part is the shared
-  wall.**
-
-Concretely: the band between room `a` of group A and room `b` of group B is not
-in `fill(A)` — dilating A reaches into it, but the erode pulls straight back out
-because nothing merged across. Same for B. Their ancestor holds both rooms, its
-close merges, and it claims the band exactly once.
-
-> **A correction worth keeping.** Two earlier documents said "closing is not
-> idempotent". Closing **is** idempotent (`φ(φ(X)) = φ(X)`), along with extensive
-> and increasing — those three are its definition (Serra 1982; Soille).
-> Non-distribution over union is the property that was meant, and it is the
-> stronger claim. What genuinely is not idempotent is `geo`'s **bevel-join
-> offset approximation**, which is not even extensive, since a bevel only ever
-> cuts a corner. That is why every tier is computed from the raw rooms rather
-> than from the tier below it: it keeps each footprint exactly one approximation
-> deep instead of compounding one per tier.
-
-## 5. The one place it needs help
-
-Where four rooms meet at a `+` junction, the small square at the centre is
-bounded by all four. If two belong to A and two to B, and the wall is thin
-enough that each pair's diagonal closes, **both** fill it. That is a genuine
-double count — and the design rule already answers it: bounded by two groups, so
-owned by neither. `resolve_sibling_overlaps` withdraws it from both and the
-ancestor picks it up, which is what keeps additivity exact.
-
-This is the design's own rule applied to one shape, not arbitration. It is
-junction-sized; the whole-footprint arbitration the previous design needed is
-gone.
-
-## 6. Relationship to measurement standards — read before quoting a figure
-
-`measurement_standard` is declared per project and **echoed on every response**,
-because an area figure without its definition is what standards exist to prevent.
-Today it is `null` on every real project, which is honest and not yet useful.
-
-The convention implemented here is a **house convention**. Compared wall by wall:
+The convention implemented is a **house convention**. Compared wall by wall:
 
 | wall | IPMS 3 | here |
 |---|---|---|
@@ -160,10 +53,8 @@ how one class of wall is split between the two children bounding it.
 Two consequences:
 
 - **On a centreline model this server already reports IPMS 3 department areas**,
-  without any code intending to — a centreline room polygon contains half of
-  each bounding wall, which *is* IPMS 3's rule, arrived at by modelling
-  convention. `test_centreline_and_finish_face_agree_on_the_same_building` is
-  where that is pinned down.
+  without any code intending to — a centreline room polygon contains half of each
+  bounding wall, which *is* IPMS 3's rule, arrived at by modelling convention.
 - **DIN 277 wants a different response, not a different rule.** All walls are
   Konstruktions-Grundfläche, a category of its own (`BGF = NRF + KGF`), never
   attributed to an occupier. The wall zone already *is* that quantity, so
@@ -171,10 +62,10 @@ Two consequences:
   behind it.
 
 **Therefore: do not set `measurement_standard = "IPMS3"` on a finish-face
-project** until the redistribution in §8 exists. On a centreline project it can
+project** until the redistribution below exists. On a centreline project it can
 be set today.
 
-## 7. Where this sits against the literature
+## Where this sits against the literature
 
 The closest existing field is **second-level space boundaries** in BIM/energy
 modelling (`IfcRelSpaceBoundary`) — "which space owns which piece of wall" is
@@ -183,22 +74,21 @@ exactly the question, and IFC→EnergyPlus translators have solved it for years
 that field **splits** a shared wall geometrically, usually at the centreline.
 This design refuses to split, and gives the band to the ancestor.
 
-What is *not* in that literature is the constraint that actually drove this
+What is *not* in that literature is the constraint that actually drove the
 design: **exact additivity up a classification hierarchy**. That comes from area
 scheduling and cost planning, not from geometry. Alpha shapes and characteristic
 shapes (Galton & Duckham 2006; Duckham et al. 2008) characterise "the footprint
-of a set" but carry no partition and no additivity. Space boundaries carry
+of a set" but carry no partition and no additivity; space boundaries carry
 adjacency but no hierarchy. The construction here is effectively a nested
 (laminar) family of sets over the wall zone, indexed by tree depth.
 
-Two places the literature has a better answer that was not taken, both recorded
-with citations in [the adjacency handover](Superseded/HANDOVER-adjacency.md)'s References section:
+Two places the literature has a better answer that was not taken:
 
 - **Junction handling.** A generalized Voronoi / straight-skeleton decomposition
   (Aichholzer & Aurenhammer, COCOON '96) would partition a junction exactly and
   need no withdrawal pass at all. `fill(P) = close(rooms(P)) ∩ zone` is a good
-  proxy for "bounded on both sides by P", and §5 is precisely where the proxy
-  frays.
+  proxy for "bounded on both sides by P", and the `+` junction is precisely where
+  the proxy frays.
 - **The residual chamfers.** Damen, van Kreveld & Spaan (ICA 2008) apply the same
   morphological operators to building generalization, observe that short edges
   survive, and clean them with **short-edge elimination** — rather than trying to
@@ -207,41 +97,41 @@ with citations in [the adjacency handover](Superseded/HANDOVER-adjacency.md)'s R
   distance cap is a hand-rolled **miter limit**; the standard answer is
   miter-with-a-limit at offset time (Clipper), not bevel-then-reconstruct.
 
-## 8. Open
+## Open
 
-- **No model has been read in the centreline regime end to end.** That path skips
-  the close entirely, so its failure mode is silence rather than an artifact.
-  The extractor now *declares* the regime (`extractor/pyRevit/room_mate.py` reads
-  Area and Volume Computations per document; see §2), so reaching this path no
+- **No model has been read in the centreline regime end to end.** That path
+  skips the close entirely, so its failure mode is silence rather than an
+  artifact. The extractor now *declares* the regime, so reaching this path no
   longer needs a project-settings override — it needs a centreline model. Every
   fixture and every model on hand is finish face.
-- **IPMS 3 redistribution for finish-face projects** (§6). Constructible from
-  what is already here: the bands A and B jointly enclose but neither encloses
-  alone are `close(rooms(A) ∪ rooms(B)) ∩ zone − fill(A) − fill(B)`, one extra
-  close per sibling pair, split 50/50, with three-way junctions handled by the
-  withdrawal that already exists. It is a `measurement_standard`-driven step
-  *after* the partition; additivity and the wall zone are untouched.
-- **DIN 277 KGF as its own reported figure** (§6).
+
+- **IPMS 3 redistribution for finish-face projects.** Constructible from what is
+  already here: the bands A and B jointly enclose but neither encloses alone are
+  `close(rooms(A) ∪ rooms(B)) ∩ zone − fill(A) − fill(B)`, one extra close per
+  sibling pair, split 50/50, with three-way junctions handled by the withdrawal
+  pass that already exists. It is a `measurement_standard`-driven step *after*
+  the partition; additivity and the wall zone are untouched.
+
+- **DIN 277 KGF as its own reported figure.** A response-shape change, per above.
+
 - **No project has declared a `measurement_standard`.** Every `/areas` response
-  says `null`, which is honest but not useful — the machinery exists and nobody
-  has used it. The question to answer *first* is not "which standard do we
-  like" but the one §6 raises: the convention this code implements (a wall
-  between two groups belongs to neither and fills at the common ancestor) is a
-  **house convention** matching neither IPMS 3 nor DIN 277, so declaring a
-  standard on a finish-face project would be a claim the numbers do not support.
-  Centreline projects are the exception and can be marked IPMS 3 today.
-- **No project has chosen a `max_wall_thickness` against a real model** — every
-  one runs on the 1.5 ft default, which was inherited from the constant it
-  replaced rather than measured. This is now **one value driving two services**
-  (`areas` sizes its wall zone by it, `adjacency` defaults its gap tolerance from
-  it), so it is probably the highest-leverage open item here. House A measures
-  0.317 ft wall gaps, so 0.5 ft is the obvious candidate for it — but see the
-  next item, because raising the value is what risks adjacency false positives,
-  and that is where the consequences of getting it wrong show up first.
+  says `null` — honest, but not useful: the machinery exists and nobody has used
+  it. The question to answer first is not "which standard do we like" but the one
+  the table above raises, since declaring a standard on a finish-face project
+  would be a claim the numbers do not support.
+
+- **No project has chosen a `max_wall_thickness` against a real model.** Every
+  one runs on the 1.5 ft default, inherited from the constant it replaced rather
+  than measured. This is **one value driving two services** — `areas` sizes its
+  wall zone by it, `adjacency` defaults its gap tolerance from it — so it is
+  probably the highest-leverage open item here. House A measures 0.317 ft wall
+  gaps, making 0.5 ft the obvious candidate, but see the next item: raising the
+  value is what risks adjacency false positives, and that is where the
+  consequences of getting it wrong show up first.
+
 - **Two adjacency false-positive checks, needing a model this repo does not
-  have.** Migrated here from `HANDOVER-adjacency.md` when that document was
-  superseded — everything else in it landed, and this is the one thing left. At
-  a realistic tolerance, confirm `service::adjacency` does **not** report
+  have.** At a realistic tolerance, confirm `service::adjacency` does **not**
+  report
 
   1. two rooms merely *facing each other across a corridor* as adjacent, and
   2. two rooms bridged *through* a thin service room (a riser or shaft narrower
@@ -251,8 +141,8 @@ with citations in [the adjacency handover](Superseded/HANDOVER-adjacency.md)'s R
   open.** `service::areas` rules both out *structurally* — a close at `gap/2`
   provably cannot fill a gap wider than `gap`, and the wall zone contains no
   rooms — whereas adjacency answers both with a segment-pair test plus a
-  midpoint-in-third-room occlusion check, which unit tests cover and nothing
-  else does.
+  midpoint-in-third-room occlusion check, which unit tests cover and nothing else
+  does.
 
   **House A cannot settle either, despite being real finish-face data**, and it
   is worth recording why so nobody spends an afternoon rediscovering it. It is a
@@ -274,11 +164,8 @@ with citations in [the adjacency handover](Superseded/HANDOVER-adjacency.md)'s R
   any with a third room's polygon between them. Against House A that gives a real
   finish-face regression baseline and evidence for setting `max_wall_thickness`.
   It does not tick 1 and 2, which want a hospital-scale finish-face export.
+
 - **Residual chamfers**: 3 on House A, 2 on `sample-project`, 14 on the synthetic
   `showcase`, all ≤1.06 ft and cosmetic. Two fixes were tried and reverted with
-  measurements; see [the adjacency handover](Superseded/HANDOVER-adjacency.md)'s DoD. Try short-edge elimination or a miter limit
-  before the T-vertex fix.
-- **Verification**: `scripts/check_areas.py` — six checks (spikes, area ratio,
-  true sibling overlap, invented edge directions, ring validity, tier
-  additivity), run against a live server, across **every** level. Two of the six
-  are also inline Rust tests.
+  measurements. Try short-edge elimination or a miter limit before the T-vertex
+  fix.
