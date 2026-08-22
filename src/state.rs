@@ -390,43 +390,6 @@ impl AppState {
             .transpose()
     }
 
-    /// Whether this `(project, model)` lineage has at least one live rooms
-    /// snapshot — the precondition for accepting a doors push.
-    ///
-    /// **Scoped to the model, not the project**, because that is the scope in
-    /// which the question means anything: room ids are unique only *within* a
-    /// model, so a door's `from_room`/`to_room` can only ever be resolved
-    /// against its own model's rooms. A doors push to a model with none would
-    /// store references that nothing could ever resolve.
-    ///
-    /// **It reads the latest snapshot, and that is a deliberate reversal.** This
-    /// used to answer from the snapshot index alone, never opening a file, on
-    /// the same "a gate costs a manifest read" discipline `get_phase` follows.
-    /// The cheap answer was wrong: it asks whether a snapshot *file* exists, not
-    /// whether it has rooms in it. On 2026-08-03 a model whose latest rooms
-    /// snapshot held zero rooms accepted a doors push of 26 doors referencing 22
-    /// distinct room ids, **none of which resolved** — the exact outcome this
-    /// gate exists to prevent, waved through by the gate itself.
-    ///
-    /// `reject_empty_rooms` now stops such a snapshot being stored at all, so
-    /// new data cannot reach this state. This still reads, because the five that
-    /// were already written are still on disk, and a gate that trusts history it
-    /// knows to be wrong is not a gate.
-    ///
-    /// One file read per doors push, on an operation that already writes one.
-    ///
-    /// A quarantined rooms push does not count: it is invisible to every read
-    /// path, so its rooms are not there to resolve against either.
-    pub fn has_room_snapshot(&self, key: &ModelKey) -> anyhow::Result<bool> {
-        let Some(latest) = self.store.list_snapshot_ids(SnapshotKind::Rooms, key)?.pop() else {
-            return Ok(false);
-        };
-        let raw = self.store.get_snapshot_raw(SnapshotKind::Rooms, key, &latest)?;
-        let Some(raw) = raw else { return Ok(false) };
-        let payload: RoomPayload = serde_json::from_slice(&raw)?;
-        Ok(!payload.rooms.is_empty())
-    }
-
     /// The phase one model's lineage is declared to be in — see
     /// `SnapshotStore::get_phase`. Read at ingest to decide whether a push
     /// agrees with the model it is joining.
@@ -521,8 +484,14 @@ pub fn seed_if_test(state: &AppState, test_data: Option<&TestData>) -> anyhow::R
     if let Some(test) = test_data {
         let raw = std::fs::read_to_string(&test.snapshot_path)
             .with_context(|| format!("could not read test snapshot: {}", test.snapshot_path.display()))?;
-        // Parse into the same type the push handler accepts — seed and push
+        // Parse into the same type a push is *stored* as — seed and push
         // converge on one representation and can never drift.
+        //
+        // The stored type, not the wire type: a push now arrives as a
+        // `RoomsUpload` carrying many models and is decomposed into one
+        // `RoomPayload` each. A seed is one model by construction, so it is
+        // written in the shape it lands in rather than in the shape it would
+        // have been sent in.
         let snapshot: RoomPayload = serde_json::from_str(&raw).context("failed to parse test snapshot JSON")?;
         state.set_snapshot(snapshot)?;
         tracing::info!("seeded snapshot from {}", test.snapshot_path.display());

@@ -19,8 +19,11 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio_util::io::StreamReader;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::contract::{
-    Door, DoorPayload, DoorStreamEnvelope, ModelToShared, Room, RoomBoundary, RoomPayload, StreamEnvelope,
+    Door, DoorModelEnvelope, DoorStreamEnvelope, DoorsUpload, ModelToShared, Project, Room, RoomBoundary,
+    RoomModelEnvelope, RoomPayload, RoomsUpload, Snapshot, StreamDoor, StreamEnvelope, StreamRoom,
     SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
 };
 use crate::service::adjacency;
@@ -69,12 +72,16 @@ fn validate_id(kind: &str, id: &str) -> Result<(), (StatusCode, String)> {
 /// route can run it from the envelope line alone, before reading any rooms —
 /// and so the doors routes can share it despite carrying a different payload
 /// type and their own, independently-versioned `supported_schema`.
+///
+/// **Project-level only.** A push now carries many models, so the per-model half
+/// (`validate_id("model", ..)`) moved to `validate_models`, which sees the whole
+/// list and can therefore also catch the one fault a single id never could — the
+/// same model declared twice.
 fn validate_ingest(
     state: &Shared,
     schema_version: u32,
     supported_schema: u32,
     project_id: &str,
-    model_id: &str,
     taken_at: &str,
 ) -> Result<(), (StatusCode, String)> {
     if schema_version != supported_schema {
@@ -90,8 +97,67 @@ fn validate_ingest(
         ));
     }
     validate_id("project", project_id)?;
-    validate_id("model", model_id)?;
     validate_taken_at(taken_at)
+}
+
+/// Check the `models` list a multi-model push declares, and answer with the set
+/// of ids so the element loop can reject a line naming a model that isn't there.
+///
+/// Three faults, all of them producer bugs:
+///
+/// - **an empty list** — a push exists because a run exported something, so
+///   declaring no models at all is the multi-model form of the empty-push fault
+///   `reject_empty_rooms` catches per model;
+/// - **an unsafe id** — `FsStore` builds paths straight from these, so this is
+///   the same trust boundary `validate_id` has always guarded, applied per model;
+/// - **a duplicate id** — two blocks claiming one model. Whichever stored last
+///   would win and the other's rooms would vanish silently, so it is refused
+///   rather than merged: merging would be guessing which of two `levels` lists
+///   or `model_to_shared` transforms the producer meant.
+///
+/// Runs off the envelope line, before any element is read, on the same terms as
+/// everything else here: a push that will be refused should cost its producer
+/// one line, not the whole upload.
+fn validate_models<'a>(ids: impl Iterator<Item = &'a str>) -> Result<BTreeSet<String>, (StatusCode, String)> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for id in ids {
+        validate_id("model", id)?;
+        if !seen.insert(id.to_string()) {
+            return Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("push declares model {id:?} more than once; each model may appear at most once"),
+            ));
+        }
+    }
+    if seen.is_empty() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "push declares no models. A push exists because a run exported at least one document — \
+             an empty model list is a producer fault, not an empty run."
+                .to_string(),
+        ));
+    }
+    Ok(seen)
+}
+
+/// Reject an element line naming a model the envelope never declared.
+///
+/// The line's `model_id` is what files a room or door under a lineage, so an
+/// undeclared one has no `levels`, no `model_to_shared` and no boundary regime
+/// to be stored against. Refused rather than invented: a room id is unique only
+/// within a model, so quietly filing it anywhere else would resolve against
+/// real-looking rooms instead of failing.
+fn check_declared(declared: &BTreeSet<String>, model_id: &str) -> Result<(), (StatusCode, String)> {
+    if declared.contains(model_id) {
+        return Ok(());
+    }
+    Err((
+        StatusCode::BAD_REQUEST,
+        format!(
+            "element names model {model_id:?}, which this push's envelope does not declare (it declares: {})",
+            declared.iter().cloned().collect::<Vec<_>>().join(", ")
+        ),
+    ))
 }
 
 /// A rooms push must carry at least one room.
@@ -234,47 +300,154 @@ fn warn_on_transform_drift(model_to_shared: Option<&ModelToShared>, project_id: 
     }
 }
 
-/// Revit posts room data here. Returns 200 with a short summary, or 422 if the
-/// payload fails any `validate_ingest` check. A blank/omitted snapshot id is
-/// minted server-side first (`ensure_taken_at`); the response always carries
-/// the resolved id so the pusher can attach follow-up uploads to it.
+/// Revit posts room data here — one push, one or more models. Returns 200 with
+/// a per-model summary, or 422 if the payload fails any pre-flight check. A
+/// blank/omitted snapshot id is minted server-side first (`ensure_taken_at`);
+/// the response always carries the resolved id so the pusher can attach
+/// follow-up uploads to it.
+///
+/// **Every model in one push shares one `taken_at`**, which is a property worth
+/// having rather than an implementation detail: it is what makes "these
+/// documents were read together" expressible, and before the bucket existed
+/// there was no way to say it — N separate pushes got N timestamps minutes
+/// apart.
 pub async fn ingest_rooms(
     State(state): State<Shared>,
-    Json(mut payload): Json<RoomPayload>,
+    Json(mut upload): Json<RoomsUpload>,
 ) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
-    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut payload.snapshot);
-    payload.phase = crate::contract::normalize_phase(payload.phase.as_deref());
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut upload.snapshot);
+    upload.phase = crate::contract::normalize_phase(upload.phase.as_deref());
     validate_ingest(
         &state,
-        payload.schema_version,
+        upload.schema_version,
         SUPPORTED_SCHEMA,
-        &payload.project.id,
-        &payload.model.id,
-        &payload.snapshot.taken_at,
+        &upload.project.id,
+        &upload.snapshot.taken_at,
     )?;
-    let key = ModelKey::from_payload(&payload);
-    let decision = decide_phase(&state, &key, payload.phase.as_deref())?;
-    warn_on_transform_drift(payload.model_to_shared.as_ref(), &payload.project.id, &payload.model.id);
+    validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
 
-    let count = payload.rooms.len();
-    reject_empty_rooms(count, &payload.project.id, &payload.model.id, payload.phase.as_deref())?;
-    let snapshot_taken_at = payload.snapshot.taken_at.clone();
-    let room_boundary = resolved_boundary(&state, &payload.project.id, payload.room_boundary);
-    tracing::info!("received {} room(s)", count);
+    let rooms_by_model = upload
+        .models
+        .iter_mut()
+        .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.rooms)))
+        .collect();
+    let models: Vec<RoomModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
+    let decisions = preflight_rooms(&state, &upload.project.id, upload.phase.as_deref(), &models)?;
+    store_rooms(
+        &state,
+        upload.schema_version,
+        upload.project,
+        upload.snapshot,
+        upload.phase,
+        models,
+        decisions,
+        rooms_by_model,
+        snapshot_id_generated,
+    )
+}
 
-    store_or_quarantine(&state, &key, payload, decision).map(|(status, quarantined)| {
-        (
-            status,
-            Json(IngestResponse {
-                accepted: quarantined.is_none(),
-                room_count: count,
-                snapshot_taken_at,
-                snapshot_id_generated,
-                room_boundary,
-                quarantined,
-            }),
-        )
-    })
+/// Decide every model's fate from the envelope alone, before a single element is
+/// read.
+///
+/// **This is what makes a doomed push cost one line instead of the whole
+/// upload**, and it is why the phase decision does not simply live inside
+/// `store_rooms`: the streaming route has to be able to answer 422 before it
+/// starts reading a body it is going to throw away. Both routes call it, so the
+/// buffered path cannot decide anything differently.
+///
+/// Returns one `PhaseDecision` per model, in declaration order.
+fn preflight_rooms(
+    state: &Shared,
+    project_id: &str,
+    phase: Option<&str>,
+    models: &[RoomModelEnvelope],
+) -> Result<Vec<PhaseDecision>, (StatusCode, String)> {
+    models
+        .iter()
+        .map(|envelope| {
+            let key = ModelKey { project_id: project_id.to_string(), model_id: envelope.model.id.clone() };
+            let decision = decide_phase(state, &key, phase)?;
+            warn_on_transform_drift(envelope.model_to_shared.as_ref(), project_id, &envelope.model.id);
+            Ok(decision)
+        })
+        .collect()
+}
+
+/// Decompose a rooms push into one stored snapshot per model, and report each
+/// one's outcome.
+///
+/// Shared by the buffered and streaming routes, on the same terms as
+/// `validate_ingest` and `store_or_quarantine`: which transport a producer
+/// picked must never change what gets stored, and two copies of the
+/// decomposition could drift on the order of the phase check, the empty-rooms
+/// check and the store.
+///
+/// **Every model is decided before any is stored.** A model whose phase
+/// disagrees with its lineage is quarantined, which is not a failure and must
+/// not stop its siblings; but a model contributing no rooms is a 422, and that
+/// one has to fire before anything is written, or a bad push would leave half a
+/// run live and half refused.
+///
+/// Takes the decisions `preflight_rooms` already made rather than making them
+/// here, so the streaming route can refuse a doomed push from its envelope line
+/// alone.
+#[allow(clippy::too_many_arguments)]
+fn store_rooms(
+    state: &Shared,
+    schema_version: u32,
+    project: Project,
+    snapshot: Snapshot,
+    phase: Option<String>,
+    models: Vec<RoomModelEnvelope>,
+    decisions: Vec<PhaseDecision>,
+    mut rooms_by_model: BTreeMap<String, Vec<Room>>,
+    snapshot_id_generated: bool,
+) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
+    let snapshot_taken_at = snapshot.taken_at.clone();
+
+    let mut planned = Vec::with_capacity(models.len());
+    for (envelope, decision) in models.into_iter().zip(decisions) {
+        let model_id = envelope.model.id.clone();
+        let key = ModelKey { project_id: project.id.clone(), model_id: model_id.clone() };
+        let rooms = rooms_by_model.remove(&model_id).unwrap_or_default();
+        // A model the envelope declared but that contributed nothing: the
+        // producer said it exported this document and then sent none of it.
+        //
+        // Checked here rather than in the pre-flight because it is the one
+        // refusal the envelope line cannot reach: the count only exists once the
+        // rooms have been read.
+        reject_empty_rooms(rooms.len(), &project.id, &model_id, phase.as_deref())?;
+        planned.push((key, envelope, rooms, decision));
+    }
+
+    let mut results = Vec::with_capacity(planned.len());
+    let mut total = 0usize;
+    let mut any_quarantined = false;
+    for (key, envelope, rooms, decision) in planned {
+        let count = rooms.len();
+        total += count;
+        let room_boundary = resolved_boundary(state, &project.id, envelope.room_boundary);
+        let payload = envelope.into_payload(schema_version, project.clone(), snapshot.clone(), phase.clone(), rooms);
+        let (_, quarantined) = store_or_quarantine(state, &key, payload, decision)?;
+        any_quarantined |= quarantined.is_some();
+        results.push(ModelIngestResult { model_id: key.model_id, room_count: count, room_boundary, quarantined });
+    }
+    tracing::info!("received {} room(s) across {} model(s)", total, results.len());
+
+    // 202 when *any* model was quarantined: the run as a whole did not go fully
+    // live, and a producer that only reads the status must not read that as a
+    // clean push. Which models is in `models`.
+    let status = if any_quarantined { StatusCode::ACCEPTED } else { StatusCode::OK };
+    Ok((
+        status,
+        Json(IngestResponse {
+            accepted: !any_quarantined,
+            room_count: total,
+            snapshot_taken_at,
+            snapshot_id_generated,
+            models: results,
+        }),
+    ))
 }
 
 /// Commit one push according to its `PhaseDecision`: live via `set_snapshot`, or
@@ -327,11 +500,18 @@ fn store_or_quarantine(
 
 #[derive(Debug, Serialize)]
 pub struct IngestResponse {
+    /// Whether **every** model in the push went live. False when any was
+    /// quarantined — see `models` for which.
     pub accepted: bool,
+    /// Rooms stored across the whole push. Kept as a top-level total (rather
+    /// than only per model) because it is the number a producer prints, and it
+    /// answers the same question it always did: did this run's rooms land.
     pub room_count: usize,
     /// The snapshot id this push was stored under — echoed back (or minted,
     /// see `snapshot_id_generated`) so the pusher can associate follow-up
     /// uploads with this exact snapshot.
+    ///
+    /// **One id for every model in the push.** See `ingest_rooms`.
     pub snapshot_taken_at: String,
     /// True when the server minted the id above because the payload left it
     /// blank; false when the payload supplied one and the server used it.
@@ -342,20 +522,24 @@ pub struct IngestResponse {
     /// on every successful push.
     pub snapshot_id_generated: bool,
 
-    /// Why this push was stored but **not** made live, when that happened —
-    /// its phase disagrees with the one the model's lineage is fixed to. `None`
-    /// on a normal push, and omitted from the JSON entirely so an accepted
-    /// response looks exactly as it always did.
+    /// One entry per model the push carried, in declaration order.
     ///
-    /// Paired with a `202 Accepted` rather than the usual `200`, and with
-    /// `accepted: false`: the data is safely stored and promotable, but nothing
-    /// reads it yet. A producer that ignores this field sees `accepted: false`
-    /// and knows its push did not go live, which is the important half.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quarantined: Option<String>,
+    /// The per-model half of the response, and the reason the top-level fields
+    /// above stayed scalars: a producer asking "did my push land" reads
+    /// `accepted`, and one asking "what happened to the structural model" reads
+    /// this. Collapsing them would have forced the second question through a
+    /// total that cannot answer it.
+    pub models: Vec<ModelIngestResult>,
+}
+
+/// What became of one model inside a multi-model rooms push.
+#[derive(Debug, Serialize)]
+pub struct ModelIngestResult {
+    pub model_id: String,
+    pub room_count: usize,
 
     /// The boundary regime the server **resolved** for this model — what the
-    /// envelope declared, or, when it declared nothing, what the project's
+    /// model block declared, or, when it declared nothing, what the project's
     /// `[areas] boundary_location` supplied, or finish face.
     ///
     /// Echoed for the same reason `snapshot_taken_at` is: a producer that left
@@ -363,7 +547,21 @@ pub struct IngestResponse {
     /// behalf, rather than discovering it later in a footprint that came out
     /// the wrong size. The *resolved* value, not the declared one, precisely
     /// because the interesting case is the one the producer did not state.
+    ///
+    /// Per model, never per push: the regime is one document's Area and Volume
+    /// Computations setting, and a run legitimately mixes both.
     pub room_boundary: RoomBoundary,
+
+    /// Why this model was stored but **not** made live, when that happened —
+    /// its phase disagrees with the one the model's lineage is fixed to. `None`
+    /// on a normal push, and omitted from the JSON entirely so an accepted
+    /// entry looks exactly as it always did.
+    ///
+    /// Its siblings are unaffected: one model disagreeing about phase says
+    /// nothing about the rest of the run, so the others still go live and only
+    /// the push-level `accepted` turns false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quarantined: Option<String>,
 }
 
 /// The regime resolved for one push. An unregistered project cannot reach here
@@ -385,14 +583,15 @@ fn resolved_boundary(state: &Shared, project_id: &str, declared: Option<RoomBoun
 /// is in front (see `main.rs`), this stream is already the inflated bytes --
 /// gzip and streaming compose without either side knowing about the other.
 ///
-/// Rooms are still accumulated into a `Vec` before handing the assembled
-/// `RoomPayload` to the existing store, so storage and everything downstream
-/// stays byte-for-byte identical to the buffered path -- streaming changes
-/// only how the body is *read*. Honest limitation: peak memory is therefore
-/// the in-memory room set, not the raw JSON text (still a real win, since the
-/// text is ~40% empty-string overhead). If even that Vec is too large, the
-/// next step is a `SnapshotStore::put_streaming` that writes rooms to disk as
-/// they arrive -- deferred until the Vec itself is the ceiling.
+/// Rooms are still accumulated in memory before the assembled `RoomPayload`s
+/// reach the store, so storage and everything downstream stays byte-for-byte
+/// identical to the buffered path -- streaming changes only how the body is
+/// *read*. Honest limitation: peak memory is therefore the in-memory room set,
+/// not the raw JSON text (still a real win, since the text is ~40% empty-string
+/// overhead). If that set is too large, the next step is a
+/// `SnapshotStore::put_streaming` that writes rooms to disk as they arrive --
+/// deferred until it is the ceiling, and note the bucket raised it: a run's
+/// models are now held together rather than one at a time.
 pub async fn ingest_rooms_stream(
     State(state): State<Shared>,
     body: Body,
@@ -411,7 +610,9 @@ pub async fn ingest_rooms_stream(
         serde_json::from_str(&envelope_line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad envelope: {e}")))?;
 
     // Same resolve-then-pre-flight as the buffered path -- run as soon as the
-    // envelope is parsed, before the (potentially large) room stream is read.
+    // envelope is parsed, before the (potentially large) room stream is read. A
+    // push that will be refused should cost the producer one line, not a
+    // hundred megabytes of upload.
     let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
     envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
     validate_ingest(
@@ -419,17 +620,12 @@ pub async fn ingest_rooms_stream(
         envelope.schema_version,
         SUPPORTED_SCHEMA,
         &envelope.project.id,
-        &envelope.model.id,
         &envelope.snapshot.taken_at,
     )?;
-    // Decided from the envelope alone, before a single room line is read: a
-    // push that will be refused should cost the producer one line, not a
-    // hundred megabytes of upload.
-    let key = ModelKey { project_id: envelope.project.id.clone(), model_id: envelope.model.id.clone() };
-    let decision = decide_phase(&state, &key, envelope.phase.as_deref())?;
-    warn_on_transform_drift(envelope.model_to_shared.as_ref(), &envelope.project.id, &envelope.model.id);
+    let declared = validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
+    let decisions = preflight_rooms(&state, &envelope.project.id, envelope.phase.as_deref(), &envelope.models)?;
 
-    let mut rooms: Vec<Room> = Vec::new();
+    let mut rooms_by_model: BTreeMap<String, Vec<Room>> = BTreeMap::new();
     while let Some(line) = lines
         .next_line()
         .await
@@ -438,56 +634,30 @@ pub async fn ingest_rooms_stream(
         if line.trim().is_empty() {
             continue; // tolerate a trailing blank line
         }
-        let room: Room =
+        let line: StreamRoom =
             serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad room line: {e}")))?;
-        rooms.push(room);
+        check_declared(&declared, &line.model_id)?;
+        rooms_by_model.entry(line.model_id).or_default().push(line.room);
     }
 
-    let count = rooms.len();
-    reject_empty_rooms(count, &envelope.project.id, &envelope.model.id, envelope.phase.as_deref())?;
-    tracing::info!("streamed {} room(s)", count);
-
-    let snapshot_taken_at = envelope.snapshot.taken_at.clone();
-    let room_boundary = resolved_boundary(&state, &envelope.project.id, envelope.room_boundary);
-    let payload = RoomPayload {
-        schema_version: envelope.schema_version,
-        project: envelope.project,
-        model: envelope.model,
-        snapshot: envelope.snapshot,
-        phase: envelope.phase,
-        model_to_shared: envelope.model_to_shared,
-        room_boundary: envelope.room_boundary,
-        levels: envelope.levels,
-        rooms,
-    };
-
-    store_or_quarantine(&state, &key, payload, decision).map(|(status, quarantined)| {
-        (
-            status,
-            Json(IngestResponse {
-                accepted: quarantined.is_none(),
-                room_count: count,
-                snapshot_taken_at,
-                snapshot_id_generated,
-                room_boundary,
-                quarantined,
-            }),
-        )
-    })
+    store_rooms(
+        &state,
+        envelope.schema_version,
+        envelope.project,
+        envelope.snapshot,
+        envelope.phase,
+        envelope.models,
+        decisions,
+        rooms_by_model,
+        snapshot_id_generated,
+    )
 }
 
-/// The doors half of the ingest contract: the two checks a doors push has that
-/// a rooms push does not, applied after `validate_ingest` and before anything
-/// is stored.
+/// The doors half of the ingest contract: the one check a doors push has that a
+/// rooms push does not, applied after `validate_ingest` and before anything is
+/// stored.
 ///
-/// **1. The model must already have rooms.** A door's `from_room`/`to_room` are
-/// `Room.id`s, and room ids are unique only *within* a model — so a doors push
-/// to a model with no rooms stores references nothing can ever resolve. Scoped
-/// to the `(project, model)` lineage rather than the project for exactly that
-/// reason: rooms under a *sibling* model are the wrong id space, so they would
-/// satisfy a project-wide gate while resolving nothing.
-///
-/// **2. The phase must match the lineage, and disagreement is refused.** This is
+/// **The phase must match the lineage, and disagreement is refused.** This is
 /// where doors deliberately diverge from rooms. A rooms push that disagrees is
 /// quarantined and promotable, because promotion is how a model re-phases
 /// (PLAN-phasing.md "D6"). A doors push has no such story: promoting it would
@@ -500,26 +670,35 @@ pub async fn ingest_rooms_stream(
 /// unfiltered mixed-phase content.
 ///
 /// A lineage with **no** phase yet accepts the push and is phased by it, exactly
-/// as a first phased rooms push would. That is the live case for a model whose
-/// rooms were pushed before phasing existed: its rooms snapshot keeps reporting
-/// itself unphased (it was), and the QA phase report keeps saying so.
+/// as a first phased rooms push would — including when the doors arrive *first*
+/// and there are no rooms behind them yet. That is now an ordinary order rather
+/// than a leftover: see below.
+///
+/// ## The rooms gate that used to be here, and why it is gone
+///
+/// This function used to refuse a doors push to a model with no rooms snapshot,
+/// on the reasoning that `from_room`/`to_room` are `Room.id`s and room ids are
+/// unique only within a model, so such a push stores references nothing can
+/// resolve. That reasoning was sound while the *only* answer to "which room does
+/// this door belong to" was the id the export carried.
+///
+/// It stops holding once the server resolves a door's rooms itself, from the
+/// door's own position and the project's rooms. The question the gate asked —
+/// "can these references resolve **now**?" — has a legitimate answer of "not
+/// yet", because rooms may arrive in a later push or in a sibling model, and
+/// refusing means refusing data that becomes resolvable the moment they do.
+///
+/// It was also the only place in this codebase where an unresolved
+/// cross-reference was an *error* rather than a reported state, against the
+/// "signal, not error" rule everything else here follows. Removing it makes the
+/// server more consistent, not less strict — the check did not disappear, it
+/// moved to `service::validation::door_report`, where it can be re-answered
+/// every time the data changes instead of once, at the moment of the push, on
+/// the least information anyone will ever have. That report now distinguishes a
+/// model whose rooms have not arrived (**pending** — expected, not a finding)
+/// from a reference that names a room its model does not have (**dangling** — a
+/// finding), which is the distinction this gate could not make at all.
 fn check_doors_ingest(state: &Shared, key: &ModelKey, pushed: Option<&str>) -> Result<(), (StatusCode, String)> {
-    let has_rooms = state.has_room_snapshot(key).map_err(|e| {
-        tracing::error!("failed to read rooms index: {e:#}");
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not read rooms index: {e}"))
-    })?;
-    if !has_rooms {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!(
-                "no rooms have been pushed for {}/{}, so this model's doors have nothing to link to. \
-                 Push rooms for this model first — a door's from_room/to_room are room ids, and room \
-                 ids are unique only within one model.",
-                key.project_id, key.model_id
-            ),
-        ));
-    }
-
     let Some(pushed) = pushed else {
         return Err((
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -554,49 +733,149 @@ fn check_doors_ingest(state: &Shared, key: &ModelKey, pushed: Option<&str>) -> R
 
 #[derive(Debug, Serialize)]
 pub struct DoorIngestResponse {
+    /// Always true on a 200 — a doors push has no quarantine branch, so it
+    /// either stored every model or answered an error. Kept as a field anyway,
+    /// in lockstep with `IngestResponse`, so a producer reads both responses the
+    /// same way rather than remembering which entity can be half-accepted.
     pub accepted: bool,
+    /// Doors stored across the whole push.
     pub door_count: usize,
     /// The snapshot id this push was stored under — echoed back (or minted) on
-    /// the same terms as `IngestResponse::snapshot_taken_at`.
+    /// the same terms as `IngestResponse::snapshot_taken_at`, and shared by
+    /// every model in the push.
     pub snapshot_taken_at: String,
     pub snapshot_id_generated: bool,
+    /// One entry per model the push carried, in declaration order.
+    pub models: Vec<DoorModelIngestResult>,
 }
 
-/// Revit posts door data here. Mirrors `ingest_rooms` — same envelope
-/// resolution, same pre-flight — plus `check_doors_ingest`.
+/// What became of one model inside a multi-model doors push.
+///
+/// Shorter than `ModelIngestResult` by exactly the two fields doors have no
+/// answer for: there is no boundary regime on a doors push, and no quarantine.
+#[derive(Debug, Serialize)]
+pub struct DoorModelIngestResult {
+    pub model_id: String,
+    pub door_count: usize,
+}
+
+/// Revit posts door data here — one push, one or more models. Mirrors
+/// `ingest_rooms`: same envelope resolution, same pre-flight, same
+/// decomposition into one stored snapshot per model, plus `check_doors_ingest`.
 ///
 /// **There is no quarantine branch and so no 202**, unlike rooms: a doors push
 /// either goes live or is refused. See `check_doors_ingest` for why.
 pub async fn ingest_doors(
     State(state): State<Shared>,
-    Json(mut payload): Json<DoorPayload>,
+    Json(mut upload): Json<DoorsUpload>,
 ) -> Result<(StatusCode, Json<DoorIngestResponse>), (StatusCode, String)> {
-    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut payload.snapshot);
-    payload.phase = crate::contract::normalize_phase(payload.phase.as_deref());
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut upload.snapshot);
+    upload.phase = crate::contract::normalize_phase(upload.phase.as_deref());
     validate_ingest(
         &state,
-        payload.schema_version,
+        upload.schema_version,
         SUPPORTED_DOOR_SCHEMA,
-        &payload.project.id,
-        &payload.model.id,
-        &payload.snapshot.taken_at,
+        &upload.project.id,
+        &upload.snapshot.taken_at,
     )?;
-    let key = ModelKey::from_door_payload(&payload);
-    check_doors_ingest(&state, &key, payload.phase.as_deref())?;
-    warn_on_transform_drift(payload.model_to_shared.as_ref(), &payload.project.id, &payload.model.id);
+    validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
 
-    let count = payload.doors.len();
-    let snapshot_taken_at = payload.snapshot.taken_at.clone();
-    tracing::info!("received {} door(s)", count);
+    let doors_by_model = upload
+        .models
+        .iter_mut()
+        .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.doors)))
+        .collect();
+    let models: Vec<DoorModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
+    preflight_doors(&state, &upload.project.id, upload.phase.as_deref(), &models)?;
+    store_doors(
+        &state,
+        upload.schema_version,
+        upload.project,
+        upload.snapshot,
+        upload.phase,
+        models,
+        doors_by_model,
+        snapshot_id_generated,
+    )
+}
 
-    state.set_door_snapshot(payload).map_err(|e| {
-        tracing::error!("failed to store doors snapshot: {e:#}");
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store doors snapshot: {e}"))
-    })?;
+/// The doors counterpart of `preflight_rooms`: every refusal a doors push can
+/// earn, decided from the envelope line before any door is read.
+///
+/// Answers nothing, unlike the rooms version — a doors push has no quarantine
+/// branch, so there is no per-model decision to carry forward, only a refusal or
+/// silence.
+fn preflight_doors(
+    state: &Shared,
+    project_id: &str,
+    phase: Option<&str>,
+    models: &[DoorModelEnvelope],
+) -> Result<(), (StatusCode, String)> {
+    for envelope in models {
+        let key = ModelKey { project_id: project_id.to_string(), model_id: envelope.model.id.clone() };
+        check_doors_ingest(state, &key, phase)?;
+        warn_on_transform_drift(envelope.model_to_shared.as_ref(), project_id, &envelope.model.id);
+    }
+    Ok(())
+}
+
+/// Decompose a doors push into one stored snapshot per model — the doors
+/// counterpart of `store_rooms`, shared by the buffered and streaming routes for
+/// the same reason.
+///
+/// **A model that contributes no doors is stored anyway**, which is where this
+/// deliberately parts company with `store_rooms`. A rooms push carrying an empty
+/// model is a producer fault, because a document with no rooms is not something
+/// anyone exports; a model with rooms and no doors is a shell, a pre-fit-out
+/// phase, or simply a floor without any. The server cannot tell that from a
+/// broken export and does not try — the producer refuses a doorless *run*, which
+/// is a question only it can answer.
+#[allow(clippy::too_many_arguments)]
+fn store_doors(
+    state: &Shared,
+    schema_version: u32,
+    project: Project,
+    snapshot: Snapshot,
+    phase: Option<String>,
+    models: Vec<DoorModelEnvelope>,
+    mut doors_by_model: BTreeMap<String, Vec<Door>>,
+    snapshot_id_generated: bool,
+) -> Result<(StatusCode, Json<DoorIngestResponse>), (StatusCode, String)> {
+    let snapshot_taken_at = snapshot.taken_at.clone();
+
+    // `preflight_doors` has already refused anything refusable, from the
+    // envelope line alone. What is left is the store.
+    let mut planned = Vec::with_capacity(models.len());
+    for envelope in models {
+        let model_id = envelope.model.id.clone();
+        let key = ModelKey { project_id: project.id.clone(), model_id: model_id.clone() };
+        let doors = doors_by_model.remove(&model_id).unwrap_or_default();
+        planned.push((key, envelope, doors));
+    }
+
+    let mut results = Vec::with_capacity(planned.len());
+    let mut total = 0usize;
+    for (key, envelope, doors) in planned {
+        let count = doors.len();
+        total += count;
+        let payload = envelope.into_payload(schema_version, project.clone(), snapshot.clone(), phase.clone(), doors);
+        state.set_door_snapshot(payload).map_err(|e| {
+            tracing::error!("failed to store doors snapshot: {e:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store doors snapshot: {e}"))
+        })?;
+        results.push(DoorModelIngestResult { model_id: key.model_id, door_count: count });
+    }
+    tracing::info!("received {} door(s) across {} model(s)", total, results.len());
 
     Ok((
         StatusCode::OK,
-        Json(DoorIngestResponse { accepted: true, door_count: count, snapshot_taken_at, snapshot_id_generated }),
+        Json(DoorIngestResponse {
+            accepted: true,
+            door_count: total,
+            snapshot_taken_at,
+            snapshot_id_generated,
+            models: results,
+        }),
     ))
 }
 
@@ -624,6 +903,8 @@ pub async fn ingest_doors_stream(
     let mut envelope: DoorStreamEnvelope =
         serde_json::from_str(&envelope_line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad envelope: {e}")))?;
 
+    // Decided from the envelope alone, before a single door line is read — a
+    // push that will be refused should cost the producer one line.
     let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
     envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
     validate_ingest(
@@ -631,16 +912,12 @@ pub async fn ingest_doors_stream(
         envelope.schema_version,
         SUPPORTED_DOOR_SCHEMA,
         &envelope.project.id,
-        &envelope.model.id,
         &envelope.snapshot.taken_at,
     )?;
-    // Decided from the envelope alone, before a single door line is read — a
-    // push that will be refused should cost the producer one line.
-    let key = ModelKey { project_id: envelope.project.id.clone(), model_id: envelope.model.id.clone() };
-    check_doors_ingest(&state, &key, envelope.phase.as_deref())?;
-    warn_on_transform_drift(envelope.model_to_shared.as_ref(), &envelope.project.id, &envelope.model.id);
+    let declared = validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
+    preflight_doors(&state, &envelope.project.id, envelope.phase.as_deref(), &envelope.models)?;
 
-    let mut doors: Vec<Door> = Vec::new();
+    let mut doors_by_model: BTreeMap<String, Vec<Door>> = BTreeMap::new();
     while let Some(line) = lines
         .next_line()
         .await
@@ -649,34 +926,22 @@ pub async fn ingest_doors_stream(
         if line.trim().is_empty() {
             continue; // tolerate a trailing blank line
         }
-        let door: Door =
+        let line: StreamDoor =
             serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad door line: {e}")))?;
-        doors.push(door);
+        check_declared(&declared, &line.model_id)?;
+        doors_by_model.entry(line.model_id).or_default().push(line.door);
     }
 
-    let count = doors.len();
-    tracing::info!("streamed {} door(s)", count);
-
-    let snapshot_taken_at = envelope.snapshot.taken_at.clone();
-    let payload = DoorPayload {
-        schema_version: envelope.schema_version,
-        project: envelope.project,
-        model: envelope.model,
-        snapshot: envelope.snapshot,
-        phase: envelope.phase,
-        model_to_shared: envelope.model_to_shared,
-        doors,
-    };
-
-    state.set_door_snapshot(payload).map_err(|e| {
-        tracing::error!("failed to store doors snapshot: {e:#}");
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store doors snapshot: {e}"))
-    })?;
-
-    Ok((
-        StatusCode::OK,
-        Json(DoorIngestResponse { accepted: true, door_count: count, snapshot_taken_at, snapshot_id_generated }),
-    ))
+    store_doors(
+        &state,
+        envelope.schema_version,
+        envelope.project,
+        envelope.snapshot,
+        envelope.phase,
+        envelope.models,
+        doors_by_model,
+        snapshot_id_generated,
+    )
 }
 
 /// `ServiceError` -> `(StatusCode, String)`, the same message-carrying error
@@ -1074,6 +1339,37 @@ mod tests {
         }
     }
 
+    /// One model's rooms as a v7 upload — the shape every rooms ingest test
+    /// builds, since a push is now a bucket even when it carries one model.
+    fn rooms_upload(model: &str, ts: &str, phase: Option<&str>, rooms: Vec<Room>) -> RoomsUpload {
+        rooms_upload_for("p1", model, ts, phase, rooms)
+    }
+
+    /// `rooms_upload` with the project named, for the unregistered-project case.
+    fn rooms_upload_for(project: &str, model: &str, ts: &str, phase: Option<&str>, rooms: Vec<Room>) -> RoomsUpload {
+        RoomsUpload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: project.to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: ts.to_string() },
+            phase: phase.map(str::to_string),
+            models: vec![room_model(model, rooms)],
+        }
+    }
+
+    /// One model block, with the two optional per-model facts left unset —
+    /// tests that care about them set them on the returned value.
+    fn room_model(model: &str, rooms: Vec<Room>) -> crate::contract::RoomModelUpload {
+        crate::contract::RoomModelUpload {
+            envelope: RoomModelEnvelope {
+                model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+                model_to_shared: None,
+                room_boundary: None,
+                levels: vec![],
+            },
+            rooms,
+        }
+    }
+
     fn make_drofus() -> ReferenceData {
         ReferenceData {
             link_property: "Number".to_string(),
@@ -1289,21 +1585,11 @@ mod tests {
             ("m1", "2026-01-01T00:00:00+10:00"), // parses, but not UTC
         ];
         for (model_id, taken_at) in cases {
-            let payload = RoomPayload {
-                schema_version: SUPPORTED_SCHEMA,
-                project: Project { id: "p1".to_string(), name: "P".to_string() },
-                model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
-                snapshot: Snapshot { taken_at: taken_at.to_string() },
-                phase: Some("New Construction".to_string()),
-                model_to_shared: None,
-                room_boundary: None,
-                levels: vec![],
-                rooms: vec![],
-            };
+            let upload = rooms_upload(model_id, taken_at, Some("New Construction"), vec![]);
             let state: Shared =
                 std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-            let result = ingest_rooms(State(state), Json(payload)).await;
+            let result = ingest_rooms(State(state), Json(upload)).await;
             match result {
                 Err((status, msg)) => {
                     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "model {model_id:?} taken_at {taken_at:?}");
@@ -1321,37 +1607,17 @@ mod tests {
         // empty push outright -- the identity cases above still reach their own
         // 422 first, since `validate_ingest` runs before the room count is
         // looked at.
-        let payload = RoomPayload {
-            schema_version: SUPPORTED_SCHEMA,
-            project: Project { id: "p1".to_string(), name: "P".to_string() },
-            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
-            snapshot: Snapshot { taken_at: good_ts.to_string() },
-            phase: Some("New Construction".to_string()),
-            model_to_shared: None,
-            room_boundary: None,
-            levels: vec![],
-            rooms: vec![make_room("r1", "Room 1")],
-        };
+        let upload = rooms_upload("m1", good_ts, Some("New Construction"), vec![make_room("r1", "Room 1")]);
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
-        let (status, Json(body)) = ingest_rooms(State(state), Json(payload)).await.unwrap();
+        let (status, Json(body)) = ingest_rooms(State(state), Json(upload)).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.snapshot_taken_at, good_ts);
         assert!(!body.snapshot_id_generated);
     }
 
-    /// One payload for the phase tests, phase supplied per case.
-    fn phase_payload(model: &str, ts: &str, phase: Option<&str>) -> RoomPayload {
-        RoomPayload {
-            schema_version: SUPPORTED_SCHEMA,
-            project: Project { id: "p1".to_string(), name: "P".to_string() },
-            model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
-            snapshot: Snapshot { taken_at: ts.to_string() },
-            phase: phase.map(str::to_string),
-            model_to_shared: None,
-            room_boundary: None,
-            levels: vec![],
-            rooms: vec![make_room("r1", "Room A")],
-        }
+    /// One upload for the phase tests, phase supplied per case.
+    fn phase_payload(model: &str, ts: &str, phase: Option<&str>) -> RoomsUpload {
+        rooms_upload(model, ts, phase, vec![make_room("r1", "Room A")])
     }
 
     fn phase_state() -> Shared {
@@ -1409,7 +1675,7 @@ mod tests {
         .expect("the first phased push is accepted");
         assert_eq!(status, StatusCode::OK);
         assert!(body.accepted);
-        assert!(body.quarantined.is_none());
+        assert!(body.models[0].quarantined.is_none());
         assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
 
         // Same phase, typed differently -- still the same phase.
@@ -1448,7 +1714,7 @@ mod tests {
 
         assert_eq!(status, StatusCode::ACCEPTED, "202: stored, not acted upon");
         assert!(!body.accepted, "it did not go live");
-        let reason = body.quarantined.expect("a quarantined push says why");
+        let reason = body.models[0].quarantined.clone().expect("a quarantined push says why");
         assert!(
             reason.contains("Existing") && reason.contains("New Construction"),
             "names both phases: {reason}"
@@ -1470,10 +1736,11 @@ mod tests {
     async fn test_stream_ingest_rejects_an_unphased_envelope() {
         let state = phase_state();
         let body = concat!(
-            r#"{"schema_version":6,"project":{"id":"p1","name":"P"},"model":{"id":"m1","name":"M","source":"revit"},"#,
-            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"levels":[]}"#,
+            r#"{"schema_version":7,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"#,
+            r#""models":[{"id":"m1","name":"M","source":"revit","levels":[]}]}"#,
             "\n",
-            r#"{"id":"r1","name":"Room A","level_id":"1","loops":[]}"#,
+            r#"{"model_id":"m1","id":"r1","name":"Room A","level_id":"1","loops":[]}"#,
             "\n",
         );
 
@@ -1495,8 +1762,12 @@ mod tests {
             room_count: 26,
             snapshot_taken_at: "2026-07-15T11:18:58.186000Z".to_string(),
             snapshot_id_generated: false,
-            room_boundary: RoomBoundary::FinishFace,
-            quarantined: None,
+            models: vec![ModelIngestResult {
+                model_id: "m1".to_string(),
+                room_count: 26,
+                room_boundary: RoomBoundary::FinishFace,
+                quarantined: None,
+            }],
         })
         .unwrap();
 
@@ -1509,6 +1780,10 @@ mod tests {
         // The snake_case spellings are the producer-facing contract too: an
         // extractor sends `"room_boundary": "finish_face"` and reads it back.
         assert!(json.contains(r#""room_boundary":"finish_face""#), "unexpected wire shape: {json}");
+        // The per-model block is the producer-facing half of a multi-model
+        // push: a run that sent three documents reads here which of them
+        // landed, and under what regime.
+        assert!(json.contains(r#""model_id":"m1""#), "unexpected wire shape: {json}");
     }
 
     /// A blank (or omitted -- serde defaults it to blank) snapshot id is no
@@ -1516,20 +1791,10 @@ mod tests {
     /// the pusher can attach follow-up uploads to the same snapshot.
     #[tokio::test]
     async fn test_ingest_rooms_generates_snapshot_id_when_blank() {
-        let payload = RoomPayload {
-            schema_version: SUPPORTED_SCHEMA,
-            project: Project { id: "p1".to_string(), name: "P".to_string() },
-            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
-            snapshot: Snapshot { taken_at: "".to_string() },
-            phase: Some("New Construction".to_string()),
-            model_to_shared: None,
-            room_boundary: None,
-            levels: vec![],
-            rooms: vec![make_room("r1", "Room A")],
-        };
+        let upload = rooms_upload("m1", "", Some("New Construction"), vec![make_room("r1", "Room A")]);
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let (_, Json(body)) = ingest_rooms(State(state.clone()), Json(payload)).await.unwrap();
+        let (_, Json(body)) = ingest_rooms(State(state.clone()), Json(upload)).await.unwrap();
 
         assert!(body.snapshot_id_generated);
         assert!(crate::contract::validate_snapshot_id(&body.snapshot_taken_at).is_ok());
@@ -1543,20 +1808,16 @@ mod tests {
     /// `assemble_rooms`'s "skip on read" for the same case.
     #[tokio::test]
     async fn test_ingest_rooms_rejects_unregistered_project() {
-        let payload = RoomPayload {
-            schema_version: SUPPORTED_SCHEMA,
-            project: Project { id: "unregistered".to_string(), name: "P".to_string() },
-            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
-            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
-            phase: Some("New Construction".to_string()),
-            model_to_shared: None,
-            room_boundary: None,
-            levels: vec![],
-            rooms: vec![make_room("r1", "Room A")],
-        };
+        let upload = rooms_upload_for(
+            "unregistered",
+            "m1",
+            "2026-01-01T00:00:00Z",
+            Some("New Construction"),
+            vec![make_room("r1", "Room A")],
+        );
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let result = ingest_rooms(State(state), Json(payload)).await;
+        let result = ingest_rooms(State(state), Json(upload)).await;
         match result {
             Err((status, _)) => assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY),
             Ok(_) => panic!("expected 422 for an unregistered project"),
@@ -1575,20 +1836,12 @@ mod tests {
             945737.6,
             20545096.5,
         ];
-        let payload = RoomPayload {
-            schema_version: SUPPORTED_SCHEMA,
-            project: Project { id: "p1".to_string(), name: "P".to_string() },
-            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
-            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
-            phase: Some("New Construction".to_string()),
-            model_to_shared: Some(ModelToShared { matrix }),
-            room_boundary: None,
-            levels: vec![],
-            rooms: vec![make_room("r1", "Room A")],
-        };
+        let mut upload =
+            rooms_upload("m1", "2026-01-01T00:00:00Z", Some("New Construction"), vec![make_room("r1", "Room A")]);
+        upload.models[0].envelope.model_to_shared = Some(ModelToShared { matrix });
         let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let _ = ingest_rooms(State(state.clone() as Shared), Json(payload)).await.expect("accepted");
+        let _ = ingest_rooms(State(state.clone() as Shared), Json(upload)).await.expect("accepted");
 
         let stored = state.all_snapshots().unwrap();
         let (_, payload) = stored.iter().find(|(k, _)| k.model_id == "m1").expect("stored");
@@ -1610,20 +1863,12 @@ mod tests {
     /// never a 422 (advisory only; the geometry still stores and renders).
     #[tokio::test]
     async fn test_ingest_rooms_accepts_non_rigid_model_to_shared() {
-        let payload = RoomPayload {
-            schema_version: SUPPORTED_SCHEMA,
-            project: Project { id: "p1".to_string(), name: "P".to_string() },
-            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
-            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
-            phase: Some("New Construction".to_string()),
-            model_to_shared: Some(ModelToShared { matrix: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] }),
-            room_boundary: None,
-            levels: vec![],
-            rooms: vec![make_room("r1", "Room A")],
-        };
+        let mut upload =
+            rooms_upload("m1", "2026-01-01T00:00:00Z", Some("New Construction"), vec![make_room("r1", "Room A")]);
+        upload.models[0].envelope.model_to_shared = Some(ModelToShared { matrix: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] });
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let (_, Json(body)) = ingest_rooms(State(state), Json(payload)).await.expect("accepted despite det drift");
+        let (_, Json(body)) = ingest_rooms(State(state), Json(upload)).await.expect("accepted despite det drift");
         assert!(body.accepted);
     }
 
@@ -1636,24 +1881,22 @@ mod tests {
     async fn test_ingest_stores_room_boundary_on_both_routes() {
         let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let buffered = RoomPayload {
-            schema_version: SUPPORTED_SCHEMA,
-            project: Project { id: "p1".to_string(), name: "P".to_string() },
-            model: Model { id: "buffered".to_string(), name: "M".to_string(), source: "revit".to_string() },
-            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
-            phase: Some("New Construction".to_string()),
-            model_to_shared: None,
-            room_boundary: Some(RoomBoundary::FinishFace),
-            levels: vec![],
-            rooms: vec![make_room("r1", "Room A")],
-        };
+        let mut buffered = rooms_upload(
+            "buffered",
+            "2026-01-01T00:00:00Z",
+            Some("New Construction"),
+            vec![make_room("r1", "Room A")],
+        );
+        buffered.models[0].envelope.room_boundary = Some(RoomBoundary::FinishFace);
         let _ = ingest_rooms(State(state.clone() as Shared), Json(buffered)).await.expect("accepted");
 
         let body = concat!(
-            r#"{"schema_version":6,"project":{"id":"p1","name":"P"},"model":{"id":"streamed","name":"M","source":"revit"},"#,
-            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"phase":"New Construction","room_boundary":"centreline","levels":[]}"#,
-            "\n",
-            r#"{"id":"r1","name":"Room A","level_id":"1","loops":[]}"#,
+            r#"{"schema_version":7,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"streamed","name":"M","source":"revit","room_boundary":"centreline","levels":[]}]}"#,
+            "
+",
+            r#"{"model_id":"streamed","id":"r1","name":"Room A","level_id":"1","loops":[]}"#,
             "\n",
         );
         let _ = ingest_rooms_stream(State(state.clone() as Shared), Body::from(body))
@@ -1664,6 +1907,200 @@ mod tests {
         let of = |model: &str| stored.iter().find(|(k, _)| k.model_id == model).expect("stored").1.room_boundary;
         assert_eq!(of("buffered"), Some(RoomBoundary::FinishFace));
         assert_eq!(of("streamed"), Some(RoomBoundary::Centreline), "the stream path carries it too");
+    }
+
+    // ---------- the multi-model push ----------
+
+    /// **The change this all exists for: one push, several models, one snapshot
+    /// each.**
+    ///
+    /// The bucket is a transport shape and must not become a storage one — every
+    /// model keeps its own lineage, its own `levels`, and its own place in the
+    /// `(project, model)` key everything downstream reads. What it gains is one
+    /// shared `taken_at`, which is how "these documents were read together"
+    /// becomes expressible at all.
+    #[tokio::test]
+    async fn test_one_push_decomposes_into_a_snapshot_per_model() {
+        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let upload = RoomsUpload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
+            models: vec![
+                room_model("arch", vec![make_room("r1", "Ward 1")]),
+                room_model("struct", vec![make_room("r1", "Core"), make_room("r2", "Riser")]),
+            ],
+        };
+
+        let (status, Json(body)) = ingest_rooms(State(state.clone() as Shared), Json(upload)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.accepted);
+        assert_eq!(body.room_count, 3, "the total is across the run");
+        assert_eq!(body.models.len(), 2);
+        assert_eq!(body.models[0].model_id, "arch");
+        assert_eq!(body.models[0].room_count, 1);
+        assert_eq!(body.models[1].room_count, 2);
+
+        // Two lineages, not one — and the same room id under each is two
+        // different rooms, which is the invariant a stored bucket would break.
+        let arch = ModelKey { project_id: "p1".into(), model_id: "arch".into() };
+        let structural = ModelKey { project_id: "p1".into(), model_id: "struct".into() };
+        assert_eq!(state.list_snapshot_ids(&arch).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
+        assert_eq!(state.list_snapshot_ids(&structural).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
+        let stored = state.all_snapshots().unwrap();
+        let of = |m: &str| stored.iter().find(|(k, _)| k.model_id == m).expect("stored").1.rooms.len();
+        assert_eq!(of("arch"), 1);
+        assert_eq!(of("struct"), 2);
+    }
+
+    /// One model quarantined does not hold back its siblings. The disagreement
+    /// is a fact about that model's lineage and says nothing about the rest of
+    /// the run, so the others go live and only the push-level `accepted` turns
+    /// false — with 202 so a producer reading the status alone still knows.
+    #[tokio::test]
+    async fn test_one_model_quarantined_does_not_stop_its_siblings() {
+        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        // `arch` is fixed to New Construction by a first push; `struct` is new.
+        let _ = ingest_rooms(
+            State(state.clone() as Shared),
+            Json(rooms_upload(
+                "arch",
+                "2026-01-01T00:00:00Z",
+                Some("New Construction"),
+                vec![make_room("r1", "A")],
+            )),
+        )
+        .await
+        .expect("first push");
+
+        let upload = RoomsUpload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
+            phase: Some("Existing".to_string()),
+            models: vec![
+                room_model("arch", vec![make_room("r1", "A")]),
+                room_model("struct", vec![make_room("r1", "S")]),
+            ],
+        };
+        let (status, Json(body)) = ingest_rooms(State(state.clone() as Shared), Json(upload)).await.expect("stored");
+
+        assert_eq!(status, StatusCode::ACCEPTED, "202: not every model went live");
+        assert!(!body.accepted);
+        assert!(body.models[0].quarantined.is_some(), "arch disagrees about phase");
+        assert!(body.models[1].quarantined.is_none(), "struct had no lineage to disagree with");
+
+        // arch is untouched and its push is promotable; struct is live.
+        let arch = ModelKey { project_id: "p1".into(), model_id: "arch".into() };
+        let structural = ModelKey { project_id: "p1".into(), model_id: "struct".into() };
+        assert_eq!(state.list_snapshot_ids(&arch).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
+        assert!(state.pending_snapshot(&arch).unwrap().is_some());
+        assert_eq!(state.model_phase(&structural).unwrap().as_deref(), Some("Existing"));
+    }
+
+    /// A push declaring the same model twice is refused. Whichever block stored
+    /// last would win and the other's rooms would vanish in silence, and merging
+    /// them would mean guessing which of two `levels` lists the producer meant.
+    #[tokio::test]
+    async fn test_a_model_declared_twice_is_refused() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let upload = RoomsUpload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
+            models: vec![
+                room_model("arch", vec![make_room("r1", "A")]),
+                room_model("arch", vec![make_room("r2", "B")]),
+            ],
+        };
+
+        let (status, message) = ingest_rooms(State(state.clone()), Json(upload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("more than once"), "{message}");
+        assert!(state.all_snapshots().unwrap().is_empty(), "nothing stored");
+    }
+
+    /// A push declaring no models at all is refused: a push exists because a run
+    /// exported at least one document.
+    #[tokio::test]
+    async fn test_a_push_with_no_models_is_refused() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let upload = RoomsUpload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
+            models: vec![],
+        };
+
+        let (status, message) = ingest_rooms(State(state), Json(upload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("declares no models"), "{message}");
+    }
+
+    /// **A room line naming an undeclared model is refused, never filed
+    /// anywhere.** Room ids are unique only within a model, so quietly putting
+    /// it under some other lineage would make it resolve against real-looking
+    /// rooms instead of failing — the failure mode the per-line `model_id`
+    /// exists to make impossible.
+    #[tokio::test]
+    async fn test_a_room_line_naming_an_undeclared_model_is_refused() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let body = concat!(
+            r#"{"schema_version":7,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"arch","name":"M","source":"revit","levels":[]}]}"#,
+            "\n",
+            r#"{"model_id":"struct","id":"r1","name":"Room A","level_id":"1","loops":[]}"#,
+            "\n",
+        );
+
+        let (status, message) = ingest_rooms_stream(State(state.clone()), Body::from(body)).await.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("struct") && message.contains("arch"), "names both: {message}");
+        assert!(state.all_snapshots().unwrap().is_empty(), "nothing stored");
+    }
+
+    /// The streamed route decomposes identically to the buffered one — two
+    /// models interleaved on the wire land in two lineages, each with only its
+    /// own rooms. Interleaving is the case worth writing: the producer emits
+    /// model by model today, and nothing on the wire says it must.
+    #[tokio::test]
+    async fn test_streamed_multi_model_push_decomposes_the_same_way() {
+        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let body = concat!(
+            r#"{"schema_version":7,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"arch","name":"A","source":"revit","levels":[]},"#,
+            r#"{"id":"struct","name":"S","source":"revit","levels":[]}]}"#,
+            "\n",
+            r#"{"model_id":"arch","id":"r1","name":"Ward","level_id":"1","loops":[]}"#,
+            "\n",
+            r#"{"model_id":"struct","id":"r1","name":"Core","level_id":"1","loops":[]}"#,
+            "\n",
+            r#"{"model_id":"arch","id":"r2","name":"Store","level_id":"1","loops":[]}"#,
+            "\n",
+        );
+
+        let (status, Json(body)) = ingest_rooms_stream(State(state.clone() as Shared), Body::from(body))
+            .await
+            .expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.room_count, 3);
+
+        let stored = state.all_snapshots().unwrap();
+        let of = |m: &str| {
+            let (_, p) = stored.iter().find(|(k, _)| k.model_id == m).expect("stored");
+            p.rooms.iter().map(|r| r.name.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            of("arch"),
+            vec!["Ward".to_string(), "Store".to_string()],
+            "in wire order, and only arch's"
+        );
+        assert_eq!(of("struct"), vec!["Core".to_string()]);
     }
 
     // ---------- doors ingest ----------
@@ -1687,15 +2124,19 @@ mod tests {
         }
     }
 
-    fn door_payload(project: &str, model: &str, ts: &str, phase: Option<&str>) -> DoorPayload {
-        DoorPayload {
+    fn door_payload(project: &str, model: &str, ts: &str, phase: Option<&str>) -> DoorsUpload {
+        DoorsUpload {
             schema_version: SUPPORTED_DOOR_SCHEMA,
             project: Project { id: project.to_string(), name: "P".to_string() },
-            model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
             snapshot: Snapshot { taken_at: ts.to_string() },
             phase: phase.map(str::to_string),
-            model_to_shared: None,
-            doors: vec![make_door("d1", Some("r1"), None)],
+            models: vec![crate::contract::doors::DoorModelUpload {
+                envelope: DoorModelEnvelope {
+                    model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+                    model_to_shared: None,
+                },
+                doors: vec![make_door("d1", Some("r1"), None)],
+            }],
         }
     }
 
@@ -1755,19 +2196,9 @@ mod tests {
     #[tokio::test]
     async fn test_rooms_push_with_no_rooms_is_refused() {
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
-        let payload = RoomPayload {
-            schema_version: SUPPORTED_SCHEMA,
-            project: Project { id: "p1".to_string(), name: "P".to_string() },
-            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
-            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
-            phase: Some("New Construction".to_string()),
-            model_to_shared: None,
-            room_boundary: None,
-            levels: vec![],
-            rooms: vec![],
-        };
+        let upload = rooms_upload("m1", "2026-01-01T00:00:00Z", Some("New Construction"), vec![]);
 
-        let (status, message) = ingest_rooms(State(state.clone()), Json(payload)).await.unwrap_err();
+        let (status, message) = ingest_rooms(State(state.clone()), Json(upload)).await.unwrap_err();
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(message.contains("contains no rooms"), "{message}");
         // Names the phase, because a filter that matched nothing is what this
@@ -1786,10 +2217,9 @@ mod tests {
         let envelope = serde_json::json!({
             "schema_version": SUPPORTED_SCHEMA,
             "project": { "id": "p1", "name": "P" },
-            "model": { "id": "m1", "name": "M", "source": "revit" },
             "snapshot": { "taken_at": "2026-01-01T00:00:00Z" },
             "phase": "New Construction",
-            "levels": [],
+            "models": [{ "id": "m1", "name": "M", "source": "revit", "levels": [] }],
         });
         let body = Body::from(format!(
             "{envelope}
@@ -1801,20 +2231,21 @@ mod tests {
         assert!(message.contains("contains no rooms"), "{message}");
     }
 
-    /// **A doors push is refused when the model's rooms snapshot is EMPTY**, not
-    /// merely when no snapshot exists.
+    /// **A doors push against an EMPTY rooms snapshot is accepted**, and is
+    /// reported rather than refused.
     ///
-    /// This is the hole the 2026-08-03 pushes went through: the gate asked
-    /// whether a rooms snapshot *file* existed, which an empty one does. 26
-    /// doors referencing 22 distinct room ids were stored against zero rooms,
-    /// none of them resolvable — by the gate whose whole purpose is preventing
-    /// exactly that.
+    /// This is where the 2026-08-03 regression used to be caught: the gate
+    /// asked whether a rooms snapshot *file* existed, which an empty one does,
+    /// so 26 doors referencing 22 room ids were stored against zero rooms. The
+    /// gate that fixed it is gone — ingest no longer requires rooms at all —
+    /// and the regression is guarded from both ends instead: `reject_empty_rooms`
+    /// stops the empty snapshot being *written*, and `door_report` reports every
+    /// unresolvable reference on every read rather than once, at the push.
     ///
-    /// `reject_empty_rooms` now stops such a snapshot being written, so this
-    /// state is only reachable through history already on disk. It is reachable,
-    /// which is why the gate reads rather than trusting the index.
+    /// What this asserts is that the doors still land, because that is what
+    /// makes them visible to the report that now owns the question.
     #[tokio::test]
-    async fn test_doors_push_is_refused_when_the_rooms_snapshot_is_empty() {
+    async fn test_doors_push_against_an_empty_rooms_snapshot_is_stored() {
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
         let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
 
@@ -1835,38 +2266,34 @@ mod tests {
         assert!(!state.list_snapshot_ids(&key).unwrap().is_empty(), "a snapshot file exists");
 
         let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
-        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(message.contains("no rooms have been pushed"), "{message}");
-        assert!(state.all_door_snapshots().unwrap().is_empty(), "no doors stored");
+        let (status, _) = ingest_doors(State(state.clone()), Json(payload)).await.expect("stored, not refused");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state.all_door_snapshots().unwrap().len(), 1, "the doors are on disk for QA to report on");
     }
 
-    /// **The rooms-first gate.** Without rooms in this model there is nothing a
-    /// door's `from_room`/`to_room` could resolve against, so the push is
-    /// refused rather than stored to dangle.
+    /// **Doors may be pushed before their rooms**, which is the whole point of
+    /// removing the rooms-first gate.
+    ///
+    /// The gate used to refuse this, on the reasoning that a door's
+    /// `from_room`/`to_room` have nothing to resolve against. That reasoning
+    /// only held while the export's ids were the sole answer to "which room";
+    /// with the server resolving a door's rooms from its own position, "not yet"
+    /// is a legitimate state, and refusing meant refusing data that becomes
+    /// resolvable the moment the rooms arrive.
     #[tokio::test]
-    async fn test_doors_push_to_a_model_without_rooms_is_refused() {
+    async fn test_doors_push_to_a_model_without_rooms_is_accepted() {
         let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
         let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
 
-        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(message.contains("no rooms have been pushed"), "{message}");
-        assert!(state.all_door_snapshots().unwrap().is_empty(), "nothing was stored");
-    }
-
-    /// The gate is scoped to the `(project, model)` lineage, not the project.
-    /// Rooms under a *sibling* model are a different room-id space, so they
-    /// cannot satisfy it — a project-wide gate would accept this push and leave
-    /// every reference unresolvable.
-    #[tokio::test]
-    async fn test_rooms_under_a_sibling_model_do_not_satisfy_the_gate() {
-        let state = state_with_rooms(Some("New Construction")).await; // rooms on m1
-        let payload = door_payload("p1", "m2", "2026-02-01T00:00:00Z", Some("New Construction"));
-
-        let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(message.contains("p1/m2"), "names the model that lacks rooms: {message}");
+        let (status, Json(body)) = ingest_doors(State(state.clone() as Shared), Json(payload))
+            .await
+            .expect("doors may arrive first");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.door_count, 1);
+        assert_eq!(state.all_door_snapshots().unwrap().len(), 1);
+        // And it phased the lineage, exactly as a first rooms push would have.
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
     }
 
     /// **Doors diverge from rooms here.** A rooms push whose phase disagrees is
@@ -1965,10 +2392,11 @@ mod tests {
         let state = state_with_rooms(Some("New Construction")).await;
 
         let body = concat!(
-            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"model":{"id":"m1","name":"M","source":"revit"},"#,
-            r#""snapshot":{"taken_at":"2026-02-01T00:00:00Z"},"phase":"New Construction"}"#,
+            r#"{"schema_version":2,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-02-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit"}]}"#,
             "\n",
-            r#"{"id":"d1","level_id":"1","loops":[],"from_room":"r1","type_id":"t1","type_name":"Single"}"#,
+            r#"{"model_id":"m1","id":"d1","level_id":"1","loops":[],"from_room":"r1","type_id":"t1","type_name":"Single"}"#,
             "\n",
             "\n", // a trailing blank line is tolerated, as on the rooms stream
         );
@@ -1986,20 +2414,25 @@ mod tests {
 
     /// The stream route refuses on the envelope line alone, before reading any
     /// door lines — a push that will be refused should cost the producer one
-    /// line, not the whole body.
+    /// line, not the whole body. The malformed line below is never parsed, and
+    /// that is the assertion: the error is the envelope's, not the parser's.
+    ///
+    /// The refusal under test is the **phase** one. It used to be the rooms
+    /// gate, which no longer exists — see `check_doors_ingest`.
     #[tokio::test]
     async fn test_doors_stream_refuses_from_the_envelope_alone() {
-        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let state = state_with_rooms(Some("New Construction")).await;
         let body = concat!(
-            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"model":{"id":"m1","name":"M","source":"revit"},"#,
-            r#""snapshot":{"taken_at":"2026-02-01T00:00:00Z"},"phase":"New Construction"}"#,
+            r#"{"schema_version":2,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-02-01T00:00:00Z"},"phase":"Existing","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit"}]}"#,
             "\n",
             r#"{"this is not a door and is never parsed"#, // malformed on purpose
         );
 
         let (status, message) = ingest_doors_stream(State(state.clone()), Body::from(body)).await.unwrap_err();
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "the gate ran, not the line parser");
-        assert!(message.contains("no rooms have been pushed"), "{message}");
+        assert!(message.contains("Existing") && message.contains("New Construction"), "{message}");
     }
 
     /// An unregistered project is refused for doors exactly as for rooms — a

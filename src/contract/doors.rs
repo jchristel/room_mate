@@ -44,11 +44,16 @@ pub struct Door {
     /// The level the door sits on, keyed the same way `Room.level_id` is —
     /// and, like it, unique only *within* one model.
     ///
-    /// No `levels` array rides the door payload. A door push targets a model
-    /// that already has rooms (ingest refuses otherwise), and that model's rooms
-    /// snapshot already carries the level set these ids point into. Sending a
-    /// second copy would create two level lists per model that could disagree,
-    /// for no reader that needs the duplicate.
+    /// No `levels` array rides the door payload. The model's rooms snapshot
+    /// carries the level set these ids point into, and sending a second copy
+    /// would create two level lists per model that could disagree, for no reader
+    /// that needs the duplicate.
+    ///
+    /// Note the reason is no longer "ingest refuses a doors push to a model with
+    /// no rooms" — it does not, and doors may arrive first. The level set may
+    /// therefore be absent for a while, which is a state the server reports (see
+    /// `service::validation::PendingRoomReference`) rather than a reason to
+    /// duplicate it here.
     pub level_id: String,
 
     /// The door's footprint, in the **room convention verbatim**: `loops[0]` is
@@ -100,8 +105,14 @@ pub struct Door {
     ///
     /// The value is a `Room.id` **in the same model**. Room ids are unique only
     /// within a model, so this reference is only meaningful against its own
-    /// model's rooms — which is why ingest requires them and QA resolves against
-    /// them.
+    /// model's rooms — which is why QA resolves against them per model and never
+    /// project-wide.
+    ///
+    /// Ingest used to require those rooms to be there already. It no longer
+    /// does: "not yet" is a legitimate answer, and refusing the push meant
+    /// refusing data that becomes resolvable the moment the rooms arrive. The
+    /// question moved to `door_report`, which can re-answer it every time the
+    /// data changes.
     #[serde(default)]
     pub from_room: Option<String>,
 
@@ -282,27 +293,94 @@ pub struct DoorPayload {
     pub doors: Vec<Door>,
 }
 
-/// The first NDJSON line of a streamed doors push (`POST /doors/stream`):
-/// everything in `DoorPayload` EXCEPT `doors`, which arrive as subsequent
-/// lines, one door per line.
+/// One model's block on a multi-model doors upload — the doors counterpart of
+/// `RoomModelEnvelope`, and deliberately shorter than it.
+///
+/// No `levels` and no `room_boundary`: a doors push targets a model whose rooms
+/// snapshot already carries the level set `Door.level_id` points into, and the
+/// boundary regime is a rooms fact the doors contract has no key for. What is
+/// left is identity and placement, which is exactly what a door needs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DoorModelEnvelope {
+    #[serde(flatten)]
+    pub model: Model,
+    #[serde(default)]
+    pub model_to_shared: Option<ModelToShared>,
+}
+
+impl DoorModelEnvelope {
+    /// Rebuild the single-model `DoorPayload` this block plus the run's shared
+    /// envelope describes — see `RoomModelEnvelope::into_payload`, which this
+    /// mirrors and which explains why a push decomposes at all.
+    pub fn into_payload(
+        self,
+        schema_version: u32,
+        project: Project,
+        snapshot: Snapshot,
+        phase: Option<String>,
+        doors: Vec<Door>,
+    ) -> DoorPayload {
+        DoorPayload {
+            schema_version,
+            project,
+            model: self.model,
+            snapshot,
+            phase,
+            model_to_shared: self.model_to_shared,
+            doors,
+        }
+    }
+}
+
+/// The first NDJSON line of a streamed doors push (`POST /doors/stream`): the
+/// run's shared identity plus one `DoorModelEnvelope` per model, with every
+/// door arriving on a following line as a `StreamDoor`.
 ///
 /// Its own type rather than making `doors` optional on `DoorPayload`, for the
 /// reason `StreamEnvelope` gives: the envelope must deserialize alone with no
 /// doors present, and `DoorPayload` must keep `doors` guaranteed for every other
-/// consumer. Every envelope field here is in lockstep with `DoorPayload` —
-/// which ingest route a producer picks must never change what the stored
-/// snapshot claims.
+/// consumer.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DoorStreamEnvelope {
     pub schema_version: u32,
     pub project: Project,
-    pub model: Model,
     #[serde(default)]
     pub snapshot: Snapshot,
     #[serde(default)]
     pub phase: Option<String>,
+    pub models: Vec<DoorModelEnvelope>,
+}
+
+/// One door line of a streamed push: the door, plus the id of the model it
+/// belongs to. See `StreamRoom` for why the id rides every element rather than
+/// a grouping marker.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StreamDoor {
+    pub model_id: String,
+    #[serde(flatten)]
+    pub door: Door,
+}
+
+/// The buffered multi-model doors upload (`POST /doors`), the counterpart of
+/// `RoomsUpload`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DoorsUpload {
+    pub schema_version: u32,
+    pub project: Project,
     #[serde(default)]
-    pub model_to_shared: Option<ModelToShared>,
+    pub snapshot: Snapshot,
+    #[serde(default)]
+    pub phase: Option<String>,
+    pub models: Vec<DoorModelUpload>,
+}
+
+/// One model's block on a buffered doors upload: its `DoorModelEnvelope` plus
+/// its doors.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DoorModelUpload {
+    #[serde(flatten)]
+    pub envelope: DoorModelEnvelope,
+    pub doors: Vec<Door>,
 }
 
 /// Doors schema version this server accepts. **Starts at 1, and moves
@@ -317,18 +395,24 @@ pub struct DoorStreamEnvelope {
 ///
 /// Starting at 1 rather than at 6 is the other half of that: a shared starting
 /// number would imply a shared history these two do not have.
-pub const SUPPORTED_DOOR_SCHEMA: u32 = 1;
+///
+/// **Now 2: one push carries many models**, in lockstep with rooms' v6 → v7 and
+/// for the identical reason — the envelope's single `model` block became a
+/// `models` list and each door names its own. That the two bumped together is a
+/// coincidence of one change touching both entities, not the version lines
+/// merging: the next change to either will move one number and not the other.
+pub const SUPPORTED_DOOR_SCHEMA: u32 = 2;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The wire shape, end to end: a v1 doors payload round-trips with both
+    /// The wire shape, end to end: a v2 doors payload round-trips with both
     /// property tiers, both room references, and the footprint intact.
     #[test]
     fn test_door_payload_round_trips() {
         let json = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "project":  { "id": "House A", "name": "House A" },
             "model":    { "id": "m1", "name": "ARCH", "source": "revit" },
             "snapshot": { "taken_at": "2026-07-29T20:03:41Z" },
@@ -542,22 +626,38 @@ mod tests {
     #[test]
     fn test_door_stream_envelope_deserializes_without_doors() {
         let mut json = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "project":  { "id": "House A", "name": "House A" },
-            "model":    { "id": "m1", "name": "ARCH", "source": "revit" }
+            "models": [{ "id": "m1", "name": "ARCH", "source": "revit" }]
         });
 
         let envelope: DoorStreamEnvelope = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(envelope.schema_version, SUPPORTED_DOOR_SCHEMA);
         assert_eq!(envelope.snapshot.taken_at, "", "for `ensure_taken_at` to resolve");
         assert!(envelope.phase.is_none());
-        assert!(envelope.model_to_shared.is_none());
+        assert!(envelope.models[0].model_to_shared.is_none());
 
+        // The phase is a run fact and rides the envelope; the transform places
+        // one document and rides that document's block.
         json["phase"] = serde_json::json!("New Construction");
-        json["model_to_shared"] = serde_json::json!({ "matrix": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] });
+        json["models"][0]["model_to_shared"] = serde_json::json!({ "matrix": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] });
         let envelope: DoorStreamEnvelope = serde_json::from_value(json).unwrap();
         assert_eq!(envelope.phase.as_deref(), Some("New Construction"));
-        assert!(envelope.model_to_shared.is_some());
+        assert!(envelope.models[0].model_to_shared.is_some());
+    }
+
+    /// A door line names its model, and the door deserializes flat alongside
+    /// that one extra key — the doors half of `StreamRoom`'s guarantee.
+    #[test]
+    fn test_stream_door_carries_its_model_id() {
+        let json = serde_json::json!({
+            "model_id": "m1",
+            "id": "d1", "level_id": "lvl1", "type_id": "t1", "type_name": "D120a",
+            "loops": [], "properties": {}, "type_properties": {}
+        });
+        let line: StreamDoor = serde_json::from_value(json).unwrap();
+        assert_eq!(line.model_id, "m1");
+        assert_eq!(line.door.id, "d1");
     }
 
     /// Doors version independently of rooms. If this ever reads as equal, the
@@ -565,7 +665,7 @@ mod tests {
     /// not to do.
     #[test]
     fn test_door_schema_is_independent_of_the_room_schema() {
-        assert_eq!(SUPPORTED_DOOR_SCHEMA, 1);
+        assert_eq!(SUPPORTED_DOOR_SCHEMA, 2);
         assert_ne!(SUPPORTED_DOOR_SCHEMA, super::super::SUPPORTED_SCHEMA);
     }
 }

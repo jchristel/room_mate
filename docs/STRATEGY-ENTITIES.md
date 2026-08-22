@@ -51,15 +51,28 @@ entity.
   room are different properties that happen to share a spelling, which is why a
   reference source and a `[[builtin_properties]]` entry each declare an `entity`.
 
-**A dependent entity needs two more things**, and both are consequences of
+**A dependent entity needs one more thing**, and it is a consequence of
 depending on rooms rather than of being new:
 
-- an **ingest gate** — a doors push is refused unless the target `(project,
-  model)` lineage already has a live rooms snapshot, scoped to the *model*
-  because room ids are unique only within one;
 - **model-scoped reference resolution** everywhere the join appears.
 
-FFE that hangs off rooms will need both. FFE that stands alone will not.
+FFE that hangs off rooms will need it. FFE that stands alone will not.
+
+**It used to need two, and losing the second is worth recording.** There was an
+*ingest gate*: a doors push was refused unless the target `(project, model)`
+lineage already had a live rooms snapshot. It is gone. The gate asked "can these
+references resolve **now**?", which has a legitimate answer of "not yet" — rooms
+may arrive in a later push — so refusing meant refusing data that becomes
+resolvable the moment they do. It was also the only place in the server where an
+unresolved cross-reference was an *error* rather than a reported state, against
+the "signal, not error" rule listed above.
+
+The check did not disappear; it moved to `service::validation::door_report`,
+which distinguishes **pending** (this model has no rooms yet — expected) from
+**dangling** (the named room is not among the ones it has — a finding). That is
+a distinction the gate could not make at all, and it is re-answered on every
+read rather than once, at the push, on the least information anyone will ever
+have. **Do not re-add an ingest-time gate for the next dependent entity.**
 
 ## Deferred
 
