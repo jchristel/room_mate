@@ -28,7 +28,9 @@ use crate::contract::{
     date_match, lookup_property, numeric_match, property_presence, DoorPayload, PropertyPresence, Room, RoomPayload,
 };
 use crate::reference::ReferenceData;
-use crate::settings::{BuiltinPropertyDef, CompareMode, DoorPolicy, FieldType, ReferenceFieldConfig, RoomAttribution};
+use crate::settings::{
+    BuiltinPropertyDef, CompareMode, DoorPolicy, FieldType, ReferenceFieldConfig, RoomAttribution, RoomResolution,
+};
 use crate::state::{AppState, ModelKey};
 
 use super::ServiceError;
@@ -316,6 +318,108 @@ pub struct DoorDiscrepancyCounts {
     pub doors_unresolved_room: usize,
     pub doors_unattributed: usize,
     pub room_reference_mismatches: usize,
+    /// Models, not doors — see `DoorReport::doors_phase_drift`.
+    pub doors_phase_drift: usize,
+    pub room_geometry_mismatches: usize,
+}
+
+/// Which of two snapshots was read first, and therefore which one has not been
+/// checked against the other since.
+///
+/// **It names the *unverified* side, not the wrong one**, and the distinction
+/// matters when acting on it. If the doors were read later than the rooms and
+/// the two disagree, it may be because a door moved — in which case the rooms
+/// data is perfectly current and re-pushing it changes nothing. Re-pushing the
+/// older side is still the right first move, because it either fixes the
+/// disagreement or proves it is not drift; the finding just must not claim more
+/// than it knows, which is why both timestamps are reported rather than only a
+/// verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StaleSide {
+    /// The doors snapshot was read first: it has not seen the current rooms.
+    Doors,
+    /// The rooms snapshot was read first: it has not seen the current doors.
+    Rooms,
+    /// **Both were read in one run and still disagree**, so this is not drift at
+    /// all — nobody needs to re-push, and the model itself is wrong. A
+    /// multi-model push gives every model in a run one shared `taken_at`, which
+    /// is what makes this distinguishable rather than a coincidence.
+    Neither,
+}
+
+/// One door whose authored room reference resolves, and disagrees with where the
+/// door physically is.
+///
+/// **The finding nothing else could see.** A dangling reference names a room the
+/// model does not have and is already reported; this one names a room that
+/// exists, so every id check passes while the door is attributed to a room it is
+/// nowhere near. It is what rooms-moved-and-doors-did-not looks like from the
+/// server: the ids still line up and the geometry no longer does.
+///
+/// **Not a swing check.** A door is attributed to the room it *serves*, which
+/// the modeller decides and which is not always the room it opens into — a
+/// cupboard off a corridor swings into the corridor and belongs to the cupboard.
+/// `CLAUDE.md` forbids reconciling those two and this does not: the cupboard
+/// door's insertion point is still on the cupboard/corridor boundary, so it
+/// passes. What fails here is a room that has *moved away* from its door.
+#[derive(Debug, Serialize)]
+pub struct RoomGeometryMismatch {
+    pub model_id: String,
+    pub door_id: String,
+    pub side: DoorSide,
+    /// The room the model states this side opens onto.
+    pub authored_room_id: String,
+    /// The room the geometry puts on that side, `None` when it found none.
+    /// Absent with the door still present means the door is no longer beside
+    /// *any* room on that side.
+    pub geometric_room: Option<crate::service::room_locator::RoomRef>,
+    /// When each snapshot was read — the export's own timestamp, not the
+    /// server's receipt time, which is what makes comparing them meaningful.
+    pub doors_taken_at: String,
+    pub rooms_taken_at: String,
+    pub stale: StaleSide,
+}
+
+/// How many sides the geometry answered, and how many it could not.
+///
+/// **Without this the resolver is unauditable.** A project that turns resolution
+/// on and sees nothing change cannot otherwise tell whether every door was
+/// already answered, or whether every probe failed for the same reason.
+#[derive(Debug, Default, Serialize)]
+pub struct RoomResolutionCounts {
+    /// Sides the model left absent and the geometry filled.
+    pub derived: usize,
+    /// Sides the model left absent and the geometry could not fill, by reason.
+    /// `no_candidate` here is usually an **external door** and not a problem.
+    pub unresolved: BTreeMap<String, usize>,
+}
+
+/// One model whose stored doors were filtered to a different phase than its
+/// stored rooms.
+///
+/// **Stale data, not absent data** — which is why it is a finding rather than a
+/// pending state. Both snapshots exist and both look complete; they simply
+/// describe different phases of the building, so every reference between them is
+/// answering a question about a model that no longer exists in that form.
+///
+/// It became reachable in two ways at once. A rooms push whose phase disagrees
+/// is quarantined and *promotable*, so activating it moves the lineage while the
+/// stored doors stay on the old phase. And doors may now be pushed before rooms
+/// and phase a lineage themselves, so the rooms-first ordering that used to make
+/// this rare is gone.
+///
+/// Nothing else notices: `PhaseReport` reads rooms snapshots only, and the door
+/// reference checks resolve ids without asking what phase either side is on.
+#[derive(Debug, Serialize)]
+pub struct DoorPhaseDrift {
+    pub model_id: String,
+    /// The phase this model's stored **doors** were filtered to.
+    pub doors_phase: Option<String>,
+    /// The phase this model's stored **rooms** were filtered to. `None` is a
+    /// snapshot from before phasing existed — its rooms were never filtered at
+    /// all, which is a different and worse problem than disagreeing.
+    pub rooms_phase: Option<String>,
 }
 
 /// A door whose model has no rooms snapshot yet, so its references cannot be
@@ -396,6 +500,23 @@ pub struct DoorReport {
     /// per side: nothing about this door was checked, so there is no per-side
     /// answer to give.
     pub doors_pending_rooms: Vec<PendingRoomReference>,
+    /// Models whose stored doors and stored rooms describe different phases —
+    /// see `DoorPhaseDrift`. One entry per model, not per door: it is a fact
+    /// about the two snapshots, and repeating it per door would bury every other
+    /// finding under it.
+    pub doors_phase_drift: Vec<DoorPhaseDrift>,
+    /// Authored references that resolve but disagree with the geometry — see
+    /// `RoomGeometryMismatch`. Empty when `[doors] room_resolution` is off,
+    /// which is **not the same as clean**; the setting is echoed below so a
+    /// reader can tell the two apart.
+    pub room_geometry_mismatches: Vec<RoomGeometryMismatch>,
+    /// What the geometry answered across this project — see
+    /// `RoomResolutionCounts`.
+    pub room_resolution_counts: RoomResolutionCounts,
+    /// The resolution mode in force, echoed for the same reason
+    /// `room_reference_property` is: off is a real state, and a reader must be
+    /// able to tell "the check found nothing" from "the check did not run".
+    pub room_resolution: RoomResolution,
     /// Doors with a room on exactly one side — external doors. **Informational,
     /// not a discrepancy**; see the type doc for why.
     pub doors_external: usize,
@@ -467,6 +588,100 @@ fn phase_report(project_id: &str, stored: &[(ModelKey, RoomPayload)]) -> PhaseRe
     PhaseReport { by_model, disagree: distinct.len() > 1 }
 }
 
+/// Every door's geometric answer, resolved once by the caller so this module
+/// does not need the store.
+///
+/// Keyed on `(model id, door id)` for the reason every door lookup here is: a
+/// door id, like a room id, is unique only within one model.
+pub type LocatedDoors = BTreeMap<(String, String), crate::service::room_locator::Sides>;
+
+/// Compare each authored reference against where the door physically is, and
+/// count what the geometry managed to answer.
+///
+/// **Runs over doors that stated a reference too**, unlike the read path, which
+/// skips the probe when both sides are authored because nothing it found would
+/// be used. Here the disagreement *is* the finding, so the probe is exactly what
+/// is wanted.
+///
+/// A side the model left absent is not a mismatch — there is nothing to
+/// disagree with — so it lands in `derived`/`unresolved` instead.
+fn geometry_pass(
+    project_id: &str,
+    stored_rooms: &[(ModelKey, RoomPayload)],
+    stored_doors: &[(ModelKey, DoorPayload)],
+    located: &LocatedDoors,
+    report: &mut DoorReport,
+) {
+    use crate::service::room_locator::Located;
+
+    let rooms_taken_at: BTreeMap<&str, &str> = stored_rooms
+        .iter()
+        .filter(|(_, p)| p.project.id == project_id)
+        .map(|(key, p)| (key.model_id.as_str(), p.snapshot.taken_at.as_str()))
+        .collect();
+
+    for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
+        for door in &payload.doors {
+            let Some(sides) = located.get(&(key.model_id.clone(), door.id.clone())) else {
+                continue;
+            };
+            for (side, authored, derived) in [
+                (DoorSide::FromRoom, door.from_room.as_deref(), &sides.from),
+                (DoorSide::ToRoom, door.to_room.as_deref(), &sides.to),
+            ] {
+                let Some(authored) = authored else {
+                    // Nothing stated: this is the fill case, not the drift case.
+                    match derived {
+                        Located::Found(_) => report.room_resolution_counts.derived += 1,
+                        Located::Unresolved(why) => {
+                            let label = serde_json::to_value(why)
+                                .ok()
+                                .and_then(|v| v.as_str().map(str::to_string))
+                                .unwrap_or_else(|| "unknown".to_string());
+                            *report.room_resolution_counts.unresolved.entry(label).or_default() += 1;
+                        }
+                    }
+                    continue;
+                };
+
+                // The geometry finding *nothing* on a side the model named is
+                // not evidence the model is wrong: an unplaced room, a door
+                // with no direction, or a probe that cleared no wall all land
+                // here. Only a geometry answer that names a different room is a
+                // disagreement.
+                let Located::Found(found) = derived else { continue };
+                if found.model_id == key.model_id && found.room_id == authored {
+                    continue;
+                }
+
+                let doors_taken_at = payload.snapshot.taken_at.as_str();
+                let rooms_at = rooms_taken_at.get(key.model_id.as_str()).copied().unwrap_or("");
+                report.room_geometry_mismatches.push(RoomGeometryMismatch {
+                    model_id: key.model_id.clone(),
+                    door_id: door.id.clone(),
+                    side,
+                    authored_room_id: authored.to_string(),
+                    geometric_room: Some(found.clone()),
+                    doors_taken_at: doors_taken_at.to_string(),
+                    rooms_taken_at: rooms_at.to_string(),
+                    stale: stale_side(doors_taken_at, rooms_at),
+                });
+            }
+        }
+    }
+}
+
+/// Which snapshot was read first. RFC3339 UTC ids compare lexically — the same
+/// property the store's "lexical max is newest" rule already depends on — so
+/// this needs no date parsing and cannot fail on a value the store accepted.
+fn stale_side(doors_taken_at: &str, rooms_taken_at: &str) -> StaleSide {
+    match doors_taken_at.cmp(rooms_taken_at) {
+        std::cmp::Ordering::Less => StaleSide::Doors,
+        std::cmp::Ordering::Greater => StaleSide::Rooms,
+        std::cmp::Ordering::Equal => StaleSide::Neither,
+    }
+}
+
 /// Reconcile one project's doors against its rooms — see `DoorReport`.
 ///
 /// Rooms are indexed **per model** rather than into one project-wide set, which
@@ -492,6 +707,7 @@ fn door_report(
     stored_doors: &[(ModelKey, DoorPayload)],
     policy: &DoorPolicy,
     builtin_defs: &[BuiltinPropertyDef],
+    located: Option<&LocatedDoors>,
 ) -> DoorReport {
     let rooms_by_model: BTreeMap<&str, BTreeSet<&str>> = stored_rooms
         .iter()
@@ -521,6 +737,31 @@ fn door_report(
 
     let mut report = DoorReport { room_attribution: policy.room_attribution, ..DoorReport::default() };
     report.room_reference_property = policy.room_reference_property.clone();
+    report.room_resolution = policy.room_resolution;
+
+    // Phase drift is a fact about the two *snapshots*, so it is settled per
+    // model before any door is looked at. A model with doors but no rooms is not
+    // drift -- it is pending, and reported as such per door below.
+    let rooms_phase_by_model: BTreeMap<&str, Option<&str>> = stored_rooms
+        .iter()
+        .filter(|(_, payload)| payload.project.id == project_id)
+        .map(|(key, payload)| (key.model_id.as_str(), payload.phase.as_deref()))
+        .collect();
+    for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
+        let Some(rooms_phase) = rooms_phase_by_model.get(key.model_id.as_str()) else {
+            continue; // no rooms yet: pending, not drift
+        };
+        // Folded exactly as `contract::phases_agree` folds, so a model differing
+        // only in spelling is not reported -- the same stance `phase_report`
+        // takes, and the same one ingest takes when deciding agreement.
+        if !crate::contract::phases_agree(payload.phase.as_deref(), *rooms_phase) {
+            report.doors_phase_drift.push(DoorPhaseDrift {
+                model_id: key.model_id.clone(),
+                doors_phase: payload.phase.clone(),
+                rooms_phase: rooms_phase.map(str::to_string),
+            });
+        }
+    }
 
     for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
         // A model with doors but no rooms snapshot has nothing to resolve
@@ -632,15 +873,23 @@ fn door_report(
         }
     }
 
+    if let Some(located) = located {
+        geometry_pass(project_id, stored_rooms, stored_doors, located, &mut report);
+    }
+
     report.discrepancies = DoorDiscrepancyCounts {
         total: report.doors_without_room_reference.len()
             + report.doors_unresolved_room.len()
             + report.doors_unattributed.len()
-            + report.room_reference_mismatches.len(),
+            + report.room_reference_mismatches.len()
+            + report.doors_phase_drift.len()
+            + report.room_geometry_mismatches.len(),
         doors_unattributed: report.doors_unattributed.len(),
         room_reference_mismatches: report.room_reference_mismatches.len(),
         doors_without_room_reference: report.doors_without_room_reference.len(),
         doors_unresolved_room: report.doors_unresolved_room.len(),
+        doors_phase_drift: report.doors_phase_drift.len(),
+        room_geometry_mismatches: report.room_geometry_mismatches.len(),
     };
     report
 }
@@ -995,7 +1244,18 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // two phases at once, or serving doors that link to rooms it no longer has,
     // and that is exactly the project nobody would otherwise be watching.
     response.phases = phase_report(project_id, &stored);
-    response.doors = door_report(project_id, &stored, &stored_doors, &bundle.doors, &bundle.builtin_properties);
+    // Resolved before the report so `door_report` stays a pure function of the
+    // data it is handed -- it never touches the store, which is what lets every
+    // one of its tests build a scenario as two vectors.
+    let located = super::doors::locate_project_doors(state, project_id, bundle.doors.room_resolution, &stored_doors)?;
+    response.doors = door_report(
+        project_id,
+        &stored,
+        &stored_doors,
+        &bundle.doors,
+        &bundle.builtin_properties,
+        (!located.is_empty()).then_some(&located),
+    );
     if loaded.is_empty() {
         return Ok(response);
     }
@@ -1782,6 +2042,50 @@ mod tests {
         (ModelKey { project_id: project_id.to_string(), model_id: model_id.to_string() }, payload)
     }
 
+    /// `rooms_for` with the snapshot id stated, for the drift tests -- which are
+    /// entirely about which of two snapshots was read first.
+    fn rooms_at(project_id: &str, model_id: &str, room_ids: &[&str], taken_at: &str) -> (ModelKey, RoomPayload) {
+        let (key, mut payload) = rooms_for(project_id, model_id, room_ids);
+        payload.snapshot.taken_at = taken_at.to_string();
+        (key, payload)
+    }
+
+    /// `make_doors` with the snapshot id stated.
+    fn doors_at(
+        project_id: &str,
+        model_id: &str,
+        doors: Vec<crate::contract::Door>,
+        taken_at: &str,
+    ) -> (ModelKey, DoorPayload) {
+        let (key, mut payload) = make_doors(project_id, model_id, doors);
+        payload.snapshot.taken_at = taken_at.to_string();
+        (key, payload)
+    }
+
+    /// `rooms_for` with the phase stated, for the phase-drift tests.
+    fn phased_rooms(
+        project_id: &str,
+        model_id: &str,
+        room_ids: &[&str],
+        phase: Option<&str>,
+    ) -> (ModelKey, RoomPayload) {
+        let (key, mut payload) = rooms_for(project_id, model_id, room_ids);
+        payload.phase = phase.map(str::to_string);
+        (key, payload)
+    }
+
+    /// `make_doors` with the phase stated.
+    fn phased_doors(
+        project_id: &str,
+        model_id: &str,
+        doors: Vec<crate::contract::Door>,
+        phase: Option<&str>,
+    ) -> (ModelKey, DoorPayload) {
+        let (key, mut payload) = make_doors(project_id, model_id, doors);
+        payload.phase = phase.map(str::to_string);
+        (key, payload)
+    }
+
     /// The clean case: every reference resolves, nothing is reported, and the
     /// one-sided door is counted as external rather than flagged.
     #[test]
@@ -1796,7 +2100,7 @@ mod tests {
             ],
         )];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
         assert_eq!(report.total_doors, 2);
         assert_eq!(report.doors_external, 1, "the one-sided door is external");
         assert_eq!(report.discrepancies.total, 0, "an external door is not a discrepancy");
@@ -1809,7 +2113,7 @@ mod tests {
         let rooms = vec![rooms_for("p1", "m1", &["r1"])];
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
         assert_eq!(report.discrepancies.doors_without_room_reference, 1);
         assert_eq!(report.doors_without_room_reference[0].door_id, "d1");
         assert_eq!(report.doors_without_room_reference[0].model_id, "m1");
@@ -1829,7 +2133,7 @@ mod tests {
             vec![make_door("d1", Some("gone"), Some("also-gone"))],
         )];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
         assert_eq!(report.discrepancies.doors_unresolved_room, 2, "two broken references, two entries");
         let sides: Vec<DoorSide> = report.doors_unresolved_room.iter().map(|u| u.side).collect();
         assert_eq!(sides, vec![DoorSide::FromRoom, DoorSide::ToRoom]);
@@ -1845,7 +2149,7 @@ mod tests {
         let rooms = vec![rooms_for("p1", "m1", &["other"]), rooms_for("p1", "m2", &["r1"])];
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), None)])];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
         assert_eq!(report.discrepancies.doors_unresolved_room, 1, "m2's r1 is a different room");
         assert_eq!(report.doors_unresolved_room[0].model_id, "m1");
     }
@@ -1860,7 +2164,7 @@ mod tests {
             make_doors("p2", "m1", vec![make_door("d2", None, None)]),
         ];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
         assert_eq!(report.total_doors, 1);
         assert_eq!(report.discrepancies.total, 0, "p2's broken door is not counted here");
     }
@@ -1883,7 +2187,7 @@ mod tests {
             ],
         )];
         let policy = DoorPolicy::default();
-        let report = door_report("p1", &rooms, &doors, &policy, &[]);
+        let report = door_report("p1", &rooms, &doors, &policy, &[], None);
 
         let owners = |from: Option<&str>, to: Option<&str>| {
             policy.room_attribution.owners(from, to).iter().map(|s| s.to_string()).collect::<Vec<_>>()
@@ -1915,7 +2219,7 @@ mod tests {
             ],
         )];
         let policy = DoorPolicy { room_attribution: RoomAttribution::ToRoom, ..Default::default() };
-        let report = door_report("p1", &rooms, &doors, &policy, &[]);
+        let report = door_report("p1", &rooms, &doors, &policy, &[], None);
 
         assert_eq!(report.doors_unattributed.len(), 1);
         assert_eq!(report.doors_unattributed[0].door_id, "from-only");
@@ -1962,7 +2266,7 @@ mod tests {
             ],
         )];
 
-        let off = door_report("p1", &[rooms.clone()], &doors, &DoorPolicy::default(), &[]);
+        let off = door_report("p1", &[rooms.clone()], &doors, &DoorPolicy::default(), &[], None);
         assert!(off.room_reference_mismatches.is_empty(), "no property named — the check is off");
         assert!(off.room_reference_property.is_none());
 
@@ -1970,7 +2274,7 @@ mod tests {
             room_reference_property: Some("Door Room Reference".to_string()),
             ..Default::default()
         };
-        let on = door_report("p1", &[rooms], &doors, &policy, &[]);
+        let on = door_report("p1", &[rooms], &doors, &policy, &[], None);
         assert_eq!(on.room_reference_mismatches.len(), 1);
         let m = &on.room_reference_mismatches[0];
         assert_eq!(m.door_id, "disagrees");
@@ -1986,9 +2290,271 @@ mod tests {
     #[test]
     fn test_no_doors_is_an_empty_report() {
         let rooms = vec![rooms_for("p1", "m1", &["r1"])];
-        let report = door_report("p1", &rooms, &[], &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &rooms, &[], &DoorPolicy::default(), &[], None);
         assert_eq!(report.total_doors, 0);
         assert_eq!(report.discrepancies.total, 0);
+    }
+
+    // ---------- phase drift ----------
+
+    /// **Doors and rooms describing different phases is a finding.** Both
+    /// snapshots exist and look complete, so nothing else notices: the phase
+    /// report reads rooms only, and the reference checks resolve ids without
+    /// asking what phase either side is on.
+    #[test]
+    fn test_doors_on_a_different_phase_than_their_rooms_is_a_finding() {
+        let rooms = vec![phased_rooms("p1", "m1", &["r1"], Some("Stage 2"))];
+        let doors = vec![phased_doors(
+            "p1",
+            "m1",
+            vec![make_door("d1", Some("r1"), None)],
+            Some("Stage 1"),
+        )];
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+
+        assert_eq!(report.doors_phase_drift.len(), 1);
+        assert_eq!(report.doors_phase_drift[0].model_id, "m1");
+        assert_eq!(report.doors_phase_drift[0].doors_phase.as_deref(), Some("Stage 1"));
+        assert_eq!(report.doors_phase_drift[0].rooms_phase.as_deref(), Some("Stage 2"));
+        assert_eq!(report.discrepancies.doors_phase_drift, 1);
+    }
+
+    /// Folded exactly as ingest folds when it decides agreement, so a model
+    /// differing only in spelling is not reported.
+    #[test]
+    fn test_phase_drift_folds_case_and_whitespace() {
+        let rooms = vec![phased_rooms("p1", "m1", &["r1"], Some("New Construction"))];
+        let doors = vec![phased_doors(
+            "p1",
+            "m1",
+            vec![make_door("d1", Some("r1"), None)],
+            Some("  new CONSTRUCTION "),
+        )];
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        assert!(report.doors_phase_drift.is_empty(), "same phase, different spelling");
+    }
+
+    /// One entry per model, not per door — it is a fact about the two
+    /// snapshots, and repeating it per door would bury every other finding.
+    #[test]
+    fn test_phase_drift_is_reported_once_per_model() {
+        let rooms = vec![phased_rooms("p1", "m1", &["r1"], Some("Stage 2"))];
+        let doors = vec![phased_doors(
+            "p1",
+            "m1",
+            vec![make_door("d1", Some("r1"), None), make_door("d2", Some("r1"), None)],
+            Some("Stage 1"),
+        )];
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        assert_eq!(report.doors_phase_drift.len(), 1, "two doors, one model, one finding");
+    }
+
+    /// A model with doors and no rooms yet is **pending**, not drift: there is
+    /// no rooms phase to disagree with.
+    #[test]
+    fn test_a_model_awaiting_rooms_is_not_phase_drift() {
+        let doors = vec![phased_doors(
+            "p1",
+            "m1",
+            vec![make_door("d1", Some("r1"), None)],
+            Some("Stage 1"),
+        )];
+        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
+        assert!(report.doors_phase_drift.is_empty());
+        assert_eq!(report.doors_pending_rooms.len(), 1);
+    }
+
+    // ---------- geometric drift ----------
+
+    /// The geometric answer for one door, as `locate_project_doors` would have
+    /// produced it. Built by hand so these tests state the scenario rather than
+    /// constructing a store and a coordinate system to imply it.
+    fn located(model: &str, door: &str, from: Option<&str>, to: Option<&str>) -> LocatedDoors {
+        use crate::service::room_locator::{Located, RoomRef, Sides, Unresolved};
+        let side = |r: Option<&str>| match r {
+            Some(room) => Located::Found(RoomRef { model_id: model.into(), room_id: room.into() }),
+            None => Located::Unresolved(Unresolved::NoCandidate),
+        };
+        BTreeMap::from([((model.to_string(), door.to_string()), Sides { from: side(from), to: side(to) })])
+    }
+
+    /// **The finding nothing else could see.** The authored reference resolves —
+    /// room `r1` exists — so every id check passes while the door is nowhere
+    /// near it. This is what rooms-moved-and-doors-did-not looks like from the
+    /// server.
+    #[test]
+    fn test_an_authored_reference_that_disagrees_with_geometry_is_a_finding() {
+        let rooms = vec![rooms_at("p1", "m1", &["r1", "r2"], "2026-02-01T00:00:00Z")];
+        let doors = vec![doors_at(
+            "p1",
+            "m1",
+            vec![make_door("d1", None, Some("r1"))],
+            "2026-01-01T00:00:00Z",
+        )];
+        let report = door_report(
+            "p1",
+            &rooms,
+            &doors,
+            &DoorPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, Some("r2"))),
+        );
+
+        assert!(report.doors_unresolved_room.is_empty(), "the reference resolves — that is the point");
+        assert_eq!(report.room_geometry_mismatches.len(), 1);
+        let finding = &report.room_geometry_mismatches[0];
+        assert_eq!(finding.authored_room_id, "r1");
+        assert_eq!(finding.geometric_room.as_ref().unwrap().room_id, "r2");
+        assert_eq!(finding.side, DoorSide::ToRoom);
+        assert_eq!(report.discrepancies.room_geometry_mismatches, 1);
+    }
+
+    /// The doors were read first, so they are the side that has not seen the
+    /// current rooms.
+    #[test]
+    fn test_the_older_snapshot_is_named_as_the_unverified_one() {
+        let rooms = vec![rooms_at("p1", "m1", &["r1", "r2"], "2026-02-01T00:00:00Z")];
+        let doors = vec![doors_at(
+            "p1",
+            "m1",
+            vec![make_door("d1", None, Some("r1"))],
+            "2026-01-01T00:00:00Z",
+        )];
+        let report = door_report(
+            "p1",
+            &rooms,
+            &doors,
+            &DoorPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, Some("r2"))),
+        );
+        assert_eq!(report.room_geometry_mismatches[0].stale, StaleSide::Doors);
+
+        // Reversed, the other side is the unverified one.
+        let rooms = vec![rooms_at("p1", "m1", &["r1", "r2"], "2026-01-01T00:00:00Z")];
+        let doors = vec![doors_at(
+            "p1",
+            "m1",
+            vec![make_door("d1", None, Some("r1"))],
+            "2026-02-01T00:00:00Z",
+        )];
+        let report = door_report(
+            "p1",
+            &rooms,
+            &doors,
+            &DoorPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, Some("r2"))),
+        );
+        assert_eq!(report.room_geometry_mismatches[0].stale, StaleSide::Rooms);
+    }
+
+    /// **Equal timestamps mean it is not drift at all.** A multi-model push
+    /// gives every model in a run one shared `taken_at`, so rooms and doors read
+    /// together and still disagreeing is a modelling error — nobody needs to
+    /// re-push, and the finding must not tell them to.
+    #[test]
+    fn test_snapshots_read_together_report_neither_as_stale() {
+        let ts = "2026-02-01T00:00:00Z";
+        let rooms = vec![rooms_at("p1", "m1", &["r1", "r2"], ts)];
+        let doors = vec![doors_at("p1", "m1", vec![make_door("d1", None, Some("r1"))], ts)];
+        let report = door_report(
+            "p1",
+            &rooms,
+            &doors,
+            &DoorPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, Some("r2"))),
+        );
+        assert_eq!(report.room_geometry_mismatches[0].stale, StaleSide::Neither);
+        assert_eq!(report.room_geometry_mismatches[0].doors_taken_at, ts);
+        assert_eq!(report.room_geometry_mismatches[0].rooms_taken_at, ts);
+    }
+
+    /// Agreement is not a finding, and neither is the geometry finding nothing:
+    /// an unplaced room, a door with no direction and a probe that cleared no
+    /// wall all land there, and none of them is evidence the model is wrong.
+    #[test]
+    fn test_agreement_and_an_unresolved_probe_are_both_silent() {
+        let rooms = vec![rooms_at("p1", "m1", &["r1"], "2026-01-01T00:00:00Z")];
+        let doors = vec![doors_at(
+            "p1",
+            "m1",
+            vec![make_door("d1", None, Some("r1"))],
+            "2026-01-01T00:00:00Z",
+        )];
+
+        let agrees = door_report(
+            "p1",
+            &rooms,
+            &doors,
+            &DoorPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, Some("r1"))),
+        );
+        assert!(agrees.room_geometry_mismatches.is_empty(), "geometry agrees");
+
+        let silent =
+            door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], Some(&located("m1", "d1", None, None)));
+        assert!(silent.room_geometry_mismatches.is_empty(), "the probe found nothing — not a disagreement");
+    }
+
+    /// A side the model left **absent** is the fill case, not the drift case:
+    /// it is counted, never reported as a mismatch.
+    #[test]
+    fn test_an_absent_side_is_counted_as_derived_not_as_a_mismatch() {
+        let rooms = vec![rooms_at("p1", "m1", &["r1", "r2"], "2026-01-01T00:00:00Z")];
+        let doors = vec![doors_at(
+            "p1",
+            "m1",
+            vec![make_door("d1", None, None)],
+            "2026-01-01T00:00:00Z",
+        )];
+        let report = door_report(
+            "p1",
+            &rooms,
+            &doors,
+            &DoorPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", Some("r1"), Some("r2"))),
+        );
+
+        assert!(report.room_geometry_mismatches.is_empty(), "nothing authored to disagree with");
+        assert_eq!(report.room_resolution_counts.derived, 2, "both sides filled");
+    }
+
+    /// Unresolved sides are broken down by reason, so a project that turns
+    /// resolution on and sees nothing can tell "already answered" from "every
+    /// probe failed the same way".
+    #[test]
+    fn test_unresolved_sides_are_counted_by_reason() {
+        let rooms = vec![rooms_at("p1", "m1", &["r1"], "2026-01-01T00:00:00Z")];
+        let doors = vec![doors_at(
+            "p1",
+            "m1",
+            vec![make_door("d1", None, None)],
+            "2026-01-01T00:00:00Z",
+        )];
+        let report =
+            door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], Some(&located("m1", "d1", None, None)));
+        assert_eq!(report.room_resolution_counts.unresolved.get("no_candidate"), Some(&2));
+        assert_eq!(report.room_resolution_counts.derived, 0);
+    }
+
+    /// Resolution off means the check did not run, which is **not the same as
+    /// clean** — the mode is echoed so a reader can tell.
+    #[test]
+    fn test_resolution_off_is_reported_as_off_not_as_clean() {
+        let rooms = vec![rooms_at("p1", "m1", &["r1"], "2026-01-01T00:00:00Z")];
+        let doors = vec![doors_at(
+            "p1",
+            "m1",
+            vec![make_door("d1", None, Some("r1"))],
+            "2026-01-01T00:00:00Z",
+        )];
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        assert_eq!(report.room_resolution, RoomResolution::Off);
+        assert!(report.room_geometry_mismatches.is_empty());
     }
 
     /// **Doors whose model has no rooms are PENDING, not dangling** — the
@@ -2003,7 +2569,7 @@ mod tests {
     #[test]
     fn test_doors_whose_model_has_no_rooms_are_pending_not_dangling() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
-        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
         assert_eq!(report.discrepancies.doors_unresolved_room, 0, "nothing dangles — nothing was checked");
         assert_eq!(report.discrepancies.total, 0, "a pending model is not a finding");
         assert_eq!(report.doors_pending_rooms.len(), 1, "one entry per door, not per side");
@@ -2019,7 +2585,7 @@ mod tests {
     fn test_a_pending_reference_becomes_dangling_once_rooms_arrive() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
         let rooms = vec![rooms_for("p1", "m1", &["something-else"])];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
         assert!(report.doors_pending_rooms.is_empty(), "the model has rooms now");
         assert_eq!(report.discrepancies.doors_unresolved_room, 2, "both sides name rooms it does not have");
     }
@@ -2031,7 +2597,7 @@ mod tests {
     #[test]
     fn test_a_pending_model_still_reports_doors_with_no_reference() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
-        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[]);
+        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
         assert_eq!(report.doors_without_room_reference.len(), 1);
         assert!(report.doors_pending_rooms.is_empty(), "it has no reference to be pending about");
     }

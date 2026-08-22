@@ -40,20 +40,6 @@ become.
   is the only reason the trait exists. Nothing about it is designed yet beyond
   that seam.
 
-- **`SnapshotStore::put_streaming`.** `POST /rooms/stream` streams *parsing*
-  only — rooms are still accumulated in memory, and `set_snapshot` then
-  serializes the whole payload again, so peak is roughly the payload twice and
-  streaming does not help when the room set itself is too large. Writing rooms to
-  disk as they arrive is the next step. One snapshot file stays the unit; what
-  changes is that it is written line by line and committed at the end, so it must
-  write to a temp path and rename — the store re-parses every snapshot at boot,
-  and a truncated file from an aborted push must never read as a complete one.
-
-  **The multi-model push raised the ceiling this is measured against**: one
-  request now holds a whole run's models rather than one at a time, and the
-  writer will need to handle N open snapshots (or group and write them
-  sequentially). (The limitation is also recorded at the handler.)
-
 - **A milestone-aware validation report.** `GET /projects/{id}/validation` is
   latest-based regardless of `?milestone=`: it resolves each source's link
   values itself rather than through the rooms path, so the milestone

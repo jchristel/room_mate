@@ -849,6 +849,12 @@ fn phases_of(scoped: &[ScopedPayload<'_>]) -> BTreeMap<String, BTreeMap<String, 
 /// tuple's payload slot). A project without the named milestone, or a model it
 /// doesn't pin, contributes nothing — the building-filter discipline.
 ///
+/// `pub(crate)` since the doors read needs the same scoped room payloads to
+/// resolve a door against room *geometry* — the cheap first move this codebase
+/// prescribes when a second consumer appears, rather than a second copy of the
+/// milestone-substitution rules that could pin a different snapshot than
+/// `/rooms` does.
+///
 /// The second return value is each milestone-pinned reference source,
 /// resolved once per (project id, source name): `Some(data)` = joined instead
 /// of that source's current data; a `None` *value* means "attempted, fall
@@ -856,7 +862,7 @@ fn phases_of(scoped: &[ScopedPayload<'_>]) -> BTreeMap<String, BTreeMap<String, 
 /// re-parsed nor re-warned across a project's models. Empty on the
 /// non-milestone path. Kept together with the scoping loop that fills it,
 /// since that's where the pin is known.
-fn scope_payloads<'r>(
+pub(crate) fn scope_payloads<'r>(
     state: &AppState,
     registry: &'r SettingsRegistry,
     stored: Vec<(ModelKey, RoomPayload)>,

@@ -31,6 +31,15 @@ If it only joins onto something else, it is a reference source and the existing
 three counts; a door *schedule* does not — it is reference data for the door
 entity.
 
+**Geometric room association generalizes too, as of phase 2.**
+`service::room_locator` takes a point, an optional plan direction and candidate
+rooms — never a `Door` — so windows (same two-sided shape) and an FF&E instance
+(one side, `Room` rather than `FromRoom`/`ToRoom`) need the glue, not the
+geometry. The extractor already made the same split: `room_reference(instance,
+phase, which)` takes the property name as an argument because that is the only
+thing that varies per category. **A category whose Revit references go
+unpopulated in a split-model setup needs exactly that glue and nothing else.**
+
 **What generalizes to every primary entity:**
 
 - the upload envelope, and snapshot id resolution through

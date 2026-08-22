@@ -18,11 +18,12 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::contract::{Door, DoorPayload, PropertyPresence};
+use crate::contract::{Door, DoorPayload, ModelToShared, Point2D, PropertyPresence};
 use crate::reference::{ReferenceData, ReferenceRecord};
-use crate::settings::{BuiltinPropertyDef, ReferenceEntity};
+use crate::settings::{BuiltinPropertyDef, ReferenceEntity, RoomResolution};
 use crate::state::{AppState, ModelKey};
 
+use super::room_locator::{self, RoomRef, Unresolved};
 use super::rooms::{FilterTarget, RoomFilter};
 use super::ServiceError;
 
@@ -59,6 +60,24 @@ pub struct DoorResponse {
     /// Derived at read time from the stored references, never stored: changing
     /// the policy changes every answer immediately and rewrites nothing.
     pub owner_rooms: Vec<String>,
+
+    /// The same owners, **model-qualified** — and the only field that can name a
+    /// room in another model.
+    ///
+    /// `owner_rooms` above is a list of bare room ids resolved against this
+    /// door's own model, which is all it can be: a room id is unique only within
+    /// a model. Once geometry can reach a room in a *linked* model, that shape
+    /// has no way to say so, and putting the bare id there would resolve it
+    /// against the wrong model's rooms — a wrong answer that looks right.
+    ///
+    /// So `owner_rooms` keeps its meaning exactly (same-model owners, empty
+    /// means homeless) and this carries the whole truth beside it. A consumer
+    /// that needs to be correct across linked models reads this one.
+    pub owner_rooms_qualified: Vec<RoomRef>,
+
+    /// Where each side's room reference came from — stated by the model,
+    /// derived from geometry, or unresolved with a reason. See `SideOrigin`.
+    pub room_origin: RoomOrigin,
 
     /// Joined reference-source records, keyed by source name — the same shape
     /// `RoomResponse::reference` carries, and flattened the same way so
@@ -206,6 +225,264 @@ fn doors_revision(scoped: &[(ModelKey, DoorPayload)]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+/// Where one side's room reference came from.
+///
+/// **On the wire because a consumer must be able to tell a stated answer from a
+/// computed one.** The same rule `through_wall_normal` states for direction: a
+/// guessed value nothing can distinguish from a measured one is worse than an
+/// absent one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "origin", content = "value")]
+pub enum SideOrigin {
+    /// The model stated it. Always wins — see `RoomResolution`.
+    Authored(RoomRef),
+    /// The model stated nothing and the geometry found a room.
+    Derived(RoomRef),
+    /// The model stated nothing and the geometry did not resolve one, carrying
+    /// why. `no_candidate` on one side of an otherwise two-sided door is an
+    /// **external door**, which is the correct answer rather than a gap.
+    Unresolved(Unresolved),
+}
+
+impl SideOrigin {
+    /// The room this side resolves to, whatever it came from.
+    fn room(&self) -> Option<&RoomRef> {
+        match self {
+            SideOrigin::Authored(r) | SideOrigin::Derived(r) => Some(r),
+            SideOrigin::Unresolved(_) => None,
+        }
+    }
+}
+
+/// Both of a door's sides, and where each came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RoomOrigin {
+    pub from_room: SideOrigin,
+    pub to_room: SideOrigin,
+}
+
+/// The smallest step that still leaves the wall, in feet (~15 mm).
+///
+/// A **centreline** model has a wall gap of zero — neighbouring rooms already
+/// tile, so their boundaries are one shared line. Probing by zero would test
+/// that line itself, where containment is undefined and a room may or may not
+/// claim its own edge. Any positive step lands cleanly in one room or the other,
+/// so this is a floor rather than a tolerance to tune.
+const MIN_PROBE_FT: f64 = 0.05;
+
+/// Every room a door could be resolved against, prepared once per read.
+///
+/// Built once rather than per door: the rooms come from storage, and reading
+/// them inside the door loop would be one storage read per door.
+struct Candidates {
+    /// Candidates grouped by the model that owns them. `SameModel` probes one
+    /// group; `Project` probes the union, which is the entire difference between
+    /// the two modes — the same probe, a different set of rooms allowed to
+    /// answer it.
+    by_model: BTreeMap<String, Vec<room_locator::Candidate>>,
+    /// Every candidate, already placed in the shared frame. Empty outside
+    /// `Project` mode, where models are never mixed.
+    shared: Vec<room_locator::Candidate>,
+    /// `(model id, level id)` → elevation, so a *door* — which carries a level
+    /// id, not an elevation — can be put on the same axis as the rooms.
+    elevation: BTreeMap<(String, String), f64>,
+    /// Model id → the wall gap its rooms were drawn to, so a probe is sized by
+    /// the regime of the rooms it is reaching for rather than by a constant.
+    gap_by_model: BTreeMap<String, f64>,
+    /// Model id → its `model_to_shared`, needed in `Project` mode to lift the
+    /// door's own point into the frame the candidates are already in.
+    transform_by_model: BTreeMap<String, ModelToShared>,
+    shared_frame: bool,
+}
+
+/// Apply a 2D affine to a **position**: `shared_x = a*x + c*y + e`.
+fn place(m: &ModelToShared, p: Point2D) -> Point2D {
+    let [a, b, c, d, e, f] = m.matrix;
+    Point2D { x: a * p.x + c * p.y + e, y: b * p.x + d * p.y + f }
+}
+
+/// Apply only the **linear** part to a direction, then renormalise.
+///
+/// A normal is a direction, not a position, so the translation must not reach
+/// it — a door's facing does not move when the model is placed somewhere else on
+/// the survey grid. The transform is a rigid-body rotation
+/// (`ModelToShared::is_rigid`), so renormalising is defensive rather than
+/// corrective: it costs one square root and means a scaled matrix that slipped
+/// past ingest's warning cannot silently lengthen every probe.
+fn place_direction(m: &ModelToShared, p: Point2D) -> Option<Point2D> {
+    let [a, b, c, d, _e, _f] = m.matrix;
+    let (x, y) = (a * p.x + c * p.y, b * p.x + d * p.y);
+    let len = (x * x + y * y).sqrt();
+    if len < 1e-9 {
+        return None;
+    }
+    Some(Point2D { x: x / len, y: y / len })
+}
+
+/// Collect the project's rooms as probe candidates, under the same milestone
+/// scope the doors read is using.
+///
+/// **Scoped through `rooms::scope_payloads`, not by re-reading the store.** A
+/// door has to be resolved against exactly the rooms `/rooms` is serving, or a
+/// milestone read would answer two different questions about one building.
+fn build_candidates(state: &AppState, scope: &DoorScope<'_>, mode: RoomResolution) -> Result<Candidates, ServiceError> {
+    let registry = state.settings();
+    let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
+    let (scoped, _) = super::rooms::scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
+
+    let shared_frame = mode == RoomResolution::Project;
+    let mut out = Candidates {
+        by_model: BTreeMap::new(),
+        shared: Vec::new(),
+        elevation: BTreeMap::new(),
+        gap_by_model: BTreeMap::new(),
+        transform_by_model: BTreeMap::new(),
+        shared_frame,
+    };
+
+    for (key, payload, bundle) in scoped {
+        let boundary = bundle.areas.resolve_boundary(payload.room_boundary);
+        out.gap_by_model.insert(key.model_id.clone(), bundle.areas.wall_gap_ft(boundary));
+        if let Some(transform) = payload.model_to_shared {
+            out.transform_by_model.insert(key.model_id.clone(), transform);
+        }
+
+        // Elevations come from this model's own `levels`, never from a merged
+        // list: a level id is per-document, and two linked models name the same
+        // floor with different ids. The elevation is what crosses.
+        for level in &payload.levels {
+            out.elevation.insert((key.model_id.clone(), level.id.clone()), level.elevation);
+        }
+
+        for room in &payload.rooms {
+            let Some(outline) = room_locator::outline_of(room) else {
+                continue; // unplaced room: nothing to probe against
+            };
+            let Some(&elevation) = out.elevation.get(&(key.model_id.clone(), room.level_id.clone())) else {
+                continue; // a room on a level this model does not declare
+            };
+            let reference = RoomRef { model_id: key.model_id.clone(), room_id: room.id.clone() };
+            if shared_frame {
+                let Some(transform) = payload.model_to_shared else {
+                    // Un-placed in a mode where everything else has been placed.
+                    // Including it would probe it in the wrong frame, which is
+                    // worse than leaving it out — a wrong room resolves and
+                    // looks right.
+                    continue;
+                };
+                let placed = geo::MapCoords::map_coords(&outline, |c| {
+                    let p = place(&transform, Point2D { x: c.x, y: c.y });
+                    geo::Coord { x: p.x, y: p.y }
+                });
+                out.shared.push(room_locator::Candidate { reference, outline: placed, elevation });
+            } else {
+                out.by_model.entry(key.model_id.clone()).or_default().push(room_locator::Candidate {
+                    reference,
+                    outline,
+                    elevation,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// No rooms to probe against at all — the answer when resolution is off, which
+/// is every read that did not ask for it.
+const NO_CANDIDATES: &[room_locator::Candidate] = &[];
+
+impl Candidates {
+    /// Resolve one door's two sides.
+    fn locate(&self, door: &Door, model_id: &str) -> room_locator::Sides {
+        let unresolved = |why| room_locator::Sides {
+            from: room_locator::Located::Unresolved(why),
+            to: room_locator::Located::Unresolved(why),
+        };
+        let Some(mut point) = room_locator::position_of(door.insertion_point, &door.loops) else {
+            return unresolved(Unresolved::NoPosition);
+        };
+        let Some(&elevation) = self.elevation.get(&(model_id.to_string(), door.level_id.clone())) else {
+            // The door names a level its model's rooms snapshot does not carry,
+            // so there is no axis to compare on. Nothing to probe.
+            return unresolved(Unresolved::NoCandidate);
+        };
+        let mut normal = door.through_wall_normal;
+
+        let candidates: &[room_locator::Candidate] = if self.shared_frame {
+            // The candidates have been placed, so the door has to be too. A
+            // model with no transform cannot be compared against ones that were
+            // placed — it would be probed in the wrong frame.
+            let Some(transform) = self.transform_by_model.get(model_id) else {
+                return unresolved(Unresolved::NoPosition);
+            };
+            point = place(transform, point);
+            normal = normal.and_then(|n| place_direction(transform, n));
+            &self.shared
+        } else {
+            self.by_model.get(model_id).map_or(NO_CANDIDATES, Vec::as_slice)
+        };
+
+        // Sized by the regime of the rooms being reached for. `SameModel` only
+        // ever reaches its own model's rooms; `Project` may reach any, so the
+        // widest gap in scope is the honest step — a shorter one would resolve
+        // some models and silently not others.
+        let gap = if self.shared_frame {
+            self.gap_by_model.values().copied().fold(0.0_f64, |a, b| a.max(b))
+        } else {
+            self.gap_by_model.get(model_id).copied().unwrap_or_default()
+        };
+
+        let placement = room_locator::Placement { point, normal, elevation };
+        room_locator::locate(&placement, candidates, gap.max(MIN_PROBE_FT))
+    }
+}
+
+/// Resolve every door in one project against its rooms, for the QA report.
+///
+/// **Latest-based, with no milestone scope**, matching `/validation` as a whole:
+/// the report is about the data being served now, and the drift it exists to
+/// catch is precisely a rooms snapshot moving on without its doors.
+///
+/// Returns an empty map when resolution is off, so the caller needs no branch
+/// beyond the one that decides whether to ask.
+pub fn locate_project_doors(
+    state: &AppState,
+    project_id: &str,
+    mode: RoomResolution,
+    stored_doors: &[(ModelKey, DoorPayload)],
+) -> Result<BTreeMap<(String, String), room_locator::Sides>, ServiceError> {
+    let mut out = BTreeMap::new();
+    if mode == RoomResolution::Off {
+        return Ok(out);
+    }
+    let scope = DoorScope { project: Some(project_id), ..DoorScope::default() };
+    let candidates = build_candidates(state, &scope, mode)?;
+    for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
+        for door in &payload.doors {
+            out.insert((key.model_id.clone(), door.id.clone()), candidates.locate(door, &payload.model.id));
+        }
+    }
+    Ok(out)
+}
+
+/// Fold one side's authored reference and one side's derived answer into the
+/// single origin the response carries.
+///
+/// **Authored always wins.** A door's `to_room` is the modeller's assignment —
+/// what the door *serves*, which is not always what it opens into — so geometry
+/// replacing it would be the reconciliation `CLAUDE.md` forbids. Geometry fills
+/// what the model left absent, and disagrees audibly with what it did not
+/// (`DoorReport::room_geometry_mismatches`).
+fn side_origin(authored: Option<&str>, model_id: &str, derived: &room_locator::Located) -> SideOrigin {
+    if let Some(room_id) = authored {
+        return SideOrigin::Authored(RoomRef { model_id: model_id.to_string(), room_id: room_id.to_string() });
+    }
+    match derived {
+        room_locator::Located::Found(reference) => SideOrigin::Derived(reference.clone()),
+        room_locator::Located::Unresolved(why) => SideOrigin::Unresolved(*why),
+    }
+}
+
 /// `(model id, room id)` → that room's building key, for the rooms in scope.
 ///
 /// **Built by calling `assemble_rooms`, not by re-deriving classification.** A
@@ -257,6 +534,13 @@ fn building_by_room(
 /// A project with no registered settings contributes nothing, matching
 /// `assemble_rooms`' skip-on-read policy — a model with nothing to resolve
 /// canonical property names against has no home in the response.
+///
+/// Over the 100-line discovery threshold and kept whole: it is three sequential
+/// phases over one scoped set — scope, prepare (buildings, candidates), derive —
+/// and each reads the ones before it. Splitting them into helpers would move the
+/// order into call sites without removing it, and the order is the part a reader
+/// has to see.
+#[allow(clippy::too_many_lines)]
 pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<DoorsResult>, ServiceError> {
     let stored = state.all_door_snapshots().map_err(ServiceError::Internal)?;
     if stored.is_empty() {
@@ -314,6 +598,27 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
         None => BTreeMap::new(),
     };
 
+    // Geometric resolution, when a project asks for it. Off is the default and
+    // costs nothing: no storage read, no candidates, and every side reports
+    // whatever the model stated.
+    //
+    // Resolved per project rather than per model, because `Project` mode probes
+    // across models by design. A read spanning projects with different settings
+    // therefore builds one candidate set per project that wants one.
+    let mut candidates_by_project: BTreeMap<String, Candidates> = BTreeMap::new();
+    for (_, payload) in &scoped {
+        let mode = registry
+            .settings_for(&payload.project.id)
+            .map(|b| b.doors.room_resolution)
+            .unwrap_or_default();
+        if mode == RoomResolution::Off || candidates_by_project.contains_key(&payload.project.id) {
+            continue;
+        }
+        let project_scope = DoorScope { project: Some(&payload.project.id), ..DoorScope::default() };
+        let project_scope = DoorScope { milestone: scope.milestone, ..project_scope };
+        candidates_by_project.insert(payload.project.id.clone(), build_candidates(state, &project_scope, mode)?);
+    }
+
     // Phase 2 — derive the response doors, applying the property filter *after*
     // assembly so a predicate sees the same resolved vocabulary a consumer does.
     for (key, payload) in &scoped {
@@ -354,12 +659,41 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
                 })
                 .collect();
 
+            // Authored first, geometry only where the model said nothing —
+            // and the probe is skipped entirely for a door that stated both,
+            // since nothing it could find would be used. The QA report runs the
+            // same probe on those doors deliberately, because there the
+            // disagreement is the finding.
+            let derived = match candidates_by_project.get(&payload.project.id) {
+                Some(candidates) if door.from_room.is_none() || door.to_room.is_none() => {
+                    candidates.locate(door, &payload.model.id)
+                }
+                _ => room_locator::Sides {
+                    from: room_locator::Located::Unresolved(Unresolved::NoCandidate),
+                    to: room_locator::Located::Unresolved(Unresolved::NoCandidate),
+                },
+            };
+            let room_origin = RoomOrigin {
+                from_room: side_origin(door.from_room.as_deref(), &payload.model.id, &derived.from),
+                to_room: side_origin(door.to_room.as_deref(), &payload.model.id, &derived.to),
+            };
+            let owner_rooms_qualified: Vec<RoomRef> = attribution
+                .owners(room_origin.from_room.room(), room_origin.to_room.room())
+                .into_iter()
+                .cloned()
+                .collect();
+
             let response = DoorResponse {
-                owner_rooms: attribution
-                    .owners(door.from_room.as_deref(), door.to_room.as_deref())
-                    .into_iter()
-                    .map(str::to_string)
+                // Same-model owners only, so the field keeps meaning exactly
+                // what it always did. A cross-model owner appears in
+                // `owner_rooms_qualified` and nowhere else.
+                owner_rooms: owner_rooms_qualified
+                    .iter()
+                    .filter(|r| r.model_id == payload.model.id)
+                    .map(|r| r.room_id.clone())
                     .collect(),
+                owner_rooms_qualified,
+                room_origin,
                 door: door.clone(),
                 project_id: payload.project.id.clone(),
                 model_id: payload.model.id.clone(),
@@ -368,10 +702,14 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
             };
             // A homeless door matches no building — see `DoorScope::building`.
             // Room ids are unique only within a model, so the lookup is keyed on
-            // the pair, never the bare room id.
+            // the pair, never the bare room id — and it reads the *qualified*
+            // owners, because a derived owner may live in a linked model and the
+            // door's own model id would be the wrong half of that key.
             if let Some(wanted) = scope.building
-                && !response.owner_rooms.iter().any(|room| {
-                    building_of_room.get(&(key.model_id.clone(), room.clone())).is_some_and(|b| b == wanted)
+                && !response.owner_rooms_qualified.iter().any(|room| {
+                    building_of_room
+                        .get(&(room.model_id.clone(), room.room_id.clone()))
+                        .is_some_and(|b| b == wanted)
                 })
             {
                 continue;
@@ -393,7 +731,9 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{CustomValue, Model, Project, Snapshot, SUPPORTED_DOOR_SCHEMA};
+    use crate::contract::{
+        CustomValue, Model, Project, RoomPayload, Snapshot, SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
+    };
     use crate::state::ProjectSettings;
     use crate::storage::MemStore;
     use std::collections::{BTreeSet, HashMap};
@@ -436,6 +776,155 @@ mod tests {
         }
     }
 
+    // ---------- geometric resolution ----------
+
+    /// A door in the wall between two rooms, with no `from_room`/`to_room` — the
+    /// split-model case, where Revit populates neither.
+    fn wall_door(id: &str) -> Door {
+        Door {
+            insertion_point: Some(crate::contract::Point2D { x: 10.25, y: 5.0 }),
+            through_wall_normal: Some(crate::contract::Point2D { x: 1.0, y: 0.0 }),
+            level_id: "lvl1".to_string(),
+            ..make_door(id, None, None, &[])
+        }
+    }
+
+    fn room_rect(id: &str, x0: f64, x1: f64) -> crate::contract::Room {
+        crate::contract::Room {
+            id: id.to_string(),
+            name: id.to_string(),
+            level_id: "lvl1".to_string(),
+            loops: vec![crate::contract::Loop {
+                points: vec![
+                    crate::contract::Point2D { x: x0, y: 0.0 },
+                    crate::contract::Point2D { x: x1, y: 0.0 },
+                    crate::contract::Point2D { x: x1, y: 10.0 },
+                    crate::contract::Point2D { x: x0, y: 10.0 },
+                ],
+            }],
+            properties: BTreeMap::new(),
+        }
+    }
+
+    /// A state holding one model's rooms (left | wall | right) and one door in
+    /// the wall, with `room_resolution` set.
+    fn state_with_wall(mode: crate::settings::RoomResolution, doors: Vec<Door>) -> AppState {
+        let mut bundle = bundle();
+        bundle.doors.room_resolution = mode;
+        let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle)]), None);
+        state
+            .set_snapshot(RoomPayload {
+                schema_version: SUPPORTED_SCHEMA,
+                project: Project { id: "p1".into(), name: "P".into() },
+                model: Model { id: "m1".into(), name: "M".into(), source: "revit".into() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                phase: Some("New Construction".into()),
+                model_to_shared: None,
+                room_boundary: Some(crate::contract::RoomBoundary::FinishFace),
+                levels: vec![crate::contract::Level { id: "lvl1".into(), name: "Level 1".into(), elevation: 0.0 }],
+                rooms: vec![room_rect("left", 0.0, 10.0), room_rect("right", 10.5, 20.0)],
+            })
+            .unwrap();
+        state
+            .set_door_snapshot(DoorPayload {
+                schema_version: SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p1".into(), name: "P".into() },
+                model: Model { id: "m1".into(), name: "M".into(), source: "revit".into() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                phase: Some("New Construction".into()),
+                model_to_shared: None,
+                doors,
+            })
+            .unwrap();
+        state
+    }
+
+    /// **The split-model fix.** Revit left both references empty; the geometry
+    /// fills them, and the door is attributed instead of homeless.
+    #[test]
+    fn test_geometry_fills_a_door_that_states_no_rooms() {
+        let state = state_with_wall(crate::settings::RoomResolution::SameModel, vec![wall_door("d1")]);
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        let door = &result.doors[0];
+
+        assert_eq!(
+            door.room_origin.to_room,
+            SideOrigin::Derived(RoomRef { model_id: "m1".into(), room_id: "right".into() }),
+            "+normal is the to-side"
+        );
+        assert_eq!(
+            door.room_origin.from_room,
+            SideOrigin::Derived(RoomRef { model_id: "m1".into(), room_id: "left".into() })
+        );
+        assert_eq!(door.owner_rooms, vec!["right".to_string()], "attributed, not homeless");
+        assert_eq!(door.door.to_room, None, "the stored reference is untouched");
+    }
+
+    /// **Off is the default and it derives nothing.** Turning resolution on
+    /// changes `owner_rooms` for exactly these doors, which is why it is opt-in.
+    #[test]
+    fn test_resolution_off_leaves_the_door_homeless() {
+        let state = state_with_wall(crate::settings::RoomResolution::Off, vec![wall_door("d1")]);
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        let door = &result.doors[0];
+
+        assert!(door.owner_rooms.is_empty(), "homeless, as before");
+        assert!(matches!(door.room_origin.to_room, SideOrigin::Unresolved(_)));
+    }
+
+    /// **Authored always wins.** The model says this door opens into `left`,
+    /// which is behind it geometrically — a cupboard-off-a-corridor shape. The
+    /// stated answer is served unchanged and the geometry does not override it.
+    #[test]
+    fn test_an_authored_reference_is_never_overridden_by_geometry() {
+        let door = Door { to_room: Some("left".into()), ..wall_door("d1") };
+        let state = state_with_wall(crate::settings::RoomResolution::SameModel, vec![door]);
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        let door = &result.doors[0];
+
+        assert_eq!(
+            door.room_origin.to_room,
+            SideOrigin::Authored(RoomRef { model_id: "m1".into(), room_id: "left".into() }),
+            "the modeller's assignment stands"
+        );
+        assert_eq!(door.owner_rooms, vec!["left".to_string()]);
+        // The other side was absent, so geometry filled that one.
+        assert_eq!(
+            door.room_origin.from_room,
+            SideOrigin::Derived(RoomRef { model_id: "m1".into(), room_id: "left".into() })
+        );
+    }
+
+    /// A door with no plan direction resolves neither side, and says why. A
+    /// guessed direction would be worse than none.
+    #[test]
+    fn test_a_door_with_no_direction_resolves_nothing() {
+        let door = Door { through_wall_normal: None, ..wall_door("d1") };
+        let state = state_with_wall(crate::settings::RoomResolution::SameModel, vec![door]);
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+
+        assert_eq!(result.doors[0].room_origin.to_room, SideOrigin::Unresolved(Unresolved::NoDirection));
+    }
+
+    /// `owner_rooms` keeps meaning "this model's rooms"; the qualified list
+    /// carries the model id so a cross-model owner has somewhere to be said.
+    #[test]
+    fn test_qualified_owners_carry_the_model_id() {
+        let state = state_with_wall(crate::settings::RoomResolution::SameModel, vec![wall_door("d1")]);
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        let door = &result.doors[0];
+
+        assert_eq!(
+            door.owner_rooms_qualified,
+            vec![RoomRef { model_id: "m1".into(), room_id: "right".into() }]
+        );
+        assert_eq!(
+            door.owner_rooms,
+            vec!["right".to_string()],
+            "the bare list is the same rooms, unqualified"
+        );
+    }
+
     /// **R4 end to end: a source declaring `entity = "doors"` joins onto doors.**
     ///
     /// Before this, `[sources.reference.<name>]` meant "for rooms" with nothing
@@ -444,6 +933,7 @@ mod tests {
     /// `DoorResponse::presence` answered `Absent` for every source-qualified
     /// field specifically so the same predicate would start *matching* rather
     /// than change status once the join existed.
+
     #[tokio::test]
     async fn test_a_doors_scoped_reference_source_joins_onto_doors() {
         // Row 1 is labels, row 2 col 0 names the door property holding the key.

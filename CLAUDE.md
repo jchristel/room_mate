@@ -20,6 +20,20 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   that is the exact parallel-method-set failure R1 was written to prevent.
   `AppState` holds `Box<dyn SnapshotStore>`, so the trait must stay
   **object-safe**: a generic `put<T>` is out.
+- **Ingest streams to disk; the JSON framing lives in `state.rs`, not the
+  store.** `put_streaming` hands back an append-only byte sink that publishes
+  atomically, and `StreamingSnapshot` is what knows a snapshot is an object with
+  an element array in it. A store that parsed the payload in order to write it
+  would be the first crack in the bytes-at-the-boundary rule. The streamed file
+  is **one element per line** and the buffered path still writes `to_vec_pretty`;
+  they differ in whitespace and key order only, and nothing re-reads a snapshot
+  by shape.
+- **A writer dropped without committing must leave no trace**, and dropping is
+  the *ordinary* path, not an error one: a rooms push is only known to be empty
+  once its rooms have been counted, which is after writing has started. That is
+  why `finish_rooms` checks every model before committing any — a stray temp
+  file, a manifest entry, or half a run going live would turn a correct refusal
+  into corrupt data.
 - **A room id is unique only within a model, and a door's `from_room`/`to_room`
   are room ids.** So the door→room join is model-scoped *everywhere*: QA resolves
   references per model, and every `/doors` row carries `model_id`. A
@@ -60,6 +74,13 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   `through_wall_normal` points away from its own `to_room` is correct data, not
   a finding. Do not add a check that "reconciles" the two — they answer
   different questions, which is also why both are on the wire.
+- **The geometric resolver does not violate that, and the distinction is easy to
+  lose.** `service::room_locator` answers "which room is this door physically
+  beside", which is *not* "does this door open into that room". The cupboard
+  door's insertion point is still on the cupboard/corridor boundary, so it
+  passes; what fails is a room that has **moved away** from its door. Authored
+  references always win — geometry fills an absent side and reports a
+  disagreement, never overwrites one (`[doors] room_resolution`, default off).
 - **`room_reference_property` reconciles the modeller against the geometry**,
   and finds real disagreements: 4 of the 26 House A doors, mostly where the
   geometry picks an exterior or circulation space over the served room. Absent
