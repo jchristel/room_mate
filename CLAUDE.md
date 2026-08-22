@@ -20,6 +20,20 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   that is the exact parallel-method-set failure R1 was written to prevent.
   `AppState` holds `Box<dyn SnapshotStore>`, so the trait must stay
   **object-safe**: a generic `put<T>` is out.
+- **Ingest streams to disk; the JSON framing lives in `state.rs`, not the
+  store.** `put_streaming` hands back an append-only byte sink that publishes
+  atomically, and `StreamingSnapshot` is what knows a snapshot is an object with
+  an element array in it. A store that parsed the payload in order to write it
+  would be the first crack in the bytes-at-the-boundary rule. The streamed file
+  is **one element per line** and the buffered path still writes `to_vec_pretty`;
+  they differ in whitespace and key order only, and nothing re-reads a snapshot
+  by shape.
+- **A writer dropped without committing must leave no trace**, and dropping is
+  the *ordinary* path, not an error one: a rooms push is only known to be empty
+  once its rooms have been counted, which is after writing has started. That is
+  why `finish_rooms` checks every model before committing any — a stray temp
+  file, a manifest entry, or half a run going live would turn a correct refusal
+  into corrupt data.
 - **A room id is unique only within a model, and a door's `from_room`/`to_room`
   are room ids.** So the door→room join is model-scoped *everywhere*: QA resolves
   references per model, and every `/doors` row carries `model_id`. A

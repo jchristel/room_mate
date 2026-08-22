@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 
-use super::{SnapshotKind, SnapshotMeta, SnapshotStore};
+use super::{SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter};
 use crate::state::ModelKey;
 
 /// (project id, source name) -> (taken_at, bytes) — factored out purely to
@@ -58,6 +58,50 @@ impl MemStore {
     }
 }
 
+/// A streamed snapshot for the in-memory store: accumulate, then `put_raw` on
+/// commit.
+///
+/// **It buffers, and that is the honest implementation rather than a shortcut.**
+/// `put_streaming` exists to keep a large payload off the heap on its way to
+/// *disk*; `MemStore`'s destination is the heap, so there is nothing for
+/// streaming to save and pretending otherwise would be theatre. What it does buy
+/// is that both stores answer the same call, so the ingest routes have one code
+/// path and the tests that run against `MemStore` exercise the real one.
+///
+/// Dropping without committing discards the buffer, matching `FsSnapshotWriter`
+/// — which is the behaviour the ingest routes actually depend on.
+struct MemSnapshotWriter<'a> {
+    store: &'a MemStore,
+    buffer: Vec<u8>,
+    kind: SnapshotKind,
+    key: ModelKey,
+    project_name: String,
+    model_name: String,
+    taken_at: String,
+    phase: Option<String>,
+}
+
+impl SnapshotWriter for MemSnapshotWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.buffer.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn commit(self: Box<Self>) -> Result<()> {
+        self.store.put_raw(
+            &SnapshotMeta {
+                kind: self.kind,
+                key: &self.key,
+                project_name: &self.project_name,
+                model_name: &self.model_name,
+                taken_at: &self.taken_at,
+                phase: self.phase.as_deref(),
+            },
+            &self.buffer,
+        )
+    }
+}
+
 impl SnapshotStore for MemStore {
     fn put_raw(&self, meta: &SnapshotMeta<'_>, json: &[u8]) -> Result<()> {
         // Record the lineage's phase on the first phased push and never
@@ -73,20 +117,39 @@ impl SnapshotStore for MemStore {
         Ok(())
     }
 
+    fn put_streaming<'a>(&'a self, meta: &SnapshotMeta<'_>) -> Result<Box<dyn SnapshotWriter + 'a>> {
+        Ok(Box::new(MemSnapshotWriter {
+            store: self,
+            buffer: Vec::new(),
+            kind: meta.kind,
+            key: meta.key.clone(),
+            project_name: meta.project_name.to_string(),
+            model_name: meta.model_name.to_string(),
+            taken_at: meta.taken_at.to_string(),
+            phase: meta.phase.map(str::to_string),
+        }))
+    }
+
     fn get_latest_raw(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>> {
         Ok(self.latest.lock().unwrap().get(&(kind, key.clone())).map(|(_, bytes)| bytes.clone()))
     }
 
     fn list_models(&self) -> Result<Vec<ModelKey>> {
-        // Rooms only, matching `FsStore` — see `SnapshotStore::list_models` for
-        // why a doors-only model is not a case that can arise.
+        // Every model holding a snapshot of ANY kind, deduped — a model with
+        // both rooms and doors has two entries in `latest` and is one model.
+        //
+        // This used to filter to rooms, on the reasoning that a doors-only model
+        // could not exist. It can now (see `SnapshotStore::list_models`), and
+        // `FsStore` always counted it, so the filter was the thing that made the
+        // two impls disagree rather than the thing that kept them aligned.
         Ok(self
             .latest
             .lock()
             .unwrap()
             .keys()
-            .filter(|(kind, _)| *kind == SnapshotKind::Rooms)
             .map(|(_, key)| key.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect())
     }
 
@@ -343,8 +406,37 @@ mod tests {
             store.get_latest_raw(SnapshotKind::Doors, &key).unwrap().as_deref(),
             Some(&b"{\"doors\":[]}"[..])
         );
-        assert_eq!(store.list_models().unwrap(), vec![key.clone()], "one model, two kinds");
+        assert_eq!(store.list_models().unwrap(), vec![key.clone()], "one model, two kinds, listed once");
         assert_eq!(store.all_latest_raw(SnapshotKind::Doors).unwrap().len(), 1);
+    }
+
+    /// **A doors-only model is listed**, matching `FsStore`. It became a real
+    /// state when the rooms-first ingest gate was removed, and a store that
+    /// hid it here would answer `all_latest_raw` differently from the one on
+    /// disk — a divergence only visible in production.
+    #[test]
+    fn test_mem_store_lists_a_model_that_has_only_doors() {
+        let store = MemStore::new();
+        let key = ModelKey { project_id: "p".into(), model_id: "doors-only".into() };
+        store
+            .put_raw(
+                &SnapshotMeta {
+                    kind: SnapshotKind::Doors,
+                    key: &key,
+                    project_name: "P",
+                    model_name: "M",
+                    taken_at: "2026-01-01T10:00:00Z",
+                    phase: Some("New Construction"),
+                },
+                b"{\"doors\":[]}",
+            )
+            .unwrap();
+
+        assert_eq!(store.list_models().unwrap(), vec![key.clone()]);
+        assert!(
+            store.get_latest_raw(SnapshotKind::Rooms, &key).unwrap().is_none(),
+            "and it still has no rooms"
+        );
     }
 
     /// MemStore dRofus: latest-only, replacement is the normal upsert.

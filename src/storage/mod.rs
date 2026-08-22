@@ -265,25 +265,65 @@ impl ModelEntry {
 pub trait SnapshotStore: Send + Sync {
     /// Persist one pushed snapshot's bytes, creating project/model structure as
     /// needed. Everything the store needs beyond the bytes rides `meta`.
+    ///
+    /// Takes the whole snapshot at once. `put_streaming` is the incremental
+    /// counterpart, and is what an ingest route uses; this one stays for callers
+    /// that genuinely have the bytes already — the dev-config seed and
+    /// `promote_pending`.
     fn put_raw(&self, meta: &SnapshotMeta<'_>, json: &[u8]) -> Result<()>;
+
+    /// Begin a snapshot that is written **incrementally**, and appears in one
+    /// step when committed.
+    ///
+    /// The reason this exists: an ingest route used to accumulate every element
+    /// of a push in memory and then serialize the assembled payload, so peak was
+    /// roughly the payload twice. Neither buffer is inherent — the elements
+    /// arrive one at a time on the wire and could go to disk one at a time —
+    /// and the multi-model push raised the ceiling further, since a request now
+    /// carries a whole run rather than one model.
+    ///
+    /// **The unit is still one snapshot file.** Nothing about the layout,
+    /// `ModelKey`, milestone pins or history changes; only *when* the bytes are
+    /// written. That is deliberate — element-addressed storage would flatten
+    /// exactly the identity the rest of the codebase reads.
+    ///
+    /// **Bytes, and the caller frames them.** The writer appends whatever it is
+    /// given and knows nothing about JSON, keeping the "bytes at this boundary,
+    /// types above it" rule intact: `state::StreamingSnapshot` owns the framing
+    /// because it is the layer that already owns serde. A store that parsed the
+    /// payload to write it would be the first crack in that rule.
+    ///
+    /// **Nothing is visible until `commit`**, and an uncommitted writer must
+    /// leave no trace when dropped. A half-written snapshot that a reader could
+    /// find would be worse than no streaming at all: the store re-parses every
+    /// snapshot at boot, so a truncated file is a model that silently lost
+    /// elements. That is why the returned writer, not this call, is what
+    /// publishes.
+    fn put_streaming<'a>(&'a self, meta: &SnapshotMeta<'_>) -> Result<Box<dyn SnapshotWriter + 'a>>;
 
     /// Latest snapshot of one kind for a model, if any. (Latest = newest by
     /// snapshot key.)
     fn get_latest_raw(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>>;
 
-    /// Every model key the store knows about — the index question. For
-    /// `FsStore` this is answered by the `project.toml` manifests (the
-    /// manifest is the index, snapshots are the record), reconciled against
-    /// the directory tree.
+    /// Every model key the store knows about, **whatever kinds of snapshot it
+    /// holds** — the index question. For `FsStore` this is answered by the
+    /// `project.toml` manifests (the manifest is the index, snapshots are the
+    /// record), reconciled against the directory tree.
     ///
-    /// **This means "models with rooms", and takes no `kind`.** R1 left the
-    /// question open — should it become "models with a snapshot of any kind",
-    /// which would change `/rooms` and `/projects` for a doors-only model? The
-    /// answer is no, because ingest refuses a doors push to a model that has no
-    /// live rooms snapshot: rooms are what a door's `from_room`/`to_room` are
-    /// resolved against, and a doors-only model could never answer that. So a
-    /// doors-only model is unreachable, and widening this would only add a case
-    /// that cannot occur.
+    /// Keys are unique: a model holding both rooms and doors appears once.
+    ///
+    /// **It used to mean "models with rooms", and the reason it stopped is worth
+    /// knowing.** R1 left open whether this should count a doors-only model, and
+    /// answered no on the grounds that ingest refused a doors push to a model
+    /// with no live rooms snapshot — so the case could not arise. That gate is
+    /// gone (see `handlers::check_doors_ingest`): doors may now be pushed first,
+    /// and a doors-only model is an ordinary state.
+    ///
+    /// So the case arises, and the two impls have to answer it the same way or
+    /// `all_latest_raw` would find a model's doors on disk and not in memory.
+    /// The kind-agnostic answer is also the one `FsStore` was always giving —
+    /// its manifest gains an entry on *any* push — so the narrower contract was
+    /// already only true of `MemStore`.
     fn list_models(&self) -> Result<Vec<ModelKey>>;
 
     /// Every model's latest snapshot of one kind, for the merge `/rooms` does.
@@ -367,4 +407,36 @@ pub trait SnapshotStore: Send + Sync {
     /// bootstrap hydration read that turns an `Upload`-sourced project's
     /// stored data into its in-memory `ReferenceData`.
     fn get_latest_reference(&self, project_id: &str, source: &str) -> Result<Option<(String, Vec<u8>)>>;
+}
+
+/// One snapshot being written incrementally — the handle `put_streaming` hands
+/// back.
+///
+/// **An append-only byte sink that publishes atomically, and nothing more.** It
+/// does not know it is writing JSON, which is what keeps the store's boundary at
+/// bytes; `state::StreamingSnapshot` wraps it and owns the format.
+///
+/// The two ways it can end are deliberately asymmetric:
+///
+/// - **`commit`** consumes it and makes the snapshot visible — indexed in the
+///   manifest, findable by every read path, and complete.
+/// - **`drop`** discards it, leaving no trace. That is the *normal* path for a
+///   push that turns out to be refused: an empty rooms push is only recognisable
+///   once its elements have been counted, which is after the writing has
+///   started. Discarding is therefore an ordinary outcome, not an error path,
+///   which is why it needs no method and cannot fail.
+///
+/// A store that made "dropped without commit" observable — a stray temp file, a
+/// manifest entry, a half snapshot — would turn a correct refusal into corrupt
+/// data. That is the one thing an implementation must get right.
+pub trait SnapshotWriter: Send {
+    /// Append bytes to the snapshot in progress.
+    fn write(&mut self, bytes: &[u8]) -> Result<()>;
+
+    /// Finish and publish. Consumes the writer, so a committed snapshot cannot
+    /// be appended to afterwards.
+    ///
+    /// `Box<Self>` rather than `self`, because this trait is used as
+    /// `Box<dyn SnapshotWriter>` and a by-value `self` would not be object-safe.
+    fn commit(self: Box<Self>) -> Result<()>;
 }

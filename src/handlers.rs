@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
 use tokio_util::io::StreamReader;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::contract::{
     Door, DoorModelEnvelope, DoorStreamEnvelope, DoorsUpload, ModelToShared, Project, Room, RoomBoundary,
@@ -35,7 +35,7 @@ use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
 use crate::service::validation::ValidationResponse;
 use crate::service::{doors, milestones, projects, reference, rooms, snapshots, validation, ServiceError};
-use crate::state::{ModelKey, Shared};
+use crate::state::{ModelKey, Shared, StreamingSnapshot};
 
 /// Reject a project/model id that can't safely become a filesystem path
 /// component. `FsStore` builds paths as `root/<project_id>/<model_id>` straight
@@ -326,23 +326,40 @@ pub async fn ingest_rooms(
     )?;
     validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
 
-    let rooms_by_model = upload
+    let mut rooms_by_model: Vec<(String, Vec<Room>)> = upload
         .models
         .iter_mut()
         .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.rooms)))
         .collect();
     let models: Vec<RoomModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
     let decisions = preflight_rooms(&state, &upload.project.id, upload.phase.as_deref(), &models)?;
-    store_rooms(
+
+    // Through the same sinks the streamed route feeds, one room at a time. This
+    // route already holds them all, so it gains nothing from streaming -- what it
+    // gains is that there is one storage path, and a buffered snapshot and a
+    // streamed one cannot come out different.
+    let mut sinks = open_room_sinks(
         &state,
         upload.schema_version,
-        upload.project,
-        upload.snapshot,
-        upload.phase,
+        &upload.project,
+        &upload.snapshot,
+        upload.phase.as_deref(),
         models,
         decisions,
-        rooms_by_model,
+    )?;
+    for (model_id, rooms) in &mut rooms_by_model {
+        let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
+        for room in rooms.drain(..) {
+            sink.push(room)?;
+        }
+    }
+    finish_rooms(
+        &state,
+        &upload.project,
+        upload.phase.as_deref(),
+        upload.snapshot.taken_at.clone(),
         snapshot_id_generated,
+        sinks,
     )
 }
 
@@ -392,45 +409,139 @@ fn preflight_rooms(
 /// here, so the streaming route can refuse a doomed push from its envelope line
 /// alone.
 #[allow(clippy::too_many_arguments)]
-fn store_rooms(
-    state: &Shared,
+fn open_room_sinks<'a>(
+    state: &'a Shared,
     schema_version: u32,
-    project: Project,
-    snapshot: Snapshot,
-    phase: Option<String>,
+    project: &Project,
+    snapshot: &Snapshot,
+    phase: Option<&str>,
     models: Vec<RoomModelEnvelope>,
     decisions: Vec<PhaseDecision>,
-    mut rooms_by_model: BTreeMap<String, Vec<Room>>,
-    snapshot_id_generated: bool,
-) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
-    let snapshot_taken_at = snapshot.taken_at.clone();
-
-    let mut planned = Vec::with_capacity(models.len());
+) -> Result<Vec<RoomSink<'a>>, (StatusCode, String)> {
+    let mut sinks = Vec::with_capacity(models.len());
     for (envelope, decision) in models.into_iter().zip(decisions) {
         let model_id = envelope.model.id.clone();
-        let key = ModelKey { project_id: project.id.clone(), model_id: model_id.clone() };
-        let rooms = rooms_by_model.remove(&model_id).unwrap_or_default();
-        // A model the envelope declared but that contributed nothing: the
-        // producer said it exported this document and then sent none of it.
-        //
-        // Checked here rather than in the pre-flight because it is the one
-        // refusal the envelope line cannot reach: the count only exists once the
-        // rooms have been read.
-        reject_empty_rooms(rooms.len(), &project.id, &model_id, phase.as_deref())?;
-        planned.push((key, envelope, rooms, decision));
+        let room_boundary = resolved_boundary(state, &project.id, envelope.room_boundary);
+        // The payload with an EMPTY rooms list. For a live model that is the
+        // envelope the snapshot's header is written from; for a quarantined one
+        // it is the payload its rooms accumulate into.
+        let payload = envelope.into_payload(
+            schema_version,
+            project.clone(),
+            snapshot.clone(),
+            phase.map(str::to_string),
+            Vec::new(),
+        );
+        let dest = match decision {
+            PhaseDecision::Accept => RoomDest::Live(state.open_room_snapshot(&payload).map_err(store_failed)?),
+            PhaseDecision::Quarantine { lineage } => RoomDest::Quarantined { payload: Box::new(payload), lineage },
+        };
+        sinks.push(RoomSink { model_id, room_boundary, dest });
+    }
+    Ok(sinks)
+}
+
+/// Where one model's rooms go while a push is being read.
+///
+/// **A live model streams; a quarantined one buffers**, and the asymmetry is
+/// deliberate rather than an omission. Streaming exists to keep a large payload
+/// off the heap on its way to disk, and quarantine is at most one push per
+/// model, kept only so a human can promote it. Giving it a streaming path too
+/// would mean a second streaming entry point on `SnapshotStore` — a parallel
+/// method set, which is what the bytes-at-the-boundary rule exists to prevent —
+/// in exchange for memory on the one push nobody is reading.
+enum RoomDest<'a> {
+    Live(StreamingSnapshot<'a>),
+    /// Boxed: a `RoomPayload` is an order of magnitude larger than a writer
+    /// handle, and every live model -- the overwhelming majority -- would
+    /// otherwise carry that size for a variant it never uses.
+    Quarantined {
+        payload: Box<RoomPayload>,
+        lineage: String,
+    },
+}
+
+/// One model's destination plus what the response owes about it.
+struct RoomSink<'a> {
+    model_id: String,
+    room_boundary: RoomBoundary,
+    dest: RoomDest<'a>,
+}
+
+impl RoomSink<'_> {
+    /// Take one room. Both routes feed sinks through here, so the buffered and
+    /// streamed paths cannot store different things.
+    fn push(&mut self, room: Room) -> Result<(), (StatusCode, String)> {
+        match &mut self.dest {
+            RoomDest::Live(snapshot) => snapshot.push(&room).map_err(store_failed),
+            RoomDest::Quarantined { payload, .. } => {
+                payload.rooms.push(room);
+                Ok(())
+            }
+        }
     }
 
-    let mut results = Vec::with_capacity(planned.len());
+    fn count(&self) -> usize {
+        match &self.dest {
+            RoomDest::Live(snapshot) => snapshot.count(),
+            RoomDest::Quarantined { payload, .. } => payload.rooms.len(),
+        }
+    }
+}
+
+/// Check every sink, then publish every sink — and report the push.
+///
+/// **The two loops are not one loop.** `reject_empty_rooms` can only run once a
+/// model's rooms have been counted, which is after writing has begun; doing the
+/// check and the commit together would publish the models before the offending
+/// one and refuse the rest, leaving half a run live. Checking all of them first
+/// means a refusal drops every sink uncommitted, and a dropped sink leaves no
+/// trace — see `SnapshotWriter`.
+fn finish_rooms(
+    state: &Shared,
+    project: &Project,
+    phase: Option<&str>,
+    snapshot_taken_at: String,
+    snapshot_id_generated: bool,
+    sinks: Vec<RoomSink<'_>>,
+) -> Result<(StatusCode, Json<IngestResponse>), (StatusCode, String)> {
+    for sink in &sinks {
+        // A model the envelope declared but that contributed nothing: the
+        // producer said it exported this document and then sent none of it.
+        reject_empty_rooms(sink.count(), &project.id, &sink.model_id, phase)?;
+    }
+
+    let mut results = Vec::with_capacity(sinks.len());
     let mut total = 0usize;
     let mut any_quarantined = false;
-    for (key, envelope, rooms, decision) in planned {
-        let count = rooms.len();
+    for sink in sinks {
+        let count = sink.count();
         total += count;
-        let room_boundary = resolved_boundary(state, &project.id, envelope.room_boundary);
-        let payload = envelope.into_payload(schema_version, project.clone(), snapshot.clone(), phase.clone(), rooms);
-        let (_, quarantined) = store_or_quarantine(state, &key, payload, decision)?;
+        let RoomSink { model_id, room_boundary, dest } = sink;
+        let key = ModelKey { project_id: project.id.clone(), model_id: model_id.clone() };
+        let quarantined = match dest {
+            RoomDest::Live(snapshot) => {
+                snapshot.commit().map_err(store_failed)?;
+                None
+            }
+            RoomDest::Quarantined { payload, lineage } => {
+                let pushed = payload.phase.clone().unwrap_or_default();
+                state.set_pending_snapshot(&key, &payload).map_err(store_failed)?;
+                tracing::warn!(
+                    "quarantined push for {}/{}: phase {:?} disagrees with the model's {:?}",
+                    key.project_id,
+                    key.model_id,
+                    pushed,
+                    lineage
+                );
+                Some(format!(
+                    "stored but not live: this push is phase {pushed:?} while the model is {lineage:?}. \
+                     A model's phase is fixed once set; activate this push to re-phase the model."
+                ))
+            }
+        };
         any_quarantined |= quarantined.is_some();
-        results.push(ModelIngestResult { model_id: key.model_id, room_count: count, room_boundary, quarantined });
+        results.push(ModelIngestResult { model_id, room_count: count, room_boundary, quarantined });
     }
     tracing::info!("received {} room(s) across {} model(s)", total, results.len());
 
@@ -450,52 +561,17 @@ fn store_rooms(
     ))
 }
 
-/// Commit one push according to its `PhaseDecision`: live via `set_snapshot`, or
-/// quarantined via `set_pending_snapshot`. Returns the status to answer with and
-/// the quarantine reason, if any.
-///
-/// Shared by both ingest routes so the buffered and streamed paths cannot
-/// disagree about what a phase disagreement does — the same reason
-/// `validate_ingest` is shared.
-fn store_or_quarantine(
-    state: &Shared,
-    key: &ModelKey,
-    payload: RoomPayload,
-    decision: PhaseDecision,
-) -> Result<(StatusCode, Option<String>), (StatusCode, String)> {
-    // A storage failure (unwritable disk, etc.) is a real server error, not a
-    // bad request — surface it as 500 rather than swallowing it.
-    let fail = |e: anyhow::Error| {
-        tracing::error!("failed to store snapshot: {e:#}");
-        (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store snapshot: {e}"))
-    };
+/// A storage failure (unwritable disk, etc.) is a real server error, not a bad
+/// request — surface it as 500 rather than swallowing it.
+fn store_failed(e: anyhow::Error) -> (StatusCode, String) {
+    tracing::error!("failed to store snapshot: {e:#}");
+    (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store snapshot: {e}"))
+}
 
-    match decision {
-        PhaseDecision::Accept => {
-            state.set_snapshot(payload).map_err(fail)?;
-            Ok((StatusCode::OK, None))
-        }
-        PhaseDecision::Quarantine { lineage } => {
-            let pushed = payload.phase.clone().unwrap_or_default();
-            state.set_pending_snapshot(key, &payload).map_err(fail)?;
-            tracing::warn!(
-                "quarantined push for {}/{}: phase {:?} disagrees with the model's {:?}",
-                key.project_id,
-                key.model_id,
-                pushed,
-                lineage
-            );
-            // 202, not 200: the payload was accepted and stored, but has not
-            // been acted upon — it is inert until someone promotes it.
-            Ok((
-                StatusCode::ACCEPTED,
-                Some(format!(
-                    "stored but not live: this push is phase {pushed:?} while the model is {lineage:?}. \
-                     A model's phase is fixed once set; activate this push to re-phase the model."
-                )),
-            ))
-        }
-    }
+/// Find the sink for one element's model. Linear, because a run carries a
+/// handful of models and a map would cost more to build than it saves.
+fn sink_for<'s, T>(sinks: &'s mut [T], model_id: &str, id_of: impl Fn(&T) -> &str) -> Option<&'s mut T> {
+    sinks.iter_mut().find(|s| id_of(s) == model_id)
 }
 
 #[derive(Debug, Serialize)]
@@ -583,15 +659,16 @@ fn resolved_boundary(state: &Shared, project_id: &str, declared: Option<RoomBoun
 /// is in front (see `main.rs`), this stream is already the inflated bytes --
 /// gzip and streaming compose without either side knowing about the other.
 ///
-/// Rooms are still accumulated in memory before the assembled `RoomPayload`s
-/// reach the store, so storage and everything downstream stays byte-for-byte
-/// identical to the buffered path -- streaming changes only how the body is
-/// *read*. Honest limitation: peak memory is therefore the in-memory room set,
-/// not the raw JSON text (still a real win, since the text is ~40% empty-string
-/// overhead). If that set is too large, the next step is a
-/// `SnapshotStore::put_streaming` that writes rooms to disk as they arrive --
-/// deferred until it is the ceiling, and note the bucket raised it: a run's
-/// models are now held together rather than one at a time.
+/// **Rooms are no longer accumulated.** Each one is written to its model's
+/// snapshot as its line is parsed (`SnapshotStore::put_streaming`), so peak
+/// memory is one room rather than the whole push -- which used to be the room
+/// set *plus* the serialized copy `set_snapshot` made of it, and which the
+/// multi-model bucket had made worse by holding a whole run at once.
+///
+/// One snapshot per model is open at a time, and none of them is visible until
+/// `finish_rooms` commits. An early return anywhere below drops the sinks, and a
+/// dropped sink leaves no trace -- which matters because the empty-push refusal
+/// can only fire *after* rooms have been written.
 pub async fn ingest_rooms_stream(
     State(state): State<Shared>,
     body: Body,
@@ -625,7 +702,20 @@ pub async fn ingest_rooms_stream(
     let declared = validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
     let decisions = preflight_rooms(&state, &envelope.project.id, envelope.phase.as_deref(), &envelope.models)?;
 
-    let mut rooms_by_model: BTreeMap<String, Vec<Room>> = BTreeMap::new();
+    // Open one snapshot per model BEFORE reading any room, so each room can go
+    // straight to its model's file as its line is parsed. Nothing any of them
+    // wrote becomes visible until `finish_rooms` commits, and an early return
+    // anywhere below drops the sinks, which leaves no trace.
+    let mut sinks = open_room_sinks(
+        &state,
+        envelope.schema_version,
+        &envelope.project,
+        &envelope.snapshot,
+        envelope.phase.as_deref(),
+        envelope.models,
+        decisions,
+    )?;
+
     while let Some(line) = lines
         .next_line()
         .await
@@ -637,19 +727,18 @@ pub async fn ingest_rooms_stream(
         let line: StreamRoom =
             serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad room line: {e}")))?;
         check_declared(&declared, &line.model_id)?;
-        rooms_by_model.entry(line.model_id).or_default().push(line.room);
+        let sink = sink_for(&mut sinks, &line.model_id, |s| s.model_id.as_str())
+            .expect("check_declared already refused any model without a sink");
+        sink.push(line.room)?;
     }
 
-    store_rooms(
+    finish_rooms(
         &state,
-        envelope.schema_version,
-        envelope.project,
-        envelope.snapshot,
-        envelope.phase,
-        envelope.models,
-        decisions,
-        rooms_by_model,
+        &envelope.project,
+        envelope.phase.as_deref(),
+        envelope.snapshot.taken_at.clone(),
         snapshot_id_generated,
+        sinks,
     )
 }
 
@@ -780,23 +869,31 @@ pub async fn ingest_doors(
     )?;
     validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
 
-    let doors_by_model = upload
+    let mut doors_by_model: Vec<(String, Vec<Door>)> = upload
         .models
         .iter_mut()
         .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.doors)))
         .collect();
     let models: Vec<DoorModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
     preflight_doors(&state, &upload.project.id, upload.phase.as_deref(), &models)?;
-    store_doors(
+
+    // Through the same sinks the streamed route feeds -- see the rooms half of
+    // this pair for why the buffered route goes through them too.
+    let mut sinks = open_door_sinks(
         &state,
         upload.schema_version,
-        upload.project,
-        upload.snapshot,
-        upload.phase,
+        &upload.project,
+        &upload.snapshot,
+        upload.phase.as_deref(),
         models,
-        doors_by_model,
-        snapshot_id_generated,
-    )
+    )?;
+    for (model_id, doors) in &mut doors_by_model {
+        let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
+        for door in doors.drain(..) {
+            sink.push(door)?;
+        }
+    }
+    finish_doors(upload.snapshot.taken_at.clone(), snapshot_id_generated, sinks)
 }
 
 /// The doors counterpart of `preflight_rooms`: every refusal a doors push can
@@ -819,51 +916,73 @@ fn preflight_doors(
     Ok(())
 }
 
-/// Decompose a doors push into one stored snapshot per model — the doors
-/// counterpart of `store_rooms`, shared by the buffered and streaming routes for
-/// the same reason.
+/// Open one streamed snapshot per model — the doors counterpart of
+/// `open_room_sinks`, and shorter by exactly the two things doors have no answer
+/// for: there is no boundary regime on a doors push, and no quarantine, so every
+/// sink is live.
 ///
-/// **A model that contributes no doors is stored anyway**, which is where this
-/// deliberately parts company with `store_rooms`. A rooms push carrying an empty
+/// `preflight_doors` has already refused anything refusable, from the envelope
+/// line alone.
+fn open_door_sinks<'a>(
+    state: &'a Shared,
+    schema_version: u32,
+    project: &Project,
+    snapshot: &Snapshot,
+    phase: Option<&str>,
+    models: Vec<DoorModelEnvelope>,
+) -> Result<Vec<DoorSink<'a>>, (StatusCode, String)> {
+    let mut sinks = Vec::with_capacity(models.len());
+    for envelope in models {
+        let model_id = envelope.model.id.clone();
+        let payload = envelope.into_payload(
+            schema_version,
+            project.clone(),
+            snapshot.clone(),
+            phase.map(str::to_string),
+            Vec::new(),
+        );
+        let snapshot = state.open_door_snapshot(&payload).map_err(store_failed)?;
+        sinks.push(DoorSink { model_id, snapshot });
+    }
+    Ok(sinks)
+}
+
+/// Where one model's doors go while a push is being read.
+struct DoorSink<'a> {
+    model_id: String,
+    snapshot: StreamingSnapshot<'a>,
+}
+
+impl DoorSink<'_> {
+    fn push(&mut self, door: Door) -> Result<(), (StatusCode, String)> {
+        self.snapshot.push(&door).map_err(store_failed)
+    }
+}
+
+/// Publish every model's doors and report the push.
+///
+/// **A model that contributed no doors is still committed**, which is where this
+/// deliberately parts company with `finish_rooms`. A rooms push carrying an empty
 /// model is a producer fault, because a document with no rooms is not something
 /// anyone exports; a model with rooms and no doors is a shell, a pre-fit-out
 /// phase, or simply a floor without any. The server cannot tell that from a
 /// broken export and does not try — the producer refuses a doorless *run*, which
 /// is a question only it can answer.
-#[allow(clippy::too_many_arguments)]
-fn store_doors(
-    state: &Shared,
-    schema_version: u32,
-    project: Project,
-    snapshot: Snapshot,
-    phase: Option<String>,
-    models: Vec<DoorModelEnvelope>,
-    mut doors_by_model: BTreeMap<String, Vec<Door>>,
+///
+/// So there is no check-then-commit split here: nothing can refuse at this
+/// point, and one loop is the honest shape.
+fn finish_doors(
+    snapshot_taken_at: String,
     snapshot_id_generated: bool,
+    sinks: Vec<DoorSink<'_>>,
 ) -> Result<(StatusCode, Json<DoorIngestResponse>), (StatusCode, String)> {
-    let snapshot_taken_at = snapshot.taken_at.clone();
-
-    // `preflight_doors` has already refused anything refusable, from the
-    // envelope line alone. What is left is the store.
-    let mut planned = Vec::with_capacity(models.len());
-    for envelope in models {
-        let model_id = envelope.model.id.clone();
-        let key = ModelKey { project_id: project.id.clone(), model_id: model_id.clone() };
-        let doors = doors_by_model.remove(&model_id).unwrap_or_default();
-        planned.push((key, envelope, doors));
-    }
-
-    let mut results = Vec::with_capacity(planned.len());
+    let mut results = Vec::with_capacity(sinks.len());
     let mut total = 0usize;
-    for (key, envelope, doors) in planned {
-        let count = doors.len();
+    for sink in sinks {
+        let count = sink.snapshot.count();
         total += count;
-        let payload = envelope.into_payload(schema_version, project.clone(), snapshot.clone(), phase.clone(), doors);
-        state.set_door_snapshot(payload).map_err(|e| {
-            tracing::error!("failed to store doors snapshot: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("could not store doors snapshot: {e}"))
-        })?;
-        results.push(DoorModelIngestResult { model_id: key.model_id, door_count: count });
+        sink.snapshot.commit().map_err(store_failed)?;
+        results.push(DoorModelIngestResult { model_id: sink.model_id, door_count: count });
     }
     tracing::info!("received {} door(s) across {} model(s)", total, results.len());
 
@@ -917,7 +1036,15 @@ pub async fn ingest_doors_stream(
     let declared = validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
     preflight_doors(&state, &envelope.project.id, envelope.phase.as_deref(), &envelope.models)?;
 
-    let mut doors_by_model: BTreeMap<String, Vec<Door>> = BTreeMap::new();
+    let mut sinks = open_door_sinks(
+        &state,
+        envelope.schema_version,
+        &envelope.project,
+        &envelope.snapshot,
+        envelope.phase.as_deref(),
+        envelope.models,
+    )?;
+
     while let Some(line) = lines
         .next_line()
         .await
@@ -929,19 +1056,12 @@ pub async fn ingest_doors_stream(
         let line: StreamDoor =
             serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad door line: {e}")))?;
         check_declared(&declared, &line.model_id)?;
-        doors_by_model.entry(line.model_id).or_default().push(line.door);
+        let sink = sink_for(&mut sinks, &line.model_id, |s| s.model_id.as_str())
+            .expect("check_declared already refused any model without a sink");
+        sink.push(line.door)?;
     }
 
-    store_doors(
-        &state,
-        envelope.schema_version,
-        envelope.project,
-        envelope.snapshot,
-        envelope.phase,
-        envelope.models,
-        doors_by_model,
-        snapshot_id_generated,
-    )
+    finish_doors(envelope.snapshot.taken_at.clone(), snapshot_id_generated, sinks)
 }
 
 /// `ServiceError` -> `(StatusCode, String)`, the same message-carrying error
@@ -2101,6 +2221,146 @@ mod tests {
             "in wire order, and only arch's"
         );
         assert_eq!(of("struct"), vec!["Core".to_string()]);
+    }
+
+    /// **One empty model refuses the whole push, and publishes none of it.**
+    ///
+    /// The property the check-all-then-commit split in `finish_rooms` exists
+    /// for. Elements now go to disk as they are read, so by the time the empty
+    /// model is recognised the *other* models have already been written -- and
+    /// committing them before discovering the fault would leave half a run live
+    /// under a snapshot id that claims the whole run was read together.
+    ///
+    /// The sinks are dropped instead, and a dropped sink leaves no trace.
+    #[tokio::test]
+    async fn test_one_empty_model_refuses_the_whole_push_and_stores_nothing() {
+        let dir = std::env::temp_dir().join(format!("roommate-handler-empty-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = crate::storage::FsStore::new(dir.clone()).unwrap();
+        let state = std::sync::Arc::new(AppState::new(Box::new(store), single_project("p1"), None));
+
+        let upload = RoomsUpload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
+            models: vec![
+                room_model("full", vec![make_room("r1", "Ward")]),
+                room_model("empty", vec![]),
+            ],
+        };
+
+        let (status, message) = ingest_rooms(State(state.clone() as Shared), Json(upload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("contains no rooms"), "{message}");
+        assert!(message.contains("empty"), "names the offending model: {message}");
+
+        // Neither model landed -- not even the one whose rooms were written.
+        assert!(state.all_snapshots().unwrap().is_empty(), "nothing was published");
+        let full = ModelKey { project_id: "p1".into(), model_id: "full".into() };
+        assert!(state.list_snapshot_ids(&full).unwrap().is_empty(), "the good model was discarded too");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The streamed rooms path writes one element per line and it parses back
+    /// unchanged -- properties, geometry and envelope intact.
+    ///
+    /// Worth asserting on the *file* rather than only through a read: the
+    /// snapshot is assembled by hand now (an object, a spliced array key, one
+    /// element per line, a closing bracket), so a missing comma or a stray one
+    /// would produce a file that no read path could ever recover.
+    #[tokio::test]
+    async fn test_a_streamed_snapshot_is_one_element_per_line_and_parses_back() {
+        let dir = std::env::temp_dir().join(format!("roommate-handler-lines-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = crate::storage::FsStore::new(dir.clone()).unwrap();
+        let state = std::sync::Arc::new(AppState::new(Box::new(store), single_project("p1"), None));
+
+        let body = concat!(
+            r#"{"schema_version":7,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-01-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit","room_boundary":"centreline","#,
+            r#""levels":[{"id":"lvl1","name":"Level 1","elevation":0.0}]}]}"#,
+            "\n",
+            r#"{"model_id":"m1","id":"r1","name":"Ward","level_id":"lvl1","loops":[],"properties":{"Number":{"value":"1","storage_type":"String"}}}"#,
+            "\n",
+            r#"{"model_id":"m1","id":"r2","name":"Store","level_id":"lvl1","loops":[],"properties":{}}"#,
+            "\n",
+        );
+        let (status, _) = ingest_rooms_stream(State(state.clone() as Shared), Body::from(body))
+            .await
+            .expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+
+        // The stored payload round-trips through the normal read path.
+        let stored = state.all_snapshots().unwrap();
+        let (_, payload) = stored.iter().find(|(k, _)| k.model_id == "m1").expect("stored");
+        assert_eq!(payload.rooms.len(), 2);
+        assert_eq!(payload.rooms[0].name, "Ward");
+        assert_eq!(payload.rooms[1].name, "Store");
+        assert_eq!(payload.levels.len(), 1, "the envelope survived the splice");
+        assert_eq!(payload.room_boundary, Some(RoomBoundary::Centreline));
+        assert_eq!(payload.phase.as_deref(), Some("New Construction"));
+        assert_eq!(payload.rooms[0].properties.get("Number").map(|v| v.value.as_str()), Some("1"));
+
+        // And the file itself is one room per line, which is what makes it
+        // greppable and what a single long line would have cost.
+        let file = dir.join("p1").join("m1").join("2026-01-01T00-00-00Z.json");
+        let text = std::fs::read_to_string(&file).expect("snapshot file");
+        let room_lines = text.lines().filter(|l| l.contains(r#""level_id""#)).count();
+        assert_eq!(room_lines, 2, "one room per line, not one long line:\n{text}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A quarantined model buffers while its live siblings stream, and both end
+    /// up right: the live one is published, the quarantined one is inert and
+    /// promotable. The two destinations are the one place `finish_rooms`
+    /// branches, so this is what proves the branch.
+    #[tokio::test]
+    async fn test_a_quarantined_model_and_a_live_one_in_one_push() {
+        let state = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        // `arch` is fixed to New Construction; `struct` has no lineage yet.
+        let _ = ingest_rooms(
+            State(state.clone() as Shared),
+            Json(rooms_upload(
+                "arch",
+                "2026-01-01T00:00:00Z",
+                Some("New Construction"),
+                vec![make_room("r1", "A")],
+            )),
+        )
+        .await
+        .expect("first push");
+
+        let upload = RoomsUpload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
+            phase: Some("Existing".to_string()),
+            models: vec![
+                room_model("arch", vec![make_room("r1", "A2")]),
+                room_model("struct", vec![make_room("r1", "S")]),
+            ],
+        };
+        let (status, Json(body)) = ingest_rooms(State(state.clone() as Shared), Json(upload)).await.expect("stored");
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(body.models[0].quarantined.is_some(), "arch buffered into quarantine");
+        assert!(body.models[1].quarantined.is_none(), "struct streamed live");
+
+        let arch = ModelKey { project_id: "p1".into(), model_id: "arch".into() };
+        let pending = state.pending_snapshot(&arch).unwrap().expect("quarantined and promotable");
+        assert_eq!(pending.rooms.len(), 1, "the buffered rooms reached the pending slot");
+        assert_eq!(pending.rooms[0].name, "A2");
+        assert_eq!(pending.phase.as_deref(), Some("Existing"));
+
+        let structural = ModelKey { project_id: "p1".into(), model_id: "struct".into() };
+        assert_eq!(
+            state.model_phase(&structural).unwrap().as_deref(),
+            Some("Existing"),
+            "the live one went live"
+        );
     }
 
     // ---------- doors ingest ----------

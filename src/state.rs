@@ -21,7 +21,7 @@ use crate::reference::ReferenceData;
 use crate::settings::{
     BuiltinPropertyDef, HierarchyExclusion, HierarchyTier, Milestone, ReferenceEntity, ReferenceFieldConfig, TestData,
 };
-use crate::storage::{SnapshotKind, SnapshotMeta, SnapshotStore};
+use crate::storage::{SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter};
 
 /// The store-side description of a rooms push, derived from the payload.
 ///
@@ -344,13 +344,38 @@ impl AppState {
         *self.registry.write().unwrap() = Arc::new(new);
     }
 
-    /// Store a pushed payload. Upsert semantics live in the store impl; state
-    /// just forwards. Shared by the push handler and the startup seed so the two
-    /// paths can't drift.
+    /// Store a pushed payload whole. Upsert semantics live in the store impl;
+    /// state just forwards.
+    ///
+    /// **The ingest routes do not use this** — they stream, via
+    /// `open_room_snapshot`. What is left are the callers that genuinely have a
+    /// complete payload in hand and nothing to stream: the startup seed and the
+    /// tests. Kept rather than folded into the streaming path, because
+    /// "serialize this whole thing" is what those callers actually mean.
     pub fn set_snapshot(&self, payload: RoomPayload) -> anyhow::Result<()> {
         let key = ModelKey::from_payload(&payload);
         let json = serde_json::to_vec_pretty(&payload).context("could not serialise snapshot")?;
         self.store.put_raw(&rooms_meta(&key, &payload), &json)
+    }
+
+    /// Begin streaming one model's rooms snapshot: the envelope is written now,
+    /// each room as it arrives, and nothing is visible until `commit`.
+    ///
+    /// `envelope` is the payload with an **empty** `rooms` list — the array is
+    /// written from the pushed rooms instead. Taking the real payload type
+    /// rather than a purpose-built header struct is what stops the two drifting:
+    /// a field added to `RoomPayload` is carried here automatically, where a
+    /// mirror struct would have to be remembered.
+    pub fn open_room_snapshot(&self, envelope: &RoomPayload) -> anyhow::Result<StreamingSnapshot<'_>> {
+        let key = ModelKey::from_payload(envelope);
+        StreamingSnapshot::open(self.store.as_ref(), &rooms_meta(&key, envelope), SnapshotKind::Rooms, envelope)
+    }
+
+    /// `open_room_snapshot`'s doors counterpart. `envelope` carries an empty
+    /// `doors` list, for the same reason.
+    pub fn open_door_snapshot(&self, envelope: &DoorPayload) -> anyhow::Result<StreamingSnapshot<'_>> {
+        let key = ModelKey::from_door_payload(envelope);
+        StreamingSnapshot::open(self.store.as_ref(), &doors_meta(&key, envelope), SnapshotKind::Doors, envelope)
     }
 
     /// Every model's latest snapshot, for the `/rooms` merge.
@@ -360,8 +385,9 @@ impl AppState {
             .and_then(|raw| raw.into_iter().map(|(key, bytes)| parse_rooms(&key, &bytes).map(|p| (key, p))).collect())
     }
 
-    /// Store a pushed doors payload — `set_snapshot`'s counterpart, and the
-    /// same thin serde layer over the byte-level store.
+    /// Store a pushed doors payload whole — `set_snapshot`'s counterpart, and
+    /// the same thin serde layer over the byte-level store. Like it, the ingest
+    /// route streams instead; this is for callers holding a complete payload.
     pub fn set_door_snapshot(&self, payload: DoorPayload) -> anyhow::Result<()> {
         let key = ModelKey::from_door_payload(&payload);
         let json = serde_json::to_vec_pretty(&payload).context("could not serialise doors snapshot")?;
@@ -475,6 +501,106 @@ impl AppState {
     /// `SnapshotStore::get_latest_reference`.
     pub fn get_latest_reference(&self, project_id: &str, source: &str) -> anyhow::Result<Option<(String, Vec<u8>)>> {
         self.store.get_latest_reference(project_id, source)
+    }
+}
+
+/// One snapshot being written element by element — the JSON half of
+/// `SnapshotStore::put_streaming`.
+///
+/// **The format lives here, not in the store.** The store's boundary is bytes
+/// (`CLAUDE.md`: "The store takes bytes plus a `SnapshotMeta`, never a payload
+/// type"), and a store that parsed the payload in order to write it would be the
+/// first crack in that rule. This is the layer that already owns serde, so it is
+/// the one that knows a snapshot is a JSON object with an array of elements in
+/// it.
+///
+/// The file it produces is **one element per line**:
+///
+/// ```text
+/// {"schema_version":7,...,"rooms":[
+/// {"id":"r1",...},
+/// {"id":"r2",...}
+/// ]}
+/// ```
+///
+/// Not `to_vec_pretty`'s indented output, which the buffered path still writes.
+/// The two differ only in whitespace and key order, and nothing re-reads a
+/// snapshot by shape — serde does not care. What one-per-line buys is that it is
+/// writable incrementally at all, while staying greppable and diffable in a way
+/// a single long line would not be.
+///
+/// **Dropping without committing discards the whole snapshot**, and that is the
+/// ordinary path rather than an error one: a rooms push is only known to be
+/// empty once its rooms have been counted, which is after writing has started.
+pub struct StreamingSnapshot<'a> {
+    writer: Box<dyn SnapshotWriter + 'a>,
+    /// Elements written so far — also what tells `push` whether it owes a comma.
+    count: usize,
+}
+
+impl<'a> StreamingSnapshot<'a> {
+    /// Open the store's writer and emit everything up to the opening bracket of
+    /// the element array.
+    ///
+    /// `envelope` is the payload type itself, serialized and then stripped of
+    /// its element array — the array key being `kind.label()`, which is already
+    /// exactly the JSON field name for both entities. Reusing the payload type
+    /// rather than mirroring it is what keeps a new envelope field from silently
+    /// going missing on the streamed path only.
+    fn open<T: serde::Serialize>(
+        store: &'a dyn SnapshotStore,
+        meta: &SnapshotMeta<'_>,
+        kind: SnapshotKind,
+        envelope: &T,
+    ) -> anyhow::Result<Self> {
+        let mut fields = match serde_json::to_value(envelope).context("could not serialise snapshot envelope")? {
+            serde_json::Value::Object(map) => map,
+            other => anyhow::bail!("snapshot envelope must serialise to a JSON object, got {other}"),
+        };
+        // Drop the element array the caller passed empty; it is written below,
+        // one line at a time, from the elements that actually arrive.
+        fields.remove(kind.label());
+
+        let mut writer = store.put_streaming(meta)?;
+        let mut header =
+            serde_json::to_vec(&serde_json::Value::Object(fields)).context("could not serialise snapshot envelope")?;
+        // `header` is a complete JSON object; splice the element array in before
+        // its closing brace. An envelope with no fields at all is not reachable
+        // (identity is validated at ingest), but an empty object would produce
+        // `{,"rooms":[` — so the comma is conditional rather than assumed.
+        let empty = header == b"{}";
+        header.truncate(header.len() - 1);
+        writer.write(&header)?;
+        if !empty {
+            writer.write(b",")?;
+        }
+        writer.write(format!("\"{}\":[\n", kind.label()).as_bytes())?;
+        Ok(Self { writer, count: 0 })
+    }
+
+    /// Append one element. The separator is written *before* the element rather
+    /// than after, because only this side knows whether a previous one exists —
+    /// a trailing comma is the one thing that would make the file unparseable.
+    pub fn push<T: serde::Serialize>(&mut self, element: &T) -> anyhow::Result<()> {
+        if self.count > 0 {
+            self.writer.write(b",\n")?;
+        }
+        let bytes = serde_json::to_vec(element).context("could not serialise snapshot element")?;
+        self.writer.write(&bytes)?;
+        self.count += 1;
+        Ok(())
+    }
+
+    /// How many elements have been written — the count an ingest route reports,
+    /// and the one it checks before deciding whether the push is empty.
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// Close the array and publish the snapshot.
+    pub fn commit(mut self) -> anyhow::Result<()> {
+        self.writer.write(b"\n]}\n")?;
+        self.writer.commit()
     }
 }
 

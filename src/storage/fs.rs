@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::{ProjectManifest, SnapshotKind, SnapshotMeta, SnapshotStore, PENDING_DIR, PENDING_FILE, REFERENCE_DIR};
+use super::{
+    ProjectManifest, SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter, PENDING_DIR, PENDING_FILE,
+    REFERENCE_DIR,
+};
 use crate::state::ModelKey;
 
 /// Filesystem-backed store rooted at a configured directory.
@@ -18,6 +21,31 @@ use crate::state::ModelKey;
 /// if disk reads on `/rooms` ever bite.
 pub struct FsStore {
     root: PathBuf,
+}
+
+/// A unique temp filename beside `path`, for the write-then-rename dance.
+///
+/// **Unique, not a plain `.tmp` sibling, and that is load-bearing.** Two pushes
+/// for *different models of one project* both rewrite that project's
+/// `project.toml`, and axum serves them concurrently — with a shared temp name
+/// they would interleave inside the temp file and one would rename a mixture of
+/// both into place. Unique names make the two writes independent; the rename is
+/// still last-one-wins, which is the intended upsert semantics, but neither file
+/// is ever malformed.
+///
+/// A **sibling**, not the system temp dir, so the rename never crosses a
+/// filesystem boundary — which would silently degrade to copy-then-delete and
+/// stop being atomic.
+///
+/// Shared by `write_atomic` and `FsSnapshotWriter`, which do the same dance at
+/// different speeds: one write or many.
+fn temp_sibling(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp");
+    path.with_file_name(format!(".{stem}.{}.{}.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)))
 }
 
 /// Write `contents` to `path` so a reader never observes a partial file.
@@ -41,26 +69,12 @@ pub struct FsStore {
 /// Write to a sibling temp file, flush and `sync_all` so the bytes are on the
 /// device before anything points at them, then `rename` over the target —
 /// atomic on POSIX, and on Windows for a same-directory replace. A crash
-/// leaves either the old complete file or the new complete file. The temp file
-/// is a sibling, not in the system temp dir, so the rename never crosses a
-/// filesystem boundary (which would silently degrade to copy-then-delete).
-///
-/// The temp name carries a process id and a counter rather than being a plain
-/// `.tmp` sibling. Two pushes for *different models of one project* both
-/// rewrite that project's `project.toml`, and axum serves them concurrently —
-/// with a shared temp name they would interleave inside the temp file and one
-/// would rename a mixture of both into place. Unique names make the two writes
-/// independent; the rename is still last-one-wins, which is the intended
-/// upsert semantics, but neither file is ever malformed.
+/// leaves either the old complete file or the new complete file. See
+/// `temp_sibling` for why the temp name is unique and where it lives.
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp");
-    let tmp =
-        path.with_file_name(format!(".{stem}.{}.{}.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+    let tmp = temp_sibling(path);
 
     // Scoped so the handle is closed before the rename — Windows refuses to
     // rename a file that still has an open handle.
@@ -88,6 +102,128 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// One snapshot being written incrementally to a sibling temp file, renamed
+/// into place on commit — `write_atomic`'s discipline, spread over many writes
+/// instead of one.
+///
+/// It reuses that function's reasoning rather than its code, and the difference
+/// is only that the bytes arrive over time: same unique sibling temp name (so
+/// two concurrent pushes never interleave), same `sync_all` before the rename
+/// (so the bytes are on the device before anything points at them), same
+/// same-directory rename (so it never degrades to copy-then-delete across a
+/// filesystem boundary).
+///
+/// **Dropping without committing removes the temp file**, which is the ordinary
+/// path for a refused push rather than an error case — see `SnapshotWriter`. It
+/// is done in `Drop` rather than by the caller because a `?` anywhere in the
+/// ingest route is also a discard, and one that no explicit cleanup call would
+/// have covered.
+struct FsSnapshotWriter<'a> {
+    store: &'a FsStore,
+    /// `None` once the file has been closed by `commit`, which is what stops
+    /// `Drop` from deleting the temp after it has already been renamed.
+    file: Option<fs::File>,
+    tmp: PathBuf,
+    target: PathBuf,
+    /// Everything the manifest upsert needs, copied out of the borrowed
+    /// `SnapshotMeta` so the writer outlives it.
+    kind: SnapshotKind,
+    key: ModelKey,
+    project_name: String,
+    model_name: String,
+    taken_at: String,
+    phase: Option<String>,
+}
+
+impl SnapshotWriter for FsSnapshotWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        use std::io::Write;
+        let file = self.file.as_mut().expect("writer is only used before commit consumes it");
+        file.write_all(bytes)
+            .with_context(|| format!("could not write snapshot: {}", self.tmp.display()))
+    }
+
+    fn commit(mut self: Box<Self>) -> Result<()> {
+        // Flush to the device, then close, before anything points at the file.
+        // Closing matters on its own here: Windows refuses to rename a file that
+        // still has an open handle.
+        let file = self.file.take().expect("commit consumes the writer, so it runs once");
+        file.sync_all()
+            .with_context(|| format!("could not flush snapshot to disk: {}", self.tmp.display()))?;
+        drop(file);
+
+        // A same-`taken_at` re-push is skipped, never overwritten — identical to
+        // `put_raw`, and checked here rather than at open so the rule lives in
+        // one place. The cost is having written a temp file for nothing, which
+        // is what a genuinely re-sent payload deserves.
+        if self.target.exists() {
+            tracing::warn!("snapshot already exists, skipping: {}", self.target.display());
+            return Ok(()); // `Drop` removes the temp
+        }
+
+        // Manifest before rename, matching `put_raw`'s order. On disagreement
+        // the filesystem wins and `list_snapshot_ids` rebuilds the index from
+        // the directory, so an entry briefly ahead of its file is recoverable;
+        // a file ahead of its entry is equally so. Neither ordering is lossy,
+        // and matching the buffered path means one thing to remember.
+        self.store.index_snapshot(
+            self.kind,
+            &self.key,
+            &self.project_name,
+            &self.model_name,
+            &self.taken_at,
+            self.phase.as_deref(),
+        )?;
+
+        fs::rename(&self.tmp, &self.target).with_context(|| {
+            format!("could not publish snapshot {} from {}", self.target.display(), self.tmp.display())
+        })?;
+        tracing::info!(
+            "stored {} snapshot {}/{} @ {} (streamed)",
+            self.kind.label(),
+            self.key.project_id,
+            self.key.model_id,
+            self.taken_at
+        );
+        Ok(())
+    }
+}
+
+impl Drop for FsSnapshotWriter<'_> {
+    fn drop(&mut self) {
+        // Close the handle first (Windows will not delete an open file), then
+        // remove the temp. Best-effort throughout: a failure here has nothing to
+        // report to, and the alternative -- panicking in a destructor -- is
+        // worse.
+        self.file.take();
+        if self.tmp.exists() {
+            let _ = fs::remove_file(&self.tmp);
+        }
+
+        // And the directories the open created, if this push is the only reason
+        // they exist.
+        //
+        // **Removing the file is not enough**, which is the part worth stating:
+        // `put_streaming` calls `create_dir_all` so the temp has somewhere to
+        // live, so a discarded push would otherwise leave an empty model dir
+        // behind -- and `list_models` reconciles the manifest against the
+        // directory tree, warning about and *including* a model dir the manifest
+        // does not list. A refused push would mint a phantom model, on the very
+        // path ("this run pushed no rooms") that is refused most often.
+        //
+        // `remove_dir` only succeeds on an empty directory, so a concurrent push
+        // that put a real snapshot there is safe by construction -- no check for
+        // it is needed, and any check would race anyway.
+        let mut dir = self.tmp.parent();
+        while let Some(candidate) = dir {
+            if candidate == self.store.root || fs::remove_dir(candidate).is_err() {
+                break;
+            }
+            dir = candidate.parent();
+        }
+    }
 }
 
 impl FsStore {
@@ -165,6 +301,48 @@ impl FsStore {
     /// safe, still-sortable form before using it as a filename.
     fn snapshot_filename(taken_at: &str) -> String {
         format!("{}.json", taken_at.replace(':', "-"))
+    }
+
+    /// Upsert the authoritative manifest for one stored snapshot: refresh the
+    /// project display name, insert this model if absent (the unknown-model
+    /// case), update its name, and index this snapshot id in *this kind's* list
+    /// (insert-if-absent, kept sorted so ascending == chronological for
+    /// RFC3339-UTC ids). Rewritten every push so the manifest always mirrors
+    /// what is on disk — which also backfills a pre-`snapshots`-field manifest
+    /// one push at a time.
+    ///
+    /// Shared by `put_raw` and the streaming writer. Two copies could disagree
+    /// about what a stored snapshot leaves in the index, which is the one thing
+    /// that would make a streamed snapshot and a buffered one differ in
+    /// anything but write order.
+    fn index_snapshot(
+        &self,
+        kind: SnapshotKind,
+        key: &ModelKey,
+        project_name: &str,
+        model_name: &str,
+        taken_at: &str,
+        phase: Option<&str>,
+    ) -> Result<()> {
+        let mut manifest = self.read_manifest(&key.project_id)?;
+        manifest.name = project_name.to_string();
+        let entry = manifest.models.entry(key.model_id.clone()).or_default();
+        entry.name = model_name.to_string();
+        // Record the lineage's phase on the first phased push, and never
+        // overwrite it afterwards. The ingest handler is the real gate — a
+        // disagreeing rooms push is quarantined and a disagreeing doors push is
+        // refused, both before ever reaching here — but expressing immutability
+        // structurally means no future caller can re-phase a model by accident.
+        // `promote_pending` is the one deliberate way past it.
+        if entry.phase.is_none() {
+            entry.phase = phase.map(str::to_string);
+        }
+        let index = entry.index_mut(kind);
+        if !index.iter().any(|id| id == taken_at) {
+            index.push(taken_at.to_string());
+            index.sort();
+        }
+        self.write_manifest(&key.project_id, &manifest)
     }
 
     /// The most recent snapshot file in a model dir, by lexical name order.
@@ -254,32 +432,10 @@ impl SnapshotStore for FsStore {
         let dir = self.kind_dir(kind, key);
         fs::create_dir_all(&dir).with_context(|| format!("could not create snapshot dir: {}", dir.display()))?;
 
-        // 2. Upsert the authoritative manifest: refresh the project display name,
-        //    insert this model if absent (`or_default` = the unknown-model case),
-        //    update its name, and index this snapshot id in *this kind's* list
-        //    (insert-if-absent, kept sorted so ascending == chronological for
-        //    RFC3339-UTC ids). Rewritten every push so the manifest always
-        //    mirrors what's on disk — which also backfills a pre-`snapshots`-field
-        //    manifest one push at a time.
-        let mut manifest = self.read_manifest(project_id)?;
-        manifest.name = project_name.to_string();
-        let entry = manifest.models.entry(model_id.clone()).or_default();
-        entry.name = model_name.to_string();
-        // Record the lineage's phase on the first phased push, and never
-        // overwrite it afterwards. The ingest handler is the real gate — a
-        // disagreeing rooms push is quarantined and a disagreeing doors push is
-        // refused, both before ever reaching here — but expressing immutability
-        // structurally means no future caller can re-phase a model by accident.
-        // `promote_pending` is the one deliberate way past it.
-        if entry.phase.is_none() {
-            entry.phase = phase.map(str::to_string);
-        }
-        let index = entry.index_mut(kind);
-        if !index.iter().any(|id| id == taken_at) {
-            index.push(taken_at.to_string());
-            index.sort();
-        }
-        self.write_manifest(project_id, &manifest)?;
+        // 2. Upsert the authoritative manifest — see `index_snapshot`. Shared
+        //    with the streaming writer so the two cannot drift on what a stored
+        //    snapshot leaves in the index.
+        self.index_snapshot(kind, key, project_name, model_name, taken_at, phase)?;
 
         // 3. Write the snapshot under its own timestamped filename — never
         //    overwriting a prior one, so the dir accumulates full history.
@@ -295,6 +451,32 @@ impl SnapshotStore for FsStore {
 
         tracing::info!("stored {} snapshot {}/{} @ {}", kind.label(), project_id, model_id, taken_at);
         Ok(())
+    }
+
+    fn put_streaming<'a>(&'a self, meta: &SnapshotMeta<'_>) -> Result<Box<dyn SnapshotWriter + 'a>> {
+        let SnapshotMeta { kind, key, project_name, model_name, taken_at, phase } = *meta;
+
+        // The kind's dir, exactly as `put_raw` does it: `create_dir_all` also
+        // makes the model and project dirs when either is brand new.
+        let dir = self.kind_dir(kind, key);
+        fs::create_dir_all(&dir).with_context(|| format!("could not create snapshot dir: {}", dir.display()))?;
+
+        let target = dir.join(Self::snapshot_filename(taken_at));
+        let tmp = temp_sibling(&target);
+        let file = fs::File::create(&tmp).with_context(|| format!("could not create temp file: {}", tmp.display()))?;
+
+        Ok(Box::new(FsSnapshotWriter {
+            store: self,
+            file: Some(file),
+            tmp,
+            target,
+            kind,
+            key: key.clone(),
+            project_name: project_name.to_string(),
+            model_name: model_name.to_string(),
+            taken_at: taken_at.to_string(),
+            phase: phase.map(str::to_string),
+        }))
     }
 
     fn get_latest_raw(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>> {
@@ -694,6 +876,123 @@ mod tests {
 
     fn phased(project: &str, model: &str, ts: &str, phase: &str) -> RoomPayload {
         RoomPayload { phase: Some(phase.into()), ..payload(project, model, ts) }
+    }
+
+    /// Every entry under a directory tree, files **and directories**, so a test
+    /// can assert that a discarded write left *nothing* rather than only that
+    /// the snapshot it expected is absent.
+    ///
+    /// Directories are in here deliberately: an earlier version of this helper
+    /// counted only files, and passed while a discarded push was leaving empty
+    /// model directories behind -- which `list_models` would have reported as
+    /// phantom models.
+    fn entries_under(dir: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        let Ok(entries) = fs::read_dir(dir) else { return out };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                out.push(name.to_string());
+            }
+            if path.is_dir() {
+                out.extend(entries_under(&path));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// **A writer dropped without committing leaves no trace.** The property the
+    /// whole streaming path rests on: an ingest route only learns a push is
+    /// empty after it has started writing, so discarding is the ordinary
+    /// outcome, and a stray temp file or a manifest entry pointing at nothing
+    /// would turn a correct refusal into corrupt data.
+    #[test]
+    fn test_a_discarded_streamed_snapshot_leaves_nothing_behind() {
+        let dir = std::env::temp_dir().join(format!("roommate-stream-discard-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+        let sample = payload("p", "m", "2026-01-01T10:00:00Z");
+
+        {
+            let mut writer = store.put_streaming(&meta(&key, &sample)).unwrap();
+            writer.write(br#"{"schema_version":7,"rooms":["#).unwrap();
+            writer.write(br#"{"id":"r1"}"#).unwrap();
+            // and then dropped, un-committed
+        }
+
+        assert_eq!(store.list_snapshot_ids(SnapshotKind::Rooms, &key).unwrap(), Vec::<String>::new());
+        assert!(store.get_latest_raw(SnapshotKind::Rooms, &key).unwrap().is_none());
+        // Not even the temp file: the names are unique, so an abandoned one
+        // would accumulate rather than be reused.
+        assert_eq!(entries_under(&dir), Vec::<String>::new(), "no snapshot, no temp, no manifest");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A streamed snapshot and a buffered one are the same stored record: same
+    /// bytes read back, same index entry, same lineage phase. Only the write
+    /// order differs, which is exactly what `put_streaming` was allowed to
+    /// change and nothing else.
+    #[test]
+    fn test_a_committed_streamed_snapshot_matches_a_buffered_one() {
+        let dir = std::env::temp_dir().join(format!("roommate-stream-commit-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+        let sample = phased("p", "m", "2026-01-01T10:00:00Z", "New Construction");
+        let body = serde_json::to_vec(&sample).unwrap();
+
+        // Written in three pieces, which is the only thing the caller does
+        // differently from `put_raw`.
+        let mut writer = store.put_streaming(&meta(&key, &sample)).unwrap();
+        let (head, tail) = body.split_at(body.len() / 2);
+        writer.write(head).unwrap();
+        writer.write(tail).unwrap();
+        writer.commit().unwrap();
+
+        assert_eq!(store.get_latest_raw(SnapshotKind::Rooms, &key).unwrap().unwrap(), body);
+        assert_eq!(
+            store.list_snapshot_ids(SnapshotKind::Rooms, &key).unwrap(),
+            vec!["2026-01-01T10:00:00Z".to_string()],
+            "indexed exactly as a buffered push would be"
+        );
+        assert_eq!(store.get_phase(&key).unwrap().as_deref(), Some("New Construction"));
+        assert!(
+            !entries_under(&dir).iter().any(|f| f.ends_with(".tmp")),
+            "the temp file is gone once it has been renamed"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A re-push under an id that already exists is **skipped, not
+    /// overwritten** — the same rule `put_raw` applies, checked in one place so
+    /// the two cannot drift. History is what makes a re-sent payload harmless;
+    /// silently replacing the record it duplicates is what would not be.
+    #[test]
+    fn test_a_streamed_re_push_of_an_existing_id_is_skipped() {
+        let dir = std::env::temp_dir().join(format!("roommate-stream-dup-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+        let first = payload("p", "m", "2026-01-01T10:00:00Z");
+        store.put(&first).unwrap();
+        let original = store.get_latest_raw(SnapshotKind::Rooms, &key).unwrap().unwrap();
+
+        let mut writer = store.put_streaming(&meta(&key, &first)).unwrap();
+        writer.write(br#"{"different":true}"#).unwrap();
+        writer.commit().unwrap();
+
+        assert_eq!(
+            store.get_latest_raw(SnapshotKind::Rooms, &key).unwrap().unwrap(),
+            original,
+            "the stored record is untouched"
+        );
+        assert!(!entries_under(&dir).iter().any(|f| f.ends_with(".tmp")), "and the temp is cleaned up");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The lineage's phase is set by the first phased push and never moved by a
