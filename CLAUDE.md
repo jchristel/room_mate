@@ -74,6 +74,13 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   `through_wall_normal` points away from its own `to_room` is correct data, not
   a finding. Do not add a check that "reconciles" the two — they answer
   different questions, which is also why both are on the wire.
+- **The geometric resolver does not violate that, and the distinction is easy to
+  lose.** `service::room_locator` answers "which room is this door physically
+  beside", which is *not* "does this door open into that room". The cupboard
+  door's insertion point is still on the cupboard/corridor boundary, so it
+  passes; what fails is a room that has **moved away** from its door. Authored
+  references always win — geometry fills an absent side and reports a
+  disagreement, never overwrites one (`[doors] room_resolution`, default off).
 - **`room_reference_property` reconciles the modeller against the geometry**,
   and finds real disagreements: 4 of the 26 House A doors, mostly where the
   geometry picks an exterior or circulation space over the served room. Absent

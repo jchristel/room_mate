@@ -267,6 +267,47 @@ pub enum MeasurementStandard {
 /// `room_attribution` and `room_reference_property` — waited for that question
 /// to be answered rather than shipping with a default that would have settled
 /// it by accident. Both now live on `DoorPolicy`.
+/// How far the server may go to work out which rooms an element is between,
+/// when the model does not say.
+///
+/// **Off by default, and that is a deliberate choice rather than caution.**
+/// Turning it on changes `owner_rooms` for elements the model left unresolved —
+/// homeless becomes attributed — so it must be something a project opts into,
+/// not something an upgrade does on its behalf. `room_attribution` has a default
+/// because the chain only ever uses what the model already states; this fills in
+/// what the model does not.
+///
+/// **A derived answer never overrides an authored one**, at any setting. A
+/// door's `to_room` is the modeller's assignment — what the door *serves*, which
+/// is not always what it opens into — and geometry replacing it would be exactly
+/// the reconciliation `CLAUDE.md` forbids. What the geometry does is fill an
+/// absent side, and disagree audibly with a present one
+/// (`DoorReport::room_geometry_mismatches`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomResolution {
+    /// Never derive. Absent references stay absent, and the geometric drift
+    /// check does not run.
+    #[default]
+    Off,
+    /// Resolve against the element's **own model's** rooms only. The setting for
+    /// a model that holds its own rooms and simply failed to populate a
+    /// reference.
+    SameModel,
+    /// Resolve against **every model in the project**, placing each one through
+    /// its `model_to_shared` transform first. The setting for a split model —
+    /// doors or windows in one file, rooms in another.
+    ///
+    /// **This is the first thing in the server to depend on `model_to_shared`
+    /// being numerically correct.** The transform has been carried on the
+    /// envelope since before any consumer existed, and nothing has ever checked
+    /// it against a real survey: a model whose shared coordinates were never set
+    /// up emits an identity transform, and two such models will be silently
+    /// stacked on top of each other. Verify a project's placement before
+    /// trusting this mode, and prefer `same_model` where it suffices.
+    Project,
+}
+
 /// Which of a door's two room references attributes it to a room, for area
 /// rollups, hierarchy scoping and door schedules. The attribution rule itself
 /// is in `CLAUDE.md`.
@@ -306,7 +347,14 @@ impl RoomAttribution {
     ///
     /// The single place the chain is expressed, so the read path, the QA report
     /// and any future rollup cannot disagree about what a door belongs to.
-    pub fn owners<'a>(&self, from_room: Option<&'a str>, to_room: Option<&'a str>) -> Vec<&'a str> {
+    ///
+    /// Generic over what a reference *is*, because it is now two things: a bare
+    /// room id where the model stated one, and a model-qualified reference where
+    /// the geometry derived one (a probe can reach a room in a linked model, and
+    /// a bare id would be resolved against the wrong model's rooms). The policy
+    /// is about presence and order, never about the payload, so making it
+    /// generic keeps one chain rather than a second copy that could drift.
+    pub fn owners<'a, T: ?Sized>(&self, from_room: Option<&'a T>, to_room: Option<&'a T>) -> Vec<&'a T> {
         match self {
             RoomAttribution::ToRoomThenFromRoom => to_room.or(from_room).into_iter().collect(),
             RoomAttribution::ToRoom => to_room.into_iter().collect(),
@@ -349,6 +397,15 @@ pub struct DoorPolicy {
     /// project that disagrees changes one line and loses nothing.
     #[serde(default)]
     pub room_attribution: RoomAttribution,
+
+    /// How far the server may go to work out a door's rooms from its geometry
+    /// (see `RoomResolution`). Off by default.
+    ///
+    /// Declared after `room_attribution` because it feeds it: a derived
+    /// reference fills an absent side, and attribution then runs over the
+    /// result. It never replaces a reference the model states.
+    #[serde(default)]
+    pub room_resolution: RoomResolution,
 
     /// The door property carrying an **authored** room reference (in the sample
     /// export, `"Door Room Reference"`), reconciled against the room
