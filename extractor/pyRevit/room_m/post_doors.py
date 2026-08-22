@@ -2,24 +2,29 @@
 POC bridge for DOORS: take the duHast door export, translate to the viewer's
 v1 doors contract, and POST to the Rust server.
 
-The sibling of `post_rooms.py`, and deliberately built on it rather than
-beside it -- the transport (`make_client`, `_post_content`), the duHast
-flattening (`duhast_object_to_plain`) and the NDJSON writer
-(`write_ndjson_line`) are imported, not re-implemented, so the two pushes
-cannot drift on how they talk to the server.
+The sibling of `post_rooms.py`, and built alongside it on a shared base rather
+than on it -- the transport (`_post_content`), the duHast flattening
+(`duhast_object_to_plain`), the NDJSON writer (`write_ndjson_line`) and the
+identity envelope (`build_identity_envelope`) all come from `post_common.py`,
+imported and never re-implemented, so the two pushes cannot drift on how they
+talk to the server or on what they claim to be. This module holds only what is
+doors-specific, and knows nothing about rooms.
 
 What is genuinely different, and why:
 
 - **The doors schema versions independently of rooms**, starting at 1. A
   change to the room contract has nothing to say about doors.
-- **No `levels` array.** A doors push targets a model that already has rooms
-  (the server refuses otherwise), and that model's rooms snapshot already
-  carries the level set a door's `level_id` points into. A second copy could
-  only disagree.
+- **No `levels` array.** A door's `level_id` points into the level set its own
+  model's rooms snapshot already carries. A second copy could only disagree.
+  Note the reason is no longer "the server refuses a doors push without rooms" —
+  it does not, and doors may now arrive first. The level set may therefore be
+  absent for a while, which is a state the server reports rather than a reason
+  to duplicate it here.
 - **The room references, the position and the direction do not come from the
   export.** See `translate_door` -- all four are read from the Revit API by
-  `room_mate.py`, in one pass, which is the only side that can ask the
-  questions correctly and the only way they are guaranteed to agree.
+  `room_m.utils.doors.door_placements`, in one pass, which is the only side
+  that can ask the questions correctly and the only way they are guaranteed to
+  agree.
 - **A degenerate footprint is dropped**, see `loops_from_polygon`. This is
   the one place this module actively discards data, and it has to: the bad
   value looks like real geometry.
@@ -29,8 +34,13 @@ What is genuinely different, and why:
   pre-fit-out phase from a broken export. This side is not answering that
   question -- it is answering "someone asked for a doors push and there are no
   doors to push", which is worth stopping whichever of the two it turns out to
-  be. The cost is real and accepted: a model that genuinely has no doors can no
-  longer record that fact through this producer.
+  be.
+
+  **Scoped to the whole RUN**, which is what made the rule honest. Asked per
+  model it turned a rooms-only document in a multiselect run into a failed push
+  and a red run — routine, and wrong. The residual cost is unchanged and still
+  accepted: a run whose documents genuinely hold no doors at all cannot record
+  that fact through this producer.
 
 Returns the same `(ok, status, text)` tuple shape as the room push, so the
 caller's `Result` tracking is identical for both.
@@ -43,14 +53,18 @@ from System.IO.Compression import GZipStream, CompressionMode
 from System.Net.Http import ByteArrayContent
 from System.Net.Http.Headers import MediaTypeHeaderValue
 
-from post_rooms import (
+from room_m.post_common import (
+    build_identity_envelope,
     duhast_object_to_plain,
     empty_push_refusal,
     loop_to_points,
     properties_to_map,
     write_ndjson_line,
     _post_content,
-    SOURCE,
+)
+
+from room_m.utils.phase_filter import (
+    in_selected_phase,
 )
 
 SERVER_URL = "http://127.0.0.1:5151/doors"
@@ -58,8 +72,8 @@ SERVER_URL_STREAM = "http://127.0.0.1:5151/doors/stream"
 
 # Doors version independently of rooms (contract/doors.rs
 # `SUPPORTED_DOOR_SCHEMA`). Sending the room schema here is refused, and the
-# server's message names this number.
-SCHEMA_VERSION = 1
+# server's message names this number. Now 2: one push carries many models.
+SCHEMA_VERSION = 2
 
 DOOR_LIST_KEY = "door"
 
@@ -110,54 +124,26 @@ def loops_from_polygon(polygons):
     return loops
 
 
-def build_envelope(doors_source):
-    """Everything the v1 doors contract needs EXCEPT `doors`: schema_version,
-    project, model (+ source), snapshot, phase, and the optional
-    model_to_shared. The doors counterpart of `post_rooms.build_envelope`, and
-    validated the same way -- identity is checked, never defaulted, because a
-    payload missing project id, model id or snapshot timestamp is broken input
-    and a loud ValueError here beats a 422 that names the wrong thing.
+def build_envelope(run_envelope, model_blocks):
+    """Everything the v2 doors contract needs EXCEPT `doors`.
 
-    No `levels`: see the module docstring."""
-    project = doors_source.get("project")
-    if not project or not project.get("id"):
-        raise ValueError("export is missing its identity envelope: project.id")
-    model = doors_source.get("model")
-    if not model or not model.get("id"):
-        raise ValueError("export is missing its identity envelope: model.id")
-    snapshot = doors_source.get("snapshot")
-    if not snapshot or not snapshot.get("taken_at"):
-        raise ValueError("export is missing its identity envelope: snapshot.taken_at")
+    Which is the shared identity block and nothing else -- no `levels`, no
+    `room_boundary` (see the module docstring for both). That is why this is a
+    single delegating call rather than a body: what a doors envelope carries is
+    exactly what every entity's envelope carries, so the *only* doors-specific
+    facts left here are the schema version and the noun in the phase message.
 
-    # Required, exactly as for rooms, and refused by the server if absent: a
-    # push carrying no phase was never filtered by the phase range test, so it
-    # is unfiltered mixed-phase content. Doors are stricter than rooms on the
-    # OTHER side of this check -- a phase that DISAGREES with the model is
-    # refused rather than quarantined, because activating it would re-phase the
-    # model while its rooms stayed behind.
-    phase = doors_source.get("phase")
-    if not phase or not str(phase).strip():
-        raise ValueError(
-            "export is missing its phase: doors must be filtered to one Revit "
-            "phase before pushing (see room_mate.choose_phase)"
-        )
+    Kept as a named function rather than inlined into its two callers, on the
+    same terms as the transport helpers: the doors schema version is then stated
+    once, and the streaming and buffered paths cannot end up building different
+    envelopes.
 
-    model = dict(model)
-    model["source"] = SOURCE
-
-    envelope = {
-        "schema_version": SCHEMA_VERSION,
-        "project": project,
-        "model": model,
-        "snapshot": snapshot,
-        "phase": str(phase).strip(),
-    }
-
-    model_to_shared = doors_source.get("model_to_shared")
-    if model_to_shared is not None:
-        envelope["model_to_shared"] = model_to_shared
-
-    return envelope
+    Doors are stricter than rooms on the far side of the phase check -- a phase
+    that DISAGREES with the model is refused rather than quarantined, because
+    activating it would re-phase the model while its rooms stayed behind. That
+    is the server's rule, not this envelope's; what happens here is identical
+    for both entities."""
+    return build_identity_envelope(run_envelope, model_blocks, "doors", SCHEMA_VERSION)
 
 
 def translate_door(door, placements):
@@ -165,7 +151,8 @@ def translate_door(door, placements):
     it carries no id (nothing downstream could key on it).
 
     `placements` is `{door id: {"from_room", "to_room", "insertion_point",
-    "normal"}}`, built by `room_mate.door_placements` from the Revit API.
+    "normal"}}`, built by `room_m.utils.doors.door_placements` from the Revit
+    API.
     **Everything in it is read from Revit rather than from the export**, and for
     two different reasons.
 
@@ -218,33 +205,27 @@ def translate_door(door, placements):
     }
 
 
-def in_selected_phase(out_door, allowed_door_ids):
-    """Whether a translated door survives the phase filter. `None` means no
-    filter was supplied and every door passes.
-
-    The test itself lives in `room_mate.elements_in_phase`, which has the
-    document's phase ordering; this module stays free of the Revit assembly,
-    exactly as the room path does."""
-    if allowed_door_ids is None:
-        return True
-    return out_door["id"] in allowed_door_ids
-
-
-def translate(doors_source, placements, allowed_door_ids=None):
-    """Map the duHast door export onto the v1 contract as one whole payload.
+def translate(run_envelope, entries):
+    """Map a run's duHast door exports onto the v2 contract as one whole payload.
     The buffered counterpart of `post_doors_stream`, kept for the same reasons
-    `post_rooms.translate` is: small manual pushes and fixture generation."""
-    envelope = build_envelope(doors_source)
-    out_doors = []
-    for door in doors_source.get(DOOR_LIST_KEY, []):
-        out_door = translate_door(door, placements)
-        if out_door is not None and in_selected_phase(out_door, allowed_door_ids):
-            out_doors.append(out_door)
-    envelope["doors"] = out_doors
-    return envelope
+    `post_rooms.translate` is: small manual pushes and fixture generation.
+
+    `entries` is `[(model_block, contribution), ...]`, one per document, as
+    `room_m.exporters.doors.export_model` builds them."""
+    blocks = [dict(block) for block, _ in entries]
+    contract = build_envelope(run_envelope, blocks)
+    for model, (_, contribution) in zip(contract["models"], entries):
+        doors_source = duhast_object_to_plain(contribution["doors"])
+        out_doors = []
+        for door in doors_source.get(DOOR_LIST_KEY, []):
+            out_door = translate_door(door, contribution["placements"])
+            if out_door is not None and in_selected_phase(out_door, contribution["allowed_ids"]):
+                out_doors.append(out_door)
+        model["doors"] = out_doors
+    return contract
 
 
-def post_doors_stream(json_formatted_doors, placements, url=SERVER_URL_STREAM, allowed_door_ids=None):
+def post_doors_stream(run_envelope, entries, url=SERVER_URL_STREAM):
     """Gzip-compress an NDJSON stream (line 1 = envelope, one line per door) to
     the server's streaming doors ingest, translating one door at a time as it
     is read off the raw export.
@@ -254,13 +235,15 @@ def post_doors_stream(json_formatted_doors, placements, url=SERVER_URL_STREAM, a
     pushes -- a producer that streamed rooms and buffered doors would be two
     code paths to keep working for no gain. Returns `(ok, status, text)`.
 
-    Sends nothing when no door reaches the wire, counted as the stream is
-    written for the same reason the room path counts there -- see the module
-    docstring for why this is stricter than the server."""
-    door_meta = dict(
-        (key, value) for key, value in json_formatted_doors.items() if key != DOOR_LIST_KEY
-    )
-    envelope = build_envelope(duhast_object_to_plain(door_meta))
+    Every door line names its own model, for the reason
+    `post_rooms.post_payload_stream` gives.
+
+    Sends nothing when no door reaches the wire **across the whole run**, counted
+    as the stream is written for the same reason the room path counts there --
+    see the module docstring for why this is stricter than the server, and why
+    the run rather than the model is the scope that makes it honest."""
+    blocks = [dict(block) for block, _ in entries]
+    envelope = build_envelope(run_envelope, blocks)
 
     raw = 0
     no_id = 0
@@ -272,17 +255,21 @@ def post_doors_stream(json_formatted_doors, placements, url=SERVER_URL_STREAM, a
         # leaveOpen defaults False: closing gz flushes the gzip footer into `out`.
         gz = GZipStream(out, CompressionMode.Compress)
         write_ndjson_line(gz, envelope)
-        for door in json_formatted_doors.get(DOOR_LIST_KEY, []):
-            raw += 1
-            out_door = translate_door(duhast_object_to_plain(door), placements)
-            if out_door is None:
-                no_id += 1
-                continue
-            if not in_selected_phase(out_door, allowed_door_ids):
-                out_of_phase += 1
-                continue
-            written += 1
-            write_ndjson_line(gz, out_door)
+        for block, (_, contribution) in zip(blocks, entries):
+            model_id = block["id"]
+            for door in contribution["doors"].get(DOOR_LIST_KEY, []):
+                raw += 1
+                out_door = translate_door(
+                    duhast_object_to_plain(door), contribution["placements"])
+                if out_door is None:
+                    no_id += 1
+                    continue
+                if not in_selected_phase(out_door, contribution["allowed_ids"]):
+                    out_of_phase += 1
+                    continue
+                written += 1
+                out_door["model_id"] = model_id
+                write_ndjson_line(gz, out_door)
         gz.Close()  # MUST close to flush the gzip footer; do NOT skip
         body = out.ToArray()
     finally:
@@ -301,17 +288,18 @@ def post_doors_stream(json_formatted_doors, placements, url=SERVER_URL_STREAM, a
     return _post_content(url, content)
 
 
-def post_doors(json_formatted_doors, placements, url=SERVER_URL, allowed_door_ids=None):
+def post_doors(run_envelope, entries, url=SERVER_URL):
     """Buffered counterpart of `post_doors_stream`. Returns `(ok, status, text)`."""
-    doors_source = duhast_object_to_plain(json_formatted_doors)
-    contract = translate(doors_source, placements, allowed_door_ids)
+    contract = translate(run_envelope, entries)
 
     # Guarded here rather than in `translate`, matching `post_rooms.post_payload`:
     # translating an empty door set is a legitimate thing to ask for, pushing one
-    # is not.
-    if not contract["doors"]:
-        return empty_push_refusal(
-            "doors", contract, len(doors_source.get(DOOR_LIST_KEY, [])), [])
+    # is not. Counted across the run, matching the streaming path.
+    if not sum(len(model["doors"]) for model in contract["models"]):
+        raw = sum(
+            len(duhast_object_to_plain(c["doors"]).get(DOOR_LIST_KEY, [])) for _, c in entries
+        )
+        return empty_push_refusal("doors", contract, raw, [])
 
     from System.Net.Http import StringContent
     from System.Text import Encoding

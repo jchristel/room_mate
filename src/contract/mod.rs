@@ -32,7 +32,9 @@ use crate::settings::BuiltinPropertyDef;
 
 pub mod doors;
 
-pub use doors::{Door, DoorPayload, DoorStreamEnvelope, SUPPORTED_DOOR_SCHEMA};
+pub use doors::{
+    Door, DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA,
+};
 
 /// A 2D point in Revit model space. Units are decimal feet, Y points UP.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -368,31 +370,138 @@ pub struct RoomPayload {
     pub rooms: Vec<Room>,
 }
 
-/// The first NDJSON line of a streamed push (`POST /rooms/stream`): everything
-/// in `RoomPayload` EXCEPT `rooms`, which arrive as subsequent lines, one room
-/// per line. Kept as its own type (rather than making `rooms` optional on
-/// `RoomPayload`) so the envelope deserializes on its own with no rooms
-/// present, and so `RoomPayload` itself keeps `rooms` guaranteed for every
-/// other consumer.
+/// One model's block on a multi-model upload — the facts that are true of *one
+/// Revit document* and cannot be shared across a push.
+///
+/// **This is the type that makes a combined push possible at all.** A run now
+/// exports several models at once and sends them as one bucket, so identity can
+/// no longer sit on the envelope: `levels` are keyed by per-document
+/// `ElementId`s, `model_to_shared` places one document, and `room_boundary` is
+/// one document's Area and Volume Computations setting. Merging any of them
+/// across models would be merging things that only look alike.
+///
+/// What stays on the envelope above is what a *run* genuinely shares: the
+/// project it targets, the one phase the user picked, and the moment it was
+/// read.
+///
+/// `model` is flattened, so a block reads `{"id", "name", "source", "levels",
+/// ...}` — the same keys the single-model envelope carried, one level down.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoomModelEnvelope {
+    #[serde(flatten)]
+    pub model: Model,
+    /// Model→shared placement transform for *this* document (see
+    /// `ModelToShared`), on the same optional terms `RoomPayload` states.
+    #[serde(default)]
+    pub model_to_shared: Option<ModelToShared>,
+    /// This document's boundary regime, on the same optional terms
+    /// `RoomPayload` states.
+    #[serde(default)]
+    pub room_boundary: Option<RoomBoundary>,
+    pub levels: Vec<Level>,
+}
+
+impl RoomModelEnvelope {
+    /// Rebuild the single-model `RoomPayload` this block plus the run's shared
+    /// envelope describes — the **decomposition** every rooms ingest performs.
+    ///
+    /// A push carries N models; storage keeps N snapshots, one per model, keyed
+    /// exactly as they always were. So the bucket is a *transport* shape and
+    /// never a storage one: `ModelKey`, milestone pins, per-model QA scoping and
+    /// comparison all keep working on a type this function did not change.
+    ///
+    /// Shared by the buffered and streaming routes so the two cannot drift on
+    /// what a decomposed snapshot contains — the same discipline that keeps
+    /// `validate_ingest` in one place.
+    pub fn into_payload(
+        self,
+        schema_version: u32,
+        project: Project,
+        snapshot: Snapshot,
+        phase: Option<String>,
+        rooms: Vec<Room>,
+    ) -> RoomPayload {
+        RoomPayload {
+            schema_version,
+            project,
+            model: self.model,
+            snapshot,
+            phase,
+            model_to_shared: self.model_to_shared,
+            room_boundary: self.room_boundary,
+            levels: self.levels,
+            rooms,
+        }
+    }
+}
+
+/// The first NDJSON line of a streamed push (`POST /rooms/stream`): the run's
+/// shared identity plus one `RoomModelEnvelope` per model, with every room
+/// arriving on a following line as a `StreamRoom`.
+///
+/// Kept as its own type (rather than making `rooms` optional somewhere) so the
+/// envelope deserializes on its own with no rooms present, and so `RoomPayload`
+/// keeps `rooms` guaranteed for every other consumer.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StreamEnvelope {
     pub schema_version: u32,
     pub project: Project,
-    pub model: Model,
     #[serde(default)]
     pub snapshot: Snapshot,
-    /// The push's phase, in lockstep with `RoomPayload` — which ingest route a
-    /// producer picked must never change what phase the stored snapshot claims.
+    /// The push's phase — **one per run, not one per model**. `choose_phase`
+    /// offers only names common to every selected document and each document
+    /// resolves that name against its own phase table, so a run is scoped to one
+    /// phase by construction and a per-model phase could only ever disagree with
+    /// itself.
     #[serde(default)]
     pub phase: Option<String>,
-    /// Model→shared placement transform, in lockstep with `RoomPayload` (a
-    /// streamed push carries identical envelope metadata; only `rooms` differ).
+    /// Every model this push carries, in no particular order. Ingest refuses an
+    /// empty list and a duplicate id — see `handlers::validate_models`.
+    pub models: Vec<RoomModelEnvelope>,
+}
+
+/// One room line of a streamed push: the room, plus the id of the model it
+/// belongs to.
+///
+/// **The model id is on the element, not inferred from position.** A stream
+/// could have grouped rooms by model and switched on a marker line, but then a
+/// dropped or reordered line would silently file rooms under the wrong model —
+/// and a room id is unique only within a model, so the result would resolve
+/// against real-looking rooms rather than failing. Naming the model per line
+/// costs a few bytes gzip removes anyway and makes that failure impossible.
+///
+/// Flattened, so a line is the room object it always was with one extra key.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StreamRoom {
+    pub model_id: String,
+    #[serde(flatten)]
+    pub room: Room,
+}
+
+/// The buffered multi-model rooms upload (`POST /rooms`) — the same shape the
+/// stream sends, with each model's rooms inline rather than on their own lines.
+///
+/// Retained for fixture generation and small manual pushes, exactly as before;
+/// the live Revit path streams. Both decompose through
+/// `RoomModelEnvelope::into_payload`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoomsUpload {
+    pub schema_version: u32,
+    pub project: Project,
     #[serde(default)]
-    pub model_to_shared: Option<ModelToShared>,
-    /// Boundary regime, in lockstep with `RoomPayload` for the same reason.
+    pub snapshot: Snapshot,
     #[serde(default)]
-    pub room_boundary: Option<RoomBoundary>,
-    pub levels: Vec<Level>,
+    pub phase: Option<String>,
+    pub models: Vec<RoomModelUpload>,
+}
+
+/// One model's block on a buffered upload: its `RoomModelEnvelope` plus its
+/// rooms.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoomModelUpload {
+    #[serde(flatten)]
+    pub envelope: RoomModelEnvelope,
+    pub rooms: Vec<Room>,
 }
 
 /// Schema version this server accepts. Now v5: the fixed, typed `builtin`
@@ -438,7 +547,20 @@ pub struct StreamEnvelope {
 /// snapshots already on disk deserialize without a version check, and
 /// `RoomPayload::phase` being `Option` is what keeps them readable. See
 /// PLAN-phasing.md "D2".
-pub const SUPPORTED_SCHEMA: u32 = 6;
+///
+/// **Now 7: one push carries many models.** The envelope's single `model` block
+/// became a `models` list (`RoomModelEnvelope`), and each room names the model
+/// it belongs to. A v6 payload no longer parses — the strongest form of the
+/// bump test, and the right one: a run selects several documents, and sending
+/// them one request at a time is what made a doors push depend on the order its
+/// siblings arrived in.
+///
+/// The permissive-type / strict-handler split is unchanged and is what keeps
+/// this cheap. `RoomPayload` — the **stored** type — is untouched: ingest
+/// decomposes a push into one payload per model, so every snapshot on disk,
+/// every milestone pin and every per-model read keeps working on the shape it
+/// always had. Only the wire moved.
+pub const SUPPORTED_SCHEMA: u32 = 7;
 
 /// Resolve a *canonical* property name (e.g. "Area") to the source-specific
 /// raw property name a room's `properties` map actually keys on, via
@@ -853,17 +975,34 @@ mod tests {
     #[test]
     fn test_stream_envelope_carries_room_boundary() {
         let mut json = serde_json::json!({
-            "schema_version": 6,
+            "schema_version": 7,
             "project":  { "id": "p1", "name": "Hospital Job" },
-            "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
-            "levels": []
+            "models": [{ "id": "m-guid", "name": "ARCH", "source": "revit", "levels": [] }]
         });
         let envelope: StreamEnvelope = serde_json::from_value(json.clone()).unwrap();
-        assert!(envelope.room_boundary.is_none());
+        assert!(envelope.models[0].room_boundary.is_none());
 
-        json["room_boundary"] = serde_json::json!("finish_face");
+        json["models"][0]["room_boundary"] = serde_json::json!("finish_face");
         let envelope: StreamEnvelope = serde_json::from_value(json).unwrap();
-        assert_eq!(envelope.room_boundary, Some(RoomBoundary::FinishFace));
+        assert_eq!(envelope.models[0].room_boundary, Some(RoomBoundary::FinishFace));
+    }
+
+    /// The regime is **per model**, not per push — a run legitimately mixes a
+    /// centreline model with a finish-face one, and collapsing them onto the
+    /// shared envelope would size one model's wall zone off the other's setting.
+    #[test]
+    fn test_each_model_declares_its_own_boundary() {
+        let json = serde_json::json!({
+            "schema_version": 7,
+            "project":  { "id": "p1", "name": "Hospital Job" },
+            "models": [
+                { "id": "arch", "name": "ARCH", "source": "revit", "levels": [], "room_boundary": "centreline" },
+                { "id": "struct", "name": "STR", "source": "revit", "levels": [], "room_boundary": "finish_face" },
+            ]
+        });
+        let envelope: StreamEnvelope = serde_json::from_value(json).unwrap();
+        assert_eq!(envelope.models[0].room_boundary, Some(RoomBoundary::Centreline));
+        assert_eq!(envelope.models[1].room_boundary, Some(RoomBoundary::FinishFace));
     }
 
     /// `phase` rides the envelope as a bare name and survives a round-trip;
@@ -901,10 +1040,9 @@ mod tests {
     #[test]
     fn test_stream_envelope_carries_phase() {
         let mut json = serde_json::json!({
-            "schema_version": 6,
+            "schema_version": 7,
             "project":  { "id": "p1", "name": "Hospital Job" },
-            "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
-            "levels": []
+            "models": [{ "id": "m-guid", "name": "ARCH", "source": "revit", "levels": [] }]
         });
         let envelope: StreamEnvelope = serde_json::from_value(json.clone()).unwrap();
         assert!(envelope.phase.is_none());
@@ -967,21 +1105,40 @@ mod tests {
     #[test]
     fn test_stream_envelope_deserializes_without_rooms() {
         let json = serde_json::json!({
-            "schema_version": 6,
+            "schema_version": 7,
             "project":  { "id": "p1", "name": "Hospital Job" },
-            "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
             "snapshot": { "taken_at": "2026-05-09T11:13:34Z" },
-            "levels": [{ "id": "lvl1", "name": "Level 1", "elevation": 0.0 }]
+            "models": [{
+                "id": "m-guid", "name": "ARCH", "source": "revit",
+                "levels": [{ "id": "lvl1", "name": "Level 1", "elevation": 0.0 }]
+            }]
         });
 
         let envelope: StreamEnvelope = serde_json::from_value(json).unwrap();
         assert_eq!(envelope.schema_version, SUPPORTED_SCHEMA);
         assert_eq!(envelope.project.id, "p1");
-        assert_eq!(envelope.model.source, "revit");
-        assert_eq!(envelope.levels.len(), 1);
+        assert_eq!(envelope.models[0].model.source, "revit");
+        assert_eq!(envelope.models[0].levels.len(), 1);
         // No `model_to_shared` key present → defaults to None (in lockstep with
         // RoomPayload), so an un-placed streamed push stays valid.
-        assert!(envelope.model_to_shared.is_none());
+        assert!(envelope.models[0].model_to_shared.is_none());
+    }
+
+    /// A room line names its model, and the room itself deserializes flat
+    /// alongside that one extra key — so an element can never be filed under a
+    /// model the push did not declare, and a reordered stream cannot silently
+    /// misfile it.
+    #[test]
+    fn test_stream_room_carries_its_model_id() {
+        let json = serde_json::json!({
+            "model_id": "arch",
+            "id": "r1", "name": "Ward 1", "level_id": "lvl1",
+            "loops": [], "properties": {}
+        });
+        let line: StreamRoom = serde_json::from_value(json).unwrap();
+        assert_eq!(line.model_id, "arch");
+        assert_eq!(line.room.id, "r1");
+        assert_eq!(line.room.name, "Ward 1");
     }
 
     /// A payload with no "snapshot" key at all still deserializes (the
@@ -989,18 +1146,24 @@ mod tests {
     /// to resolve.
     #[test]
     fn test_payload_deserializes_without_snapshot() {
-        let json = serde_json::json!({
-            "schema_version": 6,
+        let stored = serde_json::json!({
+            "schema_version": 7,
             "project":  { "id": "p1", "name": "Hospital Job" },
             "model":    { "id": "m-guid", "name": "ARCH", "source": "revit" },
             "levels": [],
             "rooms": []
         });
-
-        let payload: RoomPayload = serde_json::from_value(json.clone()).unwrap();
+        let payload: RoomPayload = serde_json::from_value(stored).unwrap();
         assert_eq!(payload.snapshot.taken_at, "");
 
-        let envelope: StreamEnvelope = serde_json::from_value(json).unwrap();
+        // The same relaxation on the wire envelope, whose shape differs — one
+        // `models` list rather than one `model` block.
+        let wire = serde_json::json!({
+            "schema_version": 7,
+            "project":  { "id": "p1", "name": "Hospital Job" },
+            "models": [{ "id": "m-guid", "name": "ARCH", "source": "revit", "levels": [] }]
+        });
+        let envelope: StreamEnvelope = serde_json::from_value(wire).unwrap();
         assert_eq!(envelope.snapshot.taken_at, "");
     }
 

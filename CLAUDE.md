@@ -21,13 +21,22 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   `AppState` holds `Box<dyn SnapshotStore>`, so the trait must stay
   **object-safe**: a generic `put<T>` is out.
 - **A room id is unique only within a model, and a door's `from_room`/`to_room`
-  are room ids.** So the door→room join is model-scoped *everywhere*: ingest
-  refuses doors to a model with no rooms, QA resolves references per model, and
-  every `/doors` row carries `model_id`. A project-scoped shortcut anywhere here
-  turns a dangling reference into a false clean bill.
+  are room ids.** So the door→room join is model-scoped *everywhere*: QA resolves
+  references per model, and every `/doors` row carries `model_id`. A
+  project-scoped shortcut anywhere here turns a dangling reference into a false
+  clean bill.
+- **Ingest does NOT require a model to have rooms before its doors** — and the
+  gate that used to is deliberately gone, not missing. Doors may be pushed first.
+  The question moved to `door_report`, which separates **pending** (no rooms yet
+  — expected, not a finding) from **dangling** (the named room is not among the
+  ones the model has — a finding). Re-adding an ingest-time gate would refuse
+  data that becomes resolvable the moment the rooms land, and would put the one
+  "signal, not error" exception back into the server.
 - **Doors never re-phase a lineage.** A rooms push that disagrees on phase is
   quarantined and promotable; a doors push is **refused**. Promoting it would
-  move the lineage while the rooms stayed behind.
+  move the lineage while the rooms stayed behind. An *unphased* lineage is the
+  exception and is phased by whichever push reaches it first — which, now that
+  doors may arrive before rooms, is sometimes the doors.
 - **Reference sources are entity-scoped (R4, 2026-08-05).** Each declares
   `entity`, defaulting to `rooms`. A source scoped to one entity never joins the
   other, even when the key would match. The join namespace stays **flat** —
@@ -163,29 +172,43 @@ with one, not here.
   doors is legitimate, and the server cannot tell that from a broken export. The
   extractor does refuse one; see the last bullet, and note the two are answering
   different questions rather than disagreeing.
-- **`has_room_snapshot` reads the latest snapshot, not the index.** It used to
-  ask whether a rooms snapshot *file* existed, which an empty one does — so it
-  waved through 26 doors referencing 22 room ids, none resolvable. Reading costs
-  one file per doors push and is the only honest answer while empty snapshots
-  from before the fix are still on disk.
+- **`has_room_snapshot` is gone with the gate it served.** Worth knowing why it
+  existed: it used to ask whether a rooms snapshot *file* existed, which an empty
+  one does — so it waved through 26 doors referencing 22 room ids, none
+  resolvable. That regression is now guarded from both ends instead:
+  `reject_empty_rooms` stops the empty snapshot being written, and `door_report`
+  reports every unresolvable reference on every read rather than once, at the
+  push.
 - **The extractor refuses empty pushes too, and for doors it is deliberately
   stricter than the server** (`post_rooms.empty_push_refusal`, 2026-08-06). The
   server must accept zero doors — it cannot tell a shell from a broken export.
   The producer is answering a different question ("someone asked for a doors
   push and there are none"), and it knows what the server never sees: how many
   the export held and where each one went, so its message names the phase filter
-  instead of reporting a bare zero. The accepted cost: **a model with genuinely
-  no doors can no longer record that fact through this producer.** The refusal
-  rides the normal `(ok, status, text)` tuple with `status = None`, so callers
-  need no second failure channel.
+  instead of reporting a bare zero. The refusal rides the normal
+  `(ok, status, text)` tuple with `status = None`, so callers need no second
+  failure channel.
+- **That refusal is scoped to the RUN, not to one model**, and the difference
+  mattered. Asked per model, a rooms-only document in a multiselect run made the
+  doors push fail and reddened an otherwise clean run — routine, and wrong. The
+  residual cost is unchanged: **a run whose documents genuinely hold no doors at
+  all cannot record that fact through this producer.**
 
 ## Traps
 
 - **Line endings are LF**, enforced by `.gitattributes`. Writing files through a
   Python heredoc on Windows silently converts them to CRLF — check with
   `git diff --stat` (it warns) after any scripted file write.
-- **Contract is v6 and `phase` is required.** A hand-rolled test push without it
-  gets a 422 naming a stale extractor.
+- **Contract is rooms v7 / doors v2, `phase` is required, and one push carries
+  MANY models.** The envelope has a `models` list, not a `model` block, and every
+  room or door line names the model it belongs to. A hand-rolled push in the old
+  single-model shape gets a 422 naming a stale extractor.
+- **The bucket is a transport shape, never a storage one.** Ingest decomposes a
+  push into one snapshot per model, so `RoomPayload`/`DoorPayload`, `ModelKey`,
+  milestone pins and every per-model read are untouched by it. What the run
+  gains is one shared `taken_at` across its models — which is what makes "these
+  documents were read together" expressible at all. Storing the bucket whole
+  would flatten exactly the identity the rest of the codebase is built on.
 
 ## Open, as of 2026-08-05
 
@@ -194,17 +217,23 @@ verified against Revit, and R4 landed.
 
 ## The extractor has three entry points, and one of them is a trap
 
-`rooms_export_entry` still pushes **rooms and then doors**, despite the name.
-Its pyRevit button lives outside this repo, so narrowing it to rooms would not
-fail — it would keep succeeding while quietly no longer pushing doors. The split
-is in the two siblings instead: `rooms_only_export_entry` and
-`doors_export_entry`. All three are one line over `export_entry(..., entities)`;
-document selection, the one project and the one phase never differ.
+`rooms_export_entry` still pushes **rooms and doors**, despite the name. Its
+pyRevit button lives outside this repo, so narrowing it to rooms would not fail —
+it would keep succeeding while quietly no longer pushing doors. The split is in
+the two siblings instead: `rooms_only_export_entry` and `doors_export_entry`.
+All three are one line over `export_entry(..., entities)`; document selection,
+the one project and the one phase never differ.
 
-A doors-only push does **not** check that rooms are on the server first. That is
-the server's question and it already answers it; a client-side re-check would
-mean this script deciding what counts as "has rooms", which is what
-`has_room_snapshot` got wrong.
+**A run exports every selected model first, then pushes one bucket per entity.**
+So `entities` no longer carries a push *order* — the buckets are independent, and
+`ENTITY_EXPORTERS` lost its `blocking` flag with the server gate that justified
+it. A cancelled run pushes nothing at all rather than sending the models read so
+far: a partial run stored under one snapshot id would read downstream as "these
+are the documents that were exported together", which would be a lie.
+
+A doors-only push does **not** check that rooms are on the server first, and now
+neither does the server. Doors may be pushed before their rooms; an unresolvable
+reference is reported by `door_report` as *pending* rather than refused.
 
 ## Phase filtering: rooms and doors are not alike
 

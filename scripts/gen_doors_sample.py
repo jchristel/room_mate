@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Translate the raw duHast door export (`scripts/fixtures/doors-raw.json`) into the server's
-v1 doors contract, for pushing at House A.
+v2 doors contract, for pushing at House A.
 
 This is the *server-side* twin of `extractor/pyRevit/post_doors.py`: same
 translation, run over a captured export instead of a live Revit document. It
@@ -27,7 +27,7 @@ ROOT = os.path.dirname(HERE)
 RAW = os.path.join(ROOT, "scripts", "fixtures", "doors-raw.json")
 OUT = os.path.join(ROOT, "data", "house-a-doors.json")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROJECT = {"id": "House A", "name": "House A"}
 MODEL = {"id": "Building_BF_Framing_jan.r.christel", "name": "Building_BF_Framing_jan.r.christel", "source": "revit"}
 # The export's own header timestamp ("2026_07_29_20_03_41"), as the RFC3339 UTC
@@ -135,13 +135,18 @@ def translate(raw):
             "type_properties": properties_to_map(type_props),
         })
 
+    # v2 carries a `models` list rather than one `model` block: a push is a run,
+    # and a run may hold several documents. This fixture is one document, so the
+    # list has one entry -- the shape is the same either way, which is the point
+    # of not special-casing the single-model case on the wire.
+    model = dict(MODEL)
+    model["doors"] = doors
     payload = {
         "schema_version": SCHEMA_VERSION,
         "project": PROJECT,
-        "model": MODEL,
         "snapshot": {"taken_at": TAKEN_AT},
         "phase": PHASE,
-        "doors": doors,
+        "models": [model],
     }
     return payload, no_footprint
 
@@ -159,14 +164,15 @@ def main():
         json.dump(payload, f, indent=2)
         f.write("\n")
 
-    print("wrote {} ({} doors)".format(OUT, len(payload["doors"])))
+    doors = payload["models"][0]["doors"]
+    print("wrote {} ({} doors)".format(OUT, len(doors)))
     if no_footprint:
         print(
             "  {} door(s) have no usable footprint and were sent with empty loops: {}".format(
                 len(no_footprint), ", ".join(no_footprint)
             )
         )
-    external = [d["id"] for d in payload["doors"] if not (d["from_room"] and d["to_room"])]
+    external = [d["id"] for d in doors if not (d["from_room"] and d["to_room"])]
     print("  {} door(s) reference a room on one side only (external -- normal)".format(len(external)))
 
 

@@ -318,6 +318,27 @@ pub struct DoorDiscrepancyCounts {
     pub room_reference_mismatches: usize,
 }
 
+/// A door whose model has no rooms snapshot yet, so its references cannot be
+/// resolved either way.
+///
+/// **Not a finding, and the distinction is the whole point of this type.** A
+/// doors push no longer requires its model's rooms to be on the server -- ingest
+/// used to refuse one, and that gate is gone because the question it asked
+/// ("can these references resolve *now*?") has a legitimate answer of "not
+/// yet": rooms may arrive in a later push. Counting these as dangling would
+/// report an entire doors-first push as broken, which is the loudest possible
+/// way to be wrong about a normal state.
+///
+/// What separates this from a dangling reference is *which* thing is missing.
+/// Here the model has no rooms at all, so nothing was checked. A dangling
+/// reference names a room that its model demonstrably does not have, which
+/// stays a finding.
+#[derive(Debug, Serialize)]
+pub struct PendingRoomReference {
+    pub model_id: String,
+    pub door_id: String,
+}
+
 /// Whether this project's doors link to rooms that actually exist.
 ///
 /// **Two findings, and one deliberate non-finding.**
@@ -330,6 +351,15 @@ pub struct DoorDiscrepancyCounts {
 /// produces when rooms and doors drift apart — doors pushed against one rooms
 /// snapshot, rooms then re-pushed without them — and nothing else would notice,
 /// because the door itself is perfectly well-formed.
+///
+/// A door in a model with **no rooms snapshot at all** is the deliberate
+/// non-finding that used to be impossible: ingest refused such a push, so this
+/// report could treat "no rooms for this model" as "every reference dangles".
+/// That gate is gone (see `handlers::check_doors_ingest`), so the state is now
+/// ordinary — doors may simply have arrived first — and it is reported as
+/// **pending** instead. This report is where the gate's question moved, and the
+/// gain is that it is re-answered every time the data changes rather than once,
+/// at the push, on the least information anyone will ever have.
 ///
 /// A door with exactly **one** side set is **not** a finding. That is an
 /// external door, and it is a normal state the contract carries deliberately
@@ -357,7 +387,15 @@ pub struct DoorReport {
     /// Room references naming a room the door's own model does not have. One
     /// entry per dangling *side*, so a door dangling on both appears twice —
     /// they are two broken references, and a reader fixing them fixes two.
+    ///
+    /// Only ever populated for a model that **has** a rooms snapshot; a model
+    /// still waiting for one contributes to `doors_pending_rooms` instead.
     pub doors_unresolved_room: Vec<UnresolvedRoomReference>,
+    /// Doors whose model has no rooms snapshot yet — see `PendingRoomReference`.
+    /// **Informational, not a discrepancy**, and one entry per door rather than
+    /// per side: nothing about this door was checked, so there is no per-side
+    /// answer to give.
+    pub doors_pending_rooms: Vec<PendingRoomReference>,
     /// Doors with a room on exactly one side — external doors. **Informational,
     /// not a discrepancy**; see the type doc for why.
     pub doors_external: usize,
@@ -440,6 +478,14 @@ fn phase_report(project_id: &str, stored: &[(ModelKey, RoomPayload)]) -> PhaseRe
 /// actually being served: doors pushed against an older rooms snapshot that has
 /// since been replaced show up here, which is the drift case nothing else
 /// notices.
+///
+/// Over the 100-line discovery threshold since the pending/dangling split, and
+/// kept whole deliberately. The body is one pass over one door deciding between
+/// five mutually-exclusive outcomes, and the *order* of those decisions is
+/// load-bearing — external before pending, attribution before the room-dependent
+/// checks. Splitting it into per-outcome helpers would hide that ordering behind
+/// call sites, which is exactly the thing a reader has to see.
+#[allow(clippy::too_many_lines)]
 fn door_report(
     project_id: &str,
     stored_rooms: &[(ModelKey, RoomPayload)],
@@ -477,10 +523,12 @@ fn door_report(
     report.room_reference_property = policy.room_reference_property.clone();
 
     for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
-        // A model with doors but no rooms snapshot cannot resolve anything.
-        // Ingest refuses to create that state, so reaching it means the rooms
-        // were removed from the store by hand — every reference then dangles,
-        // which is the honest answer rather than a special case.
+        // A model with doors but no rooms snapshot has nothing to resolve
+        // against. That used to be unreachable — ingest refused the push — so
+        // this treated it as "every reference dangles". It is now an ordinary
+        // state (doors may arrive before rooms), and calling it dangling would
+        // report a whole correct push as broken. See the `rooms` binding below
+        // for what it skips and, more importantly, what it does not.
         let rooms = rooms_by_model.get(key.model_id.as_str());
         for door in &payload.doors {
             report.total_doors += 1;
@@ -503,18 +551,6 @@ fn door_report(
                 (Some(_), Some(_)) => {}
             }
 
-            for (side, room_id) in sides {
-                let Some(room_id) = room_id else { continue };
-                if !rooms.is_some_and(|ids| ids.contains(room_id)) {
-                    report.doors_unresolved_room.push(UnresolvedRoomReference {
-                        model_id: key.model_id.clone(),
-                        door_id: door.id.clone(),
-                        side,
-                        room_id: room_id.to_string(),
-                    });
-                }
-            }
-
             // Attribution. This door HAS a reference (the no-reference case
             // `continue`d above), so an empty result means the configured policy
             // declined to use it — a policy consequence, reported separately
@@ -525,6 +561,34 @@ fn door_report(
                     .doors_unattributed
                     .push(DoorWithoutRoom { model_id: key.model_id.clone(), door_id: door.id.clone() });
                 continue;
+            }
+
+            // Pending — this model's rooms have not arrived, so the two checks
+            // below (does the named room exist, does its Number match the
+            // authored one) have nothing to run against.
+            //
+            // **Only those two are skipped, and the ordering above is what makes
+            // that true.** Whether a door is external, and whether the
+            // attribution policy declines to use its reference, are facts about
+            // the door alone — checked before this gate precisely so a
+            // doors-first push does not quietly stop reporting them.
+            let Some(rooms) = rooms else {
+                report
+                    .doors_pending_rooms
+                    .push(PendingRoomReference { model_id: key.model_id.clone(), door_id: door.id.clone() });
+                continue;
+            };
+
+            for (side, room_id) in sides {
+                let Some(room_id) = room_id else { continue };
+                if !rooms.contains(room_id) {
+                    report.doors_unresolved_room.push(UnresolvedRoomReference {
+                        model_id: key.model_id.clone(),
+                        door_id: door.id.clone(),
+                        side,
+                        room_id: room_id.to_string(),
+                    });
+                }
             }
 
             // Reconcile the authored reference against the attributed room's
@@ -1927,14 +1991,49 @@ mod tests {
         assert_eq!(report.discrepancies.total, 0);
     }
 
-    /// Doors whose model has lost its rooms entirely: ingest refuses to create
-    /// that state, so reaching it means the rooms were removed from the store by
-    /// hand. Every reference then dangles, which is the honest answer.
+    /// **Doors whose model has no rooms are PENDING, not dangling** — the
+    /// distinction that replaced the ingest gate.
+    ///
+    /// This state used to be unreachable (ingest refused a doors push to a model
+    /// without rooms) and so was read as "every reference dangles". Doors may now
+    /// arrive first, which makes it ordinary, and reporting a whole correct push
+    /// as broken would be the loudest possible way to be wrong about it. So it
+    /// costs no discrepancies at all, and is reported once per door rather than
+    /// once per side: nothing was checked, so there is no side to blame.
     #[test]
-    fn test_doors_whose_model_has_no_rooms_all_dangle() {
+    fn test_doors_whose_model_has_no_rooms_are_pending_not_dangling() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
         let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[]);
-        assert_eq!(report.discrepancies.doors_unresolved_room, 2);
+        assert_eq!(report.discrepancies.doors_unresolved_room, 0, "nothing dangles — nothing was checked");
+        assert_eq!(report.discrepancies.total, 0, "a pending model is not a finding");
+        assert_eq!(report.doors_pending_rooms.len(), 1, "one entry per door, not per side");
+        assert_eq!(report.doors_pending_rooms[0].model_id, "m1");
+        assert_eq!(report.doors_pending_rooms[0].door_id, "d1");
+    }
+
+    /// The same door, once its model's rooms arrive and do not contain the ids
+    /// it names, IS a finding. Pending and dangling are the two answers to
+    /// "unresolvable", and only the second is a fault — which is exactly what
+    /// the ingest gate could not distinguish.
+    #[test]
+    fn test_a_pending_reference_becomes_dangling_once_rooms_arrive() {
+        let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
+        let rooms = vec![rooms_for("p1", "m1", &["something-else"])];
+        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[]);
+        assert!(report.doors_pending_rooms.is_empty(), "the model has rooms now");
+        assert_eq!(report.discrepancies.doors_unresolved_room, 2, "both sides name rooms it does not have");
+    }
+
+    /// A pending model still reports the facts that are about the door alone.
+    /// A door with **no** reference on either side is a finding whether or not
+    /// its rooms have arrived — nothing about the rooms would change that
+    /// answer, and the ordering in `door_report` is what keeps it reported.
+    #[test]
+    fn test_a_pending_model_still_reports_doors_with_no_reference() {
+        let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
+        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[]);
+        assert_eq!(report.doors_without_room_reference.len(), 1);
+        assert!(report.doors_pending_rooms.is_empty(), "it has no reference to be pending about");
     }
 
     /// The door report reaches the response even when the project configures no
