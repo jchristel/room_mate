@@ -108,10 +108,15 @@ projects is meaningless until the two share a datum — a shared survey point, o
 an explicit alignment transform between them.
 
 **The first half exists.** A model may carry a `model_to_shared` transform on
-its upload envelope (see [Index](STRATEGY.md), "The upload envelope") that maps
-its room points into the project's *shared* coordinate system, so the rooms of
-one project's linked models land in one frame. It was shipped deliberately ahead
-of any consumer, and nothing numeric depends on it being present or correct.
+its upload envelope (see [Coding Conventions](CODING-CONVENTIONS.md), "Identity
+& the upload envelope") that maps its room points into the project's *shared*
+coordinate system, so the rooms of one project's linked models land in one
+frame. It shipped ahead of any consumer, and **it now has one**: `[doors]
+room_resolution = "project"` lifts every model's rooms into the shared frame
+before probing, so a wrong transform there is a wrong `owner_rooms`, not a
+harmless unused field. The transform has still never been checked against a real
+survey — which is why `same_model` is the mode to prefer, and why the *rest* of
+the server still depends on nothing numeric here.
 
 What is **still missing** is a frame shared *across* projects. Two
 survey-registered projects in the same CRS become directly comparable; the

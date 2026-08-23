@@ -7,10 +7,10 @@ them to the room hierarchy — so the first implementation doesn't re-derive it.
 
 Everything here is an application of rules the pipeline already follows
 elsewhere; where a decision is genuinely new it is called out as such. The
-existing docs it leans on: [Index](STRATEGY.md) (the upload envelope),
-[Server](STRATEGY-SERVER.md) (`SnapshotStore`, manifest, milestones),
-[Sources](STRATEGY-SOURCES.md) (the reference-source upload precedent),
-[Browser](STRATEGY-BROWSER.md), [MCP](STRATEGY-MCP.md),
+existing docs it leans on: [Coding Conventions](CODING-CONVENTIONS.md) (the
+upload envelope), [Server](STRATEGY-SERVER.md) (`SnapshotStore`, manifest,
+milestones), [Sources](STRATEGY-SOURCES.md) (the reference-source upload
+precedent), [Browser](STRATEGY-BROWSER.md), [MCP](STRATEGY-MCP.md),
 [Security](STRATEGY-SECURITY.md) (the trust boundary this data crosses once
 authored content is user-submitted, not just machine-pushed).
 
@@ -78,9 +78,10 @@ Each new kind directory is a **reserved name `list_models` skips**, exactly as
 `reference/` already is — otherwise it surfaces as a phantom model. Each is
 indexed on the project manifest with the same filesystem-wins reconciliation
 model snapshots use, and each rides `?taken_at=` through the same
-`ensure_taken_at` / `validate_snapshot_id` pair (see [Index](STRATEGY.md), "The
-upload envelope"). Adding a kind should be a manifest field and a reserved
-name, not an architecture.
+`ensure_taken_at` / `validate_snapshot_id` pair (see
+[Coding Conventions](CODING-CONVENTIONS.md), "Identity & the upload envelope").
+Adding a kind should be a manifest field and a reserved name, not an
+architecture.
 
 **Why one store rather than a database per kind:** a single manifest means one
 reconciliation rule, one atomic-install path, one hot-reload, one `SAVE_LOCK`.

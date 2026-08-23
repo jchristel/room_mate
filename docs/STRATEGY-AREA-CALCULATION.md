@@ -122,8 +122,9 @@ Two places the literature has a better answer that was not taken:
 
 - **No project has chosen a `max_wall_thickness` against a real model.** Every
   one runs on the 1.5 ft default, inherited from the constant it replaced rather
-  than measured. This is **one value driving two services** — `areas` sizes its
-  wall zone by it, `adjacency` defaults its gap tolerance from it — so it is
+  than measured. This is **one value driving three services** — `areas` sizes
+  its wall zone by it, `adjacency` defaults its gap tolerance from it, and
+  `room_locator` sizes the step it probes across a wall by it — so it is
   probably the highest-leverage open item here. House A measures 0.317 ft wall
   gaps, making 0.5 ft the obvious candidate, but see the next item: raising the
   value is what risks adjacency false positives, and that is where the
