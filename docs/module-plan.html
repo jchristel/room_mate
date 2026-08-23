@@ -1,0 +1,1287 @@
+<!doctype html>
+<title>RoomMate Module Plan</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+  :root {
+    --ground: #E2E3DC;
+    --paper: #EDEEE8;
+    --panel: #F5F6F1;
+    --ink: #15191A;
+    --ink-2: #4C5354;
+    --ink-3: #7A807E;
+    --rule: #C5C8BF;
+    --rule-strong: #A5A99E;
+    --hue-extractor: #8E5F16;
+    --hue-server: #0F6076;
+    --hue-browser: #71375F;
+    --hue-tooling: #47514E;
+    --tint-sel: 14%;
+    --tint-link: 6%;
+    --shadow: 0 1px 0 rgba(21, 25, 26, .04);
+
+    --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --f-prose: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --f-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+
+    --step--1: .735rem;
+    --step-0: .875rem;
+    --step-1: 1.0625rem;
+    --step-2: 1.375rem;
+    --step-3: 2rem;
+    --step-4: clamp(2.4rem, 5.5vw, 3.6rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #101314;
+      --paper: #171A1B;
+      --panel: #1E2223;
+      --ink: #E8EAE4;
+      --ink-2: #A8AEAC;
+      --ink-3: #79807E;
+      --rule: #2E3335;
+      --rule-strong: #464C4D;
+      --hue-extractor: #DCA755;
+      --hue-server: #56BBD2;
+      --hue-browser: #C98DBA;
+      --hue-tooling: #9DA8A4;
+      --tint-sel: 20%;
+      --tint-link: 9%;
+      --shadow: 0 1px 0 rgba(0, 0, 0, .3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #101314;
+    --paper: #171A1B;
+    --panel: #1E2223;
+    --ink: #E8EAE4;
+    --ink-2: #A8AEAC;
+    --ink-3: #79807E;
+    --rule: #2E3335;
+    --rule-strong: #464C4D;
+    --hue-extractor: #DCA755;
+    --hue-server: #56BBD2;
+    --hue-browser: #C98DBA;
+    --hue-tooling: #9DA8A4;
+    --tint-sel: 20%;
+    --tint-link: 9%;
+    --shadow: 0 1px 0 rgba(0, 0, 0, .3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-display);
+    font-size: var(--step-0);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 0 clamp(12px, 3vw, 32px) 64px;
+  }
+
+  /* ---------- title block ---------- */
+
+  .titleblock {
+    border-bottom: 1px solid var(--rule-strong);
+    padding: clamp(24px, 5vw, 44px) 0 18px;
+    display: grid;
+    gap: 22px;
+  }
+
+  .tb-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+  }
+
+  .eyebrow {
+    font-size: var(--step--1);
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+
+  h1 {
+    font-family: var(--f-display);
+    font-size: var(--step-4);
+    font-weight: 700;
+    letter-spacing: -.025em;
+    line-height: .96;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .lede {
+    font-family: var(--f-prose);
+    font-size: var(--step-1);
+    color: var(--ink-2);
+    max-width: 56ch;
+    margin: 12px 0 0;
+  }
+
+  .tallies {
+    display: flex;
+    gap: clamp(16px, 3vw, 34px);
+    flex-wrap: wrap;
+  }
+
+  .tally-n {
+    font-family: var(--f-mono);
+    font-size: var(--step-2);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    display: block;
+    line-height: 1.1;
+  }
+
+  .tally-l {
+    font-size: var(--step--1);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ---------- pipeline strip ---------- */
+
+  .flow {
+    display: flex;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 0;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    overflow-x: auto;
+  }
+
+  .flow-step {
+    flex: 1 1 130px;
+    min-width: 130px;
+    padding: 11px 14px;
+    border-right: 1px solid var(--rule);
+    display: grid;
+    gap: 2px;
+    align-content: start;
+  }
+
+  .flow-step:last-child { border-right: 0; }
+
+  .flow-k {
+    font-family: var(--f-mono);
+    font-size: .66rem;
+    letter-spacing: .08em;
+    color: var(--hue, var(--ink-3));
+    text-transform: uppercase;
+  }
+
+  .flow-t { font-weight: 600; font-size: var(--step-0); letter-spacing: -.01em; }
+  .flow-d { font-size: var(--step--1); color: var(--ink-3); line-height: 1.35; }
+
+  /* ---------- controls ---------- */
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    padding: 14px 0 0;
+  }
+
+  .search {
+    flex: 0 1 280px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--rule-strong);
+    background: var(--panel);
+    padding: 7px 11px;
+  }
+
+  .search input {
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--f-mono);
+    font-size: var(--step--1);
+    width: 100%;
+    outline: none;
+  }
+
+  .search input::placeholder { color: var(--ink-3); }
+  .search svg { flex: none; color: var(--ink-3); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .chip {
+    font: 600 var(--step--1)/1 var(--f-display);
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    padding: 8px 11px;
+    border: 1px solid var(--rule-strong);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: background .12s ease, color .12s ease;
+  }
+
+  .chip .swatch {
+    width: 9px;
+    height: 9px;
+    background: var(--hue);
+    display: block;
+  }
+
+  .chip[aria-pressed="true"] {
+    background: color-mix(in oklab, var(--hue) 12%, var(--panel));
+    border-color: var(--hue);
+    color: var(--ink);
+  }
+
+  .chip[aria-pressed="false"] { opacity: .45; }
+  .chip[aria-pressed="false"] .swatch { background: var(--ink-3); }
+
+  .chip.plain { border-style: dashed; }
+
+  .hint {
+    font-size: var(--step--1);
+    color: var(--ink-3);
+    margin-left: auto;
+    font-family: var(--f-mono);
+  }
+
+  /* ---------- sheet + inspector ---------- */
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 348px;
+    gap: 26px;
+    align-items: start;
+    padding-top: 26px;
+  }
+
+  .sheet { display: grid; gap: 22px; min-width: 0; }
+
+  .band {
+    display: grid;
+    grid-template-columns: 148px minmax(0, 1fr);
+    border-top: 1px solid var(--rule-strong);
+  }
+
+  .rail { padding: 12px 14px 12px 0; display: grid; gap: 4px; align-content: start; }
+
+  .rail-n {
+    font-family: var(--f-mono);
+    font-size: .66rem;
+    color: var(--hue);
+    letter-spacing: .1em;
+  }
+
+  .rail-t { font-weight: 600; font-size: var(--step-0); letter-spacing: -.01em; line-height: 1.2; }
+  .rail-d { font-size: var(--step--1); color: var(--ink-3); line-height: 1.35; }
+
+  .rooms {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    align-content: start;
+  }
+
+  .cell {
+    grid-column: span var(--span, 1);
+    position: relative;
+    appearance: none;
+    border: 0;
+    margin: 0;
+    padding: 10px 11px 26px;
+    min-height: 84px;
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--rule);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    display: block;
+    transition: background .12s ease;
+  }
+
+  .cell:focus-visible { outline: 2px solid var(--hue); outline-offset: -2px; z-index: 3; }
+
+  .cell .inner { display: grid; gap: 3px; transition: opacity .14s ease; }
+
+  .cell-name {
+    overflow-wrap: anywhere;
+    font-weight: 600;
+    font-size: var(--step-0);
+    letter-spacing: -.012em;
+    line-height: 1.2;
+  }
+
+  .cell-path {
+    font-family: var(--f-mono);
+    font-size: .66rem;
+    color: var(--ink-3);
+    word-break: break-all;
+    line-height: 1.35;
+  }
+
+  .cell-loc {
+    position: absolute;
+    right: 10px;
+    bottom: 8px;
+    font-family: var(--f-mono);
+    font-size: .66rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-3);
+    transition: opacity .14s ease;
+  }
+
+  .cell::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 3px;
+    height: 100%;
+    background: var(--hue);
+    opacity: 0;
+    transition: opacity .12s ease;
+  }
+
+  .cell:hover { background: color-mix(in oklab, var(--hue) var(--tint-link), var(--paper)); }
+  .cell:hover::after { opacity: .55; }
+
+  .cell.is-linked { background: color-mix(in oklab, var(--hue) var(--tint-link), var(--paper)); }
+  .cell.is-linked::after { opacity: .55; }
+
+  .cell.is-selected { background: color-mix(in oklab, var(--hue) var(--tint-sel), var(--paper)); }
+  .cell.is-selected::after { opacity: 1; }
+  .cell.is-selected .cell-name { color: var(--hue); }
+
+  .cell.is-match { box-shadow: 0 0 0 1px var(--rule), inset 0 0 0 2px var(--hue); }
+
+  .cell.is-dim .inner,
+  .cell.is-dim .cell-loc { opacity: .17; }
+
+  .cell.is-dim { background: var(--paper); }
+  .cell.is-dim:hover { background: color-mix(in oklab, var(--hue) var(--tint-link), var(--paper)); }
+  .cell.is-dim:hover .inner,
+  .cell.is-dim:hover .cell-loc { opacity: 1; }
+
+  .band.is-off { opacity: .3; }
+
+  /* ---------- inspector ---------- */
+
+  .inspector {
+    position: sticky;
+    top: 18px;
+    border: 1px solid var(--rule-strong);
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    padding: 18px;
+    display: grid;
+    gap: 16px;
+    align-content: start;
+    max-height: calc(100vh - 36px);
+    overflow-y: auto;
+  }
+
+  .ins-kicker {
+    font-family: var(--f-mono);
+    font-size: .66rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--hue, var(--ink-3));
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 8px;
+  }
+
+  .ins-title { font-size: var(--step-2); font-weight: 700; letter-spacing: -.025em; line-height: 1.1; margin: 0; }
+  .ins-path { font-family: var(--f-mono); font-size: var(--step--1); color: var(--ink-3); word-break: break-all; margin: 4px 0 0; }
+
+  .ins-blurb {
+    font-family: var(--f-prose);
+    font-size: var(--step-0);
+    line-height: 1.55;
+    color: var(--ink-2);
+    margin: 0;
+  }
+
+  .ins-blurb strong { color: var(--ink); font-weight: 600; }
+
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
+  .fact { background: var(--panel); padding: 8px 10px; }
+  .fact dt { font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 2px; }
+  .fact dd { margin: 0; font-family: var(--f-mono); font-size: var(--step--1); font-variant-numeric: tabular-nums; }
+
+  .sect-h {
+    font-size: .66rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 600;
+    margin: 0 0 7px;
+  }
+
+  .links { display: flex; flex-wrap: wrap; gap: 5px; }
+
+  .link {
+    appearance: none;
+    border: 1px solid var(--rule-strong);
+    background: transparent;
+    color: var(--ink-2);
+    font-family: var(--f-mono);
+    font-size: .68rem;
+    padding: 4px 7px;
+    cursor: pointer;
+    transition: border-color .12s ease, color .12s ease;
+  }
+
+  .link:hover { border-color: var(--lhue); color: var(--ink); }
+  .link:focus-visible { outline: 2px solid var(--lhue); outline-offset: 1px; }
+
+  .empty-note { font-size: var(--step--1); color: var(--ink-3); font-style: italic; margin: 0; }
+
+  .legend { display: grid; gap: 9px; }
+
+  .legend-row { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 9px; align-items: start; font-size: var(--step--1); color: var(--ink-2); }
+  .legend-key { height: 14px; border: 1px solid var(--rule-strong); background: var(--paper); position: relative; }
+  .legend-key.sel { background: color-mix(in oklab, var(--hue-server) var(--tint-sel), var(--paper)); border-color: var(--hue-server); }
+  .legend-key.lnk { background: color-mix(in oklab, var(--hue-server) var(--tint-link), var(--paper)); }
+  .legend-key.dim { opacity: .17; }
+  .legend-key.size { width: 14px; border-color: var(--ink-3); }
+
+  .clear {
+    appearance: none;
+    border: 1px solid var(--rule-strong);
+    background: transparent;
+    color: var(--ink-2);
+    font: 600 var(--step--1)/1 var(--f-display);
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    padding: 8px 11px;
+    cursor: pointer;
+  }
+
+  .clear:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  footer {
+    margin-top: 42px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+    font-size: var(--step--1);
+    color: var(--ink-3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+    justify-content: space-between;
+  }
+
+  footer code { font-family: var(--f-mono); }
+
+  @media (max-width: 1080px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .inspector { position: static; max-height: none; order: -1; }
+  }
+
+  @media (max-width: 720px) {
+    .band { grid-template-columns: minmax(0, 1fr); }
+    .rail { padding: 10px 0; }
+    .rooms { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cell { grid-column: auto; }
+    .hint { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="titleblock">
+    <div class="tb-head">
+      <div>
+        <p class="eyebrow">roommate · repository plan</p>
+        <h1>Module Plan</h1>
+        <p class="lede">Every module in the Revit&nbsp;→&nbsp;Rust&nbsp;→&nbsp;browser pipeline, drawn as a plan: each
+          module is a room, sized by its lines of <em>code</em>; each band is a level. Select one to see what it does
+          and what it shares a wall with.</p>
+      </div>
+      <div class="tallies" id="tallies"></div>
+    </div>
+
+    <div class="flow" id="flow"></div>
+
+    <div class="controls">
+      <label class="search">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4" />
+          <path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+        </svg>
+        <input id="q" type="search" placeholder="filter modules…" aria-label="Filter modules by name, path or text">
+      </label>
+      <div class="chips" id="chips"></div>
+      <button class="clear" id="clear" type="button">Reset</button>
+      <span class="hint">click a module · esc clears</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <main class="sheet" id="sheet"></main>
+    <aside class="inspector" id="inspector" aria-live="polite"></aside>
+  </div>
+
+  <footer>
+    <span>Drawn from module headers in <code>src/</code>, <code>src-js/</code>, <code>extractor/</code> and
+      <code>scripts/</code>. A code line is non-blank and does not begin a comment, doc comment or docstring; Rust’s
+      inline <code>#[cfg(test)]</code> modules and the renderer’s sibling <code>.test.ts</code> files are counted as
+      tests, not code. Trailing comments count as code.</span>
+    <span>roommate · edition 2024 · axum + pixi.js + IronPython</span>
+  </footer>
+</div>
+
+<script>
+  // Measured, not estimated: [code, whole file, comments, tests].
+  // "code" is non-blank lines that are not comments, doc comments or docstrings,
+  // with Rust's inline #[cfg(test)] modules taken out. Widths follow this number
+  // and nothing else, so a cell means the same thing in every language.
+  const STATS = {
+    bootstrap: [161, 522, 80, 258],
+    check_areas: [311, 496, 99, 0],
+    classify: [33, 172, 39, 92],
+    contract: [285, 1443, 479, 629],
+    contract_doors: [102, 672, 275, 267],
+    docsdir: [1787, 1787, 0, 0],
+    ex_doors: [41, 121, 58, 0],
+    ex_rooms: [54, 159, 79, 0],
+    gen: [434, 712, 158, 0],
+    handlers: [843, 2710, 509, 1268],
+    js_app: [20, 182, 38, 119],
+    js_colour: [53, 120, 20, 39],
+    js_door: [176, 747, 189, 349],
+    js_fills: [144, 220, 45, 0],
+    js_geom: [90, 275, 30, 146],
+    js_gl: [478, 857, 316, 0],
+    js_index: [34, 53, 15, 0],
+    js_labels: [66, 123, 42, 0],
+    js_lines: [190, 319, 96, 0],
+    js_paint: [99, 316, 41, 156],
+    js_proj: [11, 40, 25, 0],
+    js_seam: [28, 125, 82, 0],
+    js_spatial: [92, 326, 73, 148],
+    js_types: [67, 148, 69, 0],
+    js_viewport: [17, 205, 49, 134],
+    lib: [15, 67, 47, 0],
+    main: [141, 545, 160, 225],
+    mcp: [507, 882, 234, 89],
+    p_bundle: [918, 1122, 45, 0],
+    p_common: [67, 174, 88, 0],
+    p_comparison: [400, 493, 48, 0],
+    p_graph: [411, 721, 255, 0],
+    p_index: [2974, 4549, 1231, 0],
+    p_settings: [1030, 1254, 136, 0],
+    p_tokens: [19, 22, 1, 0],
+    post_common: [143, 379, 177, 0],
+    post_doors: [121, 308, 135, 0],
+    post_rooms: [138, 284, 102, 0],
+    reference: [85, 310, 93, 113],
+    room_mate: [104, 303, 138, 0],
+    settings: [362, 1289, 657, 196],
+    settings_api: [321, 1145, 148, 634],
+    settings_load: [66, 287, 38, 171],
+    settings_validate: [80, 338, 55, 196],
+    state: [277, 697, 287, 70],
+    storage: [91, 443, 315, 0],
+    storage_fs: [497, 1606, 212, 826],
+    storage_mem: [164, 462, 66, 206],
+    svc_adj: [402, 1265, 313, 493],
+    svc_areas: [531, 2054, 485, 967],
+    svc_cmp: [379, 1535, 261, 845],
+    svc_doors: [409, 1412, 268, 682],
+    svc_locator: [98, 372, 106, 153],
+    svc_mile: [34, 139, 21, 76],
+    svc_mod: [25, 54, 23, 0],
+    svc_proj: [97, 322, 47, 161],
+    svc_ref: [57, 159, 26, 69],
+    svc_rooms: [561, 2513, 531, 1342],
+    svc_snap: [107, 382, 67, 195],
+    svc_val: [661, 2642, 540, 1371],
+    u_doors: [60, 159, 74, 0],
+    u_envelope: [62, 227, 133, 0],
+    u_generic: [46, 138, 65, 0],
+    u_phase: [4, 57, 43, 0],
+    u_refs: [5, 64, 47, 0],
+    u_rooms: [31, 84, 42, 0],
+    u_ui: [65, 136, 51, 0],
+    weekly: [247, 473, 140, 0]
+  };
+
+  const LAYERS = [
+    { id: "extractor", name: "Extractor", hue: "var(--hue-extractor)", note: "IronPython inside Revit" },
+    { id: "server", name: "Server", hue: "var(--hue-server)", note: "Rust library + two binaries" },
+    { id: "browser", name: "Browser", hue: "var(--hue-browser)", note: "TypeScript renderer + pages" },
+    { id: "tooling", name: "Workbench", hue: "var(--hue-tooling)", note: "Fixtures and drift checks" }
+  ];
+
+  const FLOW = [
+    { k: "01", t: "Revit document", d: "One phase, N selected models, read through duHast.", layer: "extractor" },
+    { k: "02", t: "Export per model", d: "Rooms, levels and doors translated to the wire contract.", layer: "extractor" },
+    { k: "03", t: "One bucket push", d: "Gzipped NDJSON, one snapshot id timing the whole run.", layer: "extractor" },
+    { k: "04", t: "Ingest", d: "Streamed to disk, decomposed into one snapshot per model.", layer: "server" },
+    { k: "05", t: "Store", d: "Manifest is the index; snapshots are the record.", layer: "server" },
+    { k: "06", t: "Assemble", d: "Join reference data, classify, derive geometry — at read time.", layer: "server" },
+    { k: "07", t: "Serve", d: "HTTP for the viewer, MCP over stdio for agents.", layer: "server" },
+    { k: "08", t: "Draw", d: "WebGL plan: five draw calls, whatever the room count.", layer: "browser" }
+  ];
+
+  const ZONES = [
+    { id: "run", n: "A", t: "Run & exporters", d: "What a button press does", layer: "extractor" },
+    { id: "push", n: "B", t: "Push & wire contract", d: "What goes on the wire", layer: "extractor" },
+    { id: "readers", n: "C", t: "Revit readers", d: "What the API is asked", layer: "extractor" },
+    { id: "entry", n: "D", t: "Entry points", d: "Two binaries, one wiring", layer: "server" },
+    { id: "transport", n: "E", t: "Transport adapters", d: "HTTP in, HTTP out", layer: "server" },
+    { id: "service", n: "F", t: "Domain services", d: "Transport-agnostic derive logic", layer: "server" },
+    { id: "core", n: "G", t: "Shape, state & joins", d: "The load-bearing type layer", layer: "server" },
+    { id: "store", n: "H", t: "Persistence", d: "Swappable behind one trait", layer: "server" },
+    { id: "config", n: "J", t: "Configuration", d: "TOML a human hand-edits", layer: "server" },
+    { id: "renderer", n: "K", t: "Plan renderer", d: "The committed bundle's sources", layer: "browser" },
+    { id: "pages", n: "L", t: "Viewer pages", d: "Served from ./static", layer: "browser" },
+    { id: "bench", n: "M", t: "Workbench", d: "Fixtures, generators, drift checks", layer: "tooling" }
+  ];
+
+  const M = [
+    // ---- extractor: run & exporters
+    {
+      id: "room_mate", name: "room_mate.py", path: "extractor/pyRevit/room_m/room_mate.py", zone: "run",
+      lang: "IronPython",
+      blurb: "The three entry points. <strong>rooms_export_entry still pushes rooms and doors</strong>, despite the name — its pyRevit button lives outside this repo, so narrowing it would keep succeeding while quietly pushing nothing. The split lives in the two siblings instead. A run exports every selected model first, then pushes one bucket per entity; a cancelled run pushes nothing at all.",
+      deps: ["ex_rooms", "ex_doors", "u_generic", "u_envelope", "u_ui"]
+    },
+    {
+      id: "ex_rooms", name: "exporters/rooms.py", path: "extractor/pyRevit/room_m/exporters/rooms.py", zone: "run",
+      lang: "IronPython",
+      blurb: "The rooms half of a push. Every exporter offers the same three names — <strong>export_model</strong>, <strong>post_bucket</strong>, <strong>stamp_envelope</strong> — and that trio is the whole interface the dispatcher knows.",
+      deps: ["post_rooms", "u_envelope", "u_rooms"]
+    },
+    {
+      id: "ex_doors", name: "exporters/doors.py", path: "extractor/pyRevit/room_m/exporters/doors.py", zone: "run",
+      lang: "IronPython",
+      blurb: "The doors half, same three names. Doors no longer wait on rooms: the server resolves a door's rooms itself and treats “the rooms have not arrived yet” as a state it reports, not one it refuses. So the two buckets are independent.",
+      deps: ["post_doors", "u_doors"]
+    },
+
+    // ---- extractor: push & wire
+    {
+      id: "post_common", name: "post_common.py", path: "extractor/pyRevit/room_m/post_common.py", zone: "push",
+      lang: "IronPython",
+      blurb: "The parts of the wire contract that belong to no single entity: the transport, the duHast flattening, the NDJSON writer and the identity envelope. Rooms and doors import it and never re-implement it, so two pushes cannot drift on how they talk to the server.",
+      deps: []
+    },
+    {
+      id: "post_rooms", name: "post_rooms.py", path: "extractor/pyRevit/room_m/post_rooms.py", zone: "push",
+      lang: "IronPython",
+      blurb: "Rooms + levels into the v7 contract, gzipped and streamed — large exports run past 100 MB uncompressed. Refuses an empty push and names the phase filter, because a filter matching nothing is what it nearly always is.",
+      deps: ["post_common", "u_phase"]
+    },
+    {
+      id: "post_doors", name: "post_doors.py", path: "extractor/pyRevit/room_m/post_doors.py", zone: "push",
+      lang: "IronPython",
+      blurb: "Doors into the v2 contract. Built <em>alongside</em> post_rooms on a shared base rather than on top of it. Its empty-push refusal is scoped to the run, not the model — asked per model, a rooms-only document in a multiselect run reddened an otherwise clean push.",
+      deps: ["post_common", "u_phase"]
+    },
+    {
+      id: "u_envelope", name: "utils/post_envelope.py", path: "extractor/pyRevit/room_m/utils/post_envelope.py", zone: "push",
+      lang: "IronPython",
+      blurb: "What one <strong>run</strong> carries versus what one <strong>model</strong> carries — and the split is the point. The project, the phase and the snapshot id are picked once and time the whole read, which is what makes “these documents were read together” expressible at all.",
+      deps: ["post_common"]
+    },
+    {
+      id: "u_phase", name: "utils/phase_filter.py", path: "extractor/pyRevit/room_m/utils/phase_filter.py", zone: "push",
+      lang: "IronPython",
+      blurb: "The wire side of the phase filter: does a translated entity survive it. The predicate cannot live here — deciding phase membership needs the live document's phase ordering — so this is a membership test over ids handed down from extraction. Imports nothing Revit-facing, deliberately.",
+      deps: []
+    },
+
+    // ---- extractor: readers
+    {
+      id: "u_rooms", name: "utils/rooms.py", path: "extractor/pyRevit/room_m/utils/rooms.py", zone: "readers",
+      lang: "IronPython",
+      blurb: "A room <strong>belongs</strong> to exactly one phase, so rooms use an equality test on ROOM_PHASE — not the built-in/demolished range test doors use. Running rooms through the range filter returns nothing, silently. That cost five empty pushes to find.",
+      deps: ["u_generic"]
+    },
+    {
+      id: "u_doors", name: "utils/doors.py", path: "extractor/pyRevit/room_m/utils/doors.py", zone: "readers",
+      lang: "IronPython",
+      blurb: "The through-wall direction, from FacingOrientation — <strong>facing, not the host wall</strong>. Revit's ToRoom follows the door's orientation, so flipping a door swaps both together; deriving direction from the wall would introduce a second source of truth that could disagree.",
+      deps: ["u_generic", "u_refs"]
+    },
+    {
+      id: "u_refs", name: "utils/room_refs.py", path: "extractor/pyRevit/room_m/utils/room_refs.py", zone: "readers",
+      lang: "IronPython",
+      blurb: "Which room does some <em>other</em> element point at, in a given phase. Its own module because it answers a different question than the room extractor — every entity hanging off a room needs this one and none of them need that one.",
+      deps: ["u_generic"]
+    },
+    {
+      id: "u_generic", name: "utils/generic.py", path: "extractor/pyRevit/room_m/utils/generic.py", zone: "readers",
+      lang: "IronPython",
+      blurb: "The API-version shims. An ElementId's <code>.Value</code> is modern, <code>.IntegerValue</code> is what older Revit exposes, and this script runs on both — so neither name is hard-coded. Also home to the built/demolished range test doors use.",
+      deps: []
+    },
+    {
+      id: "u_ui", name: "utils/ui.py", path: "extractor/pyRevit/room_m/utils/ui.py", zone: "readers",
+      lang: "IronPython",
+      blurb: "The forced choices: which server-registered project, which phase, which documents. The project id must match a registered settings bundle or the push 422s, so it cannot be derived from the Revit file — it has to come from the server. No default, no skip path.",
+      deps: ["post_common", "u_generic"]
+    },
+
+    // ---- server: entry
+    {
+      id: "lib", name: "lib.rs", path: "src/lib.rs", zone: "entry", lang: "Rust",
+      blurb: "The library crate both binaries share, and the module index. Neither binary's transport concerns leak inward: <code>service/</code> never imports axum or rmcp, and bootstrap is shared verbatim so the two entry points cannot drift.",
+      deps: []
+    },
+    {
+      id: "main", name: "main.rs", path: "src/main.rs", zone: "entry", lang: "Rust",
+      blurb: "The Axum HTTP binary, deliberately thin: parse args, build state, wire the router. <code>build_router</code> is split out of main so the CORS policy is reachable from a test — a security control with no regression test is one refactor from reverting to permissive.",
+      deps: ["bootstrap", "handlers", "settings_api", "state"]
+    },
+    {
+      id: "mcp", name: "bin/mcp.rs", path: "src/bin/mcp.rs", zone: "entry", lang: "Rust",
+      blurb: "The MCP stdio server: eighteen tools, one per HTTP <em>read</em> route plus three settings reads and one forwarded mutation. Writes stay HTTP-only — a separate process could not hot-swap this one's registry, which is instant split-brain.",
+      deps: ["bootstrap", "svc_mod", "svc_rooms", "svc_doors", "settings_api", "state"]
+    },
+    {
+      id: "bootstrap", name: "bootstrap.rs", path: "src/bootstrap.rs", zone: "entry", lang: "Rust",
+      blurb: "Settings files → a running <code>Shared</code> state. The one place that knows how to turn a server config plus a directory of project settings into live state, shared verbatim by both binaries so a change to how a store is picked has exactly one call site.",
+      deps: ["reference", "svc_rooms", "settings", "state", "storage"]
+    },
+
+    // ---- server: transport
+    {
+      id: "handlers", name: "handlers.rs", path: "src/handlers.rs", zone: "transport", lang: "Rust",
+      blurb: "Thin Axum adapters: each handler extracts its input, calls exactly one service function, and translates the result. <code>StatusCode</code>, <code>Query</code>, <code>Path</code> and <code>Json</code> never leak past this file. Ingest is the exception and stays here in full — the MCP server deliberately exposes none.",
+      deps: ["contract", "reference", "svc_mod", "svc_rooms", "svc_doors", "svc_areas", "svc_adj", "svc_cmp", "svc_val", "svc_snap", "svc_proj", "svc_mile", "svc_ref", "state", "storage"]
+    },
+    {
+      id: "settings_api", name: "settings_api.rs", path: "src/settings_api.rs", zone: "transport", lang: "Rust",
+      blurb: "The machinery behind the settings UI, laid out as the codebase's handler/service split inside one module: transport-agnostic core at the top, Axum adapters at the bottom. The TOML files stay the single source of truth — reads parse fresh, a save validates before it lands.",
+      deps: ["bootstrap", "contract", "reference", "settings", "state", "storage"]
+    },
+
+    // ---- server: services
+    {
+      id: "svc_mod", name: "service/mod.rs", path: "src/service/mod.rs", zone: "service", lang: "Rust",
+      blurb: "The seam itself. Domain logic never imports a transport crate; <code>ServiceError</code> is what each transport maps to its own convention — and that mapping is deliberately kept out of here, because it belongs in the adapter.",
+      deps: []
+    },
+    {
+      id: "svc_rooms", name: "service/rooms.rs", path: "src/service/rooms.rs", zone: "service", lang: "Rust",
+      blurb: "The <code>/rooms</code> derive: reference join, classification, level dedup. Moved verbatim out of the handler — the logic never depended on Query or Json, so the only real change was the signature.",
+      deps: ["classify", "contract", "reference", "settings", "state", "storage"]
+    },
+    {
+      id: "svc_doors", name: "service/doors.rs", path: "src/service/doors.rs", zone: "service", lang: "Rust",
+      blurb: "Deliberately thinner than rooms, and the differences are the point: same filter grammar and milestone pinning, no classification hierarchy, no level dedup. <code>?building=</code> only became answerable once room attribution settled which room owns a door.",
+      deps: ["contract", "reference", "settings", "state", "storage", "svc_locator", "svc_rooms"]
+    },
+    {
+      id: "svc_areas", name: "service/areas.rs", path: "src/service/areas.rs", zone: "service", lang: "Rust",
+      blurb: "The first geometry service, and the one place the <em>definition</em> of the output is contested rather than read off the model — what a wall belongs to is a convention, and two prior designs were reversed over exactly that. Per group per level: the rooms, plus the wall bands the group encloses alone.",
+      deps: ["classify", "contract", "settings", "state", "storage", "svc_rooms"]
+    },
+    {
+      id: "svc_adj", name: "service/adjacency.rs", path: "src/service/adjacency.rs", zone: "service", lang: "Rust",
+      blurb: "Two rooms are adjacent when they share a wall: boundaries parallel, within a wall-thickness gap, overlapping by more than a trivial length, same level. <strong>Not door connectivity</strong> — that is a different graph over the same rooms.",
+      deps: ["classify", "contract", "reference", "settings", "state", "storage", "svc_rooms"]
+    },
+    {
+      id: "svc_cmp", name: "service/comparison.rs", path: "src/service/comparison.rs", zone: "service", lang: "Rust",
+      blurb: "A <em>star</em> diff of N milestones against one baseline, never all-pairs. A new consumer of existing machinery rather than a reimplementation: assemble_rooms already resolves a milestone's pinned snapshots, so a qualified reference field diffs the pinned values with no new resolution logic.",
+      deps: ["contract", "settings", "state", "storage", "svc_rooms", "svc_doors"]
+    },
+    {
+      id: "svc_val", name: "service/validation.rs", path: "src/service/validation.rs", zone: "service", lang: "Rust",
+      blurb: "Reference reconciliation QA — <strong>one report per source, not one report</strong>. Each source declares its own link property, so the questions cannot share a list. A source configured but not yet uploaded is skipped, not failed: signal, not error.",
+      deps: ["contract", "reference", "settings", "state", "svc_locator"]
+    },
+    {
+      id: "svc_locator", name: "service/room_locator.rs", path: "src/service/room_locator.rs", zone: "service", lang: "Rust",
+      blurb: "<strong>This module knows nothing about doors.</strong> It takes a point, an optional plan direction and candidate rooms, and answers which room lies on each side. Windows have the same shape; FF&E has one side rather than two. Keeping the primitive at the boundary means the next category needs glue, not geometry.",
+      deps: ["contract"]
+    },
+    {
+      id: "svc_snap", name: "service/snapshots.rs", path: "src/service/snapshots.rs", zone: "service", lang: "Rust",
+      blurb: "Which dated snapshots exist per model, and the latest id a follow-up upload attaches to. An unregistered project is skipped on read rather than erroring — its snapshots could never be served anyway.",
+      deps: ["contract", "state", "storage"]
+    },
+    {
+      id: "svc_proj", name: "service/projects.rs", path: "src/service/projects.rs", zone: "service", lang: "Rust",
+      blurb: "Project and building listings for the pickers — derived from stored snapshots, with no storage or identity of their own.",
+      deps: ["classify", "contract", "settings", "state", "storage", "svc_rooms"]
+    },
+    {
+      id: "svc_mile", name: "service/milestones.rs", path: "src/service/milestones.rs", zone: "service", lang: "Rust",
+      blurb: "Milestones are settings-resident, not stored — so this list hot-updates the moment a settings save lands, no push required.",
+      deps: ["settings", "state", "storage"]
+    },
+    {
+      id: "svc_ref", name: "service/reference.rs", path: "src/service/reference.rs", zone: "service", lang: "Rust",
+      blurb: "Which uploaded CSVs exist for a (project, source) pair, and a parsed summary of one. No source is privileged — “drofus” is simply the one most projects configure. Reports the <em>shape</em>, not the rows: the rows are already joined onto /rooms.",
+      deps: ["reference", "state", "storage"]
+    },
+
+    // ---- server: core
+    {
+      id: "contract", name: "contract/mod.rs", path: "src/contract/mod.rs", zone: "core", lang: "Rust",
+      blurb: "The shape of the data and nothing else — no I/O, no state, no handlers. Property lookup lives here because it inspects the tiers, so both consumers depend on the contract rather than on each other. Ids ride as strings on the wire and are parsed to i64 only here, where the width is safe.",
+      deps: ["settings"]
+    },
+    {
+      id: "contract_doors", name: "contract/doors.rs", path: "src/contract/doors.rs", zone: "core", lang: "Rust",
+      blurb: "The door half of the contract, split out at exactly the size the conventions name for splitting a module. The envelope, the geometry primitives and the property machinery all stay shared — a door gets its own copy of none of them.",
+      deps: ["contract"]
+    },
+    {
+      id: "state", name: "state.rs", path: "src/state.rs", zone: "core", lang: "Rust",
+      blurb: "State no longer owns the store's mechanism — it holds a <code>Box&lt;dyn SnapshotStore&gt;</code> and delegates, so the trait must stay object-safe. The JSON framing for streamed ingest lives here, not in the store: a store that parsed the payload to write it would be the first crack in bytes-at-the-boundary.",
+      deps: ["contract", "reference", "settings", "storage"]
+    },
+    {
+      id: "classify", name: "classify.rs", path: "src/classify.rs", zone: "core", lang: "Rust",
+      blurb: "Resolve each room to a full-depth path through the hierarchy tiers. <strong>Missing tier data is a represented state, not an error</strong> — once a tier lacks data, it and everything below become an explicit undefined, never a truncated path and never a dropped room.",
+      deps: ["contract", "settings"]
+    },
+    {
+      id: "reference", name: "reference.rs", path: "src/reference.rs", zone: "core", lang: "Rust",
+      blurb: "Store raw, join late. Reference data is loaded at startup and attached at response assembly, never merged into the stored snapshot — so the Revit push stays untouched and the join stays reversible. Byte-source-agnostic, because an uploaded CSV and a file on disk are the same parser.",
+      deps: []
+    },
+
+    // ---- server: storage
+    {
+      id: "storage", name: "storage/mod.rs", path: "src/storage/mod.rs", zone: "store", lang: "Rust",
+      blurb: "The whole point of this module is the <code>SnapshotStore</code> trait: callers talk to it, never to the filesystem. A database is a third impl, no change upstream. The trait, the manifest types and the on-disk layout live here because both impls depend on them.",
+      deps: ["state"]
+    },
+    {
+      id: "storage_fs", name: "storage/fs.rs", path: "src/storage/fs.rs", zone: "store", lang: "Rust",
+      blurb: "The persistent, history-keeping impl: manifest is the index, snapshots are the record. <strong>A writer dropped without committing must leave no trace</strong> — and dropping is the ordinary path, since a rooms push is only known to be empty after writing has already started.",
+      deps: ["contract", "state", "storage"]
+    },
+    {
+      id: "storage_mem", name: "storage/mem.rs", path: "src/storage/mem.rs", zone: "store", lang: "Rust",
+      blurb: "The volatile, latest-only impl kept for storage-less dev and test configs. The one thing that differs from fs: there is no history, so replacement is the normal upsert.",
+      deps: ["contract", "state"]
+    },
+
+    // ---- server: config
+    {
+      id: "settings", name: "settings/mod.rs", path: "src/settings/mod.rs", zone: "config", lang: "Rust",
+      blurb: "Config a human hand-edits (hence TOML, with comments); the data it points at stays JSON. Everything resolves once at startup and fails fast — better a loud startup error than a surprise on the first request. The tagged ReferenceOrigin enum is the seam that keeps a future file→API swap loader-only.",
+      deps: ["contract"]
+    },
+    {
+      id: "settings_load", name: "settings/load.rs", path: "src/settings/load.rs", zone: "config", lang: "Rust",
+      blurb: "The TOML loaders and settings-file-relative path resolution, split from the type definitions so the parsing pass reads on its own. Re-exported, so callers' paths never changed.",
+      deps: ["settings"]
+    },
+    {
+      id: "settings_validate", name: "settings/validate.rs", path: "src/settings/validate.rs", zone: "config", lang: "Rust",
+      blurb: "The checks that are not a single type's own validate(): “what a field is” and “is this whole declaration coherent” stay legible apart.",
+      deps: ["settings"]
+    },
+
+    // ---- browser: renderer
+    {
+      id: "js_index", name: "index.ts", path: "src-js/renderer/index.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "The bundle's single public surface — the one thing index.html may reach for, published as the global <code>PlanRenderer</code>. Kept narrow because TypeScript cannot see those call sites: every name here is an unchecked boundary.",
+      deps: ["js_app", "js_geom", "js_colour", "js_door", "js_gl", "js_spatial", "js_seam", "js_paint", "js_types"]
+    },
+    {
+      id: "js_seam", name: "seam.ts", path: "src-js/renderer/seam.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "What a zone asks of whatever draws its plan — paint, pan, highlight, mark, pick, dispose. It earned its place while two renderers had to be swappable under a running page; it is kept because the surviving one is several files of shaders whose entry points would otherwise be guesswork.",
+      deps: ["js_types"]
+    },
+    {
+      id: "js_types", name: "types.ts", path: "src-js/renderer/types.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "Deliberately a <em>subset</em> of what /rooms returns. Typing the whole contract here would create a second, drifting copy of a carefully versioned server-side definition.",
+      deps: []
+    },
+    {
+      id: "js_geom", name: "geometry.ts", path: "src-js/renderer/geometry.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "<strong>The coordinate rule lives here:</strong> payload data is Y-up, and every function returns Y-down. The viewBox, the cull, the overlay and the pick all live in flipped space — which is why GL keeps the flip and inverts Y in the projection instead.",
+      deps: ["js_types"]
+    },
+    {
+      id: "js_app", name: "appearance.ts", path: "src-js/renderer/appearance.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "The appearance <em>decision</em>, in one place. A WebGL renderer cannot serialize to .svg, so the two painters could no longer share a body — one pure function resolves what a room looks like and both emitters consume it. The decision must not drift; the emitting was never the risk.",
+      deps: ["js_types"]
+    },
+    {
+      id: "js_gl", name: "gl/renderer.ts", path: "src-js/renderer/gl/renderer.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "The WebGL plan renderer, and now the only one. Grid, fills, hover, holes, lines, doors, labels — <strong>five draw calls plus labels, whatever the room or door count</strong>. That is the point: the fitted view is the case culling could never help, because nothing is off screen to hide.",
+      deps: ["js_app", "js_geom", "js_seam", "js_types", "js_colour", "js_door", "js_fills", "js_labels", "js_lines", "js_spatial", "js_viewport"]
+    },
+    {
+      id: "js_lines", name: "gl/lines.ts", path: "src-js/renderer/gl/lines.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "<strong>The hard part of the whole exercise.</strong> Every stroke holds a constant <em>screen</em> width at any zoom, and nothing in a scene graph gives you that. Each segment is expanded into a quad in the vertex shader, in pixel space, after projection — so pan and zoom rebuild nothing.",
+      deps: ["js_proj"]
+    },
+    {
+      id: "js_fills", name: "gl/fills.ts", path: "src-js/renderer/gl/fills.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "One triangulated mesh for the whole level, not one per room — at plate scale that is 3 draw calls against 5,046. Holes are real holes here, so a dimmed courtyard shows the page instead of stacking two translucent layers into mud.",
+      deps: ["js_geom", "js_types", "js_proj"]
+    },
+    {
+      id: "js_labels", name: "gl/labels.ts", path: "src-js/renderer/gl/labels.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "BitmapText, not Text: one shared glyph atlas rather than 5,046 textures. Sizing is re-derived rather than ported — a bitmap font is rasterised once and scaled — but the rule is preserved: the label fits the room's bbox, with the level's base font as a ceiling.",
+      deps: ["js_geom", "js_types", "js_colour"]
+    },
+    {
+      id: "js_door", name: "gl/doorGlyph.ts", path: "src-js/renderer/gl/doorGlyph.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "The door direction glyph as triangles — all of the geometry and none of the GL, so the shape rules are testable without a canvas. Orientation is <strong>baked into the vertices</strong>, never carried as a uniform, which is what lets every door share the buffer the rooms already fill.",
+      deps: ["js_geom", "js_types"]
+    },
+    {
+      id: "js_spatial", name: "gl/spatial.ts", path: "src-js/renderer/gl/spatial.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "One Flatbush R-tree doing two jobs Pixi is explicitly not allowed to do: the viewport query (which for GL culls <em>labels</em>, not geometry) and the pick. Built once per level, because the box set is static per snapshot — exactly the case Flatbush beats RBush for.",
+      deps: ["js_geom", "js_types"]
+    },
+    {
+      id: "js_proj", name: "gl/projection.ts", path: "src-js/renderer/gl/projection.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "Why pan and zoom cost nothing: the view is a <strong>uniform</strong>, so changing it rewrites four floats rather than touching a vertex buffer. Also why Pixi's container transform is deliberately unused — once the scene graph scales, screen-space stroke widths stop being expressible.",
+      deps: []
+    },
+    {
+      id: "js_viewport", name: "gl/viewport.ts", path: "src-js/renderer/gl/viewport.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "Aspect fitting, extracted as a pure function because getting it wrong is invisible in review and obvious on screen. An SVG viewBox letterboxes by default; a GL projection does not, and every coordinate assumption in the viewer was written against the one that does.",
+      deps: ["js_types"]
+    },
+    {
+      id: "js_colour", name: "gl/colour.ts", path: "src-js/renderer/gl/colour.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "CSS custom properties → GL floats, read at <em>paint</em> time and never cached: the theme can change under a running page, and a cached palette would leave the plan in the old theme while every other surface moved.",
+      deps: []
+    },
+    {
+      id: "js_paint", name: "svg/paint.ts", path: "src-js/renderer/svg/paint.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "The SVG painter for the <strong>export</strong>, and nothing else — it used to draw the live plan too, and saying plainly that it no longer does matters, because a comment describing a dead relationship sends the next reader hunting for a path that was deleted.",
+      deps: ["js_app", "js_geom", "js_types"]
+    },
+
+    // ---- browser: pages
+    {
+      id: "p_index", name: "index.html", path: "static/index.html", zone: "pages", lang: "HTML + JS",
+      blurb: "The viewer: zones, levels, filters, search, selection, the areas overlay and the poll. Still ~4,000 lines of inline JavaScript. The migration direction is one module at a time — each frontend change moves what it touches into src-js/.",
+      deps: ["p_common", "p_tokens", "p_bundle"]
+    },
+    {
+      id: "p_settings", name: "settings.html", path: "static/settings.html", zone: "pages", lang: "HTML + JS",
+      blurb: "The human UI behind the settings API — hierarchy tiers, reference sources, milestones, comparison fields. Mutation lives here and only here, which is what keeps the MCP server's read-only contract honest.",
+      deps: ["p_common", "p_tokens"]
+    },
+    {
+      id: "p_comparison", name: "comparison.html", path: "static/comparison.html", zone: "pages", lang: "HTML + JS",
+      blurb: "The milestone diff view: baseline against each compared milestone, rooms added and removed, and the property differences on the rooms present in both.",
+      deps: ["p_common", "p_graph", "p_tokens"]
+    },
+    {
+      id: "p_graph", name: "graph.js", path: "static/graph.js", zone: "pages", lang: "JavaScript",
+      blurb: "The charting used by the comparison view — drawn in the page's own token palette so it follows the theme with everything else.",
+      deps: ["p_tokens"]
+    },
+    {
+      id: "p_common", name: "common.js", path: "static/common.js", zone: "pages", lang: "JavaScript",
+      blurb: "What all three pages share: fetch helpers, formatting, the project picker's plumbing.",
+      deps: []
+    },
+    {
+      id: "p_tokens", name: "tokens.css", path: "static/tokens.css", zone: "pages", lang: "CSS",
+      blurb: "The palette, as custom properties that follow the light/dark theme. Small, and load-bearing well past its size: the GL renderer reads these same variables at every paint.",
+      deps: []
+    },
+    {
+      id: "p_bundle", name: "renderer.bundle.js", path: "static/vendor/renderer.bundle.js", zone: "pages", lang: "generated",
+      blurb: "<strong>A generated file that is committed</strong>, so a fresh clone plus <code>cargo run</code> works with no node installed. CI rebuilds it and fails if the committed copy disagrees — forgetting <code>npm run build</code> means a red PR, or worse a green one serving a stale renderer.",
+      deps: ["js_index"]
+    },
+
+    // ---- workbench
+    {
+      id: "weekly", name: "weekly_review.py", path: "scripts/weekly_review.py", zone: "bench", lang: "Python",
+      blurb: "The mechanical docs-vs-code drift check: claims the documentation makes that the code no longer supports. It checks documentation against code, never a diff — the judgement calls it cannot make are a human checklist beside it.",
+      deps: []
+    },
+    {
+      id: "gen", name: "gen_*.py", path: "scripts/gen_big_plate.py · gen_samples.py · gen_doors_sample.py · gen_showcase.py", zone: "bench", lang: "Python",
+      blurb: "Fixture generators: the 5,046-room big plate the renderer's draw-call budget is measured against, the sample plates, the door samples and the showcase snapshots.",
+      deps: []
+    },
+    {
+      id: "check_areas", name: "check_areas.py", path: "scripts/check_areas.py", zone: "bench", lang: "Python",
+      blurb: "An independent read on the area service's output — the contested-definition module is the one worth checking from outside the code that produces it.",
+      deps: []
+    },
+    {
+      id: "docsdir", name: "docs/", path: "docs/STRATEGY-*.md · CODING-CONVENTIONS.md", zone: "bench", lang: "Markdown",
+      blurb: "<strong>The strategy docs hold only what is not built; the code documents what is.</strong> Shipping a feature includes deleting its description from the strategy doc. <code>docs/Superseded/</code> is an archive — nothing there is live.",
+      deps: []
+    }
+  ];
+
+  // ---------- derived ----------
+
+  const byId = new Map(M.map(m => [m.id, m]));
+  const zoneById = new Map(ZONES.map(z => [z.id, z]));
+  M.forEach(m => {
+    m.layer = zoneById.get(m.zone).layer;
+    const [code, total, cmnt, tests] = STATS[m.id];
+    Object.assign(m, { loc: code, total, cmnt, tests });
+    // Prose and build output are not code, so they take no width from the scale
+    // they would otherwise distort — docs/ would sit second on this plan.
+    m.kind = m.lang === "generated" ? "generated" : m.lang === "Markdown" ? "prose" : "code";
+  });
+
+  const dependents = new Map(M.map(m => [m.id, []]));
+  M.forEach(m => m.deps.forEach(d => { if (dependents.has(d)) dependents.get(d).push(m.id); }));
+
+  const hueVar = layer => `var(--hue-${layer})`;
+  // Square-root, so a 2,974-line module is wider than a 100-line one without
+  // being thirty times wider — four steps is all a six-column row can carry.
+  const span = m => m.kind === "code" ? Math.min(4, Math.max(1, Math.round(Math.sqrt(m.loc) / 6.5))) : 1;
+  const fmt = n => n.toLocaleString("en-US");
+  const pct = (n, of) => ` · ${Math.round(100 * n / of)}%`;
+
+  // ---------- title block ----------
+
+  const code = M.filter(m => m.kind === "code");
+  const totalCode = code.reduce((a, m) => a + m.loc, 0);
+  const totalFile = code.reduce((a, m) => a + m.total, 0);
+  document.getElementById("tallies").innerHTML = [
+    [M.length, "modules"],
+    [fmt(totalCode), "lines of code"],
+    [fmt(totalFile), "lines in file"],
+    [ZONES.length, "zones"]
+  ].map(([n, l]) => `<div><span class="tally-n">${n}</span><span class="tally-l">${l}</span></div>`).join("");
+
+  document.getElementById("flow").innerHTML = FLOW.map(s => `
+    <div class="flow-step" style="--hue:${hueVar(s.layer)}">
+      <span class="flow-k">${s.k}</span>
+      <span class="flow-t">${s.t}</span>
+      <span class="flow-d">${s.d}</span>
+    </div>`).join("");
+
+  // ---------- sheet ----------
+
+  const sheet = document.getElementById("sheet");
+  sheet.innerHTML = ZONES.map(z => {
+    const rooms = M.filter(m => m.zone === z.id).map(m => `
+      <button class="cell" type="button" data-id="${m.id}"
+              style="--span:${span(m)};--hue:${hueVar(m.layer)}"
+              aria-pressed="false">
+        <span class="inner">
+          <span class="cell-name">${m.name.replace(/\//g, "/<wbr>")}</span>
+          <span class="cell-path">${m.path.split(" · ")[0]}</span>
+        </span>
+        <span class="cell-loc">${m.kind === "code" ? fmt(m.loc) + " loc" : m.kind === "prose" ? fmt(m.loc) + " prose" : "generated"}</span>
+      </button>`).join("");
+    return `
+      <section class="band" data-zone="${z.id}" data-layer="${z.layer}" style="--hue:${hueVar(z.layer)}">
+        <div class="rail">
+          <span class="rail-n">${z.n} · ${z.layer.toUpperCase()}</span>
+          <span class="rail-t">${z.t}</span>
+          <span class="rail-d">${z.d}</span>
+        </div>
+        <div class="rooms">${rooms}</div>
+      </section>`;
+  }).join("");
+
+  // ---------- chips ----------
+
+  const active = new Set(LAYERS.map(l => l.id));
+  document.getElementById("chips").innerHTML = LAYERS.map(l => `
+    <button class="chip" type="button" data-layer="${l.id}" aria-pressed="true" style="--hue:${l.hue}">
+      <span class="swatch"></span>${l.name}
+    </button>`).join("");
+
+  // ---------- state ----------
+
+  let selected = null;
+  let query = "";
+
+  const cells = [...document.querySelectorAll(".cell")];
+  const bands = [...document.querySelectorAll(".band")];
+  const inspector = document.getElementById("inspector");
+
+  function matches(m) {
+    if (!query) return true;
+    const hay = (m.name + " " + m.path + " " + m.blurb + " " + m.lang).toLowerCase();
+    return hay.includes(query);
+  }
+
+  function related(id) {
+    const m = byId.get(id);
+    return new Set([...m.deps, ...dependents.get(id)]);
+  }
+
+  function render() {
+    const near = selected ? related(selected) : null;
+
+    bands.forEach(b => b.classList.toggle("is-off", !active.has(b.dataset.layer)));
+
+    cells.forEach(c => {
+      const m = byId.get(c.dataset.id);
+      const on = active.has(m.layer);
+      const hit = matches(m);
+      const isSel = selected === m.id;
+      const isNear = near ? near.has(m.id) : false;
+
+      c.classList.toggle("is-selected", isSel);
+      c.classList.toggle("is-linked", !isSel && isNear);
+      c.classList.toggle("is-match", !!query && hit && !isSel);
+      c.classList.toggle("is-dim", !on || !hit || (!!near && !isSel && !isNear));
+      c.setAttribute("aria-pressed", String(isSel));
+    });
+
+    inspector.innerHTML = selected ? detailHTML(byId.get(selected)) : defaultHTML();
+    inspector.style.setProperty("--hue", selected ? hueVar(byId.get(selected).layer) : "var(--ink-3)");
+  }
+
+  function chipList(ids, label, emptyNote) {
+    if (!ids.length) return `<div><p class="sect-h">${label}</p><p class="empty-note">${emptyNote}</p></div>`;
+    const items = ids.map(id => {
+      const m = byId.get(id);
+      return `<button class="link" type="button" data-goto="${id}" style="--lhue:${hueVar(m.layer)}">${m.name}</button>`;
+    }).join("");
+    return `<div><p class="sect-h">${label} · ${ids.length}</p><div class="links">${items}</div></div>`;
+  }
+
+  function detailHTML(m) {
+    const z = zoneById.get(m.zone);
+    return `
+      <div class="ins-kicker"><span>${z.n} · ${z.t}</span><span>${m.lang}</span></div>
+      <div>
+        <h2 class="ins-title">${m.name}</h2>
+        <p class="ins-path">${m.path}</p>
+      </div>
+      <p class="ins-blurb">${m.blurb}</p>
+      <dl class="facts">
+        <div class="fact"><dt>${m.kind === "code" ? "Code" : m.kind === "prose" ? "Prose" : "Generated"}</dt><dd>${fmt(m.loc)}</dd></div>
+        <div class="fact"><dt>Whole file</dt><dd>${fmt(m.total)}</dd></div>
+        <div class="fact"><dt>Comments</dt><dd>${m.cmnt ? fmt(m.cmnt) + pct(m.cmnt, m.total) : "—"}</dd></div>
+        <div class="fact"><dt>Tests</dt><dd>${m.tests ? fmt(m.tests) + pct(m.tests, m.total) : "—"}</dd></div>
+        <div class="fact"><dt>Imports</dt><dd>${m.deps.length}</dd></div>
+        <div class="fact"><dt>Imported by</dt><dd>${dependents.get(m.id).length}</dd></div>
+      </dl>
+      ${chipList(m.deps, "Depends on", "Nothing in the repo — a leaf.")}
+      ${chipList(dependents.get(m.id), "Depended on by", "Nothing imports it — an entry point or a boundary.")}`;
+  }
+
+  function defaultHTML() {
+    return `
+      <div class="ins-kicker"><span>Legend</span><span>how to read it</span></div>
+      <p class="ins-blurb">Each cell is one module, and its width follows its <strong>code</strong> lines only —
+        comments, doc comments and tests are measured but take no width. That is why the Rust rooms are smaller than
+        their files: <code>src/</code> is 28% code, 24% comment and 44% inline test. The widest room on the plan is
+        still <strong>index.html</strong>, the viewer page waiting to be broken up. Bands group modules by the job they
+        do; colour marks which side of the wire they live on.</p>
+      <div class="legend">
+        <div class="legend-row"><span class="legend-key sel"></span><span>Selected module.</span></div>
+        <div class="legend-row"><span class="legend-key lnk"></span><span>Shares an import edge with it, either direction.</span></div>
+        <div class="legend-row"><span class="legend-key dim"></span><span>Unrelated — dimmed, the way the viewer dims rooms outside a filter.</span></div>
+        <div class="legend-row"><span class="legend-key size" style="width:8px"></span><span>Narrow cell: under ~180 lines of code. Prose and build output take no width at all.</span></div>
+      </div>
+      <div>
+        <p class="sect-h">Rules that outlive the build</p>
+        <p class="ins-blurb"><code>service/</code> never imports axum or rmcp — the transports are thin adapters over it.
+        The store takes bytes plus metadata, never a payload type. Reference data is joined at read time and never
+        merged into a snapshot. A room id is unique only within a model, so every door→room join is model-scoped.</p>
+      </div>`;
+  }
+
+  // ---------- events ----------
+
+  const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  sheet.addEventListener("click", e => {
+    const cell = e.target.closest(".cell");
+    if (!cell) return;
+    selected = selected === cell.dataset.id ? null : cell.dataset.id;
+    render();
+    // Narrow screens stack the inspector above the sheet, so a selection made
+    // halfway down the plan would otherwise land off screen with no feedback.
+    if (selected && matchMedia("(max-width: 1080px)").matches) {
+      inspector.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+    }
+  });
+
+  inspector.addEventListener("click", e => {
+    const link = e.target.closest("[data-goto]");
+    if (!link) return;
+    selected = link.dataset.goto;
+    render();
+    const cell = cells.find(c => c.dataset.id === selected);
+    cell.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+    cell.focus({ preventScroll: true });
+  });
+
+  document.getElementById("chips").addEventListener("click", e => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    const id = chip.dataset.layer;
+    if (active.has(id)) active.delete(id); else active.add(id);
+    if (!active.size) LAYERS.forEach(l => active.add(l.id));
+    [...document.querySelectorAll(".chip")].forEach(c => c.setAttribute("aria-pressed", String(active.has(c.dataset.layer))));
+    render();
+  });
+
+  document.getElementById("q").addEventListener("input", e => {
+    query = e.target.value.trim().toLowerCase();
+    render();
+  });
+
+  document.getElementById("clear").addEventListener("click", () => {
+    selected = null;
+    query = "";
+    document.getElementById("q").value = "";
+    LAYERS.forEach(l => active.add(l.id));
+    [...document.querySelectorAll(".chip")].forEach(c => c.setAttribute("aria-pressed", "true"));
+    render();
+  });
+
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    selected = null;
+    render();
+  });
+
+  render();
+</script>

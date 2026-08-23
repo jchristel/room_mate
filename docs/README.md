@@ -29,6 +29,7 @@ strategy doc documents what is not".
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
 | [MCP host setup](mcp-host-setup.md) | Client configs for Claude Code and Claude Desktop, plus build and verify steps |
+| [Module plan](module-plan.html) | Interactive map of every module across the extractor, server and browser — sized by line count, with its import edges. Open the file in a browser; it is generated from the module headers, so treat a header as the source and this as the view |
 
 ## Archive
 
