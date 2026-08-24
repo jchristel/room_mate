@@ -37,10 +37,11 @@ Two things the workflow does that are not obvious:
   main, but "usually" is not a gate, and this is the one workflow that hands a
   binary to somebody.
 - **It passes the tag to `build.ps1` as the version**, rather than letting it
-  fall back to `Cargo.toml`. Those two have drifted — the crate says `0.1.0`
-  while the published tags say `0.0.1-beta.N` — and since `AppId` is fixed on
-  purpose, stamping from the crate would make every release look to Windows
-  like an upgrade of a thing whose version never moves.
+  fall back to `Cargo.toml`. The crate now follows the same format, but it is
+  maintained by hand and records the version last *released* — not the one
+  being cut. Tagging `0.0.1-beta.5` without remembering to edit the crate first
+  would stamp `beta.4` onto it, and since `AppId` is fixed on purpose, Windows
+  would read that as an upgrade of a thing whose version never moved.
 
 ### The version is two versions
 

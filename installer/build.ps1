@@ -20,12 +20,16 @@
 
 .PARAMETER Version
     Version to stamp the installer with. Defaults to the crate version in
-    Cargo.toml. The release workflow passes the git TAG instead, because the tag
-    is what a downloaded artifact is identified by -- and the two have drifted:
-    Cargo.toml says 0.1.0 while the published tags say 0.0.1-beta.N. Stamping a
-    tagged release from Cargo.toml would put a version in Add/Remove Programs
-    that never moves, and since AppId is fixed on purpose, every build would
-    look like an upgrade of a thing that stayed the same version.
+    Cargo.toml, which now follows the tag format (0.0.1-beta.N).
+
+    The release workflow passes the git TAG anyway, and should keep doing so
+    even though the two agree today: Cargo.toml is maintained by hand and
+    records the version last released, not the one being cut. Tagging
+    0.0.1-beta.5 without remembering to edit the crate first would otherwise
+    stamp beta.4 onto it -- and since AppId is fixed on purpose, Windows would
+    read that as an upgrade of a thing whose version never moved. The tag is
+    what a downloaded artifact is identified by, so for a tagged build the tag
+    wins and no one has to remember anything.
 #>
 [CmdletBinding()]
 param(
@@ -42,7 +46,8 @@ $OutDir   = Join-Path $RepoRoot 'target\installer'
 
 # Cargo.toml is the default source of version truth; the .iss only carries a
 # fallback for someone compiling it by hand. Keeping those in sync by hand is
-# exactly the kind of thing that ships a "0.1.0" installer for a 0.3 build.
+# exactly the kind of thing that ships a "0.1.0" installer for a 0.3 build --
+# which is why anything that HAS a tag passes it in rather than relying on this.
 if (-not $Version) {
     $cargoToml = Get-Content (Join-Path $RepoRoot 'Cargo.toml') -Raw
     if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
