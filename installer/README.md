@@ -14,6 +14,65 @@ winget install JRSoftware.InnoSetup   # once
 
 Output: `target/installer/RoomMate-Setup-<version>.exe`.
 
+## Releasing it
+
+Push a tag and [`release.yml`](../.github/workflows/release.yml) builds the
+installer and attaches it to the release:
+
+```bash
+git tag 0.0.1-beta.4 && git push origin 0.0.1-beta.4
+```
+
+It creates the release if the tag was pushed from a terminal, and uploads into
+it when the release already exists because it was published from the web UI.
+A `workflow_dispatch` run builds and uploads the installer as a **run artifact**
+and publishes nothing — the way to exercise the whole path without spending a
+tag.
+
+Two things the workflow does that are not obvious:
+
+- **It runs `cargo test` and rebuilds the renderer bundle**, because a tag push
+  triggers *neither* `rust.yml` nor `frontend.yml` — both are scoped to branches
+  and pull requests. The tag usually points at a commit that already passed on
+  main, but "usually" is not a gate, and this is the one workflow that hands a
+  binary to somebody.
+- **It passes the tag to `build.ps1` as the version**, rather than letting it
+  fall back to `Cargo.toml`. Those two have drifted — the crate says `0.1.0`
+  while the published tags say `0.0.1-beta.N` — and since `AppId` is fixed on
+  purpose, stamping from the crate would make every release look to Windows
+  like an upgrade of a thing whose version never moves.
+
+### The version is two versions
+
+Inno needs both, and only one of them may be free text. `AppVersion` is the
+display string — the setup filename and the Add/Remove Programs entry — and
+takes `0.0.1-beta.4` happily. `VersionInfoVersion` is the Windows *file version*
+resource, which must be purely numeric with at most four parts and is a
+**compile error**, not a warning, when it is not. `build.ps1` derives the second
+from the first, folding a trailing pre-release number into the fourth component:
+
+| Tag | Filename | File version |
+|---|---|---|
+| `0.0.1-beta.4` | `RoomMate-Setup-0.0.1-beta.4.exe` | `0.0.1.4` |
+| `v1.2.3` | `RoomMate-Setup-1.2.3.exe` | `1.2.3` |
+| `2.0.0-rc.7` | `RoomMate-Setup-2.0.0-rc.7.exe` | `2.0.0.7` |
+
+That fold is why `beta.3` and `beta.4` are distinguishable once the tag text has
+been stripped away — otherwise both report `0.0.1`, and "which build is actually
+installed?" has no answer on the machine that has it.
+
+### One installer replaces three assets
+
+Releases up to `0.0.1-beta.3` carried `roommate.exe`, `mcp.exe` and
+`static.zip` loose, which left whoever downloaded them to assemble the layout
+and discover two mandatory settings flags on their own. Nothing stops you
+attaching those as well, but the installer is the supported path.
+
+The setup is **not code-signed**, and downloading it from a release is exactly
+the path that attaches a Mark-of-the-Web, so SmartScreen warns on first run.
+Fine for hand-delivery; a certificate is the fix if this gets distributed
+widely.
+
 ## What the install looks like, and why it is split
 
 | | |
