@@ -4,7 +4,7 @@
 //! module index). The `mcp` binary (`src/bin/mcp.rs`) is the other consumer
 //! of that lib crate, over stdio instead of HTTP.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use axum::http::{Method, StatusCode};
@@ -193,6 +193,44 @@ async fn guard_host(req: axum::extract::Request, next: axum::middleware::Next) -
     next.run(req).await
 }
 
+/// Where the viewer's HTML/CSS/JS live: **beside the executable**, falling back
+/// to `./static` relative to the working directory.
+///
+/// This was a bare `ServeDir::new("static")`, which is right exactly when the
+/// process was launched from the crate root -- true under `cargo run` and false
+/// for every installed build, because a Start Menu shortcut sets whatever
+/// working directory it likes. The failure mode is the expensive kind: the API
+/// keeps answering normally and only the *pages* 404, so the server looks
+/// healthy while the website is simply missing.
+///
+/// Exe-relative is tried first because that is the shape an installer ships --
+/// `roommate.exe` and `static/` in one directory, launched from anywhere. The
+/// working-directory fallback is what keeps the repo working, where the binary
+/// sits in `target/debug` with no `static/` beside it. Note the fallback is a
+/// *relative* path on purpose: it must stay wrong in the same way it was
+/// before, so nothing that already relies on being run from the crate root
+/// changes behaviour.
+///
+/// Existence, not contents, decides the branch. A half-copied install is not
+/// worth distinguishing from a missing one -- both want the same answer from
+/// whoever reads the startup log, which is why `main` prints the path it chose.
+fn viewer_root() -> PathBuf {
+    let exe = std::env::current_exe().ok();
+    resolve_viewer_root(exe.as_deref().and_then(Path::parent))
+}
+
+/// The decision in `viewer_root`, with the one environment lookup lifted out so
+/// both branches are reachable from a test. `std::env::current_exe` cannot be
+/// pointed somewhere else, and under `cargo test` it resolves to
+/// `target/debug/deps` -- which has no `static/` beside it, so an un-split
+/// `viewer_root` could only ever exercise the fallback.
+fn resolve_viewer_root(exe_dir: Option<&Path>) -> PathBuf {
+    exe_dir
+        .map(|dir| dir.join("static"))
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(|| PathBuf::from("static"))
+}
+
 /// Build the application router. Split out of `main` so the CORS policy above
 /// is reachable from a test — a security control with no regression test is one
 /// refactor away from silently reverting to `permissive()`.
@@ -207,8 +245,11 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // on line-by-line reading to keep peak memory low instead.
         .route("/rooms/stream", post(ingest_rooms_stream).layer(DefaultBodyLimit::disable()))
         // Doors: the second primary entity, same body limits and same streaming
-        // pair as rooms. A doors push is refused unless the target model already
-        // has rooms -- see `handlers::check_doors_ingest`.
+        // pair as rooms. Doors may be pushed BEFORE their rooms -- the gate that
+        // once required them is deliberately gone, and an unresolvable room
+        // reference is reported by `door_report` rather than refused here. What
+        // `handlers::check_doors_ingest` still refuses is an unphased push, and
+        // a doors push that disagrees on an already-established phase.
         .route(
             "/doors",
             post(ingest_doors).get(get_doors).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
@@ -271,8 +312,9 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // is_default file, so the viewer's payload id (not a settings project_id)
         // still finds its colour plans. Editors keep the strict route above.
         .route("/api/settings/resolve/{id}", get(http_get_project_resolved))
-        // Serves the viewer page at "/" from ./static.
-        .fallback_service(ServeDir::new("static"))
+        // Serves the viewer page at "/" from the viewer root -- see `viewer_root`
+        // for why that is not simply "static".
+        .fallback_service(ServeDir::new(viewer_root()))
         // Inflate gzip request bodies (Content-Encoding: gzip) before Json/NDJSON
         // parsing sees them. Transparent: a non-gzip body passes through
         // untouched, so an uncompressed sender still works -- purely additive.
@@ -312,6 +354,9 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| {
         format!("could not bind {addr} — is another roommate already listening on port {}?", args.port)
     })?;
+    // Logged because a wrong answer here is otherwise invisible: the API still
+    // works and only the pages 404. See `viewer_root`.
+    tracing::info!("viewer files from {}", viewer_root().display());
     tracing::info!("viewer on http://{addr}  (POST room JSON to http://{addr}/rooms)");
     axum::serve(listener, app).await?;
 
@@ -327,6 +372,35 @@ mod tests {
     use roommate::storage::MemStore;
     use std::sync::Arc;
     use tower::ServiceExt;
+
+    /// The installed shape: `static/` beside the binary wins, and the result is
+    /// absolute -- which is the whole point, since the caller's working
+    /// directory is a Start Menu shortcut's business, not ours.
+    #[test]
+    fn test_viewer_root_prefers_a_static_dir_beside_the_exe() {
+        let tmp = std::env::temp_dir().join("roommate_viewer_root_test");
+        std::fs::create_dir_all(tmp.join("static")).expect("temp dir");
+
+        let resolved = resolve_viewer_root(Some(&tmp));
+
+        assert_eq!(resolved, tmp.join("static"));
+        assert!(resolved.is_absolute(), "an installed build is launched from anywhere");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// No `static/` beside the binary -- the `cargo run` case -- falls back to
+    /// the historic **relative** path. Relative deliberately: this branch has to
+    /// stay wrong in exactly the way it was before, or the repo workflow that
+    /// depends on being launched from the crate root changes under it.
+    #[test]
+    fn test_viewer_root_falls_back_to_the_working_directory() {
+        let tmp = std::env::temp_dir().join("roommate_viewer_root_empty");
+        std::fs::create_dir_all(&tmp).expect("temp dir");
+
+        assert_eq!(resolve_viewer_root(Some(&tmp)), PathBuf::from("static"));
+        assert_eq!(resolve_viewer_root(None), PathBuf::from("static"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 
     fn parse(extra: &[&str]) -> Args {
         let mut argv = vec!["roommate", "--server-settings", "s.toml", "--project-settings", "p"];

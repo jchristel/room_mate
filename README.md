@@ -26,6 +26,7 @@ it belongs to:
 | [`settings/`](settings) | Server config, and one TOML per project (classification tiers, sources, area policy). |
 | [`scripts/`](scripts) | Dev tooling run *against* this repo: fixture generators, `fixtures/` (sample data to push or upload), and `check_areas.py`, the areas diagnostic. Not shipped. |
 | [`docs/`](docs) | Strategy docs, coding conventions, and handovers (landed ones in `docs/Superseded/`). |
+| [`installer/`](installer) | The **Windows package** — an Inno Setup script and the launcher the Start Menu shortcut runs, producing one `RoomMate-Setup.exe` with no prerequisites. See [installer/README.md](installer/README.md). |
 
 ## The extractor and the server move together
 
@@ -61,3 +62,24 @@ Serves the viewer and the API on `http://127.0.0.1:5151` (`--port`, or `$PORT`,
 moves it; the host is loopback-only by design — see `DEFAULT_HTTP_HOST`).
 [Server](docs/STRATEGY-SERVER.md) covers the endpoints,
 [Browser](docs/STRATEGY-BROWSER.md) the viewer.
+
+`static/` is found **beside the executable**, falling back to the working
+directory — which is what the line above relies on. See `main.rs`'s
+`viewer_root` before moving either.
+
+## Installing it
+
+For a machine that is not a development one, [`installer/`](installer) builds a
+single `RoomMate-Setup-<version>.exe`: both binaries, the viewer, and a seeded
+per-user data folder, with no Rust, node or runtime to install first.
+
+```powershell
+winget install JRSoftware.InnoSetup   # build machine only, once
+.\installer\build.ps1
+```
+
+It installs per-user (no admin), keeps the app under
+`%LOCALAPPDATA%\Programs\RoomMate` and everything writable — settings and the
+snapshot store — under `%LOCALAPPDATA%\RoomMate`, so an upgrade never touches
+an edited project file. [installer/README.md](installer/README.md) has the
+reasoning.
