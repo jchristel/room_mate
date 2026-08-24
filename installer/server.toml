@@ -1,0 +1,27 @@
+# RoomMate server settings, installed copy.
+#
+# This file lives in your own profile (%LOCALAPPDATA%\RoomMate\settings), not in
+# the install directory, for two reasons: the settings UI writes project files
+# back here, and the snapshot store below has to be somewhere writable without
+# admin rights. Editing it is expected. The installer never overwrites it -- an
+# upgrade leaves your edits alone, and deleting the whole folder resets it from
+# the template shipped beside roommate.exe.
+#
+# Relative paths below resolve against *this file's own directory*, not the
+# working directory of whatever launched the server -- which is what lets the
+# Start Menu shortcut work regardless of where Windows starts it from.
+
+# ---------------------------------------------------------------------------
+# On-disk snapshot persistence. "../data/snapshots" is
+# %LOCALAPPDATA%\RoomMate\data\snapshots. Comment this section out to run
+# purely in memory, losing every pushed snapshot on restart.
+# ---------------------------------------------------------------------------
+[storage]
+root = "../data/snapshots"
+
+# ---------------------------------------------------------------------------
+# [test_data] is deliberately absent. It seeds the server with a sample
+# snapshot at startup, which is a development convenience and a confusing thing
+# to find in a fresh install -- a project you never pushed, holding rooms you
+# never exported. Push from Revit instead; the store starts empty on purpose.
+# ---------------------------------------------------------------------------

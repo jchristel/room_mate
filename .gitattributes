@@ -34,12 +34,16 @@ LICENSE        text eol=lf
 # from anywhere else are byte-comparable.
 *.csv text eol=lf
 
-# Windows-only scripts: CRLF in the working tree (cmd.exe is picky about it).
-# None exist today; the rule is here so the first one added lands correctly
-# rather than inheriting the LF default.
+# Windows-only scripts and packaging: CRLF in the working tree (cmd.exe is
+# picky about it, and Notepad is still the default viewer for a bare .txt).
+# installer/ is where these live -- the launcher, the build script, the Inno
+# Setup script, and the readme dropped next to the installed exe. .bat/.cmd
+# have no instances yet; the rule stays so the first one lands correctly.
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+*.iss text eol=crlf
+*.txt text eol=crlf
 
 # Never touch: binary assets git's auto-detection should not second-guess.
 # Revit families/templates are plausible test fixtures for this pipeline, and
