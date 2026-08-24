@@ -19,6 +19,16 @@
   #define AppVersion "0.1.0"
 #endif
 
+; The Windows FILE version, which is NOT the same thing as AppVersion above.
+; AppVersion is free text and carries the tag verbatim ("0.0.1-beta.4");
+; VersionInfoVersion must be purely numeric with at most four parts, and is a
+; compile ERROR rather than a warning when it is not. build.ps1 derives the
+; numeric form from the tag and passes it in; this fallback is for a hand
+; compile, where AppVersion above is already numeric.
+#ifndef AppNumericVersion
+  #define AppNumericVersion AppVersion
+#endif
+
 #define AppName    "RoomMate"
 #define AppExeName "roommate.exe"
 #define DataRoot   "{localappdata}\RoomMate"
@@ -30,7 +40,7 @@ AppId={{b138d5aa-8b00-4854-aa65-9439e6f575ce}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppNumericVersion}
 DefaultDirName={localappdata}\Programs\RoomMate
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes

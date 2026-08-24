@@ -17,11 +17,21 @@
 
 .PARAMETER IsccPath
     Full path to ISCC.exe, if it is somewhere this script does not look.
+
+.PARAMETER Version
+    Version to stamp the installer with. Defaults to the crate version in
+    Cargo.toml. The release workflow passes the git TAG instead, because the tag
+    is what a downloaded artifact is identified by -- and the two have drifted:
+    Cargo.toml says 0.1.0 while the published tags say 0.0.1-beta.N. Stamping a
+    tagged release from Cargo.toml would put a version in Add/Remove Programs
+    that never moves, and since AppId is fixed on purpose, every build would
+    look like an upgrade of a thing that stayed the same version.
 #>
 [CmdletBinding()]
 param(
     [switch] $SkipBuild,
-    [string] $IsccPath
+    [string] $IsccPath,
+    [string] $Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,15 +40,41 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Iss      = Join-Path $PSScriptRoot 'roommate.iss'
 $OutDir   = Join-Path $RepoRoot 'target\installer'
 
-# The crate is the single source of version truth; the .iss only carries a
-# fallback for someone compiling it by hand. Keeping the two in sync by hand is
+# Cargo.toml is the default source of version truth; the .iss only carries a
+# fallback for someone compiling it by hand. Keeping those in sync by hand is
 # exactly the kind of thing that ships a "0.1.0" installer for a 0.3 build.
-$cargoToml = Get-Content (Join-Path $RepoRoot 'Cargo.toml') -Raw
-if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
-    throw "Could not read version from Cargo.toml"
+if (-not $Version) {
+    $cargoToml = Get-Content (Join-Path $RepoRoot 'Cargo.toml') -Raw
+    if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+        throw "Could not read version from Cargo.toml"
+    }
+    $Version = $Matches[1]
 }
-$Version = $Matches[1]
-Write-Host "RoomMate $Version" -ForegroundColor Cyan
+$Version = $Version -replace '^v', ''
+
+# Inno needs TWO versions and only one of them may be free text. AppVersion is
+# the display string -- the setup filename, the Add/Remove Programs entry --
+# and takes a tag like "0.0.1-beta.4" happily. VersionInfoVersion is the
+# Windows FILE version resource, which must be purely numeric with at most four
+# parts; handed the same string it is a compile error, not a warning. So the
+# numeric one is derived here rather than left to whoever writes the tag.
+if ($Version -notmatch '^(\d+(?:\.\d+){0,3})') {
+    throw "Version '$Version' does not start with a number -- Inno cannot build a file version from it."
+}
+$core          = $Matches[1]
+$parts         = $core.Split('.').Count
+$tail          = $Version.Substring($core.Length)
+$NumericVersion = $core
+
+# A trailing number in the pre-release tail becomes the next component, so
+# beta.3 and beta.4 are distinguishable file versions instead of both being
+# 0.0.1 -- which is what "which build is actually installed?" comes down to
+# once the tag text has been stripped away.
+if ($parts -lt 4 -and $tail -match '(\d+)\s*$') {
+    $NumericVersion = $core + ('.0' * (3 - $parts)) + '.' + $Matches[1]
+}
+
+Write-Host "RoomMate $Version (file version $NumericVersion)" -ForegroundColor Cyan
 
 if (-not $SkipBuild) {
     Write-Host 'Building release binaries...' -ForegroundColor Cyan
@@ -85,7 +121,7 @@ if (-not $IsccPath) {
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 Write-Host "Compiling installer with $IsccPath ..." -ForegroundColor Cyan
-& $IsccPath "/DAppVersion=$Version" $Iss
+& $IsccPath "/DAppVersion=$Version" "/DAppNumericVersion=$NumericVersion" $Iss
 if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
 
 $setup = Join-Path $OutDir "RoomMate-Setup-$Version.exe"

@@ -1,0 +1,149 @@
+# Builds the Windows installer and attaches it to the release for a tag.
+#
+# Its own workflow rather than a job in rust.yml or frontend.yml: those two are
+# named for, and reason about, a toolchain each, and this needs BOTH plus the
+# Inno Setup compiler. It is also the only workflow here that publishes
+# anything, which is a different blast radius from a check that goes red.
+#
+# What it replaces: releases used to carry roommate.exe, mcp.exe and static.zip
+# as three loose assets, leaving whoever downloaded them to assemble the layout
+# and discover two mandatory settings flags on their own.
+name: Release
+
+on:
+  push:
+    # Matches the existing tag scheme (0.0.1-beta.3), which has no `v` prefix.
+    # Anchored on a digit so a non-version tag does not publish a release.
+    tags: [ "[0-9]*" ]
+  # Manual runs build and upload the installer as a run artifact but publish
+  # NOTHING -- the one way to exercise this end to end without spending a tag.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp (defaults to the crate version)"
+        required: false
+        default: ""
+
+# The default token is read-only on this repo; creating a release and uploading
+# an asset both need write. Scoped to this workflow rather than granted
+# repo-wide, so the two check workflows keep the weaker token.
+permissions:
+  contents: write
+
+# Every `run` below is PowerShell, matching build.ps1 and the launcher.
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  installer:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        # Same pin as frontend.yml. A silent major bump would rebuild the
+        # renderer differently here than in the gate that verifies it.
+        node-version: "24"
+        cache: npm
+
+    # Rust is preinstalled on the runner image, same as rust.yml assumes.
+    #
+    # This runs the test suite because **a tag push triggers neither rust.yml
+    # nor frontend.yml** -- both are scoped to branches and pull requests. The
+    # tag usually points at a commit that already passed on main, but "usually"
+    # is not a gate, and this is the one workflow that hands a binary to
+    # somebody. Clippy and fmt are left to rust.yml: a lint finding is not a
+    # reason to refuse to publish a commit whose behaviour is verified.
+    - name: Test
+      run: cargo test --verbose
+
+    - name: Install frontend dependencies
+      run: npm ci
+
+    # Rebuild rather than trust the committed bundle, then fail if the rebuild
+    # disagrees with it. static/vendor/renderer.bundle.js is generated AND
+    # committed, so a release could otherwise ship a renderer that no commit
+    # produced -- and the viewer inside the installer is the whole product.
+    # frontend.yml makes the same check on PRs; this one exists because tags
+    # do not run it.
+    - name: Rebuild the renderer bundle
+      run: npm run build
+
+    - name: Fail if the committed bundle is stale
+      run: git diff --exit-code -- static/vendor/renderer.bundle.js
+
+    # Inno Setup 6.7 is preinstalled on the windows runner images, at the path
+    # build.ps1 already probes -- so there is no install step and no version to
+    # pin here. If that ever stops being true the build fails with build.ps1's
+    # own "Inno Setup compiler not found" message rather than something cryptic.
+    #
+    # The tag is passed as the version. build.ps1 owns turning it into Inno's
+    # two versions (display and numeric file version); this workflow does not
+    # invoke ISCC itself, so there is exactly one way an installer gets built.
+    #
+    # Values arrive through env rather than being interpolated into the script
+    # body: a tag name is attacker-controlled text in the general case, and
+    # `${{ }}` inside a run block is textual substitution, not an argument.
+    - name: Build the installer
+      id: build
+      env:
+        REF_TYPE: ${{ github.ref_type }}
+        REF_NAME: ${{ github.ref_name }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        # A no-op on a fresh checkout, and what makes the glob further down
+        # correct by construction rather than by luck: with a leftover setup
+        # from an earlier build present, it would pick one of two arbitrarily.
+        Remove-Item 'target\installer\*.exe' -ErrorAction SilentlyContinue
+
+        $version = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME } else { $env:INPUT_VERSION }
+        if ($version) {
+          .\installer\build.ps1 -Version $version
+        } else {
+          .\installer\build.ps1
+        }
+        $setup = Get-ChildItem 'target\installer\*.exe' | Select-Object -First 1
+        if (-not $setup) { throw 'build.ps1 produced no installer' }
+        "setup=$($setup.FullName)" >> $env:GITHUB_OUTPUT
+        "name=$($setup.Name)" >> $env:GITHUB_OUTPUT
+
+    # Always, including manual runs -- this is what makes a dispatch run useful,
+    # and it keeps the exact bytes that were published downloadable from the run
+    # that built them.
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.build.outputs.name }}
+        path: ${{ steps.build.outputs.setup }}
+        if-no-files-found: error
+
+    # Creates the release when the tag was pushed from a terminal, and uploads
+    # into it when it already exists because it was published from the web UI.
+    # --clobber so re-running a failed job replaces the asset instead of
+    # erroring on a name that is already taken.
+    - name: Attach the installer to the release
+      if: github.ref_type == 'tag'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+        SETUP: ${{ steps.build.outputs.setup }}
+      run: |
+        $ErrorActionPreference = 'Continue'
+        gh release view $env:TAG *> $null
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "No release for $env:TAG yet -- creating one."
+          gh release create $env:TAG --title $env:TAG --generate-notes
+          # Publishing from the web UI creates the tag and the release together,
+          # and this job can start between the two -- so losing that race means
+          # the release exists, which is the state we were trying to reach. The
+          # upload below is the step that must actually succeed, and it fails
+          # loudly if the release really is missing.
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Create failed -- assuming the release appeared meanwhile.'
+          }
+        }
+        gh release upload $env:TAG $env:SETUP --clobber
+        if ($LASTEXITCODE -ne 0) { throw 'gh release upload failed' }
+
