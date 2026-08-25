@@ -59,3 +59,4 @@ __pycache__/
 # machine-specific path: it invokes `cargo run -q --bin mcp` with settings paths
 # relative to the crate root. Keep it that way; an absolute path belongs in the
 # host's own config (that doc's Claude Desktop section), never in this file.
+settings/projects/RHH.toml
