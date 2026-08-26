@@ -152,7 +152,7 @@ pub fn get_project_file(projects_dir: &Path, project_id: &str) -> Result<(String
 /// exactly, fall back to the file marked `is_default = true`.
 ///
 /// The viewer resolves colour plans by the *payload* project id (e.g.
-/// `"130486"`), which is not a settings `project_id` (e.g. `"Rouse Hill ..."`),
+/// `"130486"`), which is not a settings `project_id` (e.g. `"Riverside ..."`),
 /// so the exact match 404s and it needs this fallback. The editors
 /// (`settings.html`, `comparison.html`) must NOT get the fallback — they GET and
 /// PUT the same path by the real `project_id`, and a silent default-fallback
@@ -1106,12 +1106,12 @@ ids = ["12345", "67890"]
     #[test]
     fn test_resolve_project_file_exact_match_wins() {
         let dir = temp_dir("resolve-exact");
-        std::fs::write(dir.join("real.toml"), "project_id = \"Rouse Hill\"\n").unwrap();
+        std::fs::write(dir.join("real.toml"), "project_id = \"Riverside\"\n").unwrap();
         std::fs::write(dir.join("default.toml"), "project_id = \"other\"\nis_default = true\n").unwrap();
 
-        let (file, settings) = resolve_project_file(&dir, "Rouse Hill").unwrap();
+        let (file, settings) = resolve_project_file(&dir, "Riverside").unwrap();
         assert_eq!(file, "real.toml");
-        assert_eq!(settings.project_id, "Rouse Hill");
+        assert_eq!(settings.project_id, "Riverside");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1121,11 +1121,11 @@ ids = ["12345", "67890"]
     #[test]
     fn test_resolve_project_file_falls_back_to_default() {
         let dir = temp_dir("resolve-default");
-        std::fs::write(dir.join("real.toml"), "project_id = \"Rouse Hill\"\nis_default = true\n").unwrap();
+        std::fs::write(dir.join("real.toml"), "project_id = \"Riverside\"\nis_default = true\n").unwrap();
 
         let (file, settings) = resolve_project_file(&dir, "130486").unwrap();
         assert_eq!(file, "real.toml");
-        assert_eq!(settings.project_id, "Rouse Hill", "fell back to the is_default file");
+        assert_eq!(settings.project_id, "Riverside", "fell back to the is_default file");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1135,7 +1135,7 @@ ids = ["12345", "67890"]
     #[test]
     fn test_resolve_project_file_unknown_no_default_is_not_found() {
         let dir = temp_dir("resolve-none");
-        std::fs::write(dir.join("real.toml"), "project_id = \"Rouse Hill\"\n").unwrap();
+        std::fs::write(dir.join("real.toml"), "project_id = \"Riverside\"\n").unwrap();
 
         assert!(matches!(resolve_project_file(&dir, "130486"), Err(SettingsError::NotFound(_))));
 
