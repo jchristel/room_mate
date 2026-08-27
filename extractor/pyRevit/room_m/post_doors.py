@@ -25,9 +25,15 @@ What is genuinely different, and why:
   `room_m.utils.doors.door_placements`, in one pass, which is the only side
   that can ask the questions correctly and the only way they are guaranteed to
   agree.
-- **A degenerate footprint is dropped**, see `loops_from_polygon`. This is
-  the one place this module actively discards data, and it has to: the bad
-  value looks like real geometry.
+- **A degenerate footprint is dropped**, see `loops_from_polygon`. The bad
+  value looks like real geometry, which is why it has to be caught here.
+- **A door nested inside another door is dropped**, see
+  `room_m.utils.doors.nested_door_ids`. A door leaf modelled as a nested shared
+  family is an independently-collectable `FamilyInstance` of category Doors, so
+  the collector returns it beside the door containing it. Counted separately
+  from the phase filter and reported separately in an empty push: "not a door"
+  and "not in this phase" are different fates, and the refusal message exists
+  precisely to stop a reader hunting the wrong one.
 - **An empty doors push is refused here, though the server accepts one.**
   Deliberately stricter than `handlers.rs`, and the asymmetry is the point.
   The server must allow zero doors, because it cannot tell a shell or a
@@ -217,9 +223,12 @@ def translate(run_envelope, entries):
     for model, (_, contribution) in zip(contract["models"], entries):
         doors_source = duhast_object_to_plain(contribution["doors"])
         out_doors = []
+        nested_ids = contribution.get("nested_ids") or set()
         for door in doors_source.get(DOOR_LIST_KEY, []):
             out_door = translate_door(door, contribution["placements"])
-            if out_door is not None and in_selected_phase(out_door, contribution["allowed_ids"]):
+            if out_door is None or out_door["id"] in nested_ids:
+                continue
+            if in_selected_phase(out_door, contribution["allowed_ids"]):
                 out_doors.append(out_door)
         model["doors"] = out_doors
     return contract
@@ -247,6 +256,7 @@ def post_doors_stream(run_envelope, entries, url=SERVER_URL_STREAM):
 
     raw = 0
     no_id = 0
+    nested = 0
     out_of_phase = 0
     written = 0
 
@@ -257,12 +267,19 @@ def post_doors_stream(run_envelope, entries, url=SERVER_URL_STREAM):
         write_ndjson_line(gz, envelope)
         for block, (_, contribution) in zip(blocks, entries):
             model_id = block["id"]
+            nested_ids = contribution.get("nested_ids") or set()
             for door in contribution["doors"].get(DOOR_LIST_KEY, []):
                 raw += 1
                 out_door = translate_door(
                     duhast_object_to_plain(door), contribution["placements"])
                 if out_door is None:
                     no_id += 1
+                    continue
+                # Before the phase test, because a leaf is not a door in any
+                # phase -- counting it as out-of-phase would misreport why the
+                # export shrank.
+                if out_door["id"] in nested_ids:
+                    nested += 1
                     continue
                 if not in_selected_phase(out_door, contribution["allowed_ids"]):
                     out_of_phase += 1
@@ -278,6 +295,7 @@ def post_doors_stream(run_envelope, entries, url=SERVER_URL_STREAM):
     if written == 0:
         return empty_push_refusal("doors", envelope, raw, [
             (no_id, "carrying no element id"),
+            (nested, "nested inside another door (leaves, panels, hardware)"),
             (out_of_phase, "outside phase '{}'".format(envelope["phase"])),
         ])
 
