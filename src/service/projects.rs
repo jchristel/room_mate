@@ -255,8 +255,8 @@ mod tests {
     #[test]
     fn test_list_buildings_flags_shared_name_distinct_codes() {
         let state = state_with_rooms(vec![
-            make_room("r1", &[("bldg_code", "B01"), ("bldg_name", "Rouse Hill Hospital")]),
-            make_room("r2", &[("bldg_code", "B02"), ("bldg_name", "Rouse Hill Hospital")]),
+            make_room("r1", &[("bldg_code", "B01"), ("bldg_name", "Riverside Hospital")]),
+            make_room("r2", &[("bldg_code", "B02"), ("bldg_name", "Riverside Hospital")]),
             make_room("r3", &[("bldg_code", "B03"), ("bldg_name", "Somewhere Else")]),
         ]);
 
@@ -276,8 +276,8 @@ mod tests {
     #[test]
     fn test_list_buildings_flags_shared_name_with_missing_code() {
         let state = state_with_rooms(vec![
-            make_room("r1", &[("bldg_code", "B01"), ("bldg_name", "Rouse Hill Hospital")]),
-            make_room("r2", &[("bldg_name", "Rouse Hill Hospital")]),
+            make_room("r1", &[("bldg_code", "B01"), ("bldg_name", "Riverside Hospital")]),
+            make_room("r2", &[("bldg_name", "Riverside Hospital")]),
         ]);
 
         let result = list_buildings(&state, "p1").unwrap();

@@ -43,6 +43,7 @@ from room_m.post_doors import post_doors_stream
 from room_m.utils.doors import (
     door_placements,
     doors_in_phase,
+    nested_door_ids,
 )
 
 
@@ -59,12 +60,17 @@ def export_model(selected_doc, phase_name, return_value):
     Failures are recorded and swallowed rather than raised, so one unreadable
     document costs its own doors and not the rest of the run's.
 
-    :return: `{"doors", "placements", "allowed_ids"}` -- the raw duHast export,
-        the Revit-read placements, and this document's phase filter.
+    :return: `{"doors", "placements", "allowed_ids", "nested_ids"}` -- the raw
+        duHast export, the Revit-read placements, this document's phase filter,
+        and the doors that are components of another door.
     :rtype: dict
     """
     try:
         allowed_door_ids = doors_in_phase(selected_doc, phase_name)
+        # Two filters, kept apart on purpose: "not in this phase" and "not a
+        # door at all" are different fates, and an empty push has to be able to
+        # name which one emptied it. See `nested_door_ids`.
+        nested_ids = nested_door_ids(selected_doc)
         # Read from the Revit API, not from the export -- see `door_placements`.
         # Keyed by bare door id and therefore only ever used against ITS OWN
         # model's doors, which is why it rides the contribution rather than being
@@ -85,6 +91,7 @@ def export_model(selected_doc, phase_name, return_value):
         "doors": json_formatted_doors,
         "placements": placements,
         "allowed_ids": allowed_door_ids,
+        "nested_ids": nested_ids,
     }
 
 

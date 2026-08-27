@@ -35,6 +35,33 @@ pub struct TierValue {
     pub undefined: bool,
 }
 
+/// Read one tier property, treating Revit's `"None"` as absent.
+///
+/// `lookup_property` already collapses "property missing" and "property blank"
+/// together, but Revit stringifies an *unset* parameter as the literal text
+/// `"None"` — a value, as far as the wire and the lookup are concerned. Left
+/// alone it classifies: on the job this was found against, 18 rooms with no
+/// `Building` set produced a building **named** "None" that sorted to the top
+/// of the picker and was the first thing the viewer opened, rather than the
+/// `undefined` bucket the whole "missing tier data is a represented state"
+/// design already has for them.
+///
+/// This is the same reading `service::validation` gives the door reference
+/// check ("a blank value, or the literal 'None'... is *not authored*"), applied
+/// one tier up. The cost is a real room named "None" being unclassifiable — no
+/// such room exists in any snapshot on disk, and a hierarchy tier whose value
+/// is the word "None" would be indistinguishable from the unset case anyway,
+/// so there is nothing here to preserve.
+fn tier_value(
+    room: &Room,
+    property: Option<&str>,
+    source: &str,
+    builtin_defs: &[BuiltinPropertyDef],
+) -> Option<String> {
+    let value = lookup_property(room, property?, source, builtin_defs)?;
+    (value.trim() != "None").then_some(value)
+}
+
 /// Resolve one room to a full-depth classification path.
 ///
 /// RULE: once a tier has no data, that tier AND every tier below it are
@@ -56,11 +83,11 @@ pub fn classify_room(
     let mut fell_through = false;
 
     for tier in tiers {
-        // Resolve this tier's code/name from the room. `as_deref` turns the
-        // Option<String> config field into Option<&str> for lookup; a tier may
-        // define code, name, or both, so either lookup can be None.
-        let code = tier.code_property.as_deref().and_then(|p| lookup_property(room, p, source, builtin_defs));
-        let name = tier.name_property.as_deref().and_then(|p| lookup_property(room, p, source, builtin_defs));
+        // Resolve this tier's code/name from the room. A tier may define code,
+        // name, or both, so either can be None — `tier_value` takes the
+        // unconfigured case as well as the unset-on-this-room one.
+        let code = tier_value(room, tier.code_property.as_deref(), source, builtin_defs);
+        let name = tier_value(room, tier.name_property.as_deref(), source, builtin_defs);
 
         // A tier resolves if *either* of its referenced properties is present.
         let has_data = code.is_some() || name.is_some();
@@ -153,6 +180,72 @@ mod tests {
         assert!(!path[0].undefined);
         assert!(!path[1].undefined);
         assert!(path[2].undefined);
+    }
+
+    /// Revit's `"None"` is an unset parameter, not a tier value: a room whose
+    /// Building reads "None" is undefined, exactly as one with no Building
+    /// property at all — and so are the tiers below it. Without this, a real
+    /// job's 18 unset rooms became a building called "None" that sorted first
+    /// in the picker. The blank case is `lookup_property`'s and is covered
+    /// there; what is asserted here is that the two now agree.
+    #[test]
+    fn test_classify_room_literal_none_is_absent() {
+        let room = make_room("r1", BTreeMap::from([("bldg_name", ("None", None)), ("dept_name", ("Logistics", None))]));
+        let tiers = vec![
+            make_tier("Building", None, Some("bldg_name")),
+            make_tier("Department", None, Some("dept_name")),
+        ];
+
+        let path = classify_room(&room, &tiers, "revit", &[]);
+
+        assert!(path[0].undefined, "a Building of \"None\" is unset, not a building named None");
+        assert!(path[1].undefined, "and the tier below it falls through as usual");
+    }
+
+    /// The filter reads the *trimmed* value but hands back the original, so a
+    /// tier value is never silently reshaped on its way to the group key — only
+    /// " None " itself is rejected.
+    #[test]
+    fn test_classify_room_none_filter_does_not_trim_survivors() {
+        let room =
+            make_room("r1", BTreeMap::from([("bldg_name", (" None ", None)), ("dept_name", (" Ward 4 ", None))]));
+        let tiers = vec![
+            make_tier("Building", None, Some("bldg_name")),
+            make_tier("Department", None, Some("dept_name")),
+        ];
+
+        let path = classify_room(&room, &tiers, "revit", &[]);
+
+        assert!(path[0].undefined, "surrounding whitespace doesn't rescue \"None\"");
+        assert!(path[1].undefined, "so the tier below falls through");
+    }
+
+    /// "None" as a *substring* is an ordinary value — the check is equality on
+    /// the whole trimmed string, not a contains.
+    #[test]
+    fn test_classify_room_none_is_matched_whole() {
+        let room = make_room("r1", BTreeMap::from([("bldg_name", ("None Such Tower", None))]));
+        let tiers = vec![make_tier("Building", None, Some("bldg_name"))];
+
+        let path = classify_room(&room, &tiers, "revit", &[]);
+
+        assert!(!path[0].undefined);
+        assert_eq!(path[0].name.as_deref(), Some("None Such Tower"));
+    }
+
+    /// A tier defining both properties resolves on either one, so a code of
+    /// "None" beside a real name still classifies — the tier is undefined only
+    /// when everything it names is unset.
+    #[test]
+    fn test_classify_room_none_code_beside_real_name() {
+        let room = make_room("r1", BTreeMap::from([("bldg_code", ("None", None)), ("bldg_name", ("Riverside", None))]));
+        let tiers = vec![make_tier("Building", Some("bldg_code"), Some("bldg_name"))];
+
+        let path = classify_room(&room, &tiers, "revit", &[]);
+
+        assert!(!path[0].undefined);
+        assert_eq!(path[0].code, None, "the unset code is dropped rather than carried as \"None\"");
+        assert_eq!(path[0].name.as_deref(), Some("Riverside"));
     }
 
     /// A room missing tier 1 is undefined all the way down.

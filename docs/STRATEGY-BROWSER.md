@@ -37,6 +37,11 @@ rediscover are below rather than in the code, because they are properties of the
   undone deliberately: it is a UI decision about where a *per-level* fact belongs
   in a *scope-level* table, not a mechanical follow-on from the server change.
 
+  **No longer hypothetical as of 2026-08-25.** A centreline project now reports
+  `0` on every level while House A reports `1.5`, so two projects one dropdown
+  apart produce areas that mean measurably different things, and the UI
+  presents them identically.
+
 - **Door labels on the plan.** The inspector answers "what is this door" as
   ordinary DOM, so on-plan door text is a cost to take deliberately rather than a
   gap to close by default — see the label build cost below. Needs `door_label` in

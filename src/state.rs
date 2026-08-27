@@ -636,7 +636,7 @@ mod tests {
     fn test_ordinary_ids_are_accepted() {
         for id in [
             "sample-project",
-            "Rouse Hill Hospital",
+            "Riverside Hospital",
             "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
             "Building_BF_Framing_jan.r.christel",
             "130486",

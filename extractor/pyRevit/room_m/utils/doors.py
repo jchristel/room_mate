@@ -157,3 +157,59 @@ def door_insertion_point(door):
     if point is None:
         return None
     return {"x": float(point.X), "y": float(point.Y)}
+
+def nested_door_ids(doc):
+    """The ids of doors that are a *component of another door*, and so are not
+    doors at all -- they are its leaves, panels and hardware.
+
+    **This model family represents a door leaf as a nested shared family**, and
+    a nested shared instance is a real, independently-collectable
+    `FamilyInstance` carrying the Doors category of the family it was drawn
+    from. `FilteredElementCollector.OfCategory(OST_Doors)` therefore returns the
+    leaf alongside the door that contains it, and the export counted both.
+
+    What that costs is not a tidy over-count. On the job this was written
+    against, 2236 of 4134 exported "doors" were components: `PS`, `PS.V2X8`,
+    `PS Aluminium`, and a pull handle typed `3/4" diameter x 10" H x 4" W`.
+    **Not one of the 2236 carried a room reference**, and only 41 carried a
+    `Mark` -- because a component has neither. They were the bulk of what the
+    server then reported as homeless doors, which made a data artifact look
+    like a modelling gap.
+
+    **The test is the parent's category, not its family or name.** A door
+    hosting a *window*-category or generic-model sub-component is a different
+    statement about the model and is left alone; only "a door inside a door"
+    means leaf. Compared against `door.Category`, not against
+    `BuiltInCategory.OST_Doors` converted to an int: the collector above has
+    already fixed every element's category, so the door in hand IS the
+    comparison value, and this avoids the enum-to-id conversion that
+    `element_id_str` exists to keep version-proof.
+
+    **Only the immediate `SuperComponent` is tested**, matching Revit's own
+    one-step relationship. A leaf nested two deep inside an intermediate
+    component that is NOT a door would survive; no such arrangement exists in
+    the model this was measured on. Walking `SuperComponent` to the root would
+    be a loop here rather than a redesign, if one ever turns up.
+
+    Returned as its own set rather than subtracted from `doors_in_phase`'s,
+    deliberately: the two answer different questions, and an empty push has to
+    be able to say which of them emptied it. Folding them together would report
+    a leaf as "outside phase" in the one message written to stop a reader
+    hunting the wrong thing."""
+    nested = set()
+    collector = (
+        FilteredElementCollector(doc)
+        .OfCategory(BuiltInCategory.OST_Doors)
+        .WhereElementIsNotElementType()
+    )
+    for door in collector:
+        parent = getattr(door, "SuperComponent", None)
+        if parent is None:
+            continue  # a standalone door, which is the ordinary case
+        parent_category = getattr(parent, "Category", None)
+        own_category = getattr(door, "Category", None)
+        if parent_category is None or own_category is None:
+            continue  # nothing to compare: keep it, absence is not evidence
+        if element_id_str(parent_category.Id) == element_id_str(own_category.Id):
+            nested.add(element_id_str(door.Id))
+    return nested

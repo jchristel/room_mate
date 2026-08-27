@@ -3,7 +3,7 @@
 ## TL;DR
 The viewer's colour-plan `<select>` never shows because the viewer fetches colour
 plans using the **payload project id** (`130486`) against an endpoint that matches
-strictly on the **settings `project_id`** (`"Rouse Hill Hospital Health Services"`).
+strictly on the **settings `project_id`** (`"Riverside Hospital Health Services"`).
 Those are two different id spaces. The fetch 404s, `zone.colourPlans` falls to `[]`,
 and `populateColourSelect` hides the select.
 
@@ -22,7 +22,7 @@ as a fix.
   `list_projects`).
 - Every normal endpoint resolves that id through
   `SettingsRegistry::settings_for` (`state.rs:131`), which does
-  `by_project.get(id).or(default)`. Your `RHH.toml` has `is_default = true`, so
+  `by_project.get(id).or(default)`. Your `riverside.toml` has `is_default = true`, so
   `130486` resolves to the default bundle. That's why room data, buildings,
   milestones, validation all work.
 - BUT the settings read endpoint `GET /api/settings/projects/{id}`

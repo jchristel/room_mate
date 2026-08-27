@@ -99,11 +99,65 @@ Two places the literature has a better answer that was not taken:
 
 ## Open
 
-- **No model has been read in the centreline regime end to end.** That path
-  skips the close entirely, so its failure mode is silence rather than an
-  artifact. The extractor now *declares* the regime, so reaching this path no
-  longer needs a project-settings override — it needs a centreline model. Every
-  fixture and every model on hand is finish face.
+- **The centreline regime has now been read end to end, and it is mostly
+  right.** A hospital job read on 2026-08-25 — the **test project** every
+  measurement below comes from — is the first centreline data to reach the
+  server: 6 models, 18 levels, 2880 rooms in its main building. Its data and
+  its settings file are both gitignored, which is why it is unnamed here and
+  why the numbers, not the labels, are what is written down. The standing
+  "every fixture and every model on hand is finish face" is no longer true,
+  and the path whose failure mode is *silence rather than an artifact* has
+  been made to speak. What it said:
+
+  - The declared regime matches the measured one on every level: the
+    `coincident_share` cross-check in `areas.rs` logs nothing, and
+    `wall_gap_by_level` is `0` for all 18. The close is genuinely skipped.
+  - **335 of 361 groups report exactly 1.000× their rooms' net area** — the
+    signature of the regime, since a centreline room polygon already contains
+    its half-walls and the dissolve adds nothing. `adjacency` independently
+    lands on `wall_max = 0` and still finds 185 edges over 147 rooms, which is
+    the same fact from the other side: the rooms really do tile.
+  - Additivity holds. Of 72 parents, 49 are exact or carry a surplus, 20 are
+    exact to 0.00 ft², and 3 fall short — worst 21.7 ft² (0.48%), inside
+    `check_areas.py`'s 0.5% slack.
+
+  Two things it found, both **new and both centreline-specific**:
+
+  - **10 self-intersecting rings** — 6 on the building tier itself, the rest
+    spread over three departments and one sub-department. Simple rings is one
+    of the two invariants stated absolutely (it is an inline Rust test as well
+    as check 5), so this is a violation, not a threshold. Nothing bevels a
+    centreline dissolve, so the usual suspects — `sharpen_bevels`,
+    `corner_of_chamfer` — are not even running.
+  - **Two groups whose footprint is BELOW their rooms' net area**, both
+    sub-departments of one department: 0.89× and 0.92×. On centreline the
+    expected ratio is 1.000 exactly, so `check_areas.py`'s 0.95–1.6 band is
+    the wrong instrument here — it was calibrated for finish face, where the
+    footprint is net *plus* wall. Read against 1.000, 15 groups are low, not
+    two.
+
+  **The two are independent, which is the trap here**: 8 of the 10
+  self-intersecting groups measure exactly 1.000×, so the bad rings cost no
+  area at all, and neither low-ratio group self-intersects — correlating them
+  is an afternoon that finds nothing. The area loss pairs up somewhere else
+  entirely: one department's circulation sub-group is **157.2 ft² short** of
+  its rooms' net while its parent department is **157.2 ft² long** on the sum
+  of its children, the same figure on both sides. So the second finding is not
+  area vanishing but area moving **up a tier** — in a regime with no fill,
+  which is the only mechanism that is supposed to add anything at a parent.
+
+  What is still unread: the sibling-overlap check (3) has never completed on
+  the test project — the pure-Python sampler is O(pairs) over 361 groups and
+  was still running after half an hour. Everything above is a `--skip-overlap`
+  run. Do not answer it with a finer grid; it wants an exact clipper, and the
+  invariant it guards is already covered from two cheaper directions above (a
+  double-claim would push children past their parent, and would read above
+  1.000× on the group that swallowed).
+
+  The slack itself deserves a second look. `check_areas.py` justifies its 0.5%
+  by "the close's bevel at the level's outer boundary" — a centreline level has
+  no close, so on this project the slack is unearned and those 3 shortfalls
+  have no stated cause.
 
 - **IPMS 3 redistribution for finish-face projects.** Constructible from what is
   already here: the bands A and B jointly enclose but neither encloses alone are
@@ -118,7 +172,12 @@ Two places the literature has a better answer that was not taken:
   says `null` — honest, but not useful: the machinery exists and nobody has used
   it. The question to answer first is not "which standard do we like" but the one
   the table above raises, since declaring a standard on a finish-face project
-  would be a claim the numbers do not support.
+  would be a claim the numbers do not support. **The test project above is the
+  first where that objection does not apply** — it is centreline, so per the
+  table above `IPMS3` is declarable on it today, and it would be the first
+  non-null value any consumer has ever seen. Settle the rings above first: a
+  standard on a figure with a self-intersecting boundary is a claim about a
+  number that is still moving.
 
 - **No project has chosen a `max_wall_thickness` against a real model.** Every
   one runs on the 1.5 ft default, inherited from the constant it replaced rather
@@ -166,7 +225,17 @@ Two places the literature has a better answer that was not taken:
   finish-face regression baseline and evidence for setting `max_wall_thickness`.
   It does not tick 1 and 2, which want a hospital-scale finish-face export.
 
+  **The test project above is hospital-scale and does NOT tick them either**,
+  which is worth saying because it is the obvious wrong assumption to make
+  about it. It has the hazards House A lacks — double-loaded corridors, risers
+  — but it is *centreline*, so its tolerance collapses to `wall_max = 0` and
+  neither false positive can fire at any distance. The pairing still wanted is
+  scale **and** finish face; it supplies only the first.
+
 - **Residual chamfers**: 3 on House A, 2 on `sample-project`, 14 on the synthetic
   `showcase`, all ≤1.06 ft and cosmetic. Two fixes were tried and reverted with
   measurements. Try short-edge elimination or a miter limit before the T-vertex
-  fix.
+  fix. **Zero on the centreline test project**, and that is a control rather
+  than a fourth data point: chamfers are made by the close, and a centreline
+  dissolve never runs one. It does tell you the self-intersecting rings above
+  come from somewhere else.
