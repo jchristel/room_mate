@@ -1305,6 +1305,7 @@ mod tests {
             snapshot: Snapshot { taken_at: taken_at.to_string() },
             phase: Some("New Construction".to_string()),
             model_to_shared: None,
+            levels: vec![],
             doors,
         }
     }
