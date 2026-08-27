@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Loop, Model, ModelToShared, Point2D, Project, PropertyTiers, Snapshot};
+use super::{CustomValue, Level, Loop, Model, ModelToShared, Point2D, Project, PropertyTiers, Snapshot};
 
 /// One door instance, as extracted from Revit.
 ///
@@ -44,10 +44,15 @@ pub struct Door {
     /// The level the door sits on, keyed the same way `Room.level_id` is —
     /// and, like it, unique only *within* one model.
     ///
-    /// No `levels` array rides the door payload. The model's rooms snapshot
-    /// carries the level set these ids point into, and sending a second copy
-    /// would create two level lists per model that could disagree, for no reader
-    /// that needs the duplicate.
+    /// The set these ids point into normally comes from the model's **rooms**
+    /// snapshot, and that stays the preferred source — one level list per model,
+    /// no chance of two disagreeing.
+    ///
+    /// `DoorPayload::levels` is the fallback, and exists for the one case the
+    /// rooms snapshot cannot cover: a model that pushes doors and no rooms at
+    /// all. Read that field for why, and note the ordering — a rooms snapshot
+    /// wins wherever both exist, so the duplicate this comment used to warn
+    /// about cannot become a disagreement, only a redundancy.
     ///
     /// Note the reason is no longer "ingest refuses a doors push to a model with
     /// no rooms" — it does not, and doors may arrive first. The level set may
@@ -290,22 +295,51 @@ pub struct DoorPayload {
     #[serde(default)]
     pub model_to_shared: Option<ModelToShared>,
 
+    /// The level set `Door.level_id` points into, for a model that has no rooms
+    /// snapshot to supply one.
+    ///
+    /// **Empty is the ordinary case and stays the ordinary case.** A model that
+    /// pushes rooms as well already declares its levels there, and this list is
+    /// then redundant — `service::doors` prefers the rooms' set, so sending it
+    /// twice changes nothing. What this exists for is the model that pushes
+    /// doors and *no rooms at all*: a facade or envelope file, whose doors are
+    /// real and whose rooms live in the interior models it is linked against.
+    ///
+    /// Without it those doors are unreachable rather than merely unresolved.
+    /// `service::doors::Candidates::locate` looks an elevation up by
+    /// `(model_id, level_id)` and gives up before probing when it misses, so a
+    /// doors-only model's every door returned `NoCandidate` no matter what the
+    /// geometry said — 191 of them on the job this was built for, of which ~93
+    /// are real doors once nested leaves are excluded.
+    ///
+    /// **Optional and additive, so no schema bump** (STRATEGY.md's rule): every
+    /// v2 payload already on disk stays valid and means exactly what it meant.
+    ///
+    /// The *elevation* is what this is for, not the id. Level ids are
+    /// per-document and never match across models; elevations are what cross,
+    /// which is why `room_locator` compares on them. See `LEVEL_EPS_FT`.
+    #[serde(default)]
+    pub levels: Vec<Level>,
+
     pub doors: Vec<Door>,
 }
 
 /// One model's block on a multi-model doors upload — the doors counterpart of
-/// `RoomModelEnvelope`, and deliberately shorter than it.
+/// `RoomModelEnvelope`, and still shorter than it.
 ///
-/// No `levels` and no `room_boundary`: a doors push targets a model whose rooms
-/// snapshot already carries the level set `Door.level_id` points into, and the
-/// boundary regime is a rooms fact the doors contract has no key for. What is
-/// left is identity and placement, which is exactly what a door needs.
+/// No `room_boundary`: that is a rooms fact the doors contract has no key for.
+/// `levels` IS carried, on the optional terms `DoorPayload::levels` states — a
+/// doors-only model has no rooms snapshot to declare the level set its doors
+/// point into, and without one its doors cannot be placed on an elevation axis
+/// at all. A model that also pushes rooms may leave it empty and usually does.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DoorModelEnvelope {
     #[serde(flatten)]
     pub model: Model,
     #[serde(default)]
     pub model_to_shared: Option<ModelToShared>,
+    #[serde(default)]
+    pub levels: Vec<Level>,
 }
 
 impl DoorModelEnvelope {
@@ -327,6 +361,7 @@ impl DoorModelEnvelope {
             snapshot,
             phase,
             model_to_shared: self.model_to_shared,
+            levels: self.levels,
             doors,
         }
     }
@@ -618,6 +653,66 @@ mod tests {
             super::super::lookup_property(&door, "Fire Rating", "revit", &[]),
             Some("FD30".to_string())
         );
+    }
+
+    /// `levels` is optional and additive, which is what keeps doors on v2: a
+    /// payload written before the field existed still parses and still means
+    /// what it meant. That is the STRATEGY.md test for "does this force a bump",
+    /// asserted rather than argued.
+    #[test]
+    fn test_levels_are_optional_on_a_doors_payload() {
+        let mut json = serde_json::json!({
+            "schema_version": 2,
+            "project":  { "id": "p", "name": "P" },
+            "model":    { "id": "facade", "name": "F", "source": "revit" },
+            "snapshot": { "taken_at": "2026-08-27T00:00:00Z" },
+            "phase": "New Construction",
+            "doors": []
+        });
+
+        let without: DoorPayload = serde_json::from_value(json.clone()).unwrap();
+        assert!(without.levels.is_empty(), "absent reads as empty, not an error");
+
+        json["levels"] = serde_json::json!([
+            { "id": "16667035", "name": "GROUND", "elevation": 55500.0 }
+        ]);
+        let with: DoorPayload = serde_json::from_value(json).unwrap();
+        assert_eq!(with.levels.len(), 1);
+        assert_eq!(with.levels[0].elevation, 55500.0, "the elevation is the field's whole purpose");
+
+        let reparsed: DoorPayload = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+        assert_eq!(reparsed.levels[0].id, "16667035", "survives a round-trip");
+    }
+
+    /// A streamed model block carries `levels` on the same optional terms, so
+    /// the two push paths cannot disagree about whether a doors-only model can
+    /// declare its own.
+    #[test]
+    fn test_stream_model_block_carries_levels() {
+        let json = serde_json::json!({
+            "schema_version": 2,
+            "project":  { "id": "p", "name": "P" },
+            "snapshot": { "taken_at": "2026-08-27T00:00:00Z" },
+            "phase": "New Construction",
+            "models": [
+                { "id": "facade", "name": "F", "source": "revit",
+                  "levels": [{ "id": "l1", "name": "GROUND", "elevation": 55500.0 }] },
+                { "id": "interior", "name": "I", "source": "revit" }
+            ]
+        });
+
+        let envelope: DoorStreamEnvelope = serde_json::from_value(json).unwrap();
+        assert_eq!(envelope.models[0].levels.len(), 1);
+        assert!(envelope.models[1].levels.is_empty(), "a model with rooms elsewhere may send none");
+
+        let payload = envelope.models.into_iter().next().unwrap().into_payload(
+            SUPPORTED_DOOR_SCHEMA,
+            Project { id: "p".into(), name: "P".into() },
+            Snapshot { taken_at: "2026-08-27T00:00:00Z".into() },
+            Some("New Construction".into()),
+            vec![],
+        );
+        assert_eq!(payload.levels[0].elevation, 55500.0, "the block's levels reach the decomposed payload");
     }
 
     /// The streamed envelope deserializes with no `doors` key present — proves

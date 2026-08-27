@@ -35,7 +35,9 @@ a run may push either alone, in any order.
 """
 
 from duHast.Revit.Doors.Export.to_data_door import get_all_door_data
+from duHast.Revit.Levels.Export.to_data_level_building import get_all_level_data
 from duHast.Data.Objects.Collectors import data_door as dd
+from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 
 from room_m.post_doors import post_doors_stream
@@ -60,9 +62,9 @@ def export_model(selected_doc, phase_name, return_value):
     Failures are recorded and swallowed rather than raised, so one unreadable
     document costs its own doors and not the rest of the run's.
 
-    :return: `{"doors", "placements", "allowed_ids", "nested_ids"}` -- the raw
-        duHast export, the Revit-read placements, this document's phase filter,
-        and the doors that are components of another door.
+    :return: `{"doors", "levels", "placements", "allowed_ids", "nested_ids"}` --
+        the raw duHast exports, the Revit-read placements, this document's phase
+        filter, and the doors that are components of another door.
     :rtype: dict
     """
     try:
@@ -81,6 +83,19 @@ def export_model(selected_doc, phase_name, return_value):
         door_data = get_all_door_data(selected_doc)
         json_formatted_doors = build_json_for_file(
             {dd.DataDoor.data_type: door_data}, "{}".format(selected_doc.Title))
+
+        # Levels ride the DOORS envelope too, and unconditionally rather than
+        # only for a rooms-less document. This side cannot tell whether the
+        # server already has rooms for this model -- a doors-only button exists
+        # precisely so doors can be pushed against rooms sent by an earlier run
+        # -- so "does it need them" is not a question the producer can answer.
+        # Sending them always makes a doors push self-sufficient whatever the
+        # run held, and costs a list of tens of levels; the server prefers the
+        # rooms snapshot's copy wherever it has one, so the duplicate can only
+        # ever be redundant.
+        level_data = get_all_level_data(selected_doc)
+        json_formatted_levels = build_json_for_file(
+            {dl.DataLevelBuilding.data_type: level_data}, "{}".format(selected_doc.Title))
     except Exception as e:
         return_value.update_sep(
             False, "{}: door export failed: {}".format(selected_doc.Title, e)
@@ -89,6 +104,7 @@ def export_model(selected_doc, phase_name, return_value):
 
     return {
         "doors": json_formatted_doors,
+        "levels": json_formatted_levels,
         "placements": placements,
         "allowed_ids": allowed_door_ids,
         "nested_ids": nested_ids,

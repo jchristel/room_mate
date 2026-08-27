@@ -2394,6 +2394,7 @@ mod tests {
                 envelope: DoorModelEnvelope {
                     model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
                     model_to_shared: None,
+                    levels: vec![],
                 },
                 doors: vec![make_door("d1", Some("r1"), None)],
             }],

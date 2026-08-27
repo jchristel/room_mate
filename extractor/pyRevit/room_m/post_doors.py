@@ -14,12 +14,18 @@ What is genuinely different, and why:
 
 - **The doors schema versions independently of rooms**, starting at 1. A
   change to the room contract has nothing to say about doors.
-- **No `levels` array.** A door's `level_id` points into the level set its own
-  model's rooms snapshot already carries. A second copy could only disagree.
-  Note the reason is no longer "the server refuses a doors push without rooms" —
-  it does not, and doors may now arrive first. The level set may therefore be
-  absent for a while, which is a state the server reports rather than a reason
-  to duplicate it here.
+- **`levels` rides the envelope, and the reason it now does is narrow.** A
+  door's `level_id` normally points into the level set its own model's ROOMS
+  snapshot carries, and the server still prefers that copy — so for most models
+  this list is redundant, which is the point: a redundancy cannot disagree.
+  What it exists for is the model that pushes doors and *no rooms at all*, a
+  facade or envelope file whose doors are real and whose rooms live in the
+  interior models it links. The server looks an elevation up by
+  `(model_id, level_id)` before it will probe a door's surroundings, so without
+  this such a model's every door is unreachable rather than merely unresolved.
+  Sent unconditionally: this side cannot know whether the server already holds
+  rooms for the model, so it cannot answer "are they needed" -- see
+  `room_m.exporters.doors.export_model`.
 - **The room references, the position and the direction do not come from the
   export.** See `translate_door` -- all four are read from the Revit API by
   `room_m.utils.doors.door_placements`, in one pass, which is the only side
@@ -61,10 +67,12 @@ from System.Net.Http.Headers import MediaTypeHeaderValue
 
 from room_m.post_common import (
     build_identity_envelope,
+    duhast_objects_to_plain,
     duhast_object_to_plain,
     empty_push_refusal,
     loop_to_points,
     properties_to_map,
+    translate_levels,
     write_ndjson_line,
     _post_content,
 )
@@ -130,13 +138,28 @@ def loops_from_polygon(polygons):
     return loops
 
 
+def stamp_levels(contribution):
+    """This document's levels for its doors envelope block.
+
+    A thin named wrapper so the two push paths cannot drift on where the list
+    comes from, and so an older contribution -- one built before doors carried
+    levels, as the fixture generators still do -- yields `[]` rather than
+    raising. Empty is a legal value the server reads as "ask the rooms snapshot",
+    which is what every model with rooms wants anyway."""
+    levels_source = contribution.get("levels")
+    if not levels_source:
+        return []
+    return translate_levels(duhast_objects_to_plain(levels_source))
+
+
 def build_envelope(run_envelope, model_blocks):
     """Everything the v2 doors contract needs EXCEPT `doors`.
 
-    Which is the shared identity block and nothing else -- no `levels`, no
-    `room_boundary` (see the module docstring for both). That is why this is a
-    single delegating call rather than a body: what a doors envelope carries is
-    exactly what every entity's envelope carries, so the *only* doors-specific
+    Which is the shared identity block plus whatever the caller already stamped
+    onto each block -- `levels` among them now, see `stamp_levels`. No
+    `room_boundary`: that stays a rooms fact the doors contract has no key for.
+    Still a single delegating call rather than a body: what a doors envelope
+    carries is what every entity's envelope carries, so the *only* doors-specific
     facts left here are the schema version and the noun in the phase message.
 
     Kept as a named function rather than inlined into its two callers, on the
@@ -221,6 +244,7 @@ def translate(run_envelope, entries):
     blocks = [dict(block) for block, _ in entries]
     contract = build_envelope(run_envelope, blocks)
     for model, (_, contribution) in zip(contract["models"], entries):
+        model["levels"] = stamp_levels(contribution)
         doors_source = duhast_object_to_plain(contribution["doors"])
         out_doors = []
         nested_ids = contribution.get("nested_ids") or set()
@@ -252,6 +276,8 @@ def post_doors_stream(run_envelope, entries, url=SERVER_URL_STREAM):
     see the module docstring for why this is stricter than the server, and why
     the run rather than the model is the scope that makes it honest."""
     blocks = [dict(block) for block, _ in entries]
+    for block, (_, contribution) in zip(blocks, entries):
+        block["levels"] = stamp_levels(contribution)
     envelope = build_envelope(run_envelope, blocks)
 
     raw = 0

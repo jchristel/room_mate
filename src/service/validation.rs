@@ -2031,6 +2031,7 @@ mod tests {
             snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
             phase: Some("New Construction".to_string()),
             model_to_shared: None,
+            levels: vec![],
             doors,
         };
         (key, payload)

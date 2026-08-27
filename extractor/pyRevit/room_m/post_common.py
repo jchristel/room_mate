@@ -151,6 +151,41 @@ def properties_to_map(instance_properties):
     return out
 
 
+LEVEL_LIST_KEY = "building level"
+
+
+def translate_levels(levels_source):
+    """One model's duHast level export as the contract's `levels`, sorted by
+    elevation.
+
+    **Per model, and that is load-bearing.** A level id is a per-document
+    `ElementId`, so two models' level lists cannot be merged -- "Level 1" in the
+    architectural model and in the structural model are different ids naming the
+    same floor, and the server dedups them across models on read. Stamping the
+    list onto its own model's envelope block is what keeps that possible.
+
+    Built before the identity check, as it always has been: a malformed level is
+    a broken export too, and reordering the two would only change which complaint
+    a reader sees first.
+
+    **Shared rather than duplicated, because both entities stamp levels now.**
+    Rooms always have; doors do too, so that a model pushing doors and NO rooms
+    still declares the level set its `level_id`s point into -- without which the
+    server cannot put those doors on an elevation axis and refuses to probe them
+    at all. Two copies that could drift on what a level looks like would be
+    worse than one import, the same terms `empty_push_refusal` is shared under.
+    """
+    levels = []
+    for lvl in levels_source.get(LEVEL_LIST_KEY, []):
+        levels.append({
+            "id": str(lvl.get("id", "unknown")),
+            "name": lvl.get("name", "Unknown Level"),
+            "elevation": float(lvl.get("elevation", 0.0) or 0.0),
+        })
+    levels.sort(key=lambda l: l["elevation"])
+    return levels
+
+
 def build_identity_envelope(run_envelope, model_blocks, entity, schema_version):
     """The envelope fields EVERY entity's contract carries: schema_version,
     project, snapshot, phase, and the run's `models` list (each block stamped

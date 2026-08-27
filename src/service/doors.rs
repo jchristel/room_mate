@@ -7,6 +7,9 @@
 //! which lands with doors' first reference source), no classification hierarchy,
 //! and no level dedup — a door's `level_id` points into the level set its
 //! model's *rooms* snapshot already carries, so there is nothing here to merge.
+//! A model that pushes doors and no rooms carries its own levels on the doors
+//! envelope instead (`DoorPayload::levels`); `build_candidates` reads them only
+//! where the rooms did not supply one, which is a fallback rather than a merge.
 //!
 //! `?building=` **is** supported, and was the last thing to arrive: a door's
 //! building is its *owning* room's building, so the scope only became
@@ -325,7 +328,12 @@ fn place_direction(m: &ModelToShared, p: Point2D) -> Option<Point2D> {
 /// **Scoped through `rooms::scope_payloads`, not by re-reading the store.** A
 /// door has to be resolved against exactly the rooms `/rooms` is serving, or a
 /// milestone read would answer two different questions about one building.
-fn build_candidates(state: &AppState, scope: &DoorScope<'_>, mode: RoomResolution) -> Result<Candidates, ServiceError> {
+fn build_candidates(
+    state: &AppState,
+    scope: &DoorScope<'_>,
+    mode: RoomResolution,
+    door_payloads: &[(ModelKey, DoorPayload)],
+) -> Result<Candidates, ServiceError> {
     let registry = state.settings();
     let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
     let (scoped, _) = super::rooms::scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
@@ -382,6 +390,29 @@ fn build_candidates(state: &AppState, scope: &DoorScope<'_>, mode: RoomResolutio
                     elevation,
                 });
             }
+        }
+    }
+
+    // A doors-only model declares its own levels and placement on the doors
+    // envelope, because it has no rooms snapshot to declare them. Filled in
+    // *after* the rooms pass and only where the key is absent, so a model that
+    // pushes both is answered by its rooms — which keeps the duplicate a
+    // redundancy rather than something that could disagree.
+    //
+    // This is what makes such a model's doors reachable at all: `locate` gives
+    // up before probing when the elevation lookup misses, so without this every
+    // door in a facade or envelope file reports `NoCandidate` however good its
+    // geometry is. It only pays off under `Project` — a model with no rooms has
+    // no same-model candidates to be probed against, whatever its elevations.
+    for (key, payload) in door_payloads {
+        if scope.project.is_some_and(|p| payload.project.id != p) {
+            continue;
+        }
+        for level in &payload.levels {
+            out.elevation.entry((key.model_id.clone(), level.id.clone())).or_insert(level.elevation);
+        }
+        if let Some(transform) = payload.model_to_shared {
+            out.transform_by_model.entry(key.model_id.clone()).or_insert(transform);
         }
     }
     Ok(out)
@@ -456,7 +487,7 @@ pub fn locate_project_doors(
         return Ok(out);
     }
     let scope = DoorScope { project: Some(project_id), ..DoorScope::default() };
-    let candidates = build_candidates(state, &scope, mode)?;
+    let candidates = build_candidates(state, &scope, mode, stored_doors)?;
     for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
         for door in &payload.doors {
             out.insert((key.model_id.clone(), door.id.clone()), candidates.locate(door, &payload.model.id));
@@ -616,7 +647,8 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
         }
         let project_scope = DoorScope { project: Some(&payload.project.id), ..DoorScope::default() };
         let project_scope = DoorScope { milestone: scope.milestone, ..project_scope };
-        candidates_by_project.insert(payload.project.id.clone(), build_candidates(state, &project_scope, mode)?);
+        candidates_by_project
+            .insert(payload.project.id.clone(), build_candidates(state, &project_scope, mode, &scoped)?);
     }
 
     // Phase 2 — derive the response doors, applying the property filter *after*
@@ -833,6 +865,7 @@ mod tests {
                 snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
                 phase: Some("New Construction".into()),
                 model_to_shared: None,
+                levels: vec![],
                 doors,
             })
             .unwrap();
@@ -858,6 +891,148 @@ mod tests {
         );
         assert_eq!(door.owner_rooms, vec!["right".to_string()], "attributed, not homeless");
         assert_eq!(door.door.to_room, None, "the stored reference is untouched");
+    }
+
+    /// A state with the rooms in ONE model and the doors in ANOTHER that has no
+    /// rooms at all — the facade/envelope split. `door_levels` is what the doors
+    /// model declares on its own envelope; passing `&[]` reproduces the state
+    /// before `DoorPayload::levels` existed.
+    fn state_split_models(
+        mode: crate::settings::RoomResolution,
+        door_levels: &[(&str, f64)],
+        doors: Vec<Door>,
+    ) -> AppState {
+        let mut bundle = bundle();
+        bundle.doors.room_resolution = mode;
+        let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle)]), None);
+        // The rooms model. Identity placement on both sides, so the shared frame
+        // is a no-op and the test is about the elevation lookup, not the affine.
+        state
+            .set_snapshot(RoomPayload {
+                schema_version: SUPPORTED_SCHEMA,
+                project: Project { id: "p1".into(), name: "P".into() },
+                model: Model { id: "interior".into(), name: "M".into(), source: "revit".into() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                phase: Some("New Construction".into()),
+                model_to_shared: Some(ModelToShared { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }),
+                room_boundary: Some(crate::contract::RoomBoundary::FinishFace),
+                levels: vec![crate::contract::Level { id: "lvl1".into(), name: "Level 1".into(), elevation: 0.0 }],
+                rooms: vec![room_rect("left", 0.0, 10.0), room_rect("right", 10.5, 20.0)],
+            })
+            .unwrap();
+        // The facade model: doors, no rooms, and its OWN level ids — which never
+        // match the interior model's, exactly as in Revit.
+        state
+            .set_door_snapshot(DoorPayload {
+                schema_version: SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p1".into(), name: "P".into() },
+                model: Model { id: "facade".into(), name: "F".into(), source: "revit".into() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                phase: Some("New Construction".into()),
+                model_to_shared: Some(ModelToShared { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }),
+                levels: door_levels
+                    .iter()
+                    .map(|(id, elevation)| crate::contract::Level {
+                        id: (*id).into(),
+                        name: "Level 1".into(),
+                        elevation: *elevation,
+                    })
+                    .collect(),
+                doors,
+            })
+            .unwrap();
+        state
+    }
+
+    fn facade_door(id: &str, level_id: &str) -> Door {
+        Door { level_id: level_id.to_string(), ..wall_door(id) }
+    }
+
+    /// **The doors-only model, which is what `DoorPayload::levels` exists for.**
+    /// Its levels let `locate` put the door on an elevation axis; the rooms it
+    /// then finds are in a *different* model, so the answer is model-qualified.
+    #[test]
+    fn test_a_doors_only_model_resolves_against_another_models_rooms() {
+        let state = state_split_models(
+            crate::settings::RoomResolution::Project,
+            &[("facade-lvl", 0.0)],
+            vec![facade_door("d1", "facade-lvl")],
+        );
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        let door = &result.doors[0];
+
+        assert_eq!(
+            door.room_origin.to_room,
+            SideOrigin::Derived(RoomRef { model_id: "interior".into(), room_id: "right".into() }),
+            "the room is in the interior model, not the door's own"
+        );
+        assert_eq!(
+            door.owner_rooms_qualified,
+            vec![RoomRef { model_id: "interior".into(), room_id: "right".into() }],
+            "a cross-model owner is only expressible on the qualified list"
+        );
+        assert!(
+            door.owner_rooms.is_empty(),
+            "the bare list stays same-model: a foreign room id there would resolve against the wrong model"
+        );
+    }
+
+    /// **Without the levels it is unreachable, not merely unresolved** — and the
+    /// distinction is the whole reason the field was added. The geometry is
+    /// identical to the test above; only the doors envelope's level set is gone,
+    /// and `locate` gives up before it probes anything.
+    #[test]
+    fn test_a_doors_only_model_with_no_levels_cannot_be_probed() {
+        let state =
+            state_split_models(crate::settings::RoomResolution::Project, &[], vec![facade_door("d1", "facade-lvl")]);
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        let door = &result.doors[0];
+
+        assert_eq!(door.room_origin.to_room, SideOrigin::Unresolved(Unresolved::NoCandidate));
+        assert!(door.owner_rooms_qualified.is_empty(), "homeless, with the geometry never consulted");
+    }
+
+    /// **A rooms snapshot wins over the doors envelope's copy.** The doors model
+    /// declares its level at a nonsense elevation; the rooms snapshot declares
+    /// the same id at the real one, and the door still resolves — so a model
+    /// that pushes both cannot be broken by a stale duplicate.
+    #[test]
+    fn test_the_rooms_snapshot_wins_over_the_doors_envelope_levels() {
+        let mut bundle = bundle();
+        bundle.doors.room_resolution = crate::settings::RoomResolution::SameModel;
+        let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle)]), None);
+        state
+            .set_snapshot(RoomPayload {
+                schema_version: SUPPORTED_SCHEMA,
+                project: Project { id: "p1".into(), name: "P".into() },
+                model: Model { id: "m1".into(), name: "M".into(), source: "revit".into() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                phase: Some("New Construction".into()),
+                model_to_shared: None,
+                room_boundary: Some(crate::contract::RoomBoundary::FinishFace),
+                levels: vec![crate::contract::Level { id: "lvl1".into(), name: "Level 1".into(), elevation: 0.0 }],
+                rooms: vec![room_rect("left", 0.0, 10.0), room_rect("right", 10.5, 20.0)],
+            })
+            .unwrap();
+        state
+            .set_door_snapshot(DoorPayload {
+                schema_version: SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p1".into(), name: "P".into() },
+                model: Model { id: "m1".into(), name: "M".into(), source: "revit".into() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                phase: Some("New Construction".into()),
+                model_to_shared: None,
+                levels: vec![crate::contract::Level { id: "lvl1".into(), name: "Level 1".into(), elevation: 9999.0 }],
+                doors: vec![wall_door("d1")],
+            })
+            .unwrap();
+
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        assert_eq!(
+            result.doors[0].owner_rooms,
+            vec!["right".to_string()],
+            "resolved at the rooms snapshot's elevation, not the doors envelope's 9999"
+        );
     }
 
     /// **Off is the default and it derives nothing.** Turning resolution on
@@ -958,6 +1133,7 @@ D-101,60
                 snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
                 phase: Some("New Construction".to_string()),
                 model_to_shared: None,
+                levels: vec![],
                 doors: vec![
                     make_door("d1", None, Some("r1"), &[("Door Mark", "D-101")]),
                     // No matching key: an unmatched row is a signal, not an
@@ -1019,6 +1195,7 @@ D-101,60
                 snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
                 phase: Some("New Construction".to_string()),
                 model_to_shared: None,
+                levels: vec![],
                 doors: vec![make_door("d1", None, Some("r1"), &[("Door Mark", "D-101")])],
             })
             .unwrap();
@@ -1045,6 +1222,7 @@ D-101,60
                     snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
                     phase: Some("New Construction".to_string()),
                     model_to_shared: None,
+                    levels: vec![],
                     doors: list,
                 })
                 .unwrap();
@@ -1194,6 +1372,7 @@ D-101,60
                 snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
                 phase: Some("New Construction".to_string()),
                 model_to_shared: None,
+                levels: vec![],
                 doors: vec![make_door("d1", Some("r1"), None, &[])],
             })
             .unwrap();
@@ -1220,6 +1399,7 @@ D-101,60
                 snapshot: Snapshot { taken_at: "2026-03-01T00:00:00Z".to_string() },
                 phase: Some("New Construction".to_string()),
                 model_to_shared: None,
+                levels: vec![],
                 doors: vec![make_door("d1", Some("r1"), None, &[])],
             })
             .unwrap();
@@ -1249,6 +1429,7 @@ D-101,60
                     snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
                     phase: Some("New Construction".to_string()),
                     model_to_shared: None,
+                    levels: vec![],
                     doors: doors.clone(),
                 })
                 .unwrap();
@@ -1327,6 +1508,7 @@ D-101,60
                     snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
                     phase: Some("New Construction".to_string()),
                     model_to_shared: None,
+                    levels: vec![],
                     doors: vec![
                         make_door(&format!("{model}-owned"), None, Some("r1"), &[]),
                         make_door(&format!("{model}-homeless"), None, None, &[]),
@@ -1386,6 +1568,7 @@ D-101,60
                     snapshot: Snapshot { taken_at: ts.to_string() },
                     phase: Some("New Construction".to_string()),
                     model_to_shared: None,
+                    levels: vec![],
                     doors: vec![make_door(id, Some("r1"), None, &[])],
                 })
                 .unwrap()
