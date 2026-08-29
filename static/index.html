@@ -1016,10 +1016,43 @@ function sampleScheme(name, t) {
   return rgbToHex(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f);
 }
 
-function numericProp(room, name) {
+// Resolve one authored property name against a room, as a raw string or null.
+// A `<source>.<label>` name reads that joined reference record's field; anything
+// else is one of the room's own properties. Absent and blank collapse to the
+// same null, matching the server's `lookup_property` — a colour plan cannot act
+// on an empty string any more than on a missing key.
+//
+// The split follows the server's rule (`split_namespace` in service/rooms.rs):
+// a prefix binds as a namespace only when it names a source this payload
+// actually carries, so a Revit property with a dot in its name keeps resolving
+// as itself. `knownReferenceSources` is the vocabulary, refreshed by
+// `syncReferenceSources()` at the top of `ingestAll` — before any zone renders,
+// which is why colour can rely on it being current.
+//
+// Where the two rules part company: the server treats an unrecognised word
+// before a dot as an error, and there is no error channel at colour time — an
+// unresolvable plan just greys its rooms, the same "no data" degradation an
+// unparseable value already gets. `validate_namespaced_field` (via
+// bootstrap::load_project_bundle) refuses that typo at settings-load instead,
+// where the message has somewhere to go.
+function roomValue(room, name) {
+  const dot = name.indexOf(".");
+  if (dot > 0) {
+    const source = name.slice(0, dot);
+    if (knownReferenceSources.includes(source)) {
+      const record = room[source];
+      const value = record && record.fields ? record.fields[name.slice(dot + 1).trim()] : null;
+      return value == null || value === "" ? null : value;
+    }
+  }
   const p = room.properties && room.properties[name];
-  if (!p || p.value == null || p.value === "") return null;
-  const n = parseFloat(p.value);
+  return p && p.value != null && p.value !== "" ? p.value : null;
+}
+
+function numericProp(room, name) {
+  const raw = roomValue(room, name);
+  if (raw == null) return null;
+  const n = parseFloat(raw);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -1032,11 +1065,6 @@ function classKey(room, tierName) {
   const tv = (room.classification || []).find(t => t.tier === tierName);
   if (!tv || tv.undefined) return null;
   return tv.code != null ? tv.code : (tv.name != null ? tv.name : null);
-}
-
-function dateProp(room, name) {
-  const p = room.properties && room.properties[name];
-  return p && p.value != null && p.value !== "" ? p.value : null;
 }
 
 function parseDate(value, format) {
@@ -1136,7 +1164,7 @@ function buildColourContext(rooms, plan) {
     ctx.nearMs = parseDate(mode.near_date, null); // near_date is a plain YYYY-MM-DD from the editor
     ctx.maxPast = 0;
     for (const room of rooms) {
-      const d = parseDate(dateProp(room, mode.property), mode.format);
+      const d = parseDate(roomValue(room, mode.property), mode.format);
       if (d == null || ctx.nearMs == null) continue;
       const delta = d - ctx.nearMs;
       if (delta <= 0) ctx.maxPast = Math.max(ctx.maxPast, -delta); // past/at only; future goes blue
@@ -1159,7 +1187,7 @@ function colourForRoom(room, plan, ctx) {
   }
 
   if (mode.kind === "daterange") {
-    const d = parseDate(dateProp(room, mode.property), mode.format);
+    const d = parseDate(roomValue(room, mode.property), mode.format);
     if (d == null || ctx.nearMs == null) return NO_DATA_COLOUR;
     const delta = d - ctx.nearMs;
     if (delta > 0) return FUTURE_COLOUR;

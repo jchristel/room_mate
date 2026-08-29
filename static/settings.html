@@ -206,10 +206,10 @@
 
         <section class="block">
           <h2>Room label</h2>
-          <p class="hint">Ordered fields shown on each room in the viewer. $name and $id are the room's own name/id; anything else is a property name.</p>
+          <p class="hint">Ordered fields shown on each room in the viewer. $name and $id are the room's own name/id; <code>source.Column</code> reads a joined reference source; anything else is a property name.</p>
           <div class="chips" id="labelChips"></div>
           <label class="field">
-            <input type="text" id="labelInput" size="16" placeholder="Area" />
+            <input type="text" id="labelInput" size="16" placeholder="Area" list="roomPropertyOptions" />
           </label>
           <button type="button" class="action" id="addLabelBtn">+ field</button>
         </section>
@@ -223,7 +223,7 @@
 
         <section class="block">
           <h2>Colour plans</h2>
-          <p class="hint">Named room-colouring configs the viewer's colour picker offers. At most one may be active (the picker's default; "No colour" always overrides). All colouring is computed in the browser — the server just stores these. This pass edits <em>property compare</em> plans (compare two room properties, colour by the result); property names come from the current project's rooms.</p>
+          <p class="hint">Named room-colouring configs the viewer's colour picker offers. At most one may be active (the picker's default; "No colour" always overrides). All colouring is computed in the browser — the server just stores these. This pass edits <em>property compare</em> plans (compare two room properties, colour by the result). Property names come from the current project's rooms, plus <code>source.Column</code> for a joined reference source's data. Hierarchy tiers are the exception — they read room properties only.</p>
           <div class="rows" id="colourRows"></div>
           <button type="button" class="action" id="addColourBtn">+ colour plan</button>
           <datalist id="roomPropertyOptions"></datalist>
@@ -359,10 +359,10 @@ async function selectProject(projectId) {
   loadRoomPropertyKeys(projectId);
 }
 
-// The union of property names actually present on this project's rooms — the
-// datalist the colour-plan property-compare inputs draw from. Fetched from
-// /rooms (the viewer's data source); an unreachable/empty result just means an
-// empty list (the inputs stay free-text, so a not-yet-present name still works).
+// The union of property names actually present on this project's rooms — half
+// of the datalist the property inputs draw from. Fetched from /rooms (the
+// viewer's data source); an unreachable/empty result just means an empty list
+// (the inputs stay free-text, so a not-yet-present name still works).
 async function loadRoomPropertyKeys(projectId) {
   roomPropertyKeys = [];
   try {
@@ -375,7 +375,26 @@ async function loadRoomPropertyKeys(projectId) {
   } catch (err) {
     roomPropertyKeys = [];
   }
-  $("roomPropertyOptions").replaceChildren(...roomPropertyKeys.map(k => el("option", { value: k })));
+  renderPropertyOptions();
+}
+
+// The datalist every property input shares: the room's own property names,
+// then each configured source's columns as `<source>.<label>` — the same
+// namespaced vocabulary a /rooms filter and comparison_key already speak.
+//
+// Rebuilt from both caches rather than assembled once, because they land
+// independently: `roomPropertyKeys` comes from one /rooms read, while
+// `labelsBySource` fills per source and refreshes on every upload. Own
+// properties sort first — they are what most plans compare, and a source's
+// columns read as a group under their prefix.
+function renderPropertyOptions() {
+  const options = roomPropertyKeys.map(k => el("option", { value: k }));
+  for (const source of Object.keys(labelsBySource).sort()) {
+    for (const label of (labelsBySource[source] || [])) {
+      options.push(el("option", { value: `${source}.${label}` }));
+    }
+  }
+  $("roomPropertyOptions").replaceChildren(...options);
 }
 
 function newProject() {
@@ -1034,6 +1053,7 @@ async function loadReferenceLatest(src) {
     labelsBySource[src.name] = [];
     referenceStatus(src, "", "no upload yet — QA labels load from the first uploaded CSV");
   }
+  renderPropertyOptions(); // this source's columns just became authorable
 }
 
 async function uploadReferenceFile(src, file) {
@@ -1054,6 +1074,7 @@ async function uploadReferenceFile(src, file) {
   if (res.ok) {
     const data = JSON.parse(text);
     labelsBySource[src.name] = data.labels;
+    renderPropertyOptions(); // a re-upload may have added or dropped columns
     // `record_count` is the DEDUPLICATED count, so a file with repeated or
     // blank ids stores fewer records than it has rows. Say so here: this is
     // the one moment the operator is looking at the file they just picked,
