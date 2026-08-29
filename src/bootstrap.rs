@@ -20,10 +20,10 @@ use std::sync::Arc;
 use anyhow::Context;
 
 use crate::reference::load_reference_from_bytes;
-use crate::service::rooms::validate_comparison_field;
+use crate::service::rooms::{validate_namespaced_field, validate_room_only_field};
 use crate::settings::{
-    load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields, ReferenceOrigin,
-    ServerConfig,
+    load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields, ColourMode,
+    ColourPlan, ReferenceOrigin, ServerConfig,
 };
 use crate::state::{seed_if_test, AppState, ProjectReferenceSource, ProjectSettings, Shared};
 use crate::storage::{FsStore, MemStore, SnapshotStore};
@@ -38,34 +38,53 @@ use crate::storage::{FsStore, MemStore, SnapshotStore};
 pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Result<(String, bool, ProjectSettings)> {
     let settings = load_settings(path).with_context(|| format!("bad settings file: {}", path.display()))?;
 
-    // Comparison fields: the namespace half is checkable right here, and a bad
-    // one left unchecked yields an empty milestone diff indistinguishable from
-    // "no changes" — the silent no-op this loud failure replaces. Lives here
-    // rather than in `load_settings` because the vocabulary belongs to
-    // `service::rooms` (settings must not depend on service); running inside
-    // this function is also what gives the settings-save path the same
-    // rejection for free. Unqualified names stay unvalidated — free-text room
-    // properties may legitimately match nothing yet.
+    // Every setting that may name a joined source: the namespace half is
+    // checkable right here, and left unchecked each one fails differently but
+    // always silently — an empty milestone diff indistinguishable from "no
+    // changes", a room-tag chip that never appears, a colour plan that greys
+    // every room. Lives here rather than in `load_settings` because the
+    // vocabulary belongs to `service::rooms` (settings must not depend on
+    // service); running inside this function is also what gives the
+    // settings-save path the same rejection for free. Unqualified names stay
+    // unvalidated — free-text room properties may legitimately match nothing
+    // yet, and only the source half is a closed set this file can check.
     //
     // Validated against THIS project's own configured source names, not a
-    // global cross-project union: a comparison is always scoped to one
-    // project (`compare_milestones(state, project, ..)`), so a
-    // `comparison_key` naming a source only some OTHER project configures
-    // could never resolve here anyway — the tighter, project-local check is
-    // both simpler (no chicken-and-egg with the rest of the directory still
-    // loading) and the semantically correct one. Contrast the live `/rooms`
-    // filter (`handlers::get_rooms`), which spans projects unscoped and so
-    // must use the registry-wide union instead (see
+    // global cross-project union: every one of these settings is scoped to one
+    // project (a comparison runs as `compare_milestones(state, project, ..)`; a
+    // label and a colour plan belong to the project that authored them), so a
+    // name pointing at a source only some OTHER project configures could never
+    // resolve here anyway — the tighter, project-local check is both simpler
+    // (no chicken-and-egg with the rest of the directory still loading) and the
+    // semantically correct one. Contrast the live `/rooms` filter
+    // (`handlers::get_rooms`), which spans projects unscoped and so must use the
+    // registry-wide union instead (see
     // `SettingsRegistry::known_reference_sources`).
     let known_here: std::collections::BTreeSet<String> = settings.sources.reference.keys().cloned().collect();
     for (which, field) in settings
         .comparison_key
         .iter()
-        .map(|f| ("comparison_key", f))
-        .chain(settings.comparison_properties.iter().map(|f| ("comparison_properties", f)))
+        .map(|f| ("comparison_key".to_string(), f))
+        .chain(settings.comparison_properties.iter().map(|f| ("comparison_properties".to_string(), f)))
+        .chain(settings.room_label.iter().map(|f| ("room_label".to_string(), f)))
+        .chain(settings.colour_plans.iter().flat_map(colour_plan_fields))
     {
-        validate_comparison_field(field, &known_here)
+        validate_namespaced_field(field, &known_here)
             .map_err(|msg| anyhow::anyhow!("bad {which} entry {field:?} in {}: {msg}", path.display()))?;
+    }
+
+    // Hierarchy tiers are the one surface that reads room properties ONLY, so
+    // they get the inverse check — see `validate_room_only_field`.
+    for tier in &settings.hierarchy {
+        for (which, field) in [
+            ("code_property", &tier.code_property),
+            ("name_property", &tier.name_property),
+        ] {
+            let Some(field) = field else { continue };
+            validate_room_only_field(field, &known_here).map_err(|msg| {
+                anyhow::anyhow!("hierarchy tier {:?} {which} {field:?} in {}: {msg}", tier.name, path.display())
+            })?;
+        }
     }
 
     // A source name that collides with a room's own wire field would
@@ -173,6 +192,23 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
         hierarchy_exclusions: settings.hierarchy_exclusions,
     };
     Ok((settings.project_id, settings.is_default, bundle))
+}
+
+/// The property names one colour plan authors, each paired with the label a
+/// load error should name it by — the plan's own name included, since a project
+/// may hold several and "bad colour plan property_a" would not say which one.
+///
+/// `Hierarchy` contributes nothing: its `tiers` names hierarchy tiers, not room
+/// properties, so there is no namespace to split.
+fn colour_plan_fields(plan: &ColourPlan) -> Vec<(String, &String)> {
+    let label = |which: &str| format!("colour plan {:?} {which}", plan.name);
+    match &plan.mode {
+        ColourMode::PropertyCompare { property_a, property_b, .. } => {
+            vec![(label("property_a"), property_a), (label("property_b"), property_b)]
+        }
+        ColourMode::DateRange { property, .. } => vec![(label("property"), property)],
+        ColourMode::Hierarchy { .. } => Vec::new(),
+    }
 }
 
 /// Load and validate every `*.toml` file directly inside `projects_dir` (not

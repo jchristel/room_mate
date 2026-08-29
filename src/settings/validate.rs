@@ -74,11 +74,13 @@ pub fn validate_reference_field_shapes(fields: &[ReferenceFieldConfig]) -> anyho
 /// - **`Bands` colourings are a sorted, disjoint partition** (see
 ///   `validate_bands`).
 ///
-/// Property names are deliberately **not** validated: a name that doesn't
+/// Property names are deliberately **not** validated *here*: a name that doesn't
 /// resolve on a room just renders that room "no data" grey in the browser (the
 /// `room_label` "an unresolvable name contributes nothing" precedent), and room
 /// properties are source-native and vary, so a hard fail here would reject
-/// legitimate configs.
+/// legitimate configs. The **namespace half** of a `<source>.<field>` name is a
+/// different question and IS checked, in `bootstrap::load_project_bundle` —
+/// the vocabulary belongs to `service::rooms`, which settings must not depend on.
 pub fn validate_colour_plans(plans: &[ColourPlan]) -> anyhow::Result<()> {
     let active: Vec<&str> = plans.iter().filter(|p| p.active).map(|p| p.name.as_str()).collect();
     if active.len() > 1 {

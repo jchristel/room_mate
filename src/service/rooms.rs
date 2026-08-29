@@ -98,22 +98,50 @@ pub struct RoomResponse {
 
 /// Resolve one room's label fields from the configured, ordered name list.
 /// `"$name"` / `"$id"` are intrinsic tokens for `Room`'s own fields (not
-/// reachable via `lookup_property`, which only reads `room.properties`);
-/// anything else is a canonical property name resolved the same way
+/// reachable via `lookup_property`, which only reads `room.properties`); a
+/// `<source>.<label>` name reads that joined reference record's field; anything
+/// else is a canonical property name resolved the same way
 /// dRofus/classification already are, so a second source (or a differently-
 /// named property) needs no change here.
+///
+/// `known` is the project's *configured* source vocabulary, deliberately not
+/// the subset that actually joined onto this room. The two differ only on a
+/// room with no record for a named source, and there the configured set is what
+/// keeps the rule uniform: the name still parses as a namespace and resolves to
+/// nothing ("an unmatched key is a signal, not an error"). Handing in the joined
+/// subset instead would make the very same label fall through to a bogus
+/// `room.properties["<source>.<label>"]` lookup on exactly the rooms that failed
+/// to match — one rule for matched rooms and another for the rest.
+///
+/// A blank reference cell contributes nothing, matching `lookup_property`, which
+/// already collapses "property missing" and "property blank" together — a label
+/// list should not sprout an empty chip because one CSV cell was empty.
 fn resolve_label_fields(
     room: &Room,
     fields: &[String],
     source: &str,
     builtin_defs: &[BuiltinPropertyDef],
+    reference: &BTreeMap<String, ReferenceRecord>,
+    known: &BTreeSet<String>,
 ) -> Vec<String> {
     fields
         .iter()
         .filter_map(|name| match name.as_str() {
             "$name" => Some(room.name.clone()).filter(|s| !s.is_empty()),
             "$id" => Some(room.id.clone()),
-            canonical => lookup_property(room, canonical, source, builtin_defs),
+            other => match split_namespace(other, known) {
+                NamespaceSplit::Joined { source: ns, property } => reference
+                    .get(&ns)
+                    .and_then(|record| record.fields.get(property))
+                    .filter(|v| !v.trim().is_empty())
+                    .cloned(),
+                // An unknown namespace has no error channel here — a label that
+                // does not resolve contributes nothing, same as an absent
+                // property. `validate_namespaced_field` is what refuses the
+                // typo, at load, where there IS somewhere to put the message.
+                NamespaceSplit::UnknownSource(_) => None,
+                NamespaceSplit::Unqualified(canonical) => lookup_property(room, canonical, source, builtin_defs),
+            },
         })
         .collect()
 }
@@ -134,9 +162,14 @@ fn resolve_label_fields(
 /// *pinned* snapshots instead of each source's current data — see
 /// `assemble_scoped_rooms`, which resolves it once per project and passes
 /// the same map into every room `assemble_room` sees for that project.
+///
+/// `known` is `effective_reference`'s key set, hoisted to the caller because it
+/// is per-payload and this runs per room — see `resolve_label_fields` for why
+/// the vocabulary is the configured sources rather than the joined ones.
 fn assemble_room(
     bundle: &ProjectSettings,
     effective_reference: &BTreeMap<String, &ReferenceData>,
+    known: &BTreeSet<String>,
     room: &Room,
     source: &str,
     key: &ModelKey,
@@ -156,7 +189,7 @@ fn assemble_room(
     // Classification resolved fresh — see staleness note on classify_room.
     let classification = classify_room(room, &bundle.hierarchy, source, &bundle.builtin_properties);
 
-    let label = resolve_label_fields(room, &bundle.room_label, source, &bundle.builtin_properties);
+    let label = resolve_label_fields(room, &bundle.room_label, source, &bundle.builtin_properties, &reference, known);
 
     RoomResponse {
         room: room.clone(),
@@ -519,22 +552,53 @@ fn resolve_field<T: FilterTarget>(
     }
 }
 
-/// Validate the *namespace* half of one settings-configured comparison field
-/// (`comparison_key` / `comparison_properties`) — the only half checkable at
-/// load time. An unqualified name stays unvalidated: it is free-text that may
-/// legitimately match no currently-loaded room (an empty store still boots).
-/// A bad namespace, by contrast, can never resolve, and unvalidated it would
-/// yield an empty diff indistinguishable from "no changes" — the silent no-op
-/// this check turns into a loud load error (see CODING-CONVENTIONS.md §"Loud
-/// startup over silent no-op"). Called from `bootstrap::load_project_bundle`,
-/// which the settings-save path re-runs, so a save gets the same rejection.
-pub fn validate_comparison_field(field: &str, known: &std::collections::BTreeSet<String>) -> Result<(), String> {
+/// Validate the *namespace* half of one settings-configured field name — the
+/// only half checkable at load time. Serves every surface that may name a
+/// joined source: `comparison_key`/`comparison_properties`, `room_label`, and a
+/// colour plan's compared/date properties.
+///
+/// An unqualified name stays unvalidated: it is free-text that may legitimately
+/// match no currently-loaded room (an empty store still boots). A bad namespace,
+/// by contrast, can never resolve — and unvalidated it degrades differently on
+/// each surface but always silently: an empty milestone diff indistinguishable
+/// from "no changes", a label chip that never appears, a plan that greys every
+/// room. One loud load error replaces all three (see CODING-CONVENTIONS.md
+/// §"Loud startup over silent no-op"). Checking only the knowable half is what
+/// makes leaving the property half alone safe.
+///
+/// Called from `bootstrap::load_project_bundle`, which the settings-save path
+/// re-runs, so a save gets the same rejection.
+pub fn validate_namespaced_field(field: &str, known: &std::collections::BTreeSet<String>) -> Result<(), String> {
     match split_namespace(field, known) {
         NamespaceSplit::UnknownSource(ns) => Err(unknown_source_message(ns, known)),
         NamespaceSplit::Joined { source, property: "" } => Err(format!(
             "no property named after the {source:?} namespace — expected {source}.<field label>"
         )),
         NamespaceSplit::Joined { .. } | NamespaceSplit::Unqualified(_) => Ok(()),
+    }
+}
+
+/// The counterpart rule, for a setting that resolves against the room's OWN
+/// properties and cannot reach a joined source at all — today, a hierarchy
+/// tier's `code_property`/`name_property`.
+///
+/// `classify_room` takes a `&Room` and never sees the joined record, so a tier
+/// naming a real source would resolve to nothing on every room and bucket the
+/// whole project as `undefined`. That is the silent no-op worth a load error,
+/// and it is why this is the inverse of `validate_namespaced_field` rather than
+/// a stricter version of it: there, a known namespace is the *good* case.
+///
+/// Only a **known** source prefix is refused. An unrecognised word before a dot
+/// is, on this surface, just a property name that happens to contain a dot —
+/// `lookup_property` reads it literally and always has — so rejecting it would
+/// break a working config to guard against a typo that costs nothing here.
+pub fn validate_room_only_field(field: &str, known: &std::collections::BTreeSet<String>) -> Result<(), String> {
+    match split_namespace(field, known) {
+        NamespaceSplit::Joined { source, .. } => Err(format!(
+            "reads data source {source:?}, which classification cannot do — a tier resolves against the room's own \
+             properties only, so every room would classify as undefined"
+        )),
+        NamespaceSplit::UnknownSource(_) | NamespaceSplit::Unqualified(_) => Ok(()),
     }
 }
 
@@ -1082,6 +1146,10 @@ fn assemble_scoped_rooms(
             })
             .collect();
 
+        // The namespace vocabulary a `<source>.<label>` room label splits
+        // against, built once per payload rather than per room.
+        let known_sources: BTreeSet<String> = effective_reference.keys().cloned().collect();
+
         // First model of a project wins; every model of one project resolves
         // the same effective data, so this is dedup, not precedence. A
         // project with no reference source gets no entry — absent, not empty,
@@ -1101,7 +1169,8 @@ fn assemble_scoped_rooms(
         let assembled: Vec<RoomResponse> = matching_rooms
             .into_iter()
             .map(|room| {
-                let mut response = assemble_room(bundle, &effective_reference, room, &payload.model.source, key);
+                let mut response =
+                    assemble_room(bundle, &effective_reference, &known_sources, room, &payload.model.source, key);
                 if let Some(canonical_id) =
                     level_remap.get(&(key.project_id.clone(), key.model_id.clone(), room.level_id.clone()))
                 {
@@ -1376,7 +1445,7 @@ mod tests {
     fn test_resolve_label_fields_intrinsic_tokens() {
         let room = make_room("324772", "Room 101", &[]);
         let fields = vec!["$name".to_string(), "$id".to_string()];
-        let label = resolve_label_fields(&room, &fields, "revit", &[]);
+        let label = resolve_label_fields(&room, &fields, "revit", &[], &BTreeMap::new(), &BTreeSet::new());
         assert_eq!(label, vec!["Room 101".to_string(), "324772".to_string()]);
     }
 
@@ -1390,7 +1459,7 @@ mod tests {
             by_source: std::collections::HashMap::from([("revit".to_string(), "Area".to_string())]),
         }];
         let fields = vec!["Area".to_string()];
-        let label = resolve_label_fields(&room, &fields, "revit", &defs);
+        let label = resolve_label_fields(&room, &fields, "revit", &defs, &BTreeMap::new(), &BTreeSet::new());
         assert_eq!(label, vec!["25.5".to_string()]);
     }
 
@@ -1400,8 +1469,56 @@ mod tests {
     fn test_resolve_label_fields_skips_unresolved() {
         let room = make_room("1", "Room", &[]);
         let fields = vec!["$name".to_string(), "Nonexistent".to_string(), "$id".to_string()];
-        let label = resolve_label_fields(&room, &fields, "revit", &[]);
+        let label = resolve_label_fields(&room, &fields, "revit", &[], &BTreeMap::new(), &BTreeSet::new());
         assert_eq!(label, vec!["Room".to_string(), "1".to_string()]);
+    }
+
+    /// A `<source>.<label>` field reads the joined reference record, so a room
+    /// tag can show a CSV column the model itself never carried.
+    #[test]
+    fn test_resolve_label_fields_reads_joined_reference() {
+        let room = make_room("1", "Room", &[]);
+        let reference = BTreeMap::from([(
+            "sample".to_string(),
+            ReferenceRecord { fields: BTreeMap::from([("NetArea".to_string(), "30.5".to_string())]) },
+        )]);
+        let known = BTreeSet::from(["sample".to_string()]);
+        let fields = vec!["sample.NetArea".to_string()];
+        let label = resolve_label_fields(&room, &fields, "revit", &[], &reference, &known);
+        assert_eq!(label, vec!["30.5".to_string()]);
+    }
+
+    /// The rule that makes the vocabulary the *configured* sources rather than
+    /// the joined ones: a room that matched no record still reads
+    /// `sample.NetArea` as a namespace and resolves it to nothing. It must NOT
+    /// fall back to a room property that happens to be spelled that way, or
+    /// unmatched rooms would silently follow a different rule from matched ones.
+    #[test]
+    fn test_resolve_label_fields_unmatched_source_does_not_fall_back_to_property() {
+        let room = make_room("1", "Room", &[("sample.NetArea", "decoy")]);
+        let defs = vec![BuiltinPropertyDef {
+            canonical: "sample.NetArea".to_string(),
+            by_source: std::collections::HashMap::from([("revit".to_string(), "sample.NetArea".to_string())]),
+        }];
+        let known = BTreeSet::from(["sample".to_string()]);
+        let fields = vec!["$id".to_string(), "sample.NetArea".to_string()];
+        let label = resolve_label_fields(&room, &fields, "revit", &defs, &BTreeMap::new(), &known);
+        assert_eq!(label, vec!["1".to_string()], "the decoy property must not stand in for the joined field");
+    }
+
+    /// A blank CSV cell contributes nothing, matching `lookup_property`'s
+    /// collapse of missing and blank — no empty chip on the room tag.
+    #[test]
+    fn test_resolve_label_fields_skips_blank_reference_cell() {
+        let room = make_room("1", "Room", &[]);
+        let reference = BTreeMap::from([(
+            "sample".to_string(),
+            ReferenceRecord { fields: BTreeMap::from([("NetArea".to_string(), "   ".to_string())]) },
+        )]);
+        let known = BTreeSet::from(["sample".to_string()]);
+        let fields = vec!["$id".to_string(), "sample.NetArea".to_string()];
+        let label = resolve_label_fields(&room, &fields, "revit", &[], &reference, &known);
+        assert_eq!(label, vec!["1".to_string()]);
     }
 
     /// Two models under the same project each define "the same" level (same
@@ -2043,23 +2160,44 @@ mod tests {
     /// unqualified names pass, an unknown namespace and an empty property
     /// after the dot are rejected with a message naming the known sources.
     #[test]
-    fn test_validate_comparison_field() {
-        assert!(validate_comparison_field("Area", &known()).is_ok());
-        assert!(validate_comparison_field("drofus.NetArea", &known()).is_ok());
+    fn test_validate_namespaced_field() {
+        assert!(validate_namespaced_field("Area", &known()).is_ok());
+        assert!(validate_namespaced_field("drofus.NetArea", &known()).is_ok());
         // A dot inside a spaced name stays part of the property name — the
         // same subtlety `Predicate::parse` applies, via the same helper.
-        assert!(validate_comparison_field("Room Ref. Number", &known()).is_ok());
+        assert!(validate_namespaced_field("Room Ref. Number", &known()).is_ok());
+        // The room-label intrinsics need no special case: no dot, so they
+        // split as `Unqualified` and pass straight through.
+        assert!(validate_namespaced_field("$name", &known()).is_ok());
 
         let err =
-            validate_comparison_field("drofuss.NetArea", &known()).expect_err("unknown namespace must be rejected");
+            validate_namespaced_field("drofuss.NetArea", &known()).expect_err("unknown namespace must be rejected");
         assert!(
             err.contains("unknown data source") && err.contains("drofus"),
             "names the known sources: {err:?}"
         );
 
         let err =
-            validate_comparison_field("drofus.", &known()).expect_err("empty property after the dot must be rejected");
+            validate_namespaced_field("drofus.", &known()).expect_err("empty property after the dot must be rejected");
         assert!(err.contains("drofus"), "names the namespace: {err:?}");
+    }
+
+    /// The inverse rule for a room-only surface: a *known* source is the
+    /// rejection (classification can't read one), while an unrecognised word
+    /// before a dot stays a legal property name — the opposite verdict on both
+    /// inputs from `validate_namespaced_field`, which is the whole point of
+    /// having two.
+    #[test]
+    fn test_validate_room_only_field() {
+        assert!(validate_room_only_field("Department", &known()).is_ok());
+        assert!(
+            validate_room_only_field("Dept.Code", &known()).is_ok(),
+            "unknown prefix is just a dotted name here"
+        );
+
+        let err =
+            validate_room_only_field("drofus.Department", &known()).expect_err("a tier must not name a joined source");
+        assert!(err.contains("drofus") && err.contains("undefined"), "explains the consequence: {err:?}");
     }
 
     /// `resolve_presence` spans both vocabularies: unqualified names resolve

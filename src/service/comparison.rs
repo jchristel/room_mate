@@ -628,7 +628,7 @@ pub fn compare_milestones(
     // A comparison is always scoped to this one project, so its own
     // configured source names are the right (and only reachable) vocabulary
     // — see the matching note on `bootstrap::load_project_bundle`'s
-    // `validate_comparison_field` call for why this differs from the
+    // `validate_namespaced_field` call for why this differs from the
     // registry-wide set the live `/rooms` filter needs.
     let known: std::collections::BTreeSet<String> = bundle.reference.keys().cloned().collect();
 
