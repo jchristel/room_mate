@@ -409,25 +409,28 @@ export class GlPlanRenderer implements PlanRenderer {
   }
 
   roomAt(clientX: number, clientY: number): Room | null {
-    // Viewport pixels -> flipped world, using the canvas's own rect so this is
-    // correct under any CSS sizing.
-    const r = this.#canvas.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) return null;
-    // The ASPECT-CORRECTED view, not `zone.view` — the same rect the projection
-    // uses. Using the raw view here would put the pick a few percent off
-    // everywhere and further off towards the edges, which reads as "clicking
-    // sometimes selects the wrong room" rather than as a projection bug.
-    const eff = this.#effectiveView();
-    const wx = eff.x + ((clientX - r.left) / r.width) * eff.w;
-    const wy = eff.y + ((clientY - r.top) / r.height) * eff.h;
-    return this.#index.roomAt(wx, wy);
+    const p = this.toWorld(clientX, clientY);
+    if (!p) return null;
+    return this.#index.roomAt(p.x, p.y);
   }
 
-  /** Viewport pixels -> flipped world, or `null` when the canvas has no size.
-   *  Extracted so `roomAt` and `pickAt` cannot drift on the aspect correction —
-   *  a pick a few percent off everywhere reads as "clicking selects the wrong
-   *  thing", not as a projection bug. */
-  #toWorld(clientX: number, clientY: number): { x: number; y: number } | null {
+  /**
+   * Viewport pixels -> flipped world, or `null` when the canvas has no size.
+   *
+   * PUBLIC because the page pans and zooms in world units and cannot do this
+   * conversion itself. `zone.view` is the RAW view; what is on screen is the
+   * aspect-corrected one, and the two differ on whichever axis `meet` gave the
+   * slack to. A drag converted with the raw view moves the plan by the wrong
+   * number of world units on exactly that axis — the plan slides out from under
+   * the pointer horizontally while tracking it perfectly vertically, which
+   * reads as a mouse problem rather than a projection one.
+   *
+   * Everything that converts between screen and world goes through
+   * `#effectiveView`, and this is how a caller outside the renderer joins that
+   * rule instead of reimplementing it.
+   */
+  toWorld(clientX: number, clientY: number): { x: number; y: number } | null {
+    // The canvas's own rect, so this is correct under any CSS sizing.
     const r = this.#canvas.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) return null;
     const eff = this.#effectiveView();
@@ -438,7 +441,7 @@ export class GlPlanRenderer implements PlanRenderer {
   }
 
   pickAt(clientX: number, clientY: number): Pick | null {
-    const p = this.#toWorld(clientX, clientY);
+    const p = this.toWorld(clientX, clientY);
     if (!p) return null;
     // Doors first. A door glyph is drawn over the room it serves and is far
     // smaller, so a click inside one is a click on the door — resolving to the

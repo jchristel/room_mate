@@ -3924,11 +3924,25 @@ function wireInteractions(zone) {
     if (!dragging) { updateHover(zone, e); return; }
     if (!movedFar && downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > CLICK_SLOP_PX)
       movedFar = true;
-    const rect = svg.getBoundingClientRect();
-    const v = { ...zone.view };
-    v.x -= (e.clientX - last.x) / rect.width * v.w;
-    v.y -= (e.clientY - last.y) / rect.height * v.h;
+    // Both ends of the drag in WORLD units, from the renderer, and subtracted.
+    //
+    // Not `dx / rect.width * v.w`: `zone.view` is the raw view, and what is on
+    // screen is that view widened to the canvas's aspect ratio. On the axis
+    // `meet` gave the slack to, the raw view spans FEWER world units than the
+    // pixels do, so the plan moved less than the pointer and slid out from
+    // under it — on one axis only, which is why it read as a horizontal-pan
+    // bug rather than a projection one. The other axis was right by accident:
+    // it is the constrained one, where the two rects agree.
+    //
+    // Both conversions read the same view (nothing has committed yet), so the
+    // difference is exact rather than an approximation of it.
+    const to = zone.renderer.toWorld(e.clientX, e.clientY);
+    const from = zone.renderer.toWorld(last.x, last.y);
     last = { x: e.clientX, y: e.clientY };
+    if (!to || !from) return;
+    const v = { ...zone.view };
+    v.x -= to.x - from.x;
+    v.y -= to.y - from.y;
     commitView(zone, v);
     // A pan is not a hover. Dropping the mark here also stops the tooltip
     // trailing the pointer across a drag, which reads as a stuck overlay.
@@ -3941,13 +3955,17 @@ function wireInteractions(zone) {
 
   svg.addEventListener("wheel", e => {
     e.preventDefault();
-    const rect = svg.getBoundingClientRect();
+    // The anchor comes from the renderer for the same reason the pan's ends do:
+    // the point under the cursor is only findable through the aspect-corrected
+    // view. Scaling the RAW view about that point is still right — the fit is
+    // centre-preserving and uniform, so the corrected view scales by the same
+    // `k` about the same point.
+    const m = zone.renderer.toWorld(e.clientX, e.clientY);
+    if (!m) return;
     const v = { ...zone.view };
-    const mx = v.x + (e.clientX - rect.left) / rect.width * v.w;
-    const my = v.y + (e.clientY - rect.top) / rect.height * v.h;
     const k = e.deltaY > 0 ? 1.1 : 0.9;
-    v.x = mx - (mx - v.x) * k;
-    v.y = my - (my - v.y) * k;
+    v.x = m.x - (m.x - v.x) * k;
+    v.y = m.y - (m.y - v.y) * k;
     v.w *= k; v.h *= k;
     commitView(zone, v);
   }, { passive: false });

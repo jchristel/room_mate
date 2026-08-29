@@ -102,6 +102,18 @@ export interface PlanRenderer {
    *  visibly wrong when missed. */
   setAreasActive(on: boolean): void;
 
+  /**
+   * A viewport point in world coordinates, or `null` when the plan has no size.
+   *
+   * The page owns pan and zoom — it holds the view rect and hands it back
+   * through `setView` — but it cannot convert a pointer position itself,
+   * because the rect it holds is not the rect on screen: aspect correction sits
+   * between them, and only the renderer knows the canvas. A caller that does
+   * the division itself gets one axis right and the other wrong by whatever
+   * letterboxing added, which is a pan that drifts on one axis only.
+   */
+  toWorld(clientX: number, clientY: number): { x: number; y: number } | null;
+
   /** The room under a viewport point, or `null` for empty space. */
   roomAt(clientX: number, clientY: number): Room | null;
 

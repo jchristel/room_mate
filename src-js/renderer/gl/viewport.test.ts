@@ -69,6 +69,63 @@ describe("fitViewToAspect", () => {
   });
 });
 
+describe("pan and zoom against the corrected view", () => {
+  // The page owns pan/zoom and holds the RAW view; `toWorld` is the only way it
+  // can ask where a pointer is. These pin the arithmetic on the page's side of
+  // that call, because the page itself is untestable inline JavaScript.
+
+  /** What `GlPlanRenderer.toWorld` does, minus the DOM. */
+  function toWorld(view: Rect, w: number, h: number, px: number, py: number) {
+    const eff = fitViewToAspect(view, w, h);
+    return { x: eff.x + (px / w) * eff.w, y: eff.y + (py / h) * eff.h };
+  }
+
+  // A letterboxed case: the view is squarer than the canvas, so width gains the
+  // slack and the horizontal axis is the one the raw view gets wrong.
+  const view: Rect = { x: 0, y: 0, w: 100, h: 100 };
+  const cw = 1200;
+  const ch = 400;
+
+  it("keeps the grabbed point under the pointer through a drag", () => {
+    // THE REGRESSION, stated as the thing a user checks: put the pointer on a
+    // wall, drag, and the wall is still under the pointer. It failed
+    // horizontally and passed vertically, which is what made it read as a mouse
+    // fault rather than a projection one.
+    const grabbed = toWorld(view, cw, ch, 300, 120);
+    const to = toWorld(view, cw, ch, 500, 260);
+    const panned: Rect = { ...view, x: view.x - (to.x - grabbed.x), y: view.y - (to.y - grabbed.y) };
+    const underPointer = toWorld(panned, cw, ch, 500, 260);
+    expect(underPointer.x).toBeCloseTo(grabbed.x, 9);
+    expect(underPointer.y).toBeCloseTo(grabbed.y, 9);
+  });
+
+  it("moves both axes by the same world units per pixel", () => {
+    // The shipped bug in one line: `dx / rect.width * view.w` differs from
+    // `dy / rect.height * view.h` by exactly the letterboxing, so a diagonal
+    // drag skewed. Nothing that goes through `toWorld` can differ that way.
+    const a = toWorld(view, cw, ch, 100, 100);
+    const b = toWorld(view, cw, ch, 200, 200);
+    expect(b.x - a.x).toBeCloseTo(b.y - a.y, 9);
+  });
+
+  it("holds the cursor's world point fixed across a wheel zoom", () => {
+    // Scaling the RAW view about a point found through the CORRECTED one is not
+    // a mixed-coordinate mistake: the fit is centre-preserving and uniform, so
+    // both rects scale by `k` about the same point. This is what says so.
+    const m = toWorld(view, cw, ch, 900, 90);
+    const k = 1.1;
+    const zoomed: Rect = {
+      x: m.x - (m.x - view.x) * k,
+      y: m.y - (m.y - view.y) * k,
+      w: view.w * k,
+      h: view.h * k,
+    };
+    const after = toWorld(zoomed, cw, ch, 900, 90);
+    expect(after.x).toBeCloseTo(m.x, 9);
+    expect(after.y).toBeCloseTo(m.y, 9);
+  });
+});
+
 describe("labelTransform", () => {
   /** Where the label container puts a world point, in CSS pixels. */
   function place(view: Rect, cssW: number, wx: number, wy: number) {
