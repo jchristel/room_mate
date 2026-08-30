@@ -1234,8 +1234,8 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // room-versus-room finding that owes nothing to reference data — a project
     // reconciling against nothing can still be serving two phases at once, and
     // that is exactly the project nobody would otherwise be watching.
-    let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
-    let stored_doors = state.all_door_snapshots().map_err(ServiceError::Internal)?;
+    let stored = state.all_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
+    let stored_doors = state.all_door_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
 
     let mut response = ValidationResponse::nothing_to_reconcile();
     // Both of these are room-versus-room and door-versus-room findings that owe

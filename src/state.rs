@@ -384,10 +384,29 @@ impl AppState {
         self.store.model_index()
     }
 
-    /// Every model's latest snapshot, for the `/rooms` merge.
-    pub fn all_snapshots(&self) -> anyhow::Result<Vec<(ModelKey, RoomPayload)>> {
+    /// Whether any model anywhere holds a snapshot of this kind — the
+    /// "nothing has ever been pushed to this server" question behind both
+    /// assemblers' 204.
+    ///
+    /// **Store-wide on purpose, and answered from the index.** It used to fall
+    /// out of `all_snapshots().is_empty()`, which was fine while that read the
+    /// whole store and became wrong the moment it took a scope: a scoped read
+    /// of an unknown project is empty, and answering 204 there would collapse
+    /// the distinction both assemblers document — "nothing pushed" (204) versus
+    /// "the question has an empty answer" (200 with empty vecs).
+    pub fn has_any_snapshot(&self, kind: SnapshotKind) -> anyhow::Result<bool> {
+        Ok(self.store.model_index()?.iter().any(|row| row.latest.contains_key(&kind)))
+    }
+
+    /// Every model's latest snapshot, for the `/rooms` merge, narrowed to one
+    /// project — `None` for the genuinely unscoped read.
+    ///
+    /// **Pass the scope you have.** Parsing is what a read costs here, and a
+    /// caller that filters the result afterwards has already paid for every
+    /// project it is about to discard. See `SnapshotStore::all_latest_raw`.
+    pub fn all_snapshots(&self, project: Option<&str>) -> anyhow::Result<Vec<(ModelKey, RoomPayload)>> {
         self.store
-            .all_latest_raw(SnapshotKind::Rooms)
+            .all_latest_raw(SnapshotKind::Rooms, project)
             .and_then(|raw| raw.into_iter().map(|(key, bytes)| parse_rooms(&key, &bytes).map(|p| (key, p))).collect())
     }
 
@@ -403,9 +422,9 @@ impl AppState {
     /// Every model's latest doors snapshot. A model with rooms but no doors
     /// contributes nothing — the normal state for a project that has not pushed
     /// doors, not an error.
-    pub fn all_door_snapshots(&self) -> anyhow::Result<Vec<(ModelKey, DoorPayload)>> {
+    pub fn all_door_snapshots(&self, project: Option<&str>) -> anyhow::Result<Vec<(ModelKey, DoorPayload)>> {
         self.store
-            .all_latest_raw(SnapshotKind::Doors)
+            .all_latest_raw(SnapshotKind::Doors, project)
             .and_then(|raw| raw.into_iter().map(|(key, bytes)| parse_doors(&key, &bytes).map(|p| (key, p))).collect())
     }
 

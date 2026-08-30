@@ -112,7 +112,7 @@ pub fn list_buildings(state: &AppState, project_id: &str) -> Result<BuildingsRes
         return Ok(BuildingsResponse { tier_configured: false, buildings: vec![] });
     };
 
-    let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
+    let stored = state.all_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
 
     // key -> (code, name). An unrecognized project_id just yields zero rows
     // below, not an error — consistent with how an unmatched dRofus/level key

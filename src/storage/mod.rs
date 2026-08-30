@@ -381,7 +381,20 @@ pub trait SnapshotStore: Send + Sync {
 
     /// Every model's latest snapshot of one kind, for the merge `/rooms` does.
     /// A model with no snapshot of that kind contributes nothing.
-    fn all_latest_raw(&self, kind: SnapshotKind) -> Result<Vec<(ModelKey, Vec<u8>)>>;
+    ///
+    /// `project` narrows the read to one project, and it is a **parameter
+    /// rather than a caller-side filter** because filtering afterwards is what
+    /// made every read cost the whole store. Each caller here is answering a
+    /// question about one project and then discarding the rest — measured, a
+    /// 257 KB `/doors?project=House A` response spent 1.3 s of CPU parsing RHH
+    /// first. `None` still reads everything, for the genuinely unscoped
+    /// `/rooms`.
+    ///
+    /// It takes the filter rather than a sibling `all_latest_raw_scoped`
+    /// existing beside it: two methods answering one question in two scopes is
+    /// the parallel-method-set shape the store's byte-level boundary was
+    /// written to avoid, and the unscoped call is just this one with `None`.
+    fn all_latest_raw(&self, kind: SnapshotKind, project: Option<&str>) -> Result<Vec<(ModelKey, Vec<u8>)>>;
 
     /// Every snapshot id (`taken_at`) stored for one model and kind,
     /// ascending — so the latest is the last element. Empty when the model is

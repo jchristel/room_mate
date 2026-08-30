@@ -191,13 +191,17 @@ impl SnapshotStore for MemStore {
             .collect())
     }
 
-    fn all_latest_raw(&self, kind: SnapshotKind) -> Result<Vec<(ModelKey, Vec<u8>)>> {
+    fn all_latest_raw(&self, kind: SnapshotKind, project: Option<&str>) -> Result<Vec<(ModelKey, Vec<u8>)>> {
+        // The filter saves this store nothing — the bytes are already resident,
+        // so there is no read to skip. It is implemented anyway because the two
+        // impls have to *answer the same*: a test running against `MemStore`
+        // that saw an out-of-scope model would pass while `FsStore` dropped it.
         Ok(self
             .latest
             .lock()
             .unwrap()
             .iter()
-            .filter(|((k, _), _)| *k == kind)
+            .filter(|((k, key), _)| *k == kind && project.is_none_or(|p| key.project_id == p))
             .map(|((_, key), (_, bytes))| (key.clone(), bytes.clone()))
             .collect())
     }
@@ -445,7 +449,7 @@ mod tests {
             Some(&b"{\"doors\":[]}"[..])
         );
         assert_eq!(store.list_models().unwrap(), vec![key.clone()], "one model, two kinds, listed once");
-        assert_eq!(store.all_latest_raw(SnapshotKind::Doors).unwrap().len(), 1);
+        assert_eq!(store.all_latest_raw(SnapshotKind::Doors, None).unwrap().len(), 1);
     }
 
     /// **A doors-only model is listed**, matching `FsStore`. It became a real

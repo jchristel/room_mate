@@ -1881,6 +1881,42 @@ mod tests {
         assert!(body["rooms"].as_array().unwrap().is_empty());
     }
 
+    /// The doors counterpart of `test_get_rooms_empty_filter_result_is_200_not_204`,
+    /// added with the scoped store read that made it fragile: the "nothing has
+    /// ever been pushed" 204 used to fall out of the merge read being empty, and
+    /// a read narrowed to an unknown project is empty for a completely different
+    /// reason. Both assemblers now ask the index instead.
+    #[tokio::test]
+    async fn test_get_doors_unknown_project_is_200_not_204() {
+        let state = state_with_one_room("2026-01-01T00:00:00Z");
+        state
+            .set_door_snapshot(crate::contract::DoorPayload {
+                schema_version: crate::contract::SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                phase: None,
+                model_to_shared: None,
+                levels: vec![],
+                doors: vec![],
+            })
+            .unwrap();
+
+        let query = DoorsQuery {
+            project: Some("nonexistent".to_string()),
+            building: None,
+            milestone: None,
+            filter: None,
+        };
+        let response = get_doors(State(state), HeaderMap::new(), Query(query)).await.unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the store has data; this question just has an empty answer"
+        );
+    }
+
     /// A project/model id that could escape the storage root as a path
     /// component -- or a `taken_at` that isn't an RFC3339 UTC date-time
     /// (which rules out anything path-shaped) -- is rejected 422 before
@@ -2157,7 +2193,7 @@ mod tests {
 
         let _ = ingest_rooms(State(state.clone() as Shared), Json(upload)).await.expect("accepted");
 
-        let stored = state.all_snapshots().unwrap();
+        let stored = state.all_snapshots(None).unwrap();
         let (_, payload) = stored.iter().find(|(k, _)| k.model_id == "m1").expect("stored");
         // Compared with tolerance, not bit-exactly: storage takes bytes now, so
         // even `MemStore` round-trips the payload through JSON, and a ~1e7 grid
@@ -2217,7 +2253,7 @@ mod tests {
             .await
             .expect("accepted");
 
-        let stored = state.all_snapshots().unwrap();
+        let stored = state.all_snapshots(None).unwrap();
         let of = |model: &str| stored.iter().find(|(k, _)| k.model_id == model).expect("stored").1.room_boundary;
         assert_eq!(of("buffered"), Some(RoomBoundary::FinishFace));
         assert_eq!(of("streamed"), Some(RoomBoundary::Centreline), "the stream path carries it too");
@@ -2262,7 +2298,7 @@ mod tests {
         let structural = ModelKey { project_id: "p1".into(), model_id: "struct".into() };
         assert_eq!(state.list_snapshot_ids(&arch).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
         assert_eq!(state.list_snapshot_ids(&structural).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
-        let stored = state.all_snapshots().unwrap();
+        let stored = state.all_snapshots(None).unwrap();
         let of = |m: &str| stored.iter().find(|(k, _)| k.model_id == m).expect("stored").1.rooms.len();
         assert_eq!(of("arch"), 1);
         assert_eq!(of("struct"), 2);
@@ -2333,7 +2369,7 @@ mod tests {
         let (status, message) = ingest_rooms(State(state.clone()), Json(upload)).await.unwrap_err();
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(message.contains("more than once"), "{message}");
-        assert!(state.all_snapshots().unwrap().is_empty(), "nothing stored");
+        assert!(state.all_snapshots(None).unwrap().is_empty(), "nothing stored");
     }
 
     /// A push declaring no models at all is refused: a push exists because a run
@@ -2374,7 +2410,7 @@ mod tests {
         let (status, message) = ingest_rooms_stream(State(state.clone()), Body::from(body)).await.unwrap_err();
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(message.contains("struct") && message.contains("arch"), "names both: {message}");
-        assert!(state.all_snapshots().unwrap().is_empty(), "nothing stored");
+        assert!(state.all_snapshots(None).unwrap().is_empty(), "nothing stored");
     }
 
     /// The streamed route decomposes identically to the buffered one — two
@@ -2404,7 +2440,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.room_count, 3);
 
-        let stored = state.all_snapshots().unwrap();
+        let stored = state.all_snapshots(None).unwrap();
         let of = |m: &str| {
             let (_, p) = stored.iter().find(|(k, _)| k.model_id == m).expect("stored");
             p.rooms.iter().map(|r| r.name.clone()).collect::<Vec<_>>()
@@ -2450,7 +2486,7 @@ mod tests {
         assert!(message.contains("empty"), "names the offending model: {message}");
 
         // Neither model landed -- not even the one whose rooms were written.
-        assert!(state.all_snapshots().unwrap().is_empty(), "nothing was published");
+        assert!(state.all_snapshots(None).unwrap().is_empty(), "nothing was published");
         let full = ModelKey { project_id: "p1".into(), model_id: "full".into() };
         assert!(state.list_snapshot_ids(&full).unwrap().is_empty(), "the good model was discarded too");
 
@@ -2488,7 +2524,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
 
         // The stored payload round-trips through the normal read path.
-        let stored = state.all_snapshots().unwrap();
+        let stored = state.all_snapshots(None).unwrap();
         let (_, payload) = stored.iter().find(|(k, _)| k.model_id == "m1").expect("stored");
         assert_eq!(payload.rooms.len(), 2);
         assert_eq!(payload.rooms[0].name, "Ward");
@@ -2629,7 +2665,7 @@ mod tests {
         assert!(!body.snapshot_id_generated);
 
         let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
-        let stored = state.all_door_snapshots().unwrap();
+        let stored = state.all_door_snapshots(None).unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].1.doors[0].from_room.as_deref(), Some("r1"));
         // The rooms lineage is untouched: same snapshot, same single id.
@@ -2723,7 +2759,11 @@ mod tests {
         let payload = door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"));
         let (status, _) = ingest_doors(State(state.clone()), Json(payload)).await.expect("stored, not refused");
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(state.all_door_snapshots().unwrap().len(), 1, "the doors are on disk for QA to report on");
+        assert_eq!(
+            state.all_door_snapshots(None).unwrap().len(),
+            1,
+            "the doors are on disk for QA to report on"
+        );
     }
 
     /// **Doors may be pushed before their rooms**, which is the whole point of
@@ -2745,7 +2785,7 @@ mod tests {
             .expect("doors may arrive first");
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.door_count, 1);
-        assert_eq!(state.all_door_snapshots().unwrap().len(), 1);
+        assert_eq!(state.all_door_snapshots(None).unwrap().len(), 1);
         // And it phased the lineage, exactly as a first rooms push would have.
         let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
         assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
@@ -2763,7 +2803,7 @@ mod tests {
         let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(message.contains("Existing") && message.contains("New Construction"), "{message}");
-        assert!(state.all_door_snapshots().unwrap().is_empty());
+        assert!(state.all_door_snapshots(None).unwrap().is_empty());
         let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
         assert!(state.pending_snapshot(&key).unwrap().is_none(), "never quarantined");
         assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"), "lineage unmoved");
@@ -2809,7 +2849,7 @@ mod tests {
 
         // The rooms snapshot still reports itself unphased — it was, and a later
         // doors push does not retroactively relabel what was stored.
-        let stored = state.all_snapshots().unwrap();
+        let stored = state.all_snapshots(None).unwrap();
         assert_eq!(stored[0].1.phase, None);
     }
 
