@@ -1870,11 +1870,21 @@ function renderSourceValidation(name, report) {
     section("Missing link value", report.rooms_missing_link_value, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
     section("Duplicate link values", report.duplicate_link_values,
       d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(id => `<span${at(id)}>${escapeHtml(id)}</span>`).join(", ")}</li>`),
-    section(`Rooms unmatched in ${label}`, report.rooms_unmatched, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
-    // The reverse direction. Deliberately NOT a `data-room` jump target: these
-    // are the source's own link values, and there is no room to jump to — that
-    // being the entire finding.
-    section(`${label} records with no room`, report.reference_unmatched || [],
+    // These two headings are deliberately symmetrical, and each names BOTH
+    // sides in a fixed order: which population was looked in, then which one
+    // was searched. "Rooms unmatched in X" read as a value comparison and gave
+    // no clue which side was short — the question it actually answers is
+    // "where is the data missing", and 1205 unmatched rooms against an export
+    // covering 1824 of 3045 is an answer nobody could reach from the old
+    // wording without opening the CSV.
+    section(`Rooms in the model with no match in ${label}`, report.rooms_unmatched,
+      id => `<li${at(id)}>${escapeHtml(id)}</li>`),
+    // The reverse direction. "Rows", not "Rooms", and the asymmetry is the
+    // honest one: these are the source's own link values — CSV rows — and a
+    // source keyed on something other than a room number would make "rooms"
+    // simply wrong. Deliberately NOT a `data-room` jump target either, for the
+    // same reason: there is no room to jump to, that being the entire finding.
+    section(`Rows in ${label} with no match in the model`, report.reference_unmatched || [],
       value => `<li>${escapeHtml(value)}</li>`),
     // Both of these are about the uploaded FILE, not about any room: rows the
     // loader had to drop. No `data-room` for the same reason as above.
@@ -2062,11 +2072,14 @@ function buildValidationCsv(data) {
     for (const id of report.rooms_missing_link_value) push(id, "missing link value");
     for (const dup of report.duplicate_link_values)
       for (const id of dup.room_ids) push(id, `duplicate link value: ${dup.value}`);
-    for (const id of report.rooms_unmatched) push(id, `room unmatched in ${label}`);
+    // Same two directions as the on-screen headings, and worded to match them:
+    // whoever exports this CSV is doing it to find out which side is short.
+    for (const id of report.rooms_unmatched) push(id, `room in the model with no match in ${label}`);
     // No room id, number or name — the whole point is that no room reached
     // this record — so only the link value is filled, under its own column.
     for (const value of report.reference_unmatched || [])
-      rows.push([label, "", "", "", report.link_property || "", value, `${label} record with no room`]);
+      rows.push([label, "", "", "", report.link_property || "", value,
+        `row in ${label} with no match in the model`]);
     for (const value of report.reference_duplicate_ids || [])
       rows.push([label, "", "", "", report.link_property || "", value,
         `${label} id used by more than one row (only the last kept)`]);
