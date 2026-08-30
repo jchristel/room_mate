@@ -152,6 +152,35 @@ impl DiscrepancyCounts {
 #[derive(Serialize)]
 pub struct SourceValidation {
     pub link_property: String,
+    /// The link property named **nothing on any room in the project** — not
+    /// blank somewhere, absent everywhere. A configuration fault, reported
+    /// apart from the data-quality lists because it is not one of them: every
+    /// other finding here says something about the data, and this one says the
+    /// join was never wired up.
+    ///
+    /// It has to be called out separately because its symptoms are
+    /// indistinguishable from a catastrophic data problem. `resolve_raw_name`
+    /// falls back to using a canonical name **verbatim** when no
+    /// `builtin_properties` entry maps it (deliberately — that is what lets a
+    /// config name a raw Revit property directly), so a link property with a
+    /// typo, or one needing an alias that nobody declared, silently looks up a
+    /// property no room has. Every room then lands in
+    /// `rooms_missing_link_value` and every row in `reference_unmatched`, and
+    /// the source's own record count still reports fine.
+    ///
+    /// That cost a real afternoon on a production machine: an `arch` CSV whose
+    /// row 2 declares `Room Number` against rooms whose Revit property is
+    /// `Number`, on a settings file missing the alias the dev machine had.
+    /// "3045 rooms and 1824 rows, none of them linked" reads as broken data
+    /// until somebody thinks to doubt the property name.
+    ///
+    /// **Absent everywhere, not empty everywhere**, and the difference is the
+    /// whole point — see `PropertyPresence`. A property that exists and is
+    /// blank on every room is an ordinary (if extreme) data gap and is NOT
+    /// flagged; one that no room carries at all cannot be anything but
+    /// misconfiguration. False on a project with no rooms, where there is
+    /// nothing to conclude.
+    pub link_property_absent_everywhere: bool,
     pub rooms_missing_link_value: Vec<String>,
     pub duplicate_link_values: Vec<DuplicateLinkValue>,
     /// Rooms whose link value finds no record in this source.
@@ -920,18 +949,27 @@ fn ascii_narrowed(s: &str) -> String {
 
 /// Phase 1 — resolve every room's link-property value. Returns the room
 /// count, the ids of rooms that resolved no value at all
-/// (`rooms_missing_link_value`), and a map of resolved link value → every
+/// (`rooms_missing_link_value`), a map of resolved link value → every
 /// `(room, source)` that resolved to it (so the caller can detect a value
-/// shared by more than one room). Borrows the rooms out of `stored`.
+/// shared by more than one room), and whether the property was **named by no
+/// room at all** (`SourceValidation::link_property_absent_everywhere`).
+/// Borrows the rooms out of `stored`.
+///
+/// Reads through `property_presence` rather than `lookup_property` — the two
+/// agree on which rooms resolve a value, but only the former keeps `Absent`
+/// and `Empty` apart, and that distinction is the entire difference between
+/// "this property does not exist" and "nobody has filled it in".
 fn resolve_link_values<'a>(
     project_id: &str,
     stored: &'a [(ModelKey, RoomPayload)],
     drofus: &ReferenceData,
     builtin_defs: &[BuiltinPropertyDef],
-) -> (usize, Vec<String>, LinkValueIndex<'a>) {
+) -> (usize, Vec<String>, LinkValueIndex<'a>, bool) {
     let mut total_rooms = 0;
     let mut rooms_missing_link_value = Vec::new();
     let mut by_value: LinkValueIndex = BTreeMap::new();
+    // Any room that carried the name at all, whether or not it held a value.
+    let mut named_by_some_room = false;
 
     for (_key, payload) in stored {
         if payload.project.id != project_id {
@@ -939,14 +977,21 @@ fn resolve_link_values<'a>(
         }
         for room in &payload.rooms {
             total_rooms += 1;
-            match lookup_property(room, &drofus.link_property, &payload.model.source, builtin_defs) {
-                Some(value) => by_value.entry(value).or_default().push((room, &payload.model.source)),
-                None => rooms_missing_link_value.push(room.id.clone()),
+            match property_presence(room, &drofus.link_property, &payload.model.source, builtin_defs) {
+                PropertyPresence::Present(value) => {
+                    named_by_some_room = true;
+                    by_value.entry(value).or_default().push((room, &payload.model.source));
+                }
+                PropertyPresence::Empty => {
+                    named_by_some_room = true;
+                    rooms_missing_link_value.push(room.id.clone());
+                }
+                PropertyPresence::Absent => rooms_missing_link_value.push(room.id.clone()),
             }
         }
     }
 
-    (total_rooms, rooms_missing_link_value, by_value)
+    (total_rooms, rooms_missing_link_value, by_value, total_rooms > 0 && !named_by_some_room)
 }
 
 /// The typed comparison ladder for one reconciled field, each rung falling
@@ -1068,7 +1113,7 @@ pub fn compute_validation(
     builtin_defs: &[BuiltinPropertyDef],
     fields: &[ReferenceFieldConfig],
 ) -> SourceValidation {
-    let (_total_rooms, rooms_missing_link_value, by_value) =
+    let (_total_rooms, rooms_missing_link_value, by_value, link_property_absent_everywhere) =
         resolve_link_values(project_id, stored, reference, builtin_defs);
 
     let mut duplicate_link_values = Vec::new();
@@ -1177,6 +1222,7 @@ pub fn compute_validation(
 
     SourceValidation {
         link_property: reference.link_property.clone(),
+        link_property_absent_everywhere,
         rooms_missing_link_value,
         duplicate_link_values,
         rooms_unmatched,
@@ -1416,6 +1462,65 @@ mod tests {
         assert_eq!(count_project_rooms("p1", &stored), 1);
         assert_eq!(result.rooms_missing_link_value, vec!["1".to_string()]);
         assert!(result.duplicate_link_values.is_empty());
+    }
+
+    /// The production failure this flag exists for: a link property no room
+    /// carries. Every room lands in `rooms_missing_link_value` and every row
+    /// in `reference_unmatched` — symptoms identical to catastrophically bad
+    /// data — so the flag is what says "the join was never wired up".
+    ///
+    /// `resolve_raw_name` uses an unmapped canonical name verbatim, on
+    /// purpose, so this is reachable from a plain settings typo with nothing
+    /// else wrong anywhere.
+    #[test]
+    fn test_compute_validation_flags_a_link_property_no_room_carries() {
+        let rooms = vec![
+            make_room("1", "Room A", &[("Number", "101")]),
+            make_room("2", "Room B", &[("Number", "102")]),
+        ];
+        let (key, payload) = make_payload("p1", rooms);
+        let stored = vec![(key, payload)];
+        // The rooms key on `Number`; the source asks for `Room Number`, and no
+        // builtin_properties entry maps one to the other.
+        let drofus = make_drofus("Room Number", &[("101", &[]), ("102", &[])], &[]);
+
+        let result = compute_validation("p1", &stored, &drofus, &[], &[]);
+
+        assert!(result.link_property_absent_everywhere, "named the fault");
+        assert_eq!(result.rooms_missing_link_value.len(), 2, "and every room still listed");
+        assert_eq!(result.reference_unmatched.len(), 2, "with every row unclaimed");
+    }
+
+    /// The distinction the flag turns on: a property that EXISTS and is blank
+    /// everywhere is an ordinary data gap, however extreme, and must not be
+    /// reported as misconfiguration. Same visible symptom, different cause,
+    /// different fix — one is a settings edit, the other is data entry.
+    #[test]
+    fn test_compute_validation_empty_everywhere_is_not_a_config_fault() {
+        let rooms = vec![
+            make_room("1", "Room A", &[("Number", "")]),
+            make_room("2", "Room B", &[("Number", "")]),
+        ];
+        let (key, payload) = make_payload("p1", rooms);
+        let stored = vec![(key, payload)];
+        let drofus = make_drofus("Number", &[("101", &[])], &[]);
+
+        let result = compute_validation("p1", &stored, &drofus, &[], &[]);
+
+        assert!(!result.link_property_absent_everywhere, "present but blank is data, not config");
+        assert_eq!(result.rooms_missing_link_value.len(), 2, "still reported as missing a value");
+    }
+
+    /// A project with no rooms concludes nothing — there is no evidence either
+    /// way, and flagging it would fire on every project the moment a source is
+    /// configured before its first push.
+    #[test]
+    fn test_compute_validation_no_rooms_is_not_a_config_fault() {
+        let (key, payload) = make_payload("p1", vec![]);
+        let stored = vec![(key, payload)];
+        let drofus = make_drofus("Room Number", &[("101", &[])], &[]);
+
+        assert!(!compute_validation("p1", &stored, &drofus, &[], &[]).link_property_absent_everywhere);
     }
 
     /// Two rooms sharing one link value are ambiguous: reported as a
