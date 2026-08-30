@@ -2,14 +2,15 @@
 //! See the module doc in `mod.rs` for the on-disk layout and the
 //! manifest-is-index / snapshots-are-record discipline this file implements.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use super::{
-    ProjectManifest, SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter, PENDING_DIR, PENDING_FILE,
-    REFERENCE_DIR,
+    ModelIndexRow, ProjectManifest, SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter, PENDING_DIR,
+    PENDING_FILE, REFERENCE_DIR,
 };
 use crate::state::ModelKey;
 
@@ -540,14 +541,65 @@ impl SnapshotStore for FsStore {
         Ok(out)
     }
 
-    fn all_latest_raw(&self, kind: SnapshotKind) -> Result<Vec<(ModelKey, Vec<u8>)>> {
+    fn model_index(&self) -> Result<Vec<ModelIndexRow>> {
+        // Built on `list_models` rather than on the manifests directly, so the
+        // index and every read path agree on which models exist — including the
+        // on-disk-but-unindexed ones that `list_models` warns about and keeps.
+        // Those have no manifest entry to name them, hence the id fallback.
+        //
+        // One manifest read per *project*, not per model: the keys arrive
+        // grouped (`list_models` walks a project dir at a time), so remembering
+        // the last one read is enough to collapse a model-per-read into a
+        // project-per-read without sorting or a map.
+        let mut out = Vec::new();
+        let mut cached: Option<(String, ProjectManifest)> = None;
+
+        for key in self.list_models()? {
+            let manifest = match &cached {
+                Some((id, m)) if *id == key.project_id => m,
+                _ => {
+                    let m = self.read_manifest(&key.project_id)?;
+                    &cached.insert((key.project_id.clone(), m)).1
+                }
+            };
+            let project_name = if manifest.name.is_empty() {
+                key.project_id.clone()
+            } else {
+                manifest.name.clone()
+            };
+            let model_name = manifest
+                .models
+                .get(&key.model_id)
+                .map(|e| e.name.clone())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| key.model_id.clone());
+            let mut latest = BTreeMap::new();
+            for kind in [SnapshotKind::Rooms, SnapshotKind::Doors] {
+                if let Some(id) = self.list_snapshot_ids(kind, &key)?.pop() {
+                    latest.insert(kind, id); // ids are ascending, so the last is the newest
+                }
+            }
+            out.push(ModelIndexRow { key, project_name, model_name, latest });
+        }
+        Ok(out)
+    }
+
+    fn all_latest_raw(&self, kind: SnapshotKind, project: Option<&str>) -> Result<Vec<(ModelKey, Vec<u8>)>> {
         // The manifest-backed index supplies the keys, `get_latest_raw` reads
         // each key's newest snapshot — the manifest is the index, the snapshots
         // the record, exactly as the module doc claims. A manifest entry whose
         // dir holds no snapshots of this kind yet (or was deleted by hand)
         // simply yields nothing for that key.
+        //
+        // The project filter sits between the two, which is the whole point:
+        // keys are free (they come off the manifests) and bytes are not, so an
+        // out-of-scope model must be dropped *before* `get_latest_raw` opens
+        // its file.
         let mut out = Vec::new();
         for key in self.list_models()? {
+            if project.is_some_and(|p| key.project_id != p) {
+                continue;
+            }
             if let Some(bytes) = self.get_latest_raw(kind, &key)? {
                 out.push((key, bytes));
             }
@@ -827,7 +879,7 @@ mod tests {
         }
 
         fn all_latest(&self) -> Result<Vec<(ModelKey, RoomPayload)>> {
-            self.all_latest_raw(SnapshotKind::Rooms)?
+            self.all_latest_raw(SnapshotKind::Rooms, None)?
                 .into_iter()
                 .map(|(k, b)| Ok((k, serde_json::from_slice(&b)?)))
                 .collect()
@@ -927,6 +979,38 @@ mod tests {
         // Not even the temp file: the names are unique, so an abandoned one
         // would accumulate rather than be reused.
         assert_eq!(entries_under(&dir), Vec::<String>::new(), "no snapshot, no temp, no manifest");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The project filter drops an out-of-scope model **before** its bytes are
+    /// read, which is the entire point of the parameter and is invisible to a
+    /// test that only counts results.
+    ///
+    /// So this proves it by removing the other project's snapshot file behind
+    /// the store's back and asking for the scoped read anyway: a read that still
+    /// opened it would fail or come back short. A filter applied after
+    /// `get_latest_raw` would have touched that file; this one never looks.
+    #[test]
+    fn test_a_scoped_read_never_opens_another_projects_snapshot() {
+        let dir = std::env::temp_dir().join(format!("roommate-scoped-read-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FsStore::new(dir.clone()).unwrap();
+        store.put(&payload("wanted", "m", "2026-01-01T10:00:00Z")).unwrap();
+        store.put(&payload("other", "m", "2026-01-01T10:00:00Z")).unwrap();
+
+        // The manifest still indexes it, so `list_models` still yields the key.
+        let orphaned = ModelKey { project_id: "other".into(), model_id: "m".into() };
+        std::fs::remove_dir_all(dir.join("other").join("m")).unwrap();
+
+        let scoped = store.all_latest_raw(SnapshotKind::Rooms, Some("wanted")).unwrap();
+
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].0.project_id, "wanted");
+        assert!(
+            store.get_latest_raw(SnapshotKind::Rooms, &orphaned).unwrap().is_none(),
+            "the file really is gone — the scoped read simply never asked for it"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

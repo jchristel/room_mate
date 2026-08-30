@@ -58,7 +58,7 @@ pub fn list_project_snapshots(state: &AppState, project_id: &str) -> Result<Proj
         return Ok(ProjectSnapshotsResponse { models: vec![] });
     }
 
-    let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
+    let stored = state.all_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
     let mut models = Vec::new();
     for (key, payload) in &stored {
         if payload.project.id != project_id {

@@ -25,6 +25,7 @@ use crate::contract::{Door, DoorPayload, ModelToShared, Point2D, PropertyPresenc
 use crate::reference::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, ReferenceEntity, RoomResolution};
 use crate::state::{AppState, ModelKey};
+use crate::storage::SnapshotKind;
 
 use super::room_locator::{self, RoomRef, Unresolved};
 use super::rooms::{FilterTarget, RoomFilter};
@@ -335,7 +336,7 @@ fn build_candidates(
     door_payloads: &[(ModelKey, DoorPayload)],
 ) -> Result<Candidates, ServiceError> {
     let registry = state.settings();
-    let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
+    let stored = state.all_snapshots(scope.project).map_err(ServiceError::Internal)?;
     let (scoped, _) = super::rooms::scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
 
     let shared_frame = mode == RoomResolution::Project;
@@ -573,10 +574,13 @@ fn building_by_room(
 /// has to see.
 #[allow(clippy::too_many_lines)]
 pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<DoorsResult>, ServiceError> {
-    let stored = state.all_door_snapshots().map_err(ServiceError::Internal)?;
-    if stored.is_empty() {
+    // "Nothing pushed at all" is asked of the index, not of this scoped read:
+    // an unknown project reads empty and still deserves a 200 with an empty
+    // list, per the contract above.
+    if !state.has_any_snapshot(SnapshotKind::Doors).map_err(ServiceError::Internal)? {
         return Ok(None);
     }
+    let stored = state.all_door_snapshots(scope.project).map_err(ServiceError::Internal)?;
     let registry = state.settings();
 
     // Phase 1 — scope to the request, substituting a milestone's pinned doors

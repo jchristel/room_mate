@@ -13,6 +13,7 @@ use crate::classify::classify_room;
 use super::rooms::{building_key, building_tier_index, UNCLASSIFIED_BUILDING_KEY};
 use super::ServiceError;
 use crate::state::AppState;
+use crate::storage::SnapshotKind;
 
 /// One known project, for the `/projects` picker.
 #[derive(Serialize)]
@@ -48,26 +49,43 @@ pub struct BuildingsResponse {
 }
 
 /// Lists every project with at least one stored model AND a registered
-/// settings bundle. Derived from `all_snapshots()` — a project's identity
-/// already rides on every payload it stores, so no dedicated storage query is
-/// needed. The registration filter mirrors `assemble_rooms`'s "skip on read"
-/// policy: a stored-but-unregistered project (a dev seed that bypassed the
-/// ingest check, or a settings file deleted after data existed) is invisible
-/// to `/rooms`, so listing it here would offer the picker a project that can
-/// never show anything. An empty list is a perfectly good answer for a
+/// settings bundle. The registration filter mirrors `assemble_rooms`'s "skip on
+/// read" policy: a stored-but-unregistered project (a dev seed that bypassed
+/// the ingest check, or a settings file deleted after data existed) is
+/// invisible to `/rooms`, so listing it here would offer the picker a project
+/// that can never show anything. An empty list is a perfectly good answer for a
 /// picker, unlike `/rooms`'s 204 (which exists for the poller's specific
 /// "nothing posted yet" signal) — that distinction is an HTTP-adapter
 /// concern, not reflected here.
+///
+/// **Answered from the index, never by opening a snapshot**, and that is the
+/// whole point of the route being this shape. It used to derive both strings
+/// from `all_snapshots()` on the reasoning that a project's identity already
+/// rides on every payload it stores — true, and it made a 213-byte response
+/// cost a full parse of every model's newest snapshot: 0.36 s of CPU at RHH
+/// scale, on the route the viewer polls every two seconds. The names live in
+/// the manifest too; only the missing accessor forced the parse. See
+/// `SnapshotStore::model_index`.
 pub fn list_projects(state: &AppState) -> Result<Vec<ProjectSummary>, ServiceError> {
-    let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
+    let index = state.model_index().map_err(ServiceError::Internal)?;
     let registry = state.settings();
 
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
-    for (_key, payload) in &stored {
-        if registry.settings_for(&payload.project.id).is_none() {
+    for row in &index {
+        // Rooms, specifically — the index is kind-agnostic (a doors-only model
+        // is an ordinary state) but this list is not. The old `all_snapshots()`
+        // derivation was rooms-only by construction, and the picker it feeds
+        // opens a project by drawing its plan: offering one whose `/rooms` can
+        // only 204 would put "waiting for data" behind a name. Whether a
+        // doors-only project deserves a place here is a real question; it is
+        // not this change's to answer.
+        if !row.latest.contains_key(&SnapshotKind::Rooms) {
+            continue;
+        }
+        if registry.settings_for(&row.key.project_id).is_none() {
             continue; // skip on read, same as assemble_rooms
         }
-        seen.entry(payload.project.id.clone()).or_insert_with(|| payload.project.name.clone());
+        seen.entry(row.key.project_id.clone()).or_insert_with(|| row.project_name.clone());
     }
 
     let mut projects: Vec<ProjectSummary> = seen.into_iter().map(|(id, name)| ProjectSummary { id, name }).collect();
@@ -94,7 +112,7 @@ pub fn list_buildings(state: &AppState, project_id: &str) -> Result<BuildingsRes
         return Ok(BuildingsResponse { tier_configured: false, buildings: vec![] });
     };
 
-    let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
+    let stored = state.all_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
 
     // key -> (code, name). An unrecognized project_id just yields zero rows
     // below, not an error — consistent with how an unmatched dRofus/level key
@@ -210,6 +228,55 @@ mod tests {
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].id, "p1");
+    }
+
+    /// The listing names a project from the *index*, not from a parsed payload
+    /// — which is the whole point of `model_index` and easy to regress into a
+    /// full-store parse again without noticing, since both produce the same
+    /// answer. This pins the answer; `test_list_projects_ignores_doors_only_project`
+    /// pins the part that could not be answered from a rooms parse at all.
+    #[test]
+    fn test_list_projects_reports_the_pushed_display_name() {
+        let registry = std::collections::HashMap::from([("p1".to_string(), make_bundle())]);
+        let state = AppState::new(Box::new(MemStore::new()), registry, None);
+        state.set_snapshot(make_payload("p1", "Riverside")).unwrap();
+
+        let projects = list_projects(&state).unwrap();
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "Riverside", "the manifest's name, not the id");
+    }
+
+    /// A project whose only stored model is doors-only stays *out* of the
+    /// listing, and this is the one place the index rewrite could have changed
+    /// behaviour by accident: the old derivation read rooms snapshots, so it
+    /// could not see such a project, while `model_index` is kind-agnostic by
+    /// contract. The picker opens a project by drawing its plan, so listing one
+    /// whose `/rooms` can only 204 would put "waiting for data" behind a name.
+    #[test]
+    fn test_list_projects_ignores_doors_only_project() {
+        use crate::contract::{DoorPayload, SUPPORTED_DOOR_SCHEMA};
+
+        let registry =
+            std::collections::HashMap::from([("p1".to_string(), make_bundle()), ("p2".to_string(), make_bundle())]);
+        let state = AppState::new(Box::new(MemStore::new()), registry, None);
+        state.set_snapshot(make_payload("p1", "Has Rooms")).unwrap();
+        state
+            .set_door_snapshot(DoorPayload {
+                schema_version: SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p2".to_string(), name: "Doors Only".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                phase: None,
+                model_to_shared: None,
+                levels: vec![],
+                doors: vec![],
+            })
+            .unwrap();
+
+        let ids: Vec<String> = list_projects(&state).unwrap().into_iter().map(|p| p.id).collect();
+
+        assert_eq!(ids, vec!["p1"], "a doors-only project has no plan to draw");
     }
 
     fn make_room(id: &str, props: &[(&str, &str)]) -> Room {

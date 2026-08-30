@@ -17,6 +17,7 @@ use crate::contract::{
 use crate::reference::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, HierarchyTier};
 use crate::state::{AppState, ModelKey, ProjectSettings, SettingsRegistry};
+use crate::storage::SnapshotKind;
 
 use super::ServiceError;
 
@@ -859,10 +860,14 @@ fn scoped_revision(scoped: &[ScopedPayload]) -> String {
 /// nothing is still `Ok(Some)` with empty vecs: the store has data, the
 /// question just has an empty answer.
 pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<RoomsResult>, ServiceError> {
-    let stored = state.all_snapshots().map_err(ServiceError::Internal)?;
-    if stored.is_empty() {
+    // Asked of the index, not of the scoped read below — see
+    // `AppState::has_any_snapshot`. `?project=nonexistent` against a populated
+    // store is a 200 with empty vecs, and scoping the read is exactly what
+    // would otherwise have turned it into a 204.
+    if !state.has_any_snapshot(SnapshotKind::Rooms).map_err(ServiceError::Internal)? {
         return Ok(None);
     }
+    let stored = state.all_snapshots(scope.project).map_err(ServiceError::Internal)?;
 
     // One settings snapshot for the whole request — a save landing mid-merge
     // can't mix old and new bundles in one response. Held here for the length

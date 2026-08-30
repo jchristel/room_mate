@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 
-use super::{SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter};
+use super::{ModelIndexRow, SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter};
 use crate::state::ModelKey;
 
 /// (project id, source name) -> (taken_at, bytes) — factored out purely to
@@ -46,6 +46,14 @@ pub struct MemStore {
     /// them would quietly break the moment `promote_pending` makes them differ
     /// for an instant. With bytes in `latest` it could not be derived anyway.
     phases: Mutex<BTreeMap<ModelKey, String>>,
+    /// Display names per model: `(project name, model name)`, latest push wins.
+    ///
+    /// `FsStore` reads these off its manifest; this store has none, and the
+    /// bytes in `latest` are exactly what `model_index` exists to avoid
+    /// parsing — so the names are kept as they arrive on `SnapshotMeta`. Not
+    /// keyed by kind: a model's rooms and doors pushes carry the same identity
+    /// envelope, so either one names it.
+    names: Mutex<BTreeMap<ModelKey, (String, String)>>,
     /// The one quarantined push per model, invisible to every read path:
     /// `(taken_at, bytes)`. Not keyed by kind — quarantine is rooms-only, see
     /// `SnapshotStore::put_pending_raw`.
@@ -110,6 +118,10 @@ impl SnapshotStore for MemStore {
         if let Some(phase) = meta.phase {
             self.phases.lock().unwrap().entry(meta.key.clone()).or_insert(phase.to_string());
         }
+        self.names
+            .lock()
+            .unwrap()
+            .insert(meta.key.clone(), (meta.project_name.to_string(), meta.model_name.to_string()));
         self.latest
             .lock()
             .unwrap()
@@ -153,13 +165,43 @@ impl SnapshotStore for MemStore {
             .collect())
     }
 
-    fn all_latest_raw(&self, kind: SnapshotKind) -> Result<Vec<(ModelKey, Vec<u8>)>> {
+    fn model_index(&self) -> Result<Vec<ModelIndexRow>> {
+        // `list_models` is still the authority on which models exist; `names`
+        // only decorates it. A key present in `latest` but not in `names` can
+        // only come from a push that bypassed `put_raw`, so it falls back to the
+        // ids rather than vanishing — the same "filesystem wins" stance
+        // `FsStore` takes towards an unindexed model dir.
+        let keys = self.list_models()?;
+        let names = self.names.lock().unwrap();
+        let latest = self.latest.lock().unwrap();
+        Ok(keys
+            .into_iter()
+            .map(|key| {
+                let (project_name, model_name) =
+                    names.get(&key).cloned().unwrap_or_else(|| (key.project_id.clone(), key.model_id.clone()));
+                // Latest-only by design, so whatever sits in the slot IS the
+                // newest id — there is no history here to take a last element of.
+                let latest = latest
+                    .iter()
+                    .filter(|((_, k), _)| *k == key)
+                    .map(|((kind, _), (taken_at, _))| (*kind, taken_at.clone()))
+                    .collect();
+                ModelIndexRow { key, project_name, model_name, latest }
+            })
+            .collect())
+    }
+
+    fn all_latest_raw(&self, kind: SnapshotKind, project: Option<&str>) -> Result<Vec<(ModelKey, Vec<u8>)>> {
+        // The filter saves this store nothing — the bytes are already resident,
+        // so there is no read to skip. It is implemented anyway because the two
+        // impls have to *answer the same*: a test running against `MemStore`
+        // that saw an out-of-scope model would pass while `FsStore` dropped it.
         Ok(self
             .latest
             .lock()
             .unwrap()
             .iter()
-            .filter(|((k, _), _)| *k == kind)
+            .filter(|((k, key), _)| *k == kind && project.is_none_or(|p| key.project_id == p))
             .map(|((_, key), (_, bytes))| (key.clone(), bytes.clone()))
             .collect())
     }
@@ -407,7 +449,7 @@ mod tests {
             Some(&b"{\"doors\":[]}"[..])
         );
         assert_eq!(store.list_models().unwrap(), vec![key.clone()], "one model, two kinds, listed once");
-        assert_eq!(store.all_latest_raw(SnapshotKind::Doors).unwrap().len(), 1);
+        assert_eq!(store.all_latest_raw(SnapshotKind::Doors, None).unwrap().len(), 1);
     }
 
     /// **A doors-only model is listed**, matching `FsStore`. It became a real
