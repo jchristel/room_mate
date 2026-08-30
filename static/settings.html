@@ -541,6 +541,52 @@ function rowControls(list, index, rerender) {
   ];
 }
 
+// A band bound as a number, or null for "open end" (blank) and for anything
+// that isn't a number yet — a half-typed "-" should read as no bound, not as a
+// hint that lies until the next keystroke.
+function bandBound(v) {
+  const s = v == null ? "" : String(v).trim();
+  return s !== "" && Number.isFinite(parseFloat(s)) ? parseFloat(s) : null;
+}
+
+// Whole numbers get an inclusive reading ("covers 0–5"), which is the one that
+// prevents the mistake: the trap is authoring [0, 5) and expecting 5 in it.
+// Fractional bounds cannot be restated that way — there is no "last value
+// before 5.5" — so those fall back to naming the comparison outright.
+function bandCoverage(band) {
+  const lo = bandBound(band.lo), hi = bandBound(band.hi);
+  if (lo == null && hi == null) return "covers every value";
+  if (lo != null && hi != null && lo >= hi) return "covers nothing — lo must be below hi";
+  const whole = (n) => n == null || Number.isInteger(n);
+  if (!whole(lo) || !whole(hi)) {
+    if (lo == null) return `covers any value < ${hi}`;
+    if (hi == null) return `covers any value ≥ ${lo}`;
+    return `covers ${lo} ≤ value < ${hi}`;
+  }
+  if (lo == null) return `covers everything up to ${hi - 1}`;
+  if (hi == null) return `covers ${lo} and up`;
+  return hi - 1 === lo ? `covers ${lo} only` : `covers ${lo}–${hi - 1}`;
+}
+
+// Values that fall between two bands. A gap is LEGAL — the server only enforces
+// sorted and non-overlapping — and sometimes deliberate, so this states the
+// consequence rather than calling it an error: whatever lands there paints with
+// the no-data colour. Naming the values is the point; "there is a gap" would
+// still leave the reader to work out that it is exactly the 5 they wanted green.
+function bandGapNote(bands) {
+  const uncovered = [];
+  for (let i = 0; i + 1 < bands.length; i++) {
+    const hi = bandBound(bands[i].hi), lo = bandBound(bands[i + 1].lo);
+    if (hi == null || lo == null || hi >= lo) continue;
+    if (Number.isInteger(hi) && Number.isInteger(lo)) {
+      uncovered.push(lo - 1 === hi ? `${hi}` : `${hi}–${lo - 1}`);
+    } else {
+      uncovered.push(`${hi} up to (not including) ${lo}`);
+    }
+  }
+  return uncovered.length ? `⚠ not covered by any band, painted as no-data: ${uncovered.join(", ")}` : "";
+}
+
 function textInput(obj, key, attrs) {
   return el("input", Object.assign({
     type: "text",
@@ -868,18 +914,42 @@ function renderPropertyComparePlan(rows, plan) {
   rows.appendChild(el("div", { class: "row" }, styleRow));
 
   // Bands: editable [lo, hi) colour rows. Empty lo/hi = open end.
+  //
+  // Each row carries a plain-English "covers …" hint, and the block carries a
+  // note naming any value that falls between two bands. Both exist because the
+  // half-open interval is stated here twice already — in the `[` `)` glyphs and
+  // in the footer hint — and neither survived contact with someone authoring
+  // "0–5 green, 6–10 yellow" and reasonably expecting 5 to be green. It is not:
+  // [0, 5) stops at 4, and 5 lands in a gap, which is legal (the server only
+  // enforces sorted + non-overlapping) and paints grey. The hints answer the
+  // question the brackets only encode.
   if (plan.style === "bands") {
+    const hints = [];
+    const gapNote = el("span", { class: "row-head" });
+    const refresh = () => {
+      plan.bands.forEach((band, k) => { hints[k].textContent = bandCoverage(band); });
+      gapNote.textContent = bandGapNote(plan.bands);
+    };
     plan.bands.forEach((b, j) => {
+      const lo = textInput(b, "lo", { size: "6", placeholder: "−∞" });
+      const hi = textInput(b, "hi", { size: "6", placeholder: "+∞" });
+      // Registered after `textInput`'s own handler, so `b` is already updated
+      // by the time this reads it back.
+      lo.addEventListener("input", refresh);
+      hi.addEventListener("input", refresh);
+      const hint = el("span", { class: "row-head" });
+      hints.push(hint);
       rows.appendChild(el("div", { class: "row" }, [
         el("span", { class: "row-head", text: "↳↳" }),
-        el("span", { text: "[" }), textInput(b, "lo", { size: "6", placeholder: "−∞" }),
-        el("span", { text: "," }), textInput(b, "hi", { size: "6", placeholder: "+∞" }),
+        el("span", { text: "[" }), lo,
+        el("span", { text: "," }), hi,
         el("span", { text: ")" }),
         el("input", { type: "color", value: /^#[0-9a-fA-F]{6}$/.test(b.colour) ? b.colour : "#b4541f",
           oninput: (e) => { b.colour = e.target.value; } }),
         el("button", { type: "button", class: "action icon", title: "remove band", text: "✕", onclick: () => {
           plan.bands.splice(j, 1); renderColourPlans();
         }}),
+        hint,
       ]));
     });
     rows.appendChild(el("div", { class: "row" }, [
@@ -889,6 +959,8 @@ function renderPropertyComparePlan(rows, plan) {
       }}),
       el("span", { class: "row-head", text: "half-open [lo, hi); blank = open end; must be sorted & non-overlapping (server validates)" }),
     ]));
+    rows.appendChild(el("div", { class: "row" }, [el("span", { class: "row-head", text: "" }), gapNote]));
+    refresh();
   }
 }
 
