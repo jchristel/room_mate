@@ -4134,18 +4134,45 @@ function setLayout() {
 
 // ============================ polling loop ============================
 
+// True while a tick is still running, so the next interval firing steps over it
+// rather than starting a second one alongside.
+//
+// `setInterval` fires on the clock, not on completion, and a tick is three
+// awaited round trips — so a tick slower than its own interval used to overlap
+// the next one, and the one after that, without bound. On the largest project
+// here a cold tick is still ~4 s against a 2 s interval, and every overlapping
+// copy costs the SERVER a full assemble: measured before the conditional poll
+// landed, three concurrent doors reads took it from 245 MB to 904 MB resident.
+let tickInFlight = false;
+
 // Each tick: refresh the scope pickers (cheap, signature-gated — also how a
 // newly-pushed project shows up without a reload), then ONE scoped /rooms
 // fetch fanned out to every zone. Tick cost no longer scales with zone count.
+//
+// **A skipped tick is dropped, never queued**, and that is the right shape for
+// a poll: every tick asks the same question ("what is the current state?"), so a
+// tick deferred behind a slow one would only ask it again a moment later.
+// Draining a backlog is exactly the pile-up this guard exists to prevent.
+//
+// The `finally` is load-bearing. `poll` handles its own failures, but
+// `refreshScope` can throw, and a flag left set by one exception would stop the
+// viewer polling for the rest of the session — a worse failure than the
+// overlapping it prevents, and a silent one.
 async function tick() {
-  let projects = null;
+  if (tickInFlight) return;
+  tickInFlight = true;
   try {
-    projects = await fetchJson("/projects");
-  } catch (err) {
-    // Connection issue: skip the picker refresh and let poll() surface it.
+    let projects = null;
+    try {
+      projects = await fetchJson("/projects");
+    } catch (err) {
+      // Connection issue: skip the picker refresh and let poll() surface it.
+    }
+    if (projects) await refreshScope(projects);
+    await poll();
+  } finally {
+    tickInFlight = false;
   }
-  if (projects) await refreshScope(projects);
-  await poll();
 }
 
 // ============================ header controls ============================
