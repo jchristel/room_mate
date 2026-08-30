@@ -456,6 +456,15 @@
   .band-body ul { margin: 0; padding-left: 1.1rem; }
   .band-body .mismatch { margin-bottom: 0.3rem; }
   .band-body .ok { opacity: 0.6; }
+  /* A misconfigured join, not a data finding — the one thing in this band that
+     is about the SETTINGS rather than the rooms, so it is the one thing given a
+     box instead of a heading and a list. It sits above every list it invalidates. */
+  .band-body section.config-error {
+    margin: 0 0 0.6rem; padding: 0.5rem 0.7rem;
+    border: 2px solid var(--error);
+    background: color-mix(in srgb, var(--error) 12%, transparent);
+  }
+  .band-body section.config-error > h3 { margin: 0 0 0.3rem; }
   /* QA entries are jump targets into the grid below. */
   .band-body [data-room] { cursor: pointer; }
   .band-body [data-room]:hover { color: var(--accent); }
@@ -1867,6 +1876,20 @@ function renderSourceValidation(name, report) {
   const at = (id) => ` data-room="${escapeHtml(id)}"`;
   const label = escapeHtml(sourceDisplayName(name));
   const body = [
+    // Ahead of every list, because when this fires the lists below are all
+    // noise: every room is missing a link value and every row is unmatched,
+    // and reading them top to bottom tells you the data is catastrophically
+    // broken when the truth is that one property name never resolved. Says
+    // what to change, not just what is wrong — the fix is a settings edit and
+    // nothing about the CSV or the model is at fault.
+    report.link_property_absent_everywhere
+      ? `<section class="config-error"><h3>⚠ Link property "${escapeHtml(report.link_property)}" `
+        + `does not exist on any room</h3><ul><li>Nothing can join: every room below is listed only `
+        + `because this lookup found no property of that name, not because its data is missing. `
+        + `Either ${label}'s CSV names a property the rooms do not carry (row 2, first column), or `
+        + `this project needs a <code>[[builtin_properties]]</code> entry mapping `
+        + `<code>${escapeHtml(report.link_property)}</code> to the Revit property that holds it.</li></ul></section>`
+      : "",
     section("Missing link value", report.rooms_missing_link_value, id => `<li${at(id)}>${escapeHtml(id)}</li>`),
     section("Duplicate link values", report.duplicate_link_values,
       d => `<li>${escapeHtml(d.value)}: ${d.room_ids.map(id => `<span${at(id)}>${escapeHtml(id)}</span>`).join(", ")}</li>`),
