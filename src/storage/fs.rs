@@ -2,14 +2,15 @@
 //! See the module doc in `mod.rs` for the on-disk layout and the
 //! manifest-is-index / snapshots-are-record discipline this file implements.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use super::{
-    ProjectManifest, SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter, PENDING_DIR, PENDING_FILE,
-    REFERENCE_DIR,
+    ModelIndexRow, ProjectManifest, SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter, PENDING_DIR,
+    PENDING_FILE, REFERENCE_DIR,
 };
 use crate::state::ModelKey;
 
@@ -536,6 +537,49 @@ impl SnapshotStore for FsStore {
                     .into_iter()
                     .map(|model_id| ModelKey { project_id: project_id.clone(), model_id }),
             );
+        }
+        Ok(out)
+    }
+
+    fn model_index(&self) -> Result<Vec<ModelIndexRow>> {
+        // Built on `list_models` rather than on the manifests directly, so the
+        // index and every read path agree on which models exist — including the
+        // on-disk-but-unindexed ones that `list_models` warns about and keeps.
+        // Those have no manifest entry to name them, hence the id fallback.
+        //
+        // One manifest read per *project*, not per model: the keys arrive
+        // grouped (`list_models` walks a project dir at a time), so remembering
+        // the last one read is enough to collapse a model-per-read into a
+        // project-per-read without sorting or a map.
+        let mut out = Vec::new();
+        let mut cached: Option<(String, ProjectManifest)> = None;
+
+        for key in self.list_models()? {
+            let manifest = match &cached {
+                Some((id, m)) if *id == key.project_id => m,
+                _ => {
+                    let m = self.read_manifest(&key.project_id)?;
+                    &cached.insert((key.project_id.clone(), m)).1
+                }
+            };
+            let project_name = if manifest.name.is_empty() {
+                key.project_id.clone()
+            } else {
+                manifest.name.clone()
+            };
+            let model_name = manifest
+                .models
+                .get(&key.model_id)
+                .map(|e| e.name.clone())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| key.model_id.clone());
+            let mut latest = BTreeMap::new();
+            for kind in [SnapshotKind::Rooms, SnapshotKind::Doors] {
+                if let Some(id) = self.list_snapshot_ids(kind, &key)?.pop() {
+                    latest.insert(kind, id); // ids are ascending, so the last is the newest
+                }
+            }
+            out.push(ModelIndexRow { key, project_name, model_name, latest });
         }
         Ok(out)
     }

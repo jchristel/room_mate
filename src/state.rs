@@ -21,7 +21,7 @@ use crate::reference::ReferenceData;
 use crate::settings::{
     BuiltinPropertyDef, HierarchyExclusion, HierarchyTier, Milestone, ReferenceEntity, ReferenceFieldConfig, TestData,
 };
-use crate::storage::{SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter};
+use crate::storage::{ModelIndexRow, SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter};
 
 /// The store-side description of a rooms push, derived from the payload.
 ///
@@ -376,6 +376,12 @@ impl AppState {
     pub fn open_door_snapshot(&self, envelope: &DoorPayload) -> anyhow::Result<StreamingSnapshot<'_>> {
         let key = ModelKey::from_door_payload(envelope);
         StreamingSnapshot::open(self.store.as_ref(), &doors_meta(&key, envelope), SnapshotKind::Doors, envelope)
+    }
+
+    /// The store's index — every model, with display names, and **no snapshot
+    /// opened**. See `SnapshotStore::model_index` for why this exists.
+    pub fn model_index(&self) -> anyhow::Result<Vec<ModelIndexRow>> {
+        self.store.model_index()
     }
 
     /// Every model's latest snapshot, for the `/rooms` merge.

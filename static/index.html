@@ -836,6 +836,23 @@ let currentPayload = null;   // the one /rooms payload every zone renders from
 let doorsPayload = null;
 let lastDoorsRevision = null;
 let lastRevision = null;     // poll change-detection cursor
+// The server's ETag for the last body we actually received, per entity.
+//
+// A SECOND cursor beside `lastRevision`, not a replacement for it, and the two
+// answer different questions. `revision` rides in the body and says whether the
+// content we now hold differs from what we drew — it decides whether to
+// re-render. The ETag is sent back up as `If-None-Match` and lets the SERVER
+// decide not to build a body at all; it is deliberately more conservative than
+// the revision (see `service::scope_cursor`), so the two are not interchangeable
+// and must not be collapsed into one.
+//
+// Neither needs clearing on a scope change, unlike `lastRevision` beside them:
+// the tag is computed over the project/building/milestone/filter it was issued
+// for, so a tag from the old scope simply cannot match and the server answers
+// 200. The failure this rules out — a stale 304 hiding a scope switch — is
+// structural rather than something the reset lines below have to remember.
+let lastRoomsEtag = null;
+let lastDoorsEtag = null;
 // Picker refresh guards (diff signatures so the 2s tick doesn't fight the user).
 let lastProjectIds = null;
 let lastBuildingsSignature = null;
@@ -3735,14 +3752,21 @@ function doorsOnLevel(levelId) {
 // drawing without them.
 async function pollDoors() {
   try {
-    const res = await fetch(doorsUrl(), { cache: "no-store" });
+    const res = await fetch(doorsUrl(), { cache: "no-store", headers: condHeaders(lastDoorsEtag) });
+    // Nothing changed, and the server spent nothing establishing that. No body
+    // arrives, so there is nothing to compare or repaint.
+    if (res.status === 304) return false;
     if (res.status === 204) {
       // No doors in scope. Clear rather than keep the last set — stale doors
       // over a new project's plan is worse than none.
+      // Drop the tag with the payload: 204 carries none, so holding the old
+      // one would send `If-None-Match` for an entity we no longer have.
+      lastDoorsEtag = null;
       if (doorsPayload !== null) { doorsPayload = null; lastDoorsRevision = null; return true; }
       return false;
     }
     if (!res.ok) return false;
+    lastDoorsEtag = res.headers.get("ETag");
     const payload = await res.json();
     const incoming = payload.revision ?? JSON.stringify(payload);
     if (incoming === lastDoorsRevision) return false;
@@ -3752,6 +3776,17 @@ async function pollDoors() {
   } catch (err) {
     return false;   // rooms already report connection loss; one message is enough
   }
+}
+
+// `If-None-Match` for a poll, or no header at all on the first pass.
+//
+// Sent explicitly rather than relying on `cache: "no-cache"` to revalidate for
+// us, and the difference matters: the browser cache would hand back its stored
+// 200 on a 304, so the page would re-parse 73 MB of doors JSON to discover
+// nothing had changed. Setting the header by hand with `cache: "no-store"` lets
+// the 304 reach this code as a 304, with no body and no parse.
+function condHeaders(etag) {
+  return etag ? { "If-None-Match": etag } : {};
 }
 
 // Every zone's meta line reports poll-level states (waiting / connection lost)
@@ -3765,9 +3800,15 @@ function metaAll(text) {
 
 async function poll() {
   try {
-    const res = await fetch(roomsUrl(), { cache: "no-store" });
-    if (res.status === 204) { metaAll("waiting for data"); return; }
+    const res = await fetch(roomsUrl(), { cache: "no-store", headers: condHeaders(lastRoomsEtag) });
+    // A 304 settles the whole tick: rooms are unchanged, and `pollDoors` has
+    // its own tag, so there is nothing to re-render on either side. Returning
+    // here (rather than falling through to the revision compare) is what turns
+    // an idle poll into two header exchanges.
+    if (res.status === 304) { await pollDoors(); return; }
+    if (res.status === 204) { lastRoomsEtag = null; metaAll("waiting for data"); return; }
     if (!res.ok) throw new Error(res.status);
+    lastRoomsEtag = res.headers.get("ETag");
     const payload = await res.json();
     // Change-detection compares the server's one-value content revision instead
     // of re-stringifying the whole payload every poll (see the `revision` field

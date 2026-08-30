@@ -10,7 +10,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -34,8 +34,11 @@ use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
 use crate::service::validation::ValidationResponse;
-use crate::service::{doors, milestones, projects, reference, rooms, snapshots, validation, ServiceError};
+use crate::service::{
+    doors, milestones, projects, reference, rooms, scope_cursor, snapshots, validation, ServiceError,
+};
 use crate::state::{ModelKey, Shared, StreamingSnapshot};
+use crate::storage::SnapshotKind;
 
 /// Reject a project/model id that can't safely become a filesystem path
 /// component. `FsStore` builds paths as `root/<project_id>/<model_id>` straight
@@ -1230,8 +1233,47 @@ pub struct RoomsQuery {
 /// ingest and settings handlers already use), and threading a body-less 204
 /// through it would have meant answering the viewer's poll with an empty-bodied
 /// error.
+/// Turn a data cursor plus the request's own scope into one `ETag` value.
+///
+/// **The scope has to be in the tag, not just the data.** `service::scope_cursor`
+/// answers "which snapshots would this read serve", which is identical for
+/// `?building=A` and `?building=B` — the two responses are not. HTTP validates
+/// an entity tag against the URL that produced it, but the viewer compares tags
+/// in JavaScript across a scope change, so an unqualified tag would let a
+/// building switch look like "nothing changed". Hashing the parsed fields rather
+/// than the raw query string also means `?a=1&b=2` and `?b=2&a=1` agree, which
+/// a raw-string tag would not.
+fn etag_for(cursor: &str, scope: [Option<&str>; 4]) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    cursor.hash(&mut hasher);
+    scope.hash(&mut hasher);
+    // Quoted: a bare token is not a legal entity tag, and a proxy that
+    // normalises one would break the comparison below.
+    format!("\"{:016x}\"", hasher.finish())
+}
+
+/// Whether the client already holds this exact entity — an `If-None-Match` hit.
+///
+/// Only the exact-match case is honoured. `*` and weak comparison exist in the
+/// spec, but nothing this server talks to sends them, and a wrong "yes" here
+/// serves a stale plan indefinitely; a wrong "no" costs one body.
+fn is_fresh(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|hdr| hdr.split(',').any(|candidate| candidate.trim() == etag))
+}
+
+/// A 304, carrying the tag so a client that lost track can re-sync from it.
+fn not_modified(etag: &str) -> Response {
+    ([(header::ETAG, etag)], StatusCode::NOT_MODIFIED).into_response()
+}
+
 pub async fn get_rooms(
     State(state): State<Shared>,
+    headers: HeaderMap,
     Query(query): Query<RoomsQuery>,
 ) -> Result<Response, (StatusCode, String)> {
     // Parsed here, in the adapter that holds the raw string, then passed down
@@ -1255,11 +1297,32 @@ pub async fn get_rooms(
         milestone: query.milestone.as_deref(),
         filter: filter.as_ref(),
     };
+
+    // The cheap half first: if the client's tag still matches, nothing below
+    // this line has to run at all. That is the entire point — the assemble is
+    // what costs, not the transfer.
+    let cursor =
+        scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Rooms]).map_err(map_service_error)?;
+    let etag = etag_for(
+        &cursor,
+        [
+            query.project.as_deref(),
+            query.building.as_deref(),
+            query.milestone.as_deref(),
+            query.filter.as_deref(),
+        ],
+    );
+    if is_fresh(&headers, &etag) {
+        return Ok(not_modified(&etag));
+    }
+
     let result = rooms::assemble_rooms(&state, &scope).map_err(map_service_error)?;
 
     match result {
+        // No tag on a 204: there is no entity to hold, and tagging "nothing"
+        // would let the first real push be answered with a 304.
         None => Ok(StatusCode::NO_CONTENT.into_response()),
-        Some(result) => Ok(Json(result).into_response()),
+        Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
     }
 }
 
@@ -1288,6 +1351,7 @@ pub struct DoorsQuery {
 /// (`service::doors`' module doc).
 pub async fn get_doors(
     State(state): State<Shared>,
+    headers: HeaderMap,
     Query(query): Query<DoorsQuery>,
 ) -> Result<Response, (StatusCode, String)> {
     // The same registry-wide source vocabulary `/rooms` parses against, even
@@ -1310,11 +1374,30 @@ pub async fn get_doors(
         milestone: query.milestone.as_deref(),
         filter: filter.as_ref(),
     };
+
+    // Both kinds, because a doors response is not a function of doors alone:
+    // ownership and the geometric resolver read the scope's *rooms*
+    // (`doors::build_candidates`), so a rooms push changes this body.
+    let cursor = scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Rooms, SnapshotKind::Doors])
+        .map_err(map_service_error)?;
+    let etag = etag_for(
+        &cursor,
+        [
+            query.project.as_deref(),
+            query.building.as_deref(),
+            query.milestone.as_deref(),
+            query.filter.as_deref(),
+        ],
+    );
+    if is_fresh(&headers, &etag) {
+        return Ok(not_modified(&etag));
+    }
+
     let result = doors::assemble_doors(&state, &scope).map_err(map_service_error)?;
 
     match result {
         None => Ok(StatusCode::NO_CONTENT.into_response()),
-        Some(result) => Ok(Json(result).into_response()),
+        Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
     }
 }
 
@@ -1543,8 +1626,117 @@ mod tests {
     async fn test_get_rooms_returns_204_when_store_empty() {
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
-        let response = get_rooms(State(state), Query(unscoped_query())).await.expect("204 is not an error");
+        let response = get_rooms(State(state), HeaderMap::new(), Query(unscoped_query()))
+            .await
+            .expect("204 is not an error");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    /// One registered project with one room, for the conditional-request tests.
+    fn state_with_one_room(taken_at: &str) -> Shared {
+        let payload = RoomPayload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: taken_at.to_string() },
+            phase: None,
+            model_to_shared: None,
+            room_boundary: None,
+            levels: vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
+            rooms: vec![make_room("r1", "Room A")],
+        };
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        state.set_snapshot(payload).unwrap();
+        state
+    }
+
+    fn if_none_match(etag: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+        headers
+    }
+
+    /// The round trip the viewer's poll actually performs: a 200 hands out an
+    /// `ETag`, and sending it straight back returns 304 with no body. This is
+    /// the whole saving — an idle poll must not cost an assemble.
+    #[tokio::test]
+    async fn test_get_rooms_answers_304_to_its_own_etag() {
+        let state = state_with_one_room("2026-01-01T00:00:00Z");
+
+        let first = get_rooms(State(state.clone()), HeaderMap::new(), Query(unscoped_query())).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let etag = first
+            .headers()
+            .get(header::ETAG)
+            .expect("a 200 must carry a tag")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let second = get_rooms(State(state), if_none_match(&etag), Query(unscoped_query())).await.unwrap();
+
+        assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+        let bytes = axum::body::to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        assert!(bytes.is_empty(), "a 304 carries no body — that is the point");
+    }
+
+    /// A push moves the tag, so a client holding the old one gets a real body.
+    /// The failure this rules out is the only *dangerous* direction: a cursor
+    /// that kept matching would freeze the viewer on a stale plan indefinitely,
+    /// where the opposite error merely costs one needless download.
+    #[tokio::test]
+    async fn test_get_rooms_etag_moves_on_a_push() {
+        let state = state_with_one_room("2026-01-01T00:00:00Z");
+        let first = get_rooms(State(state.clone()), HeaderMap::new(), Query(unscoped_query())).await.unwrap();
+        let etag = first.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+
+        let mut newer = RoomPayload {
+            schema_version: SUPPORTED_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: "2026-02-02T00:00:00Z".to_string() },
+            phase: None,
+            model_to_shared: None,
+            room_boundary: None,
+            levels: vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
+            rooms: vec![make_room("r1", "Room A")],
+        };
+        newer.rooms.push(make_room("r2", "Room B"));
+        state.set_snapshot(newer).unwrap();
+
+        let after = get_rooms(State(state), if_none_match(&etag), Query(unscoped_query())).await.unwrap();
+
+        assert_eq!(after.status(), StatusCode::OK, "the pushed snapshot must not hide behind the old tag");
+    }
+
+    /// A tag issued for one scope must not satisfy a request for another. The
+    /// data cursor is identical across these two — same store, same snapshots —
+    /// so only the scope going into the tag separates them, and the viewer
+    /// compares tags in JavaScript across a scope change rather than relying on
+    /// HTTP's per-URL validation.
+    #[tokio::test]
+    async fn test_get_rooms_etag_is_scoped_to_the_request() {
+        let state = state_with_one_room("2026-01-01T00:00:00Z");
+        let unscoped = get_rooms(State(state.clone()), HeaderMap::new(), Query(unscoped_query())).await.unwrap();
+        let etag = unscoped.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+
+        let scoped = RoomsQuery { building: Some("B01".to_string()), ..unscoped_query() };
+        let response = get_rooms(State(state), if_none_match(&etag), Query(scoped)).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "a building filter is a different entity");
+    }
+
+    /// An empty store answers 204 and issues **no** tag. Tagging "nothing"
+    /// would let the first real push be answered 304 — the viewer would sit on
+    /// "waiting for data" through a successful import.
+    #[tokio::test]
+    async fn test_get_rooms_204_carries_no_etag() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let response = get_rooms(State(state), HeaderMap::new(), Query(unscoped_query())).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(response.headers().get(header::ETAG).is_none());
     }
 
     fn adjacency_query(wall_max: Option<&str>) -> AdjacencyQuery {
@@ -1652,7 +1844,9 @@ mod tests {
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
 
         let query = RoomsQuery { filter: Some("Department".to_string()), ..unscoped_query() };
-        let (status, message) = get_rooms(State(state), Query(query)).await.expect_err("no operator in the predicate");
+        let (status, message) = get_rooms(State(state), HeaderMap::new(), Query(query))
+            .await
+            .expect_err("no operator in the predicate");
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
             message.contains("no operator"),
@@ -1679,7 +1873,7 @@ mod tests {
         state.set_snapshot(payload).unwrap();
 
         let query = RoomsQuery { project: Some("nonexistent".to_string()), ..unscoped_query() };
-        let response = get_rooms(State(state), Query(query)).await.unwrap();
+        let response = get_rooms(State(state), HeaderMap::new(), Query(query)).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();

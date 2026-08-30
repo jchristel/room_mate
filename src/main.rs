@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use axum::http::{Method, StatusCode};
+use axum::http::{header, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::{
     extract::DefaultBodyLimit,
@@ -124,6 +124,13 @@ fn read_only_cors() -> CorsLayer {
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::HEAD])
         .allow_headers(Any)
+        // `ETag` has to be exposed or the conditional-poll saving is same-origin
+        // only: a cross-origin reader may *send* `If-None-Match` (allowed above,
+        // at the cost of a preflight) but cannot read the tag back off a 200 to
+        // send next time, so it would never have one to send. Response headers
+        // are opaque to cross-origin JS unless named here, and the safelist does
+        // not include `ETag`.
+        .expose_headers([header::ETAG])
 }
 
 /// The host names this server will answer to. Anything else is a request that

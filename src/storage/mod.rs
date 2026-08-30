@@ -167,6 +167,34 @@ pub struct ProjectManifest {
     pub reference_snapshots: BTreeMap<String, Vec<String>>,
 }
 
+/// One model in the store's index: its key, plus the display names the manifest
+/// holds for it and its project.
+///
+/// Deliberately **not** a `ModelEntry` — that is the on-disk shape, private to
+/// `FsStore` and carrying a phase and two snapshot-id lists no index consumer
+/// wants. This is the store-agnostic answer, and `MemStore` (which has no
+/// manifest at all) fills it from the `SnapshotMeta` of the pushes it has seen.
+#[derive(Debug, Clone)]
+pub struct ModelIndexRow {
+    pub key: ModelKey,
+    /// Project display name. Mutable — the latest push wins, same as the
+    /// manifest field it comes from.
+    pub project_name: String,
+    /// Model display name, under the same mutability rule.
+    pub model_name: String,
+    /// The newest stored snapshot id (`taken_at`) per kind, absent for a kind
+    /// this model holds nothing of.
+    ///
+    /// **Reconciled, not read straight off the manifest.** These ids are what a
+    /// content cursor is built from (`rooms::scope_cursor`), and a cursor that
+    /// named a snapshot no read path would serve is worse than no cursor: it
+    /// would answer "nothing changed" about content that was never there. So
+    /// this goes through `list_snapshot_ids`, which drops a manifest id with no
+    /// file behind it — filesystem wins, exactly as everywhere else in the
+    /// store.
+    pub latest: BTreeMap<SnapshotKind, String>,
+}
+
 /// One model's entry in a `ProjectManifest`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelEntry {
@@ -325,6 +353,31 @@ pub trait SnapshotStore: Send + Sync {
     /// its manifest gains an entry on *any* push — so the narrower contract was
     /// already only true of `MemStore`.
     fn list_models(&self) -> Result<Vec<ModelKey>>;
+
+    /// Every model the store knows about, with the display names the manifest
+    /// carries for it — the index question `list_models` answers, plus the two
+    /// strings a picker needs.
+    ///
+    /// **It exists so `/projects` can stop parsing the store.** A project's id
+    /// and name ride on every payload it stores, so listing projects used to be
+    /// derived from `all_latest_raw` — which parses every model's newest
+    /// snapshot to read two strings. That is fine at sample-project scale and
+    /// absurd at RHH's: measured, a 213-byte `/projects` response cost 0.36 s of
+    /// CPU, on a route the viewer polls every two seconds. The names were in the
+    /// manifest the whole time; nothing but the missing accessor forced the
+    /// parse.
+    ///
+    /// Its second consumer is the content cursor behind `ETag`/`If-None-Match`
+    /// on `/rooms` and `/doors` (`rooms::scope_cursor`), which needs the same
+    /// question answered one field further: *which* snapshot each model would
+    /// contribute, without reading any of them.
+    ///
+    /// Names, unlike the ids, are **mutable and best-effort**: a model on disk
+    /// that the manifest does not index still appears (filesystem wins, same
+    /// rule as `list_models`), carrying its id in place of a name. A caller that
+    /// needs a guaranteed name must read the payload — but no caller does, since
+    /// a name nothing has ever pushed does not exist to be read.
+    fn model_index(&self) -> Result<Vec<ModelIndexRow>>;
 
     /// Every model's latest snapshot of one kind, for the merge `/rooms` does.
     /// A model with no snapshot of that kind contributes nothing.
