@@ -175,9 +175,163 @@ pub fn resolve_project_file(projects_dir: &Path, project_id: &str) -> Result<(St
     )))
 }
 
+/// Render `settings` as the file to write, carrying the previous file's
+/// comments across.
+///
+/// A save regenerates the whole project file from the typed `Settings`, and a
+/// generated file has no comments in it. For these files the comments are most
+/// of the content — why a door key is `$id` and not `Mark`, which of two
+/// measured options a setting records, what a tier would break if it were keyed
+/// on the code instead of the name. None of it is recoverable from the values,
+/// none of it is written down anywhere else, and losing it to an unrelated edit
+/// is the same class of loss `merge_over_stored` fixes one layer down.
+///
+/// **Content and formatting come from `toml::to_string_pretty`; only decor
+/// comes from the old file.** The generated text is reparsed and decorated
+/// rather than being built through `toml_edit`'s own serializer, which keeps
+/// exactly one thing deciding what a settings file looks like — the same call,
+/// still guarded by `test_toml_serializer_hoists_values_above_tables`. The
+/// worst case here is a comment dropped or misplaced; a *value* cannot come out
+/// different, because no value passes through this.
+///
+/// `previous` absent — a create, or a file too broken to parse — simply means
+/// nothing to carry.
+fn render_settings(settings: &Settings, previous: Option<&str>) -> Result<String, SettingsError> {
+    let generated = toml::to_string_pretty(settings)
+        .map_err(|e| SettingsError::Invalid(format!("settings do not serialize to TOML: {e}")))?;
+
+    let (Some(previous), Ok(mut next)) = (previous, generated.parse::<toml_edit::DocumentMut>()) else {
+        return Ok(generated);
+    };
+    let Ok(previous) = previous.parse::<toml_edit::DocumentMut>() else {
+        return Ok(generated);
+    };
+
+    carry_comments(previous.as_table(), next.as_table_mut());
+    next.set_trailing(previous.trailing().clone());
+    Ok(next.to_string())
+}
+
+/// Copy one document's comments onto a freshly generated one, matched by key
+/// path. A key the new document no longer has loses its comment along with the
+/// setting it described; a key the old document never had gets none. Both are
+/// the right answer, which is why neither is special-cased.
+fn carry_comments(previous: &toml_edit::Table, next: &mut toml_edit::Table) {
+    for (mut key, item) in next.iter_mut() {
+        let name = key.get().to_string();
+        let Some(old_item) = previous.get(&name) else { continue };
+
+        // A scalar's comment block sits on its KEY; a `[table]`'s sits on the
+        // table header, handled in `carry_table_comments`. A key is only ever
+        // one of the two, so copying both is not double-counting.
+        if let Some(old_key) = previous.key(&name)
+            && let Some(prefix) = old_key.leaf_decor().prefix()
+        {
+            key.leaf_decor_mut().set_prefix(prefix.clone());
+        }
+
+        match (old_item, item) {
+            (toml_edit::Item::Table(old), toml_edit::Item::Table(new)) => carry_table_comments(old, new),
+            (toml_edit::Item::ArrayOfTables(old), toml_edit::Item::ArrayOfTables(new)) => {
+                for (index, entry) in new.iter_mut().enumerate() {
+                    let Some(old_entry) = matching_entry(old, entry, index) else {
+                        continue;
+                    };
+                    carry_table_comments(old_entry, entry);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn carry_table_comments(previous: &toml_edit::Table, next: &mut toml_edit::Table) {
+    if let Some(prefix) = previous.decor().prefix() {
+        next.decor_mut().set_prefix(prefix.clone());
+    }
+    carry_comments(previous, next);
+}
+
+/// Which entry of the previous array-of-tables described this one.
+///
+/// By **identity** wherever the entries carry one — `name` for a hierarchy
+/// tier, milestone or colour plan, `canonical` for a builtin property, `label`
+/// for a reference field — and by position only for entries that carry none.
+/// Position alone breaks the first time somebody reorders tiers in the UI: the
+/// comments would stay where they were and start describing their new
+/// neighbours, which is worse than losing them. An identified entry with no
+/// match in the old document is new, and correctly gets nothing.
+fn matching_entry<'a>(
+    previous: &'a toml_edit::ArrayOfTables,
+    entry: &toml_edit::Table,
+    index: usize,
+) -> Option<&'a toml_edit::Table> {
+    for field in ["name", "canonical", "label"] {
+        if let Some(id) = entry.get(field).and_then(toml_edit::Item::as_str) {
+            return previous.iter().find(|old| old.get(field).and_then(toml_edit::Item::as_str) == Some(id));
+        }
+    }
+    previous.get(index)
+}
+
+/// Fill a partial update from the file it is about to replace: any top-level
+/// key the request did not send keeps the value already on disk.
+///
+/// **This exists because a save is a whole-file write and the settings page
+/// only edits part of a project.** `static/settings.html` has no controls for
+/// `[doors]`, `[areas]` or `hierarchy_exclusions` and never sends them, and
+/// all three are `#[serde(default, skip_serializing_if = ...)]` — so an unsent
+/// section did not stay unedited, it was **deleted**, silently, by editing
+/// something unrelated. RHH lost `[doors] room_resolution = "same_model"` that
+/// way and put 2084 doors back to homeless; nothing anywhere said so.
+///
+/// The merge is deliberately **top-level only**. A deep merge would resurrect
+/// what the client meant to remove — a source dropped from `sources`, a tier
+/// dropped from `hierarchy` — because "absent from a list the client sent" and
+/// "absent from the request" would stop being distinguishable. At this depth
+/// they still are: a key the client sent wins whole, a key it omitted is
+/// inherited whole.
+///
+/// It runs on the JSON, before typing, because that is the last point where
+/// the distinction exists at all. Once the body is a `Settings`,
+/// `#[serde(default)]` has already turned "not sent" into "the default value"
+/// and no code downstream can tell those apart.
+///
+/// Update only. A create has no stored file to inherit from, and giving one a
+/// silent parent would be a different feature.
+fn merge_over_stored(
+    projects_dir: &Path,
+    project_id: &str,
+    incoming: serde_json::Value,
+) -> Result<Settings, SettingsError> {
+    let serde_json::Value::Object(mut merged) = incoming else {
+        return Err(SettingsError::Invalid("settings body must be a JSON object".to_string()));
+    };
+
+    // A project this lookup cannot find has nothing to carry forward. The
+    // error is not raised here: `save_project` owns the update path's 404 and
+    // its wording, and raising a second one would fork that message.
+    if let Ok((_, stored)) = get_project_file(projects_dir, project_id) {
+        let stored = serde_json::to_value(&stored)
+            .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not re-encode stored settings: {e}")))?;
+        if let serde_json::Value::Object(stored) = stored {
+            for (key, value) in stored {
+                merged.entry(key).or_insert(value);
+            }
+        }
+    }
+
+    serde_json::from_value(serde_json::Value::Object(merged))
+        .map_err(|e| SettingsError::Invalid(format!("settings body is not valid project settings: {e}")))
+}
+
 /// Save one project's settings: validate through the startup pipeline, write
 /// the file atomically, hot-swap the running registry. `existing_id` is
 /// `Some` for an update (`PUT`) and `None` for a create (`POST`).
+///
+/// Takes a whole `Settings` and writes a whole file. An update that means to
+/// preserve what it does not mention must go through `merge_over_stored`
+/// first — see that function for why the merge cannot live in here.
 ///
 /// Ordering is deliberate: nothing is installed until the candidate passed
 /// the exact validation startup runs, and the registry is only swapped from a
@@ -253,8 +407,10 @@ pub fn save_project(
     // (so relative dRofus paths resolve exactly as they will at startup) with
     // a non-.toml extension (so a crash mid-save can't leave a file the next
     // startup scan would pick up).
-    let toml_text = toml::to_string_pretty(&settings)
-        .map_err(|e| SettingsError::Invalid(format!("settings do not serialize to TOML: {e}")))?;
+    // The file being replaced is read for its comments only — see
+    // `render_settings`. A create has no such file and reads `None`.
+    let previous = std::fs::read_to_string(&target).ok();
+    let toml_text = render_settings(&settings, previous.as_deref())?;
     let temp = projects_dir.join(format!(".{id}.candidate.tmp"));
     std::fs::write(&temp, &toml_text)
         .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not write candidate file: {e}")))?;
@@ -476,11 +632,17 @@ pub async fn http_create_project(
 }
 
 /// `PUT /api/settings/projects/{id}` (update)
+///
+/// Body is taken as raw JSON, not as `Settings`, so `merge_over_stored` can
+/// still see which keys the client actually sent — typing it here would
+/// collapse "not sent" into "default" before anything could preserve it.
 pub async fn http_update_project(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
-    Json(settings): Json<Settings>,
+    Json(incoming): Json<serde_json::Value>,
 ) -> Result<Json<SaveResponse>, (StatusCode, String)> {
+    let dir = require_dir(&state)?;
+    let settings = merge_over_stored(&dir, &project_id, incoming).map_err(to_http)?;
     let settings = save_project(&state, Some(&project_id), settings).map_err(to_http)?;
     Ok(Json(SaveResponse { applied: true, settings }))
 }
@@ -512,6 +674,7 @@ pub async fn http_upload_reference(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::RoomResolution;
     use crate::storage::MemStore;
     use std::collections::HashMap;
 
@@ -901,6 +1064,196 @@ ids = ["12345", "67890"]
         assert_eq!(std::fs::read_to_string(dir.join("p1.toml")).unwrap(), before, "file untouched");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A stored file holding two sections the settings page cannot edit
+    /// (`[doors]`) and one it can (`hierarchy`), so one fixture exercises both
+    /// halves of the merge rule.
+    const DOORS_TOML: &str = r#"
+project_id = "p1"
+room_label = ["$name"]
+
+[doors]
+comparison_key = "$id"
+room_resolution = "same_model"
+
+[[hierarchy]]
+name = "Building"
+name_property = "Building"
+
+[[hierarchy]]
+name = "Department"
+name_property = "Department"
+"#;
+
+    /// The regression this whole merge exists for: a body shaped like what
+    /// `settings.html` actually sends — no `doors` key anywhere — must not
+    /// delete `[doors]`. Before `merge_over_stored`, editing a room label
+    /// silently dropped `room_resolution` and re-homeless'd 2084 RHH doors.
+    #[test]
+    fn test_update_preserves_sections_the_client_did_not_send() {
+        let dir = temp_dir("merge-keep");
+        std::fs::write(dir.join("p1.toml"), DOORS_TOML).unwrap();
+
+        let body = serde_json::json!({
+            "project_id": "p1",
+            "room_label": ["$name", "Area"],
+            "hierarchy": [{ "name": "Building", "name_property": "Building" }],
+        });
+        let merged = merge_over_stored(&dir, "p1", body).unwrap();
+
+        assert_eq!(merged.doors.comparison_key.as_deref(), Some("$id"), "unsent section inherited");
+        assert_eq!(merged.doors.room_resolution, RoomResolution::SameModel);
+        // Top-level only: the one tier the client sent wins WHOLE. A deep
+        // merge would put the deleted "Department" tier back.
+        assert_eq!(merged.hierarchy.len(), 1, "a sent list is not back-filled");
+        assert_eq!(merged.room_label, vec!["$name".to_string(), "Area".to_string()]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The other half of the same rule: a section the client DID send replaces
+    /// the stored one entirely, defaults included. Sending `doors` without
+    /// `room_resolution` means off — inheriting the stored `same_model` field
+    /// by field is the deep merge this deliberately isn't.
+    #[test]
+    fn test_update_lets_a_sent_section_win_whole() {
+        let dir = temp_dir("merge-override");
+        std::fs::write(dir.join("p1.toml"), DOORS_TOML).unwrap();
+
+        let body = serde_json::json!({
+            "project_id": "p1",
+            "doors": { "comparison_key": "Mark" },
+        });
+        let merged = merge_over_stored(&dir, "p1", body).unwrap();
+
+        assert_eq!(merged.doors.comparison_key.as_deref(), Some("Mark"));
+        assert_eq!(merged.doors.room_resolution, RoomResolution::Off, "replaced whole, not field by field");
+        // Untouched keys still come from disk.
+        assert_eq!(merged.hierarchy.len(), 2);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A project with no stored file has nothing to inherit, and the body is
+    /// typed exactly as it arrived. The 404 belongs to `save_project`, so this
+    /// path must not raise one of its own.
+    #[test]
+    fn test_update_merge_tolerates_an_unknown_project() {
+        let dir = temp_dir("merge-ghost");
+        let merged = merge_over_stored(&dir, "ghost", serde_json::json!({ "project_id": "ghost" })).unwrap();
+        assert_eq!(merged.project_id, "ghost");
+        assert_eq!(merged.doors.room_resolution, RoomResolution::Off);
+
+        // A body that isn't an object cannot be merged into one.
+        assert!(matches!(
+            merge_over_stored(&dir, "ghost", serde_json::json!([1, 2, 3])),
+            Err(SettingsError::Invalid(_))
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A commented file in the shape the real project files take: a header
+    /// block, a comment on a scalar, one on a table, and one on each entry of
+    /// an array-of-tables.
+    const COMMENTED_TOML: &str = r#"# Rouse Hill Hospital — the file header.
+# Second line of it.
+project_id = "p1"
+
+# Room identity across milestones.
+comparison_key = "Number"
+room_label = ["$name"]
+
+# Doors are pushed for six of the seven models.
+[doors]
+comparison_key = "$id"
+room_resolution = "same_model"
+
+# The top tier.
+[[hierarchy]]
+name = "Building"
+name_property = "Building"
+
+# The middle tier, keyed on name only.
+[[hierarchy]]
+name = "Department"
+name_property = "Department"
+"#;
+
+    /// Comments survive a save. Before this, every save regenerated the file
+    /// from the typed struct and the reasoning in it was simply gone — the
+    /// values were preserved and the only record of WHY they were those values
+    /// was not.
+    #[test]
+    fn test_render_carries_comments_onto_a_regenerated_file() {
+        let mut settings: Settings = toml::from_str(COMMENTED_TOML).unwrap();
+        settings.room_label = vec!["$name".to_string(), "Area".to_string()];
+
+        let rendered = render_settings(&settings, Some(COMMENTED_TOML)).unwrap();
+
+        assert!(rendered.contains("# Rouse Hill Hospital — the file header."), "header block: {rendered}");
+        assert!(rendered.contains("# Second line of it."));
+        assert!(rendered.contains("# Room identity across milestones."), "scalar key comment");
+        assert!(
+            rendered.contains("# Doors are pushed for six of the seven models."),
+            "table header comment"
+        );
+        assert!(rendered.contains("# The top tier."), "array-of-tables entry comment");
+        assert!(rendered.contains("# The middle tier, keyed on name only."));
+
+        // The edit still landed, and the file still parses back to it.
+        let back: Settings = toml::from_str(&rendered).unwrap();
+        assert_eq!(back.room_label, vec!["$name".to_string(), "Area".to_string()]);
+        assert_eq!(back.doors.room_resolution, RoomResolution::SameModel);
+    }
+
+    /// Reordering array entries moves their comments with them. Matching by
+    /// position instead would leave "# The top tier." sitting on Department —
+    /// a comment that now says something false, which is worse than none.
+    #[test]
+    fn test_render_matches_array_entries_by_identity_not_position() {
+        let mut settings: Settings = toml::from_str(COMMENTED_TOML).unwrap();
+        settings.hierarchy.reverse();
+
+        let rendered = render_settings(&settings, Some(COMMENTED_TOML)).unwrap();
+
+        let department = rendered.find("# The middle tier, keyed on name only.").expect("kept");
+        let building = rendered.find("# The top tier.").expect("kept");
+        assert!(department < building, "comments followed their tiers:\n{rendered}");
+        assert!(
+            rendered[department..building].contains("name = \"Department\""),
+            "Department's comment sits on Department:\n{rendered}"
+        );
+    }
+
+    /// A section that is gone takes its comment with it, and a create has
+    /// nothing to carry — the two ends of "decor follows content".
+    #[test]
+    fn test_render_drops_comments_for_removed_sections_and_skips_a_create() {
+        let mut settings: Settings = toml::from_str(COMMENTED_TOML).unwrap();
+        settings.doors = Default::default();
+        settings.hierarchy.clear();
+
+        let rendered = render_settings(&settings, Some(COMMENTED_TOML)).unwrap();
+        assert!(!rendered.contains("# Doors are pushed"), "comment left without its section:\n{rendered}");
+        assert!(!rendered.contains("# The top tier."));
+        assert!(rendered.contains("# Room identity across milestones."), "surviving keys keep theirs");
+
+        // No previous file: byte-identical to what the plain serializer writes,
+        // so a create is unchanged by any of this.
+        let created = render_settings(&settings, None).unwrap();
+        assert_eq!(created, toml::to_string_pretty(&settings).unwrap());
+    }
+
+    /// An unparseable previous file must not fail the save it precedes — the
+    /// settings UI is exactly the tool you would use to fix a rotten file, so
+    /// overwriting one has to keep working. Comments are simply not carried.
+    #[test]
+    fn test_render_falls_back_when_the_previous_file_is_broken() {
+        let settings = minimal_settings("p1");
+        let rendered = render_settings(&settings, Some("this is not toml [[")).unwrap();
+        assert_eq!(rendered, toml::to_string_pretty(&settings).unwrap());
     }
 
     const UPLOAD_TOML: &str = "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n";
