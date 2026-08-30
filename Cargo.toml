@@ -20,6 +20,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
 toml = "0.8"
+# Comment-PRESERVING TOML writing, for the settings save path only. `toml`
+# above still does every read and every byte of formatting, including on save;
+# this crate is used purely to move the OLD file's comments onto the newly
+# generated one, because regenerating a project file from the typed struct threw
+# away the rationale comments those files are mostly made of. Already in the
+# tree as a `toml` dependency — this only makes it direct. Default features
+# (parse + display) are all it needs: nothing here serializes through it, which
+# is what keeps `toml::to_string_pretty` the single source of format truth.
+toml_edit = "0.22"
 anyhow = "1"
 chrono = "0.4"
 csv = "1"
