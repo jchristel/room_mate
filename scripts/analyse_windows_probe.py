@@ -26,6 +26,7 @@ lands, including a machine with no checkout of this repo beside it.
 import argparse
 import json
 import os
+import re
 import sys
 from collections import Counter, OrderedDict
 
@@ -198,6 +199,41 @@ def structural_diff(window_records, door_records):
     for r in door_records:
         door |= key_paths(r)
     return sorted(win - door), sorted(door - win)
+
+
+def dropped_by_export(probe, window_records):
+    """Instances the collector saw that the duHast export does not contain.
+
+    `populate_data_*_object` returns None for anything it could not measure, and
+    the caller simply does not append it -- so the loss is silent and invisible
+    from the export alone, which is the only thing production ever sees. The
+    probe is the first thing to count both sides.
+
+    Reported with each element's room references, because that is what decides
+    whether the drop matters: an unmeasurable nested leaf is noise, and a real
+    element naming two rooms is a hole in the data. On the House A door control
+    this found 6 dropped of 32, one of them a room-referenced sliding door."""
+    exported = set(
+        str(dig(r, "instance_properties.id")) for r in window_records
+    )
+    out = []
+    for element in probe.get("elements", {}).values():
+        if str(element.get("id")) in exported:
+            continue
+        rooms = []
+        for entry in element.get("rooms_by_phase") or []:
+            if entry.get("fromroom") or entry.get("toroom"):
+                rooms.append((entry.get("fromroom"), entry.get("toroom")))
+        out.append(
+            {
+                "id": element.get("id"),
+                "mark": element.get("mark"),
+                "family": element.get("family_name"),
+                "nested": element.get("is_nested_in_same_category"),
+                "names_a_room": bool(rooms),
+            }
+        )
+    return out
 
 
 def geometry_health(window_records):
@@ -374,10 +410,85 @@ def storey_by_sill_rule(min_z, max_z, levels):
     return lowest
 
 
-def level_report(probe):
-    """Every element whose reported level disagrees with the sill rule, plus the
-    two coarser flags that do not depend on the rule at all."""
+def reconcile_frames(probe):
+    """Put level elevations and element bounding boxes into ONE vertical frame,
+    and report how confidently.
+
+    **They do not arrive in the same frame, and assuming they do produces a
+    catastrophic false positive.** On House A the levels read 361-382 ft and the
+    windows 4-20 ft: the levels carry a survey-based elevation and the bounding
+    boxes are on the internal origin, a constant 360.27 ft apart. Compared
+    directly, 33 of 47 windows look like they sit a storey low. Every one of
+    them is fine.
+
+    The offset is recovered per element as
+    `level.elevation - (bbox_min_z - sill_height)`, because `sill_height` is
+    already level-relative: it is the one quantity that spans both frames. The
+    MEDIAN of those is the frame offset.
+
+    **The spread is the finding, and this is what makes the measure
+    non-circular.** A window on the wrong level throws its own sample off by a
+    whole storey, so it falls out as an outlier rather than shifting the median.
+    Anything further than half a storey from the median is reported as a
+    candidate mis-level; a tight spread across windows on *different* levels is
+    positive evidence the reported levels are right. The tolerance is half the
+    smallest inter-level gap rather than a constant, so it scales with the
+    building instead of being tuned to one.
+
+    Returns None when nothing carries both a sill height and a box, which makes
+    Q3 inconclusive rather than wrong."""
     levels = probe.get("levels", [])
+    by_id = dict((str(l["id"]), l) for l in levels)
+
+    samples = []
+    for element in probe.get("elements", {}).values():
+        level = by_id.get(str(element.get("level_id")))
+        sill = element.get("sill_height")
+        if sill is None:
+            sill = element.get("level_offset")
+        min_z = element.get("bbox_min_z")
+        if level is None or sill is None or min_z is None:
+            continue
+        samples.append((level["elevation"] - (min_z - sill), element))
+
+    if not samples:
+        return None
+
+    values = sorted(s[0] for s in samples)
+    offset = values[len(values) // 2]
+
+    gaps = [b["elevation"] - a["elevation"] for a, b in zip(levels, levels[1:])]
+    storey = min(gaps) if gaps else None
+    tolerance = (storey / 2.0) if storey else 1.0
+
+    return {
+        "offset": offset,
+        "spread": values[-1] - values[0],
+        "storey": storey,
+        "tolerance": tolerance,
+        "sampled": len(samples),
+        "outliers": [
+            {
+                "id": e["id"],
+                "mark": e.get("mark"),
+                "off_by": round(o - offset, 3),
+                "storeys": round((o - offset) / storey, 2) if storey else None,
+            }
+            for o, e in samples
+            if abs(o - offset) > tolerance
+        ],
+    }
+
+
+def level_report(probe, frame):
+    """Every element whose reported level disagrees with the sill rule, plus the
+    two coarser flags that do not depend on the rule at all.
+
+    `frame` comes from `reconcile_frames`; its offset is subtracted from every
+    level so the comparison happens in the elements' own frame. Without it this
+    function measures the frame difference and calls it a modelling error."""
+    offset = (frame or {}).get("offset", 0.0)
+    levels = [dict(l, elevation=l["elevation"] - offset) for l in probe.get("levels", [])]
     by_id = {str(l["id"]): l for l in levels}
     elements = list(probe.get("elements", {}).values())
 
@@ -485,7 +596,8 @@ def build_report(data):
     only_windows, only_doors = structural_diff(win_records, door_records)
     geometry = geometry_health(win_records)
     q2 = curtain_and_nested(win_probe)
-    q3 = level_report(win_probe)
+    frame = reconcile_frames(win_probe)
+    q3 = level_report(win_probe, frame)
     phases = export_phase_ids_resolve(win_records, win_probe.get("phases", []))
 
     lines = []
@@ -518,6 +630,26 @@ def build_report(data):
         "sentinel**.".format(**geometry)
     )
     add("")
+
+    dropped = dropped_by_export(win_probe, win_records)
+    if dropped:
+        with_rooms = [d for d in dropped if d["names_a_room"]]
+        add(
+            "**{} instance(s) collected but NOT in the export** - duHast returns None "
+            "for anything it cannot measure and the caller drops it silently, so this "
+            "is invisible from the export alone. **{} of them name a room**, which is "
+            "the half that matters.".format(len(dropped), len(with_rooms))
+        )
+        add("")
+        add(
+            table(
+                ["Element", "Mark", "Family", "Nested", "Names a room"],
+                [[d["id"], d["mark"] or "-", d["family"] or "-",
+                  "yes" if d["nested"] else "no", "**yes**" if d["names_a_room"] else "no"]
+                 for d in dropped[:20]],
+            )
+        )
+        add("")
     add("Key paths on windows only: {}".format(", ".join("`%s`" % p for p in only_windows) or "_none_"))
     add("Key paths on doors only: {}".format(", ".join("`%s`" % p for p in only_doors) or "_none_"))
     add("")
@@ -526,6 +658,35 @@ def build_report(data):
         "phases: {}.".format(phases["seen"] or "_none_", phases["resolved"] or "_none_")
     )
     add("")
+
+    problems = win_probe.get("serialisation_problems") or []
+    if problems:
+        add(
+            "**{} export field(s) would not serialise** and were written as markers. "
+            "duHast's `Base.to_json` calls `json.dumps` with no `default=`, so "
+            "upstream this is not a degraded field but a lost document. Grouped by "
+            "path:".format(len(problems))
+        )
+        add("")
+        # Indices out before grouping: the path carries the element's position in
+        # the export, so `[0]` and `[1]` are the same finding on two windows and
+        # must collapse to one row saying "on N of them".
+        grouped = Counter(
+            (
+                re.sub(r"\[\d+\]", "[]", p.get("path", "?")),
+                p.get("type", "?"),
+                p.get("repr", p.get("error", "")),
+            )
+            for p in problems
+        )
+        add(
+            table(
+                ["Path", "Type", "Value", "Count"],
+                [[pth, typ, "`{}`".format(rep) if rep else "-", n]
+                 for (pth, typ, rep), n in grouped.most_common(20)],
+            )
+        )
+        add("")
 
     add("## Q2 - curtain-wall panels and nested components")
     add("")
@@ -572,6 +733,36 @@ def build_report(data):
 
     add("## Q3 - is the reported level the storey it serves?")
     add("")
+    if frame is None:
+        add(
+            "**Inconclusive.** No window carries both a sill height and a bounding "
+            "box, so level elevations and element geometry cannot be put in one "
+            "frame. Everything below would be measuring that gap, not the model."
+        )
+        add("")
+    else:
+        add(
+            "Levels and geometry arrive in DIFFERENT vertical frames; reconciled "
+            "before comparing. Offset **{:.3f} ft** (median of {} windows), spread "
+            "**{:.2f} ft** against a {:.2f} ft storey. {}".format(
+                frame["offset"],
+                frame["sampled"],
+                frame["spread"],
+                frame["storey"] or 0.0,
+                "No window is off by a storey."
+                if not frame["outliers"]
+                else "**{} outlier(s)** beyond half a storey.".format(len(frame["outliers"])),
+            )
+        )
+        add("")
+        if frame["outliers"]:
+            add(
+                table(
+                    ["Element", "Mark", "Off by (ft)", "Storeys"],
+                    [[o["id"], o["mark"] or "-", o["off_by"], o["storeys"]] for o in frame["outliers"][:20]],
+                )
+            )
+            add("")
     add("- Windows measured: **{}** ({} could not be).".format(q3["total"] - q3["unmeasurable"], q3["unmeasurable"]))
     add("- Reported level disagrees with duHast's sill rule: **{}**".format(len(q3["disagree"])))
     add("- Sits entirely above the next level up: **{}**".format(q3["above_next_level"]))

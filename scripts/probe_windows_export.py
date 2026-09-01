@@ -133,7 +133,12 @@ ENTITY_SPECS = {
 # fixture `gen_doors_sample.py` reads.
 OUT_SUFFIX = {"windows": "", "doors": "-control"}
 
-PROBE_VERSION = 1
+# Bumped whenever the probe's OUTPUT or its conversion changes. Printed at
+# startup because this script is run by exec'ing its text, so nothing else
+# tells a reader which copy actually ran -- and a stale copy has already
+# cost two runs, both diagnosed from a traceback that named the old line
+# numbers. v2: plainify replaced duHast's all-or-nothing serializer.
+PROBE_VERSION = 2
 
 
 # --------------------------------------------------------------------------
@@ -345,11 +350,23 @@ def document_levels(doc):
     levels = []
     for level in FilteredElementCollector(doc).OfClass(Level).ToElements():
         try:
+            # BOTH elevations, because they are not the same number and the
+            # difference is not academic. On House A `Elevation` reads 361-382 ft
+            # (survey based) while element bounding boxes sit at 4-20 ft, and
+            # comparing the two directly made 33 of 47 correctly-placed windows
+            # look a storey low. Recording both lets the analyser pick the frame
+            # that matches the geometry instead of inferring the offset.
+            project_elevation = None
+            try:
+                project_elevation = float(level.ProjectElevation)
+            except Exception:
+                project_elevation = None
             levels.append(
                 {
                     "id": _element_id_str(level.Id),
                     "name": level.Name,
                     "elevation": float(level.Elevation),
+                    "project_elevation": project_elevation,
                 }
             )
         except Exception:
@@ -541,22 +558,99 @@ def run_probe(doc, spec, context):
 # --------------------------------------------------------------------------
 
 
-def write_json(path, payload, duhast_objects=False):
+# Python 2 and 3 spell their string and integer types differently, and this file
+# runs on both. Resolved once here rather than guarded at each use.
+try:
+    STRING_TYPES = (str, unicode)  # noqa: F821 - IronPython 2.7
+    NUMBER_TYPES = (int, long, float)  # noqa: F821 - IronPython 2.7
+except NameError:
+    STRING_TYPES = (str,)
+    NUMBER_TYPES = (int, float)
+
+
+def plainify(value, path="", problems=None):
+    """duHast data objects to plain JSON types, recording -- rather than raising
+    on -- anything that will not convert.
+
+    **duHast's own serializer cannot be used here, and the reason is worth
+    keeping.** `serialize_utf` delegates to `Base.to_json`, which calls
+    `json.dumps` with **no `default=` handler**, over a `class_to_dict()` whose
+    inner `serialize()` ends in `else: return obj` -- so any CLR object duHast
+    did not anticipate passes through untouched and then raises. That makes the
+    export all-or-nothing: one unconvertible leaf on one window and the whole
+    document produces no file at all. Measured against a real model on
+    2026-09-01, one does (`<property# Name on Element>`), and the likely origin
+    is `get_type_properties`: it assigns `encode_utf8(Element.Name.GetValue(e))`,
+    and `encode_utf8` returns a non-string argument UNCHANGED, so a CLR
+    descriptor lands in `type_properties.name` with nothing complaining until
+    serialisation.
+
+    An instrument whose job is to describe a model nobody has looked at yet must
+    not have that failure mode. So the conversion happens here, `class_to_dict()`
+    is still used for each duHast object (it is correct, and it handles the .NET
+    `Int64` conversion), and the unconvertible leaf becomes a marker string plus
+    an entry in `problems` naming its path. The export lands, and *which* field
+    would not convert becomes a finding rather than a stack trace.
+
+    Returns `(plain_value, problems)`."""
+    if problems is None:
+        problems = []
+
+    if value is None or isinstance(value, bool):
+        return value, problems
+    if isinstance(value, NUMBER_TYPES) or isinstance(value, STRING_TYPES):
+        return value, problems
+
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            key_str = key if isinstance(key, STRING_TYPES) else str(key)
+            out[key_str], problems = plainify(item, "{}.{}".format(path, key_str), problems)
+        return out, problems
+
+    if isinstance(value, (list, tuple)):
+        out = []
+        for index, item in enumerate(value):
+            converted, problems = plainify(item, "{}[{}]".format(path, index), problems)
+            out.append(converted)
+        return out, problems
+
+    # A duHast data object. `class_to_dict` already recurses its own children and
+    # converts Int64, so this hands back a structure whose only possible
+    # survivors are the leaves duHast did not expect -- which the recursion above
+    # then catches.
+    to_dict = getattr(value, "class_to_dict", None)
+    if callable(to_dict):
+        try:
+            return plainify(to_dict(), path, problems)
+        except Exception as error:
+            problems.append({"path": path, "type": type(value).__name__, "error": str(error)})
+            return "<class_to_dict failed: {}>".format(type(value).__name__), problems
+
+    # `__dict__` only when it holds something. An EMPTY one means the fallback
+    # learned nothing, and emitting `{}` for it would quietly turn an
+    # unconvertible field into an empty object -- the field would then read as
+    # "present but blank" in the coverage table, which is the one wrong answer
+    # this whole function exists to avoid. A CLR property descriptor is exactly
+    # that shape.
+    attributes = getattr(value, "__dict__", None)
+    if isinstance(attributes, dict) and attributes:
+        return plainify(attributes, path, problems)
+
+    problems.append({"path": path, "type": type(value).__name__, "repr": repr(value)})
+    return "<unconvertible: {}>".format(type(value).__name__), problems
+
+
+def write_json(path, payload):
     """Write `payload` as UTF-8 JSON with LF endings.
 
     Binary mode on purpose: `.gitattributes` enforces LF and a text-mode write
     on Windows would produce CRLF in a file destined for the repo -- the trap
     `CLAUDE.md` records under Traps.
 
-    `duhast_objects` routes through duHast's own serializer, which is what turns
-    its data classes into dicts; plain probe records do not need it and must not
-    pay for the import."""
-    if duhast_objects:
-        from duHast.Utilities.files_json import serialize_utf
-
-        text = json.dumps(payload, indent=2, default=serialize_utf, ensure_ascii=False, sort_keys=True)
-    else:
-        text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+    `payload` must already be plain (see `plainify`); nothing here converts, so a
+    caller that forgets fails loudly rather than writing half a file."""
+    text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
 
     directory = os.path.dirname(os.path.abspath(path))
     if directory and not os.path.isdir(directory):
@@ -588,11 +682,17 @@ def probe_document(doc, out_dir, entities=("windows", "doors")):
         suffix = OUT_SUFFIX[entity]
 
         raw = run_export(doc, spec)
+        raw_plain, problems = plainify(raw, entity)
+        if problems:
+            # Loud, because a silently degraded export is the one outcome worse
+            # than no export: the file still parses and the analyser still runs.
+            print(
+                "  WARNING: {} field(s) would not convert; see "
+                "serialisation_problems in the probe file".format(len(problems))
+            )
         written.append(
             write_json(
-                os.path.join(out_dir, "{}-raw{}.json".format(entity, suffix)),
-                raw,
-                duhast_objects=True,
+                os.path.join(out_dir, "{}-raw{}.json".format(entity, suffix)), raw_plain
             )
         )
 
@@ -600,6 +700,10 @@ def probe_document(doc, out_dir, entities=("windows", "doors")):
         probe = dict(shared)
         probe["entity"] = entity
         probe["list_key"] = spec["list_key"]
+        # Which export fields duHast could not serialise, and where. A finding in
+        # its own right: a field that will not convert is a field the contract
+        # cannot carry, whatever the plan assumed about it.
+        probe["serialisation_problems"] = problems
         # Both counts, side by side, because their DIFFERENCE is a finding: the
         # export drops any instance it could not measure, and the size of that
         # drop is the first thing question 1 asks.
@@ -661,12 +765,14 @@ def main(out_dir=None, entities=("windows", "doors")):
             "main(out_dir=r'C:\\\\temp\\\\probe')"
         )
 
+    print("probe_windows_export v{} (plainify: on)".format(PROBE_VERSION))
     for doc in resolve_documents():
         print("probing {} -> {}".format(doc.Title, out_dir))
         for path in probe_document(doc, out_dir, entities):
             print("  wrote {}".format(path))
     print("done. Now run: python scripts/analyse_windows_probe.py")
 
+sys.path += [r"C:\Users\janchristel\Documents\GitHub\SampleCodeRevitBatchProcessor-NET8\src", r"C:\Users\janchristel\Documents\GitHub\SampleCodeRevitBatchProcessor-NET8\Samples\pyRevit\Extensions\duHast-2025.extension\duHast.tab\lib"]
 
 if __name__ == "__main__":
-    main()
+    main(r"C:\Users\janchristel\Documents\GitHub\room_mate\temp")
