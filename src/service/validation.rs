@@ -1281,7 +1281,9 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // reconciling against nothing can still be serving two phases at once, and
     // that is exactly the project nobody would otherwise be watching.
     let stored = state.all_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
-    let stored_doors = state.all_door_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
+    let stored_doors = state
+        .all_opening_snapshots::<crate::contract::DoorPayload>(crate::storage::SnapshotKind::Doors, Some(project_id))
+        .map_err(ServiceError::Internal)?;
 
     let mut response = ValidationResponse::nothing_to_reconcile();
     // Both of these are room-versus-room and door-versus-room findings that owe
@@ -1293,7 +1295,8 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // Resolved before the report so `door_report` stays a pure function of the
     // data it is handed -- it never touches the store, which is what lets every
     // one of its tests build a scenario as two vectors.
-    let located = super::doors::locate_project_doors(state, project_id, bundle.doors.room_resolution, &stored_doors)?;
+    let located =
+        super::openings::locate_project_openings(state, project_id, bundle.doors.room_resolution, &stored_doors)?;
     response.doors = door_report(
         project_id,
         &stored,

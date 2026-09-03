@@ -35,7 +35,7 @@ use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
 use crate::service::validation::ValidationResponse;
 use crate::service::{
-    doors, milestones, projects, reference, rooms, scope_cursor, snapshots, validation, ServiceError,
+    milestones, openings, projects, reference, rooms, scope_cursor, snapshots, validation, ServiceError,
 };
 use crate::state::{ModelKey, Shared, StreamingSnapshot};
 use crate::storage::SnapshotKind;
@@ -1348,7 +1348,7 @@ pub struct DoorsQuery {
 
 /// The doors read. Mirrors `get_rooms`, minus `?building=` — a door's building
 /// depends on which of its rooms owns it, which is an open design question
-/// (`service::doors`' module doc).
+/// (`service::openings`' module doc).
 pub async fn get_doors(
     State(state): State<Shared>,
     headers: HeaderMap,
@@ -1368,7 +1368,7 @@ pub async fn get_doors(
         .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
         .filter(|f| !f.is_empty());
 
-    let scope = doors::DoorScope {
+    let scope = openings::OpeningScope {
         project: query.project.as_deref(),
         building: query.building.as_deref(),
         milestone: query.milestone.as_deref(),
@@ -1377,7 +1377,7 @@ pub async fn get_doors(
 
     // Both kinds, because a doors response is not a function of doors alone:
     // ownership and the geometric resolver read the scope's *rooms*
-    // (`doors::build_candidates`), so a rooms push changes this body.
+    // (`openings::build_candidates`), so a rooms push changes this body.
     let cursor = scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Rooms, SnapshotKind::Doors])
         .map_err(map_service_error)?;
     let etag = etag_for(
@@ -1393,11 +1393,15 @@ pub async fn get_doors(
         return Ok(not_modified(&etag));
     }
 
-    let result = doors::assemble_doors(&state, &scope).map_err(map_service_error)?;
+    let result =
+        openings::assemble_openings::<crate::contract::DoorPayload>(&state, openings::OpeningKind::Doors, &scope)
+            .map_err(map_service_error)?;
 
     match result {
         None => Ok(StatusCode::NO_CONTENT.into_response()),
-        Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
+        Some(assembled) => {
+            Ok(([(header::ETAG, etag)], Json(openings::DoorsResult::from_assembled(assembled))).into_response())
+        }
     }
 }
 
@@ -2666,7 +2670,9 @@ mod tests {
         assert!(!body.snapshot_id_generated);
 
         let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
-        let stored = state.all_door_snapshots(None).unwrap();
+        let stored = state
+            .all_opening_snapshots::<crate::contract::DoorPayload>(crate::storage::SnapshotKind::Doors, None)
+            .unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].1.doors[0].from_room.as_deref(), Some("r1"));
         // The rooms lineage is untouched: same snapshot, same single id.
@@ -2761,7 +2767,10 @@ mod tests {
         let (status, _) = ingest_doors(State(state.clone()), Json(payload)).await.expect("stored, not refused");
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            state.all_door_snapshots(None).unwrap().len(),
+            state
+                .all_opening_snapshots::<crate::contract::DoorPayload>(crate::storage::SnapshotKind::Doors, None)
+                .unwrap()
+                .len(),
             1,
             "the doors are on disk for QA to report on"
         );
@@ -2786,7 +2795,13 @@ mod tests {
             .expect("doors may arrive first");
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.door_count, 1);
-        assert_eq!(state.all_door_snapshots(None).unwrap().len(), 1);
+        assert_eq!(
+            state
+                .all_opening_snapshots::<crate::contract::DoorPayload>(crate::storage::SnapshotKind::Doors, None)
+                .unwrap()
+                .len(),
+            1
+        );
         // And it phased the lineage, exactly as a first rooms push would have.
         let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
         assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
@@ -2804,7 +2819,10 @@ mod tests {
         let (status, message) = ingest_doors(State(state.clone()), Json(payload)).await.unwrap_err();
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(message.contains("Existing") && message.contains("New Construction"), "{message}");
-        assert!(state.all_door_snapshots(None).unwrap().is_empty());
+        assert!(state
+            .all_opening_snapshots::<crate::contract::DoorPayload>(crate::storage::SnapshotKind::Doors, None)
+            .unwrap()
+            .is_empty());
         let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
         assert!(state.pending_snapshot(&key).unwrap().is_none(), "never quarantined");
         assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"), "lineage unmoved");

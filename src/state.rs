@@ -68,8 +68,22 @@ fn doors_meta<'a>(key: &'a ModelKey, payload: &'a DoorPayload) -> SnapshotMeta<'
 }
 
 fn parse_doors(key: &ModelKey, bytes: &[u8]) -> anyhow::Result<DoorPayload> {
+    parse_opening(SnapshotKind::Doors, key, bytes)
+}
+
+/// Parse one stored opening snapshot, naming the kind in the failure.
+///
+/// The kind is carried purely for the message. It is worth the parameter: the
+/// three entities' snapshots are structurally similar enough that "malformed
+/// snapshot for p/m" would leave a reader guessing which file to open, and this
+/// is the error that fires at boot when a store has been hand-edited.
+fn parse_opening<P: serde::de::DeserializeOwned>(
+    kind: SnapshotKind,
+    key: &ModelKey,
+    bytes: &[u8],
+) -> anyhow::Result<P> {
     serde_json::from_slice(bytes)
-        .with_context(|| format!("malformed doors snapshot for {}/{}", key.project_id, key.model_id))
+        .with_context(|| format!("malformed {} snapshot for {}/{}", kind.label(), key.project_id, key.model_id))
 }
 
 /// Composite key identifying one storage bucket: a model within a project.
@@ -425,13 +439,42 @@ impl AppState {
         self.store.put_raw(&doors_meta(&key, &payload), &json)
     }
 
-    /// Every model's latest doors snapshot. A model with rooms but no doors
-    /// contributes nothing — the normal state for a project that has not pushed
-    /// doors, not an error.
-    pub fn all_door_snapshots(&self, project: Option<&str>) -> anyhow::Result<Vec<(ModelKey, DoorPayload)>> {
+    /// Every model's latest snapshot of one opening kind, parsed into that
+    /// kind's envelope. A model that has not pushed this kind contributes
+    /// nothing — the normal state, not an error.
+    ///
+    /// Generic over the envelope rather than one function per entity: the store
+    /// already takes the kind and hands back bytes, so the only thing that
+    /// varied between `all_door_snapshots` and a windows twin was the type the
+    /// bytes were parsed into. `P` supplies that and the caller supplies the
+    /// kind — which does mean the two must agree, and nothing here can check it.
+    /// That pairing is made once per entity in `service::openings::OpeningKind`
+    /// and nowhere else, which is what keeps a mismatch impossible to write by
+    /// accident rather than merely unlikely.
+    pub fn all_opening_snapshots<P: serde::de::DeserializeOwned>(
+        &self,
+        kind: SnapshotKind,
+        project: Option<&str>,
+    ) -> anyhow::Result<Vec<(ModelKey, P)>> {
+        self.store.all_latest_raw(kind, project).and_then(|raw| {
+            raw.into_iter()
+                .map(|(key, bytes)| parse_opening(kind, &key, &bytes).map(|p| (key, p)))
+                .collect()
+        })
+    }
+
+    /// One specific stored snapshot of one opening kind, by id — the milestone
+    /// read path. The generic twin of `all_opening_snapshots`.
+    pub fn get_opening_snapshot<P: serde::de::DeserializeOwned>(
+        &self,
+        kind: SnapshotKind,
+        key: &ModelKey,
+        taken_at: &str,
+    ) -> anyhow::Result<Option<P>> {
         self.store
-            .all_latest_raw(SnapshotKind::Doors, project)
-            .and_then(|raw| raw.into_iter().map(|(key, bytes)| parse_doors(&key, &bytes).map(|p| (key, p))).collect())
+            .get_snapshot_raw(kind, key, taken_at)?
+            .map(|bytes| parse_opening(kind, key, &bytes))
+            .transpose()
     }
 
     /// One model's doors snapshot ids, ascending.

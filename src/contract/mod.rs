@@ -35,7 +35,7 @@ pub mod openings;
 pub mod windows;
 
 pub use doors::{DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA};
-pub use openings::Opening;
+pub use openings::{Opening, OpeningEnvelope};
 pub use windows::{
     StreamWindow, WindowModelEnvelope, WindowPayload, WindowStreamEnvelope, WindowsUpload, SUPPORTED_WINDOW_SCHEMA,
 };

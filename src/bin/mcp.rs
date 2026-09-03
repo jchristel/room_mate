@@ -48,7 +48,7 @@ use rmcp::{
 use roommate::bootstrap::build_state;
 use roommate::default_http_addr;
 use roommate::service::{
-    adjacency, areas, comparison, doors, milestones, projects, reference, rooms, snapshots, validation, ServiceError,
+    adjacency, areas, comparison, milestones, openings, projects, reference, rooms, snapshots, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -363,7 +363,7 @@ impl RoommateMcp {
     }
 
     /// Merges every stored model's doors, optionally scoped -- see
-    /// `service::doors::assemble_doors`. Same `None` -> plain-text handling as
+    /// `service::openings::assemble_openings`. Same `None` -> plain-text handling as
     /// `get_rooms`, for the same reason.
     #[tool(
         description = "Fetch merged doors across stored models, optionally scoped by project id, milestone name, and property filter. Each door carries its own instance \
@@ -381,13 +381,19 @@ impl RoommateMcp {
         let known = self.state.settings().known_reference_sources();
         let filter =
             rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
-        let scope = doors::DoorScope {
+        let scope = openings::OpeningScope {
             project: p.project.as_deref(),
             building: p.building.as_deref(),
             milestone: p.milestone.as_deref(),
             filter: Some(&filter).filter(|f| !f.is_empty()),
         };
-        let result = doors::assemble_doors(&self.state, &scope).map_err(to_mcp_error)?;
+        let result = openings::assemble_openings::<roommate::contract::DoorPayload>(
+            &self.state,
+            openings::OpeningKind::Doors,
+            &scope,
+        )
+        .map_err(to_mcp_error)?
+        .map(openings::DoorsResult::from_assembled);
         match result {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no doors have been pushed to this server yet",
