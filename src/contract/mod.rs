@@ -32,9 +32,13 @@ use crate::settings::BuiltinPropertyDef;
 
 pub mod doors;
 pub mod openings;
+pub mod windows;
 
 pub use doors::{DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA};
 pub use openings::Opening;
+pub use windows::{
+    StreamWindow, WindowModelEnvelope, WindowPayload, WindowStreamEnvelope, WindowsUpload, SUPPORTED_WINDOW_SCHEMA,
+};
 
 /// A 2D point in Revit model space. Units are decimal feet, Y points UP.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
