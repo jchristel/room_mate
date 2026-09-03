@@ -812,6 +812,187 @@ mod tests {
         }
     }
 
+    // ---------- the wire shape, pinned ----------
+
+    /// The `/doors` payload exactly as it serialises today, with `revision`
+    /// normalised out. Lifted out of the test so the function stays under the
+    /// `too_many_lines` trigger and so this reads as what it is: recorded
+    /// output, not code. Regenerate it only when a wire change is INTENDED.
+    const EXPECTED_DOORS_WIRE: &str = r#"{
+  "doors": [
+    {
+      "from_room": "r1",
+      "id": "d1",
+      "insertion_point": {
+        "x": 1.5,
+        "y": 0.125
+      },
+      "level_id": "lvl1",
+      "loops": [
+        {
+          "points": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 3.0,
+              "y": 0.0
+            },
+            {
+              "x": 3.0,
+              "y": 0.25
+            }
+          ]
+        }
+      ],
+      "model_id": "m1",
+      "owner_rooms": [
+        "r2"
+      ],
+      "owner_rooms_qualified": [
+        {
+          "model_id": "m1",
+          "room_id": "r2"
+        }
+      ],
+      "project_id": "p1",
+      "properties": {
+        "Mark": {
+          "storage_type": "String",
+          "value": "D-101"
+        }
+      },
+      "room_origin": {
+        "from_room": {
+          "origin": "authored",
+          "value": {
+            "model_id": "m1",
+            "room_id": "r1"
+          }
+        },
+        "to_room": {
+          "origin": "authored",
+          "value": {
+            "model_id": "m1",
+            "room_id": "r2"
+          }
+        }
+      },
+      "through_wall_normal": {
+        "x": 0.0,
+        "y": 1.0
+      },
+      "to_room": "r2",
+      "type_id": "t1",
+      "type_name": "Single",
+      "type_properties": {
+        "Door Leaf Thickness": {
+          "storage_type": null,
+          "value": "40.0"
+        }
+      }
+    }
+  ],
+  "phase_by_model": {
+    "p1": {
+      "m1": "New Construction"
+    }
+  },
+  "revision": "<pinned-out>",
+  "schema_version": 2
+}"#;
+
+    /// **The `/doors` response, pinned byte for byte.**
+    ///
+    /// This test exists for one job that no other test here does: to make the
+    /// *generalisation* of the door stack into a shared `Opening` provably
+    /// inert. Every other test asserts a field it cares about, so a rename that
+    /// quietly dropped `#[serde(flatten)]`, reordered a struct, changed a
+    /// `skip_serializing_if`, or renamed a wire key could pass all of them and
+    /// still change what a consumer receives. The viewer and the MCP tools read
+    /// these exact names.
+    ///
+    /// It is deliberately a whole-payload string compare rather than a set of
+    /// field assertions, because the failure it guards against is *unknown*: if
+    /// the shape changes at all, the diff should say so, and the reviewer should
+    /// have to look at it. A test that only checked the fields somebody thought
+    /// of would not have caught the thing nobody thought of.
+    ///
+    /// **`revision` is normalised out, and that is not laziness.** It is a
+    /// `DefaultHasher` digest, and std does not promise that hasher's output is
+    /// stable across Rust versions — pinning it would turn a toolchain upgrade
+    /// into a mysterious failure in a test about serde. It cannot vary under a
+    /// rename anyway, since it hashes ids and timestamps rather than type names.
+    /// Its stability *within* a run is asserted separately below, which is the
+    /// property consumers actually rely on.
+    #[test]
+    fn test_the_doors_wire_shape_is_pinned() {
+        let door = Door {
+            id: "d1".to_string(),
+            level_id: "lvl1".to_string(),
+            loops: vec![crate::contract::Loop {
+                points: vec![
+                    crate::contract::Point2D { x: 0.0, y: 0.0 },
+                    crate::contract::Point2D { x: 3.0, y: 0.0 },
+                    crate::contract::Point2D { x: 3.0, y: 0.25 },
+                ],
+            }],
+            from_room: Some("r1".to_string()),
+            to_room: Some("r2".to_string()),
+            insertion_point: Some(crate::contract::Point2D { x: 1.5, y: 0.125 }),
+            through_wall_normal: Some(crate::contract::Point2D { x: 0.0, y: 1.0 }),
+            type_id: "t1".to_string(),
+            type_name: "Single".to_string(),
+            properties: BTreeMap::from([(
+                "Mark".to_string(),
+                CustomValue { value: "D-101".to_string(), storage_type: Some("String".to_string()) },
+            )]),
+            type_properties: BTreeMap::from([(
+                "Door Leaf Thickness".to_string(),
+                CustomValue { value: "40.0".to_string(), storage_type: None },
+            )]),
+        };
+
+        let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle())]), None);
+        state
+            .set_snapshot(RoomPayload {
+                schema_version: SUPPORTED_SCHEMA,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() },
+                phase: Some("New Construction".to_string()),
+                model_to_shared: None,
+                room_boundary: None,
+                levels: vec![],
+                rooms: vec![room_rect("r1", 0.0, 10.0), room_rect("r2", 10.5, 20.0)],
+            })
+            .unwrap();
+        state
+            .set_door_snapshot(DoorPayload {
+                schema_version: SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-02-01T00:00:00Z".to_string() },
+                phase: Some("New Construction".to_string()),
+                model_to_shared: None,
+                levels: vec![],
+                doors: vec![door],
+            })
+            .unwrap();
+
+        let result = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
+        let again = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
+        assert_eq!(result.revision, again.revision, "revision is stable for unchanged data");
+        assert!(!result.revision.is_empty(), "revision is always emitted");
+
+        let mut json = serde_json::to_value(&result).expect("serialises");
+        json["revision"] = serde_json::Value::String("<pinned-out>".to_string());
+        let actual = serde_json::to_string_pretty(&json).expect("re-serialises");
+
+        assert_eq!(actual, EXPECTED_DOORS_WIRE, "the /doors wire shape changed");
+    }
+
     // ---------- geometric resolution ----------
 
     /// A door in the wall between two rooms, with no `from_room`/`to_room` — the
