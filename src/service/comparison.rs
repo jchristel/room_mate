@@ -720,6 +720,7 @@ mod tests {
             reference_snapshots: BTreeMap::new(),
             attachments: BTreeMap::from([(model_id.to_string(), taken_at.to_string())]),
             door_attachments: BTreeMap::new(),
+            window_attachments: Default::default(),
         }
     }
 
@@ -774,6 +775,7 @@ mod tests {
             comparison_properties: comparison_properties.iter().map(|s| s.to_string()).collect(),
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
@@ -1321,10 +1323,11 @@ mod tests {
                 reference_snapshots: BTreeMap::new(),
                 attachments: BTreeMap::new(),
                 door_attachments: BTreeMap::from([("m1".to_string(), ts.to_string())]),
+                window_attachments: Default::default(),
             })
             .collect();
         ProjectSettings {
-            doors: crate::settings::DoorPolicy {
+            doors: crate::settings::OpeningPolicy {
                 comparison_key: key.map(str::to_string),
                 comparison_properties: properties.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()

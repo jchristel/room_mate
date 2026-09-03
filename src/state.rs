@@ -226,11 +226,17 @@ pub struct ProjectSettings {
     /// gap tolerance from the same value.
     pub areas: crate::settings::AreaPolicy,
 
-    /// This project's door policy (see `settings::DoorPolicy`): the comparison
+    /// This project's door policy (see `settings::OpeningPolicy`): the comparison
     /// key and comparable property set for doors. Server-used like `areas`, so
     /// it belongs in the resolved bundle rather than being re-read from
     /// `Settings` at request time.
-    pub doors: crate::settings::DoorPolicy,
+    pub doors: crate::settings::OpeningPolicy,
+
+    /// The same, for windows. A second field rather than a map keyed on the
+    /// entity: the two are read from different call sites and a map would put
+    /// an `unwrap_or_default` at each, which is how a project silently gets the
+    /// wrong policy.
+    pub windows: crate::settings::OpeningPolicy,
 
     /// Footprint exclusions for the hierarchy-areas feature. Unlike
     /// `colour_plans` (client-only, never in this bundle), exclusions are used by

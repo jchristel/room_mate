@@ -808,6 +808,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
@@ -1733,6 +1734,7 @@ D-101,60
             reference_snapshots: BTreeMap::new(),
             attachments: BTreeMap::new(),
             door_attachments: BTreeMap::from([("m1".to_string(), "2026-02-01T00:00:00Z".to_string())]),
+            window_attachments: Default::default(),
         }];
         let state = AppState::new(
             Box::new(

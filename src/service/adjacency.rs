@@ -1137,6 +1137,7 @@ mod tests {
                 comparison_properties: vec![],
                 areas: Default::default(),
                 doors: Default::default(),
+                windows: Default::default(),
                 hierarchy_exclusions: vec![],
             }
         }

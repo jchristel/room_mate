@@ -29,7 +29,7 @@ use crate::contract::{
 };
 use crate::reference::ReferenceData;
 use crate::settings::{
-    BuiltinPropertyDef, CompareMode, DoorPolicy, FieldType, ReferenceFieldConfig, RoomAttribution, RoomResolution,
+    BuiltinPropertyDef, CompareMode, FieldType, OpeningPolicy, ReferenceFieldConfig, RoomAttribution, RoomResolution,
 };
 use crate::state::{AppState, ModelKey};
 
@@ -734,7 +734,7 @@ fn door_report(
     project_id: &str,
     stored_rooms: &[(ModelKey, RoomPayload)],
     stored_doors: &[(ModelKey, DoorPayload)],
-    policy: &DoorPolicy,
+    policy: &OpeningPolicy,
     builtin_defs: &[BuiltinPropertyDef],
     located: Option<&LocatedDoors>,
 ) -> DoorReport {
@@ -1910,6 +1910,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(
@@ -2075,6 +2076,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(
@@ -2206,7 +2208,7 @@ mod tests {
             ],
         )];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.total_doors, 2);
         assert_eq!(report.doors_external, 1, "the one-sided door is external");
         assert_eq!(report.discrepancies.total, 0, "an external door is not a discrepancy");
@@ -2219,7 +2221,7 @@ mod tests {
         let rooms = vec![rooms_for("p1", "m1", &["r1"])];
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.discrepancies.doors_without_room_reference, 1);
         assert_eq!(report.doors_without_room_reference[0].door_id, "d1");
         assert_eq!(report.doors_without_room_reference[0].model_id, "m1");
@@ -2239,7 +2241,7 @@ mod tests {
             vec![make_door("d1", Some("gone"), Some("also-gone"))],
         )];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.discrepancies.doors_unresolved_room, 2, "two broken references, two entries");
         let sides: Vec<DoorSide> = report.doors_unresolved_room.iter().map(|u| u.side).collect();
         assert_eq!(sides, vec![DoorSide::FromRoom, DoorSide::ToRoom]);
@@ -2255,7 +2257,7 @@ mod tests {
         let rooms = vec![rooms_for("p1", "m1", &["other"]), rooms_for("p1", "m2", &["r1"])];
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), None)])];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.discrepancies.doors_unresolved_room, 1, "m2's r1 is a different room");
         assert_eq!(report.doors_unresolved_room[0].model_id, "m1");
     }
@@ -2270,7 +2272,7 @@ mod tests {
             make_doors("p2", "m1", vec![make_door("d2", None, None)]),
         ];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.total_doors, 1);
         assert_eq!(report.discrepancies.total, 0, "p2's broken door is not counted here");
     }
@@ -2292,7 +2294,7 @@ mod tests {
                 make_door("homeless", None, None),
             ],
         )];
-        let policy = DoorPolicy::default();
+        let policy = OpeningPolicy::default();
         let report = door_report("p1", &rooms, &doors, &policy, &[], None);
 
         let owners = |from: Option<&str>, to: Option<&str>| {
@@ -2324,7 +2326,7 @@ mod tests {
                 make_door("homeless", None, None),
             ],
         )];
-        let policy = DoorPolicy { room_attribution: RoomAttribution::ToRoom, ..Default::default() };
+        let policy = OpeningPolicy { room_attribution: RoomAttribution::ToRoom, ..Default::default() };
         let report = door_report("p1", &rooms, &doors, &policy, &[], None);
 
         assert_eq!(report.doors_unattributed.len(), 1);
@@ -2372,11 +2374,11 @@ mod tests {
             ],
         )];
 
-        let off = door_report("p1", &[rooms.clone()], &doors, &DoorPolicy::default(), &[], None);
+        let off = door_report("p1", &[rooms.clone()], &doors, &OpeningPolicy::default(), &[], None);
         assert!(off.room_reference_mismatches.is_empty(), "no property named — the check is off");
         assert!(off.room_reference_property.is_none());
 
-        let policy = DoorPolicy {
+        let policy = OpeningPolicy {
             room_reference_property: Some("Door Room Reference".to_string()),
             ..Default::default()
         };
@@ -2396,7 +2398,7 @@ mod tests {
     #[test]
     fn test_no_doors_is_an_empty_report() {
         let rooms = vec![rooms_for("p1", "m1", &["r1"])];
-        let report = door_report("p1", &rooms, &[], &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &[], &OpeningPolicy::default(), &[], None);
         assert_eq!(report.total_doors, 0);
         assert_eq!(report.discrepancies.total, 0);
     }
@@ -2416,7 +2418,7 @@ mod tests {
             vec![make_door("d1", Some("r1"), None)],
             Some("Stage 1"),
         )];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
 
         assert_eq!(report.doors_phase_drift.len(), 1);
         assert_eq!(report.doors_phase_drift[0].model_id, "m1");
@@ -2436,7 +2438,7 @@ mod tests {
             vec![make_door("d1", Some("r1"), None)],
             Some("  new CONSTRUCTION "),
         )];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert!(report.doors_phase_drift.is_empty(), "same phase, different spelling");
     }
 
@@ -2451,7 +2453,7 @@ mod tests {
             vec![make_door("d1", Some("r1"), None), make_door("d2", Some("r1"), None)],
             Some("Stage 1"),
         )];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.doors_phase_drift.len(), 1, "two doors, one model, one finding");
     }
 
@@ -2465,7 +2467,7 @@ mod tests {
             vec![make_door("d1", Some("r1"), None)],
             Some("Stage 1"),
         )];
-        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &[], &doors, &OpeningPolicy::default(), &[], None);
         assert!(report.doors_phase_drift.is_empty());
         assert_eq!(report.doors_pending_rooms.len(), 1);
     }
@@ -2501,7 +2503,7 @@ mod tests {
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r2"))),
         );
@@ -2530,7 +2532,7 @@ mod tests {
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r2"))),
         );
@@ -2548,7 +2550,7 @@ mod tests {
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r2"))),
         );
@@ -2568,7 +2570,7 @@ mod tests {
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r2"))),
         );
@@ -2594,14 +2596,20 @@ mod tests {
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r1"))),
         );
         assert!(agrees.room_geometry_mismatches.is_empty(), "geometry agrees");
 
-        let silent =
-            door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], Some(&located("m1", "d1", None, None)));
+        let silent = door_report(
+            "p1",
+            &rooms,
+            &doors,
+            &OpeningPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, None)),
+        );
         assert!(silent.room_geometry_mismatches.is_empty(), "the probe found nothing — not a disagreement");
     }
 
@@ -2620,7 +2628,7 @@ mod tests {
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", Some("r1"), Some("r2"))),
         );
@@ -2641,8 +2649,14 @@ mod tests {
             vec![make_door("d1", None, None)],
             "2026-01-01T00:00:00Z",
         )];
-        let report =
-            door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], Some(&located("m1", "d1", None, None)));
+        let report = door_report(
+            "p1",
+            &rooms,
+            &doors,
+            &OpeningPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, None)),
+        );
         assert_eq!(report.room_resolution_counts.unresolved.get("no_candidate"), Some(&2));
         assert_eq!(report.room_resolution_counts.derived, 0);
     }
@@ -2658,7 +2672,7 @@ mod tests {
             vec![make_door("d1", None, Some("r1"))],
             "2026-01-01T00:00:00Z",
         )];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.room_resolution, RoomResolution::Off);
         assert!(report.room_geometry_mismatches.is_empty());
     }
@@ -2675,7 +2689,7 @@ mod tests {
     #[test]
     fn test_doors_whose_model_has_no_rooms_are_pending_not_dangling() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
-        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &[], &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.discrepancies.doors_unresolved_room, 0, "nothing dangles — nothing was checked");
         assert_eq!(report.discrepancies.total, 0, "a pending model is not a finding");
         assert_eq!(report.doors_pending_rooms.len(), 1, "one entry per door, not per side");
@@ -2691,7 +2705,7 @@ mod tests {
     fn test_a_pending_reference_becomes_dangling_once_rooms_arrive() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
         let rooms = vec![rooms_for("p1", "m1", &["something-else"])];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert!(report.doors_pending_rooms.is_empty(), "the model has rooms now");
         assert_eq!(report.discrepancies.doors_unresolved_room, 2, "both sides name rooms it does not have");
     }
@@ -2703,7 +2717,7 @@ mod tests {
     #[test]
     fn test_a_pending_model_still_reports_doors_with_no_reference() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
-        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
+        let report = door_report("p1", &[], &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.doors_without_room_reference.len(), 1);
         assert!(report.doors_pending_rooms.is_empty(), "it has no reference to be pending about");
     }
@@ -2724,6 +2738,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(
