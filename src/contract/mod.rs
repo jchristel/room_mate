@@ -31,10 +31,10 @@ use serde::{Deserialize, Serialize};
 use crate::settings::BuiltinPropertyDef;
 
 pub mod doors;
+pub mod openings;
 
-pub use doors::{
-    DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, Opening, StreamDoor, SUPPORTED_DOOR_SCHEMA,
-};
+pub use doors::{DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA};
+pub use openings::Opening;
 
 /// A 2D point in Revit model space. Units are decimal feet, Y points UP.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
