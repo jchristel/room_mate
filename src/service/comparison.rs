@@ -692,7 +692,7 @@ pub fn compare_milestones(
 mod tests {
     use super::*;
     use crate::contract::{
-        CustomValue, Door, DoorPayload, Level, Model, Project, Room, RoomPayload, Snapshot, SUPPORTED_SCHEMA,
+        CustomValue, DoorPayload, Level, Model, Opening, Project, Room, RoomPayload, Snapshot, SUPPORTED_SCHEMA,
     };
     use crate::settings::Milestone;
     use crate::state::ProjectSettings;
@@ -1274,12 +1274,12 @@ mod tests {
 
     // ---------- doors ----------
 
-    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>, props: &[(&str, &str)]) -> Door {
+    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>, props: &[(&str, &str)]) -> Opening {
         let mut properties = BTreeMap::new();
         for (k, v) in props {
             properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
         }
-        Door {
+        Opening {
             id: id.to_string(),
             level_id: "1".to_string(),
             loops: vec![],
@@ -1297,7 +1297,7 @@ mod tests {
         }
     }
 
-    fn doors_at(model_id: &str, taken_at: &str, doors: Vec<Door>) -> DoorPayload {
+    fn doors_at(model_id: &str, taken_at: &str, doors: Vec<Opening>) -> DoorPayload {
         DoorPayload {
             schema_version: crate::contract::SUPPORTED_DOOR_SCHEMA,
             project: Project { id: "p1".to_string(), name: "P".to_string() },

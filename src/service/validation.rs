@@ -496,7 +496,7 @@ pub struct PendingRoomReference {
 ///
 /// A door with exactly **one** side set is **not** a finding. That is an
 /// external door, and it is a normal state the contract carries deliberately
-/// (`Door::from_room`); 6 of the 26 doors in the House A sample are one-sided,
+/// (`Opening::from_room`); 6 of the 26 doors in the House A sample are one-sided,
 /// so flagging them would put a 23% false-positive rate on the first real data
 /// this ever saw. It is counted, so a reader can see the shape of the model,
 /// and left out of `discrepancies`.
@@ -2094,8 +2094,8 @@ mod tests {
 
     // ---------- doors ----------
 
-    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>) -> crate::contract::Door {
-        crate::contract::Door {
+    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>) -> crate::contract::Opening {
+        crate::contract::Opening {
             id: id.to_string(),
             level_id: "1".to_string(),
             loops: vec![],
@@ -2118,7 +2118,7 @@ mod tests {
         from_room: Option<&str>,
         to_room: Option<&str>,
         props: &[(&str, &str)],
-    ) -> crate::contract::Door {
+    ) -> crate::contract::Opening {
         let mut door = make_door(id, from_room, to_room);
         for (k, v) in props {
             door.properties
@@ -2127,7 +2127,7 @@ mod tests {
         door
     }
 
-    fn make_doors(project_id: &str, model_id: &str, doors: Vec<crate::contract::Door>) -> (ModelKey, DoorPayload) {
+    fn make_doors(project_id: &str, model_id: &str, doors: Vec<crate::contract::Opening>) -> (ModelKey, DoorPayload) {
         let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.to_string() };
         let payload = DoorPayload {
             schema_version: crate::contract::SUPPORTED_DOOR_SCHEMA,
@@ -2160,7 +2160,7 @@ mod tests {
     fn doors_at(
         project_id: &str,
         model_id: &str,
-        doors: Vec<crate::contract::Door>,
+        doors: Vec<crate::contract::Opening>,
         taken_at: &str,
     ) -> (ModelKey, DoorPayload) {
         let (key, mut payload) = make_doors(project_id, model_id, doors);
@@ -2184,7 +2184,7 @@ mod tests {
     fn phased_doors(
         project_id: &str,
         model_id: &str,
-        doors: Vec<crate::contract::Door>,
+        doors: Vec<crate::contract::Opening>,
         phase: Option<&str>,
     ) -> (ModelKey, DoorPayload) {
         let (key, mut payload) = make_doors(project_id, model_id, doors);
