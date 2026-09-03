@@ -22,7 +22,7 @@ use tokio_util::io::StreamReader;
 use std::collections::BTreeSet;
 
 use crate::contract::{
-    Door, DoorModelEnvelope, DoorStreamEnvelope, DoorsUpload, ModelToShared, Project, Room, RoomBoundary,
+    DoorModelEnvelope, DoorStreamEnvelope, DoorsUpload, ModelToShared, Opening, Project, Room, RoomBoundary,
     RoomModelEnvelope, RoomPayload, RoomsUpload, Snapshot, StreamDoor, StreamEnvelope, StreamRoom,
     SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
 };
@@ -872,7 +872,7 @@ pub async fn ingest_doors(
     )?;
     validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
 
-    let mut doors_by_model: Vec<(String, Vec<Door>)> = upload
+    let mut doors_by_model: Vec<(String, Vec<Opening>)> = upload
         .models
         .iter_mut()
         .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.doors)))
@@ -957,7 +957,7 @@ struct DoorSink<'a> {
 }
 
 impl DoorSink<'_> {
-    fn push(&mut self, door: Door) -> Result<(), (StatusCode, String)> {
+    fn push(&mut self, door: Opening) -> Result<(), (StatusCode, String)> {
         self.snapshot.push(&door).map_err(store_failed)
     }
 }
@@ -1002,7 +1002,7 @@ fn finish_doors(
 }
 
 /// Streaming doors ingest (NDJSON), the counterpart to `ingest_rooms_stream`:
-/// line 1 is the envelope, every following line is one `Door`.
+/// line 1 is the envelope, every following line is one `Opening`.
 ///
 /// Doors are far fewer than rooms per model, so this is not load-bearing the way
 /// the rooms stream is. It exists so a producer can use one transport for both
@@ -2595,8 +2595,8 @@ mod tests {
 
     // ---------- doors ingest ----------
 
-    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>) -> Door {
-        Door {
+    fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>) -> Opening {
+        Opening {
             id: id.to_string(),
             level_id: "1".to_string(),
             loops: vec![],

@@ -33,7 +33,7 @@ use crate::settings::BuiltinPropertyDef;
 pub mod doors;
 
 pub use doors::{
-    Door, DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA,
+    DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, Opening, StreamDoor, SUPPORTED_DOOR_SCHEMA,
 };
 
 /// A 2D point in Revit model space. Units are decimal feet, Y points UP.
@@ -1323,7 +1323,7 @@ mod tests {
 
     /// A stand-in for the two-tier entity doors will be: an instance map that
     /// takes precedence over a type map. Defined here rather than waiting for
-    /// `Door` so the tier *rule* is pinned by the change that introduces it —
+    /// `Opening` so the tier *rule* is pinned by the change that introduces it —
     /// the rule is a contract decision, and a decision with no test is one the
     /// next reader is free to re-derive differently.
     struct TwoTier {

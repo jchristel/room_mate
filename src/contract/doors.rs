@@ -28,7 +28,7 @@ use super::{CustomValue, Level, Loop, Model, ModelToShared, Point2D, Project, Pr
 /// identity discipline, the upload envelope — is deliberately identical, so one
 /// renderer and one `model_to_shared` transform serve both entities.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Door {
+pub struct Opening {
     /// The Revit `ElementId`, as a string on the wire like every other id here.
     ///
     /// Sourced from the export's `instance_properties.id` — the same place
@@ -240,7 +240,7 @@ pub struct Door {
 /// a *blank* instance parameter does not shadow a real type value — lives on
 /// `property_presence` in `mod.rs`, measured against this very export. This impl
 /// only declares the order.
-impl PropertyTiers for Door {
+impl PropertyTiers for Opening {
     fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>> {
         vec![&self.properties, &self.type_properties]
     }
@@ -295,7 +295,7 @@ pub struct DoorPayload {
     #[serde(default)]
     pub model_to_shared: Option<ModelToShared>,
 
-    /// The level set `Door.level_id` points into, for a model that has no rooms
+    /// The level set `Opening.level_id` points into, for a model that has no rooms
     /// snapshot to supply one.
     ///
     /// **Empty is the ordinary case and stays the ordinary case.** A model that
@@ -321,7 +321,7 @@ pub struct DoorPayload {
     #[serde(default)]
     pub levels: Vec<Level>,
 
-    pub doors: Vec<Door>,
+    pub doors: Vec<Opening>,
 }
 
 /// One model's block on a multi-model doors upload — the doors counterpart of
@@ -352,7 +352,7 @@ impl DoorModelEnvelope {
         project: Project,
         snapshot: Snapshot,
         phase: Option<String>,
-        doors: Vec<Door>,
+        doors: Vec<Opening>,
     ) -> DoorPayload {
         DoorPayload {
             schema_version,
@@ -393,7 +393,7 @@ pub struct DoorStreamEnvelope {
 pub struct StreamDoor {
     pub model_id: String,
     #[serde(flatten)]
-    pub door: Door,
+    pub door: Opening,
 }
 
 /// The buffered multi-model doors upload (`POST /doors`), the counterpart of
@@ -415,7 +415,7 @@ pub struct DoorsUpload {
 pub struct DoorModelUpload {
     #[serde(flatten)]
     pub envelope: DoorModelEnvelope,
-    pub doors: Vec<Door>,
+    pub doors: Vec<Opening>,
 }
 
 /// Doors schema version this server accepts. **Starts at 1, and moves
@@ -513,7 +513,7 @@ mod tests {
         });
 
         // A pre-placement snapshot: neither field, still a door.
-        let old: Door = serde_json::from_value(base.clone()).unwrap();
+        let old: Opening = serde_json::from_value(base.clone()).unwrap();
         assert!(old.insertion_point.is_none());
         assert!(old.through_wall_normal.is_none());
 
@@ -521,7 +521,7 @@ mod tests {
         // arrow" case. Never a reason to synthesise one.
         let mut placed = base.clone();
         placed["insertion_point"] = serde_json::json!({ "x": 1.5, "y": -2.5 });
-        let placed: Door = serde_json::from_value(placed).unwrap();
+        let placed: Opening = serde_json::from_value(placed).unwrap();
         assert_eq!(placed.insertion_point.as_ref().map(|p| p.y), Some(-2.5));
         assert!(placed.through_wall_normal.is_none());
 
@@ -534,7 +534,7 @@ mod tests {
         let mut nulled = base.clone();
         nulled["insertion_point"] = serde_json::Value::Null;
         nulled["through_wall_normal"] = serde_json::Value::Null;
-        let nulled: Door = serde_json::from_value(nulled).unwrap();
+        let nulled: Opening = serde_json::from_value(nulled).unwrap();
         assert!(nulled.insertion_point.is_none());
         assert!(nulled.through_wall_normal.is_none());
     }
@@ -558,7 +558,7 @@ mod tests {
             "through_wall_normal": { "x": 3.0, "y": 4.0 }
         });
 
-        let door: Door = serde_json::from_value(json).unwrap();
+        let door: Opening = serde_json::from_value(json).unwrap();
         let n = door.through_wall_normal.as_ref().unwrap();
         assert_eq!((n.x, n.y), (3.0, 4.0));
     }
@@ -577,12 +577,12 @@ mod tests {
             "type_name": "Single"
         });
 
-        let neither: Door = serde_json::from_value(base.clone()).unwrap();
+        let neither: Opening = serde_json::from_value(base.clone()).unwrap();
         assert!(neither.from_room.is_none() && neither.to_room.is_none());
 
         let mut external = base.clone();
         external["to_room"] = serde_json::json!("r1");
-        let external: Door = serde_json::from_value(external).unwrap();
+        let external: Opening = serde_json::from_value(external).unwrap();
         assert!(external.from_room.is_none());
         assert_eq!(external.to_room.as_deref(), Some("r1"));
 
@@ -598,7 +598,7 @@ mod tests {
     /// footprint, and the sentinel it would have invented from is `1e30`.
     #[test]
     fn test_a_door_with_no_footprint_is_valid() {
-        let door: Door = serde_json::from_value(serde_json::json!({
+        let door: Opening = serde_json::from_value(serde_json::json!({
             "id": "3475937",
             "level_id": "290501",
             "from_room": "2621499",
@@ -621,7 +621,7 @@ mod tests {
     /// shadowing.
     #[test]
     fn test_door_tiers_are_instance_then_type() {
-        let door: Door = serde_json::from_value(serde_json::json!({
+        let door: Opening = serde_json::from_value(serde_json::json!({
             "id": "d1",
             "level_id": "lvl1",
             "loops": [],

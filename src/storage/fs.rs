@@ -1207,7 +1207,7 @@ mod tests {
     }
 
     /// A doors push described to the store. The bytes stay opaque in these
-    /// tests — there is no `Door` type yet, and the store's job is precisely to
+    /// tests — there is no `Opening` type yet, and the store's job is precisely to
     /// keep two kinds' bytes apart without knowing what either means.
     fn doors_meta<'a>(key: &'a ModelKey, taken_at: &'a str) -> SnapshotMeta<'a> {
         SnapshotMeta {
