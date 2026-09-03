@@ -928,6 +928,7 @@ ids = ["12345", "67890"]
                     phase: Some("New Construction".to_string()),
                     snapshots: vec!["2026-01-01T00:00:00Z".to_string()],
                     doors: vec![],
+                    windows: vec![],
                 },
             )]),
             reference_snapshots: std::collections::BTreeMap::from([(

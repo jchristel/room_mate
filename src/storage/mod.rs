@@ -24,6 +24,8 @@
 //!       <snapshot-ts>.json  one file per rooms push — history kept, never overwritten
 //!       doors/               reserved: one subdir per non-rooms entity kind
 //!         <snapshot-ts>.json one file per doors push
+//!       windows/             the same, for windows
+//!         <snapshot-ts>.json one file per windows push
 //! ```
 //!
 //! **The layout is deliberately asymmetric**: rooms sit directly in the model
@@ -31,7 +33,7 @@
 //! snapshots down into a `rooms/` subdir would buy symmetry and risk a store
 //! nobody can read, against data already on disk. The subdirectory is additive
 //! and safe because both model-dir scans filter on `extension == "json"`, so a
-//! `doors/` directory is invisible to them — the same trick that makes
+//! `doors/` or `windows/` directory is invisible to them — the same trick that makes
 //! `REFERENCE_DIR` and `PENDING_DIR` safe (PLAN-generalisation.md R1).
 //!
 //! `project.toml` is **authoritative and two-way**: the server reads it to know
@@ -66,9 +68,46 @@ pub use mem::MemStore;
 pub enum SnapshotKind {
     Rooms,
     Doors,
+    Windows,
 }
 
 impl SnapshotKind {
+    /// Every kind, for the read paths that must sweep all of them.
+    ///
+    /// **This exists because an array literal is not exhaustive and the compiler
+    /// will not say so.** `list_models` used to iterate
+    /// `[SnapshotKind::Rooms, SnapshotKind::Doors]` written out by hand; adding
+    /// `Windows` compiled cleanly and would have left every windows snapshot out
+    /// of the model index — a silent omission, in the one structure whose job is
+    /// to know what a model holds. Every `match` on this enum was caught by the
+    /// compiler; the one list that was not is exactly where the bug landed.
+    ///
+    /// `position` below is what puts the guard back: it is an exhaustive match,
+    /// so a new variant fails to compile there, and the test pairs the two so a
+    /// variant left out of this array is caught rather than merely discouraged.
+    pub const ALL: [SnapshotKind; 3] = [SnapshotKind::Rooms, SnapshotKind::Doors, SnapshotKind::Windows];
+
+    /// This kind's index in [`ALL`](Self::ALL).
+    ///
+    /// Deliberately an exhaustive match rather than a derive: it is the
+    /// compile-time half of the guard `ALL` describes. Adding a variant without
+    /// extending `ALL` breaks this function, which is the reminder.
+    ///
+    /// `cfg(test)` because nothing in the running server needs a kind's ordinal
+    /// — it exists only to be checked. That does not weaken the guard: both CI
+    /// gates that matter here, `cargo test` and `cargo clippy --all-targets`,
+    /// compile the test cfg, so a variant added without extending `ALL` still
+    /// fails the build. Left in the normal cfg it would be dead code, and
+    /// clippy runs with `-D warnings`.
+    #[cfg(test)]
+    const fn position(self) -> usize {
+        match self {
+            SnapshotKind::Rooms => 0,
+            SnapshotKind::Doors => 1,
+            SnapshotKind::Windows => 2,
+        }
+    }
+
     /// The subdirectory this kind's snapshots live in *within* a model dir, or
     /// `None` for the kind that lives directly in it. See the layout note in
     /// the module doc for why rooms are the asymmetric one.
@@ -76,6 +115,7 @@ impl SnapshotKind {
         match self {
             SnapshotKind::Rooms => None,
             SnapshotKind::Doors => Some("doors"),
+            SnapshotKind::Windows => Some("windows"),
         }
     }
 
@@ -84,6 +124,7 @@ impl SnapshotKind {
         match self {
             SnapshotKind::Rooms => "rooms",
             SnapshotKind::Doors => "doors",
+            SnapshotKind::Windows => "windows",
         }
     }
 }
@@ -241,6 +282,17 @@ pub struct ModelEntry {
     /// as a model with no doors — which is exactly what it is.
     #[serde(default)]
     pub doors: Vec<String>,
+
+    /// The same index again, for **windows**. A third flat list rather than the
+    /// map the second one already argued against: keying a TOML table on the
+    /// kind would put its names in the file format, so this — a new field with
+    /// a `default` — is what "adding a kind" is supposed to cost.
+    ///
+    /// That it cost exactly that is the point. `default` keeps every manifest
+    /// written before windows existed parseable, as a model with no windows,
+    /// which is what such a model is.
+    #[serde(default)]
+    pub windows: Vec<String>,
 }
 
 impl ModelEntry {
@@ -250,6 +302,7 @@ impl ModelEntry {
         match kind {
             SnapshotKind::Rooms => &self.snapshots,
             SnapshotKind::Doors => &self.doors,
+            SnapshotKind::Windows => &self.windows,
         }
     }
 
@@ -257,6 +310,7 @@ impl ModelEntry {
         match kind {
             SnapshotKind::Rooms => &mut self.snapshots,
             SnapshotKind::Doors => &mut self.doors,
+            SnapshotKind::Windows => &mut self.windows,
         }
     }
 }
@@ -505,4 +559,41 @@ pub trait SnapshotWriter: Send {
     /// `Box<Self>` rather than `self`, because this trait is used as
     /// `Box<dyn SnapshotWriter>` and a by-value `self` would not be object-safe.
     fn commit(self: Box<Self>) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **`ALL` really is all of them**, paired with `position`'s exhaustive
+    /// match so the pairing is what enforces it.
+    ///
+    /// Adding a variant breaks `position` at compile time; this then catches the
+    /// two ways it could still go wrong afterwards — a variant added to the enum
+    /// and to `position` but forgotten in `ALL`, or `ALL` written in an order
+    /// that disagrees with `position`. Both would be silent, and both would
+    /// surface as a kind quietly missing from `list_models`, which is where this
+    /// went wrong once already.
+    #[test]
+    fn test_all_kinds_agree_with_their_positions() {
+        assert_eq!(SnapshotKind::ALL.len(), 3, "extend ALL when adding a kind");
+        for (index, kind) in SnapshotKind::ALL.iter().enumerate() {
+            assert_eq!(kind.position(), index, "{} is in the wrong slot of ALL", kind.label());
+        }
+    }
+
+    /// Each kind must own a distinct storage location and a distinct name.
+    /// Rooms are the deliberate `None` — they live directly in the model dir —
+    /// so the check is that no two kinds *collide*, not that all are `Some`.
+    #[test]
+    fn test_kinds_do_not_share_a_directory_or_a_label() {
+        let dirs: Vec<_> = SnapshotKind::ALL.iter().map(|k| k.dir_component()).collect();
+        let labels: Vec<_> = SnapshotKind::ALL.iter().map(|k| k.label()).collect();
+        for i in 0..SnapshotKind::ALL.len() {
+            for j in (i + 1)..SnapshotKind::ALL.len() {
+                assert_ne!(dirs[i], dirs[j], "two kinds would share a directory");
+                assert_ne!(labels[i], labels[j], "two kinds would share a label");
+            }
+        }
+    }
 }
