@@ -27,7 +27,8 @@ use roommate::handlers::{
     activate_model_pending_snapshot, compare_project_milestones, get_doors, get_model_latest_snapshot,
     get_model_pending_snapshot, get_project_adjacency, get_project_areas, get_project_buildings,
     get_project_milestones, get_project_snapshots, get_project_validation, get_projects, get_reference_latest,
-    get_reference_snapshots, get_rooms, ingest_doors, ingest_doors_stream, ingest_rooms, ingest_rooms_stream,
+    get_reference_snapshots, get_rooms, get_windows, ingest_doors, ingest_doors_stream, ingest_rooms,
+    ingest_rooms_stream, ingest_windows, ingest_windows_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
@@ -262,6 +263,17 @@ fn build_router(state: roommate::state::Shared) -> Router {
             post(ingest_doors).get(get_doors).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
         )
         .route("/doors/stream", post(ingest_doors_stream).layer(DefaultBodyLimit::disable()))
+        // Windows: the third primary entity, and the same pair again. The only
+        // route-level difference from doors is the name -- the phase gate, the
+        // sinks and the read assembly behind these are the doors ones with a
+        // SnapshotKind passed in. A facade model is the case that motivated
+        // them: 158 windows and no rooms at all, which only resolves once
+        // [windows] room_resolution can see the project's other models.
+        .route(
+            "/windows",
+            post(ingest_windows).get(get_windows).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
+        )
+        .route("/windows/stream", post(ingest_windows_stream).layer(DefaultBodyLimit::disable()))
         .route("/projects", get(get_projects))
         .route("/projects/{id}/buildings", get(get_project_buildings))
         .route("/projects/{id}/validation", get(get_project_validation))

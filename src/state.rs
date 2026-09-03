@@ -393,9 +393,30 @@ impl AppState {
 
     /// `open_room_snapshot`'s doors counterpart. `envelope` carries an empty
     /// `doors` list, for the same reason.
-    pub fn open_door_snapshot(&self, envelope: &DoorPayload) -> anyhow::Result<StreamingSnapshot<'_>> {
-        let key = ModelKey::from_door_payload(envelope);
-        StreamingSnapshot::open(self.store.as_ref(), &doors_meta(&key, envelope), SnapshotKind::Doors, envelope)
+    /// Open a streamed snapshot for one opening kind.
+    ///
+    /// Generic over the envelope, and the kind is what makes it work rather than
+    /// a coincidence: `StreamingSnapshot::open` strips the element array by
+    /// `kind.label()` before writing the header, and each envelope names its
+    /// list after its own kind (`doors`, `windows`). So the one function writes
+    /// the right header for either, and a kind/envelope mismatch would strip the
+    /// wrong key -- which is why the pairing is made once, in the handler that
+    /// knows both.
+    pub fn open_opening_snapshot<P: crate::contract::OpeningEnvelope + serde::Serialize>(
+        &self,
+        kind: SnapshotKind,
+        envelope: &P,
+    ) -> anyhow::Result<StreamingSnapshot<'_>> {
+        let key = ModelKey { project_id: envelope.project().id.clone(), model_id: envelope.model().id.clone() };
+        let meta = SnapshotMeta {
+            kind,
+            key: &key,
+            project_name: &envelope.project().name,
+            model_name: &envelope.model().name,
+            taken_at: envelope.taken_at(),
+            phase: envelope.phase(),
+        };
+        StreamingSnapshot::open(self.store.as_ref(), &meta, kind, envelope)
     }
 
     /// The store's index — every model, with display names, and **no snapshot

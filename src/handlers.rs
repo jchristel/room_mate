@@ -790,13 +790,18 @@ pub async fn ingest_rooms_stream(
 /// model whose rooms have not arrived (**pending** — expected, not a finding)
 /// from a reference that names a room its model does not have (**dangling** — a
 /// finding), which is the distinction this gate could not make at all.
-fn check_doors_ingest(state: &Shared, key: &ModelKey, pushed: Option<&str>) -> Result<(), (StatusCode, String)> {
+fn check_opening_ingest(
+    state: &Shared,
+    kind: SnapshotKind,
+    key: &ModelKey,
+    pushed: Option<&str>,
+) -> Result<(), (StatusCode, String)> {
+    let label = kind.label();
     let Some(pushed) = pushed else {
         return Err((
             StatusCode::UNPROCESSABLE_ENTITY,
             format!(
-                "doors push for {}/{} carries no phase, which indicates an extractor predating phase support; \
-                 its doors were never filtered to a phase. Update the extractor.",
+                "{label} push for {}/{} carries no phase, which indicates an extractor predating phase support;                  its {label} were never filtered to a phase. Update the extractor.",
                 key.project_id, key.model_id
             ),
         ));
@@ -812,11 +817,7 @@ fn check_doors_ingest(state: &Shared, key: &ModelKey, pushed: Option<&str>) -> R
         Some(stored) => Err((
             StatusCode::UNPROCESSABLE_ENTITY,
             format!(
-                "doors push for {}/{} is phase {pushed:?} while the model is {stored:?}. \
-                 Unlike a rooms push, a disagreeing doors push is not quarantined: activating it would \
-                 re-phase the model while its rooms stayed on {stored:?}, leaving these doors' room \
-                 references pointing at rooms from another phase. Re-phase the model with a rooms push \
-                 first, then push its doors.",
+                "{label} push for {}/{} is phase {pushed:?} while the model is {stored:?}.                  Unlike a rooms push, a disagreeing {label} push is not quarantined: activating it would                  re-phase the model while its rooms stayed on {stored:?}, leaving these {label}' room                  references pointing at rooms from another phase. Re-phase the model with a rooms push                  first, then push its {label}.",
                 key.project_id, key.model_id
             ),
         )),
@@ -878,25 +879,61 @@ pub async fn ingest_doors(
         .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.doors)))
         .collect();
     let models: Vec<DoorModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
-    preflight_doors(&state, &upload.project.id, upload.phase.as_deref(), &models)?;
+    preflight_openings(
+        &state,
+        SnapshotKind::Doors,
+        &upload.project.id,
+        upload.phase.as_deref(),
+        models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
 
     // Through the same sinks the streamed route feeds -- see the rooms half of
     // this pair for why the buffered route goes through them too.
-    let mut sinks = open_door_sinks(
-        &state,
-        upload.schema_version,
-        &upload.project,
-        &upload.snapshot,
-        upload.phase.as_deref(),
-        models,
-    )?;
+    let payloads: Vec<(String, crate::contract::DoorPayload)> = models
+        .into_iter()
+        .map(|m| {
+            let id = m.model.id.clone();
+            let payload = m.into_payload(
+                upload.schema_version,
+                upload.project.clone(),
+                upload.snapshot.clone(),
+                upload.phase.clone(),
+                Vec::new(),
+            );
+            (id, payload)
+        })
+        .collect();
+    let mut sinks = open_opening_sinks(&state, SnapshotKind::Doors, payloads)?;
     for (model_id, doors) in &mut doors_by_model {
         let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
         for door in doors.drain(..) {
             sink.push(door)?;
         }
     }
-    finish_doors(upload.snapshot.taken_at.clone(), snapshot_id_generated, sinks)
+    let outcome = finish_openings(sinks, "door")?;
+    Ok(door_ingest_response(upload.snapshot.taken_at.clone(), snapshot_id_generated, outcome))
+}
+
+/// Name a finished push for the doors wire shape.
+fn door_ingest_response(
+    snapshot_taken_at: String,
+    snapshot_id_generated: bool,
+    outcome: IngestOutcome,
+) -> (StatusCode, Json<DoorIngestResponse>) {
+    (
+        StatusCode::OK,
+        Json(DoorIngestResponse {
+            accepted: true,
+            door_count: outcome.total,
+            snapshot_taken_at,
+            snapshot_id_generated,
+            models: outcome
+                .per_model
+                .into_iter()
+                .map(|(model_id, door_count)| DoorModelIngestResult { model_id, door_count })
+                .collect(),
+        }),
+    )
 }
 
 /// The doors counterpart of `preflight_rooms`: every refusal a doors push can
@@ -905,16 +942,17 @@ pub async fn ingest_doors(
 /// Answers nothing, unlike the rooms version — a doors push has no quarantine
 /// branch, so there is no per-model decision to carry forward, only a refusal or
 /// silence.
-fn preflight_doors(
+fn preflight_openings(
     state: &Shared,
+    kind: SnapshotKind,
     project_id: &str,
     phase: Option<&str>,
-    models: &[DoorModelEnvelope],
+    models: impl Iterator<Item = (String, Option<ModelToShared>)>,
 ) -> Result<(), (StatusCode, String)> {
-    for envelope in models {
-        let key = ModelKey { project_id: project_id.to_string(), model_id: envelope.model.id.clone() };
-        check_doors_ingest(state, &key, phase)?;
-        warn_on_transform_drift(envelope.model_to_shared.as_ref(), project_id, &envelope.model.id);
+    for (model_id, transform) in models {
+        let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.clone() };
+        check_opening_ingest(state, kind, &key, phase)?;
+        warn_on_transform_drift(transform.as_ref(), project_id, &model_id);
     }
     Ok(())
 }
@@ -926,40 +964,42 @@ fn preflight_doors(
 ///
 /// `preflight_doors` has already refused anything refusable, from the envelope
 /// line alone.
-fn open_door_sinks<'a>(
+fn open_opening_sinks<'a, P: crate::contract::OpeningEnvelope + Serialize>(
     state: &'a Shared,
-    schema_version: u32,
-    project: &Project,
-    snapshot: &Snapshot,
-    phase: Option<&str>,
-    models: Vec<DoorModelEnvelope>,
-) -> Result<Vec<DoorSink<'a>>, (StatusCode, String)> {
-    let mut sinks = Vec::with_capacity(models.len());
-    for envelope in models {
-        let model_id = envelope.model.id.clone();
-        let payload = envelope.into_payload(
-            schema_version,
-            project.clone(),
-            snapshot.clone(),
-            phase.map(str::to_string),
-            Vec::new(),
-        );
-        let snapshot = state.open_door_snapshot(&payload).map_err(store_failed)?;
-        sinks.push(DoorSink { model_id, snapshot });
+    kind: SnapshotKind,
+    payloads: Vec<(String, P)>,
+) -> Result<Vec<OpeningSink<'a>>, (StatusCode, String)> {
+    let mut sinks = Vec::with_capacity(payloads.len());
+    for (model_id, payload) in payloads {
+        let snapshot = state.open_opening_snapshot(kind, &payload).map_err(store_failed)?;
+        sinks.push(OpeningSink { model_id, snapshot });
     }
     Ok(sinks)
 }
 
-/// Where one model's doors go while a push is being read.
-struct DoorSink<'a> {
+/// Where one model's openings go while a push is being read. One type for both
+/// entities: a sink is a model id and a byte stream, and neither depends on
+/// which kind is flowing through it.
+struct OpeningSink<'a> {
     model_id: String,
     snapshot: StreamingSnapshot<'a>,
 }
 
-impl DoorSink<'_> {
-    fn push(&mut self, door: Opening) -> Result<(), (StatusCode, String)> {
-        self.snapshot.push(&door).map_err(store_failed)
+impl OpeningSink<'_> {
+    fn push(&mut self, opening: Opening) -> Result<(), (StatusCode, String)> {
+        self.snapshot.push(&opening).map_err(store_failed)
     }
+}
+
+/// What a finished push amounts to, before it is named for an entity.
+///
+/// The wire responses differ -- a doors push answers `door_count` and a windows
+/// push `window_count` -- so `finish_openings` produces this and each handler
+/// names it. The same split as `Assembled` on the read side, for the same
+/// reason: share everything except what would change a serde key.
+struct IngestOutcome {
+    total: usize,
+    per_model: Vec<(String, usize)>,
 }
 
 /// Publish every model's doors and report the push.
@@ -974,31 +1014,17 @@ impl DoorSink<'_> {
 ///
 /// So there is no check-then-commit split here: nothing can refuse at this
 /// point, and one loop is the honest shape.
-fn finish_doors(
-    snapshot_taken_at: String,
-    snapshot_id_generated: bool,
-    sinks: Vec<DoorSink<'_>>,
-) -> Result<(StatusCode, Json<DoorIngestResponse>), (StatusCode, String)> {
-    let mut results = Vec::with_capacity(sinks.len());
+fn finish_openings(sinks: Vec<OpeningSink<'_>>, label: &str) -> Result<IngestOutcome, (StatusCode, String)> {
+    let mut per_model = Vec::with_capacity(sinks.len());
     let mut total = 0usize;
     for sink in sinks {
         let count = sink.snapshot.count();
         total += count;
         sink.snapshot.commit().map_err(store_failed)?;
-        results.push(DoorModelIngestResult { model_id: sink.model_id, door_count: count });
+        per_model.push((sink.model_id, count));
     }
-    tracing::info!("received {} door(s) across {} model(s)", total, results.len());
-
-    Ok((
-        StatusCode::OK,
-        Json(DoorIngestResponse {
-            accepted: true,
-            door_count: total,
-            snapshot_taken_at,
-            snapshot_id_generated,
-            models: results,
-        }),
-    ))
+    tracing::info!("received {} {}(s) across {} model(s)", total, label, per_model.len());
+    Ok(IngestOutcome { total, per_model })
 }
 
 /// Streaming doors ingest (NDJSON), the counterpart to `ingest_rooms_stream`:
@@ -1037,16 +1063,30 @@ pub async fn ingest_doors_stream(
         &envelope.snapshot.taken_at,
     )?;
     let declared = validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
-    preflight_doors(&state, &envelope.project.id, envelope.phase.as_deref(), &envelope.models)?;
-
-    let mut sinks = open_door_sinks(
+    preflight_openings(
         &state,
-        envelope.schema_version,
-        &envelope.project,
-        &envelope.snapshot,
+        SnapshotKind::Doors,
+        &envelope.project.id,
         envelope.phase.as_deref(),
-        envelope.models,
+        envelope.models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
     )?;
+
+    let payloads: Vec<(String, crate::contract::DoorPayload)> = envelope
+        .models
+        .into_iter()
+        .map(|m| {
+            let id = m.model.id.clone();
+            let payload = m.into_payload(
+                envelope.schema_version,
+                envelope.project.clone(),
+                envelope.snapshot.clone(),
+                envelope.phase.clone(),
+                Vec::new(),
+            );
+            (id, payload)
+        })
+        .collect();
+    let mut sinks = open_opening_sinks(&state, SnapshotKind::Doors, payloads)?;
 
     while let Some(line) = lines
         .next_line()
@@ -1064,7 +1104,205 @@ pub async fn ingest_doors_stream(
         sink.push(line.door)?;
     }
 
-    finish_doors(envelope.snapshot.taken_at.clone(), snapshot_id_generated, sinks)
+    let outcome = finish_openings(sinks, "door")?;
+    Ok(door_ingest_response(envelope.snapshot.taken_at.clone(), snapshot_id_generated, outcome))
+}
+
+// ---------- windows ingest ----------
+//
+// The windows half of every pair above. What is NOT repeated here is the point:
+// the phase gate, the sinks, the commit and the transform-drift warning are the
+// same functions the doors routes call, parameterised by `SnapshotKind`. What IS
+// repeated is the wire naming -- `window_count` where doors say `door_count` --
+// because that is a serde key, and a shared response type could carry only one
+// of them.
+
+#[derive(Debug, Serialize)]
+pub struct WindowIngestResponse {
+    /// Always true on a 200 -- a windows push has no quarantine branch, so it
+    /// either stored every model or answered an error. Kept in lockstep with
+    /// the other two so a producer reads all three responses the same way.
+    pub accepted: bool,
+    /// Windows stored across the whole push.
+    pub window_count: usize,
+    pub snapshot_taken_at: String,
+    pub snapshot_id_generated: bool,
+    pub models: Vec<WindowModelIngestResult>,
+}
+
+/// What became of one model inside a multi-model windows push.
+#[derive(Debug, Serialize)]
+pub struct WindowModelIngestResult {
+    pub model_id: String,
+    pub window_count: usize,
+}
+
+/// Name a finished push for the windows wire shape.
+fn window_ingest_response(
+    snapshot_taken_at: String,
+    snapshot_id_generated: bool,
+    outcome: IngestOutcome,
+) -> (StatusCode, Json<WindowIngestResponse>) {
+    (
+        StatusCode::OK,
+        Json(WindowIngestResponse {
+            accepted: true,
+            window_count: outcome.total,
+            snapshot_taken_at,
+            snapshot_id_generated,
+            models: outcome
+                .per_model
+                .into_iter()
+                .map(|(model_id, window_count)| WindowModelIngestResult { model_id, window_count })
+                .collect(),
+        }),
+    )
+}
+
+/// Build one empty payload per model, ready to stream windows into.
+fn window_payloads(
+    schema_version: u32,
+    project: &Project,
+    snapshot: &Snapshot,
+    phase: Option<&str>,
+    models: Vec<crate::contract::WindowModelEnvelope>,
+) -> Vec<(String, crate::contract::WindowPayload)> {
+    models
+        .into_iter()
+        .map(|m| {
+            let id = m.model.id.clone();
+            let payload = m.into_payload(
+                schema_version,
+                project.clone(),
+                snapshot.clone(),
+                phase.map(str::to_string),
+                Vec::new(),
+            );
+            (id, payload)
+        })
+        .collect()
+}
+
+/// Revit posts window data here -- one push, one or more models.
+///
+/// **No quarantine branch and so no 202**, the doors rule for the doors reason:
+/// activating a disagreeing push would re-phase the model while its rooms stayed
+/// behind. See `check_opening_ingest`.
+///
+/// **An empty windows list is accepted**, exactly as an empty doors list is. A
+/// model with rooms and no windows is a legitimate state -- a service core, an
+/// internal floor -- and the server cannot tell that from a broken export. The
+/// producer refuses a windowless *run*, which is the question only it can
+/// answer because only it knows how many the export held.
+pub async fn ingest_windows(
+    State(state): State<Shared>,
+    Json(mut upload): Json<crate::contract::WindowsUpload>,
+) -> Result<(StatusCode, Json<WindowIngestResponse>), (StatusCode, String)> {
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut upload.snapshot);
+    upload.phase = crate::contract::normalize_phase(upload.phase.as_deref());
+    validate_ingest(
+        &state,
+        upload.schema_version,
+        crate::contract::SUPPORTED_WINDOW_SCHEMA,
+        &upload.project.id,
+        &upload.snapshot.taken_at,
+    )?;
+    validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
+
+    let mut windows_by_model: Vec<(String, Vec<Opening>)> = upload
+        .models
+        .iter_mut()
+        .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.windows)))
+        .collect();
+    let models: Vec<crate::contract::WindowModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
+    preflight_openings(
+        &state,
+        SnapshotKind::Windows,
+        &upload.project.id,
+        upload.phase.as_deref(),
+        models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
+
+    let payloads =
+        window_payloads(upload.schema_version, &upload.project, &upload.snapshot, upload.phase.as_deref(), models);
+    let mut sinks = open_opening_sinks(&state, SnapshotKind::Windows, payloads)?;
+    for (model_id, windows) in &mut windows_by_model {
+        let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
+        for window in windows.drain(..) {
+            sink.push(window)?;
+        }
+    }
+    let outcome = finish_openings(sinks, "window")?;
+    Ok(window_ingest_response(upload.snapshot.taken_at.clone(), snapshot_id_generated, outcome))
+}
+
+/// Streaming windows ingest (NDJSON): line 1 is the envelope, every following
+/// line is one `Opening` tagged with its model id.
+///
+/// Exists so a producer uses one transport for every entity rather than
+/// branching per push, and so the buffered and streamed paths stay provably
+/// equivalent -- which the tests assert, as they do for doors.
+pub async fn ingest_windows_stream(
+    State(state): State<Shared>,
+    body: Body,
+) -> Result<(StatusCode, Json<WindowIngestResponse>), (StatusCode, String)> {
+    let stream = body.into_data_stream().map(|r| r.map_err(std::io::Error::other));
+    let reader = StreamReader::new(stream);
+    let mut lines = reader.lines();
+
+    let first = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+        .ok_or((StatusCode::BAD_REQUEST, "empty body".into()))?;
+    let mut envelope: crate::contract::WindowStreamEnvelope =
+        serde_json::from_str(&first).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad envelope line: {e}")))?;
+
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
+    envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
+    validate_ingest(
+        &state,
+        envelope.schema_version,
+        crate::contract::SUPPORTED_WINDOW_SCHEMA,
+        &envelope.project.id,
+        &envelope.snapshot.taken_at,
+    )?;
+    let declared = validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
+    preflight_openings(
+        &state,
+        SnapshotKind::Windows,
+        &envelope.project.id,
+        envelope.phase.as_deref(),
+        envelope.models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
+
+    let payloads = window_payloads(
+        envelope.schema_version,
+        &envelope.project,
+        &envelope.snapshot,
+        envelope.phase.as_deref(),
+        envelope.models,
+    );
+    let mut sinks = open_opening_sinks(&state, SnapshotKind::Windows, payloads)?;
+
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+    {
+        if line.trim().is_empty() {
+            continue; // tolerate a trailing blank line
+        }
+        let line: crate::contract::StreamWindow =
+            serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad window line: {e}")))?;
+        check_declared(&declared, &line.model_id)?;
+        let sink = sink_for(&mut sinks, &line.model_id, |s| s.model_id.as_str())
+            .expect("check_declared already refused any model without a sink");
+        sink.push(line.window)?;
+    }
+
+    let outcome = finish_openings(sinks, "window")?;
+    Ok(window_ingest_response(envelope.snapshot.taken_at.clone(), snapshot_id_generated, outcome))
 }
 
 /// `ServiceError` -> `(StatusCode, String)`, the same message-carrying error
@@ -1401,6 +1639,68 @@ pub async fn get_doors(
         None => Ok(StatusCode::NO_CONTENT.into_response()),
         Some(assembled) => {
             Ok(([(header::ETAG, etag)], Json(openings::DoorsResult::from_assembled(assembled))).into_response())
+        }
+    }
+}
+
+/// The windows read. The doors read with two lookups changed, which is the
+/// whole claim of the generalisation -- see `service::openings::OpeningKind`.
+///
+/// Mirrors `get_rooms`, minus `?building=` — a door's building
+/// depends on which of its rooms owns it, which is an open design question
+/// (`service::openings`' module doc).
+pub async fn get_windows(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<DoorsQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    // The same registry-wide source vocabulary `/rooms` parses against, even
+    // though no door carries a joined source yet: parsing a filter differently
+    // per entity would fork the grammar, and `drofus.NetArea` on a door resolves
+    // to `Absent` (matching nothing) rather than erroring. See
+    // `impl FilterTarget for DoorResponse`.
+    let known = state.settings().known_reference_sources();
+    let filter = query
+        .filter
+        .as_deref()
+        .map(|s| rooms::RoomFilter::parse_query(s, &known))
+        .transpose()
+        .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
+        .filter(|f| !f.is_empty());
+
+    let scope = openings::OpeningScope {
+        project: query.project.as_deref(),
+        building: query.building.as_deref(),
+        milestone: query.milestone.as_deref(),
+        filter: filter.as_ref(),
+    };
+
+    // Both kinds, because a doors response is not a function of doors alone:
+    // ownership and the geometric resolver read the scope's *rooms*
+    // (`openings::build_candidates`), so a rooms push changes this body.
+    let cursor = scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Rooms, SnapshotKind::Windows])
+        .map_err(map_service_error)?;
+    let etag = etag_for(
+        &cursor,
+        [
+            query.project.as_deref(),
+            query.building.as_deref(),
+            query.milestone.as_deref(),
+            query.filter.as_deref(),
+        ],
+    );
+    if is_fresh(&headers, &etag) {
+        return Ok(not_modified(&etag));
+    }
+
+    let result =
+        openings::assemble_openings::<crate::contract::WindowPayload>(&state, openings::OpeningKind::Windows, &scope)
+            .map_err(map_service_error)?;
+
+    match result {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(assembled) => {
+            Ok(([(header::ETAG, etag)], Json(openings::WindowsResult::from_assembled(assembled))).into_response())
         }
     }
 }
