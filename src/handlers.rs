@@ -3260,4 +3260,284 @@ mod tests {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(message.contains("no settings configured"), "{message}");
     }
+
+    // ---------- windows ingest ----------
+    //
+    // Deliberately NOT a copy of the doors set above. The sinks, the commit and
+    // the phase gate are the same functions those tests already exercise; what
+    // is untested until here is the *pairing* -- that the windows routes hand
+    // those functions `SnapshotKind::Windows`, the windows schema and the
+    // windows label, and that nothing crosses over into the doors slot. Every
+    // test below fails if one of those four is wired wrong, and none of them
+    // re-asserts behaviour that is not per entity.
+
+    /// One model's windows as a v1 upload.
+    ///
+    /// Builds its elements with `make_door`, which is not sloppiness: the record
+    /// IS shared (`contract::Opening`), so a second builder would only assert
+    /// that two identical struct literals are identical. The envelope is what
+    /// differs, and that is what this helper carries.
+    fn window_payload(project: &str, model: &str, ts: &str, phase: Option<&str>) -> crate::contract::WindowsUpload {
+        crate::contract::WindowsUpload {
+            schema_version: crate::contract::SUPPORTED_WINDOW_SCHEMA,
+            project: Project { id: project.to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: ts.to_string() },
+            phase: phase.map(str::to_string),
+            models: vec![crate::contract::windows::WindowModelUpload {
+                envelope: crate::contract::WindowModelEnvelope {
+                    model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+                    model_to_shared: None,
+                    levels: vec![],
+                },
+                windows: vec![make_door("w1", Some("r1"), None)],
+            }],
+        }
+    }
+
+    /// **Three kinds, three slots, one model.** The property R1 rests on, now
+    /// asserted for the kind that arrived last: a windows push must land in its
+    /// own storage slot and leave the rooms and doors lineages exactly as they
+    /// were.
+    ///
+    /// This is the test that would have caught a `SnapshotKind` threaded wrong.
+    /// A windows route that passed `Doors` anywhere -- to the sinks, to the
+    /// manifest, to the read -- compiles perfectly and would overwrite the
+    /// doors snapshot with windows.
+    #[tokio::test]
+    async fn test_windows_land_in_their_own_slot_beside_rooms_and_doors() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let _ = ingest_doors(
+            State(state.clone()),
+            Json(door_payload("p1", "m1", "2026-02-01T00:00:00Z", Some("New Construction"))),
+        )
+        .await
+        .expect("doors accepted");
+
+        let (status, body) = ingest_windows(
+            State(state.clone()),
+            Json(window_payload("p1", "m1", "2026-03-01T00:00:00Z", Some("New Construction"))),
+        )
+        .await
+        .expect("windows accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.accepted);
+        assert_eq!(body.window_count, 1);
+
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let windows = state
+            .all_opening_snapshots::<crate::contract::WindowPayload>(crate::storage::SnapshotKind::Windows, None)
+            .unwrap();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].1.windows[0].id, "w1");
+
+        // The other two lineages are untouched -- same ids, same counts.
+        assert_eq!(state.list_snapshot_ids(&key).unwrap(), vec!["2026-01-01T00:00:00Z".to_string()]);
+        assert_eq!(state.list_door_snapshot_ids(&key).unwrap(), vec!["2026-02-01T00:00:00Z".to_string()]);
+        let doors = state
+            .all_opening_snapshots::<crate::contract::DoorPayload>(crate::storage::SnapshotKind::Doors, None)
+            .unwrap();
+        assert_eq!(doors.len(), 1);
+        assert_eq!(doors[0].1.doors[0].id, "d1", "the doors snapshot is still doors");
+    }
+
+    /// The phase gate applies to windows on the doors terms: refused, never
+    /// quarantined. Same reasoning -- activating it would re-phase the lineage
+    /// while the rooms stayed behind.
+    #[tokio::test]
+    async fn test_windows_push_with_a_disagreeing_phase_is_refused_not_quarantined() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = window_payload("p1", "m1", "2026-03-01T00:00:00Z", Some("Existing"));
+
+        let (status, message) = ingest_windows(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("Existing") && message.contains("New Construction"), "{message}");
+        assert!(state
+            .all_opening_snapshots::<crate::contract::WindowPayload>(crate::storage::SnapshotKind::Windows, None)
+            .unwrap()
+            .is_empty());
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert!(state.pending_snapshot(&key).unwrap().is_none(), "never quarantined");
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"), "lineage unmoved");
+    }
+
+    /// **The refusal has to say "windows".**
+    ///
+    /// The message is now built from `kind.label()` rather than written out per
+    /// entity, which is the right shape and also a new way to be wrong: a
+    /// windows route that passed `SnapshotKind::Doors` to the gate would refuse
+    /// correctly and tell the operator to go and look at their doors. That is a
+    /// worse failure than no message, so the noun is asserted rather than
+    /// assumed.
+    #[tokio::test]
+    async fn test_a_windows_refusal_names_windows_not_doors() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = window_payload("p1", "m1", "2026-03-01T00:00:00Z", None);
+
+        let (status, message) = ingest_windows(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("windows"), "names the entity that was pushed: {message}");
+        assert!(!message.contains("doors"), "and never the other one: {message}");
+    }
+
+    /// **The doors schema version is refused on the windows route**, which is
+    /// the version lines being independent made real.
+    ///
+    /// Windows are v1 and doors are v2, so a producer that copied its doors
+    /// push and changed the URL sends a plausible-looking 2 here. Accepting it
+    /// would store a payload under a contract it does not satisfy; the refusal
+    /// names the number this route wants.
+    #[tokio::test]
+    async fn test_windows_push_with_the_doors_schema_version_is_refused() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let mut payload = window_payload("p1", "m1", "2026-03-01T00:00:00Z", Some("New Construction"));
+        payload.schema_version = crate::contract::SUPPORTED_DOOR_SCHEMA;
+
+        let (status, message) = ingest_windows(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            message.contains(&crate::contract::SUPPORTED_WINDOW_SCHEMA.to_string()),
+            "names the version this route accepts: {message}"
+        );
+    }
+
+    /// A windows push phases an unphased lineage, exactly as a rooms or doors
+    /// push does. Now that three entities can be the first to arrive, whichever
+    /// gets there first sets the phase.
+    #[tokio::test]
+    async fn test_windows_push_phases_an_unphased_lineage() {
+        let state = state_with_rooms(None).await;
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert!(state.model_phase(&key).unwrap().is_none(), "unphased to begin with");
+
+        let payload = window_payload("p1", "m1", "2026-03-01T00:00:00Z", Some("New Construction"));
+        let _ = ingest_windows(State(state.clone()), Json(payload)).await.expect("accepted");
+
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
+    }
+
+    /// **An empty windows list is accepted**, which is where windows part
+    /// company with rooms and side with doors.
+    ///
+    /// A rooms push with no rooms is a producer fault -- nobody exports a
+    /// document with no rooms. A model with rooms and no windows is a service
+    /// core or an internal floor, and the server cannot tell that from a broken
+    /// export. The producer refuses a windowless *run*, because only it knows
+    /// how many the export held.
+    #[tokio::test]
+    async fn test_a_windows_push_with_no_windows_is_accepted() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let mut payload = window_payload("p1", "m1", "2026-03-01T00:00:00Z", Some("New Construction"));
+        payload.models[0].windows.clear();
+
+        let (status, body) = ingest_windows(State(state.clone()), Json(payload)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.window_count, 0);
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert_eq!(
+            state
+                .list_opening_snapshot_ids(crate::storage::SnapshotKind::Windows, &key)
+                .unwrap()
+                .len(),
+            1,
+            "the empty snapshot is stored, not silently dropped"
+        );
+    }
+
+    /// The buffered and streamed windows routes must store identical results --
+    /// which route a producer picked cannot change what is stored.
+    #[tokio::test]
+    async fn test_windows_stream_matches_the_buffered_path() {
+        let state = state_with_rooms(Some("New Construction")).await;
+
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-03-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit"}]}"#,
+            "\n",
+            r#"{"model_id":"m1","id":"w1","level_id":"1","loops":[],"from_room":"r1","type_id":"t1","type_name":"Awning"}"#,
+            "\n",
+            "\n", // a trailing blank line is tolerated, as on the other streams
+        );
+        let (status, streamed) = ingest_windows_stream(State(state.clone()), Body::from(body)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(streamed.window_count, 1);
+
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let stored: crate::contract::WindowPayload = state
+            .get_opening_snapshot(crate::storage::SnapshotKind::Windows, &key, "2026-03-01T00:00:00Z")
+            .unwrap()
+            .expect("stored");
+        let window = &stored.windows[0];
+        assert_eq!(window.id, "w1");
+        assert_eq!(window.from_room.as_deref(), Some("r1"));
+        assert_eq!(window.to_room, None, "an external window streams as None, not an error");
+    }
+
+    /// The windows stream refuses on the envelope line alone, before reading
+    /// any window line -- a push that will be refused should cost the producer
+    /// one line, not the whole body. The malformed line below is never parsed,
+    /// and that is the assertion.
+    #[tokio::test]
+    async fn test_windows_stream_refuses_from_the_envelope_alone() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-03-01T00:00:00Z"},"phase":"Existing","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit"}]}"#,
+            "\n",
+            r#"{"this is not a window and is never parsed"#, // malformed on purpose
+        );
+
+        let (status, message) = ingest_windows_stream(State(state.clone()), Body::from(body)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "the gate ran, not the line parser");
+        assert!(message.contains("Existing") && message.contains("New Construction"), "{message}");
+    }
+
+    /// An unregistered project is refused for windows exactly as for the other
+    /// two -- a project must be onboarded before it can push anything.
+    #[tokio::test]
+    async fn test_windows_push_to_an_unregistered_project_is_refused() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let payload = window_payload("nope", "m1", "2026-03-01T00:00:00Z", Some("New Construction"));
+
+        let (status, message) = ingest_windows(State(state.clone()), Json(payload)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(message.contains("no settings configured"), "{message}");
+    }
+
+    /// **The windows read answers under its own two keys.**
+    ///
+    /// `schema_version` is 1 where doors are 2, and the element list is
+    /// `windows` where theirs is `doors`. Those are the only two things
+    /// `WindowsResult` exists for, so they are what this asserts.
+    ///
+    /// **It drives `get_windows` and reads the response BODY, deliberately.**
+    /// The first version of this test called `assemble_openings` and wrapped it
+    /// in `WindowsResult` itself -- which asserted that the result type has the
+    /// right keys, a thing the struct definition already says, and proved
+    /// nothing about the handler. Mutating `get_windows` to wrap the assembly in
+    /// `DoorsResult` left it passing. A test whose doc comment claims to catch
+    /// something it cannot is worse than no test, so it goes through the route.
+    #[tokio::test]
+    async fn test_the_windows_read_uses_the_windows_keys() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let _ = ingest_windows(
+            State(state.clone()),
+            Json(window_payload("p1", "m1", "2026-03-01T00:00:00Z", Some("New Construction"))),
+        )
+        .await
+        .expect("accepted");
+
+        let query = DoorsQuery { project: Some("p1".to_string()), building: None, milestone: None, filter: None };
+        let response = get_windows(State(state), HeaderMap::new(), Query(query)).await.expect("read");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+
+        assert_eq!(json["schema_version"], 1, "windows are v1, doors are v2");
+        assert!(json.get("windows").is_some(), "the element list is named windows");
+        assert!(json.get("doors").is_none(), "and never doors");
+        assert_eq!(json["windows"].as_array().unwrap().len(), 1);
+    }
 }

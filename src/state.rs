@@ -500,7 +500,15 @@ impl AppState {
 
     /// One model's doors snapshot ids, ascending.
     pub fn list_door_snapshot_ids(&self, key: &ModelKey) -> anyhow::Result<Vec<String>> {
-        self.store.list_snapshot_ids(SnapshotKind::Doors, key)
+        self.list_opening_snapshot_ids(SnapshotKind::Doors, key)
+    }
+
+    /// One model's snapshot ids for any opening kind, ascending. The store
+    /// already takes the kind, so this is a pass-through -- it exists so callers
+    /// name the kind rather than reaching for a per-entity method that would
+    /// have to be added for each one.
+    pub fn list_opening_snapshot_ids(&self, kind: SnapshotKind, key: &ModelKey) -> anyhow::Result<Vec<String>> {
+        self.store.list_snapshot_ids(kind, key)
     }
 
     /// One specific stored doors snapshot by id — the milestone read path.
