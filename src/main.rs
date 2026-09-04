@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use axum::http::{header, Method, StatusCode};
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::{
     extract::DefaultBodyLimit,
@@ -15,10 +15,12 @@ use axum::{
     Router,
 };
 use clap::Parser;
+use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
     decompression::RequestDecompressionLayer,
     services::ServeDir,
+    set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
 
@@ -239,6 +241,31 @@ fn resolve_viewer_root(exe_dir: Option<&Path>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("static"))
 }
 
+/// What the viewer's static files are served with, and **the bug it fixes.**
+///
+/// `ServeDir` sends `last-modified` and nothing else. With no `cache-control`,
+/// a browser is free to apply *heuristic* freshness -- roughly a tenth of the
+/// file's age -- and reuse a cached copy **without revalidating**, so a plain
+/// reload does not re-fetch. That is not a theoretical staleness: the viewer is
+/// two independently cached documents, `index.html` and the renderer bundle,
+/// and the failure mode when they disagree is silent rather than broken.
+///
+/// On 2026-09-04 a browser held a NEW `index.html` against a CACHED
+/// pre-windows `renderer.bundle.js`. The drawing code lives in the bundle and
+/// the controls live in the HTML, so the window toggle appeared, the payload
+/// loaded, and the plan drew nothing -- with no console error and nothing wrong
+/// on the server. Only a hard reload cleared it, which is not something a
+/// reader can be expected to guess.
+///
+/// `no-cache` is "store it, but revalidate before every use", NOT "do not
+/// store": the conditional request still answers 304 from `last-modified`, so
+/// the bytes are re-sent only when they actually changed. The cost is one
+/// round trip per file on loopback; the alternative is a viewer that can be
+/// silently half a release old.
+fn viewer_cache_control() -> SetResponseHeaderLayer<HeaderValue> {
+    SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"))
+}
+
 /// Build the application router. Split out of `main` so the CORS policy above
 /// is reachable from a test — a security control with no regression test is one
 /// refactor away from silently reverting to `permissive()`.
@@ -332,8 +359,12 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // still finds its colour plans. Editors keep the strict route above.
         .route("/api/settings/resolve/{id}", get(http_get_project_resolved))
         // Serves the viewer page at "/" from the viewer root -- see `viewer_root`
-        // for why that is not simply "static".
-        .fallback_service(ServeDir::new(viewer_root()))
+        // for why that is not simply "static". The cache-control layer is
+        // scoped to THIS service rather than added to the router: the API
+        // routes answer with their own ETags and revision fields, and a blanket
+        // no-cache would be making a caching decision for them too. See
+        // `viewer_cache_control`.
+        .fallback_service(ServiceBuilder::new().layer(viewer_cache_control()).service(ServeDir::new(viewer_root())))
         // Inflate gzip request bodies (Content-Encoding: gzip) before Json/NDJSON
         // parsing sees them. Transparent: a non-gzip body passes through
         // untouched, so an uncompressed sender still works -- purely additive.
@@ -478,6 +509,45 @@ mod tests {
         let state: roommate::state::Shared =
             Arc::new(AppState::new(Box::new(MemStore::new()), Default::default(), None));
         build_router(state)
+    }
+
+    /// **The regression guard for the silent-stale-viewer bug.** Without
+    /// `cache-control`, a browser may reuse a cached bundle without
+    /// revalidating, which on 2026-09-04 paired a new `index.html` with a
+    /// pre-windows renderer: the toggle was there, the payload loaded, nothing
+    /// drew. Asserted on a 404 from the static service because that is still a
+    /// response the layer wrapped -- the point is that the header is attached to
+    /// the viewer service at all, and a fixture file would make this a test
+    /// about `static/`'s contents instead.
+    #[tokio::test]
+    async fn test_viewer_files_are_served_revalidate_always() {
+        let response = router()
+            .oneshot(Request::builder().uri("/index.html").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let cache_control = response.headers().get(header::CACHE_CONTROL);
+        assert_eq!(
+            cache_control.map(|v| v.to_str().unwrap()),
+            Some("no-cache"),
+            "a viewer file cached without revalidation goes stale silently",
+        );
+    }
+
+    /// The API is NOT swept up by the layer above. `/rooms` answers with its own
+    /// revision and ETag, and a blanket no-cache would be this module deciding
+    /// caching policy for handlers that already have one.
+    #[tokio::test]
+    async fn test_api_routes_are_left_to_their_own_caching() {
+        let response = router()
+            .oneshot(Request::builder().uri("/projects").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert!(
+            response.headers().get(header::CACHE_CONTROL).is_none(),
+            "the static layer must not reach the API routes",
+        );
     }
 
     /// One CORS preflight, as a browser would send it.
