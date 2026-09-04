@@ -25,17 +25,20 @@ export { addLabel, paintLevel } from "./svg/paint.js";
 export { GlPlanRenderer } from "./gl/renderer.js";
 export { DoorIndex, RoomIndex } from "./gl/spatial.js";
 export { buildDoorGlyph, FALLBACK_GLYPH_SIZE, MIN_FOOTPRINT_EXTENT } from "./gl/doorGlyph.js";
+export { buildWindowGlyph } from "./gl/windowGlyph.js";
 export { parseColour, readPalette, withAlpha } from "./gl/colour.js";
 
 export type { PaintOptions } from "./svg/paint.js";
 export type { GlRendererOptions } from "./gl/renderer.js";
 export type { DoorGlyph } from "./gl/doorGlyph.js";
+export type { WindowGlyph } from "./gl/windowGlyph.js";
 export type { PickableDoor } from "./gl/spatial.js";
 export type { HighlightState, PaintRequest, Pick, PlanRenderer } from "./seam.js";
 export type {
   AppearanceContext,
   ClassificationTier,
   Door,
+  WindowOpening,
   Extent,
   Loop,
   Point2D,
