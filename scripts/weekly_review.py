@@ -265,7 +265,8 @@ def check_mcp_parity(findings: Findings) -> None:
     # Route -> tool is judged by hand once, then encoded here: the mapping is
     # not derivable from names (`/areas` -> `get_hierarchy_areas`).
     mapping = {
-        "/rooms": "get_rooms", "/doors": "get_doors", "/projects": "list_projects",
+        "/rooms": "get_rooms", "/doors": "get_doors", "/windows": "get_windows",
+        "/projects": "list_projects",
         "/projects/{id}/buildings": "list_buildings", "/projects/{id}/validation": "get_validation",
         "/projects/{id}/snapshots": "list_snapshots", "/projects/{id}/milestones": "list_milestones",
         "/projects/{id}/areas": "get_hierarchy_areas", "/projects/{id}/adjacency": "get_adjacency",
@@ -287,7 +288,10 @@ def check_mcp_parity(findings: Findings) -> None:
         elif f"fn {tool}(" not in mcp:
             hits.append(f"{route:<58} maps to `{tool}`, which is gone from bin/mcp.rs")
 
-    numbers = {"Fourteen": 14, "Fifteen": 15, "Sixteen": 16, "Seventeen": 17, "Eighteen": 18}
+    numbers = {
+        "Fourteen": 14, "Fifteen": 15, "Sixteen": 16, "Seventeen": 17, "Eighteen": 18,
+        "Nineteen": 19, "Twenty": 20,
+    }
     if claimed:
         said = numbers.get(claimed.group(1).capitalize())
         if said and said != tool_count:

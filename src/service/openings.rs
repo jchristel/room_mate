@@ -16,6 +16,15 @@
 //! answerable once `[doors] room_attribution` settled which room owns a door
 //! (the attribution rule is in `CLAUDE.md`). Before that, any answer would have
 //! settled that question by accident.
+//!
+//! **Past the ~500-line trigger, judged and kept whole.** The size is the saving
+//! rather than the cost: the alternative to one assembly of this length was a
+//! second copy of it for windows, and a third for whatever comes next. The seams
+//! that can be cut already are — the record lives in `contract::openings`, every
+//! per-entity lookup in `OpeningKind`, the geometry in `room_locator`. What is
+//! left is a single scoping-then-deriving pipeline whose invariants (which
+//! snapshot each model contributed, which rooms the geometry probed against,
+//! which policy attributed the result) only hold when read together.
 
 use std::collections::BTreeMap;
 
