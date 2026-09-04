@@ -534,9 +534,15 @@ impl Candidates {
             return unresolved(Unresolved::NoPosition);
         };
         let Some(&elevation) = self.elevation.get(&(model_id.to_string(), door.level_id.clone())) else {
-            // The door names a level its model's rooms snapshot does not carry,
-            // so there is no axis to compare on. Nothing to probe.
-            return unresolved(Unresolved::NoCandidate);
+            // The opening names a level nothing in scope has an elevation for,
+            // so there is no axis to compare on and nothing is probed.
+            //
+            // Reported as its own state rather than as NoCandidate, which would
+            // read as "the probe found open air" -- the ordinary answer for an
+            // external opening. This is not that: an unhosted element gets an
+            // invalid LevelId from Revit and the export carries -1, so the cause
+            // is upstream of any geometry a reader would go looking at.
+            return unresolved(Unresolved::UnknownLevel);
         };
         let mut normal = door.through_wall_normal;
 
@@ -1281,10 +1287,50 @@ mod tests {
         );
     }
 
+    /// **An unhosted opening carries no level, and says so.**
+    ///
+    /// The N3 case, measured rather than imagined: a skylight in a house and two
+    /// terrace sills in a facade file have no host wall, so Revit hands them an
+    /// invalid `LevelId` and the export carries `-1`. duHast then fails to
+    /// serialise their `level.name` at all, which is how they were found.
+    ///
+    /// The contract keeps `level_id` a required `String` and stores whatever
+    /// arrived -- refusing the push would throw away a real opening that has an
+    /// id, properties and a footprint, over one field. What the read does is
+    /// report the consequence precisely: nothing has an elevation for level
+    /// `-1`, so the geometry is never consulted and the side comes back
+    /// `UnknownLevel` rather than pretending a probe happened.
+    #[test]
+    fn test_an_unhosted_opening_reports_an_unknown_level() {
+        let state = state_with_wall(
+            crate::settings::RoomResolution::SameModel,
+            vec![Opening { level_id: "-1".to_string(), ..wall_door("skylight") }],
+        );
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let opening = &result.openings[0];
+
+        assert_eq!(
+            opening.room_origin.to_room,
+            SideOrigin::Unresolved(Unresolved::UnknownLevel),
+            "the invalid level is named, not folded into NoCandidate"
+        );
+        assert_eq!(opening.room_origin.from_room, SideOrigin::Unresolved(Unresolved::UnknownLevel));
+        assert!(opening.owner_rooms.is_empty(), "homeless, and the reason is on the wire");
+    }
+
     /// **Without the levels it is unreachable, not merely unresolved** — and the
     /// distinction is the whole reason the field was added. The geometry is
     /// identical to the test above; only the doors envelope's level set is gone,
     /// and `locate` gives up before it probes anything.
+    ///
+    /// This used to assert `NoCandidate`, which said the opposite of the
+    /// paragraph above it: `NoCandidate` means the probe RAN and found open air,
+    /// which is the ordinary answer for an external door and no finding at all.
+    /// So the response could not distinguish "nothing is there" from "we never
+    /// looked", and a reader chasing a homeless door was sent to the geometry
+    /// when the cause was a missing level set. `UnknownLevel` says which.
     #[test]
     fn test_a_doors_only_model_with_no_levels_cannot_be_probed() {
         let state =
@@ -1294,7 +1340,11 @@ mod tests {
             .unwrap();
         let door = &result.openings[0];
 
-        assert_eq!(door.room_origin.to_room, SideOrigin::Unresolved(Unresolved::NoCandidate));
+        assert_eq!(
+            door.room_origin.to_room,
+            SideOrigin::Unresolved(Unresolved::UnknownLevel),
+            "never probed, rather than probed and empty"
+        );
         assert!(door.owner_rooms_qualified.is_empty(), "homeless, with the geometry never consulted");
     }
 

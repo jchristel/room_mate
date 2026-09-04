@@ -33,3 +33,20 @@ the only documentation an agent reads, so a stale one is a wrong answer, not a
 doc debt.** When a change makes a description false, correcting it belongs in
 that same change. Doors proved both halves — the entity cost one new tool and
 three corrected descriptions, and the descriptions were the work.
+
+**Windows proved something sharper: a description can be false without a single
+word of it changing.** The window record is identical to the door record, so
+`get_windows` could have reused `get_doors`' text verbatim and every sentence in
+it would still have parsed as true. It would still have been wrong, because the
+*data* differs exactly where it matters. A one-sided opening is the exception
+for doors and the rule for windows; an opening with no room on either side is a
+finding for doors and, in a facade model that links its interiors, the state of
+every window in the file — 0 of 158 carried a reference when it was measured,
+and so did 0 of its 191 doors. An agent applying the doors reading to that would
+report a correct model as broken.
+
+So the test for a description is not "is it accurate about the shape" but **"does
+it lead a reader to the right conclusion about the data"**. Where two entities
+share a shape and differ in distribution, the second description has to say so
+in as many words, and point at the setting that changes the answer —
+`room_resolution`, whose `off` is not the same as clean.
