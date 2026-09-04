@@ -255,7 +255,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // Doors: the second primary entity, same body limits and same streaming
         // pair as rooms. Doors may be pushed BEFORE their rooms -- the gate that
         // once required them is deliberately gone, and an unresolvable room
-        // reference is reported by `door_report` rather than refused here. What
+        // reference is reported by `opening_report` rather than refused here. What
         // `handlers::check_doors_ingest` still refuses is an unphased push, and
         // a doors push that disagrees on an already-established phase.
         .route(

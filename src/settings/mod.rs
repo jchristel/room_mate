@@ -311,7 +311,7 @@ pub enum MeasurementStandard {
 /// is not always what it opens into — and geometry replacing it would be exactly
 /// the reconciliation `CLAUDE.md` forbids. What the geometry does is fill an
 /// absent side, and disagree audibly with a present one
-/// (`DoorReport::room_geometry_mismatches`).
+/// (`OpeningReport::room_geometry_mismatches`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomResolution {

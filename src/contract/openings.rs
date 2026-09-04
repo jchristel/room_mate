@@ -147,7 +147,7 @@ pub struct Opening {
     /// Ingest used to require those rooms to be there already. It no longer
     /// does: "not yet" is a legitimate answer, and refusing the push meant
     /// refusing data that becomes resolvable the moment the rooms arrive. The
-    /// question moved to `door_report`, which can re-answer it every time the
+    /// question moved to `opening_report`, which can re-answer it every time the
     /// data changes.
     #[serde(default)]
     pub from_room: Option<String>,

@@ -604,7 +604,7 @@ pub fn locate_project_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>
 /// what the door *serves*, which is not always what it opens into — so geometry
 /// replacing it would be the reconciliation `CLAUDE.md` forbids. Geometry fills
 /// what the model left absent, and disagrees audibly with what it did not
-/// (`DoorReport::room_geometry_mismatches`).
+/// (`OpeningReport::room_geometry_mismatches`).
 fn side_origin(authored: Option<&str>, model_id: &str, derived: &room_locator::Located) -> SideOrigin {
     if let Some(room_id) = authored {
         return SideOrigin::Authored(RoomRef { model_id: model_id.to_string(), room_id: room_id.to_string() });

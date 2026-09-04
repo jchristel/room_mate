@@ -784,7 +784,7 @@ pub async fn ingest_rooms_stream(
 /// cross-reference was an *error* rather than a reported state, against the
 /// "signal, not error" rule everything else here follows. Removing it makes the
 /// server more consistent, not less strict — the check did not disappear, it
-/// moved to `service::validation::door_report`, where it can be re-answered
+/// moved to `service::validation::opening_report`, where it can be re-answered
 /// every time the data changes instead of once, at the moment of the push, on
 /// the least information anyone will ever have. That report now distinguishes a
 /// model whose rooms have not arrived (**pending** — expected, not a finding)
@@ -3037,7 +3037,7 @@ mod tests {
     /// so 26 doors referencing 22 room ids were stored against zero rooms. The
     /// gate that fixed it is gone — ingest no longer requires rooms at all —
     /// and the regression is guarded from both ends instead: `reject_empty_rooms`
-    /// stops the empty snapshot being *written*, and `door_report` reports every
+    /// stops the empty snapshot being *written*, and `opening_report` reports every
     /// unresolvable reference on every read rather than once, at the push.
     ///
     /// What this asserts is that the doors still land, because that is what
