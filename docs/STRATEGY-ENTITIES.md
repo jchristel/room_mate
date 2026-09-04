@@ -6,16 +6,29 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Browser](STRATEGY-BROWSER.md) · [MCP](STRATEGY-MCP.md) ·
 [Authored](STRATEGY-AUTHORED.md) · [Security](STRATEGY-SECURITY.md)
 
-**Open work only.** Rooms and doors both ship — contract, ingest, storage, read,
-QA, milestone comparison and the pyRevit exporter — and phasing ships under them.
-What each of those does, and the invariants that are expensive to rediscover
-(tier precedence, door ownership, the model-scoped door→room join, the phase
+**Open work only.** Rooms, doors and windows all ship — contract, ingest,
+storage, read, QA and the pyRevit exporter — and phasing ships under them. What
+each of those does, and the invariants that are expensive to rediscover (tier
+precedence, opening ownership, the model-scoped opening→room join, the phase
 rules), live in the code and in `CLAUDE.md`.
 
 What is left here is the **entity dimension**: the test that decides whether the
-next candidate is an entity at all, what a second entity proved comes for free,
-and what is still unbuilt. FFE is the next candidate, which is what this document
-exists to serve.
+next candidate is an entity at all, what the second and third entities proved
+comes for free, and what is still unbuilt. FFE is the next candidate, which is
+what this document exists to serve.
+
+**The bet below has been tested once and held.** Windows were the third entity
+and needed the two dependent-entity additions this document names and nothing
+else structural: the read side, the ingest path, the QA report and the geometric
+resolver are all shared rather than copied, and what varies per entity is
+gathered in `service::openings::OpeningKind`.
+
+The line that decided every split is worth carrying forward, because it settled
+five separate questions and settled them the same way: **share it unless sharing
+would change a serde key.** That is why the `Opening` record is shared while the
+doors and windows *envelopes* are not — a stored snapshot names its element list
+after its own entity, and every file already on disk says so, making a merged
+payload type a migration rather than a refactor.
 
 ## What makes something a primary entity
 
@@ -76,7 +89,7 @@ resolvable the moment they do. It was also the only place in the server where an
 unresolved cross-reference was an *error* rather than a reported state, against
 the "signal, not error" rule listed above.
 
-The check did not disappear; it moved to `service::validation::door_report`,
+The check did not disappear; it moved to `service::validation::opening_report`,
 which distinguishes **pending** (this model has no rooms yet — expected) from
 **dangling** (the named room is not among the ones it has — a finding). That is
 a distinction the gate could not make at all, and it is re-answered on every
@@ -106,24 +119,48 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   before**. The figure to start from: the House A doors snapshot is 414 KB for 26
   doors, and `type_id` is already on the wire ready to key a shared table.
 
-- **Verifying the doors extractor against a live Revit document.** It is verified
-  by running its real translation over a captured export, but the `get_FromRoom`
-  accessor and the `OST_Doors` collector need a live document. **This is the only
-  unverified half left.** The room extractor's phase filter used to share this
+- **Verifying the doors and windows extractors against a live Revit document.**
+  Both are verified by running their real translation over a captured export,
+  but the `get_FromRoom` accessor and the category collectors need a live
+  document. **This is the only unverified half left.** The room extractor's phase filter used to share this
   standing and was run against a real document on 2026-08-03 — which found the
   failure that had been named as the first thing to check. That is the argument
   for doing the same here, not the reassurance that someone else is in the same
   position.
 
-- **Door labels on the plan**, and the `door_label` setting they need. Ordinary
-  unbuilt viewer work, blocked on nothing — see [Browser](STRATEGY-BROWSER.md)
+- **Opening labels on the plan**, and the `door_label` setting they need. Both
+  entities draw a glyph now; neither draws a label. Ordinary unbuilt viewer work,
+  blocked on nothing — see [Browser](STRATEGY-BROWSER.md)
   for why it is a cost to take deliberately rather than a gap to close.
 
-- **FFE, the next primary entity.** **The bet this document made is now
-  testable:** if FFE needs anything beyond the phase envelope, the
-  bytes-at-the-boundary store and a `PropertyTiers` impl, one of the
-  generalizations above was too narrow. Doors needed exactly the two dependent-
-  entity additions listed above and nothing else.
+- **FFE, the next primary entity.** The bet this document made was tested by
+  windows and held: they needed the two dependent-entity additions listed above
+  and nothing else structural. FFE is the harder test, because it is the first
+  candidate that is **not** an opening — it sits *in* one room rather than
+  between two, so `room_reference` takes `"Room"` where an opening takes
+  `"FromRoom"`/`"ToRoom"`, and it has no through-wall direction for the
+  geometric resolver to step along. If it needs anything beyond the phase
+  envelope, the bytes-at-the-boundary store and a `PropertyTiers` impl, one of
+  the generalizations above was too narrow.
+
+- **The pyRevit button for `windows_export_entry`.** The extractor entry point
+  exists; its button lives outside this repository and has to be wired there
+  before anyone can push windows from Revit. `rooms_export_entry` was
+  deliberately not widened — it still pushes rooms AND doors despite its name,
+  and adding a third entity to it would keep succeeding while changing what
+  every existing button does.
+
+- **Windows in milestone comparison.** `MilestonePins.windows` landed with
+  storage, so a milestone can pin them; `ComparisonResponse.windows` was cut
+  from the first pass and has no stated demand. Nothing is half-built — the pins
+  simply have no consumer yet.
+
+- **The probe's curtain-wall symbol test disagrees with its host-based
+  sibling** — 0 against 51 doors on the same document — and should not be relied
+  on until diagnosed. The host test (`Wall.CurtainGrid` is not None) is the
+  trustworthy one. It matters because duHast discriminates curtain-wall doors
+  and has no window equivalent, so this is the only instrument for that
+  question.
 
 - **Multi-phase comparison — explicitly out of scope**, recorded so it is not
   re-proposed. It is a second axis crossing the snapshot axis, and milestones
