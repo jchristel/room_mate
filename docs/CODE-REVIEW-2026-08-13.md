@@ -236,6 +236,27 @@ it. `README.md:46-52` states the rule this violates: open items belong in the
 strategy doc that owns them — here `STRATEGY-BROWSER.md`'s "Open items /
 things to watch".
 
+> **Resolved 2026-09-05 — and it was never a rendering bug.** The observation
+> was made against a build serving a **stale `target/release/static/`**. That
+> copy was last refreshed 2026-08-02 (measured on 2026-08-30, four weeks
+> behind); the bundle's last change before the report was `c609a05` on
+> **2026-08-02**, and door glyphs shipped in `087758e` (08-06) and `8d4d3b1`
+> (08-07). So the renderer being served contained **no door-glyph code at
+> all**.
+>
+> That is why the symptom never fitted its own evidence: "invisible at *any*
+> zoom" contradicts a scale explanation, and the scale that was measured was
+> the *data's*, from a source the served renderer never read. A missing feature
+> and an unreadably small one look identical on a plan, which is what kept this
+> open for three weeks.
+>
+> **Do not go looking for a glyph-scale fix on the strength of this finding.**
+> The same trap resurfaced on 2026-09-04 with windows — see `build.rs` and
+> `viewer_cache_control` in `src/main.rs`, which close it from both ends (the
+> copy beside the exe, and the copy in the browser's cache). Whether door
+> glyphs are *also* too small at plate scale is a real question, but it is
+> unmeasured: nothing here is evidence either way.
+
 ---
 
 ### The five standing questions
@@ -311,9 +332,14 @@ clean.
 
 - **Finding 11** — the DPR lesson is unrecorded. Deliberate: how much of it
   belongs in `STRATEGY-BROWSER.md` is a judgement about what that doc is for.
-- **Finding 12** — the glyph-visibility issue is still not in any Open items
+- **Finding 12** — ~~the glyph-visibility issue is still not in any Open items
   section, and its cause is not yet explained. Worth writing up once it is,
-  rather than logging a symptom.
+  rather than logging a symptom.~~ **Closed 2026-09-05.** The cause was a stale
+  served renderer, not glyph scale — see the resolution note under Finding 12.
+  It correctly never reached an Open items section: there was no open bug to
+  put there. Written up where the rule says it belongs, which for a fixed cause
+  is the code that fixes it (`build.rs`, `viewer_cache_control`), not a strategy
+  doc.
 
 ## One note on the checker
 
