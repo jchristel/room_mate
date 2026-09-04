@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::contract::{DoorPayload, ModelToShared, Opening, Point2D, PropertyPresence};
+use crate::contract::{ModelToShared, Opening, OpeningEnvelope, Point2D, PropertyPresence};
 use crate::reference::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, ReferenceEntity, RoomResolution};
 use crate::state::{AppState, ModelKey};
@@ -41,7 +41,7 @@ use super::ServiceError;
 /// a merged multi-model response would be ambiguous in exactly the way the QA
 /// report has to work around.
 #[derive(Serialize)]
-pub struct DoorResponse {
+pub struct OpeningResponse {
     #[serde(flatten)]
     pub door: Opening,
 
@@ -108,7 +108,7 @@ pub struct DoorResponse {
 /// existed: the previous implementation returned `Absent` for every qualified
 /// field precisely so that the day R4 landed, the same predicate would start
 /// matching rather than change status. It has, and it did.
-impl FilterTarget for DoorResponse {
+impl FilterTarget for OpeningResponse {
     fn presence(&self, source: Option<&str>, property: &str, builtin_defs: &[BuiltinPropertyDef]) -> PropertyPresence {
         /// A door's own struct fields always exist, so blank collapses to
         /// `Empty`, never `Absent` — the same rule `RoomResponse`'s intrinsics
@@ -162,7 +162,7 @@ impl FilterTarget for DoorResponse {
 /// namespace — a door has no joined sources to react to per source, which is
 /// the one thing that genuinely differs from the rooms version.
 pub fn resolve_presence(
-    door: &DoorResponse,
+    door: &OpeningResponse,
     field: &str,
     known: &std::collections::BTreeSet<String>,
     builtin: &[BuiltinPropertyDef],
@@ -179,7 +179,7 @@ pub fn resolve_presence(
 
 /// Everything that narrows a doors read.
 #[derive(Default)]
-pub struct DoorScope<'a> {
+pub struct OpeningScope<'a> {
     pub project: Option<&'a str>,
     /// Opaque building key, as for rooms — **a door's building is its owning
     /// room's building.** This became answerable only once
@@ -195,7 +195,76 @@ pub struct DoorScope<'a> {
     pub filter: Option<&'a RoomFilter>,
 }
 
-/// The merged doors payload.
+/// One assembled read, before it is named for an entity.
+///
+/// **Deliberately not the wire type.** `/doors` must answer
+/// `{"doors": [...], "schema_version": 2}` and `/windows`
+/// `{"windows": [...], "schema_version": 1}`, so the outermost key and the
+/// version are per entity even though everything inside them is not. The
+/// assembly produces this; each endpoint wraps it in its own result. Same line
+/// that decided the envelopes: share everything except what would change a
+/// serde key.
+pub struct Assembled {
+    pub revision: String,
+    pub openings: Vec<OpeningResponse>,
+    pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
+}
+
+/// Which opening entity a read addresses, and the **only** place the per-entity
+/// answers live.
+///
+/// Four things vary between a doors read and a windows read: the storage kind,
+/// which reference sources join, which settings section supplies the policy, and
+/// which milestone pin map applies. Every one of them is a lookup, and gathering
+/// them here is what keeps `assemble_openings` free of `if doors` — the same
+/// role `ENTITY_EXPORTERS` plays on the producer side.
+///
+/// It also fixes the one thing the generic signature cannot check. The assembly
+/// is generic over the envelope `P` and takes this kind separately, so in
+/// principle someone could pass `Windows` with `DoorPayload`. The pairing is
+/// made once, in `doors()` and `windows()` below, and every caller goes through
+/// those — so the mismatch is not merely unlikely, there is nowhere to write it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpeningKind {
+    Doors,
+    Windows,
+}
+
+impl OpeningKind {
+    pub fn snapshot_kind(self) -> SnapshotKind {
+        match self {
+            OpeningKind::Doors => SnapshotKind::Doors,
+            OpeningKind::Windows => SnapshotKind::Windows,
+        }
+    }
+
+    pub fn reference_entity(self) -> ReferenceEntity {
+        match self {
+            OpeningKind::Doors => ReferenceEntity::Doors,
+            OpeningKind::Windows => ReferenceEntity::Windows,
+        }
+    }
+
+    /// This entity's policy section on one project's resolved settings.
+    pub fn policy(self, bundle: &crate::state::ProjectSettings) -> &crate::settings::OpeningPolicy {
+        match self {
+            OpeningKind::Doors => &bundle.doors,
+            OpeningKind::Windows => &bundle.windows,
+        }
+    }
+
+    /// This entity's snapshot pins on one milestone. Three separate maps,
+    /// because the entities are pushed independently and their snapshot ids do
+    /// not correspond.
+    pub fn pins(self, milestone: &crate::settings::Milestone) -> &BTreeMap<String, String> {
+        match self {
+            OpeningKind::Doors => &milestone.door_attachments,
+            OpeningKind::Windows => &milestone.window_attachments,
+        }
+    }
+}
+
+/// The merged doors payload, exactly as `/doors` has always answered it.
 #[derive(Serialize)]
 pub struct DoorsResult {
     pub schema_version: u32,
@@ -203,24 +272,55 @@ pub struct DoorsResult {
     /// same role and same construction as `RoomsResult::revision`: a consumer
     /// compares this one field instead of re-hashing the payload.
     pub revision: String,
-    pub doors: Vec<DoorResponse>,
+    pub doors: Vec<OpeningResponse>,
     /// The Revit phase each contributing model's doors were filtered to, keyed
-    /// by project id then model id — the same shape and the same reason as
-    /// `RoomsResult::phase_by_model`. Read off each snapshot, never off the
+    /// by project id then model id. Read off each snapshot, never off the
     /// lineage's current phase.
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
+}
+
+impl DoorsResult {
+    pub fn from_assembled(assembled: Assembled) -> Self {
+        Self {
+            schema_version: crate::contract::SUPPORTED_DOOR_SCHEMA,
+            revision: assembled.revision,
+            doors: assembled.openings,
+            phase_by_model: assembled.phase_by_model,
+        }
+    }
+}
+
+/// The merged windows payload. A separate type from `DoorsResult` for its two
+/// differing keys and nothing else — see `Assembled`.
+#[derive(Serialize)]
+pub struct WindowsResult {
+    pub schema_version: u32,
+    pub revision: String,
+    pub windows: Vec<OpeningResponse>,
+    pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
+}
+
+impl WindowsResult {
+    pub fn from_assembled(assembled: Assembled) -> Self {
+        Self {
+            schema_version: crate::contract::SUPPORTED_WINDOW_SCHEMA,
+            revision: assembled.revision,
+            windows: assembled.openings,
+            phase_by_model: assembled.phase_by_model,
+        }
+    }
 }
 
 /// A stable content revision for a `DoorsResult`. Duplicated from
 /// `rooms::scoped_revision` rather than shared: that one takes room-scoped
 /// tuples, and the shared part is three lines of hashing whose meaning ("which
 /// snapshot did each model contribute") is per entity.
-fn doors_revision(scoped: &[(ModelKey, DoorPayload)]) -> String {
+fn openings_revision<P: OpeningEnvelope>(scoped: &[(ModelKey, P)]) -> String {
     use std::hash::{Hash, Hasher};
 
     let mut parts: Vec<(&str, &str, &str)> = scoped
         .iter()
-        .map(|(key, payload)| (key.project_id.as_str(), key.model_id.as_str(), payload.snapshot.taken_at.as_str()))
+        .map(|(key, payload)| (key.project_id.as_str(), key.model_id.as_str(), payload.taken_at()))
         .collect();
     parts.sort_unstable();
 
@@ -329,11 +429,11 @@ fn place_direction(m: &ModelToShared, p: Point2D) -> Option<Point2D> {
 /// **Scoped through `rooms::scope_payloads`, not by re-reading the store.** A
 /// door has to be resolved against exactly the rooms `/rooms` is serving, or a
 /// milestone read would answer two different questions about one building.
-fn build_candidates(
+fn build_candidates<P: OpeningEnvelope>(
     state: &AppState,
-    scope: &DoorScope<'_>,
+    scope: &OpeningScope<'_>,
     mode: RoomResolution,
-    door_payloads: &[(ModelKey, DoorPayload)],
+    opening_payloads: &[(ModelKey, P)],
 ) -> Result<Candidates, ServiceError> {
     let registry = state.settings();
     let stored = state.all_snapshots(scope.project).map_err(ServiceError::Internal)?;
@@ -405,14 +505,14 @@ fn build_candidates(
     // door in a facade or envelope file reports `NoCandidate` however good its
     // geometry is. It only pays off under `Project` — a model with no rooms has
     // no same-model candidates to be probed against, whatever its elevations.
-    for (key, payload) in door_payloads {
-        if scope.project.is_some_and(|p| payload.project.id != p) {
+    for (key, payload) in opening_payloads {
+        if scope.project.is_some_and(|p| payload.project().id != p) {
             continue;
         }
-        for level in &payload.levels {
+        for level in payload.levels() {
             out.elevation.entry((key.model_id.clone(), level.id.clone())).or_insert(level.elevation);
         }
-        if let Some(transform) = payload.model_to_shared {
+        if let Some(transform) = payload.model_to_shared().cloned() {
             out.transform_by_model.entry(key.model_id.clone()).or_insert(transform);
         }
     }
@@ -434,9 +534,15 @@ impl Candidates {
             return unresolved(Unresolved::NoPosition);
         };
         let Some(&elevation) = self.elevation.get(&(model_id.to_string(), door.level_id.clone())) else {
-            // The door names a level its model's rooms snapshot does not carry,
-            // so there is no axis to compare on. Nothing to probe.
-            return unresolved(Unresolved::NoCandidate);
+            // The opening names a level nothing in scope has an elevation for,
+            // so there is no axis to compare on and nothing is probed.
+            //
+            // Reported as its own state rather than as NoCandidate, which would
+            // read as "the probe found open air" -- the ordinary answer for an
+            // external opening. This is not that: an unhosted element gets an
+            // invalid LevelId from Revit and the export carries -1, so the cause
+            // is upstream of any geometry a reader would go looking at.
+            return unresolved(Unresolved::UnknownLevel);
         };
         let mut normal = door.through_wall_normal;
 
@@ -477,21 +583,21 @@ impl Candidates {
 ///
 /// Returns an empty map when resolution is off, so the caller needs no branch
 /// beyond the one that decides whether to ask.
-pub fn locate_project_doors(
+pub fn locate_project_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
     state: &AppState,
     project_id: &str,
     mode: RoomResolution,
-    stored_doors: &[(ModelKey, DoorPayload)],
+    stored: &[(ModelKey, P)],
 ) -> Result<BTreeMap<(String, String), room_locator::Sides>, ServiceError> {
     let mut out = BTreeMap::new();
     if mode == RoomResolution::Off {
         return Ok(out);
     }
-    let scope = DoorScope { project: Some(project_id), ..DoorScope::default() };
-    let candidates = build_candidates(state, &scope, mode, stored_doors)?;
-    for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
-        for door in &payload.doors {
-            out.insert((key.model_id.clone(), door.id.clone()), candidates.locate(door, &payload.model.id));
+    let scope = OpeningScope { project: Some(project_id), ..OpeningScope::default() };
+    let candidates = build_candidates(state, &scope, mode, stored)?;
+    for (key, payload) in stored.iter().filter(|(_, p)| p.project().id == project_id) {
+        for door in payload.openings() {
+            out.insert((key.model_id.clone(), door.id.clone()), candidates.locate(door, &payload.model().id));
         }
     }
     Ok(out)
@@ -504,7 +610,7 @@ pub fn locate_project_doors(
 /// what the door *serves*, which is not always what it opens into — so geometry
 /// replacing it would be the reconciliation `CLAUDE.md` forbids. Geometry fills
 /// what the model left absent, and disagrees audibly with what it did not
-/// (`DoorReport::room_geometry_mismatches`).
+/// (`OpeningReport::room_geometry_mismatches`).
 fn side_origin(authored: Option<&str>, model_id: &str, derived: &room_locator::Located) -> SideOrigin {
     if let Some(room_id) = authored {
         return SideOrigin::Authored(RoomRef { model_id: model_id.to_string(), room_id: room_id.to_string() });
@@ -527,7 +633,7 @@ fn side_origin(authored: Option<&str>, model_id: &str, derived: &room_locator::L
 /// Keyed on the pair because room ids are unique only within a model.
 fn building_by_room(
     state: &AppState,
-    scope: &DoorScope<'_>,
+    scope: &OpeningScope<'_>,
 ) -> Result<BTreeMap<(String, String), String>, ServiceError> {
     let rooms = super::rooms::assemble_rooms(
         state,
@@ -556,7 +662,7 @@ fn building_by_room(
     Ok(out)
 }
 
-/// Merge every stored model's doors into one payload, scoped by `DoorScope`.
+/// Merge every stored model's doors into one payload, scoped by `OpeningScope`.
 ///
 /// Returns `Ok(None)` when nothing has ever been pushed — the adapter's "204 No
 /// Content" case, same contract as `assemble_rooms`. A filter or scope that
@@ -573,14 +679,20 @@ fn building_by_room(
 /// order into call sites without removing it, and the order is the part a reader
 /// has to see.
 #[allow(clippy::too_many_lines)]
-pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<DoorsResult>, ServiceError> {
+pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
+    state: &AppState,
+    kind: OpeningKind,
+    scope: &OpeningScope<'_>,
+) -> Result<Option<Assembled>, ServiceError> {
     // "Nothing pushed at all" is asked of the index, not of this scoped read:
     // an unknown project reads empty and still deserves a 200 with an empty
     // list, per the contract above.
-    if !state.has_any_snapshot(SnapshotKind::Doors).map_err(ServiceError::Internal)? {
+    if !state.has_any_snapshot(kind.snapshot_kind()).map_err(ServiceError::Internal)? {
         return Ok(None);
     }
-    let stored = state.all_door_snapshots(scope.project).map_err(ServiceError::Internal)?;
+    let stored: Vec<(ModelKey, P)> = state
+        .all_opening_snapshots(kind.snapshot_kind(), scope.project)
+        .map_err(ServiceError::Internal)?;
     let registry = state.settings();
 
     // Phase 1 — scope to the request, substituting a milestone's pinned doors
@@ -589,12 +701,12 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
     // that milestone does not pin, contributes nothing, and a pin whose snapshot
     // no longer exists is skipped with a warning rather than failing the read
     // ("signal, not error").
-    let mut scoped: Vec<(ModelKey, DoorPayload)> = Vec::new();
+    let mut scoped: Vec<(ModelKey, P)> = Vec::new();
     for (key, payload) in stored {
-        if scope.project.is_some_and(|p| payload.project.id != p) {
+        if scope.project.is_some_and(|p| payload.project().id != p) {
             continue;
         }
-        let Some(bundle) = registry.settings_for(&payload.project.id) else {
+        let Some(bundle) = registry.settings_for(&payload.project().id) else {
             continue;
         };
         match scope.milestone {
@@ -603,14 +715,15 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
                 let Some(ms) = bundle.milestones.iter().find(|m| m.name == wanted) else {
                     continue;
                 };
-                let Some(pinned_id) = ms.door_attachments.get(&key.model_id) else {
+                let Some(pinned_id) = kind.pins(ms).get(&key.model_id) else {
                     continue;
                 };
-                match state.get_door_snapshot(&key, pinned_id).map_err(ServiceError::Internal)? {
+                match state.get_opening_snapshot::<P>(kind.snapshot_kind(), &key, pinned_id).map_err(ServiceError::Internal)? {
                     Some(pinned) => scoped.push((key, pinned)),
                     None => tracing::warn!(
-                        "milestone '{}' pins doors snapshot {:?} for {}/{}, but no such snapshot exists — skipping the model",
+                        "milestone '{}' pins {} snapshot {:?} for {}/{}, but no such snapshot exists — skipping the model",
                         wanted,
+                        kind.snapshot_kind().label(),
                         pinned_id,
                         key.project_id,
                         key.model_id
@@ -620,9 +733,9 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
         }
     }
 
-    let revision = doors_revision(&scoped);
+    let revision = openings_revision(&scoped);
     let mut phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>> = BTreeMap::new();
-    let mut doors: Vec<DoorResponse> = Vec::new();
+    let mut openings: Vec<OpeningResponse> = Vec::new();
 
     // A door's building is its owning room's building, so a building scope needs
     // the rooms classified. Resolved **only when a building filter is actually
@@ -643,16 +756,16 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
     let mut candidates_by_project: BTreeMap<String, Candidates> = BTreeMap::new();
     for (_, payload) in &scoped {
         let mode = registry
-            .settings_for(&payload.project.id)
-            .map(|b| b.doors.room_resolution)
+            .settings_for(&payload.project().id)
+            .map(|b| kind.policy(b).room_resolution)
             .unwrap_or_default();
-        if mode == RoomResolution::Off || candidates_by_project.contains_key(&payload.project.id) {
+        if mode == RoomResolution::Off || candidates_by_project.contains_key(&payload.project().id) {
             continue;
         }
-        let project_scope = DoorScope { project: Some(&payload.project.id), ..DoorScope::default() };
-        let project_scope = DoorScope { milestone: scope.milestone, ..project_scope };
+        let project_scope = OpeningScope { project: Some(&payload.project().id), ..OpeningScope::default() };
+        let project_scope = OpeningScope { milestone: scope.milestone, ..project_scope };
         candidates_by_project
-            .insert(payload.project.id.clone(), build_candidates(state, &project_scope, mode, &scoped)?);
+            .insert(payload.project().id.clone(), build_candidates(state, &project_scope, mode, &scoped)?);
     }
 
     // Phase 2 — derive the response doors, applying the property filter *after*
@@ -661,35 +774,35 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
         phase_by_model
             .entry(key.project_id.clone())
             .or_default()
-            .insert(key.model_id.clone(), payload.phase.clone());
+            .insert(key.model_id.clone(), payload.phase().map(str::to_string));
 
-        let bundle = registry.settings_for(&payload.project.id);
+        let bundle = registry.settings_for(&payload.project().id);
         let builtin: &[BuiltinPropertyDef] = bundle.map(|b| b.builtin_properties.as_slice()).unwrap_or_default();
-        let attribution = bundle.map(|b| b.doors.room_attribution).unwrap_or_default();
+        let attribution = bundle.map(|b| kind.policy(b).room_attribution).unwrap_or_default();
 
         // The doors half of R4: this project's sources declaring
         // `entity = "doors"`, resolved once per model rather than per door.
         // Rooms scope theirs the same way in `assemble_scoped_rooms`.
-        let door_sources: BTreeMap<&str, &ReferenceData> = bundle
+        let sources: BTreeMap<&str, &ReferenceData> = bundle
             .map(|b| {
                 b.reference
                     .iter()
-                    .filter(|(_, cfg)| cfg.entity == ReferenceEntity::Doors)
+                    .filter(|(_, cfg)| cfg.entity == kind.reference_entity())
                     .filter_map(|(name, cfg)| Some((name.as_str(), cfg.data.as_ref()?)))
                     .collect()
             })
             .unwrap_or_default();
 
-        for door in &payload.doors {
+        for door in payload.openings() {
             // One join per configured source: read its link property off the
             // DOOR -- instance tier then type tier, the R2 rule -- and look up
             // the record. `lookup_property` is the same function rooms use; a
             // door is simply another `PropertyTiers`.
-            let reference: BTreeMap<String, ReferenceRecord> = door_sources
+            let reference: BTreeMap<String, ReferenceRecord> = sources
                 .iter()
                 .filter_map(|(name, data)| {
                     let record =
-                        crate::contract::lookup_property(door, &data.link_property, &payload.model.source, builtin)
+                        crate::contract::lookup_property(door, &data.link_property, &payload.model().source, builtin)
                             .and_then(|key| data.by_id.get(&key).cloned())?;
                     Some(((*name).to_string(), record))
                 })
@@ -700,9 +813,9 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
             // since nothing it could find would be used. The QA report runs the
             // same probe on those doors deliberately, because there the
             // disagreement is the finding.
-            let derived = match candidates_by_project.get(&payload.project.id) {
+            let derived = match candidates_by_project.get(&payload.project().id) {
                 Some(candidates) if door.from_room.is_none() || door.to_room.is_none() => {
-                    candidates.locate(door, &payload.model.id)
+                    candidates.locate(door, &payload.model().id)
                 }
                 _ => room_locator::Sides {
                     from: room_locator::Located::Unresolved(Unresolved::NoCandidate),
@@ -710,8 +823,8 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
                 },
             };
             let room_origin = RoomOrigin {
-                from_room: side_origin(door.from_room.as_deref(), &payload.model.id, &derived.from),
-                to_room: side_origin(door.to_room.as_deref(), &payload.model.id, &derived.to),
+                from_room: side_origin(door.from_room.as_deref(), &payload.model().id, &derived.from),
+                to_room: side_origin(door.to_room.as_deref(), &payload.model().id, &derived.to),
             };
             let owner_rooms_qualified: Vec<RoomRef> = attribution
                 .owners(room_origin.from_room.room(), room_origin.to_room.room())
@@ -719,24 +832,24 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
                 .cloned()
                 .collect();
 
-            let response = DoorResponse {
+            let response = OpeningResponse {
                 // Same-model owners only, so the field keeps meaning exactly
                 // what it always did. A cross-model owner appears in
                 // `owner_rooms_qualified` and nowhere else.
                 owner_rooms: owner_rooms_qualified
                     .iter()
-                    .filter(|r| r.model_id == payload.model.id)
+                    .filter(|r| r.model_id == payload.model().id)
                     .map(|r| r.room_id.clone())
                     .collect(),
                 owner_rooms_qualified,
                 room_origin,
                 door: door.clone(),
-                project_id: payload.project.id.clone(),
-                model_id: payload.model.id.clone(),
+                project_id: payload.project().id.clone(),
+                model_id: payload.model().id.clone(),
                 reference,
-                source: payload.model.source.clone(),
+                source: payload.model().source.clone(),
             };
-            // A homeless door matches no building — see `DoorScope::building`.
+            // A homeless door matches no building — see `OpeningScope::building`.
             // Room ids are unique only within a model, so the lookup is keyed on
             // the pair, never the bare room id — and it reads the *qualified*
             // owners, because a derived owner may live in a linked model and the
@@ -751,28 +864,30 @@ pub fn assemble_doors(state: &AppState, scope: &DoorScope<'_>) -> Result<Option<
                 continue;
             }
             if scope.filter.is_none_or(|f| f.matches(&response, builtin)) {
-                doors.push(response);
+                openings.push(response);
             }
         }
     }
 
-    Ok(Some(DoorsResult {
-        schema_version: crate::contract::SUPPORTED_DOOR_SCHEMA,
-        revision,
-        doors,
-        phase_by_model,
-    }))
+    Ok(Some(Assembled { revision, openings, phase_by_model }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::contract::{
-        CustomValue, Model, Project, RoomPayload, Snapshot, SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
+        CustomValue, DoorPayload, Model, Project, RoomPayload, Snapshot, SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
     };
     use crate::state::ProjectSettings;
     use crate::storage::MemStore;
     use std::collections::{BTreeSet, HashMap};
+
+    /// The kind this module's tests exercise. Doors, because doors are what
+    /// has real stored data and a pinned wire shape to regress against --
+    /// the windows path is the same code with two lookups changed, and it is
+    /// covered where those lookups live (`OpeningKind`) rather than by a
+    /// second copy of every scenario below.
+    const OPENING_KIND: OpeningKind = OpeningKind::Doors;
 
     fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>, props: &[(&str, &str)]) -> Opening {
         let mut properties = BTreeMap::new();
@@ -808,6 +923,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
@@ -981,12 +1097,17 @@ mod tests {
             })
             .unwrap();
 
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
-        let again = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .expect("data");
+        let again = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .expect("data");
         assert_eq!(result.revision, again.revision, "revision is stable for unchanged data");
         assert!(!result.revision.is_empty(), "revision is always emitted");
 
-        let mut json = serde_json::to_value(&result).expect("serialises");
+        let wire = DoorsResult::from_assembled(result);
+        let mut json = serde_json::to_value(&wire).expect("serialises");
         json["revision"] = serde_json::Value::String("<pinned-out>".to_string());
         let actual = serde_json::to_string_pretty(&json).expect("re-serialises");
 
@@ -1062,8 +1183,10 @@ mod tests {
     #[test]
     fn test_geometry_fills_a_door_that_states_no_rooms() {
         let state = state_with_wall(crate::settings::RoomResolution::SameModel, vec![wall_door("d1")]);
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-        let door = &result.doors[0];
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let door = &result.openings[0];
 
         assert_eq!(
             door.room_origin.to_room,
@@ -1143,8 +1266,10 @@ mod tests {
             &[("facade-lvl", 0.0)],
             vec![facade_door("d1", "facade-lvl")],
         );
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-        let door = &result.doors[0];
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let door = &result.openings[0];
 
         assert_eq!(
             door.room_origin.to_room,
@@ -1162,18 +1287,64 @@ mod tests {
         );
     }
 
+    /// **An unhosted opening carries no level, and says so.**
+    ///
+    /// The N3 case, measured rather than imagined: a skylight in a house and two
+    /// terrace sills in a facade file have no host wall, so Revit hands them an
+    /// invalid `LevelId` and the export carries `-1`. duHast then fails to
+    /// serialise their `level.name` at all, which is how they were found.
+    ///
+    /// The contract keeps `level_id` a required `String` and stores whatever
+    /// arrived -- refusing the push would throw away a real opening that has an
+    /// id, properties and a footprint, over one field. What the read does is
+    /// report the consequence precisely: nothing has an elevation for level
+    /// `-1`, so the geometry is never consulted and the side comes back
+    /// `UnknownLevel` rather than pretending a probe happened.
+    #[test]
+    fn test_an_unhosted_opening_reports_an_unknown_level() {
+        let state = state_with_wall(
+            crate::settings::RoomResolution::SameModel,
+            vec![Opening { level_id: "-1".to_string(), ..wall_door("skylight") }],
+        );
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let opening = &result.openings[0];
+
+        assert_eq!(
+            opening.room_origin.to_room,
+            SideOrigin::Unresolved(Unresolved::UnknownLevel),
+            "the invalid level is named, not folded into NoCandidate"
+        );
+        assert_eq!(opening.room_origin.from_room, SideOrigin::Unresolved(Unresolved::UnknownLevel));
+        assert!(opening.owner_rooms.is_empty(), "homeless, and the reason is on the wire");
+    }
+
     /// **Without the levels it is unreachable, not merely unresolved** — and the
     /// distinction is the whole reason the field was added. The geometry is
     /// identical to the test above; only the doors envelope's level set is gone,
     /// and `locate` gives up before it probes anything.
+    ///
+    /// This used to assert `NoCandidate`, which said the opposite of the
+    /// paragraph above it: `NoCandidate` means the probe RAN and found open air,
+    /// which is the ordinary answer for an external door and no finding at all.
+    /// So the response could not distinguish "nothing is there" from "we never
+    /// looked", and a reader chasing a homeless door was sent to the geometry
+    /// when the cause was a missing level set. `UnknownLevel` says which.
     #[test]
     fn test_a_doors_only_model_with_no_levels_cannot_be_probed() {
         let state =
             state_split_models(crate::settings::RoomResolution::Project, &[], vec![facade_door("d1", "facade-lvl")]);
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-        let door = &result.doors[0];
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let door = &result.openings[0];
 
-        assert_eq!(door.room_origin.to_room, SideOrigin::Unresolved(Unresolved::NoCandidate));
+        assert_eq!(
+            door.room_origin.to_room,
+            SideOrigin::Unresolved(Unresolved::UnknownLevel),
+            "never probed, rather than probed and empty"
+        );
         assert!(door.owner_rooms_qualified.is_empty(), "homeless, with the geometry never consulted");
     }
 
@@ -1212,9 +1383,11 @@ mod tests {
             })
             .unwrap();
 
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            result.doors[0].owner_rooms,
+            result.openings[0].owner_rooms,
             vec!["right".to_string()],
             "resolved at the rooms snapshot's elevation, not the doors envelope's 9999"
         );
@@ -1225,8 +1398,10 @@ mod tests {
     #[test]
     fn test_resolution_off_leaves_the_door_homeless() {
         let state = state_with_wall(crate::settings::RoomResolution::Off, vec![wall_door("d1")]);
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-        let door = &result.doors[0];
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let door = &result.openings[0];
 
         assert!(door.owner_rooms.is_empty(), "homeless, as before");
         assert!(matches!(door.room_origin.to_room, SideOrigin::Unresolved(_)));
@@ -1239,8 +1414,10 @@ mod tests {
     fn test_an_authored_reference_is_never_overridden_by_geometry() {
         let door = Opening { to_room: Some("left".into()), ..wall_door("d1") };
         let state = state_with_wall(crate::settings::RoomResolution::SameModel, vec![door]);
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-        let door = &result.doors[0];
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let door = &result.openings[0];
 
         assert_eq!(
             door.room_origin.to_room,
@@ -1261,9 +1438,11 @@ mod tests {
     fn test_a_door_with_no_direction_resolves_nothing() {
         let door = Opening { through_wall_normal: None, ..wall_door("d1") };
         let state = state_with_wall(crate::settings::RoomResolution::SameModel, vec![door]);
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
 
-        assert_eq!(result.doors[0].room_origin.to_room, SideOrigin::Unresolved(Unresolved::NoDirection));
+        assert_eq!(result.openings[0].room_origin.to_room, SideOrigin::Unresolved(Unresolved::NoDirection));
     }
 
     /// `owner_rooms` keeps meaning "this model's rooms"; the qualified list
@@ -1271,8 +1450,10 @@ mod tests {
     #[test]
     fn test_qualified_owners_carry_the_model_id() {
         let state = state_with_wall(crate::settings::RoomResolution::SameModel, vec![wall_door("d1")]);
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-        let door = &result.doors[0];
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let door = &result.openings[0];
 
         assert_eq!(
             door.owner_rooms_qualified,
@@ -1290,7 +1471,7 @@ mod tests {
     /// Before this, `[sources.reference.<name>]` meant "for rooms" with nothing
     /// saying so, and a source configured for anything else parsed, loaded and
     /// joined nowhere. The filter grammar was already written for this day --
-    /// `DoorResponse::presence` answered `Absent` for every source-qualified
+    /// `OpeningResponse::presence` answered `Absent` for every source-qualified
     /// field specifically so the same predicate would start *matching* rather
     /// than change status once the join existed.
 
@@ -1328,15 +1509,17 @@ D-101,60
             })
             .unwrap();
 
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
-        let joined = result.doors.iter().find(|d| d.door.id == "d1").expect("d1");
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .expect("data");
+        let joined = result.openings.iter().find(|d| d.door.id == "d1").expect("d1");
         assert_eq!(
             joined.reference.get("schedule").and_then(|r| r.fields.get("FireRating")),
             Some(&"60".to_string()),
             "the door schedule joined onto the door"
         );
 
-        let unmatched = result.doors.iter().find(|d| d.door.id == "d2").expect("d2");
+        let unmatched = result.openings.iter().find(|d| d.door.id == "d2").expect("d2");
         assert!(unmatched.reference.is_empty(), "an unmatched key joins nothing, and is not an error");
 
         // And the filter grammar reaches it -- the same `source.property` shape
@@ -1385,9 +1568,11 @@ D-101,60
             })
             .unwrap();
 
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .expect("data");
         assert!(
-            result.doors[0].reference.is_empty(),
+            result.openings[0].reference.is_empty(),
             "a rooms-scoped source is not this entity's source, even when the key matches"
         );
     }
@@ -1424,7 +1609,9 @@ D-101,60
     #[test]
     fn test_no_doors_pushed_is_none() {
         let state = AppState::new(Box::new(MemStore::new()), HashMap::new(), None);
-        assert!(assemble_doors(&state, &DoorScope::default()).unwrap().is_none());
+        assert!(assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .is_none());
     }
 
     /// A scope that matches nothing is an empty list, not `None`: the store has
@@ -1432,10 +1619,14 @@ D-101,60
     #[test]
     fn test_a_scope_matching_nothing_is_an_empty_list() {
         let state = state_with(vec![("p1", "m1", vec![make_door("d1", Some("r1"), None, &[])])]);
-        let result = assemble_doors(&state, &DoorScope { project: Some("nope"), ..Default::default() })
-            .unwrap()
-            .expect("the store has data");
-        assert!(result.doors.is_empty());
+        let result = assemble_openings::<DoorPayload>(
+            &state,
+            OPENING_KIND,
+            &OpeningScope { project: Some("nope"), ..Default::default() },
+        )
+        .unwrap()
+        .expect("the store has data");
+        assert!(result.openings.is_empty());
     }
 
     /// Doors from every model merge, each carrying the model it came from —
@@ -1446,9 +1637,11 @@ D-101,60
             ("p1", "m1", vec![make_door("d1", Some("r1"), None, &[])]),
             ("p1", "m2", vec![make_door("d1", Some("r1"), None, &[])]),
         ]);
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().expect("data");
-        assert_eq!(result.doors.len(), 2);
-        let models: BTreeSet<&str> = result.doors.iter().map(|d| d.model_id.as_str()).collect();
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .expect("data");
+        assert_eq!(result.openings.len(), 2);
+        let models: BTreeSet<&str> = result.openings.iter().map(|d| d.model_id.as_str()).collect();
         assert_eq!(
             models,
             BTreeSet::from(["m1", "m2"]),
@@ -1470,11 +1663,15 @@ D-101,60
             ],
         )]);
         let f = filter("Mark=29");
-        let result = assemble_doors(&state, &DoorScope { filter: Some(&f), ..Default::default() })
-            .unwrap()
-            .expect("data");
-        assert_eq!(result.doors.len(), 1);
-        assert_eq!(result.doors[0].door.id, "d1");
+        let result = assemble_openings::<DoorPayload>(
+            &state,
+            OPENING_KIND,
+            &OpeningScope { filter: Some(&f), ..Default::default() },
+        )
+        .unwrap()
+        .expect("data");
+        assert_eq!(result.openings.len(), 1);
+        assert_eq!(result.openings[0].door.id, "d1");
     }
 
     /// The room references are filterable intrinsics — `$to_room=` is how a
@@ -1491,21 +1688,29 @@ D-101,60
             ],
         )]);
         let f = filter("$to_room=r2");
-        let result = assemble_doors(&state, &DoorScope { filter: Some(&f), ..Default::default() })
-            .unwrap()
-            .expect("data");
-        assert_eq!(result.doors.len(), 1);
-        assert_eq!(result.doors[0].door.id, "d1");
+        let result = assemble_openings::<DoorPayload>(
+            &state,
+            OPENING_KIND,
+            &OpeningScope { filter: Some(&f), ..Default::default() },
+        )
+        .unwrap()
+        .expect("data");
+        assert_eq!(result.openings.len(), 1);
+        assert_eq!(result.openings[0].door.id, "d1");
 
         // An external door is `Absent` on its missing side, so it fails every
         // operator — including the negative one. "This door has no to_room" is
         // not evidence that its to_room differs from r2.
         let f = filter("$to_room!=r2");
-        let result = assemble_doors(&state, &DoorScope { filter: Some(&f), ..Default::default() })
-            .unwrap()
-            .expect("data");
+        let result = assemble_openings::<DoorPayload>(
+            &state,
+            OPENING_KIND,
+            &OpeningScope { filter: Some(&f), ..Default::default() },
+        )
+        .unwrap()
+        .expect("data");
         assert!(
-            result.doors.is_empty(),
+            result.openings.is_empty(),
             "d2 has no to_room, so it does not match a negative operator either"
         );
     }
@@ -1522,10 +1727,14 @@ D-101,60
         let state = state_with(vec![("p1", "m1", vec![door])]);
 
         let f = filter("Door Leaf Thickness=40.0");
-        let result = assemble_doors(&state, &DoorScope { filter: Some(&f), ..Default::default() })
-            .unwrap()
-            .expect("data");
-        assert_eq!(result.doors.len(), 1, "a blank instance value does not shadow the type's");
+        let result = assemble_openings::<DoorPayload>(
+            &state,
+            OPENING_KIND,
+            &OpeningScope { filter: Some(&f), ..Default::default() },
+        )
+        .unwrap()
+        .expect("data");
+        assert_eq!(result.openings.len(), 1, "a blank instance value does not shadow the type's");
     }
 
     /// A source-qualified predicate resolves `Absent` rather than erroring:
@@ -1538,10 +1747,14 @@ D-101,60
         let known = BTreeSet::from(["drofus".to_string()]);
         let f = RoomFilter::parse_query("drofus.NetArea=25.5", &known).expect("parses against a known source");
 
-        let result = assemble_doors(&state, &DoorScope { filter: Some(&f), ..Default::default() })
-            .unwrap()
-            .expect("data");
-        assert!(result.doors.is_empty());
+        let result = assemble_openings::<DoorPayload>(
+            &state,
+            OPENING_KIND,
+            &OpeningScope { filter: Some(&f), ..Default::default() },
+        )
+        .unwrap()
+        .expect("data");
+        assert!(result.openings.is_empty());
     }
 
     /// An unregistered project's doors are skipped on read, matching
@@ -1562,8 +1775,10 @@ D-101,60
             })
             .unwrap();
 
-        let result = assemble_doors(&state, &DoorScope::default()).unwrap().expect("the store has data");
-        assert!(result.doors.is_empty());
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .expect("the store has data");
+        assert!(result.openings.is_empty());
     }
 
     /// The revision is stable between two idle reads and moves when the
@@ -1572,8 +1787,14 @@ D-101,60
     #[test]
     fn test_revision_is_stable_and_moves_on_a_push() {
         let state = state_with(vec![("p1", "m1", vec![make_door("d1", Some("r1"), None, &[])])]);
-        let first = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap().revision;
-        let again = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap().revision;
+        let first = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap()
+            .revision;
+        let again = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap()
+            .revision;
         assert_eq!(first, again, "two idle reads agree");
 
         state
@@ -1588,7 +1809,10 @@ D-101,60
                 doors: vec![make_door("d1", Some("r1"), None, &[])],
             })
             .unwrap();
-        let after = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap().revision;
+        let after = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap()
+            .revision;
         assert_ne!(first, after, "a new snapshot moves it");
     }
 
@@ -1618,8 +1842,10 @@ D-101,60
                     doors: doors.clone(),
                 })
                 .unwrap();
-            let r = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-            r.doors.into_iter().map(|d| (d.door.id, d.owner_rooms)).collect::<BTreeMap<_, _>>()
+            let r = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+                .unwrap()
+                .unwrap();
+            r.openings.into_iter().map(|d| (d.door.id, d.owner_rooms)).collect::<BTreeMap<_, _>>()
         };
 
         // The decided default: opens-into, else opens-from, else homeless.
@@ -1703,10 +1929,14 @@ D-101,60
         }
 
         let in_building = |key: &str| {
-            let r = assemble_doors(&state, &DoorScope { building: Some(key), ..Default::default() })
-                .unwrap()
-                .unwrap();
-            r.doors.into_iter().map(|d| d.door.id).collect::<BTreeSet<_>>()
+            let r = assemble_openings::<DoorPayload>(
+                &state,
+                OPENING_KIND,
+                &OpeningScope { building: Some(key), ..Default::default() },
+            )
+            .unwrap()
+            .unwrap();
+            r.openings.into_iter().map(|d| d.door.id).collect::<BTreeSet<_>>()
         };
 
         assert_eq!(
@@ -1719,8 +1949,10 @@ D-101,60
 
         // Both homeless doors are absent from every building, and present when
         // no building is asked for — the filter excludes them, nothing else does.
-        let all = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-        assert_eq!(all.doors.len(), 4, "unscoped, homeless doors are served normally");
+        let all = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(all.openings.len(), 4, "unscoped, homeless doors are served normally");
     }
 
     /// A milestone serves the doors snapshot it pins, not the model's latest.
@@ -1733,6 +1965,7 @@ D-101,60
             reference_snapshots: BTreeMap::new(),
             attachments: BTreeMap::new(),
             door_attachments: BTreeMap::from([("m1".to_string(), "2026-02-01T00:00:00Z".to_string())]),
+            window_attachments: Default::default(),
         }];
         let state = AppState::new(
             Box::new(
@@ -1761,19 +1994,29 @@ D-101,60
         push("2026-02-01T00:00:00Z", "pinned");
         push("2026-06-01T00:00:00Z", "latest");
 
-        let latest = assemble_doors(&state, &DoorScope::default()).unwrap().unwrap();
-        assert_eq!(latest.doors[0].door.id, "latest");
-
-        let pinned = assemble_doors(&state, &DoorScope { milestone: Some("Stage 2"), ..Default::default() })
+        let latest = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
             .unwrap()
             .unwrap();
-        assert_eq!(pinned.doors[0].door.id, "pinned");
+        assert_eq!(latest.openings[0].door.id, "latest");
+
+        let pinned = assemble_openings::<DoorPayload>(
+            &state,
+            OPENING_KIND,
+            &OpeningScope { milestone: Some("Stage 2"), ..Default::default() },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(pinned.openings[0].door.id, "pinned");
 
         // A model the milestone does not pin contributes nothing, matching the
         // rooms discipline rather than silently falling back to latest.
-        let unknown = assemble_doors(&state, &DoorScope { milestone: Some("nope"), ..Default::default() })
-            .unwrap()
-            .unwrap();
-        assert!(unknown.doors.is_empty());
+        let unknown = assemble_openings::<DoorPayload>(
+            &state,
+            OPENING_KIND,
+            &OpeningScope { milestone: Some("nope"), ..Default::default() },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(unknown.openings.is_empty());
     }
 }

@@ -3,10 +3,10 @@
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
-//! `get_reference_snapshot`, `get_doors` --
+//! `get_reference_snapshot`, `get_doors`, `get_windows` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Eighteen in
+//! and the one forwarded mutation (`upload_reference`, below). Nineteen in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -48,7 +48,7 @@ use rmcp::{
 use roommate::bootstrap::build_state;
 use roommate::default_http_addr;
 use roommate::service::{
-    adjacency, areas, comparison, doors, milestones, projects, reference, rooms, snapshots, validation, ServiceError,
+    adjacency, areas, comparison, milestones, openings, projects, reference, rooms, snapshots, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -94,6 +94,11 @@ struct GetRoomsParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+/// Parameters for both  and .
+///
+/// One struct, because the two reads take identical arguments -- the entity is
+/// the tool you call, not a field you pass. A second identical type would only
+/// give the two descriptions somewhere to drift apart.
 struct GetDoorsParams {
     /// Scope the merge to one project id. Omit to merge every stored model.
     #[serde(default)]
@@ -363,7 +368,7 @@ impl RoommateMcp {
     }
 
     /// Merges every stored model's doors, optionally scoped -- see
-    /// `service::doors::assemble_doors`. Same `None` -> plain-text handling as
+    /// `service::openings::assemble_openings`. Same `None` -> plain-text handling as
     /// `get_rooms`, for the same reason.
     #[tool(
         description = "Fetch merged doors across stored models, optionally scoped by project id, milestone name, and property filter. Each door carries its own instance \
@@ -381,16 +386,62 @@ impl RoommateMcp {
         let known = self.state.settings().known_reference_sources();
         let filter =
             rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
-        let scope = doors::DoorScope {
+        let scope = openings::OpeningScope {
             project: p.project.as_deref(),
             building: p.building.as_deref(),
             milestone: p.milestone.as_deref(),
             filter: Some(&filter).filter(|f| !f.is_empty()),
         };
-        let result = doors::assemble_doors(&self.state, &scope).map_err(to_mcp_error)?;
+        let result = openings::assemble_openings::<roommate::contract::DoorPayload>(
+            &self.state,
+            openings::OpeningKind::Doors,
+            &scope,
+        )
+        .map_err(to_mcp_error)?
+        .map(openings::DoorsResult::from_assembled);
         match result {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no doors have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    #[tool(
+        description = "Fetch merged windows across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
+                          The SAME record shape as get_doors -- instance and family-type properties, footprint, level, both room references, owner_rooms -- because a window \
+                          and a door are the same record in this contract. Every filter intrinsic get_doors accepts works here unchanged. \
+                          WHAT DIFFERS IS THE DATA, and reading it like a door schedule will mislead you. A null on one side is an EXTERNAL window, which for doors is the \
+                          exception and for windows is most of a facade. A window with null on BOTH sides is normal in a facade or envelope model: such a file links its \
+                          interiors rather than containing them, and Revit cannot resolve a room across a link -- measured on a real facade file, 0 of 158 windows carried a \
+                          reference on either side, and so did 0 of its 191 doors. Do NOT report that as missing data. \
+                          Consequently owner_rooms is empty far more often than for doors, and an empty owner_rooms means homeless -- a reported state, and a homeless window \
+                          matches no 'building' filter. If a project cares about window-to-room attribution in such a model it must set [windows] room_resolution, which \
+                          derives the rooms geometrically; get_validation's openings.windows.room_resolution echoes whether it ran, and 'off' is NOT the same as clean. \
+                          Room references are model-scoped: a room id is unique only within one model, so resolve them against rooms of the SAME 'model_id'. \
+                          The windows contract is schema_version 1 and moves independently of doors' 2; the payload's element list is keyed 'windows'. \
+                          IMPORTANT -- like get_rooms and get_doors, results are scoped to ONE Revit phase per model, named in 'phase_by_model'. Not a complete window schedule."
+    )]
+    fn get_windows(&self, Parameters(p): Parameters<GetDoorsParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = openings::OpeningScope {
+            project: p.project.as_deref(),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+        };
+        let result = openings::assemble_openings::<roommate::contract::WindowPayload>(
+            &self.state,
+            openings::OpeningKind::Windows,
+            &scope,
+        )
+        .map_err(to_mcp_error)?
+        .map(openings::WindowsResult::from_assembled);
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no windows have been pushed to this server yet",
             )])),
             Some(result) => json_result(&result),
         }
@@ -481,11 +532,7 @@ impl RoommateMcp {
                        Separately from any reference source, 'phases' reports which Revit phase each of the project's models was filtered to ('by_model') and whether they \
                        disagree ('disagree'). A true 'disagree' means /rooms is merging rooms from two different phases into one plan that will nonetheless look complete; \
                        an unphased model (null) counts as a distinct value there, since its rooms were never filtered at all. This is reported, never rejected. \
-                       Also separate from any reference source, 'doors' reports whether the project's doors link to rooms that exist: 'doors_without_room_reference' lists doors \
-                       naming no room on either side, and 'doors_unresolved_room' lists room references naming a room the door's own model does not have (one entry per dangling \
-                       side, each carrying model_id, door_id, side and room_id). References resolve WITHIN one model, because room ids are unique only within a model. \
-                       A door with a room on exactly one side is an EXTERNAL door -- normal, counted under 'doors_external', and deliberately not a discrepancy. \
-                       Door findings have their own 'doors.discrepancies' and are NOT included in the top-level 'discrepancies', which counts reference sources only. \n                       'doors.room_attribution' echoes the policy deciding which room owns a door (default: the room it opens into, else the one it opens from, else homeless); \n                       'doors_unattributed' lists doors that name a room the policy declines to use, which is a policy consequence rather than a data gap and is empty under the default. \n                       'room_reference_mismatches' lists doors whose AUTHORED room reference disagrees with the attributed room -- reported, never corrected, since the geometry and \n                       the modeller are making different claims. It is empty when [doors] room_reference_property is unset, which means the check is OFF, not clean."
+                       Also separate from any reference source, 'openings' reports whether the project's openings link to rooms that exist. It is a MAP KEYED BY ENTITY -- 'doors' and 'windows' -- and every report in it has the identical shape, so read one and you can read them all. An entity with nothing pushed still appears, reporting zero: absent would be ambiguous with 'not supported'. \n                       Per report: 'without_room_reference' lists openings naming no room on either side, and 'unresolved_room' lists room references naming a room the opening's own model does not have (one entry per dangling side, each carrying model_id, opening_id, side and room_id). References resolve WITHIN one model, because room ids are unique only within a model. \n                       An opening with a room on exactly one side is EXTERNAL -- normal, counted under 'external', and deliberately not a discrepancy. For doors that is the exception; for windows in a facade model it is the rule, and a facade file that links its interiors reports EVERY opening under 'without_room_reference' because Revit cannot see a room across a link. Read 'room_resolution' before treating that as a data fault: 'off' means the geometric fallback never ran, which is not the same as clean. \n                       Each report has its own 'discrepancies', NOT included in the top-level 'discrepancies', which counts reference sources only. \n                       'room_attribution' echoes the policy deciding which room owns an opening (default: the room it opens into, else the one it opens from, else homeless); \n                       'unattributed' lists openings that name a room the policy declines to use, which is a policy consequence rather than a data gap and is empty under the default. \n                       'room_reference_mismatches' lists openings whose AUTHORED room reference disagrees with the attributed room -- reported, never corrected, since the geometry and \n                       the modeller are making different claims. It is empty when that entity's room_reference_property is unset, which means the check is OFF, not clean."
     )]
     fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;
@@ -824,6 +871,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         };
         Arc::new(AppState::new(

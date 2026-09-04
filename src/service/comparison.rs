@@ -38,7 +38,7 @@ use crate::contract::{date_match, numeric_match, PropertyPresence};
 use crate::settings::{BuiltinPropertyDef, CompareMode, FieldType, ReferenceFieldConfig};
 use crate::state::AppState;
 
-use super::doors::{self as doors_service, DoorResponse, DoorScope};
+use super::openings::{self as openings_service, OpeningKind, OpeningResponse, OpeningScope};
 use super::rooms::{assemble_rooms, resolve_presence, source_joined, RoomResponse, RoomScope};
 use super::ServiceError;
 
@@ -425,7 +425,7 @@ fn diff_room(
 /// A door-key value → the single door that resolved it. Doors whose key value
 /// is shared are excluded and surfaced as `DuplicateKeyValue`s instead; doors
 /// resolving no key value at all can't be matched and are dropped.
-type DoorKeyIndex<'a> = BTreeMap<String, &'a DoorResponse>;
+type DoorKeyIndex<'a> = BTreeMap<String, &'a OpeningResponse>;
 
 /// Index one milestone's doors by their resolved key value, pulling out any
 /// value shared by more than one door.
@@ -436,14 +436,14 @@ type DoorKeyIndex<'a> = BTreeMap<String, &'a DoorResponse>;
 /// ElementId twice, and matching those across milestones would diff two
 /// unrelated leaves against each other. Reported rather than guessed.
 fn index_doors_by_key<'a>(
-    doors: &'a [DoorResponse],
+    doors: &'a [OpeningResponse],
     key_prop: &str,
     known: &std::collections::BTreeSet<String>,
     builtin: &[BuiltinPropertyDef],
 ) -> (DoorKeyIndex<'a>, Vec<DuplicateKeyValue>) {
-    let mut groups: BTreeMap<String, Vec<&DoorResponse>> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Vec<&OpeningResponse>> = BTreeMap::new();
     for door in doors {
-        if let PropertyPresence::Present(value) = doors_service::resolve_presence(door, key_prop, known, builtin) {
+        if let PropertyPresence::Present(value) = openings_service::resolve_presence(door, key_prop, known, builtin) {
             groups.entry(value).or_default().push(door);
         }
     }
@@ -469,8 +469,8 @@ fn index_doors_by_key<'a>(
 /// select and both sides came through the same Revit export at different times.
 fn diff_door(
     key: &str,
-    baseline: &DoorResponse,
-    other: &DoorResponse,
+    baseline: &OpeningResponse,
+    other: &OpeningResponse,
     properties: &[String],
     known: &std::collections::BTreeSet<String>,
     builtin: &[BuiltinPropertyDef],
@@ -480,11 +480,11 @@ fn diff_door(
 
     for property in properties {
         let PropertyPresence::Present(baseline_value) =
-            doors_service::resolve_presence(baseline, property, known, builtin)
+            openings_service::resolve_presence(baseline, property, known, builtin)
         else {
             continue;
         };
-        match doors_service::resolve_presence(other, property, known, builtin) {
+        match openings_service::resolve_presence(other, property, known, builtin) {
             PropertyPresence::Absent => {
                 missing_properties.push(MissingProperty { property: property.clone(), baseline_value })
             }
@@ -536,14 +536,18 @@ fn compare_doors(
 
     /// One milestone's full door set for a project: no property filter, because
     /// a comparison is only meaningful over the whole scope on both sides.
-    /// `service::doors`' counterpart of `scope` below.
-    fn door_scope<'a>(project: &'a str, milestone: &'a str) -> DoorScope<'a> {
-        DoorScope { project: Some(project), milestone: Some(milestone), ..Default::default() }
+    /// `service::openings`' counterpart of `scope` below.
+    fn door_scope<'a>(project: &'a str, milestone: &'a str) -> OpeningScope<'a> {
+        OpeningScope { project: Some(project), milestone: Some(milestone), ..Default::default() }
     }
 
-    let baseline_doors = doors_service::assemble_doors(state, &door_scope(project, baseline))?
-        .map(|r| r.doors)
-        .unwrap_or_default();
+    let baseline_doors = openings_service::assemble_openings::<crate::contract::DoorPayload>(
+        state,
+        OpeningKind::Doors,
+        &door_scope(project, baseline),
+    )?
+    .map(|r| r.openings)
+    .unwrap_or_default();
     let (baseline_index, baseline_duplicates) = index_doors_by_key(&baseline_doors, &key_prop, &known, builtin);
 
     let mut comparisons = Vec::new();
@@ -551,9 +555,13 @@ fn compare_doors(
         if other == baseline {
             continue;
         }
-        let other_doors = doors_service::assemble_doors(state, &door_scope(project, other))?
-            .map(|r| r.doors)
-            .unwrap_or_default();
+        let other_doors = openings_service::assemble_openings::<crate::contract::DoorPayload>(
+            state,
+            OpeningKind::Doors,
+            &door_scope(project, other),
+        )?
+        .map(|r| r.openings)
+        .unwrap_or_default();
         let (other_index, other_duplicates) = index_doors_by_key(&other_doors, &key_prop, &known, builtin);
 
         let doors_added: Vec<String> =
@@ -720,6 +728,7 @@ mod tests {
             reference_snapshots: BTreeMap::new(),
             attachments: BTreeMap::from([(model_id.to_string(), taken_at.to_string())]),
             door_attachments: BTreeMap::new(),
+            window_attachments: Default::default(),
         }
     }
 
@@ -774,6 +783,7 @@ mod tests {
             comparison_properties: comparison_properties.iter().map(|s| s.to_string()).collect(),
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
@@ -1321,10 +1331,11 @@ mod tests {
                 reference_snapshots: BTreeMap::new(),
                 attachments: BTreeMap::new(),
                 door_attachments: BTreeMap::from([("m1".to_string(), ts.to_string())]),
+                window_attachments: Default::default(),
             })
             .collect();
         ProjectSettings {
-            doors: crate::settings::DoorPolicy {
+            doors: crate::settings::OpeningPolicy {
                 comparison_key: key.map(str::to_string),
                 comparison_properties: properties.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()

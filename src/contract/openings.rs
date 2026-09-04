@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Loop, Point2D, PropertyTiers};
+use super::{CustomValue, Level, Loop, Model, ModelToShared, Point2D, Project, PropertyTiers};
 
 /// One door instance, as extracted from Revit.
 ///
@@ -147,7 +147,7 @@ pub struct Opening {
     /// Ingest used to require those rooms to be there already. It no longer
     /// does: "not yet" is a legitimate answer, and refusing the push meant
     /// refusing data that becomes resolvable the moment the rooms arrive. The
-    /// question moved to `door_report`, which can re-answer it every time the
+    /// question moved to `opening_report`, which can re-answer it every time the
     /// data changes.
     #[serde(default)]
     pub from_room: Option<String>,
@@ -275,6 +275,35 @@ impl PropertyTiers for Opening {
     fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>> {
         vec![&self.properties, &self.type_properties]
     }
+}
+
+/// What the read side needs from a stored snapshot, whichever entity's envelope
+/// carried it.
+///
+/// **This is the seam that lets one assembly serve doors and windows.** The
+/// envelopes stay separate — `DoorPayload` names its list `doors` and
+/// `WindowPayload` names its `windows`, because that key is baked into every
+/// snapshot already written — but nothing downstream of ingest cares what the
+/// key was called. It cares about five facts, and they are identical.
+///
+/// Kept deliberately narrow. Every method here is a field read the assembly
+/// already did; the trait exists to hide *which struct* the field came from, not
+/// to grow behaviour. Widening it would start pulling per-entity decisions back
+/// into a shared abstraction, which is the direction the envelope split exists
+/// to prevent — `project`/`model` are here only because scoping and the model
+/// key need them, and anything an entity does differently belongs at the call
+/// site with a `SnapshotKind` beside it, not behind another method.
+pub trait OpeningEnvelope {
+    fn project(&self) -> &Project;
+    fn model(&self) -> &Model;
+    fn taken_at(&self) -> &str;
+    fn phase(&self) -> Option<&str>;
+    fn model_to_shared(&self) -> Option<&ModelToShared>;
+    fn levels(&self) -> &[Level];
+
+    /// The elements themselves. The one method whose *implementation* differs
+    /// between entities, and it differs only in the field name it reads.
+    fn openings(&self) -> &[Opening];
 }
 
 #[cfg(test)]

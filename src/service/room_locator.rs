@@ -59,6 +59,23 @@ pub enum Unresolved {
     NoDirection,
     /// Neither an insertion point nor a footprint to derive one from.
     NoPosition,
+    /// The opening names a level nothing in scope carries an elevation for, so
+    /// there is no axis to compare rooms on and nothing was probed at all.
+    ///
+    /// **Its own state rather than `NoCandidate`, because the two send a reader
+    /// to opposite places.** `NoCandidate` says the probe ran and landed in open
+    /// air, which for an external opening is the right answer and no finding.
+    /// This says the probe never ran, and the cause is upstream: the element is
+    /// unhosted, so Revit gave it an invalid `LevelId` and the export carried
+    /// `-1`. Measured on real models -- one skylight in a house, two terrace
+    /// sills in a facade file -- so it is rare, real, and exactly the kind of
+    /// thing somebody would otherwise spend an afternoon looking for in the
+    /// geometry.
+    ///
+    /// Reported, never refused: the element is still a real opening with
+    /// properties and an id, and `level_id` stays a required `String` on the
+    /// contract carrying whatever the export said. "Signal, not error."
+    UnknownLevel,
 }
 
 /// One side's answer.

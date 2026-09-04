@@ -574,7 +574,7 @@ impl SnapshotStore for FsStore {
                 .filter(|n| !n.is_empty())
                 .unwrap_or_else(|| key.model_id.clone());
             let mut latest = BTreeMap::new();
-            for kind in [SnapshotKind::Rooms, SnapshotKind::Doors] {
+            for kind in SnapshotKind::ALL {
                 if let Some(id) = self.list_snapshot_ids(kind, &key)?.pop() {
                     latest.insert(kind, id); // ids are ascending, so the last is the newest
                 }
@@ -1406,6 +1406,7 @@ mod tests {
                     phase: None,
                     snapshots: vec!["2026-01-01T10:00:00Z".to_string()],
                     doors: vec![],
+                    windows: vec![],
                 },
             )]),
             reference_snapshots: BTreeMap::new(),
@@ -1470,6 +1471,7 @@ mod tests {
                     phase: None,
                     snapshots: vec!["2026-01-02T10:00:00Z".to_string(), "2026-01-03T10:00:00Z".to_string()],
                     doors: vec![],
+                    windows: vec![],
                 },
             )]),
             reference_snapshots: BTreeMap::new(),

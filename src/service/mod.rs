@@ -11,8 +11,8 @@
 pub mod adjacency;
 pub mod areas;
 pub mod comparison;
-pub mod doors;
 pub mod milestones;
+pub mod openings;
 pub mod projects;
 pub mod reference;
 pub mod room_locator;
@@ -155,6 +155,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }

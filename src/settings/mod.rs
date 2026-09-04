@@ -121,12 +121,41 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "AreaPolicy::is_default")]
     pub areas: AreaPolicy,
 
-    /// Door policy for this project (see `DoorPolicy`). Defaulted and skipped
+    /// Door policy for this project (see `OpeningPolicy`). Defaulted and skipped
     /// when empty, so a project file predating doors is unchanged on disk and
     /// unchanged in meaning. A table, so it is declared after the scalars for
     /// the TOML ordering reason `comparison_key` documents.
-    #[serde(default, skip_serializing_if = "DoorPolicy::is_default")]
-    pub doors: DoorPolicy,
+    #[serde(default, skip_serializing_if = "OpeningPolicy::is_default")]
+    pub doors: OpeningPolicy,
+
+    /// Window policy for this project — the same `OpeningPolicy` under a second
+    /// key, defaulted and skipped when empty so a project file predating windows
+    /// is unchanged on disk and unchanged in meaning.
+    ///
+    /// **Its own section rather than sharing `[doors]`, and the reason is the
+    /// one that made `[doors]` separate from the top-level room settings.** The
+    /// values are per-entity vocabulary: `comparison_key` names a *window*
+    /// property, and `room_reference_property` names the parameter a window
+    /// family carries, which is a different family-and-office convention from
+    /// the door one. One shared table would silently mean two things.
+    ///
+    /// **`room_attribution` keeps the same default and the argument is NOT
+    /// inherited.** `to_room_then_from_room` reads as "the room it opens into",
+    /// which a window does not do — it is glazing in a wall, not a passage. The
+    /// chain is still right, for a different reason: it takes whichever side
+    /// names a room and reports nothing when neither does, and for a window that
+    /// is exactly "the room this is glazed into, else the one it faces from".
+    /// The default survives because the mechanism fits, not because doors had it.
+    ///
+    /// **`room_resolution` matters far more here than it does for doors**, and
+    /// the measurement that decided it is worth carrying: a facade file held 158
+    /// windows and 191 doors and not one room, because it links its interiors
+    /// rather than containing them. `FromRoom[phase]` cannot see into a link, so
+    /// every opening in such a model is unattributable from authored data alone.
+    /// Left `Off`, a windows read of that project returns 158 homeless windows
+    /// and no way to tell that from a modelling failure.
+    #[serde(default, skip_serializing_if = "OpeningPolicy::is_default")]
+    pub windows: OpeningPolicy,
 
     /// Ordered classification tiers, outermost first. Empty if the section is
     /// omitted (a project with no classification defined).
@@ -266,7 +295,7 @@ pub enum MeasurementStandard {
 /// The settings that depend on *which* of a door's two rooms owns it —
 /// `room_attribution` and `room_reference_property` — waited for that question
 /// to be answered rather than shipping with a default that would have settled
-/// it by accident. Both now live on `DoorPolicy`.
+/// it by accident. Both now live on `OpeningPolicy`.
 /// How far the server may go to work out which rooms an element is between,
 /// when the model does not say.
 ///
@@ -282,7 +311,7 @@ pub enum MeasurementStandard {
 /// is not always what it opens into — and geometry replacing it would be exactly
 /// the reconciliation `CLAUDE.md` forbids. What the geometry does is fill an
 /// absent side, and disagree audibly with a present one
-/// (`DoorReport::room_geometry_mismatches`).
+/// (`OpeningReport::room_geometry_mismatches`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoomResolution {
@@ -366,7 +395,7 @@ impl RoomAttribution {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
-pub struct DoorPolicy {
+pub struct OpeningPolicy {
     /// The door property whose value identifies "the same door" across
     /// milestones — the door counterpart of `Settings::comparison_key`, and
     /// `None` (the default) is a real, reachable state that reports "not
@@ -432,7 +461,7 @@ pub struct DoorPolicy {
     pub comparison_properties: Vec<String>,
 }
 
-impl DoorPolicy {
+impl OpeningPolicy {
     /// Whether this policy is entirely unset — used to keep an untouched
     /// `[doors]` section out of a written settings file, same as `AreaPolicy`.
     pub fn is_default(&self) -> bool {
@@ -879,6 +908,7 @@ pub enum ReferenceEntity {
     #[default]
     Rooms,
     Doors,
+    Windows,
 }
 
 impl ReferenceEntity {
@@ -887,6 +917,7 @@ impl ReferenceEntity {
         match self {
             ReferenceEntity::Rooms => "rooms",
             ReferenceEntity::Doors => "doors",
+            ReferenceEntity::Windows => "windows",
         }
     }
 }
@@ -974,6 +1005,16 @@ pub struct Milestone {
     /// milestone authored before doors existed valid, as one that pins none.
     #[serde(default)]
     pub door_attachments: BTreeMap<String, String>,
+
+    /// The same again, for **windows**. A third map for the reason the second
+    /// one gives: the three entities are pushed independently and their snapshot
+    /// ids do not correspond, so pinning one says nothing about the others and
+    /// "the nearest" would silently pair data that never coexisted.
+    ///
+    /// `default` keeps every milestone authored before windows existed valid, as
+    /// one that pins none -- which is what it is.
+    #[serde(default)]
+    pub window_attachments: BTreeMap<String, String>,
 }
 
 impl Milestone {
@@ -998,6 +1039,7 @@ impl Milestone {
         for (label, pins) in [
             ("attachment", &self.attachments),
             ("door attachment", &self.door_attachments),
+            ("window attachment", &self.window_attachments),
         ] {
             for (model_id, taken_at) in pins {
                 if model_id.trim().is_empty() {
@@ -1109,6 +1151,7 @@ mod tests {
             reference_snapshots: Default::default(),
             attachments: Default::default(),
             door_attachments: Default::default(),
+            window_attachments: Default::default(),
         }
     }
 
@@ -1276,13 +1319,38 @@ boundary_location = "finish_face"
     /// only symptom was a source that never matched anything. Serde's own
     /// message is the specific one, so there is no hand-rolled check.
     #[test]
+    fn test_reference_source_entity_accepts_windows() {
+        let settings: Settings = toml::from_str(
+            "project_id = \"p1\"\n\n[sources.reference.schedule]\ntype = \"upload\"\nentity = \"windows\"\n",
+        )
+        .expect("parses");
+        assert_eq!(settings.sources.reference["schedule"].entity, ReferenceEntity::Windows);
+    }
+
+    /// **An unknown entity is a loud failure naming it**, not a silent fall back
+    /// to rooms. That is the whole point of the field: before it,
+    /// `[sources.reference.doors]` parsed, loaded and joined nowhere, and the
+    /// only symptom was a source that never matched anything. Serde's own
+    /// message is the specific one, so there is no hand-rolled check.
+    ///
+    /// **The example moved from `windows` to `ffe`, which is the interesting
+    /// part.** This test used to prove its point with `entity = "windows"`, and
+    /// windows are now a real entity — so left alone it would still have passed,
+    /// for the wrong reason, right up until somebody read it and believed
+    /// windows were unsupported. A negative test whose example quietly becomes
+    /// positive is worse than no test. `ffe` is the next candidate entity and
+    /// the same trap is set for whoever builds it.
+    #[test]
     fn test_unknown_reference_entity_is_rejected() {
         let err = toml::from_str::<Settings>(
-            "project_id = \"p1\"\n\n[sources.reference.s]\ntype = \"upload\"\nentity = \"windows\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.s]\ntype = \"upload\"\nentity = \"ffe\"\n",
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("windows"), "names what was written: {err}");
-        assert!(err.contains("rooms") && err.contains("doors"), "names the accepted values: {err}");
+        assert!(err.contains("ffe"), "names what was written: {err}");
+        assert!(
+            err.contains("rooms") && err.contains("doors") && err.contains("windows"),
+            "names every accepted value, windows included: {err}"
+        );
     }
 }

@@ -28,6 +28,49 @@ use crate::settings::{
 use crate::state::{seed_if_test, AppState, ProjectReferenceSource, ProjectSettings, Shared};
 use crate::storage::{FsStore, MemStore, SnapshotStore};
 
+/// Refuse a reference source whose name would shadow a room's own wire field.
+///
+/// `RoomResponse.reference` is `#[serde(flatten)]`ed onto the response so that
+/// today's sources cost no wire change -- which means a source literally named
+/// `id` or `properties` would REPLACE the room's real field on every response
+/// rather than adding one. Silent, and visible only as rooms that lost a field.
+///
+/// Here rather than in `load_settings` because the reserved vocabulary is
+/// `service::rooms`'s to define, and settings must not depend on service.
+///
+/// Extracted from `load_project_bundle` when adding the windows policy took
+/// that function one line past the `too_many_lines` gate. It is the most
+/// self-contained block in it -- it reads one field and touches nothing else --
+/// so it is the seam that costs the least to cut.
+fn reject_reserved_reference_names(settings: &crate::settings::Settings, path: &Path) -> anyhow::Result<()> {
+    // A source name that collides with a room's own wire field would
+    // silently overwrite it: `RoomResponse.reference` (service::rooms) is
+    // `#[serde(flatten)]`ed onto the response precisely so today's one
+    // source ("drofus") costs no wire change, but that means a source
+    // literally named "id" or "properties" would shadow the room's real
+    // field on every response instead of adding one. Checked here, not in
+    // `load_settings`, because the reserved vocabulary is `service::rooms`'s
+    // to define and settings must not depend on service.
+    const RESERVED_REFERENCE_NAMES: &[&str] = &[
+        "id",
+        "name",
+        "level_id",
+        "loops",
+        "properties",
+        "classification",
+        "label",
+    ];
+    for name in settings.sources.reference.keys() {
+        if RESERVED_REFERENCE_NAMES.contains(&name.as_str()) {
+            anyhow::bail!(
+                "{}: [sources.reference.{name}] uses a reserved name — it would shadow the room's own '{name}' field on every /rooms response",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Load and fully validate ONE project settings file into its runtime
 /// bundle: parse TOML, hydrate each configured reference source from its
 /// latest stored upload (which is why the store is a parameter), validate
@@ -87,31 +130,7 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
         }
     }
 
-    // A source name that collides with a room's own wire field would
-    // silently overwrite it: `RoomResponse.reference` (service::rooms) is
-    // `#[serde(flatten)]`ed onto the response precisely so today's one
-    // source ("drofus") costs no wire change, but that means a source
-    // literally named "id" or "properties" would shadow the room's real
-    // field on every response instead of adding one. Checked here, not in
-    // `load_settings`, because the reserved vocabulary is `service::rooms`'s
-    // to define and settings must not depend on service.
-    const RESERVED_REFERENCE_NAMES: &[&str] = &[
-        "id",
-        "name",
-        "level_id",
-        "loops",
-        "properties",
-        "classification",
-        "label",
-    ];
-    for name in settings.sources.reference.keys() {
-        if RESERVED_REFERENCE_NAMES.contains(&name.as_str()) {
-            anyhow::bail!(
-                "{}: [sources.reference.{name}] uses a reserved name — it would shadow the room's own '{name}' field on every /rooms response",
-                path.display()
-            );
-        }
-    }
+    reject_reserved_reference_names(&settings, path)?;
 
     // Every configured reference source hydrates the latest stored CSV for
     // that (project, source) pair from the snapshot store (which is why the
@@ -189,6 +208,7 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
         comparison_properties: settings.comparison_properties,
         areas: settings.areas,
         doors: settings.doors,
+        windows: settings.windows,
         hierarchy_exclusions: settings.hierarchy_exclusions,
     };
     Ok((settings.project_id, settings.is_default, bundle))

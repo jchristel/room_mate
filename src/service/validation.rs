@@ -25,11 +25,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::contract::{
-    date_match, lookup_property, numeric_match, property_presence, DoorPayload, PropertyPresence, Room, RoomPayload,
+    date_match, lookup_property, numeric_match, property_presence, PropertyPresence, Room, RoomPayload,
 };
 use crate::reference::ReferenceData;
 use crate::settings::{
-    BuiltinPropertyDef, CompareMode, DoorPolicy, FieldType, ReferenceFieldConfig, RoomAttribution, RoomResolution,
+    BuiltinPropertyDef, CompareMode, FieldType, OpeningPolicy, ReferenceFieldConfig, RoomAttribution, RoomResolution,
 };
 use crate::state::{AppState, ModelKey};
 
@@ -253,13 +253,26 @@ pub struct ValidationResponse {
     /// and every other finding here is a room-versus-source reconciliation.
     /// This one is a room-versus-room problem.
     pub phases: PhaseReport,
-    /// Whether this project's doors link to rooms that actually exist (see
-    /// `DoorReport`).
+    /// Whether this project's openings link to rooms that actually exist, one
+    /// report per opening entity (see `OpeningReport`), keyed `doors` /
+    /// `windows`.
     ///
     /// Top-level for the same reason `phases` is: `sources` is keyed by
-    /// reference-source name, and this is a door-versus-room problem with no
+    /// reference-source name, and this is an opening-versus-room problem with no
     /// source in it.
-    pub doors: DoorReport,
+    ///
+    /// **A map keyed by entity rather than one field per entity**, and the
+    /// entity is data rather than part of a field name. That is what stops a
+    /// third opening entity needing a parallel copy of fifteen types: the
+    /// findings are identical in shape whatever is being reported on, so the
+    /// only thing that varies is the key. It is exactly how `sources` is keyed,
+    /// so a reader navigates both the same way, and — like `SourceValidation` —
+    /// the value does not restate the key.
+    ///
+    /// An entity with nothing pushed reports zero rather than being absent, so a
+    /// consumer can tell "no windows in this project" from "this server does not
+    /// do windows".
+    pub openings: BTreeMap<String, OpeningReport>,
 }
 
 /// Which phase each of a project's models is on, and whether they agree.
@@ -294,27 +307,27 @@ pub struct PhaseReport {
 /// than a silently-unhandled value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DoorSide {
+pub enum OpeningSide {
     FromRoom,
     ToRoom,
 }
 
 /// One door that references no room on either side.
 #[derive(Debug, Serialize)]
-pub struct DoorWithoutRoom {
+pub struct OpeningWithoutRoom {
     /// **Carried on every door finding**, because a door id — like a room id —
     /// is unique only within one model. A bare door id would be ambiguous the
     /// moment a project has two models, and unresolvable back to an element.
     pub model_id: String,
-    pub door_id: String,
+    pub opening_id: String,
 }
 
 /// One door room reference that names a room this model does not have.
 #[derive(Debug, Serialize)]
 pub struct UnresolvedRoomReference {
     pub model_id: String,
-    pub door_id: String,
-    pub side: DoorSide,
+    pub opening_id: String,
+    pub side: OpeningSide,
     /// The room id the door names, which nothing in this model's rooms matches.
     pub room_id: String,
 }
@@ -330,7 +343,7 @@ pub struct UnresolvedRoomReference {
 #[derive(Debug, Serialize)]
 pub struct RoomReferenceMismatch {
     pub model_id: String,
-    pub door_id: String,
+    pub opening_id: String,
     /// The value of the door property named by `[doors] room_reference_property`.
     pub authored: String,
     /// The room the policy attributed the door to, and its resolved `Number` —
@@ -341,14 +354,14 @@ pub struct RoomReferenceMismatch {
 
 /// Door discrepancy tallies, so a consumer needn't re-sum the lists.
 #[derive(Debug, Default, Serialize)]
-pub struct DoorDiscrepancyCounts {
+pub struct OpeningDiscrepancyCounts {
     pub total: usize,
-    pub doors_without_room_reference: usize,
-    pub doors_unresolved_room: usize,
-    pub doors_unattributed: usize,
+    pub without_room_reference: usize,
+    pub unresolved_room: usize,
+    pub unattributed: usize,
     pub room_reference_mismatches: usize,
-    /// Models, not doors — see `DoorReport::doors_phase_drift`.
-    pub doors_phase_drift: usize,
+    /// Models, not doors — see `OpeningReport::phase_drift`.
+    pub phase_drift: usize,
     pub room_geometry_mismatches: usize,
 }
 
@@ -395,8 +408,8 @@ pub enum StaleSide {
 #[derive(Debug, Serialize)]
 pub struct RoomGeometryMismatch {
     pub model_id: String,
-    pub door_id: String,
-    pub side: DoorSide,
+    pub opening_id: String,
+    pub side: OpeningSide,
     /// The room the model states this side opens onto.
     pub authored_room_id: String,
     /// The room the geometry puts on that side, `None` when it found none.
@@ -405,7 +418,7 @@ pub struct RoomGeometryMismatch {
     pub geometric_room: Option<crate::service::room_locator::RoomRef>,
     /// When each snapshot was read — the export's own timestamp, not the
     /// server's receipt time, which is what makes comparing them meaningful.
-    pub doors_taken_at: String,
+    pub openings_taken_at: String,
     pub rooms_taken_at: String,
     pub stale: StaleSide,
 }
@@ -441,10 +454,10 @@ pub struct RoomResolutionCounts {
 /// Nothing else notices: `PhaseReport` reads rooms snapshots only, and the door
 /// reference checks resolve ids without asking what phase either side is on.
 #[derive(Debug, Serialize)]
-pub struct DoorPhaseDrift {
+pub struct OpeningPhaseDrift {
     pub model_id: String,
     /// The phase this model's stored **doors** were filtered to.
-    pub doors_phase: Option<String>,
+    pub openings_phase: Option<String>,
     /// The phase this model's stored **rooms** were filtered to. `None` is a
     /// snapshot from before phasing existed — its rooms were never filtered at
     /// all, which is a different and worse problem than disagreeing.
@@ -469,7 +482,7 @@ pub struct DoorPhaseDrift {
 #[derive(Debug, Serialize)]
 pub struct PendingRoomReference {
     pub model_id: String,
-    pub door_id: String,
+    pub opening_id: String,
 }
 
 /// Whether this project's doors link to rooms that actually exist.
@@ -510,30 +523,30 @@ pub struct PendingRoomReference {
 /// Reported, never rejected: "signal, not error", the same stance an unmatched
 /// reference key gets.
 #[derive(Debug, Default, Serialize)]
-pub struct DoorReport {
+pub struct OpeningReport {
     /// Doors examined across every model in this project. `0` covers both "no
     /// doors pushed" and "doors pushed but empty" — neither is an error, and a
     /// project that has never pushed doors simply has an empty report.
-    pub total_doors: usize,
+    pub total: usize,
     /// Doors referencing no room on either side.
-    pub doors_without_room_reference: Vec<DoorWithoutRoom>,
+    pub without_room_reference: Vec<OpeningWithoutRoom>,
     /// Room references naming a room the door's own model does not have. One
     /// entry per dangling *side*, so a door dangling on both appears twice —
     /// they are two broken references, and a reader fixing them fixes two.
     ///
     /// Only ever populated for a model that **has** a rooms snapshot; a model
-    /// still waiting for one contributes to `doors_pending_rooms` instead.
-    pub doors_unresolved_room: Vec<UnresolvedRoomReference>,
+    /// still waiting for one contributes to `pending_rooms` instead.
+    pub unresolved_room: Vec<UnresolvedRoomReference>,
     /// Doors whose model has no rooms snapshot yet — see `PendingRoomReference`.
     /// **Informational, not a discrepancy**, and one entry per door rather than
     /// per side: nothing about this door was checked, so there is no per-side
     /// answer to give.
-    pub doors_pending_rooms: Vec<PendingRoomReference>,
+    pub pending_rooms: Vec<PendingRoomReference>,
     /// Models whose stored doors and stored rooms describe different phases —
-    /// see `DoorPhaseDrift`. One entry per model, not per door: it is a fact
+    /// see `OpeningPhaseDrift`. One entry per model, not per door: it is a fact
     /// about the two snapshots, and repeating it per door would bury every other
     /// finding under it.
-    pub doors_phase_drift: Vec<DoorPhaseDrift>,
+    pub phase_drift: Vec<OpeningPhaseDrift>,
     /// Authored references that resolve but disagree with the geometry — see
     /// `RoomGeometryMismatch`. Empty when `[doors] room_resolution` is off,
     /// which is **not the same as clean**; the setting is echoed below so a
@@ -548,21 +561,21 @@ pub struct DoorReport {
     pub room_resolution: RoomResolution,
     /// Doors with a room on exactly one side — external doors. **Informational,
     /// not a discrepancy**; see the type doc for why.
-    pub doors_external: usize,
+    pub external: usize,
     /// The attribution policy in force, echoed so a reader can tell whether
-    /// `doors_unattributed` below is a data problem or a policy consequence.
+    /// `unattributed` below is a data problem or a policy consequence.
     pub room_attribution: RoomAttribution,
     /// Doors that **name a room but the policy declines to use it** — a
     /// `to_room`-only policy against a door that opens *from* somewhere and into
     /// nowhere.
     ///
-    /// Deliberately excludes doors already in `doors_without_room_reference`, so
+    /// Deliberately excludes doors already in `without_room_reference`, so
     /// the two lists never double-count the same door. Under the default chain
     /// this is therefore **always empty**: the chain uses whatever reference
     /// exists, so the only unattributed doors are the ones with no reference at
     /// all. A non-empty list means the configured policy is narrower than the
     /// data, which is a legitimate choice worth being able to see.
-    pub doors_unattributed: Vec<DoorWithoutRoom>,
+    pub unattributed: Vec<OpeningWithoutRoom>,
     /// Doors whose authored room reference disagrees with the attributed room.
     /// Empty when `[doors] room_reference_property` is unset — the check is
     /// off, which is not the same as clean, and the setting is echoed on the
@@ -576,7 +589,7 @@ pub struct DoorReport {
     /// across reference *sources* — a door is not a source, and folding it in
     /// would make that number mean two different things. Same separation
     /// `phases` has.
-    pub discrepancies: DoorDiscrepancyCounts,
+    pub discrepancies: OpeningDiscrepancyCounts,
 }
 
 impl ValidationResponse {
@@ -589,7 +602,7 @@ impl ValidationResponse {
             total_rooms: 0,
             discrepancies: DiscrepancyCounts::default(),
             phases: PhaseReport::default(),
-            doors: DoorReport::default(),
+            openings: BTreeMap::new(),
         }
     }
 }
@@ -622,7 +635,7 @@ fn phase_report(project_id: &str, stored: &[(ModelKey, RoomPayload)]) -> PhaseRe
 ///
 /// Keyed on `(model id, door id)` for the reason every door lookup here is: a
 /// door id, like a room id, is unique only within one model.
-pub type LocatedDoors = BTreeMap<(String, String), crate::service::room_locator::Sides>;
+pub type LocatedOpenings = BTreeMap<(String, String), crate::service::room_locator::Sides>;
 
 /// Compare each authored reference against where the door physically is, and
 /// count what the geometry managed to answer.
@@ -634,12 +647,12 @@ pub type LocatedDoors = BTreeMap<(String, String), crate::service::room_locator:
 ///
 /// A side the model left absent is not a mismatch — there is nothing to
 /// disagree with — so it lands in `derived`/`unresolved` instead.
-fn geometry_pass(
+fn geometry_pass<P: crate::contract::OpeningEnvelope>(
     project_id: &str,
     stored_rooms: &[(ModelKey, RoomPayload)],
-    stored_doors: &[(ModelKey, DoorPayload)],
-    located: &LocatedDoors,
-    report: &mut DoorReport,
+    stored_openings: &[(ModelKey, P)],
+    located: &LocatedOpenings,
+    report: &mut OpeningReport,
 ) {
     use crate::service::room_locator::Located;
 
@@ -649,14 +662,14 @@ fn geometry_pass(
         .map(|(key, p)| (key.model_id.as_str(), p.snapshot.taken_at.as_str()))
         .collect();
 
-    for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
-        for door in &payload.doors {
+    for (key, payload) in stored_openings.iter().filter(|(_, p)| p.project().id == project_id) {
+        for door in payload.openings() {
             let Some(sides) = located.get(&(key.model_id.clone(), door.id.clone())) else {
                 continue;
             };
             for (side, authored, derived) in [
-                (DoorSide::FromRoom, door.from_room.as_deref(), &sides.from),
-                (DoorSide::ToRoom, door.to_room.as_deref(), &sides.to),
+                (OpeningSide::FromRoom, door.from_room.as_deref(), &sides.from),
+                (OpeningSide::ToRoom, door.to_room.as_deref(), &sides.to),
             ] {
                 let Some(authored) = authored else {
                     // Nothing stated: this is the fill case, not the drift case.
@@ -683,17 +696,17 @@ fn geometry_pass(
                     continue;
                 }
 
-                let doors_taken_at = payload.snapshot.taken_at.as_str();
+                let openings_taken_at = payload.taken_at();
                 let rooms_at = rooms_taken_at.get(key.model_id.as_str()).copied().unwrap_or("");
                 report.room_geometry_mismatches.push(RoomGeometryMismatch {
                     model_id: key.model_id.clone(),
-                    door_id: door.id.clone(),
+                    opening_id: door.id.clone(),
                     side,
                     authored_room_id: authored.to_string(),
                     geometric_room: Some(found.clone()),
-                    doors_taken_at: doors_taken_at.to_string(),
+                    openings_taken_at: openings_taken_at.to_string(),
                     rooms_taken_at: rooms_at.to_string(),
-                    stale: stale_side(doors_taken_at, rooms_at),
+                    stale: stale_side(openings_taken_at, rooms_at),
                 });
             }
         }
@@ -703,15 +716,15 @@ fn geometry_pass(
 /// Which snapshot was read first. RFC3339 UTC ids compare lexically — the same
 /// property the store's "lexical max is newest" rule already depends on — so
 /// this needs no date parsing and cannot fail on a value the store accepted.
-fn stale_side(doors_taken_at: &str, rooms_taken_at: &str) -> StaleSide {
-    match doors_taken_at.cmp(rooms_taken_at) {
+fn stale_side(openings_taken_at: &str, rooms_taken_at: &str) -> StaleSide {
+    match openings_taken_at.cmp(rooms_taken_at) {
         std::cmp::Ordering::Less => StaleSide::Doors,
         std::cmp::Ordering::Greater => StaleSide::Rooms,
         std::cmp::Ordering::Equal => StaleSide::Neither,
     }
 }
 
-/// Reconcile one project's doors against its rooms — see `DoorReport`.
+/// Reconcile one project's doors against its rooms — see `OpeningReport`.
 ///
 /// Rooms are indexed **per model** rather than into one project-wide set, which
 /// is the whole correctness argument here: a project-wide set would silently
@@ -730,14 +743,14 @@ fn stale_side(doors_taken_at: &str, rooms_taken_at: &str) -> StaleSide {
 /// checks. Splitting it into per-outcome helpers would hide that ordering behind
 /// call sites, which is exactly the thing a reader has to see.
 #[allow(clippy::too_many_lines)]
-fn door_report(
+fn opening_report<P: crate::contract::OpeningEnvelope>(
     project_id: &str,
     stored_rooms: &[(ModelKey, RoomPayload)],
-    stored_doors: &[(ModelKey, DoorPayload)],
-    policy: &DoorPolicy,
+    stored_openings: &[(ModelKey, P)],
+    policy: &OpeningPolicy,
     builtin_defs: &[BuiltinPropertyDef],
-    located: Option<&LocatedDoors>,
-) -> DoorReport {
+    located: Option<&LocatedOpenings>,
+) -> OpeningReport {
     let rooms_by_model: BTreeMap<&str, BTreeSet<&str>> = stored_rooms
         .iter()
         .filter(|(_, payload)| payload.project.id == project_id)
@@ -764,7 +777,7 @@ fn door_report(
         })
         .collect();
 
-    let mut report = DoorReport { room_attribution: policy.room_attribution, ..DoorReport::default() };
+    let mut report = OpeningReport { room_attribution: policy.room_attribution, ..OpeningReport::default() };
     report.room_reference_property = policy.room_reference_property.clone();
     report.room_resolution = policy.room_resolution;
 
@@ -776,23 +789,23 @@ fn door_report(
         .filter(|(_, payload)| payload.project.id == project_id)
         .map(|(key, payload)| (key.model_id.as_str(), payload.phase.as_deref()))
         .collect();
-    for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
+    for (key, payload) in stored_openings.iter().filter(|(_, p)| p.project().id == project_id) {
         let Some(rooms_phase) = rooms_phase_by_model.get(key.model_id.as_str()) else {
             continue; // no rooms yet: pending, not drift
         };
         // Folded exactly as `contract::phases_agree` folds, so a model differing
         // only in spelling is not reported -- the same stance `phase_report`
         // takes, and the same one ingest takes when deciding agreement.
-        if !crate::contract::phases_agree(payload.phase.as_deref(), *rooms_phase) {
-            report.doors_phase_drift.push(DoorPhaseDrift {
+        if !crate::contract::phases_agree(payload.phase(), *rooms_phase) {
+            report.phase_drift.push(OpeningPhaseDrift {
                 model_id: key.model_id.clone(),
-                doors_phase: payload.phase.clone(),
+                openings_phase: payload.phase().map(str::to_string),
                 rooms_phase: rooms_phase.map(str::to_string),
             });
         }
     }
 
-    for (key, payload) in stored_doors.iter().filter(|(_, p)| p.project.id == project_id) {
+    for (key, payload) in stored_openings.iter().filter(|(_, p)| p.project().id == project_id) {
         // A model with doors but no rooms snapshot has nothing to resolve
         // against. That used to be unreachable — ingest refused the push — so
         // this treated it as "every reference dangles". It is now an ordinary
@@ -800,24 +813,24 @@ fn door_report(
         // report a whole correct push as broken. See the `rooms` binding below
         // for what it skips and, more importantly, what it does not.
         let rooms = rooms_by_model.get(key.model_id.as_str());
-        for door in &payload.doors {
-            report.total_doors += 1;
+        for door in payload.openings() {
+            report.total += 1;
             let sides = [
-                (DoorSide::FromRoom, door.from_room.as_deref()),
-                (DoorSide::ToRoom, door.to_room.as_deref()),
+                (OpeningSide::FromRoom, door.from_room.as_deref()),
+                (OpeningSide::ToRoom, door.to_room.as_deref()),
             ];
 
             match (door.from_room.as_deref(), door.to_room.as_deref()) {
                 (None, None) => {
                     report
-                        .doors_without_room_reference
-                        .push(DoorWithoutRoom { model_id: key.model_id.clone(), door_id: door.id.clone() });
+                        .without_room_reference
+                        .push(OpeningWithoutRoom { model_id: key.model_id.clone(), opening_id: door.id.clone() });
                     // Nothing to resolve — a door with no references cannot also
                     // have a dangling one, so it is reported once, not twice.
                     continue;
                 }
                 // Exactly one side: an external door. Counted, never flagged.
-                (Some(_), None) | (None, Some(_)) => report.doors_external += 1,
+                (Some(_), None) | (None, Some(_)) => report.external += 1,
                 (Some(_), Some(_)) => {}
             }
 
@@ -828,8 +841,8 @@ fn door_report(
             let owners = policy.room_attribution.owners(door.from_room.as_deref(), door.to_room.as_deref());
             if owners.is_empty() {
                 report
-                    .doors_unattributed
-                    .push(DoorWithoutRoom { model_id: key.model_id.clone(), door_id: door.id.clone() });
+                    .unattributed
+                    .push(OpeningWithoutRoom { model_id: key.model_id.clone(), opening_id: door.id.clone() });
                 continue;
             }
 
@@ -844,17 +857,17 @@ fn door_report(
             // doors-first push does not quietly stop reporting them.
             let Some(rooms) = rooms else {
                 report
-                    .doors_pending_rooms
-                    .push(PendingRoomReference { model_id: key.model_id.clone(), door_id: door.id.clone() });
+                    .pending_rooms
+                    .push(PendingRoomReference { model_id: key.model_id.clone(), opening_id: door.id.clone() });
                 continue;
             };
 
             for (side, room_id) in sides {
                 let Some(room_id) = room_id else { continue };
                 if !rooms.contains(room_id) {
-                    report.doors_unresolved_room.push(UnresolvedRoomReference {
+                    report.unresolved_room.push(UnresolvedRoomReference {
                         model_id: key.model_id.clone(),
-                        door_id: door.id.clone(),
+                        opening_id: door.id.clone(),
                         side,
                         room_id: room_id.to_string(),
                     });
@@ -893,7 +906,7 @@ fn door_report(
                     .unwrap_or_default();
                 report.room_reference_mismatches.push(RoomReferenceMismatch {
                     model_id: key.model_id.clone(),
-                    door_id: door.id.clone(),
+                    opening_id: door.id.clone(),
                     authored: authored.to_string(),
                     attributed_room_id: first.to_string(),
                     attributed_room_number: number,
@@ -903,21 +916,21 @@ fn door_report(
     }
 
     if let Some(located) = located {
-        geometry_pass(project_id, stored_rooms, stored_doors, located, &mut report);
+        geometry_pass(project_id, stored_rooms, stored_openings, located, &mut report);
     }
 
-    report.discrepancies = DoorDiscrepancyCounts {
-        total: report.doors_without_room_reference.len()
-            + report.doors_unresolved_room.len()
-            + report.doors_unattributed.len()
+    report.discrepancies = OpeningDiscrepancyCounts {
+        total: report.without_room_reference.len()
+            + report.unresolved_room.len()
+            + report.unattributed.len()
             + report.room_reference_mismatches.len()
-            + report.doors_phase_drift.len()
+            + report.phase_drift.len()
             + report.room_geometry_mismatches.len(),
-        doors_unattributed: report.doors_unattributed.len(),
+        unattributed: report.unattributed.len(),
         room_reference_mismatches: report.room_reference_mismatches.len(),
-        doors_without_room_reference: report.doors_without_room_reference.len(),
-        doors_unresolved_room: report.doors_unresolved_room.len(),
-        doors_phase_drift: report.doors_phase_drift.len(),
+        without_room_reference: report.without_room_reference.len(),
+        unresolved_room: report.unresolved_room.len(),
+        phase_drift: report.phase_drift.len(),
         room_geometry_mismatches: report.room_geometry_mismatches.len(),
     };
     report
@@ -1281,7 +1294,6 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // reconciling against nothing can still be serving two phases at once, and
     // that is exactly the project nobody would otherwise be watching.
     let stored = state.all_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
-    let stored_doors = state.all_door_snapshots(Some(project_id)).map_err(ServiceError::Internal)?;
 
     let mut response = ValidationResponse::nothing_to_reconcile();
     // Both of these are room-versus-room and door-versus-room findings that owe
@@ -1290,17 +1302,48 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // two phases at once, or serving doors that link to rooms it no longer has,
     // and that is exactly the project nobody would otherwise be watching.
     response.phases = phase_report(project_id, &stored);
-    // Resolved before the report so `door_report` stays a pure function of the
+    // Resolved before the report so `opening_report` stays a pure function of the
     // data it is handed -- it never touches the store, which is what lets every
     // one of its tests build a scenario as two vectors.
-    let located = super::doors::locate_project_doors(state, project_id, bundle.doors.room_resolution, &stored_doors)?;
-    response.doors = door_report(
-        project_id,
-        &stored,
-        &stored_doors,
-        &bundle.doors,
-        &bundle.builtin_properties,
-        (!located.is_empty()).then_some(&located),
+    // One report per opening entity, both built from the same function over the
+    // same rooms. An entity with nothing pushed still reports -- zero totals and
+    // empty lists -- so a reader can tell "no windows here" from "this server
+    // does not report windows", which an absent key could not say.
+    let stored_doors = state
+        .all_opening_snapshots::<crate::contract::DoorPayload>(crate::storage::SnapshotKind::Doors, Some(project_id))
+        .map_err(ServiceError::Internal)?;
+    let located_doors =
+        super::openings::locate_project_openings(state, project_id, bundle.doors.room_resolution, &stored_doors)?;
+    response.openings.insert(
+        "doors".to_string(),
+        opening_report(
+            project_id,
+            &stored,
+            &stored_doors,
+            &bundle.doors,
+            &bundle.builtin_properties,
+            (!located_doors.is_empty()).then_some(&located_doors),
+        ),
+    );
+
+    let stored_windows = state
+        .all_opening_snapshots::<crate::contract::WindowPayload>(
+            crate::storage::SnapshotKind::Windows,
+            Some(project_id),
+        )
+        .map_err(ServiceError::Internal)?;
+    let located_windows =
+        super::openings::locate_project_openings(state, project_id, bundle.windows.room_resolution, &stored_windows)?;
+    response.openings.insert(
+        "windows".to_string(),
+        opening_report(
+            project_id,
+            &stored,
+            &stored_windows,
+            &bundle.windows,
+            &bundle.builtin_properties,
+            (!located_windows.is_empty()).then_some(&located_windows),
+        ),
     );
     if loaded.is_empty() {
         return Ok(response);
@@ -1318,7 +1361,7 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{CustomValue, Model, Project, Snapshot, SUPPORTED_SCHEMA};
+    use crate::contract::{CustomValue, DoorPayload, Model, Project, Snapshot, SUPPORTED_SCHEMA};
     use crate::reference::ReferenceRecord;
 
     fn make_room(id: &str, name: &str, props: &[(&str, &str)]) -> Room {
@@ -1910,6 +1953,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(
@@ -2075,6 +2119,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(
@@ -2206,9 +2251,9 @@ mod tests {
             ],
         )];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
-        assert_eq!(report.total_doors, 2);
-        assert_eq!(report.doors_external, 1, "the one-sided door is external");
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.total, 2);
+        assert_eq!(report.external, 1, "the one-sided door is external");
         assert_eq!(report.discrepancies.total, 0, "an external door is not a discrepancy");
     }
 
@@ -2219,12 +2264,12 @@ mod tests {
         let rooms = vec![rooms_for("p1", "m1", &["r1"])];
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
-        assert_eq!(report.discrepancies.doors_without_room_reference, 1);
-        assert_eq!(report.doors_without_room_reference[0].door_id, "d1");
-        assert_eq!(report.doors_without_room_reference[0].model_id, "m1");
-        assert_eq!(report.doors_external, 0, "no sides at all is not 'external'");
-        assert!(report.doors_unresolved_room.is_empty(), "reported once, not twice");
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.discrepancies.without_room_reference, 1);
+        assert_eq!(report.without_room_reference[0].opening_id, "d1");
+        assert_eq!(report.without_room_reference[0].model_id, "m1");
+        assert_eq!(report.external, 0, "no sides at all is not 'external'");
+        assert!(report.unresolved_room.is_empty(), "reported once, not twice");
     }
 
     /// **Half two.** A reference naming a room this model does not have — the
@@ -2239,11 +2284,11 @@ mod tests {
             vec![make_door("d1", Some("gone"), Some("also-gone"))],
         )];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
-        assert_eq!(report.discrepancies.doors_unresolved_room, 2, "two broken references, two entries");
-        let sides: Vec<DoorSide> = report.doors_unresolved_room.iter().map(|u| u.side).collect();
-        assert_eq!(sides, vec![DoorSide::FromRoom, DoorSide::ToRoom]);
-        assert_eq!(report.doors_unresolved_room[0].room_id, "gone");
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.discrepancies.unresolved_room, 2, "two broken references, two entries");
+        let sides: Vec<OpeningSide> = report.unresolved_room.iter().map(|u| u.side).collect();
+        assert_eq!(sides, vec![OpeningSide::FromRoom, OpeningSide::ToRoom]);
+        assert_eq!(report.unresolved_room[0].room_id, "gone");
     }
 
     /// **The correctness argument for indexing rooms per model.** A door in
@@ -2255,9 +2300,9 @@ mod tests {
         let rooms = vec![rooms_for("p1", "m1", &["other"]), rooms_for("p1", "m2", &["r1"])];
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), None)])];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
-        assert_eq!(report.discrepancies.doors_unresolved_room, 1, "m2's r1 is a different room");
-        assert_eq!(report.doors_unresolved_room[0].model_id, "m1");
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.discrepancies.unresolved_room, 1, "m2's r1 is a different room");
+        assert_eq!(report.unresolved_room[0].model_id, "m1");
     }
 
     /// Another project's doors are not this project's problem — the same
@@ -2270,8 +2315,8 @@ mod tests {
             make_doors("p2", "m1", vec![make_door("d2", None, None)]),
         ];
 
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
-        assert_eq!(report.total_doors, 1);
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.total, 1);
         assert_eq!(report.discrepancies.total, 0, "p2's broken door is not counted here");
     }
 
@@ -2292,8 +2337,8 @@ mod tests {
                 make_door("homeless", None, None),
             ],
         )];
-        let policy = DoorPolicy::default();
-        let report = door_report("p1", &rooms, &doors, &policy, &[], None);
+        let policy = OpeningPolicy::default();
+        let report = opening_report("p1", &rooms, &doors, &policy, &[], None);
 
         let owners = |from: Option<&str>, to: Option<&str>| {
             policy.room_attribution.owners(from, to).iter().map(|s| s.to_string()).collect::<Vec<_>>()
@@ -2303,9 +2348,9 @@ mod tests {
         assert_eq!(owners(Some("r3"), None), vec!["r3"], "falls back to opens-from");
         assert!(owners(None, None).is_empty(), "homeless");
 
-        assert_eq!(report.discrepancies.doors_without_room_reference, 1);
+        assert_eq!(report.discrepancies.without_room_reference, 1);
         assert!(
-            report.doors_unattributed.is_empty(),
+            report.unattributed.is_empty(),
             "the chain uses whatever exists, so nothing is unattributed for policy reasons"
         );
     }
@@ -2324,15 +2369,12 @@ mod tests {
                 make_door("homeless", None, None),
             ],
         )];
-        let policy = DoorPolicy { room_attribution: RoomAttribution::ToRoom, ..Default::default() };
-        let report = door_report("p1", &rooms, &doors, &policy, &[], None);
+        let policy = OpeningPolicy { room_attribution: RoomAttribution::ToRoom, ..Default::default() };
+        let report = opening_report("p1", &rooms, &doors, &policy, &[], None);
 
-        assert_eq!(report.doors_unattributed.len(), 1);
-        assert_eq!(report.doors_unattributed[0].door_id, "from-only");
-        assert_eq!(
-            report.discrepancies.doors_without_room_reference, 1,
-            "the homeless door is not double-counted"
-        );
+        assert_eq!(report.unattributed.len(), 1);
+        assert_eq!(report.unattributed[0].opening_id, "from-only");
+        assert_eq!(report.discrepancies.without_room_reference, 1, "the homeless door is not double-counted");
         assert_eq!(
             report.room_attribution,
             RoomAttribution::ToRoom,
@@ -2372,18 +2414,18 @@ mod tests {
             ],
         )];
 
-        let off = door_report("p1", &[rooms.clone()], &doors, &DoorPolicy::default(), &[], None);
+        let off = opening_report("p1", &[rooms.clone()], &doors, &OpeningPolicy::default(), &[], None);
         assert!(off.room_reference_mismatches.is_empty(), "no property named — the check is off");
         assert!(off.room_reference_property.is_none());
 
-        let policy = DoorPolicy {
+        let policy = OpeningPolicy {
             room_reference_property: Some("Door Room Reference".to_string()),
             ..Default::default()
         };
-        let on = door_report("p1", &[rooms], &doors, &policy, &[], None);
+        let on = opening_report("p1", &[rooms], &doors, &policy, &[], None);
         assert_eq!(on.room_reference_mismatches.len(), 1);
         let m = &on.room_reference_mismatches[0];
-        assert_eq!(m.door_id, "disagrees");
+        assert_eq!(m.opening_id, "disagrees");
         assert_eq!(m.authored, "01.07");
         assert_eq!(m.attributed_room_id, "r2");
         assert_eq!(m.attributed_room_number, "01.12");
@@ -2396,8 +2438,8 @@ mod tests {
     #[test]
     fn test_no_doors_is_an_empty_report() {
         let rooms = vec![rooms_for("p1", "m1", &["r1"])];
-        let report = door_report("p1", &rooms, &[], &DoorPolicy::default(), &[], None);
-        assert_eq!(report.total_doors, 0);
+        let report = opening_report::<DoorPayload>("p1", &rooms, &[], &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.total, 0);
         assert_eq!(report.discrepancies.total, 0);
     }
 
@@ -2416,13 +2458,13 @@ mod tests {
             vec![make_door("d1", Some("r1"), None)],
             Some("Stage 1"),
         )];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
 
-        assert_eq!(report.doors_phase_drift.len(), 1);
-        assert_eq!(report.doors_phase_drift[0].model_id, "m1");
-        assert_eq!(report.doors_phase_drift[0].doors_phase.as_deref(), Some("Stage 1"));
-        assert_eq!(report.doors_phase_drift[0].rooms_phase.as_deref(), Some("Stage 2"));
-        assert_eq!(report.discrepancies.doors_phase_drift, 1);
+        assert_eq!(report.phase_drift.len(), 1);
+        assert_eq!(report.phase_drift[0].model_id, "m1");
+        assert_eq!(report.phase_drift[0].openings_phase.as_deref(), Some("Stage 1"));
+        assert_eq!(report.phase_drift[0].rooms_phase.as_deref(), Some("Stage 2"));
+        assert_eq!(report.discrepancies.phase_drift, 1);
     }
 
     /// Folded exactly as ingest folds when it decides agreement, so a model
@@ -2436,8 +2478,8 @@ mod tests {
             vec![make_door("d1", Some("r1"), None)],
             Some("  new CONSTRUCTION "),
         )];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
-        assert!(report.doors_phase_drift.is_empty(), "same phase, different spelling");
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
+        assert!(report.phase_drift.is_empty(), "same phase, different spelling");
     }
 
     /// One entry per model, not per door — it is a fact about the two
@@ -2451,8 +2493,8 @@ mod tests {
             vec![make_door("d1", Some("r1"), None), make_door("d2", Some("r1"), None)],
             Some("Stage 1"),
         )];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
-        assert_eq!(report.doors_phase_drift.len(), 1, "two doors, one model, one finding");
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.phase_drift.len(), 1, "two doors, one model, one finding");
     }
 
     /// A model with doors and no rooms yet is **pending**, not drift: there is
@@ -2465,9 +2507,9 @@ mod tests {
             vec![make_door("d1", Some("r1"), None)],
             Some("Stage 1"),
         )];
-        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
-        assert!(report.doors_phase_drift.is_empty());
-        assert_eq!(report.doors_pending_rooms.len(), 1);
+        let report = opening_report("p1", &[], &doors, &OpeningPolicy::default(), &[], None);
+        assert!(report.phase_drift.is_empty());
+        assert_eq!(report.pending_rooms.len(), 1);
     }
 
     // ---------- geometric drift ----------
@@ -2475,7 +2517,7 @@ mod tests {
     /// The geometric answer for one door, as `locate_project_doors` would have
     /// produced it. Built by hand so these tests state the scenario rather than
     /// constructing a store and a coordinate system to imply it.
-    fn located(model: &str, door: &str, from: Option<&str>, to: Option<&str>) -> LocatedDoors {
+    fn located(model: &str, door: &str, from: Option<&str>, to: Option<&str>) -> LocatedOpenings {
         use crate::service::room_locator::{Located, RoomRef, Sides, Unresolved};
         let side = |r: Option<&str>| match r {
             Some(room) => Located::Found(RoomRef { model_id: model.into(), room_id: room.into() }),
@@ -2497,21 +2539,21 @@ mod tests {
             vec![make_door("d1", None, Some("r1"))],
             "2026-01-01T00:00:00Z",
         )];
-        let report = door_report(
+        let report = opening_report(
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r2"))),
         );
 
-        assert!(report.doors_unresolved_room.is_empty(), "the reference resolves — that is the point");
+        assert!(report.unresolved_room.is_empty(), "the reference resolves — that is the point");
         assert_eq!(report.room_geometry_mismatches.len(), 1);
         let finding = &report.room_geometry_mismatches[0];
         assert_eq!(finding.authored_room_id, "r1");
         assert_eq!(finding.geometric_room.as_ref().unwrap().room_id, "r2");
-        assert_eq!(finding.side, DoorSide::ToRoom);
+        assert_eq!(finding.side, OpeningSide::ToRoom);
         assert_eq!(report.discrepancies.room_geometry_mismatches, 1);
     }
 
@@ -2526,11 +2568,11 @@ mod tests {
             vec![make_door("d1", None, Some("r1"))],
             "2026-01-01T00:00:00Z",
         )];
-        let report = door_report(
+        let report = opening_report(
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r2"))),
         );
@@ -2544,11 +2586,11 @@ mod tests {
             vec![make_door("d1", None, Some("r1"))],
             "2026-02-01T00:00:00Z",
         )];
-        let report = door_report(
+        let report = opening_report(
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r2"))),
         );
@@ -2564,16 +2606,16 @@ mod tests {
         let ts = "2026-02-01T00:00:00Z";
         let rooms = vec![rooms_at("p1", "m1", &["r1", "r2"], ts)];
         let doors = vec![doors_at("p1", "m1", vec![make_door("d1", None, Some("r1"))], ts)];
-        let report = door_report(
+        let report = opening_report(
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r2"))),
         );
         assert_eq!(report.room_geometry_mismatches[0].stale, StaleSide::Neither);
-        assert_eq!(report.room_geometry_mismatches[0].doors_taken_at, ts);
+        assert_eq!(report.room_geometry_mismatches[0].openings_taken_at, ts);
         assert_eq!(report.room_geometry_mismatches[0].rooms_taken_at, ts);
     }
 
@@ -2590,18 +2632,24 @@ mod tests {
             "2026-01-01T00:00:00Z",
         )];
 
-        let agrees = door_report(
+        let agrees = opening_report(
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", None, Some("r1"))),
         );
         assert!(agrees.room_geometry_mismatches.is_empty(), "geometry agrees");
 
-        let silent =
-            door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], Some(&located("m1", "d1", None, None)));
+        let silent = opening_report(
+            "p1",
+            &rooms,
+            &doors,
+            &OpeningPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, None)),
+        );
         assert!(silent.room_geometry_mismatches.is_empty(), "the probe found nothing — not a disagreement");
     }
 
@@ -2616,11 +2664,11 @@ mod tests {
             vec![make_door("d1", None, None)],
             "2026-01-01T00:00:00Z",
         )];
-        let report = door_report(
+        let report = opening_report(
             "p1",
             &rooms,
             &doors,
-            &DoorPolicy::default(),
+            &OpeningPolicy::default(),
             &[],
             Some(&located("m1", "d1", Some("r1"), Some("r2"))),
         );
@@ -2641,8 +2689,14 @@ mod tests {
             vec![make_door("d1", None, None)],
             "2026-01-01T00:00:00Z",
         )];
-        let report =
-            door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], Some(&located("m1", "d1", None, None)));
+        let report = opening_report(
+            "p1",
+            &rooms,
+            &doors,
+            &OpeningPolicy::default(),
+            &[],
+            Some(&located("m1", "d1", None, None)),
+        );
         assert_eq!(report.room_resolution_counts.unresolved.get("no_candidate"), Some(&2));
         assert_eq!(report.room_resolution_counts.derived, 0);
     }
@@ -2658,7 +2712,7 @@ mod tests {
             vec![make_door("d1", None, Some("r1"))],
             "2026-01-01T00:00:00Z",
         )];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
         assert_eq!(report.room_resolution, RoomResolution::Off);
         assert!(report.room_geometry_mismatches.is_empty());
     }
@@ -2675,12 +2729,12 @@ mod tests {
     #[test]
     fn test_doors_whose_model_has_no_rooms_are_pending_not_dangling() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
-        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
-        assert_eq!(report.discrepancies.doors_unresolved_room, 0, "nothing dangles — nothing was checked");
+        let report = opening_report("p1", &[], &doors, &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.discrepancies.unresolved_room, 0, "nothing dangles — nothing was checked");
         assert_eq!(report.discrepancies.total, 0, "a pending model is not a finding");
-        assert_eq!(report.doors_pending_rooms.len(), 1, "one entry per door, not per side");
-        assert_eq!(report.doors_pending_rooms[0].model_id, "m1");
-        assert_eq!(report.doors_pending_rooms[0].door_id, "d1");
+        assert_eq!(report.pending_rooms.len(), 1, "one entry per door, not per side");
+        assert_eq!(report.pending_rooms[0].model_id, "m1");
+        assert_eq!(report.pending_rooms[0].opening_id, "d1");
     }
 
     /// The same door, once its model's rooms arrive and do not contain the ids
@@ -2691,21 +2745,21 @@ mod tests {
     fn test_a_pending_reference_becomes_dangling_once_rooms_arrive() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", Some("r1"), Some("r2"))])];
         let rooms = vec![rooms_for("p1", "m1", &["something-else"])];
-        let report = door_report("p1", &rooms, &doors, &DoorPolicy::default(), &[], None);
-        assert!(report.doors_pending_rooms.is_empty(), "the model has rooms now");
-        assert_eq!(report.discrepancies.doors_unresolved_room, 2, "both sides name rooms it does not have");
+        let report = opening_report("p1", &rooms, &doors, &OpeningPolicy::default(), &[], None);
+        assert!(report.pending_rooms.is_empty(), "the model has rooms now");
+        assert_eq!(report.discrepancies.unresolved_room, 2, "both sides name rooms it does not have");
     }
 
     /// A pending model still reports the facts that are about the door alone.
     /// A door with **no** reference on either side is a finding whether or not
     /// its rooms have arrived — nothing about the rooms would change that
-    /// answer, and the ordering in `door_report` is what keeps it reported.
+    /// answer, and the ordering in `opening_report` is what keeps it reported.
     #[test]
     fn test_a_pending_model_still_reports_doors_with_no_reference() {
         let doors = vec![make_doors("p1", "m1", vec![make_door("d1", None, None)])];
-        let report = door_report("p1", &[], &doors, &DoorPolicy::default(), &[], None);
-        assert_eq!(report.doors_without_room_reference.len(), 1);
-        assert!(report.doors_pending_rooms.is_empty(), "it has no reference to be pending about");
+        let report = opening_report("p1", &[], &doors, &OpeningPolicy::default(), &[], None);
+        assert_eq!(report.without_room_reference.len(), 1);
+        assert!(report.pending_rooms.is_empty(), "it has no reference to be pending about");
     }
 
     /// The door report reaches the response even when the project configures no
@@ -2724,6 +2778,7 @@ mod tests {
             comparison_properties: vec![],
             areas: Default::default(),
             doors: Default::default(),
+            windows: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(
@@ -2738,7 +2793,7 @@ mod tests {
 
         let result = compute_project_validation(&state, "p1").unwrap();
         assert!(result.sources.is_empty(), "no reference source configured");
-        assert_eq!(result.doors.discrepancies.doors_without_room_reference, 1, "reported anyway");
+        assert_eq!(result.openings["doors"].discrepancies.without_room_reference, 1, "reported anyway");
         assert_eq!(
             result.discrepancies.total, 0,
             "door findings stay out of the cross-source total, which counts sources"
