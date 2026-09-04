@@ -117,6 +117,9 @@ export class RoomIndex {
  *  from the glyph it is about to draw, so the thing you can click is by
  *  construction the thing you can see — they cannot drift, because there is
  *  only one computation. */
+/** Also used for windows: the index keys on a ring and a box and does not care
+ *  what the element is, so a second class would be the same code under a
+ *  different name. `door` is the element, whichever entity it came from. */
 export interface PickableDoor {
   door: Door;
   /** The pick ring, already flipped (`DoorGlyph.pickRing`). */

@@ -34,7 +34,7 @@
 // instead. Same call site, two implementations — which is the entire point of
 // having a seam.
 
-import type { Door, Rect, Room } from "./types.js";
+import type { Door, Rect, Room, WindowOpening } from "./types.js";
 
 /** Search state, applied WITHOUT a re-render. Preserving that property is an
  *  explicit obligation: a search can match thousands of rooms, and a keystroke
@@ -67,6 +67,18 @@ export interface PaintRequest {
    *  toggle is the page's state, and a renderer given doors and no instruction
    *  should draw them. */
   showDoors?: boolean | undefined;
+
+  /**
+   * The windows to draw on this level, already scoped by the caller.
+   *
+   * A second list rather than one merged `openings` list, because the two draw
+   * differently and are toggled independently -- a reader turning doors off to
+   * read circulation still wants the windows. Merging them would mean carrying
+   * a discriminant per element and splitting it again in the renderer.
+   */
+  windows?: readonly WindowOpening[] | undefined;
+  /** Whether to draw them. Absent means yes when `windows` is non-empty. */
+  showWindows?: boolean | undefined;
 }
 
 /**
@@ -74,7 +86,10 @@ export interface PaintRequest {
  * the two share `id` and `loops` and would otherwise be told apart by
  * duck-typing on a field that both may carry.
  */
-export type Pick = { kind: "room"; room: Room } | { kind: "door"; door: Door };
+export type Pick =
+  | { kind: "room"; room: Room }
+  | { kind: "door"; door: Door }
+  | { kind: "window"; window: WindowOpening };
 
 export interface PlanRenderer {
   /** Draw a level, framed to `fitted`. Replaces whatever was drawn before. */

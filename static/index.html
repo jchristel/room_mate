@@ -652,6 +652,7 @@
     <button class="ctl" id="linkToggle" title="Sync zoom/pan across all zones">Link views: off</button>
     <button class="ctl on" id="labelsToggle" title="Show or hide room labels (SVG export follows)">Labels: on</button>
     <button class="ctl on" id="doorsToggle" title="Show or hide door glyphs">Doors: on</button>
+    <button class="ctl on" id="windowsToggle" title="Show or hide window glyphs">Windows: on</button>
     <div class="search">
       <input id="searchInput" type="search" placeholder="Search rooms…" autocomplete="off" />
       <button class="ctl" id="fieldsToggle" title="Choose which fields to search">Fields ▾</button>
@@ -844,6 +845,12 @@ let currentPayload = null;   // the one /rooms payload every zone renders from
 // entity's poll re-render the other for nothing.
 let doorsPayload = null;
 let lastDoorsRevision = null;
+// The one /windows payload. A THIRD list rather than merging into the doors
+// one: the two are pushed independently, toggled independently, and draw
+// differently, so a shared revision would make each entity's poll re-render the
+// other for nothing -- the same argument that kept doors out of currentPayload.
+let windowsPayload = null;
+let lastWindowsRevision = null;
 let lastRevision = null;     // poll change-detection cursor
 // The server's ETag for the last body we actually received, per entity.
 //
@@ -862,6 +869,7 @@ let lastRevision = null;     // poll change-detection cursor
 // structural rather than something the reset lines below have to remember.
 let lastRoomsEtag = null;
 let lastDoorsEtag = null;
+let lastWindowsEtag = null;
 // Picker refresh guards (diff signatures so the 2s tick doesn't fight the user).
 let lastProjectIds = null;
 let lastBuildingsSignature = null;
@@ -901,6 +909,7 @@ let showRoomLabels = true;
 // people who asked for the glyph want it by default. Page state, not per zone,
 // matching how labels work.
 let showDoors = true;
+let showWindows = true;
 
 // Global room search (see the "search" section lower down): one query + one set
 // of enabled field keys, applied to every zone. `searchFields` empty means "not
@@ -936,6 +945,7 @@ let selection = null;   // { kind: "room" | "area", id, zoneId } | null
 // does not exist.
 function roomSelection() { return selection && selection.kind === "room" ? selection.id : null; }
 function doorSelection() { return selection && selection.kind === "door" ? selection.id : null; }
+function windowSelection() { return selection && selection.kind === "window" ? selection.id : null; }
 
 // Anything that wants to react to a selection change registers here. Listeners
 // receive the whole `selection` object (or null), so a kind-blind listener must
@@ -1449,6 +1459,8 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       showLabels: showRoomLabels,
       doors: doorsOnLevel(levelId),
       showDoors,
+      windows: windowsOnLevel(levelId),
+      showWindows,
     });
     // Inside the deferred build, not after it: on a large level these run a
     // frame later than the surrounding code, and re-applying a selection to a
@@ -3319,6 +3331,7 @@ function applySelection(zone) {
   // the seam, so the page keeps that half itself.
   zone.renderer.setSelection(roomSelection() || null);
   zone.renderer.setDoorSelection(doorSelection() || null);
+  zone.renderer.setWindowSelection(windowSelection() || null);
 
   const areaId = selection && selection.kind === "area" ? selection.id : null;
   for (const p of zone.svg.querySelectorAll(".area-poly"))
@@ -3350,6 +3363,9 @@ function selectArea(areaId, zoneId = null) {
 }
 function selectDoor(doorId, zoneId = null) {
   select(doorId ? { kind: "door", id: doorId, zoneId } : null);
+}
+function selectWindow(windowId, zoneId = null) {
+  select(windowId ? { kind: "window", id: windowId, zoneId } : null);
 }
 
 // The room a plan click landed on, or null for empty space / the grid. Resolved
@@ -3456,6 +3472,7 @@ const INSPECTORS = {
   room: renderRoomInspector,
   area: renderAreaInspector,
   door: renderDoorInspector,
+  window: renderWindowInspector,
 };
 
 // The header every kind shares: a title, a sub-line, and the zone the click came
@@ -3568,6 +3585,71 @@ function renderDoorInspector(host) {
   inspSection(host, "Instance properties", inspApplyFilters(inst));
 
   const type = Object.entries(door.type_properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  type.sort((a, b) => a[0].localeCompare(b[0]));
+  inspSection(host, "Type properties", inspApplyFilters(type));
+}
+
+// ---- the window inspector ---------------------------------------------------
+//
+// Its own panel rather than the door one under another name, even though the
+// RECORD is identical -- measured, on two documents. What differs is what the
+// values mean, and the panel exists to say so.
+//
+// "Opens from / into" reads oddly for glazing, so the labels name the sides
+// rather than the act. And an absent room is not the same story it is for a
+// door: for a door, one side absent means external and both absent is a
+// finding; for a window in a facade model both absent is the NORMAL state,
+// because Revit cannot resolve a room across a link. Telling a reader that a
+// correct model is broken is the failure this wording avoids.
+function renderWindowInspector(host) {
+  const win = (windowsPayload?.windows || []).find(w => w.id === selection.id);
+  if (!win) {
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent = `Window ${selection.id} is not in the current scope.`;
+    host.appendChild(note);
+    return;
+  }
+
+  const levelName = (currentPayload?.levels || []).find(l => l.id === win.level_id)?.name || win.level_id;
+  inspHead(host, {
+    kind: "window",
+    title: win.type_name || win.id,
+    sub: `${win.id} · ${levelName}`,
+  });
+
+  const roomName = (id) => {
+    if (!id) return "";
+    const r = (currentPayload?.rooms || []).find(x => x.id === id);
+    return r ? (r.name || r.id) : `${id} (not in scope)`;
+  };
+
+  const sided = win.from_room || win.to_room;
+  const refs = [
+    ["Faces from", win.from_room ? roomName(win.from_room) : "(none)"],
+    ["Faces into", win.to_room ? roomName(win.to_room) : "(none)"],
+    ["Attributed to", (win.owner_rooms || []).length
+      ? win.owner_rooms.map(roomName).join(", ")
+      : sided
+        ? "(homeless — no room attributed)"
+        : "(no room reference — normal in a facade model)"],
+  ];
+  inspSection(host, "Rooms", refs);
+
+  // What the plan is drawing, named so a window shown as a bare symbol -- or as
+  // a footprint with no symbol -- does not look like a rendering fault.
+  const hasBox = !!(win.loops && win.loops.length && win.loops[0]?.points?.length);
+  const geom = [
+    ["Footprint", hasBox ? "yes" : "none — drawn from its insertion point"],
+    ["Direction", win.through_wall_normal ? "yes" : "unknown — no symbol drawn"],
+  ];
+  inspSection(host, "Geometry", geom);
+
+  const inst = Object.entries(win.properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  inst.sort((a, b) => a[0].localeCompare(b[0]));
+  inspSection(host, "Instance properties", inspApplyFilters(inst));
+
+  const type = Object.entries(win.type_properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
   type.sort((a, b) => a[0].localeCompare(b[0]));
   inspSection(host, "Type properties", inspApplyFilters(type));
 }
@@ -3810,6 +3892,56 @@ function doorsOnLevel(levelId) {
   return (doorsPayload.doors || []).filter(d => (d.level_id || "unknown") === levelId);
 }
 
+// The /windows URL. Same caveat as doorsUrl, and it bites harder here: a
+// window's building comes through the room it is attributed to, and in a facade
+// model NO window is attributed to anything -- 0 of 158 carried a room
+// reference when it was measured -- so selecting a building hides every window
+// in such a project. That is the server's documented behaviour and the reason
+// [windows] room_resolution exists, not something to paper over here.
+function windowsUrl() {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project", projectId);
+  if (buildingKey) params.set("building", buildingKey);
+  if (projectId && milestone) params.set("milestone", milestone);
+  const qs = params.toString();
+  return qs ? `/windows?${qs}` : "/windows";
+}
+
+// The windows on one level, keyed exactly as doors are and carrying the same
+// within-one-model caveat.
+function windowsOnLevel(levelId) {
+  if (!windowsPayload) return [];
+  return (windowsPayload.windows || []).filter(w => (w.level_id || "unknown") === levelId);
+}
+
+// Windows poll on their own revision, in their own try -- a windows read that
+// fails or 204s must not take rooms or doors down with it. A model with rooms
+// and no windows is legitimate (a service core, an internal floor), and the
+// plan is still worth drawing without them.
+async function pollWindows() {
+  try {
+    const res = await fetch(windowsUrl(), { cache: "no-store", headers: condHeaders(lastWindowsEtag) });
+    if (res.status === 304) return false;
+    if (res.status === 204) {
+      // Drop the tag with the payload: 204 carries none, so holding the old one
+      // would send `If-None-Match` for an entity we no longer have.
+      lastWindowsEtag = null;
+      if (windowsPayload !== null) { windowsPayload = null; lastWindowsRevision = null; return true; }
+      return false;
+    }
+    if (!res.ok) return false;
+    lastWindowsEtag = res.headers.get("ETag");
+    const payload = await res.json();
+    const incoming = payload.revision ?? JSON.stringify(payload);
+    if (incoming === lastWindowsRevision) return false;
+    lastWindowsRevision = incoming;
+    windowsPayload = payload;
+    return true;
+  } catch (err) {
+    return false;   // rooms already report connection loss; one message is enough
+  }
+}
+
 // Doors poll on their own revision, in their own try. A doors read that fails
 // or 204s must not take the rooms down with it: a model with rooms and no doors
 // is legitimate (the server says so explicitly), and the plan is still worth
@@ -3886,12 +4018,13 @@ async function poll() {
     // with both, rather than painting rooms and then immediately repainting to
     // add the doors.
     const doorsChanged = await pollDoors();
+    const windowsChanged = await pollWindows();
     if (incoming !== lastRevision) {
       lastRevision = incoming;
       ingestAll(payload); // re-fits + rebuilds level controls only on real change
-    } else if (doorsChanged) {
-      // Doors moved and rooms did not. Repaint in place: no refit, because a
-      // doors push must not throw away the user's pan and zoom.
+    } else if (doorsChanged || windowsChanged) {
+      // An opening entity moved and rooms did not. Repaint in place: no refit,
+      // because such a push must not throw away the user's pan and zoom.
       redrawAllZones();
     }
   } catch (err) {
@@ -4019,6 +4152,7 @@ function wireInteractions(zone) {
       const area = areaAtNode(zone, downNode);
       const hit = area ? null : zone.renderer.pickAt(downAt.x, downAt.y);
       if (hit && hit.kind === "door") selectDoor(hit.door.id, zone.id);
+      else if (hit && hit.kind === "window") selectWindow(hit.window.id, zone.id);
       else if (hit) selectRoom(hit.room.id, zone.id);
       else selectArea(area ? areaKey(area) : null, area ? zone.id : null);
     }
@@ -4330,6 +4464,17 @@ document.getElementById("doorsToggle").addEventListener("click", (e) => {
   // describing something the plan no longer draws and the mark points at empty
   // space. refit:false for the same reason the labels toggle uses it.
   if (!showDoors && doorSelection()) select(null);
+  redrawAllZones();
+});
+
+document.getElementById("windowsToggle").addEventListener("click", (e) => {
+  showWindows = !showWindows;
+  e.target.textContent = `Windows: ${showWindows ? "on" : "off"}`;
+  e.target.classList.toggle("on", showWindows);
+  // Hiding windows must also drop a window SELECTION, for the reason the doors
+  // toggle drops a door one: the inspector would keep describing something the
+  // plan no longer draws, and the mark would point at empty space.
+  if (!showWindows && windowSelection()) select(null);
   redrawAllZones();
 });
 

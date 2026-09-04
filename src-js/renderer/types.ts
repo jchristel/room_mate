@@ -89,6 +89,24 @@ export interface Door {
   type_properties?: Record<string, PropertyValue>;
 }
 
+/**
+ * One window, as `/windows` returns it.
+ *
+ * **The same record as `Door`, and an alias rather than a copy**, because that
+ * is what the measurement found: a full-depth key-path diff of real exports from
+ * two documents showed zero structural differences between a window record and a
+ * door record. The server shares one `Opening` type for exactly this reason, and
+ * a second interface here would only be somewhere for the two to drift apart.
+ *
+ * **Named `WindowOpening`, not `Window`**, which is not a stylistic choice:
+ * `Window` is the DOM global, and shadowing it in a file that also touches the
+ * canvas is a class of bug nobody enjoys finding.
+ *
+ * What differs is the DATA, not the shape, and the glyph is where that shows up
+ * — see `buildWindowGlyph`.
+ */
+export type WindowOpening = Door;
+
 /** A rectangle in the **flipped** (Y-down) space — the same space as
  *  `zone.view` and the SVG viewBox. */
 export interface Extent {
