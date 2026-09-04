@@ -20,6 +20,21 @@
 #
 #
 
+"""
+The extraction side of an OPENING -- a door, a window, and whatever wall-hosted
+category comes next.
+
+One module rather than one per category, because measurement said so: a
+full-depth diff of real duHast exports from two documents found a window record
+and a door record structurally identical, and the four facts read here are read
+the same way for both. `category` is the only argument that varies.
+
+The examples in the comments below cite DOORS, deliberately. They are the cases
+that decided each rule, and replacing a measured door figure with a vaguer
+statement about openings would trade evidence for symmetry. Where windows differ
+in degree rather than in kind it is said at the function concerned.
+"""
+
 import math
 
 from room_m.utils.generic import (
@@ -28,10 +43,10 @@ from room_m.utils.generic import (
     elements_in_phase,
 )
 
-# The direct Revit API use in this module: the placement pass walks doors with a
-# raw collector, because the phase-indexed room references, the insertion point
-# and the facing direction are all read off the live element rather than the
-# export (see `door_placements`).
+# The direct Revit API use in this module: the placement pass walks the chosen
+# category with a raw collector, because the phase-indexed room references, the
+# insertion point and the facing direction are all read off the live element
+# rather than the export (see `opening_placements`).
 from Autodesk.Revit.DB import (
     BuiltInCategory,
     FilteredElementCollector,
@@ -41,7 +56,7 @@ from room_m.utils.room_refs import (
     room_reference,
 )
 
-def door_through_wall_normal(door):
+def opening_through_wall_normal(opening):
     """The unit vector through the wall, from the door's from-room toward its
     to-room, as `{"x", "y"}`, or None.
 
@@ -60,7 +75,7 @@ def door_through_wall_normal(door):
     normalised out of a zero-length vector, because the honest answer is that
     this door has no in-plan direction, and the contract says a consumer must
     then draw no arrow instead of guessing one."""
-    facing = getattr(door, "FacingOrientation", None)
+    facing = getattr(opening, "FacingOrientation", None)
     if facing is None:
         return None
     x = float(facing.X)
@@ -71,9 +86,15 @@ def door_through_wall_normal(door):
     return {"x": x / length, "y": y / length}
 
 
-def door_placements(doc, phase_name):
-    """`{door id: {"from_room", "to_room", "insertion_point", "normal"}}` for
-    every door in `doc`, read from the Revit API for the chosen phase.
+def opening_placements(doc, phase_name, category):
+    """`{opening id: {"from_room", "to_room", "insertion_point", "normal"}}` for
+    every instance of `category` in `doc`, read from the Revit API for the chosen
+    phase.
+
+    `category` is a `BuiltInCategory` -- `OST_Doors`, `OST_Windows`. It is the
+    only thing that varies between entities here, which is the whole reason this
+    is one function: `room_reference` was already written to take the property
+    name as an argument for exactly this day.
 
     **One collector pass, four facts.** These were separate questions once and
     the room references came first; putting the placement reads here rather than
@@ -105,27 +126,27 @@ def door_placements(doc, phase_name):
     placements = {}
     collector = (
         FilteredElementCollector(doc)
-        .OfCategory(BuiltInCategory.OST_Doors)
+        .OfCategory(category)
         .WhereElementIsNotElementType()
     )
-    for door in collector:
+    for opening in collector:
         try:
-            from_room = room_reference(door, phase, "FromRoom")
-            to_room = room_reference(door, phase, "ToRoom")
+            from_room = room_reference(opening, phase, "FromRoom")
+            to_room = room_reference(opening, phase, "ToRoom")
         except Exception:
             from_room, to_room = None, None
 
         try:
-            insertion_point = door_insertion_point(door)
+            insertion_point = opening_insertion_point(opening)
         except Exception:
             insertion_point = None
 
         try:
-            normal = door_through_wall_normal(door)
+            normal = opening_through_wall_normal(opening)
         except Exception:
             normal = None
 
-        placements[element_id_str(door.Id)] = {
+        placements[element_id_str(opening.Id)] = {
             "from_room": from_room,
             "to_room": to_room,
             "insertion_point": insertion_point,
@@ -134,12 +155,18 @@ def door_placements(doc, phase_name):
     return placements
 
 
-def doors_in_phase(doc, phase_name):
-    """The door ids in `phase_name`."""
-    return elements_in_phase(doc, phase_name, BuiltInCategory.OST_Doors)
+def openings_in_phase(doc, phase_name, category):
+    """The ids of `category`'s instances in `phase_name`.
+
+    The RANGE test, not the equality test rooms use. A door or a window is built
+    in one phase and may be demolished in a later one, so it exists across a
+    span; a room belongs to exactly one. Running an opening through the room
+    predicate returns nothing, silently -- the failure that cost five empty
+    pushes to find."""
+    return elements_in_phase(doc, phase_name, category)
 
 
-def door_insertion_point(door):
+def opening_insertion_point(opening):
     """The door's plan position as `{"x", "y"}`, or None.
 
     Revit's `LocationPoint`, which a placed `FamilyInstance` has. Z is dropped:
@@ -152,15 +179,27 @@ def door_insertion_point(door):
     where they are. Without this they exist in QA and in `/doors` but appear
     nowhere a reader looks at a plan, which reads as "there is no door there"
     rather than "its shape is unknown"."""
-    location = getattr(door, "Location", None)
+    location = getattr(opening, "Location", None)
     point = getattr(location, "Point", None) if location is not None else None
     if point is None:
         return None
     return {"x": float(point.X), "y": float(point.Y)}
 
-def nested_door_ids(doc):
-    """The ids of doors that are a *component of another door*, and so are not
-    doors at all -- they are its leaves, panels and hardware.
+def nested_opening_ids(doc, category):
+    """The ids of instances that are a *component of another instance of the same
+    category*, and so are not openings at all -- they are its leaves, panels,
+    glazing and hardware.
+
+    **Measured for both entities, and the scale differs enormously.** On a
+    facade file: 113 of 205 collected doors were components (55%), against 6 of
+    158 windows (3.8%). The doors were mostly hardware -- one handle family
+    accounted for 58 of them. The six windows were all one family, literally
+    named `088123_Glazing-ExteriorGlass-Nested`, all children of a single
+    parent, and none carried a Mark or a room reference.
+
+    So the filter matters far more for doors than for windows, and it is needed
+    for both: 6 openings that name no room would otherwise land in the homeless
+    pile and read as a modelling gap rather than as panes of glass.
 
     **This model family represents a door leaf as a nested shared family**, and
     a nested shared instance is a real, independently-collectable
@@ -179,7 +218,7 @@ def nested_door_ids(doc):
     **The test is the parent's category, not its family or name.** A door
     hosting a *window*-category or generic-model sub-component is a different
     statement about the model and is left alone; only "a door inside a door"
-    means leaf. Compared against `door.Category`, not against
+    means leaf. Compared against `opening.Category`, not against
     `BuiltInCategory.OST_Doors` converted to an int: the collector above has
     already fixed every element's category, so the door in hand IS the
     comparison value, and this avoids the enum-to-id conversion that
@@ -191,7 +230,7 @@ def nested_door_ids(doc):
     the model this was measured on. Walking `SuperComponent` to the root would
     be a loop here rather than a redesign, if one ever turns up.
 
-    Returned as its own set rather than subtracted from `doors_in_phase`'s,
+    Returned as its own set rather than subtracted from `openings_in_phase`'s,
     deliberately: the two answer different questions, and an empty push has to
     be able to say which of them emptied it. Folding them together would report
     a leaf as "outside phase" in the one message written to stop a reader
@@ -199,17 +238,17 @@ def nested_door_ids(doc):
     nested = set()
     collector = (
         FilteredElementCollector(doc)
-        .OfCategory(BuiltInCategory.OST_Doors)
+        .OfCategory(category)
         .WhereElementIsNotElementType()
     )
-    for door in collector:
-        parent = getattr(door, "SuperComponent", None)
+    for opening in collector:
+        parent = getattr(opening, "SuperComponent", None)
         if parent is None:
             continue  # a standalone door, which is the ordinary case
         parent_category = getattr(parent, "Category", None)
-        own_category = getattr(door, "Category", None)
+        own_category = getattr(opening, "Category", None)
         if parent_category is None or own_category is None:
             continue  # nothing to compare: keep it, absence is not evidence
         if element_id_str(parent_category.Id) == element_id_str(own_category.Id):
-            nested.add(element_id_str(door.Id))
+            nested.add(element_id_str(opening.Id))
     return nested

@@ -43,10 +43,12 @@ from room_m.utils.post_envelope import (
 
 from room_m.exporters import rooms as rooms_exporter
 from room_m.exporters import doors as doors_exporter
+from room_m.exporters import windows as windows_exporter
 
 
 ROOMS = "rooms"
 DOORS = "doors"
+WINDOWS = "windows"
 
 
 EntityExporter = namedtuple(
@@ -57,6 +59,12 @@ EntityExporter = namedtuple(
 # than branching per entity, so adding windows or FF&E is a new module in
 # `room_m.exporters`, one row here, and one entry point -- not another `if` in
 # the run driver.
+#
+# **Windows cost exactly one row**, which is what this table was written to make
+# true and is now measured rather than claimed: no new branch in the run driver,
+# no ordering, no new envelope field. The one thing that did NOT come for free
+# was the pyRevit button, which lives outside this repository -- see
+# `windows_export_entry`.
 #
 # **`blocking` is gone, and its absence is the change.** It used to say that a
 # model's rooms had to land before its doors were attempted, because the server
@@ -74,6 +82,11 @@ ENTITY_EXPORTERS = {
         export_model=doors_exporter.export_model,
         post_bucket=doors_exporter.post_bucket,
         stamp_envelope=doors_exporter.stamp_envelope,
+    ),
+    WINDOWS: EntityExporter(
+        export_model=windows_exporter.export_model,
+        post_bucket=windows_exporter.post_bucket,
+        stamp_envelope=windows_exporter.stamp_envelope,
     ),
 }
 
@@ -121,6 +134,27 @@ def doors_export_entry(doc, uiapp, output, forms):
     :rtype: Result
     """
     return export_entry(doc, uiapp, output, forms, (DOORS,))
+
+
+def windows_export_entry(doc, uiapp, output, forms):
+    """Push WINDOWS alone.
+
+    A windows push carries no room data, only room *ids* -- and in a facade
+    model, usually not even those, because Revit cannot resolve a room across a
+    link. It needs nothing on the server first: an unresolvable or absent
+    reference is reported rather than refused, so windows may be pushed before
+    their rooms or without them entirely.
+
+    **Its pyRevit button has to be wired outside this repository**, which is the
+    one cost adding an entity does not absorb. Widening an existing entry point
+    instead would be worse: `rooms_export_entry` still pushes rooms AND doors
+    despite its name, and quietly adding windows to it would keep succeeding
+    while changing what every existing button does.
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return export_entry(doc, uiapp, output, forms, (WINDOWS,))
 
 
 def export_entry(doc, uiapp, output, forms, entities):
