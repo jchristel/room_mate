@@ -47,7 +47,6 @@ from System import TimeSpan
 from System.Net.Http import HttpClient
 from System.Text import Encoding
 
-from duHast.Utilities.files_json import serialize_utf
 
 
 # The settings endpoint, NOT /projects: a push target must be a *registered*
@@ -63,22 +62,101 @@ SERVER_URL_PROJECTS = "http://127.0.0.1:5151/api/settings/projects"
 SOURCE = "revit"
 
 
+# Python 2 and 3 spell their string and number types differently, and this file
+# runs on IronPython 2.7 as well as CPython 3.
+try:
+    _STRINGS = (str, unicode)  # noqa: F821 - IronPython 2.7
+    _NUMBERS = (int, long, float)  # noqa: F821 - IronPython 2.7
+except NameError:
+    _STRINGS = (str,)
+    _NUMBERS = (int, float)
+
+# What lands in a field duHast could not convert. A string where a value was
+# expected, so it survives the wire and shows up in QA as a property with a
+# strange value -- visible -- rather than as an element that never arrived.
+UNCONVERTIBLE = "<unconvertible>"
+
+
+def duhast_to_plain(value):
+    """duHast data objects to plain JSON types, marking -- rather than dying on
+    -- anything that will not convert.
+
+    **duHast's own serializer cannot be used here, and the reason is narrow.**
+    `serialize_utf` delegates to `Base.to_json`, which calls `json.dumps` with
+    **no `default=` handler** over a `class_to_dict()` whose inner `serialize()`
+    ends in `else: return obj`. So any CLR object duHast did not anticipate
+    passes through untouched and then raises -- and the raise is not scoped to
+    the field or even the element. It aborts the whole document's push.
+
+    An UNHOSTED opening triggers it. Revit gives such an element an invalid
+    `LevelId`; `get_level_data` calls `Element.Name.GetValue()` on nothing and
+    gets a property descriptor back; `encode_utf8` returns a non-string argument
+    UNCHANGED, so the descriptor lands in `level.name` with nothing complaining
+    until serialization. Measured: one skylight in a house, two terrace sills in
+    a facade file. Three elements, each of which cost its model's entire push.
+
+    **Catching around `serialize_utf` would not have been enough**, which is why
+    this walks. The failure fires inside `to_json` on a NESTED leaf, so a
+    try/except one level up marks the whole element unconvertible -- dropping a
+    real opening, with its id and properties and footprint, over one field. This
+    recurses instead and marks only the leaf. `class_to_dict()` is still used
+    for each duHast object: it is correct, it handles the .NET `Int64`
+    conversion, and its only gap is the leaves it did not expect -- which the
+    recursion below then catches.
+
+    **Silent marking is acceptable here only because the server reports the
+    consequence.** Such an element arrives with `level_id` of `-1`, nothing has
+    an elevation for it, and QA answers `UnknownLevel` -- naming the element and
+    the reason. If that report did not exist this would need its own channel.
+
+    In `post_common` rather than in one entity's push, because the mechanism is
+    duHast's and belongs to no entity: a hostless DOOR does exactly the same
+    thing, and this should not have to be found twice."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, _NUMBERS) or isinstance(value, _STRINGS):
+        return value
+
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            out[key if isinstance(key, _STRINGS) else str(key)] = duhast_to_plain(item)
+        return out
+
+    if isinstance(value, (list, tuple)):
+        return [duhast_to_plain(item) for item in value]
+
+    to_dict = getattr(value, "class_to_dict", None)
+    if callable(to_dict):
+        try:
+            return duhast_to_plain(to_dict())
+        except Exception:
+            return UNCONVERTIBLE
+
+    # `__dict__` only when it holds something. An EMPTY one means the fallback
+    # learned nothing, and emitting `{}` would quietly turn an unconvertible
+    # field into an empty object -- which reads downstream as "present but
+    # blank" rather than "could not be read". A CLR property descriptor, the
+    # thing this was written for, is exactly that shape.
+    attributes = getattr(value, "__dict__", None)
+    if isinstance(attributes, dict) and attributes:
+        return duhast_to_plain(attributes)
+
+    return UNCONVERTIBLE
+
+
 def duhast_objects_to_plain(json_data):
-    """Serialize duHast data objects (default=serialize_utf), then parse back
-    into plain dicts so the translate step can walk them. Materializes the
-    WHOLE input as a string and again as a dict tree -- fine for the buffered
-    `post_payload` path; the streaming path uses `duhast_object_to_plain`
-    per room instead so it never holds more than one room at a time."""
-    json_string = json.dumps(json_data, indent=None, default=serialize_utf, ensure_ascii=False)
-    return json.loads(json_string)
+    """Flatten a whole duHast export to plain dicts so the translate step can
+    walk it. Materializes the entire input -- fine for the buffered
+    `post_payload` path; the streaming path uses `duhast_object_to_plain` per
+    element instead so it never holds more than one at a time."""
+    return duhast_to_plain(json_data)
 
 
 def duhast_object_to_plain(obj):
-    """Flatten ONE duHast object (or small structure) to plain dicts, not the
-    whole export -- the dumps/loads round-trip exists only because duHast data
-    objects aren't plain dicts, so scoping it to one object keeps peak memory
-    at one room instead of the entire export."""
-    return json.loads(json.dumps(obj, default=serialize_utf, ensure_ascii=False))
+    """Flatten ONE duHast object (or small structure), not the whole export, so
+    peak memory stays at one element."""
+    return duhast_to_plain(obj)
 
 
 def unwrap_aggregate(e):
