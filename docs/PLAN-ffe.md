@@ -1,11 +1,15 @@
 # RoomMate — FFE implementation plan
 
-> **Status: in progress — A, C, D, E and F are built; only G is not.** The
-> pipeline runs end to end and reports on itself: the contract, the store, the
-> settings, `POST /ffe`, `POST /ffe/stream`, `GET /ffe`, the `get_ffe` MCP tool,
-> the extractor that pushes to them, and `items` on `/validation`. What is
-> missing is the viewer layer — and, outside this repository, the pyRevit button
-> for `ffe_export_entry` and the two duHast changes U1 and U2.
+> **Status: built — A, C, D, E, F and G are all in.** Revit → extractor →
+> `/ffe/stream` → store → `/ffe` → the plan, with `items` on `/validation` and a
+> `get_ffe` MCP tool. Verified end to end against the real House A export: 644
+> items pushed, 465 read back (179 components excluded by policy), drawn,
+> picked and inspected in the browser.
+>
+> What is left is outside this repository: the pyRevit button for
+> `ffe_export_entry`, and duHast's U1 and U2. Until U1 ships, every item is
+> drawn as a marker rather than a footprint — which is the state the viewer was
+> designed around rather than a gap in it.
 >
 > This records the design agreed *before* any code, so the implementation did not
 > re-derive it and the open questions were open before the work rather than after

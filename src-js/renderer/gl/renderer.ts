@@ -24,13 +24,14 @@ import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
 import { flip, pointsAttr } from "../geometry.js";
 import type { HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
-import type { Door, Rect, Room, WindowOpening } from "../types.js";
+import type { Door, Item, Rect, Room, WindowOpening } from "../types.js";
 import { parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
 import { buildLabels, type RoomLabel } from "./labels.js";
 import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js";
 import { buildDoorGlyph } from "./doorGlyph.js";
 import { buildWindowGlyph } from "./windowGlyph.js";
+import { buildItemGlyph } from "./itemGlyph.js";
 import { DoorIndex, RoomIndex, type PickableDoor } from "./spatial.js";
 import { fitViewToAspect, labelTransform } from "./viewport.js";
 
@@ -76,6 +77,15 @@ interface DoorEntry {
 /** One drawn window. The same three fields a door entry carries, because a
  *  window is drawn the same way: a footprint and a mark, each a range in the
  *  shared buffer so selection can recolour without a rebuild. */
+interface ItemEntry {
+  item: Item;
+  rect: VertexRange | null;
+  glyph: VertexRange | null;
+}
+
+/** One drawn window. The same three fields a door entry carries, because a
+ *  window is drawn the same way: a footprint and a mark, each a range in the
+ *  window mesh. */
 interface WindowEntry {
   window: WindowOpening;
   rect: VertexRange | null;
@@ -123,6 +133,7 @@ export class GlPlanRenderer implements PlanRenderer {
   #hoverMesh: FillMesh | null = null;
   #doorMesh: FillMesh | null = null;
   #windowMesh: FillMesh | null = null;
+  #ffeMesh: FillMesh | null = null;
   #holeLines: LineMesh | null = null;
   #outlines: LineMesh | null = null;
   #labelContainer: Container | null = null;
@@ -134,11 +145,14 @@ export class GlPlanRenderer implements PlanRenderer {
   #doorEntries: DoorEntry[] = [];
   #windowIndex = new DoorIndex([]);
   #windowEntries: WindowEntry[] = [];
+  #ffeIndex = new DoorIndex([]);
+  #ffeEntries: ItemEntry[] = [];
   #palette: PlanPalette;
   #view: Rect = { x: 0, y: 0, w: 100, h: 100 };
   #selected: string | null = null;
   #selectedDoor: string | null = null;
   #selectedWindow: string | null = null;
+  #selectedItem: string | null = null;
   #hovered: string | null = null;
   #areasActive = false;
   /** Retained so a repaint can reproduce exactly what is on screen. */
@@ -239,6 +253,13 @@ export class GlPlanRenderer implements PlanRenderer {
     return opts.doors ?? [];
   }
 
+  /** The FF&E this paint was given, after the `showFfe` toggle. */
+  #activeFfe(): readonly Item[] {
+    const opts = this.#lastPaint;
+    if (opts.showFfe === false) return [];
+    return opts.ffe ?? [];
+  }
+
   /** The windows this paint was given, after the `showWindows` toggle. */
   #activeWindows(): readonly WindowOpening[] {
     const opts = this.#lastPaint;
@@ -336,6 +357,8 @@ export class GlPlanRenderer implements PlanRenderer {
       doorsIndexed: this.#doorIndex.size,
       windows: this.#windowEntries.length,
       windowsIndexed: this.#windowIndex.size,
+      ffe: this.#ffeEntries.length,
+      ffeIndexed: this.#ffeIndex.size,
       labels: this.#labels.length,
       layers: {
         grid: !!this.#grid,
@@ -344,6 +367,7 @@ export class GlPlanRenderer implements PlanRenderer {
         outlines: !!this.#outlines,
         doors: !!this.#doorMesh,
         windows: !!this.#windowMesh,
+        ffe: !!this.#ffeMesh,
       },
       // PAINT ORDER, bottom-first — the answer to "what is covering what",
       // which is otherwise invisible from outside and cost a real bug once:
@@ -422,10 +446,7 @@ export class GlPlanRenderer implements PlanRenderer {
 
   setAreasActive(on: boolean): void {
     this.#areasActive = on;
-    this.#fills?.setLayerAlpha(on ? GHOST_ROOMS : 1);
-    this.#hoverMesh?.setLayerAlpha(on ? GHOST_ROOMS : 1);
-    this.#doorMesh?.setLayerAlpha(on ? GHOST_ROOMS : 1);
-    this.#windowMesh?.setLayerAlpha(on ? GHOST_ROOMS : 1);
+    for (const mesh of this.#worldMeshes()) mesh.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#outlines?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#holeLines?.setLayerAlpha(on ? GHOST_ROOMS : 1);
     this.#grid?.setLayerAlpha(on ? GHOST_ROOMS : 1);
@@ -480,6 +501,16 @@ export class GlPlanRenderer implements PlanRenderer {
     // one, and doors were here first.
     const window = this.#windowIndex.doorAt(p.x, p.y);
     if (window) return { kind: "window", window };
+
+    // FF&E last of the three element layers and before rooms. An item sits
+    // INSIDE a room rather than in its wall, so unlike an opening it competes
+    // with the room over the same floor -- and it is the smaller, more specific
+    // thing a reader aimed at, which is the rule the opening layers already
+    // follow. It loses to an opening only where the two overlap, which is a
+    // chair pushed against a door: the door is the fixed thing and the more
+    // likely target.
+    const item = this.#ffeIndex.doorAt(p.x, p.y) as Item | null;
+    if (item) return { kind: "item", item };
     const room = this.#index.roomAt(p.x, p.y);
     return room ? { kind: "room", room } : null;
   }
@@ -492,6 +523,16 @@ export class GlPlanRenderer implements PlanRenderer {
 
   get doorSelection(): string | null {
     return this.#selectedDoor;
+  }
+
+  setItemSelection(itemId: string | null): void {
+    if (this.#selectedItem === itemId) return;
+    this.#selectedItem = itemId;
+    this.#drawMarks();
+  }
+
+  get itemSelection(): string | null {
+    return this.#selectedItem;
   }
 
   setWindowSelection(windowId: string | null): void {
@@ -513,10 +554,13 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#doorEntries = [];
     this.#windowIndex = new DoorIndex([]);
     this.#windowEntries = [];
+    this.#ffeIndex = new DoorIndex([]);
+    this.#ffeEntries = [];
     this.#rooms = [];
     this.#selected = null;
     this.#selectedDoor = null;
     this.#selectedWindow = null;
+    this.#selectedItem = null;
     this.#hovered = null;
     // The marks live in the SVG overlay, which this renderer does NOT own — so
     // clearing the canvas would leave a selection outline floating over an empty
@@ -546,6 +590,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#hoverMesh?.destroy();
     this.#doorMesh?.destroy();
     this.#windowMesh?.destroy();
+    this.#ffeMesh?.destroy();
     this.#holeLines?.destroy();
     this.#outlines?.destroy();
     this.#labelContainer?.destroy({ children: true });
@@ -554,6 +599,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#hoverMesh = null;
     this.#doorMesh = null;
     this.#windowMesh = null;
+    this.#ffeMesh = null;
     this.#holeLines = null;
     this.#outlines = null;
     this.#labelContainer = null;
@@ -574,6 +620,8 @@ export class GlPlanRenderer implements PlanRenderer {
       this.#doorIndex = new DoorIndex([]);
       this.#windowEntries = [];
       this.#windowIndex = new DoorIndex([]);
+      this.#ffeEntries = [];
+      this.#ffeIndex = new DoorIndex([]);
       this.#render();
       return;
     }
@@ -703,6 +751,33 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#windowIndex = new DoorIndex(pickableWindows);
     this.#windowMesh = windowBatch.isEmpty ? null : windowBatch.build();
 
+    // FF&E GETS A FOURTH MESH, on the two arguments the third was given plus
+    // one of its own: a furnished level carries hundreds of items against tens
+    // of openings, so this is the layer a reader toggles most and the one whose
+    // rebuild cost most wants isolating from the others.
+    const ffeBatch = new FillBatch();
+    const pickableFfe: PickableDoor[] = [];
+    const ffeEntries: ItemEntry[] = [];
+    for (const item of this.#activeFfe()) {
+      const glyph = buildItemGlyph(item);
+      // `null` means no footprint AND no insertion point: nowhere to draw it.
+      if (!glyph) continue;
+
+      const rect = glyph.rect.length
+        ? ffeBatch.pushTriangles(glyph.rect, withAlpha(pal.ink, DOOR_RECT_ALPHA))
+        : null;
+      // Marker and rectangle are mutually exclusive by construction; the tick
+      // rides with whichever was drawn, so one range covers the marks.
+      const marks = glyph.marker.concat(glyph.tick);
+      const glyphRange = marks.length ? ffeBatch.pushTriangles(marks, pal.ink) : null;
+
+      ffeEntries.push({ item, rect, glyph: glyphRange });
+      pickableFfe.push({ door: item as unknown as Door, ring: glyph.pickRing, box: glyph.pick });
+    }
+    this.#ffeEntries = ffeEntries;
+    this.#ffeIndex = new DoorIndex(pickableFfe);
+    this.#ffeMesh = ffeBatch.isEmpty ? null : ffeBatch.build();
+
     this.#grid = gridBatch.build();
     this.#fills = fillBatch.isEmpty ? null : fillBatch.build();
     // The dash is the whole reason holes get their own batch: `stroke-dasharray:
@@ -726,6 +801,13 @@ export class GlPlanRenderer implements PlanRenderer {
     // window symbol reaching into a room is the thing that would be cut, and a
     // half-drawn symbol reads as a fault rather than as an overlap.
     if (this.#windowMesh) { this.#windowMesh.mesh.label = "windows"; this.#root.addChild(this.#windowMesh.mesh); }
+    // FF&E BELOW the openings would be wrong and above them is right, which is
+    // the opposite of what "the biggest layer goes at the back" would suggest.
+    // An item is a thing standing in a room; an opening is a hole in the wall
+    // around it. Where a chair meets a door the chair is in front of it in the
+    // world, and drawing it behind would read as the door being on top of the
+    // furniture. Below the labels, on the rule every element layer follows.
+    if (this.#ffeMesh) { this.#ffeMesh.mesh.label = "ffe"; this.#root.addChild(this.#ffeMesh.mesh); }
 
     if (opts.showLabels !== false) {
       const built = buildLabels(rooms, fitted, {
@@ -867,6 +949,23 @@ export class GlPlanRenderer implements PlanRenderer {
       }
     }
 
+    // And for a selected item, same class again -- three element layers, one
+    // idea. Its ring is the marker's, which for an item with no footprint (all
+    // of them today) is the square the marker was drawn in, so the mark lands
+    // exactly on what was clicked.
+    const item = this.#selectedItem
+      ? this.#ffeEntries.find((e) => e.item.id === this.#selectedItem)
+      : undefined;
+    if (item) {
+      const glyph = buildItemGlyph(item.item);
+      if (glyph) {
+        const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
+        p.setAttribute("points", glyph.pickRing.map((q) => `${q.x},${q.y}`).join(" "));
+        p.setAttribute("class", "door-selected-mark");
+        g.appendChild(p);
+      }
+    }
+
     if (g.childNodes.length === 0) {
       g.remove();
       return;
@@ -911,6 +1010,30 @@ export class GlPlanRenderer implements PlanRenderer {
     return fitViewToAspect(this.#view, app.renderer.width, app.renderer.height);
   }
 
+  /**
+   * Every mesh drawn in WORLD space, which is every mesh that needs the
+   * projection uniforms and the ghosting alpha.
+   *
+   * **A list rather than a sequence of `?.` calls, because forgetting one is a
+   * bug this codebase has now shipped twice.** A mesh that is built, added to
+   * the scene and never handed `setView` renders against whatever uniforms were
+   * last set: the windows layer drew nothing that way, and the FF&E layer drew
+   * two large black rectangles over the plan. Both passed every unit test --
+   * the geometry was provably correct in both cases -- and both were found in a
+   * screenshot.
+   *
+   * The grid, holes and outlines are NOT here: they are line meshes and take a
+   * fourth argument (the device pixel ratio, which strokes are measured in), so
+   * folding them in would mean a wider signature for the sake of one loop. They
+   * are the three that have never been forgotten, because they predate every
+   * element layer.
+   */
+  #worldMeshes(): FillMesh[] {
+    return [this.#fills, this.#hoverMesh, this.#doorMesh, this.#windowMesh, this.#ffeMesh].filter(
+      (m): m is FillMesh => m !== null,
+    );
+  }
+
   #pushView(): void {
     const app = this.#app;
     if (!app) return;
@@ -935,10 +1058,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#grid?.setView(eff, devW, devH, dpr);
     this.#holeLines?.setView(eff, devW, devH, dpr);
     this.#outlines?.setView(eff, devW, devH, dpr);
-    this.#fills?.setView(eff, devW, devH);
-    this.#hoverMesh?.setView(eff, devW, devH);
-    this.#doorMesh?.setView(eff, devW, devH);
-    this.#windowMesh?.setView(eff, devW, devH);
+    for (const mesh of this.#worldMeshes()) mesh.setView(eff, devW, devH);
     // Labels live in world space, so the scene transform carries them. This is
     // the ONE place a container transform is used, and it is correct here
     // precisely because label text SHOULD scale with the view — unlike strokes,
