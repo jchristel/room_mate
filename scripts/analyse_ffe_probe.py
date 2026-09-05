@@ -344,12 +344,39 @@ def super_component_matrix(probe):
     statement about the model from a chair inside a chair, and the plan cannot
     say which rule to use until it can see which shapes actually occur."""
     matrix = Counter()
+    nested = []
+    top = []
     for element in probe.get("elements", {}).values():
-        parent = element.get("super_component_category_name")
-        if not parent:
-            continue
-        matrix[(element.get("category_name") or "?", parent)] += 1
-    return matrix
+        if element.get("super_component_id"):
+            nested.append(element)
+            parent = element.get("super_component_category_name") or "?"
+            matrix[(element.get("category_name") or "?", parent)] += 1
+        else:
+            top.append(element)
+
+    def with_a_room(group):
+        n = 0
+        for element in group:
+            entries = element.get("rooms_by_phase") or []
+            if any(e.get("room") for e in entries):
+                n += 1
+        return n
+
+    same = sum(n for (child, parent), n in matrix.items() if child == parent)
+    return {
+        "matrix": matrix,
+        "nested": len(nested),
+        "top": len(top),
+        "same_category": same,
+        # The two discriminators, measured rather than inherited. The doors-era
+        # test was "a component carries neither a room reference nor a Mark";
+        # only one half of that transfers, and knowing WHICH is the whole
+        # question of how the filter is written.
+        "nested_with_room": with_a_room(nested),
+        "top_with_room": with_a_room(top),
+        "nested_with_mark": sum(1 for e in nested if e.get("mark")),
+        "top_with_mark": sum(1 for e in top if e.get("mark")),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -357,43 +384,87 @@ def super_component_matrix(probe):
 # --------------------------------------------------------------------------
 
 
-def level_agreement(probe):
-    """How often duHast's bbox-derived level matches the level the instance
+def named_level(element):
+    """The level an instance names, or None.
+
+    Three properties, because family hosting types disagree about which is
+    populated. `"-1"` is Revit's "no element" id and is folded into None: an
+    instance whose `LevelId` is invalid names no level, and counting it as one
+    would turn the heuristic's best case into its worst."""
+    for key in (
+        "level_id_property",
+        "level_id_family_param",
+        "level_id_schedule_param",
+    ):
+        value = element.get(key)
+        if value not in (None, "", "-1", -1):
+            return str(value)
+    return None
+
+
+def level_agreement(probe, item_records):
+    """How often the level **duHast exported** matches the level the instance
     itself names.
 
-    Three properties are compared because family hosting types disagree about
-    which is populated, and the report says which one was available rather than
-    silently picking. An instance naming no level at all is its own row: for
-    those the derived value is not a disagreement, it is the only answer there
-    is -- which is a point in the heuristic's favour and should not be counted
-    against it."""
+    **Against the export, not against a re-derivation, and the difference was a
+    factor of six.** An earlier version of this function re-ran duHast's rule
+    here -- last level at or below the bounding box minimum Z -- and compared
+    that. It reported 184 disagreements on House A where the export itself
+    disagrees on 29, because the rule was being fed Revit's own element box
+    while duHast feeds it the SOLIDS box, and those differ on 184 instances for
+    reasons that have nothing to do with levels (see `bounding_box_disagreement`).
+    Re-deriving a producer's rule to check the producer measures the
+    re-derivation. The export is the thing shipping, so the export is the thing
+    compared.
+
+    The re-derived value is still reported, clearly labelled, because it is the
+    only evidence for HOW a disagreement arises once one is found. It is a
+    diagnostic, never the count.
+
+    An instance naming no level at all is its own row, and on House A it is 92
+    of 647: for those the derived value is not a disagreement, it is the only
+    answer there is -- which is the case FOR the heuristic and must not be
+    counted against it."""
+    exported = {}
+    for record in item_records:
+        value = dig(record, "instance_properties.id")
+        if value is not None:
+            exported[str(value)] = dig(record, "level.id")
+
     rows = {
         "agree": 0,
         "disagree": 0,
         "no_named_level": 0,
-        "no_derived_level": 0,
+        "no_exported_level": 0,
+        "not_exported": 0,
         "fallback_below_all_levels": 0,
+        "rederived_disagrees": 0,
     }
     disagreements = []
-    for element in probe.get("elements", {}).values():
-        named = (
-            element.get("level_id_property")
-            or element.get("level_id_family_param")
-            or element.get("level_id_schedule_param")
-        )
-        derived = element.get("level_by_bbox")
+    for eid, element in probe.get("elements", {}).items():
         if element.get("level_by_bbox_was_fallback"):
             rows["fallback_below_all_levels"] += 1
-        if derived is None:
-            rows["no_derived_level"] += 1
+        named = named_level(element)
+        derived = element.get("level_by_bbox")
+        if named is not None and derived is not None and str(derived) != named:
+            rows["rederived_disagrees"] += 1
+
+        if str(eid) not in exported:
+            rows["not_exported"] += 1
+            continue
+        shipped = exported[str(eid)]
+        if shipped in (None, "", "-1", -1):
+            rows["no_exported_level"] += 1
             continue
         if named is None:
             rows["no_named_level"] += 1
             continue
-        if str(named) == str(derived):
+        if str(shipped) == named:
             rows["agree"] += 1
         else:
             rows["disagree"] += 1
+            element = dict(element)
+            element["level_exported"] = shipped
             disagreements.append(element)
     return rows, disagreements
 
@@ -601,7 +672,7 @@ def build_report(data):
     only_items, only_doors = structural_diff(item_records, door_records)
     drop = dropped_by_export(probe, item_records)
     matrix = super_component_matrix(probe)
-    levels, level_disagreements = level_agreement(probe)
+    levels, level_disagreements = level_agreement(probe, item_records)
     units = unit_ratios(probe, item_records)
     boxes = bounding_box_disagreement(probe)
 
@@ -716,13 +787,66 @@ def build_report(data):
         "should be including as geometry."
     )
     add("")
-    if matrix:
+    if matrix["matrix"]:
+        add(
+            "- nested instances: **{}** of {} ({}% of everything collected)".format(
+                matrix["nested"],
+                matrix["nested"] + matrix["top"],
+                pct(matrix["nested"], matrix["nested"] + matrix["top"]),
+            )
+        )
+        add(
+            "- of those, parent is the SAME category: **{}**. The "
+            "`nested_opening_ids` test would catch {}% of them.".format(
+                matrix["same_category"], pct(matrix["same_category"], matrix["nested"])
+            )
+        )
+        add("")
         add(
             table(
                 ["child category", "parent category", "count", "same?"],
                 [
                     (child, parent, n, "yes" if child == parent else "NO")
-                    for (child, parent), n in sorted(matrix.items(), key=lambda kv: -kv[1])
+                    for (child, parent), n in sorted(
+                        matrix["matrix"].items(), key=lambda kv: -kv[1]
+                    )
+                ],
+            )
+        )
+        add("")
+        add(
+            "**Which discriminator works.** The doors finding was that a "
+            "component carries neither a room reference nor a Mark. Only one "
+            "half of that transfers, and the table below is why the filter "
+            "cannot be written from the doors experience alone."
+        )
+        add("")
+        add(
+            table(
+                ["", "names a room", "carries a Mark"],
+                [
+                    (
+                        "nested ({})".format(matrix["nested"]),
+                        "{} ({}%)".format(
+                            matrix["nested_with_room"],
+                            pct(matrix["nested_with_room"], matrix["nested"]),
+                        ),
+                        "{} ({}%)".format(
+                            matrix["nested_with_mark"],
+                            pct(matrix["nested_with_mark"], matrix["nested"]),
+                        ),
+                    ),
+                    (
+                        "top-level ({})".format(matrix["top"]),
+                        "{} ({}%)".format(
+                            matrix["top_with_room"],
+                            pct(matrix["top_with_room"], matrix["top"]),
+                        ),
+                        "{} ({}%)".format(
+                            matrix["top_with_mark"],
+                            pct(matrix["top_with_mark"], matrix["top"]),
+                        ),
+                    ),
                 ],
             )
         )
@@ -745,12 +869,23 @@ def build_report(data):
         table(
             ["outcome", "items"],
             [
-                ("derived agrees with the named level", levels["agree"]),
-                ("derived DISAGREES", levels["disagree"]),
-                ("instance names no level - derived is the only answer", levels["no_named_level"]),
-                ("no derived level (no solid geometry)", levels["no_derived_level"]),
+                ("exported level agrees with the named level", levels["agree"]),
+                ("exported level DISAGREES", levels["disagree"]),
+                ("instance names no level - the heuristic is the only answer", levels["no_named_level"]),
+                ("export carries no level (no solid geometry)", levels["no_exported_level"]),
+                ("collected but not exported", levels["not_exported"]),
                 ("fell back: below every level in the document", levels["fallback_below_all_levels"]),
             ],
+        )
+    )
+    add("")
+    add(
+        "Diagnostic only, **not** the count above: re-running duHast's rule "
+        "against Revit's own element box rather than its solids box disagrees "
+        "with the named level on {} items. The gap between that and the {} the "
+        "export actually disagrees on is the measure of how badly re-deriving a "
+        "producer's rule answers a question about the producer.".format(
+            levels["rederived_disagrees"], levels["disagree"]
         )
     )
     add("")
@@ -759,15 +894,13 @@ def build_report(data):
         add("")
         add(
             table(
-                ["id", "type", "named", "derived", "bbox min z (ft)"],
+                ["id", "family", "names", "export says", "bbox min z (ft)"],
                 [
                     (
                         e.get("id"),
-                        e.get("type_name"),
-                        e.get("level_id_property")
-                        or e.get("level_id_family_param")
-                        or e.get("level_id_schedule_param"),
-                        e.get("level_by_bbox"),
+                        e.get("family_name") or e.get("type_name"),
+                        named_level(e),
+                        e.get("level_exported"),
                         round(e.get("bbox_min_z"), 3) if e.get("bbox_min_z") is not None else None,
                     )
                     for e in level_disagreements[:10]

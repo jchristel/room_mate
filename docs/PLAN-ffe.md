@@ -4,10 +4,14 @@
 > before any code, so the implementation does not re-derive it and the open
 > questions are open *before* the work rather than after — the discipline the
 > phasing and windows plans were both written under, and which is why both are
-> still readable as records now that their work has landed. Every claim about
-> the duHast export below is **read from
-> source, not measured**; PR A is the instrument that changes that, and nothing
-> below it starts until it prints.
+> still readable as records now that their work has landed.
+>
+> **PR A has run against House A (2026-09-05) and the kill condition is
+> cleared.** The decisions below were written from a reading of duHast's source
+> and are left standing rather than edited into agreement with the data;
+> [As measured](#as-measured--house-a-2026-09-05) records what the probe found,
+> including the two predictions it inverted and the one upstream change it
+> demoted. Read that section before trusting any figure above it.
 
 Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Entities](STRATEGY-ENTITIES.md) · [Server](STRATEGY-SERVER.md) ·
@@ -400,6 +404,120 @@ like the windows layer does. If U1 lands as D2 describes, this is close to free:
 the footprint arrives in the room convention and the existing renderer draws it
 with no new geometry code, leaving the toggle, the pick order and the inspector
 panel. Depends on B; runs parallel with F.
+
+## As measured — House A, 2026-09-05
+
+**PR A has run. The kill condition is cleared and the plan proceeds**, with two
+predictions inverted and one upstream change demoted. The predictions above are
+left standing rather than edited into agreement with the data: what a plan got
+wrong is worth more than a plan that reads as though it never guessed.
+
+Document `Building_BF_Framing_jan.r.christel`. 647 instances collected across
+the eight categories, 644 exported. Report in `temp/ffe-probe-report.md`.
+
+### The kill condition is cleared
+
+| phase | items naming a room | % |
+|---|---|---|
+| Existing | 0 | 0.0 |
+| New Construction | **572** | **88.4** |
+
+Zero lookup errors. Revit does know which room an item is in, so there is a join
+to perform and the entity carries what rooms do not. D3 is vindicated
+specifically: the reference is read per phase, and the Existing row shows what a
+phase-agnostic union would have blurred.
+
+### What held
+
+- **D8's deferral is nearly free.** 3 instances dropped of 647 — every one a
+  `LocationCurve`, every one an `OST_GenericModel`, and **zero** dropped that
+  had a `LocationPoint`. The "softer stop" below does not fire: line-based
+  support can wait.
+- **D9 is confirmed empirically rather than by reading.** 643 instances measured
+  twice; the median ratio between the export's X and Revit's is **304.8**
+  exactly. The export converts to millimetres and RoomMate divides.
+- **D1 holds in both directions.** An item carries `location_point`
+  (`translation_coord`, `rotation_coord`) and `rooms`; a door carries `polygon`,
+  `from_room`/`to_room` with their `phase_id`/`room_id`/`revit_model_name`,
+  `room_calculation_point`, the Z extents and `associated_elements`. Neither is
+  a subset of the other. For windows this diff was empty; here it is full, which
+  is the whole reason `Item` is a sibling and not a widening.
+- **`loops` is 0% populated**, exactly as predicted pre-U1, and 0% is why U1 is
+  scheduled rather than assumed.
+
+### What inverted
+
+**The nested-component filter cannot be the doors one, and the margin is not
+close.** 179 of 647 instances (27.7%) have a super-component, and the parent is
+the *same* category for **10** of them — so `nested_opening_ids`' test would
+catch 5.6% of the population it exists to catch.
+
+| child | parent | count |
+|---|---|---|
+| Furniture | **Casework** | 87 |
+| Generic Models | Electrical Fixtures | 70 |
+| Plumbing Fixtures | Generic Models | 6 |
+| Generic Models | **Doors** | 3 |
+
+All 87 are one family, `Handle_Joinery_FIJO_900` — joinery handles, which is the
+`PS Aluminium` pull-handle finding again at a quarter of the scale. Two things
+follow that the doors experience does not give you:
+
+- **`OST_Casework` is not one of the eight**, so the casework runs are absent
+  from the export while their handles are present. That is backwards, and it is
+  a question about D6's category list rather than about the nesting filter.
+- **The doors-era discriminator fails here.** A nested door component carried
+  neither a room reference nor a Mark; a nested *item* sits physically in a room
+  and Revit says so.
+
+| | names a room | carries a Mark |
+|---|---|---|
+| nested (179) | 175 (97.8%) | 10 (5.6%) |
+| top-level (468) | 397 (84.8%) | 245 (52.4%) |
+
+So "no room reference" is useless as a filter and "no Mark" is suggestive but
+not safe. The only reliable discriminator is **having a super-component at
+all** — which is on the wire as `super_component_id`, populated on exactly those
+179.
+
+**U2 is demoted from a fix to a tidy-up.** The two duHast boxes disagree on
+height for 184 instances, and only **4** of those have sub-components. The rest
+split 135 where the solids box is taller and 49 where the oriented box is —
+which is not one cause but at least two, neither of them nesting. Merging
+sub-components into the oriented box is still right, and it is worth knowing it
+addresses 2% of the disagreement rather than the bulk of it. None of this
+touches the footprint: `loops` is 2D and a height difference cannot reach it.
+
+### What was better than feared
+
+**The level heuristic is wrong on 9%, not on the third C6 implied.**
+
+| outcome | items |
+|---|---|
+| exported level agrees with the level the instance names | 516 |
+| exported level disagrees | **53** |
+| export carries no level (no solid geometry) | 71 |
+| instance names no level — the heuristic is the only answer | 4 |
+| fell back: below every level in the document | 26 |
+
+The 71 with no exported level are why the verdict reads `PROCEED WITH CARE`:
+`level_id` is 89% populated, not 100%, and an item with no solids has no
+storey. That is a real state to carry, not a defect to fix.
+
+### One finding about the instrument, not the model
+
+The analyser first reported **103** level disagreements by re-running duHast's
+rule here and comparing that. The export itself disagrees on 53. The gap is
+entirely method: the re-derivation was fed Revit's own element bounding box
+while duHast feeds it the *solids* box, and per U2 above those differ on 184
+instances for reasons that have nothing to do with levels.
+
+**Re-deriving a producer's rule to check the producer measures the
+re-derivation.** The analyser now compares the level the export actually
+carries, and keeps the re-derived figure only as a labelled diagnostic — the one
+thing that explains *how* a disagreement arises once the export has said there
+is one. It is the same error in miniature that D2 forbids at full scale: an
+extractor that computes its own footprint silently discards what duHast sent.
 
 ## What would stop this
 
