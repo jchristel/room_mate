@@ -50,3 +50,15 @@ it lead a reader to the right conclusion about the data"**. Where two entities
 share a shape and differ in distribution, the second description has to say so
 in as many words, and point at the setting that changes the answer —
 `room_resolution`, whose `off` is not the same as clean.
+
+**FF&E tested the opposite case and it was easier, which is worth recording so
+the windows lesson is not over-generalised.** An item is a *different record*
+from an opening — one room rather than two sides, a category, a component id,
+and no footprint at all until the exporter grows one — so `get_ffe` could not
+have been written by copying anything, and the ways it misleads are visible in
+the shape rather than hidden in the distribution. The hard half was elsewhere:
+the description has to say that `excluded_components` being large is **normal**
+(179 of 647 on the measured model), and that the two tests an agent would reach
+for to identify a component both fail, because a component names a room 97.8% of
+the time. A number that looks alarming and is not needs the same defending as a
+distribution that looks clean and is not.

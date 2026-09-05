@@ -17,8 +17,9 @@
 //! (the attribution rule is in `CLAUDE.md`). Before that, any answer would have
 //! settled that question by accident.
 //!
-//! **Back under the ~500-line trigger, and the seam that did it was not the one
-//! this header used to argue about.** It used to say the size was the saving —
+//! **Still over the ~500-line trigger at ~553 real lines, but 435 lines lighter,
+//! and the seam that did it was not the one this header used to argue about.**
+//! It used to say the size was the saving —
 //! that the alternative to one assembly of this length was a second copy for
 //! windows and a third for whatever came next — and that the seams which could
 //! be cut already were. That was true of a *second opening* and false of a

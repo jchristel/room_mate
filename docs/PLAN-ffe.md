@@ -1,10 +1,14 @@
 # RoomMate — FFE implementation plan
 
-> **Status: not started. Nothing here is built.** This records the design agreed
-> before any code, so the implementation does not re-derive it and the open
-> questions are open *before* the work rather than after — the discipline the
-> phasing and windows plans were both written under, and which is why both are
-> still readable as records now that their work has landed.
+> **Status: in progress — A, C and D are built; E, F and G are not.** The server
+> side is complete: the contract, the store, the settings, `POST /ffe`,
+> `POST /ffe/stream`, `GET /ffe` and the `get_ffe` MCP tool. What is missing is
+> the extractor that would push to it, the QA report and the viewer layer.
+>
+> This records the design agreed *before* any code, so the implementation did not
+> re-derive it and the open questions were open before the work rather than after
+> — the discipline the phasing and windows plans were both written under, and why
+> both are still readable as records now that their work has landed.
 >
 > **PR A has run against House A (2026-09-05) and the kill condition is
 > cleared.** The decisions below were written from a reading of duHast's source
@@ -459,7 +463,12 @@ phase and may be demolished in a later one. Everything ASCII, because
 IronPython 2.7 will not parse a file with an em-dash in it, not even in a
 docstring.
 
-**F — QA and MCP.** `ItemReport` under the new `items` key (D5). One new tool,
+**F — QA.** (The MCP tool moved forward into PR D: `bin/mcp.rs` keeps one
+tool per HTTP *read* route and `scripts/weekly_review.py` checks the claim, so a
+route landing without its tool would have left a known-red check standing across
+two PRs. Parity is a route concern, not a QA one.)
+
+**F — QA, continued.** `ItemReport` under the new `items` key (D5). One new tool,
 `get_ffe`, which needs three things kept in step that are hand-maintained by
 design: `bin/mcp.rs`'s spelled-out tool count, `STRATEGY-MCP.md`'s list, and
 `scripts/weekly_review.py`'s route-to-tool mapping. Its description is written

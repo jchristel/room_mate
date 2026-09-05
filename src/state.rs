@@ -407,7 +407,7 @@ impl AppState {
     /// the right header for either, and a kind/envelope mismatch would strip the
     /// wrong key -- which is why the pairing is made once, in the handler that
     /// knows both.
-    pub fn open_opening_snapshot<P: crate::contract::OpeningEnvelope + serde::Serialize>(
+    pub fn open_opening_snapshot<P: crate::contract::SnapshotEnvelope + serde::Serialize>(
         &self,
         kind: SnapshotKind,
         envelope: &P,
@@ -463,6 +463,37 @@ impl AppState {
         let key = ModelKey::from_door_payload(&payload);
         let json = serde_json::to_vec_pretty(&payload).context("could not serialise doors snapshot")?;
         self.store.put_raw(&doors_meta(&key, &payload), &json)
+    }
+
+    /// The same, for any non-rooms entity, taking its kind.
+    ///
+    /// Generic where `set_door_snapshot` is not, because by the fourth entity
+    /// the pattern is clear: the payload supplies the six identity facts through
+    /// `SnapshotEnvelope`, the caller supplies the kind, and nothing else varied
+    /// between the per-entity copies. `set_door_snapshot` stays as it is rather
+    /// than being rewritten through this — 28 call sites for no behaviour change
+    /// is a diff that hides the ones that matter.
+    ///
+    /// Same thin serde layer over the byte-level store, on the same terms: the
+    /// ingest routes stream instead, and this is for a caller holding a complete
+    /// payload — fixtures, generators and tests.
+    pub fn set_element_snapshot<P: crate::contract::SnapshotEnvelope + serde::Serialize>(
+        &self,
+        kind: SnapshotKind,
+        payload: &P,
+    ) -> anyhow::Result<()> {
+        let key = ModelKey { project_id: payload.project().id.clone(), model_id: payload.model().id.clone() };
+        let json = serde_json::to_vec_pretty(payload)
+            .with_context(|| format!("could not serialise {} snapshot", kind.label()))?;
+        let meta = SnapshotMeta {
+            kind,
+            key: &key,
+            project_name: &payload.project().name,
+            model_name: &payload.model().name,
+            taken_at: payload.taken_at(),
+            phase: payload.phase(),
+        };
+        self.store.put_raw(&meta, &json)
     }
 
     /// Every model's latest snapshot of one opening kind, parsed into that

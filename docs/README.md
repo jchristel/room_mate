@@ -28,7 +28,7 @@ strategy doc documents what is not".
 | Document | Description |
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
-| [Plan: FFE](PLAN-ffe.md) | **Open — nothing built.** The nine decisions behind FFE as the fourth primary entity, the three upstream duHast changes it needs, and the one measurement that gates the whole thing. **Every claim it makes about the duHast export is read from source, not measured** — read its Sequence before treating any of them as fact |
+| [Plan: FFE](PLAN-ffe.md) | **Open — the server side is built (A, C, D); the extractor, QA and viewer are not.** The ten decisions behind FFE as the fourth primary entity, the four upstream duHast changes it needs, and the measurement that gated it. Its "As measured" section is the part to read first: the House A probe cleared the kill condition and inverted two of the plan's predictions, and the decisions above it are deliberately left as they were written |
 | [MCP host setup](mcp-host-setup.md) | Client configs for Claude Code and Claude Desktop, plus build and verify steps |
 | [Module plan](module-plan.html) | Interactive map of every module across the extractor, server and browser — sized by line count, with its import edges. Open the file in a browser; it is generated from the module headers, so treat a header as the source and this as the view |
 

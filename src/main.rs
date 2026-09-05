@@ -26,11 +26,11 @@ use tower_http::{
 
 use roommate::bootstrap::build_state;
 use roommate::handlers::{
-    activate_model_pending_snapshot, compare_project_milestones, get_doors, get_model_latest_snapshot,
+    activate_model_pending_snapshot, compare_project_milestones, get_doors, get_ffe, get_model_latest_snapshot,
     get_model_pending_snapshot, get_project_adjacency, get_project_areas, get_project_buildings,
     get_project_milestones, get_project_snapshots, get_project_validation, get_projects, get_reference_latest,
-    get_reference_snapshots, get_rooms, get_windows, ingest_doors, ingest_doors_stream, ingest_rooms,
-    ingest_rooms_stream, ingest_windows, ingest_windows_stream,
+    get_reference_snapshots, get_rooms, get_windows, ingest_doors, ingest_doors_stream, ingest_ffe, ingest_ffe_stream,
+    ingest_rooms, ingest_rooms_stream, ingest_windows, ingest_windows_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
@@ -301,6 +301,12 @@ fn build_router(state: roommate::state::Shared) -> Router {
             post(ingest_windows).get(get_windows).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
         )
         .route("/windows/stream", post(ingest_windows_stream).layer(DefaultBodyLimit::disable()))
+        // FF&E, on the openings ingest shape and the rooms read shape: one
+        // buffered route, one streamed, one read. `/ffe` is a collective noun
+        // and stays singular-looking on purpose -- the element key on the wire
+        // is `ffe` too, so the route and the payload agree.
+        .route("/ffe", post(ingest_ffe).get(get_ffe).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)))
+        .route("/ffe/stream", post(ingest_ffe_stream).layer(DefaultBodyLimit::disable()))
         .route("/projects", get(get_projects))
         .route("/projects/{id}/buildings", get(get_project_buildings))
         .route("/projects/{id}/validation", get(get_project_validation))
