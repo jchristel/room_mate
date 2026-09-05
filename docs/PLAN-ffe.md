@@ -1,0 +1,450 @@
+# RoomMate — FFE implementation plan
+
+> **Status: not started. Nothing here is built.** This records the design agreed
+> before any code, so the implementation does not re-derive it and the open
+> questions are open *before* the work rather than after — the discipline the
+> phasing and windows plans were both written under, and which is why both are
+> still readable as records now that their work has landed. Every claim about
+> the duHast export below is **read from
+> source, not measured**; PR A is the instrument that changes that, and nothing
+> below it starts until it prints.
+
+Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
+[Entities](STRATEGY-ENTITIES.md) · [Server](STRATEGY-SERVER.md) ·
+[Browser](STRATEGY-BROWSER.md) · [MCP](STRATEGY-MCP.md) ·
+[Conventions](CODING-CONVENTIONS.md)
+
+## Why FFE exists as an entity
+
+**FFE sits in the same Revit file as the rooms, and Revit cannot schedule FFE
+against those rooms.** RoomMate performs the join Revit will not.
+
+That single sentence is the demand, and it decides more than it looks like it
+does. The model that pushes FFE is the model that pushes rooms, so
+`FamilyInstance.get_Room(phase)` has a live room to answer with and the join is
+same-model everywhere — which is what the model-scoped discipline already
+requires of doors and windows. The facade-file pathology that made
+`[windows] room_resolution` load-bearing does not arise: there, zero of 158
+windows named a room because Revit cannot resolve one across a link, and
+geometry was the *only* attribution mechanism. Here authored references are
+expected to populate, and geometry is a fallback.
+
+It also means the entity earns its place with or without a reference source.
+dRofus sits on top rather than underneath: it verifies room data and FFE data as
+two separate sets, and FFE may later be augmented by it the way rooms are
+already. R4 scoped reference sources per entity for exactly that, so
+`[sources.reference.<name>] entity = "ffe"` is a settings line rather than a
+design. Plenty of projects run without dRofus at all, and those projects still
+want the join.
+
+**This is the harder test [Entities](STRATEGY-ENTITIES.md) named.** Windows were
+a second *opening* and cost one `ENTITY_EXPORTERS` row plus one envelope. FFE is
+the first candidate that is not an opening — it sits *in* one room rather than
+between two — and the finding below is that three of the generalisations were
+opening-shaped rather than entity-shaped. That is a pass for the bet, not a
+failure: each one widens, none needs replacing.
+
+## The finding: an item is not an opening
+
+`DataDoor` and `DataWindow` both extend `DataFamilyBase`, which mixes in
+`DataElementGeometryBase`. `DataItem` extends `DataBase` alone. Read from
+duHast at `SampleCodeRevitBatchProcessor-NET8/src/duHast`, which is the copy
+this plan is written against and the one the upstream changes land in — the
+other two copies on disk predate `data_window.py` and are not live.
+
+| Fact | Opening (`DataDoor` / `DataWindow`) | FFE (`DataItem`) |
+|---|---|---|
+| Footprint | `polygon` — oriented box flattened to a loop, decimal feet | **absent**; no geometry mixin at all (changed by U1) |
+| Rotation | derived extractor-side from `FacingOrientation` | `location_point.rotation_coord`, a 3×3 matrix of world-space basis vectors |
+| Position | read extractor-side from `LocationPoint`, feet | `location_point.translation_coord`, **metric mm** |
+| Room reference | `from_room` / `to_room`, per-phase arrays of `DataRoomToPhase` | `rooms` — flat list of integer ids, **unioned across every phase**, untagged |
+| Room fallback | none | third fallback is `doc.GetRoomAtPoint(...)`, producer-side geometry |
+| Level | `get_level_data` — the element's own level | `get_level_data_by_bounding_box` — nearest level at or below the solid bbox's min Z |
+| Z extents | `bounding_box_min_z` / `max_z`, `room_calculation_point` | absent |
+| Silently dropped | a door duHast cannot measure (14 of 205 on the facade file) | any instance whose `Location` is not a `LocationPoint` |
+| Category | one, fixed | eight by default, and the list is an argument |
+| Properties, nesting | identical — same `get_instance_properties` / `get_type_properties` helpers, same `super_component_id` |
+
+The last row is why this is cheaper than the table suggests:
+`post_common.properties_to_map` works on an item unchanged, and the two property
+tiers mean the same thing they mean on a door.
+
+## Decisions
+
+### D1 — The record is a sibling of `Opening`, not a widening of it
+
+`contract::items::Item`, carrying `id`, `level_id`, `category`, `room`
+(one `Option<String>`), `insertion_point`, `facing`, `loops`, `type_id`,
+`type_name`, `properties`, `type_properties`. Its `PropertyTiers` impl is the
+same two lines `Opening`'s is.
+
+The line that settled every windows question was **share it unless sharing would
+change a serde key**. It does not reach here, because the records genuinely
+differ rather than differing only in what their envelope calls them. The honest
+extension is: **share it unless sharing would make a field mean nothing.** A
+one-sided opening would carry a `through_wall_normal` describing nothing and a
+`from_room` that is permanently `None` — and `OpeningReport::external` counts
+"a room on exactly one side", so every item in the model would be reported as an
+external opening. A field that is right in shape and wrong in meaning is worse
+than a new type.
+
+### D2 — The footprint arrives flattened, and RoomMate does not re-derive it
+
+duHast will flatten the instance's oriented bounding box exactly as
+`to_data_door` does — `get_oriented_bounding_box_from_family_instance` →
+`convert_bounding_box_to_flattened_2d_points` → `convert_xyz_in_data_geometry_polygons`
+— so an item's footprint reaches the wire as a rectangle in **decimal feet**,
+placed and rotated, in the room convention verbatim. `loops` on `Item` is then
+the same field it is on `Opening`, and one renderer and one `model_to_shared`
+transform still serve every entity.
+
+The alternative — local-frame extents composed against `rotation_coord` by the
+consumer — is more compact and is what a symbol renderer wants. It was rejected
+because it is a *second geometry convention*, and `Opening::loops`' own header
+says a second convention forks every consumer that draws or transforms geometry.
+The compactness argument is real but it is the deduplication problem, not a
+geometry problem: a local-frame box is close to a **type** fact, and belongs on
+the shared type table [Entities](STRATEGY-ENTITIES.md) defers rather than on
+every instance now. Close to, not exactly — flexed instances of one type differ,
+which is why per-instance flattening is the safe interim.
+
+`rotation_coord` is carried beside it anyway, projected to plan as `facing`. A
+rectangle does not say which end is the front, and a symbol renderer will want
+that later.
+
+**The extractor must not compute its own footprint.** That is the one rule from
+the door work that outlives it, and it cost two failed attempts to learn: an
+extractor that measures its own box silently discards whatever the export sends,
+which is exactly how a correct duHast fix produced a byte-identical bad export.
+Once U1 lands, the footprint is present and correct, so RoomMate reads it.
+
+### D3 — The room reference is read from Revit, never from `DataItem.rooms`
+
+`get_room_ids` tries `get_Room(phase)` across *every* phase and unions the
+results, then `FamilyInstance.Room`, then
+`doc.GetRoomAtPoint(point, last_phase)`. Two things are wrong with that field
+for this pipeline and both are familiar:
+
+- it is the `phase_id` trap again — a union across phases, untagged, and
+  RoomMate pushes exactly one phase, so the export cannot say which entry
+  belongs to it;
+- the third fallback is a *geometric* answer computed producer-side, where the
+  server can no longer report `SideOrigin` or a disagreement. That is what
+  `windows_location_by_rooms.py` was rejected for, and it arrives
+  indistinguishable from an authored reference.
+
+So the extractor reads `room_reference(instance, phase, "Room")`, which
+`utils/room_refs.py` was given a `which` argument for before this entity
+existed. Geometry stays server-side under `[ffe] room_resolution`.
+
+This is the third consecutive entity where the export's own room reference is
+the thing to ignore, and it is worth stating as the general rule: **the export
+answers "which rooms, ever"; RoomMate asks "which room, in this phase", and
+only the live document can answer that.**
+
+### D4 — One room, so there is no attribution policy
+
+`[ffe]` carries **no `room_attribution`**. The five-way `RoomAttribution` policy
+exists because a door lies between two rooms and something has to choose; an
+item names one room or none, and there is nothing to choose.
+
+`ItemResponse.owner_rooms` stays a **list** of zero or one all the same. Keeping
+the shape identical is what lets "empty means homeless" mean the same thing on
+every entity, and lets `owner_rooms_qualified` and `?building=` work with no
+special case — a homeless item drops out of a building-scoped view exactly as a
+homeless door does.
+
+`room_resolution` defaults **`Off`**, matching doors rather than windows, and
+the argument is stated rather than inherited: windows had it argued up because a
+facade model's openings are unattributable from authored data alone, and per
+"Why FFE exists" above that model shape does not arise here.
+
+### D5 — `items` beside `openings` in the QA response
+
+`ValidationResponse` grows `items: BTreeMap<String, ItemReport>`, keyed `"ffe"`,
+sitting beside `openings` and `sources` and keyed the same way, so a reader
+navigates all three alike.
+
+Not *inside* `openings`: that key is named for what it holds, and an item is not
+an opening. `ItemReport` reuses `UnresolvedRoomReference`, `PendingRoomReference`,
+`OpeningPhaseDrift`, `RoomGeometryMismatch` and `RoomResolutionCounts` verbatim,
+and drops the two findings that are two-sided by construction — `external`
+("a room on exactly one side") and `room_attribution`. Nothing an existing
+consumer reads is renamed, which is the saving the `doors` → `openings` rename
+was made for, taken without making that key lie.
+
+### D6 — Category is a record field, not yet a setting
+
+All eight of duHast's `DEFAULT_ITEM_CATEGORIES` are pushed: `OST_Furniture`,
+`OST_FurnitureSystems`, `OST_MechanicalEquipment`, `OST_ElectricalEquipment`,
+`OST_ElectricalFixtures`, `OST_PlumbingFixtures`, `OST_SpecialityEquipment`,
+`OST_GenericModel`. Narrowing that list is the exporter's problem later.
+
+The distinction that survives: `category` is a **field on the record** even
+though it is not a **setting**. So QA can break findings down by category and
+`?category=` filters through the existing grammar on day one, and the day an
+allow-list is wanted it changes what is pushed rather than what the wire can
+say.
+
+`OST_GenericModel` being in the set is what makes the probe's category histogram
+and super-component matrix the two numbers that matter most — see the two
+open risks below.
+
+### D7 — The read side splits at the join, not at the top
+
+`assemble_openings` is a scoping-then-deriving pipeline. Nine of its steps are
+entity-agnostic — scope resolution, milestone pinning, the snapshot sweep,
+candidate-room construction, the reference join, the filter grammar, revision
+hashing, phase reporting. Two are not: how many room references an element has,
+and how geometry resolves them.
+
+Those two are precisely the "glue, not geometry" `service::room_locator`'s own
+header predicted. So the shared spine is lifted into a module both call,
+`OpeningResponse` stays, `ItemResponse` is added, and **`OpeningKind` gains no
+`Ffe` variant** — it is the per-*opening* lookup table and would answer wrongly
+for an entity that has no `to_room`, no opening policy section shaped like one,
+and no two-sided pins.
+
+`room_locator` gains exactly one function: its existing private `probe()`
+exposed as `locate_within(point, elevation, candidates)`. `Ambiguous`,
+`NoCandidate`, `NoPosition` and `UnknownLevel` keep their exact meanings;
+`NoDirection` is unreachable for FFE, which is the shape of "an element with one
+side" the module doc already described.
+
+### D8 — Point-based only, and the skip must be countable
+
+`populate_data_item_object` returns `None` for any instance whose `Location` is
+not a `LocationPoint`, so every line-based family — continuous casework runs,
+benching systems — is absent from the export. Supporting them is deferred
+deliberately.
+
+What is **not** deferred is the silence. The collector does not append, so what
+is missing leaves no hole, which is the exact shape of duHast dropping 14
+curtain-wall doors invisibly: `populate_data_door_object` returns `None` for
+anything it cannot measure and the caller does not append it, so the loss is
+undetectable from the export alone. One counter in `get_all_item_data` (U3)
+turns a deliberate limitation into a stated number.
+
+### D9 — Two unit systems, named rather than merged
+
+After U1, one `DataItem` carries a footprint in feet and a position in mm.
+`convert_XYZ_to_point3` converts to mm; the polygon path goes through
+`get_point_as_doubles`, which does not convert — House A's stored doors are at
+`26.62`, plainly feet.
+
+`location_point` is **not** changed upstream. Other duHast consumers read it and
+mm is its documented contract. Instead the mix is named at both ends: a sentence
+in the `DataItem` docstring, and a named `MM_PER_FOOT` conversion at RoomMate's
+producer boundary rather than a bare `/ 304.8`.
+
+**A silent unit mix is how `room_locator::LEVEL_EPS_FT` came to mean half a
+millimetre.** Level elevations are already on the wire in mm (House A's LEVEL 00
+is `110250.0`) while every polygon is feet. It is currently harmless, because
+elevations are only ever compared to other elevations — but the constant
+documented as "half a foot … far tighter than any storey height and far looser
+than the float noise a transform introduces" is doing neither job, and two
+models naming one floor 0.4 mm apart already fail to match, silently, as
+`UnknownLevel`. Fixed in PR C as its own commit, with the finding written into
+the header rather than the constant quietly changed. It is not FFE's bug; it is
+on the axis FFE leans on, and FFE is what found it.
+
+## Rejected, recorded so they are not re-proposed
+
+- **FFE as a one-sided `Opening`.** See D1.
+- **FFE as a reference source on rooms.** Fails
+  [Entities](STRATEGY-ENTITIES.md)' three-part test: it is extracted from the
+  model, carries its own identity and placement, and an FFE schedule joins
+  *onto* it.
+- **One `SnapshotKind` per Revit category.** Eight lineages, eight pin maps and
+  eight endpoints for one bucket the producer reads in one pass. Category is a
+  property of an item, not an identity — the same argument that rejected
+  `/openings?category=window`, reaching the opposite conclusion because the
+  facts are opposite: there, one lineage would have merged two independently
+  pushed entities; here, eight lineages would split one.
+- **Widening `rooms_export_entry`.** Its pyRevit button lives outside this
+  repository, so it would keep succeeding while silently changing what every
+  existing button pushes. Note that "same file as the rooms" makes a combined
+  rooms-and-FFE run genuinely useful — but that is a *new* entry point and a new
+  button, one line of `export_entry(..., (ROOMS, FFE))`, not a change to that
+  one.
+- **An ingest-time gate requiring rooms before FFE.** [Entities](STRATEGY-ENTITIES.md)
+  says not to re-add it for the next dependent entity, and the reasoning holds
+  unchanged: "not yet" is a legitimate answer, and `opening_report`'s
+  pending/dangling split re-answers it on every read.
+
+## The upstream duHast changes
+
+All three land in `SampleCodeRevitBatchProcessor-NET8/src/duHast`. They are
+sequenced first not because RoomMate blocks on them — it does not, empty `loops`
+is a state the contract already carries — but because U1 is what makes the
+viewer layer nearly free.
+
+**U1 — `DataItem` carries the instance footprint.** Give it the geometry mixin
+and populate `polygon` through the three calls `to_data_door` already makes.
+`convert_bounding_box_to_flattened_2d_points` applies the box `Transform`, so
+the four corners come out world-placed and rotated rather than at the origin;
+that is the fix that made the door footprint trustworthy and it is reused whole.
+The rotation needs nothing — it is already on `location_point`.
+
+**U2 — the oriented box merges sub-component solids.** A precise difference
+between the two bbox helpers, and it lands where FFE is worst.
+`get_solids_based_bounding_box_from_family_instance` merges
+`GetSubComponentIds()` into its result; `get_oriented_bounding_box_from_family_instance`
+— the one that keeps the rotation, and therefore the one U1 needs — measures
+only `family_instance.get_Geometry()`. A desk whose drawers or monitor arm are
+nested shared families would measure to the desk top alone. The merge happens in
+the instance's own frame, where the inverse transform is already in hand.
+
+Note U2 interacts with the nested-component filter: **the components excluded as
+leaves are the ones the bounding box should be including as geometry.** They are
+the same elements answering two different questions, and getting one right does
+not get the other right.
+
+**U3 — `get_all_item_data` reports what it skipped**, per category. See D8.
+
+Two more, worth doing on their own merits and not blocking anything here:
+
+- **Drop the `GetRoomAtPoint` fallback from `get_room_ids`.** It mixes a
+  geometric answer into a field every other consumer reads as authored. Fixing
+  it does not change RoomMate's behaviour — per D3 the extractor reads Revit
+  regardless, because the export cannot carry the run's phase choice.
+- **Line-based instances**, deferred per D8.
+
+## Sequence
+
+**A — Probe the item export.** `scripts/probe_ffe_export.py` (collects, in
+Revit) and `scripts/analyse_ffe_probe.py` (decides, offline), on the split the
+windows probe used: the expensive half needs Revit and must be right first time,
+the cheap half is where the thinking goes and can be re-run and argued with.
+Six questions, none answerable from source:
+
+- how often `get_Room(phase)` populates on a real same-file model;
+- how many collected instances `populate_data_item_object` skipped, per
+  category;
+- the category histogram across all eight;
+- the super-component category matrix;
+- the bbox-derived level against the instance's own `Level` parameter;
+- the unit of every numeric field.
+
+Run against **House A first**, and a doors control from the same pass with the
+same duHast — the committed `scripts/fixtures/doors-raw.json` cannot serve,
+because it was captured from an older duHast and a field missing from it proves
+nothing about today. The windows probe made this mistake impossible by writing
+`doors-*-control.json` and never over the committed fixture; do the same.
+
+**A2 — the second probe, against RHH, after implementation.** Deliberately not
+part of the gate. House A answers "is the record what we think it is" on a model
+small enough to check by hand; RHH answers "does it hold at scale", which is a
+different question and one the implementation has to exist to ask. This is the
+same two-document logic the windows probe used in one pass, split across time
+instead — and it is the honest place for it, because the scale risks (the
+category histogram under `OST_GenericModel`, the nesting matrix, payload size)
+are exactly the ones a small sample cannot settle.
+
+**B — U1 and U2 upstream.** Parallel with A, not behind it.
+
+**C — Contract, storage, settings.** `SnapshotKind::Ffe` — the `ALL` guard makes
+an omission a compile error, which is the guard that exists because
+`list_models` once iterated a hand-written array and would have left every
+windows snapshot out of the model index. Then `contract::items::Item`,
+`contract::ffe` envelope and stream types, `SUPPORTED_FFE_SCHEMA = 1` (its own
+version line, for the reason windows started at 1 rather than matching doors: a
+version records *a contract's own* history and this one has none), manifest
+index, `[ffe]` settings, `ReferenceEntity::Ffe`, a fourth milestone pin map.
+Every test a round-trip. Carries the `LEVEL_EPS_FT` fix from D9 as its own
+commit.
+
+**D — Ingest and read.** `POST /ffe`, `POST /ffe/stream`, `GET /ffe`. The D7
+spine extraction lands here and wants splitting: do it as its own commit with
+`/doors` and `/windows` byte-identical *before* `/ffe` exists, so a regression
+has one commit to be in. The pinned wire-shape test that guarded the doors
+generalisation is the precedent.
+
+**E — Extractor.** Ahead of QA, because nothing downstream is testable against
+real data until a push exists. `room_m/exporters/ffe.py`, `post_ffe.py`,
+`utils/items.py`, one `ENTITY_EXPORTERS` row, `ffe_export_entry`. The Revit pass
+reads exactly one thing — `get_Room(phase)` — because D2 and D3 between them put
+everything else in the export or out of scope; it is much smaller than
+`opening_placements`. Phase filtering uses the **range** test
+(`elements_in_phase`), not the equality test rooms use: an item is built in one
+phase and may be demolished in a later one. Everything ASCII, because
+IronPython 2.7 will not parse a file with an em-dash in it, not even in a
+docstring.
+
+**F — QA and MCP.** `ItemReport` under the new `items` key (D5). One new tool,
+`get_ffe`, which needs three things kept in step that are hand-maintained by
+design: `bin/mcp.rs`'s spelled-out tool count, `STRATEGY-MCP.md`'s list, and
+`scripts/weekly_review.py`'s route-to-tool mapping. Its description is written
+fresh — an agent applying the doors reading to a furniture payload reports a
+correct model as broken, which is the lesson [MCP](STRATEGY-MCP.md) already
+carries from windows.
+
+**G — Viewer.** A fourth layer and a fourth toggle, polling on its own revision
+like the windows layer does. If U1 lands as D2 describes, this is close to free:
+the footprint arrives in the room convention and the existing renderer draws it
+with no new geometry code, leaving the toggle, the pick order and the inspector
+panel. Depends on B; runs parallel with F.
+
+## What would stop this
+
+**The single kill condition: `get_Room(phase)` does not populate on a model that
+holds both the rooms and the FFE.** That is the premise of the entity as stated
+at the top — RoomMate performs the join Revit will not schedule. If Revit does
+not know which room an item is in, there is no join to perform, containment is
+the only mechanism left, and the entity carries little rooms do not already
+have. It is one number out of PR A and it is the number to read first.
+
+**A distinct outcome that is not a stop: House A may hold no FFE at all.** "No
+items in this model" and "items present but unresolvable" are different answers
+and the analyser must not collapse them — the first means find another model,
+the second is the kill condition. Naming the difference before the data arrives
+is the point of writing the verdict conditions down now.
+
+**A softer stop:** if the skipped-instance count from D8 is a large fraction of
+a real model rather than a handful, the ordering changes — line-based support
+comes before RoomMate builds a QA report on a set it knows to be incomplete.
+That is a scheduling question, not an abandonment, and PR A measures it either
+way.
+
+## Open risks, carried rather than resolved
+
+- **Volume.** 26 doors is 414 KB, mostly repeated `type_properties`. Eight
+  categories including `OST_GenericModel` plausibly puts one storey into four
+  figures of instances. [Entities](STRATEGY-ENTITIES.md) defers type-property
+  deduplication until measured, with `type_id` already on the wire ready to key
+  a shared table — FFE is what measures it, and D2's rejected local-frame box
+  is the same table. Streaming ingest already handles the push; what it does not
+  handle is the viewer holding a whole payload to draw one level, which is the
+  one place the doors design assumed "far fewer than rooms" and said so in
+  `post_openings.post_stream`. PR A reports the instance count so PR G is
+  planned against a number, and A2 is where that number becomes real.
+
+- **Nesting.** `nested_opening_ids` exists because 2236 of 4134 exported
+  "doors" on one job were hardware and leaves, none carrying a room reference,
+  all landing in the homeless pile and making a data artifact look like a
+  modelling gap. Its test is "is the parent the same category", which is well
+  defined for one category and ambiguous across eight: a nested generic model
+  inside a furniture item is a different statement from a chair inside a chair.
+  The likely answer is a per-category rule in `[ffe]` rather than in code —
+  which category counts as a component is an office convention, the argument
+  `room_reference_property` already won. See also U2, which wants the opposite
+  answer about the same elements.
+
+- **The level heuristic.** An item's level is the last level at or below its
+  solid bounding box's minimum Z, with the lowest level as a fallback for
+  anything below all of them and an empty `DataLevel` when there are no solids.
+  A ceiling-mounted projector, a wall-hung basin, a pendant light: all assigned
+  to the storey *below* the one they serve if their geometry starts high enough
+  — and unlike `UnknownLevel`, this answer looks correct.
+
+  It matters less for attribution than it first appears, because with authored
+  `Room` populating, containment is a fallback that rarely runs. It matters
+  *more* for the viewer, because a wrong level draws the item on the wrong floor
+  plan, where a human sees it. The probe reports the disagreement rate against
+  the instance's own `Level` parameter; if it is material, the parameter wins
+  and the derived value becomes the fallback — the precedence authored data has
+  over geometry everywhere else here.
+
+- **The fourth unwired button.** `windows_export_entry` exists and its pyRevit
+  button still does not; `ffe_export_entry` will be the second in that state.
+  Both live outside this repository. Worth counting rather than discovering.
