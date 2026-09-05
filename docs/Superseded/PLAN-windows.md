@@ -3,7 +3,8 @@
 > **Superseded — built and merged (PRs #88–#93, 2026-08-31 to 2026-09-04).** The
 > live pointers are the code: `contract::openings` for the shared record,
 > `contract::windows` for the envelope, `service::openings::OpeningKind` for the
-> per-entity dispatch, and `room_m.post_openings` on the producer side. Kept as
+> per-entity dispatch, and `room_m.post_entity` (named `post_openings` until
+> FF&E generalised it) on the producer side. Kept as
 > the record of *why* the design looks as it does — and, in
 > [As built](#as-built), of the three things measurement changed and the three
 > findings nobody predicted.
@@ -60,7 +61,8 @@ about `put_doors`, at ten times the scale.
 That single rule settled the contract split (record shared, envelope not), the
 read result types (`Assembled` → `DoorsResult` / `WindowsResult`), the ingest
 responses (`IngestOutcome` → `door_count` / `window_count`), and the extractor's
-push modules (`post_openings` + an `OpeningPush` row each). It was overruled
+push modules (`post_openings`, now `post_entity`, + an `OpeningPush` row each,
+now `EntityPush`). It was overruled
 exactly once, deliberately — see [As built](#as-built).
 
 ## What was measured before any code moved

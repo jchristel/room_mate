@@ -20,19 +20,29 @@
 #
 #
 """
-The push side of an OPENING -- translation, both transports, and the empty-push
-refusal -- written once and bound to an entity by `OpeningPush`.
+The push side of ANY entity -- both transports, the envelope, the phase filter
+and the empty-push refusal -- written once and bound to an entity by
+`EntityPush`.
 
-Doors and windows differ in four values and nothing else: the two URLs, the
-schema version, the key duHast's export lists them under, and one sentence of
-refusal wording. Everything between reading the raw export and posting bytes is
-identical, because the RECORD is identical -- measured, not assumed, on two real
-documents.
+**This was `post_entity` until FF&E arrived, and the rename is the finding.**
+Doors and windows differ in four values and nothing else, because their RECORD
+is identical -- measured on two real documents, not assumed. That made "an
+opening push" a coherent thing to write once. An FF&E item is a different
+record, so the module had a choice: a second copy of the transport, or admit
+that the transport was never about openings. It was not. Everything from
+building the envelope to posting gzipped NDJSON is the same for any entity; the
+only thing that ever varied is how one raw export element becomes one contract
+element, and that is now `EntityPush.translate`.
 
-**What stays per entity lives in `post_doors` and `post_windows`**, which are
-now little more than an `OpeningPush` each plus their own module docstring. The
-docstrings are not ceremony: the reasoning that made each entity's rules is the
-expensive part, and it is genuinely per entity even where the code is not.
+The same split the server made at the same time, for the same reason and with
+the same shape: `service::entity_scope` holds what every entity's read shares,
+and `service::items` holds what an item does differently. Here `post_ffe` holds
+the FF&E translation and this file holds the rest.
+
+**What stays per entity lives in `post_doors`, `post_windows` and `post_ffe`**,
+which are little more than an `EntityPush` each plus their own module docstring.
+The docstrings are not ceremony: the reasoning that made each entity's rules is
+the expensive part, and it is genuinely per entity even where the code is not.
 
 Nothing here is Revit-facing. The extraction side lives in `room_m.utils`.
 """
@@ -63,15 +73,23 @@ from room_m.utils.phase_filter import (
 )
 
 
-# Everything that varies between one opening entity's push and another's.
+# Everything that varies between one entity's push and another's.
 #
 # A table rather than a subclass or a set of arguments, for the reason
 # `room_mate.ENTITY_EXPORTERS` is one: the differences are DATA, and writing them
 # as data keeps the code below free of any test on which entity is being pushed.
-# Adding a third is a row.
-OpeningPush = namedtuple(
-    "OpeningPush",
-    ["entity", "list_key", "schema_version", "url", "url_stream", "nested_reason"],
+#
+# `translate` is the one field that is a function rather than a value, and it is
+# the field FF&E added. Doors and windows share a translation because they share
+# a record; an item does not, so the choice was a second copy of both transports
+# or one more field here. `translate(plain_element, contribution)` takes the raw
+# export element already converted to plain types, plus the whole contribution --
+# not just the placements -- because what an entity needs from the extraction
+# pass is itself per entity: an opening wants room references and a facing read
+# from Revit, an item wants its category and its one room.
+EntityPush = namedtuple(
+    "EntityPush",
+    ["entity", "list_key", "schema_version", "url", "url_stream", "nested_reason", "translate"],
 )
 
 
@@ -222,7 +240,7 @@ def translate(spec, run_envelope, entries):
         out = []
         nested_ids = contribution.get("nested_ids") or set()
         for raw in source.get(spec.list_key, []):
-            element = translate_opening(raw, contribution["placements"])
+            element = spec.translate(raw, contribution)
             if element is None or element["id"] in nested_ids:
                 continue
             if in_selected_phase(element, contribution["allowed_ids"]):
@@ -270,8 +288,7 @@ def post_stream(spec, run_envelope, entries, url=None):
             nested_ids = contribution.get("nested_ids") or set()
             for raw_element in contribution["elements"].get(spec.list_key, []):
                 raw += 1
-                element = translate_opening(
-                    duhast_object_to_plain(raw_element), contribution["placements"])
+                element = spec.translate(duhast_object_to_plain(raw_element), contribution)
                 if element is None:
                     no_id += 1
                     continue

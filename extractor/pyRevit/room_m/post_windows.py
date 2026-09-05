@@ -20,7 +20,7 @@
 #
 #
 """
-The WINDOWS push. Almost all of it is `room_m.post_openings`; what is here is
+The WINDOWS push. Almost all of it is `room_m.post_entity`; what is here is
 the four values windows answer differently and the reasoning behind them.
 
 What is genuinely different about windows, and why:
@@ -76,20 +76,24 @@ Returns the same `(ok, status, text)` tuple shape as every other push, so the
 caller's `Result` tracking is identical.
 """
 
-from room_m.post_openings import (
-    OpeningPush,
+from room_m.post_entity import (
+    EntityPush,
     post_buffered,
     post_stream,
-    translate as translate_openings,
+    translate as translate_entity,
+    translate_opening,
 )
 
 
-WINDOWS = OpeningPush(
+WINDOWS = EntityPush(
     entity="windows",
     list_key="window",
     schema_version=1,
     url="http://127.0.0.1:5151/windows",
     url_stream="http://127.0.0.1:5151/windows/stream",
+    translate=lambda element, contribution: translate_opening(
+        element, contribution["placements"]
+    ),
     nested_reason="nested inside another window (glazing, panels, hardware)",
 )
 
@@ -104,7 +108,7 @@ def translate(run_envelope, entries):
     """Map a run's duHast window exports onto the v1 contract as one whole
     payload -- the buffered path, kept for small manual pushes and fixture
     generation."""
-    return translate_openings(WINDOWS, run_envelope, entries)
+    return translate_entity(WINDOWS, run_envelope, entries)
 
 
 def post_windows_stream(run_envelope, entries, url=SERVER_URL_STREAM):
