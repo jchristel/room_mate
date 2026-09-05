@@ -60,3 +60,11 @@ __pycache__/
 # relative to the crate root. Keep it that way; an absolute path belongs in the
 # host's own config (that doc's Claude Desktop section), never in this file.
 settings/projects/RHH.toml
+
+# Scratch space for probe runs and one-off exports (the windows facade probe,
+# raw duHast dumps, control files kept to diff a fixed extractor against a
+# broken one). Deliberately NOT `temp/*` with negations like the snapshot block
+# above: nothing in here is ever meant to be published, and a rule that can be
+# unpicked invites unpicking it. Anything worth keeping graduates to
+# data/snapshots or docs/ under its own name.
+temp/
