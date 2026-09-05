@@ -340,4 +340,8 @@ def post_buffered(spec, run_envelope, entries, url=None):
     from System.Net.Http import StringContent
     from System.Text import Encoding
 
-    return _post_content(url, StringContent(json.dumps(contract), Encoding.UTF8, "application/json"))
+    # ensure_ascii=False, as `write_ndjson_line` and `post_rooms.post_payload`
+    # both do: escaping a non-ASCII character under IronPython 2.7 decodes with
+    # the system code page and aborts the push. StringContent does it properly.
+    body = json.dumps(contract, ensure_ascii=False)
+    return _post_content(url, StringContent(body, Encoding.UTF8, "application/json"))

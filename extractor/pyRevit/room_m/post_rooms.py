@@ -176,7 +176,12 @@ def post_payload(run_envelope, entries, url=SERVER_URL):
         )
         return empty_push_refusal("rooms", contract, raw, [])
 
-    body = json.dumps(contract)
+    # ensure_ascii=False for the reason `write_ndjson_line` records: under
+    # IronPython 2.7 escaping a non-ASCII character means decoding a byte
+    # oriented str with the system code page first, which fails on bytes like
+    # 0xAE and takes the whole push with it. StringContent below encodes as
+    # UTF-8 correctly instead.
+    body = json.dumps(contract, ensure_ascii=False)
 
     content = StringContent(body, Encoding.UTF8, "application/json")
     return _post_content(url, content)
