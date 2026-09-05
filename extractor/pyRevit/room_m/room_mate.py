@@ -44,11 +44,13 @@ from room_m.utils.post_envelope import (
 from room_m.exporters import rooms as rooms_exporter
 from room_m.exporters import doors as doors_exporter
 from room_m.exporters import windows as windows_exporter
+from room_m.exporters import ffe as ffe_exporter
 
 
 ROOMS = "rooms"
 DOORS = "doors"
 WINDOWS = "windows"
+FFE = "ffe"
 
 
 EntityExporter = namedtuple(
@@ -65,6 +67,15 @@ EntityExporter = namedtuple(
 # no ordering, no new envelope field. The one thing that did NOT come for free
 # was the pyRevit button, which lives outside this repository -- see
 # `windows_export_entry`.
+#
+# **FF&E cost one row too, and that is the stronger result.** Windows are a
+# second OPENING and reuse the door record entirely, so a row was always going
+# to be enough. An item is a different record with a different translation, a
+# different extraction pass and no nested filter -- and the table still did not
+# notice, because what it dispatches over is "how does this entity contribute to
+# a run", which was never about what the entity is. What each row points at
+# absorbed the difference: `room_m.post_entity` grew a `translate` field, and
+# `room_m.exporters.ffe` supplies its own.
 #
 # **`blocking` is gone, and its absence is the change.** It used to say that a
 # model's rooms had to land before its doors were attempted, because the server
@@ -87,6 +98,11 @@ ENTITY_EXPORTERS = {
         export_model=windows_exporter.export_model,
         post_bucket=windows_exporter.post_bucket,
         stamp_envelope=windows_exporter.stamp_envelope,
+    ),
+    FFE: EntityExporter(
+        export_model=ffe_exporter.export_model,
+        post_bucket=ffe_exporter.post_bucket,
+        stamp_envelope=ffe_exporter.stamp_envelope,
     ),
 }
 
@@ -155,6 +171,37 @@ def windows_export_entry(doc, uiapp, output, forms):
     :rtype: Result
     """
     return export_entry(doc, uiapp, output, forms, (WINDOWS,))
+
+
+def ffe_export_entry(doc, uiapp, output, forms):
+    """Push FF&E alone.
+
+    An FF&E push carries no room data, only room *ids* -- and unlike a windows
+    push in a facade model, it usually does carry them: FF&E lives in the same
+    document as the rooms it serves, which is the premise of the entity. Revit
+    cannot schedule FF&E against those rooms, and this is the push that lets
+    RoomMate do it instead.
+
+    It needs nothing on the server first: an unresolvable or absent reference is
+    reported rather than refused, so FF&E may be pushed before its rooms.
+
+    **Its pyRevit button has to be wired outside this repository**, and it is the
+    second entry point in that state -- `windows_export_entry` is still waiting
+    for one. Widening an existing entry instead would be worse:
+    `rooms_export_entry` still pushes rooms AND doors despite its name, and
+    quietly adding a third entity to it would keep succeeding while changing what
+    every existing button does.
+
+    **A combined rooms-and-FF&E entry would be genuinely useful** and is
+    deliberately not added here. The two live in one document, so one run could
+    read it once and push both -- but that is a new entry point and a new button,
+    one line of `export_entry(..., (ROOMS, FFE))`, and adding it before anyone
+    has asked would be a third unwired button rather than a saving.
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return export_entry(doc, uiapp, output, forms, (FFE,))
 
 
 def export_entry(doc, uiapp, output, forms, entities):

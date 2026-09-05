@@ -58,27 +58,31 @@ Returns the same `(ok, status, text)` tuple shape as the room push, so the
 caller's `Result` tracking is identical for both.
 """
 
-from room_m.post_openings import (
-    OpeningPush,
+from room_m.post_entity import (
+    EntityPush,
     post_buffered,
     post_stream,
-    translate as translate_openings,
+    translate as translate_entity,
+    translate_opening,
 )
 
 
 # The doors binding. Every value here is one this entity answers differently
-# from windows; everything else about the push lives in `post_openings`.
+# from windows; everything else about the push lives in `post_entity`.
 #
 # Schema 2, not 1, and independently of rooms' 7: versioning doors against the
 # room contract would couple two things that move separately, and the bump to 2
 # was "one push carries many models". Windows start at 1 because that contract
 # has no earlier history to number around.
-DOORS = OpeningPush(
+DOORS = EntityPush(
     entity="doors",
     list_key="door",
     schema_version=2,
     url="http://127.0.0.1:5151/doors",
     url_stream="http://127.0.0.1:5151/doors/stream",
+    translate=lambda element, contribution: translate_opening(
+        element, contribution["placements"]
+    ),
     nested_reason="nested inside another door (leaves, panels, hardware)",
 )
 
@@ -93,7 +97,7 @@ def translate(run_envelope, entries):
     """Map a run's duHast door exports onto the v2 contract as one whole
     payload -- the buffered path, kept for small manual pushes and fixture
     generation."""
-    return translate_openings(DOORS, run_envelope, entries)
+    return translate_entity(DOORS, run_envelope, entries)
 
 
 def post_doors_stream(run_envelope, entries, url=SERVER_URL_STREAM):

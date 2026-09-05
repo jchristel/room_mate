@@ -1,9 +1,10 @@
 # RoomMate — FFE implementation plan
 
-> **Status: in progress — A, C and D are built; E, F and G are not.** The server
-> side is complete: the contract, the store, the settings, `POST /ffe`,
-> `POST /ffe/stream`, `GET /ffe` and the `get_ffe` MCP tool. What is missing is
-> the extractor that would push to it, the QA report and the viewer layer.
+> **Status: in progress — A, C, D and E are built; F and G are not.** The
+> pipeline runs end to end: the contract, the store, the settings, `POST /ffe`,
+> `POST /ffe/stream`, `GET /ffe`, the `get_ffe` MCP tool, and the extractor that
+> pushes to them. What is missing is the QA report and the viewer layer — and,
+> outside this repository, the pyRevit button for `ffe_export_entry`.
 >
 > This records the design agreed *before* any code, so the implementation did not
 > re-derive it and the open questions were open before the work rather than after
@@ -633,7 +634,7 @@ way.
   is the same table. Streaming ingest already handles the push; what it does not
   handle is the viewer holding a whole payload to draw one level, which is the
   one place the doors design assumed "far fewer than rooms" and said so in
-  `post_openings.post_stream`. PR A reports the instance count so PR G is
+  `post_entity.post_stream`. PR A reports the instance count so PR G is
   planned against a number, and A2 is where that number becomes real.
 
 - **Nesting.** `nested_opening_ids` exists because 2236 of 4134 exported
