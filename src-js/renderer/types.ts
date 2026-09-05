@@ -107,6 +107,57 @@ export interface Door {
  */
 export type WindowOpening = Door;
 
+/**
+ * One FF&E instance, as `/ffe` returns it — a SUBSET, on the same terms as
+ * `Room` and `Door`.
+ *
+ * **Its own interface, NOT an alias of `Door`**, which is the opposite call to
+ * `WindowOpening` above and made on the same evidence. A window record was
+ * measured to be a door record, so an alias was the honest description. An item
+ * is measurably not: it names ONE room rather than two sides, carries a Revit
+ * `category` no opening has, and has `facing` where an opening has
+ * `through_wall_normal` — a different claim, not a different spelling.
+ *
+ * `loops` is **empty on every item today**, because the upstream exporter
+ * carries no footprint for FF&E yet. That is the normal state here rather than
+ * the exception it is for an opening, and `buildItemGlyph` is built around it.
+ */
+export interface Item {
+  id: string;
+  level_id?: string;
+  /** The Revit category, e.g. `"Furniture"`. The one field no opening has, and
+   *  the first thing a reader filters on. */
+  category?: string;
+  /** `loops[0]` is the footprint rectangle when there is one. **Empty is the
+   *  ordinary state**, not an error — see `buildItemGlyph`. */
+  loops?: Loop[];
+  /** The room this item is in, or absent. Not a pair: an item sits IN a room. */
+  room?: string | null;
+  /** Where the item sits. The only placement most items have. */
+  insertion_point?: Point2D | null;
+  /**
+   * A unit vector along the item's own X axis, Y-up like every other point
+   * here — which way it faces.
+   *
+   * **Not an opening's `through_wall_normal`.** That vector passes through a
+   * wall and has a meaning on each side; this is an orientation and nothing
+   * more. Absent for 44 of 644 measured items, whose local X points along Z.
+   */
+  facing?: Point2D | null;
+  /** The instance this one is a component of, when it is one. Present means the
+   *  project's `nested_components` policy chose to include it. */
+  super_component_id?: string | null;
+  /** Whether the server classed this as a component — the resolved answer, so
+   *  a reader need not re-derive it from `super_component_id`. */
+  is_component?: boolean;
+  type_name?: string;
+  /** The room this item is attributed to, as a list of at most one. **Empty
+   *  means homeless** — a reported state, not a missing value. */
+  owner_rooms?: string[];
+  properties?: Record<string, PropertyValue>;
+  type_properties?: Record<string, PropertyValue>;
+}
+
 /** A rectangle in the **flipped** (Y-down) space — the same space as
  *  `zone.view` and the SVG viewBox. */
 export interface Extent {

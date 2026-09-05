@@ -34,7 +34,7 @@
 // instead. Same call site, two implementations — which is the entire point of
 // having a seam.
 
-import type { Door, Rect, Room, WindowOpening } from "./types.js";
+import type { Door, Item, Rect, Room, WindowOpening } from "./types.js";
 
 /** Search state, applied WITHOUT a re-render. Preserving that property is an
  *  explicit obligation: a search can match thousands of rooms, and a keystroke
@@ -79,6 +79,18 @@ export interface PaintRequest {
   windows?: readonly WindowOpening[] | undefined;
   /** Whether to draw them. Absent means yes when `windows` is non-empty. */
   showWindows?: boolean | undefined;
+
+  /**
+   * The FF&E to draw on this level, already scoped by the caller.
+   *
+   * A third list for the reason there is a second: the three draw differently
+   * and are toggled independently. It matters more here than it did for
+   * windows -- a furnished level carries hundreds of items against tens of
+   * openings, so a reader reading circulation turns this off first.
+   */
+  ffe?: readonly Item[] | undefined;
+  /** Whether to draw them. Absent means yes when `ffe` is non-empty. */
+  showFfe?: boolean | undefined;
 }
 
 /**
@@ -89,7 +101,8 @@ export interface PaintRequest {
 export type Pick =
   | { kind: "room"; room: Room }
   | { kind: "door"; door: Door }
-  | { kind: "window"; window: WindowOpening };
+  | { kind: "window"; window: WindowOpening }
+  | { kind: "item"; item: Item };
 
 export interface PlanRenderer {
   /** Draw a level, framed to `fitted`. Replaces whatever was drawn before. */
@@ -108,6 +121,11 @@ export interface PlanRenderer {
    *  rather than merged into a tagged argument, so the existing room call
    *  sites in `static/index.html` are untouched by doors existing. */
   setDoorSelection(doorId: string | null): void;
+
+  /** The one selected FF&E item, or `null`. A fourth selection setter rather
+   *  than a tagged argument, for the reason the third is separate: every
+   *  existing call site in `static/index.html` stays untouched. */
+  setItemSelection(itemId: string | null): void;
 
   /** The one hovered room, or `null`. */
   setHover(roomId: string | null): void;

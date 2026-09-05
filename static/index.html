@@ -653,6 +653,7 @@
     <button class="ctl on" id="labelsToggle" title="Show or hide room labels (SVG export follows)">Labels: on</button>
     <button class="ctl on" id="doorsToggle" title="Show or hide door glyphs">Doors: on</button>
     <button class="ctl on" id="windowsToggle" title="Show or hide window glyphs">Windows: on</button>
+    <button class="ctl on" id="ffeToggle" title="Show or hide furniture, fixtures and equipment">FF&amp;E: on</button>
     <div class="search">
       <input id="searchInput" type="search" placeholder="Search rooms…" autocomplete="off" />
       <button class="ctl" id="fieldsToggle" title="Choose which fields to search">Fields ▾</button>
@@ -851,6 +852,12 @@ let lastDoorsRevision = null;
 // other for nothing -- the same argument that kept doors out of currentPayload.
 let windowsPayload = null;
 let lastWindowsRevision = null;
+// The one /ffe payload. A FOURTH list rather than merging into the openings,
+// for the reason windows got a third: the three draw differently and toggle
+// independently. It matters most here -- a furnished level carries hundreds of
+// items against tens of openings, so this is the layer a reader turns off first.
+let ffePayload = null;
+let lastFfeRevision = null;
 let lastRevision = null;     // poll change-detection cursor
 // The server's ETag for the last body we actually received, per entity.
 //
@@ -870,6 +877,7 @@ let lastRevision = null;     // poll change-detection cursor
 let lastRoomsEtag = null;
 let lastDoorsEtag = null;
 let lastWindowsEtag = null;
+let lastFfeEtag = null;
 // Picker refresh guards (diff signatures so the 2s tick doesn't fight the user).
 let lastProjectIds = null;
 let lastBuildingsSignature = null;
@@ -910,6 +918,7 @@ let showRoomLabels = true;
 // matching how labels work.
 let showDoors = true;
 let showWindows = true;
+let showFfe = true;
 
 // Global room search (see the "search" section lower down): one query + one set
 // of enabled field keys, applied to every zone. `searchFields` empty means "not
@@ -946,6 +955,7 @@ let selection = null;   // { kind: "room" | "area", id, zoneId } | null
 function roomSelection() { return selection && selection.kind === "room" ? selection.id : null; }
 function doorSelection() { return selection && selection.kind === "door" ? selection.id : null; }
 function windowSelection() { return selection && selection.kind === "window" ? selection.id : null; }
+function itemSelection() { return selection && selection.kind === "item" ? selection.id : null; }
 
 // Anything that wants to react to a selection change registers here. Listeners
 // receive the whole `selection` object (or null), so a kind-blind listener must
@@ -1461,6 +1471,8 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       showDoors,
       windows: windowsOnLevel(levelId),
       showWindows,
+      ffe: ffeOnLevel(levelId),
+      showFfe,
     });
     // Inside the deferred build, not after it: on a large level these run a
     // frame later than the surrounding code, and re-applying a selection to a
@@ -3332,6 +3344,7 @@ function applySelection(zone) {
   zone.renderer.setSelection(roomSelection() || null);
   zone.renderer.setDoorSelection(doorSelection() || null);
   zone.renderer.setWindowSelection(windowSelection() || null);
+  zone.renderer.setItemSelection(itemSelection() || null);
 
   const areaId = selection && selection.kind === "area" ? selection.id : null;
   for (const p of zone.svg.querySelectorAll(".area-poly"))
@@ -3366,6 +3379,9 @@ function selectDoor(doorId, zoneId = null) {
 }
 function selectWindow(windowId, zoneId = null) {
   select(windowId ? { kind: "window", id: windowId, zoneId } : null);
+}
+function selectItem(itemId, zoneId = null) {
+  select(itemId ? { kind: "item", id: itemId, zoneId } : null);
 }
 
 // The room a plan click landed on, or null for empty space / the grid. Resolved
@@ -3473,6 +3489,7 @@ const INSPECTORS = {
   area: renderAreaInspector,
   door: renderDoorInspector,
   window: renderWindowInspector,
+  item: renderItemInspector,
 };
 
 // The header every kind shares: a title, a sub-line, and the zone the click came
@@ -3650,6 +3667,89 @@ function renderWindowInspector(host) {
   inspSection(host, "Instance properties", inspApplyFilters(inst));
 
   const type = Object.entries(win.type_properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  type.sort((a, b) => a[0].localeCompare(b[0]));
+  inspSection(host, "Type properties", inspApplyFilters(type));
+}
+
+// ---- the FF&E inspector -----------------------------------------------------
+//
+// Its own panel, and unlike the window one that is not a fine distinction: an
+// item is a different RECORD, so most of what the opening panels show does not
+// exist here. There is one room rather than two sides, no swing and no facing
+// direction through a wall, a Revit category no opening carries, and -- for now
+// -- no footprint at all.
+//
+// The three things this panel exists to say, none of which the reader can get
+// from the plan:
+//
+//  * WHICH KIND. Category is the first question anyone asks of FF&E, and the
+//    marker on the plan deliberately does not answer it -- nine categories
+//    would need nine drawing conventions invented here.
+//  * WHY THERE IS NO OUTLINE. Every item today is drawn as a marker because the
+//    exporter carries no footprint yet. Unstated, that reads as a rendering
+//    fault rather than as the data.
+//  * WHETHER IT IS A COMPONENT. A joinery handle inside a casework run is a
+//    real instance the project chose to show; without saying so, an inspector
+//    full of hardware looks like a modelling mess rather than a policy.
+function renderItemInspector(host) {
+  const it = (ffePayload?.ffe || []).find(x => x.id === selection.id);
+  if (!it) {
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent = `Item ${selection.id} is not in the current scope.`;
+    host.appendChild(note);
+    return;
+  }
+
+  // `-1` is Revit's "no element" id, which an unhosted item legitimately
+  // carries -- 71 of 644 when measured. Named rather than shown raw, because
+  // "-1" reads as a bug and "unhosted" reads as the fact it is.
+  const levelName = it.level_id === "-1"
+    ? "unhosted (no level)"
+    : (currentPayload?.levels || []).find(l => l.id === it.level_id)?.name || it.level_id;
+  inspHead(host, {
+    kind: "item",
+    title: it.type_name || it.id,
+    sub: `${it.id} · ${levelName}`,
+  });
+
+  const roomName = (id) => {
+    if (!id) return "";
+    const r = (currentPayload?.rooms || []).find(x => x.id === id);
+    return r ? (r.name || r.id) : `${id} (not in scope)`;
+  };
+
+  inspSection(host, "Placement", [
+    ["Category", it.category || "(unknown)"],
+    // One room, so one line. An opening's panel has two and has to explain
+    // which is which; there is nothing here to disambiguate.
+    ["In room", it.room ? roomName(it.room) : "(none)"],
+    ["Attributed to", (it.owner_rooms || []).length
+      ? it.owner_rooms.map(roomName).join(", ")
+      : "(homeless — outside every room, which is often correct)"],
+  ]);
+
+  // What the plan is drawing, named so a marker does not look like a fault.
+  const hasBox = !!(it.loops && it.loops.length && it.loops[0]?.points?.length);
+  inspSection(host, "Geometry", [
+    ["Footprint", hasBox
+      ? "yes"
+      : "none — drawn as a marker at its insertion point"],
+    ["Facing", it.facing ? "yes" : "unknown — no orientation drawn"],
+  ]);
+
+  if (it.is_component || it.super_component_id) {
+    inspSection(host, "Nesting", [
+      ["Component of", it.super_component_id || "(another instance)"],
+      ["Shown because", "this project sets [ffe] nested_components = include"],
+    ]);
+  }
+
+  const inst = Object.entries(it.properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  inst.sort((a, b) => a[0].localeCompare(b[0]));
+  inspSection(host, "Instance properties", inspApplyFilters(inst));
+
+  const type = Object.entries(it.type_properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
   type.sort((a, b) => a[0].localeCompare(b[0]));
   inspSection(host, "Type properties", inspApplyFilters(type));
 }
@@ -3914,6 +4014,57 @@ function windowsOnLevel(levelId) {
   return (windowsPayload.windows || []).filter(w => (w.level_id || "unknown") === levelId);
 }
 
+// The /ffe URL. Same caveat as doorsUrl and windowsUrl, and the middle ground
+// between them: an item's building comes through the room it is IN, and unlike a
+// facade model's windows most items do name one -- 572 of 647 when measured. So
+// a building filter hides the homeless remainder rather than everything, which
+// is the server's documented behaviour and not something to paper over here.
+function ffeUrl() {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project", projectId);
+  if (buildingKey) params.set("building", buildingKey);
+  if (projectId && milestone) params.set("milestone", milestone);
+  const qs = params.toString();
+  return qs ? `/ffe?${qs}` : "/ffe";
+}
+
+// The FF&E on one level, keyed exactly as doors and windows are.
+//
+// An item whose level is `-1` -- unhosted, 71 of 644 when measured -- lands
+// under "unknown" like any other unmatched level rather than being dropped. It
+// is a real item with a real position, and hiding it would make a plan quietly
+// incomplete.
+function ffeOnLevel(levelId) {
+  if (!ffePayload) return [];
+  return (ffePayload.ffe || []).filter(i => (i.level_id || "unknown") === levelId);
+}
+
+// FF&E polls on its own revision, in its own try -- an FF&E read that fails or
+// 204s must not take rooms, doors or windows down with it. A model with rooms
+// and no furniture is legitimate (a shell, a base-build package, a plantroom
+// level), and the plan is still worth drawing without it.
+async function pollFfe() {
+  try {
+    const res = await fetch(ffeUrl(), { cache: "no-store", headers: condHeaders(lastFfeEtag) });
+    if (res.status === 304) return false;
+    if (res.status === 204) {
+      lastFfeEtag = null;
+      if (ffePayload !== null) { ffePayload = null; lastFfeRevision = null; return true; }
+      return false;
+    }
+    if (!res.ok) return false;
+    lastFfeEtag = res.headers.get("ETag");
+    const payload = await res.json();
+    const incoming = payload.revision ?? JSON.stringify(payload);
+    if (incoming === lastFfeRevision) return false;
+    lastFfeRevision = incoming;
+    ffePayload = payload;
+    return true;
+  } catch (err) {
+    return false;   // rooms already report connection loss; one message is enough
+  }
+}
+
 // Windows poll on their own revision, in their own try -- a windows read that
 // fails or 204s must not take rooms or doors down with it. A model with rooms
 // and no windows is legitimate (a service core, an internal floor), and the
@@ -4019,11 +4170,12 @@ async function poll() {
     // add the doors.
     const doorsChanged = await pollDoors();
     const windowsChanged = await pollWindows();
+    const ffeChanged = await pollFfe();
     if (incoming !== lastRevision) {
       lastRevision = incoming;
       ingestAll(payload); // re-fits + rebuilds level controls only on real change
-    } else if (doorsChanged || windowsChanged) {
-      // An opening entity moved and rooms did not. Repaint in place: no refit,
+    } else if (doorsChanged || windowsChanged || ffeChanged) {
+      // An element entity moved and rooms did not. Repaint in place: no refit,
       // because such a push must not throw away the user's pan and zoom.
       redrawAllZones();
     }
@@ -4153,6 +4305,7 @@ function wireInteractions(zone) {
       const hit = area ? null : zone.renderer.pickAt(downAt.x, downAt.y);
       if (hit && hit.kind === "door") selectDoor(hit.door.id, zone.id);
       else if (hit && hit.kind === "window") selectWindow(hit.window.id, zone.id);
+      else if (hit && hit.kind === "item") selectItem(hit.item.id, zone.id);
       else if (hit) selectRoom(hit.room.id, zone.id);
       else selectArea(area ? areaKey(area) : null, area ? zone.id : null);
     }
@@ -4475,6 +4628,17 @@ document.getElementById("windowsToggle").addEventListener("click", (e) => {
   // toggle drops a door one: the inspector would keep describing something the
   // plan no longer draws, and the mark would point at empty space.
   if (!showWindows && windowSelection()) select(null);
+  redrawAllZones();
+});
+
+document.getElementById("ffeToggle").addEventListener("click", (e) => {
+  showFfe = !showFfe;
+  e.target.textContent = `FF&E: ${showFfe ? "on" : "off"}`;
+  e.target.classList.toggle("on", showFfe);
+  // Hiding FF&E must also drop an item SELECTION, for the reason the other two
+  // toggles drop theirs: the inspector would keep describing something the plan
+  // no longer draws, and the mark would point at empty space.
+  if (!showFfe && itemSelection()) select(null);
   redrawAllZones();
 });
 
