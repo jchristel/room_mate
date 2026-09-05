@@ -64,8 +64,6 @@
 "post_ffe.py@PLAN-ffe.md" = "proposed extractor module"
 "room_m/exporters/ffe.py@PLAN-ffe.md" = "proposed extractor module"
 "utils/items.py@PLAN-ffe.md" = "proposed extractor module"
-"scripts/probe_ffe_export.py@PLAN-ffe.md" = "proposed probe, PR A — the instrument the whole plan gates on"
-"scripts/analyse_ffe_probe.py@PLAN-ffe.md" = "proposed probe analyser, PR A"
 
 # --- History written on purpose: the doc names an old symbol to explain a
 #     rename or a split. Deleting these names would make the docs worse, not

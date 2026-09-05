@@ -186,6 +186,22 @@ though it is not a **setting**. So QA can break findings down by category and
 allow-list is wanted it changes what is pushed rather than what the wire can
 say.
 
+**And the extractor must supply that field itself, because the export has no
+key for it.** `DataItem` carries `super_component_id`, `rooms`,
+`location_point`, the two property maps, `level`, `revit_model`, `phasing` and
+`design_set_and_option` — and no category, despite `get_all_item_data` walking
+eight of them and discarding which one each instance came from. So `category`
+is the one field on `Item` that is read from the collector pass rather than from
+the export, which is a *third* rule alongside D2 (read the geometry from the
+export) and D3 (read the room from Revit). It is not an exception to either: the
+export does not carry it at all, so this is filling a gap rather than choosing
+between two answers.
+
+It also means the probe cannot attribute a dropped instance to a category by
+reading the export, and has to join the export's ids against its own per-category
+collection to do it. That is why `probe_ffe_export.py` keys its records by
+element id and counts per category separately, rather than counting the export.
+
 `OST_GenericModel` being in the set is what makes the probe's category histogram
 and super-component matrix the two numbers that matter most — see the two
 open risks below.
