@@ -273,6 +273,23 @@ pub struct ValidationResponse {
     /// consumer can tell "no windows in this project" from "this server does not
     /// do windows".
     pub openings: BTreeMap<String, OpeningReport>,
+
+    /// Whether this project's FF&E links to rooms that actually exist (see
+    /// `ItemReport`), keyed `ffe`.
+    ///
+    /// **Beside `openings` rather than inside it**, and the key name is the
+    /// argument. `openings` was renamed from `doors` precisely so a third
+    /// opening entity would cost a map key instead of fifteen types; an item is
+    /// not an opening, so putting it under that key would make the key lie to
+    /// buy a saving that -- see `ItemReport` -- mostly was not there anyway.
+    ///
+    /// A map rather than a bare `ItemReport` so a second non-opening entity
+    /// costs a key, which is the same bet `openings` made and won once.
+    ///
+    /// An entity with nothing pushed reports zero rather than being absent, so
+    /// a consumer can tell "no FF&E in this project" from "this server does not
+    /// do FF&E".
+    pub items: BTreeMap<String, ItemReport>,
 }
 
 /// Which phase each of a project's models is on, and whether they agree.
@@ -485,6 +502,194 @@ pub struct PendingRoomReference {
     pub opening_id: String,
 }
 
+/// One item, named unambiguously.
+///
+/// **One type for two lists**, where the doors report has
+/// `OpeningWithoutRoom` and `PendingRoomReference` as separate structs with
+/// identical fields. Not a criticism of that -- the two mean different things
+/// and naming them apart is defensible -- but an item has fewer findings, and
+/// two names for `{model_id, item_id}` would be ceremony at this size. The
+/// meaning lives on the field that holds it.
+///
+/// `model_id` is carried because an item id, like a room id, is unique only
+/// within one model.
+#[derive(Debug, Serialize)]
+pub struct ItemRef {
+    pub model_id: String,
+    pub item_id: String,
+}
+
+/// One item's room reference naming a room this model does not have.
+///
+/// **No `side`, which is why this is not `UnresolvedRoomReference`.** An item
+/// sits in one room; there is no from-side or to-side for a finding to name.
+#[derive(Debug, Serialize)]
+pub struct UnresolvedItemRoom {
+    pub model_id: String,
+    pub item_id: String,
+    /// The room id the item names, which nothing in this model's rooms matches.
+    pub room_id: String,
+}
+
+/// One item whose **authored** room reference disagrees with the room it names.
+#[derive(Debug, Serialize)]
+pub struct ItemRoomReferenceMismatch {
+    pub model_id: String,
+    pub item_id: String,
+    /// The value of the item property named by `[ffe] room_reference_property`.
+    pub authored: String,
+    pub attributed_room_id: String,
+    pub attributed_room_number: String,
+}
+
+/// One item whose authored room disagrees with where the geometry puts it.
+///
+/// The item counterpart of `RoomGeometryMismatch`, minus the `side` an item
+/// does not have. Same stance: reported, never corrected, because the two are
+/// different claims and there is no general rule for which is right.
+#[derive(Debug, Serialize)]
+pub struct ItemGeometryMismatch {
+    pub model_id: String,
+    pub item_id: String,
+    /// The room the model states this item is in.
+    pub authored_room_id: String,
+    /// The room the geometry puts it in, `None` when it found none.
+    pub geometric_room: Option<crate::service::room_locator::RoomRef>,
+    /// When each snapshot was read -- the export's own timestamp, not the
+    /// server's receipt time, which is what makes comparing them meaningful.
+    pub ffe_taken_at: String,
+    pub rooms_taken_at: String,
+    pub stale: StaleSide,
+}
+
+/// One model whose stored FF&E was filtered to a different phase than its
+/// stored rooms. See `OpeningPhaseDrift`, which carries the full argument.
+#[derive(Debug, Serialize)]
+pub struct ItemPhaseDrift {
+    pub model_id: String,
+    /// The phase this model's stored **FF&E** was filtered to.
+    pub ffe_phase: Option<String>,
+    pub rooms_phase: Option<String>,
+}
+
+/// FF&E discrepancy tallies, so a consumer needn't re-sum the lists.
+///
+/// **`without_room` is deliberately NOT in `total`**, which is where this parts
+/// company with `OpeningDiscrepancyCounts`. See `ItemReport::without_room`.
+#[derive(Debug, Default, Serialize)]
+pub struct ItemDiscrepancyCounts {
+    pub total: usize,
+    pub unresolved_room: usize,
+    pub room_reference_mismatches: usize,
+    pub phase_drift: usize,
+    pub room_geometry_mismatches: usize,
+}
+
+/// Whether this project's FF&E links to rooms that actually exist.
+///
+/// **A sibling of `OpeningReport`, not a reuse of it, and the plan expected
+/// otherwise.** `docs/PLAN-ffe.md` D5 said this would reuse five finding types
+/// verbatim. Reading them, one does: `RoomResolutionCounts`, which counts what
+/// the geometry answered and has nothing entity-shaped in it. Two carry a
+/// `side` an item has no equivalent for, and three name their element
+/// `opening_id` or `openings_phase`.
+///
+/// So the same rule that made `Item` a sibling of `Opening` applies one level
+/// up: **share it unless sharing would make a field mean nothing**. Six small
+/// structs is the honest cost, and it is far below the ~250 lines the
+/// `DoorReport` -> `OpeningReport` rename was made to avoid -- because an item
+/// has fewer findings, not because the types were reused.
+///
+/// **Two of the doors report's findings have no counterpart here at all**, and
+/// their absence is the point rather than an omission:
+///
+/// - `external`, "a room on exactly one side", is meaningless for an entity
+///   with one side. Modelling FF&E as a one-sided opening would have made every
+///   item in the model report as one.
+/// - `unattributed`, "the policy declined to use the reference it has", cannot
+///   arise: there is no attribution policy, because there is nothing to choose
+///   between.
+///
+/// And one has no counterpart in the doors report: `excluded_components`.
+#[derive(Debug, Default, Serialize)]
+pub struct ItemReport {
+    /// Items examined across every model in this project, **after the nested
+    /// component policy has been applied** -- so this counts what a `/ffe`
+    /// reader sees, not what the store holds. The difference is
+    /// `excluded_components`.
+    pub total: usize,
+
+    /// How many items this project's `[ffe] nested_components` policy removed.
+    ///
+    /// **The number that exists so an exclusion is not a silence.** 2236 of
+    /// 4134 exported "doors" on one job were hardware and nobody could see it,
+    /// because the producer had dropped them before anyone could count. On
+    /// House A this reads 179 of 647, and a large value here is normal rather
+    /// than a fault.
+    pub excluded_components: usize,
+
+    /// The policy in force, echoed so a reader can tell a zero that means
+    /// "no components in this model" from one that means "components are being
+    /// returned rather than excluded".
+    pub nested_components: crate::settings::NestedComponents,
+
+    /// Items naming no room at all.
+    ///
+    /// **Informational, NOT a discrepancy**, and this is the one place the item
+    /// report deliberately disagrees with the doors report about what counts as
+    /// a finding. A door with neither side set connects nothing, which is nearly
+    /// always a data problem. An item with no room is very often correct: a
+    /// bollard, external furniture, plant on a roof, a fitting in a shaft.
+    /// Measured on House A, 75 of 647 -- 11.6%, and every one a real item.
+    /// Folding that into `discrepancies` would train a reader to ignore the
+    /// number.
+    ///
+    /// Still listed, because it is exactly the hole in the join this entity
+    /// exists to perform, and a reader who wants it has to be able to get it.
+    pub without_room: Vec<ItemRef>,
+
+    /// Room references naming a room the item's own model does not have. A real
+    /// discrepancy: the reference is *there* and dangling.
+    ///
+    /// Only ever populated for a model that **has** a rooms snapshot; a model
+    /// still waiting for one contributes to `pending_rooms` instead.
+    pub unresolved_room: Vec<UnresolvedItemRoom>,
+
+    /// Items whose model has no rooms snapshot yet. **Informational** -- FF&E
+    /// may be pushed before its rooms, and nothing about these was checked.
+    pub pending_rooms: Vec<ItemRef>,
+
+    /// Models whose stored FF&E and stored rooms describe different phases.
+    pub phase_drift: Vec<ItemPhaseDrift>,
+
+    /// Authored references that resolve but disagree with the geometry. Empty
+    /// when `[ffe] room_resolution` is off, which is **not the same as clean**;
+    /// the setting is echoed below so a reader can tell the two apart.
+    pub room_geometry_mismatches: Vec<ItemGeometryMismatch>,
+
+    /// What the geometry answered across this project. The one type shared with
+    /// the doors report verbatim.
+    pub room_resolution_counts: RoomResolutionCounts,
+
+    /// The resolution mode in force. `Off` is the default for FF&E and is the
+    /// right default -- an item lives in the same document as its rooms, so
+    /// authored references populate -- which makes echoing it more important
+    /// rather than less: a reader must not read "no mismatches" as "checked".
+    pub room_resolution: RoomResolution,
+
+    /// Items whose authored room property disagrees with the room they name.
+    /// Empty when `[ffe] room_reference_property` is unset.
+    pub room_reference_mismatches: Vec<ItemRoomReferenceMismatch>,
+
+    /// The item property the reconciliation read, or `None` when off.
+    pub room_reference_property: Option<String>,
+
+    /// Tallies for the findings above. Deliberately **not** added into
+    /// `ValidationResponse::discrepancies`, which is the sum across reference
+    /// *sources* -- the same separation `phases` and `openings` have.
+    pub discrepancies: ItemDiscrepancyCounts,
+}
+
 /// Whether this project's doors link to rooms that actually exist.
 ///
 /// **Two findings, and one deliberate non-finding.**
@@ -603,6 +808,7 @@ impl ValidationResponse {
             discrepancies: DiscrepancyCounts::default(),
             phases: PhaseReport::default(),
             openings: BTreeMap::new(),
+            items: BTreeMap::new(),
         }
     }
 }
@@ -711,6 +917,263 @@ fn geometry_pass<P: crate::contract::OpeningEnvelope>(
             }
         }
     }
+}
+
+/// One project's rooms, indexed the three ways a reference check needs them.
+///
+/// **Every index here is keyed per model**, which is the correctness argument
+/// rather than a convenience: a project-wide set would silently resolve an item
+/// in model A against a same-numbered room in model B and report a dangling
+/// reference as clean. Room ids are unique only within a model.
+///
+/// `opening_report` builds the first and third of these inline and could share
+/// this. It is deliberately not changed here -- the doors report works and this
+/// is an FF&E change -- but the duplication is real and is the obvious thing to
+/// collapse next time either is touched.
+struct RoomIndex<'a> {
+    /// Which room ids each model has, for "does the named room exist".
+    by_model: BTreeMap<&'a str, BTreeSet<&'a str>>,
+    /// The rooms themselves with their source, for the authored-reference
+    /// reconciliation, which needs the room's `Number` and not just its id.
+    rooms: BTreeMap<(&'a str, &'a str), (&'a Room, &'a str)>,
+    /// When each model's rooms snapshot was read, for the staleness side of a
+    /// geometry mismatch.
+    taken_at: BTreeMap<&'a str, &'a str>,
+}
+
+impl<'a> RoomIndex<'a> {
+    fn build(project_id: &str, stored_rooms: &'a [(ModelKey, RoomPayload)]) -> Self {
+        let mine = || stored_rooms.iter().filter(move |(_, p)| p.project.id == project_id);
+        Self {
+            by_model: mine()
+                .map(|(key, payload)| {
+                    (
+                        key.model_id.as_str(),
+                        payload.rooms.iter().map(|r| r.id.as_str()).collect::<BTreeSet<&str>>(),
+                    )
+                })
+                .collect(),
+            rooms: mine()
+                .flat_map(|(key, payload)| {
+                    payload
+                        .rooms
+                        .iter()
+                        .map(move |r| ((key.model_id.as_str(), r.id.as_str()), (r, payload.model.source.as_str())))
+                })
+                .collect(),
+            taken_at: mine().map(|(key, p)| (key.model_id.as_str(), p.snapshot.taken_at.as_str())).collect(),
+        }
+    }
+}
+
+/// Models whose stored FF&E and stored rooms describe different phases.
+///
+/// **A fact about the two snapshots, so it is settled per model before any item
+/// is looked at.** A model with FF&E and no rooms is not drift -- it is
+/// pending, and reported per item instead.
+///
+/// Folded exactly as `contract::phases_agree` folds, so a model differing only
+/// in spelling is not reported -- the same stance `phase_report` and ingest both
+/// take when deciding agreement.
+fn item_phase_drift(
+    project_id: &str,
+    stored_rooms: &[(ModelKey, RoomPayload)],
+    stored_items: &[(ModelKey, crate::contract::FfePayload)],
+) -> Vec<ItemPhaseDrift> {
+    let rooms_phase_by_model: BTreeMap<&str, Option<&str>> = stored_rooms
+        .iter()
+        .filter(|(_, payload)| payload.project.id == project_id)
+        .map(|(key, payload)| (key.model_id.as_str(), payload.phase.as_deref()))
+        .collect();
+
+    let mut out = Vec::new();
+    for (key, payload) in stored_items.iter().filter(|(_, p)| p.project.id == project_id) {
+        let Some(rooms_phase) = rooms_phase_by_model.get(key.model_id.as_str()) else {
+            continue;
+        };
+        if !crate::contract::phases_agree(payload.phase.as_deref(), *rooms_phase) {
+            out.push(ItemPhaseDrift {
+                model_id: key.model_id.clone(),
+                ffe_phase: payload.phase.clone(),
+                rooms_phase: rooms_phase.map(str::to_string),
+            });
+        }
+    }
+    out
+}
+
+/// One item's geometry answer, folded into the report.
+///
+/// **Run over items that stated a room too**, unlike the read path, which skips
+/// the probe when the model answered because nothing it found would be used.
+/// Here the disagreement *is* the finding, so the probe is exactly what is
+/// wanted. The doors report makes the same split for the same reason
+/// (`geometry_pass`); this one is called inside the item loop rather than as a
+/// second pass, so the nested-component policy applied there governs it too
+/// without being written twice.
+fn item_geometry(
+    item: &crate::contract::Item,
+    model_id: &str,
+    derived: &crate::service::room_locator::Located,
+    ffe_taken_at: &str,
+    rooms_taken_at: &str,
+    report: &mut ItemReport,
+) {
+    use crate::service::room_locator::Located;
+
+    match (item.room.as_deref(), derived) {
+        // Nothing stated: the fill case, not the drift case.
+        (None, Located::Found(_)) => report.room_resolution_counts.derived += 1,
+        (None, Located::Unresolved(why)) => {
+            let label = serde_json::to_value(why)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| "unknown".to_string());
+            *report.room_resolution_counts.unresolved.entry(label).or_default() += 1;
+        }
+        // The geometry finding nothing where the model named a room is not
+        // evidence the model is wrong -- an unplaced room, or an item with no
+        // position, both land here.
+        (Some(_), Located::Unresolved(_)) => {}
+        (Some(authored), Located::Found(found)) => {
+            if found.model_id != model_id || found.room_id != authored {
+                report.room_geometry_mismatches.push(ItemGeometryMismatch {
+                    model_id: model_id.to_string(),
+                    item_id: item.id.clone(),
+                    authored_room_id: authored.to_string(),
+                    geometric_room: Some(found.clone()),
+                    ffe_taken_at: ffe_taken_at.to_string(),
+                    rooms_taken_at: rooms_taken_at.to_string(),
+                    stale: stale_side(ffe_taken_at, rooms_taken_at),
+                });
+            }
+        }
+    }
+}
+
+/// Reconcile one project's FF&E against its rooms -- see `ItemReport`.
+///
+/// **Shorter than `opening_report` by exactly the things an item does not
+/// have**: no side loop, no external count, no attribution policy, and so no
+/// ordering between them to preserve. What is left is one pass over one item
+/// deciding between three mutually exclusive outcomes -- names no room, its
+/// model has no rooms yet, or its reference resolves (or does not).
+///
+/// Rooms are indexed **per model**, which is the same correctness argument the
+/// doors report makes: a project-wide set would silently resolve an item in
+/// model A against a same-numbered room in model B and report a dangling
+/// reference as clean.
+///
+/// **The nested-component policy is applied here too**, so `total` counts what
+/// a `/ffe` reader sees. Reporting on items the policy hides would produce
+/// findings nobody could act on from the response they were reading.
+fn item_report(
+    project_id: &str,
+    stored_rooms: &[(ModelKey, RoomPayload)],
+    stored_items: &[(ModelKey, crate::contract::FfePayload)],
+    policy: &crate::settings::FfePolicy,
+    builtin_defs: &[BuiltinPropertyDef],
+    located: Option<&BTreeMap<(String, String), crate::service::room_locator::Located>>,
+) -> ItemReport {
+    use crate::contract::ItemEnvelope;
+    use crate::settings::NestedComponents;
+
+    let RoomIndex { by_model: rooms_by_model, rooms: room_by_model, taken_at: rooms_taken_at } =
+        RoomIndex::build(project_id, stored_rooms);
+
+    let mut report = ItemReport {
+        nested_components: policy.nested_components,
+        room_resolution: policy.room_resolution,
+        room_reference_property: policy.room_reference_property.clone(),
+        ..ItemReport::default()
+    };
+
+    report.phase_drift = item_phase_drift(project_id, stored_rooms, stored_items);
+
+    for (key, payload) in stored_items.iter().filter(|(_, p)| p.project.id == project_id) {
+        let rooms = rooms_by_model.get(key.model_id.as_str());
+        for item in payload.items() {
+            if item.super_component_id.is_some() && policy.nested_components == NestedComponents::Exclude {
+                report.excluded_components += 1;
+                continue;
+            }
+            report.total += 1;
+
+            if let Some(located) = located
+                && let Some(derived) = located.get(&(key.model_id.clone(), item.id.clone()))
+            {
+                let rooms_at = rooms_taken_at.get(key.model_id.as_str()).copied().unwrap_or("");
+                item_geometry(item, &key.model_id, derived, &payload.snapshot.taken_at, rooms_at, &mut report);
+            }
+
+            let Some(room_id) = item.room.as_deref() else {
+                report
+                    .without_room
+                    .push(ItemRef { model_id: key.model_id.clone(), item_id: item.id.clone() });
+                continue;
+            };
+
+            // Pending -- this model's rooms have not arrived, so neither of the
+            // two checks below has anything to run against. Checked AFTER the
+            // no-room case, which is a fact about the item alone, so a
+            // FF&E-first push does not quietly stop reporting it.
+            let Some(rooms) = rooms else {
+                report
+                    .pending_rooms
+                    .push(ItemRef { model_id: key.model_id.clone(), item_id: item.id.clone() });
+                continue;
+            };
+
+            if !rooms.contains(room_id) {
+                report.unresolved_room.push(UnresolvedItemRoom {
+                    model_id: key.model_id.clone(),
+                    item_id: item.id.clone(),
+                    room_id: room_id.to_string(),
+                });
+            }
+
+            // Reconcile the authored reference against the named room's Number,
+            // when the project names a property to read it from. A blank value,
+            // or the literal "None" Revit stringifies an unset parameter as, is
+            // "not authored" rather than an authored empty.
+            let Some(authored) = policy
+                .room_reference_property
+                .as_deref()
+                .and_then(|p| item.properties.get(p))
+                .map(|v| v.value.trim())
+                .filter(|v| !v.is_empty() && *v != "None")
+            else {
+                continue;
+            };
+
+            let number = room_by_model
+                .get(&(key.model_id.as_str(), room_id))
+                .and_then(|(room, source)| lookup_property(*room, "Number", source, builtin_defs))
+                .unwrap_or_default();
+            if number.trim() != authored {
+                report.room_reference_mismatches.push(ItemRoomReferenceMismatch {
+                    model_id: key.model_id.clone(),
+                    item_id: item.id.clone(),
+                    authored: authored.to_string(),
+                    attributed_room_id: room_id.to_string(),
+                    attributed_room_number: number,
+                });
+            }
+        }
+    }
+
+    report.discrepancies = ItemDiscrepancyCounts {
+        // `without_room` is NOT summed in -- see `ItemReport::without_room`.
+        total: report.unresolved_room.len()
+            + report.room_reference_mismatches.len()
+            + report.phase_drift.len()
+            + report.room_geometry_mismatches.len(),
+        unresolved_room: report.unresolved_room.len(),
+        room_reference_mismatches: report.room_reference_mismatches.len(),
+        phase_drift: report.phase_drift.len(),
+        room_geometry_mismatches: report.room_geometry_mismatches.len(),
+    };
+    report
 }
 
 /// Which snapshot was read first. RFC3339 UTC ids compare lexically — the same
@@ -1345,6 +1808,22 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
             (!located_windows.is_empty()).then_some(&located_windows),
         ),
     );
+    let stored_ffe = state
+        .all_opening_snapshots::<crate::contract::FfePayload>(crate::storage::SnapshotKind::Ffe, Some(project_id))
+        .map_err(ServiceError::Internal)?;
+    let located_items = super::items::locate_project_items(state, project_id, bundle.ffe.room_resolution, &stored_ffe)?;
+    response.items.insert(
+        "ffe".to_string(),
+        item_report(
+            project_id,
+            &stored,
+            &stored_ffe,
+            &bundle.ffe,
+            &bundle.builtin_properties,
+            (!located_items.is_empty()).then_some(&located_items),
+        ),
+    );
+
     if loaded.is_empty() {
         return Ok(response);
     }
@@ -2237,6 +2716,280 @@ mod tests {
         let (key, mut payload) = make_doors(project_id, model_id, doors);
         payload.phase = phase.map(str::to_string);
         (key, payload)
+    }
+
+    // ---------- FF&E ----------
+
+    fn make_item(id: &str, room: Option<&str>, parent: Option<&str>) -> crate::contract::Item {
+        crate::contract::Item {
+            id: id.to_string(),
+            level_id: "1".to_string(),
+            category: "OST_Furniture".to_string(),
+            room: room.map(str::to_string),
+            // This helper exercises references and policy, never placement, so
+            // `None` is the honest input rather than a stub.
+            insertion_point: None,
+            facing: None,
+            loops: vec![],
+            super_component_id: parent.map(str::to_string),
+            type_id: "t1".to_string(),
+            type_name: "Desk 1600x800".to_string(),
+            properties: BTreeMap::new(),
+            type_properties: BTreeMap::new(),
+        }
+    }
+
+    fn item_with(id: &str, room: Option<&str>, props: &[(&str, &str)]) -> crate::contract::Item {
+        let mut item = make_item(id, room, None);
+        for (k, v) in props {
+            item.properties
+                .insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+        }
+        item
+    }
+
+    fn make_ffe(
+        project_id: &str,
+        model_id: &str,
+        ffe: Vec<crate::contract::Item>,
+    ) -> (ModelKey, crate::contract::FfePayload) {
+        let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.to_string() };
+        let payload = crate::contract::FfePayload {
+            schema_version: crate::contract::SUPPORTED_FFE_SCHEMA,
+            project: Project { id: project_id.to_string(), name: "P".to_string() },
+            model: Model { id: model_id.to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: "2026-09-05T00:00:00Z".to_string() },
+            phase: Some("New Construction".to_string()),
+            model_to_shared: None,
+            levels: vec![],
+            ffe,
+        };
+        (key, payload)
+    }
+
+    /// The clean case: every reference resolves and nothing is reported.
+    #[test]
+    fn test_item_report_clean_project() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1", "r2"])];
+        let ffe = vec![make_ffe(
+            "p1",
+            "m1",
+            vec![make_item("f1", Some("r1"), None), make_item("f2", Some("r2"), None)],
+        )];
+        let report = item_report("p1", &rooms, &ffe, &crate::settings::FfePolicy::default(), &[], None);
+
+        assert_eq!(report.total, 2);
+        assert!(report.unresolved_room.is_empty());
+        assert!(report.without_room.is_empty());
+        assert_eq!(report.discrepancies.total, 0);
+    }
+
+    /// **An item naming no room is reported but is NOT a discrepancy**, which is
+    /// where this report deliberately disagrees with the doors one. A door with
+    /// neither side connects nothing and is nearly always a data problem; an
+    /// item outside every room is very often correct -- a bollard, external
+    /// furniture, plant on a roof -- and on House A that is 75 of 647. Summing
+    /// it into `discrepancies` would train a reader to ignore the number.
+    #[test]
+    fn test_an_item_with_no_room_is_listed_but_not_a_discrepancy() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let ffe = vec![make_ffe(
+            "p1",
+            "m1",
+            vec![make_item("f1", Some("r1"), None), make_item("f2", None, None)],
+        )];
+        let report = item_report("p1", &rooms, &ffe, &crate::settings::FfePolicy::default(), &[], None);
+
+        assert_eq!(report.without_room.len(), 1);
+        assert_eq!(report.without_room[0].item_id, "f2");
+        assert_eq!(report.discrepancies.total, 0, "listed, but not counted against the project");
+    }
+
+    /// A room the model does not have IS a discrepancy: the reference is there
+    /// and dangling, which is the drift a re-push produces.
+    #[test]
+    fn test_an_item_naming_a_missing_room_is_a_finding() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let ffe = vec![make_ffe("p1", "m1", vec![make_item("f1", Some("nope"), None)])];
+        let report = item_report("p1", &rooms, &ffe, &crate::settings::FfePolicy::default(), &[], None);
+
+        assert_eq!(report.unresolved_room.len(), 1);
+        assert_eq!(report.unresolved_room[0].room_id, "nope");
+        assert_eq!(report.discrepancies.total, 1);
+    }
+
+    /// **References resolve within one model, never across the project.** A
+    /// same-numbered room in another model must not rescue a dangling
+    /// reference -- the correctness argument the doors report makes, asserted
+    /// again here because the index is rebuilt rather than shared.
+    #[test]
+    fn test_item_references_do_not_resolve_across_models() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"]), rooms_for("p1", "m2", &["r9"])];
+        let ffe = vec![make_ffe("p1", "m1", vec![make_item("f1", Some("r9"), None)])];
+        let report = item_report("p1", &rooms, &ffe, &crate::settings::FfePolicy::default(), &[], None);
+
+        assert_eq!(report.unresolved_room.len(), 1, "m2's r9 must not answer for m1");
+        assert_eq!(report.unresolved_room[0].model_id, "m1");
+    }
+
+    /// FF&E pushed before its rooms is **pending, not dangling** -- the state
+    /// the ingest gate used to make unreachable, reported per item because
+    /// nothing about it was checked.
+    #[test]
+    fn test_ffe_pushed_before_its_rooms_is_pending() {
+        let ffe = vec![make_ffe("p1", "m1", vec![make_item("f1", Some("r1"), None)])];
+        let report = item_report("p1", &[], &ffe, &crate::settings::FfePolicy::default(), &[], None);
+
+        assert_eq!(report.pending_rooms.len(), 1);
+        assert!(report.unresolved_room.is_empty(), "not yet is not the same as dangling");
+        assert_eq!(report.discrepancies.total, 0);
+    }
+
+    /// **Components are excluded from the report and counted**, so `total`
+    /// matches what a `/ffe` reader sees and the exclusion is a number rather
+    /// than a silence.
+    #[test]
+    fn test_components_are_excluded_from_the_report_and_counted() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let ffe = vec![make_ffe(
+            "p1",
+            "m1",
+            vec![
+                make_item("f1", Some("r1"), None),
+                make_item("f2", Some("r1"), Some("3729614")),
+                make_item("f3", Some("r1"), Some("3729614")),
+            ],
+        )];
+        let report = item_report("p1", &rooms, &ffe, &crate::settings::FfePolicy::default(), &[], None);
+
+        assert_eq!(report.total, 1);
+        assert_eq!(report.excluded_components, 2);
+        assert_eq!(report.nested_components, crate::settings::NestedComponents::Exclude);
+    }
+
+    /// With the policy set to include them, components are reported like any
+    /// other item and the exclusion count is zero -- so a reader can tell "no
+    /// components" from "components are being returned".
+    #[test]
+    fn test_including_components_reports_them() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let ffe = vec![make_ffe(
+            "p1",
+            "m1",
+            vec![
+                make_item("f1", Some("r1"), None),
+                make_item("f2", Some("r1"), Some("3729614")),
+            ],
+        )];
+        let policy = crate::settings::FfePolicy {
+            nested_components: crate::settings::NestedComponents::Include,
+            ..Default::default()
+        };
+        let report = item_report("p1", &rooms, &ffe, &policy, &[], None);
+
+        assert_eq!(report.total, 2);
+        assert_eq!(report.excluded_components, 0);
+    }
+
+    /// FF&E and rooms describing different phases is a finding, once per model
+    /// rather than once per item.
+    #[test]
+    fn test_ffe_on_a_different_phase_than_its_rooms_is_a_finding() {
+        let rooms = vec![phased_rooms("p1", "m1", &["r1"], Some("Stage 2"))];
+        let (key, mut payload) =
+            make_ffe("p1", "m1", vec![make_item("f1", Some("r1"), None), make_item("f2", Some("r1"), None)]);
+        payload.phase = Some("Stage 1".to_string());
+        let report = item_report("p1", &rooms, &[(key, payload)], &crate::settings::FfePolicy::default(), &[], None);
+
+        assert_eq!(report.phase_drift.len(), 1, "one entry per model, not per item");
+        assert_eq!(report.phase_drift[0].ffe_phase.as_deref(), Some("Stage 1"));
+        assert_eq!(report.phase_drift[0].rooms_phase.as_deref(), Some("Stage 2"));
+        assert_eq!(report.discrepancies.phase_drift, 1);
+    }
+
+    /// The authored-reference reconciliation is **off** until the project names
+    /// a property, and off is not the same as clean -- which is why the setting
+    /// is echoed on the report.
+    #[test]
+    fn test_item_room_reference_reconciliation_is_off_until_configured() {
+        let (rk, mut rooms_payload) = rooms_for("p1", "m1", &["r1"]);
+        rooms_payload.rooms[0]
+            .properties
+            .insert("Number".to_string(), CustomValue { value: "01.12".to_string(), storage_type: None });
+        let rooms = vec![(rk, rooms_payload)];
+        let ffe = vec![make_ffe(
+            "p1",
+            "m1",
+            vec![item_with("f1", Some("r1"), &[("FFE Room Reference", "01.07")])],
+        )];
+
+        let off = item_report("p1", &rooms, &ffe, &crate::settings::FfePolicy::default(), &[], None);
+        assert!(off.room_reference_mismatches.is_empty());
+        assert!(off.room_reference_property.is_none(), "off is a reported state");
+
+        let policy = crate::settings::FfePolicy {
+            room_reference_property: Some("FFE Room Reference".to_string()),
+            ..Default::default()
+        };
+        let on = item_report("p1", &rooms, &ffe, &policy, &[], None);
+        assert_eq!(on.room_reference_mismatches.len(), 1);
+        assert_eq!(on.room_reference_mismatches[0].authored, "01.07");
+        assert_eq!(on.room_reference_mismatches[0].attributed_room_number, "01.12");
+        assert_eq!(on.discrepancies.room_reference_mismatches, 1);
+    }
+
+    /// A project that has never pushed FF&E gets an empty report, not an error
+    /// and not a missing key.
+    #[test]
+    fn test_no_ffe_is_an_empty_report() {
+        let rooms = vec![rooms_for("p1", "m1", &["r1"])];
+        let report = item_report("p1", &rooms, &[], &crate::settings::FfePolicy::default(), &[], None);
+        assert_eq!(report.total, 0);
+        assert_eq!(report.excluded_components, 0);
+        assert_eq!(report.discrepancies.total, 0);
+    }
+
+    /// The geometry pass fills what the model left absent and disagrees audibly
+    /// with what it did not -- and an item that named a room the geometry
+    /// cannot reach is NOT a mismatch, because there is nothing to disagree
+    /// with.
+    #[test]
+    fn test_item_geometry_fills_absent_and_flags_disagreement() {
+        use crate::service::room_locator::{Located, RoomRef, Unresolved};
+
+        let rooms = vec![rooms_at("p1", "m1", &["r1", "r2"], "2026-09-01T00:00:00Z")];
+        let ffe = vec![make_ffe(
+            "p1",
+            "m1",
+            vec![
+                make_item("filled", None, None),
+                make_item("agrees", Some("r1"), None),
+                make_item("disagrees", Some("r1"), None),
+                make_item("unreachable", Some("r1"), None),
+                make_item("homeless", None, None),
+            ],
+        )];
+        let found = |room: &str| Located::Found(RoomRef { model_id: "m1".to_string(), room_id: room.to_string() });
+        let located = BTreeMap::from([
+            (("m1".to_string(), "filled".to_string()), found("r2")),
+            (("m1".to_string(), "agrees".to_string()), found("r1")),
+            (("m1".to_string(), "disagrees".to_string()), found("r2")),
+            (
+                ("m1".to_string(), "unreachable".to_string()),
+                Located::Unresolved(Unresolved::NoCandidate),
+            ),
+            (("m1".to_string(), "homeless".to_string()), Located::Unresolved(Unresolved::NoCandidate)),
+        ]);
+
+        let report = item_report("p1", &rooms, &ffe, &crate::settings::FfePolicy::default(), &[], Some(&located));
+
+        assert_eq!(report.room_resolution_counts.derived, 1, "one absent reference filled");
+        assert_eq!(report.room_resolution_counts.unresolved.get("no_candidate"), Some(&1));
+        assert_eq!(report.room_geometry_mismatches.len(), 1);
+        let m = &report.room_geometry_mismatches[0];
+        assert_eq!(m.item_id, "disagrees");
+        assert_eq!(m.authored_room_id, "r1");
+        assert_eq!(m.stale, StaleSide::Rooms, "the FF&E snapshot is the newer of the two");
     }
 
     /// The clean case: every reference resolves, nothing is reported, and the
