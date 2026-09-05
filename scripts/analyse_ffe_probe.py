@@ -8,8 +8,8 @@
     Q1  Does `get_Room(phase)` populate on a model that holds both the rooms
         and the FFE?  **This is the kill condition.**
     Q2  What did the export drop, per category, and what were those instances?
-    Q3  What is the category histogram across duHast's eight defaults?
-    Q4  What does the super-component matrix look like across those eight?
+    Q3  What is the category histogram across duHast's nine defaults?
+    Q4  What does the super-component matrix look like across those nine?
     Q5  Does the bbox-derived level agree with the level the instance names?
     Q6  What unit is each numeric field in?
 
@@ -339,7 +339,7 @@ def super_component_matrix(probe):
     """`(child category, parent category) -> count` for every nested instance.
 
     `nested_opening_ids` asks "is the parent the same category", which is a
-    yes/no for one category and a matrix for eight. The off-diagonal entries are
+    yes/no for one category and a matrix for nine. The off-diagonal entries are
     the interesting ones: a generic model inside a furniture item is a different
     statement about the model from a chair inside a chair, and the plan cannot
     say which rule to use until it can see which shapes actually occur."""
@@ -596,7 +596,7 @@ def verdict(total_items, phase_rows, coverage, category_mismatch):
         )
     if total_items == 0:
         return (
-            "NO FFE IN THIS MODEL - nothing was collected in any of the eight "
+            "NO FFE IN THIS MODEL - nothing was collected in any of the nine "
             "categories. This is NOT the kill condition; find a model with "
             "furniture and equipment in it and re-run."
         )
@@ -762,7 +762,7 @@ def build_report(data):
     add("## Q3 - category histogram")
     add("")
     add(
-        "All eight of duHast's defaults, `OST_GenericModel` included, because "
+        "All nine of duHast's defaults, `OST_GenericModel` included, because "
         "that is what D6 commits to pushing. Whether that was wise is what this "
         "table is for."
     )

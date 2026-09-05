@@ -66,7 +66,7 @@ other two copies on disk predate `data_window.py` and are not live.
 | Level | `get_level_data` — the element's own level | `get_level_data_by_bounding_box` — nearest level at or below the solid bbox's min Z |
 | Z extents | `bounding_box_min_z` / `max_z`, `room_calculation_point` | absent |
 | Silently dropped | a door duHast cannot measure (14 of 205 on the facade file) | any instance whose `Location` is not a `LocationPoint` |
-| Category | one, fixed | eight by default, and the list is an argument |
+| Category | one, fixed | nine by default, and the list is an argument |
 | Properties, nesting | identical — same `get_instance_properties` / `get_type_properties` helpers, same `super_component_id` |
 
 The last row is why this is cheaper than the table suggests:
@@ -179,10 +179,24 @@ was made for, taken without making that key lie.
 
 ### D6 — Category is a record field, not yet a setting
 
-All eight of duHast's `DEFAULT_ITEM_CATEGORIES` are pushed: `OST_Furniture`,
-`OST_FurnitureSystems`, `OST_MechanicalEquipment`, `OST_ElectricalEquipment`,
-`OST_ElectricalFixtures`, `OST_PlumbingFixtures`, `OST_SpecialityEquipment`,
-`OST_GenericModel`. Narrowing that list is the exporter's problem later.
+All of duHast's `DEFAULT_ITEM_CATEGORIES` are pushed: `OST_Furniture`,
+`OST_FurnitureSystems`, `OST_Casework`, `OST_MechanicalEquipment`,
+`OST_ElectricalEquipment`, `OST_ElectricalFixtures`, `OST_PlumbingFixtures`,
+`OST_SpecialityEquipment`, `OST_GenericModel`. Narrowing that list is the
+exporter's problem later.
+
+**`OST_Casework` is the ninth, added 2026-09-05 after the probe found the list
+exported the wrong half of the model** (see [As measured](#as-measured--house-a-2026-09-05)):
+87 of 179 nested instances were `OST_Furniture` components of *casework*, all
+one family, so the joinery handles shipped as first-class items while the runs
+they belong to were absent entirely. A list that admits the components of a
+thing but not the thing is harder to justify than either including or excluding
+both. The change is upstream, in `to_data_item.DEFAULT_ITEM_CATEGORIES` (U4),
+and `scripts/probe_ffe_export.py` transcribes it — **the two must move
+together**, because the probe walks its own list while the export walks
+duHast's, and a drift makes every count a comparison of two populations. The
+analyser refuses to interpret a run where they differ, which is the guard that
+makes that safe rather than a hazard.
 
 The distinction that survives: `category` is a **field on the record** even
 though it is not a **setting**. So QA can break findings down by category and
@@ -268,6 +282,51 @@ models naming one floor 0.4 mm apart already fail to match, silently, as
 the header rather than the constant quietly changed. It is not FFE's bug; it is
 on the axis FFE leans on, and FFE is what found it.
 
+### D10 — Nested components are excluded by a read-time policy, not by the extractor
+
+`super_component_id` rides the `Item` record, every instance is pushed, and
+`[ffe] nested_components` decides at read time whether a component is an item.
+Default `exclude`; `include` is the opt-out. `ItemReport` states how many were
+excluded, so the exclusion is a reported number rather than a silence.
+
+**Three things this decides, and the evidence for each is in
+[As measured](#as-measured--house-a-2026-09-05).**
+
+*Which test.* Not `nested_opening_ids`' "is the parent the same category" — that
+catches 10 of 179 nested instances on House A, 5.6% of the population it exists
+to catch, because an item's parent is usually in a *different* category
+(furniture in casework, generic models in electrical fixtures, generic models in
+doors). The test is **having a super-component at all**.
+
+*Why not the doors discriminator.* A nested door component carried neither a
+room reference nor a Mark. A nested item sits physically in a room and Revit
+says so: 97.8% of nested items name a room against 84.8% of top-level ones, so
+"no room reference" is useless here. Only the Mark signal survives — 5.6%
+against 52.4% — and it is suggestive rather than safe. Inheriting the doors rule
+would have looked reasonable and been wrong twice over.
+
+*Why at read time rather than in the extractor.* This is the one place FFE
+should **not** follow doors, and the reason is what the two questions are. "Is
+this door leaf a door" has one answer: no, always, everywhere — so
+`nested_opening_ids` filters at the producer and nothing downstream ever sees
+one. "Is this component an item" is a project convention: a handle is not, and a
+chair nested in a workstation group might be. A convention belongs where every
+other convention in this codebase lives — in settings, derived at read time,
+changing every answer and rewriting nothing, exactly as `room_attribution` does.
+
+It is also what would have made the door incident visible on the day. 2236 of
+4134 exported "doors" were hardware, and they were invisible because the
+producer had already dropped them by the time anyone could count them. Here the
+count is on the QA report from the first push.
+
+The cost is a payload 28% larger than it needs to be on House A, which is real
+and is the right trade: it buys a policy that can be changed after the fact and a
+number where there was a silence. It also **removes** work — the extractor needs
+no nesting pass at all, so `utils/items.py` reads exactly one thing from Revit
+(`get_Room(phase)`), and `nested_opening_ids` stays where it is, doing the job it
+does correctly for openings. Two entities answering one question differently,
+because it is not the same question.
+
 ## Rejected, recorded so they are not re-proposed
 
 - **FFE as a one-sided `Opening`.** See D1.
@@ -321,6 +380,15 @@ the same elements answering two different questions, and getting one right does
 not get the other right.
 
 **U3 — `get_all_item_data` reports what it skipped**, per category. See D8.
+
+**U4 — `OST_Casework` joins `DEFAULT_ITEM_CATEGORIES`.** Landed
+2026-09-05, and the only upstream change so far that the probe demanded
+rather than the plan predicted; see D6 and
+[As measured](#as-measured--house-a-2026-09-05). It is a behaviour change for
+any duHast caller relying on the defaults, which is the argument for it being
+in the default list rather than in RoomMate's own: a caller who wants the old
+eight can pass them, and a caller who did not know casework was missing was
+getting the wrong answer quietly.
 
 Two more, worth doing on their own merits and not blocking anything here:
 
@@ -479,6 +547,12 @@ So "no room reference" is useless as a filter and "no Mark" is suggestive but
 not safe. The only reliable discriminator is **having a super-component at
 all** — which is on the wire as `super_component_id`, populated on exactly those
 179.
+
+Both findings are now decisions rather than open questions: the category list
+gains `OST_Casework` (D6, upstream as U4) and the filter becomes a read-time
+policy over `super_component_id` rather than an extractor pass (D10). The second
+is the one place FFE deliberately does **not** follow doors, and this
+measurement is the whole argument for it.
 
 **U2 is demoted from a fix to a tidy-up.** The two duHast boxes disagree on
 height for 184 instances, and only **4** of those have sub-components. The rest

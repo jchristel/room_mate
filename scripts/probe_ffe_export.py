@@ -52,11 +52,12 @@ THE SIX QUESTIONS, and where each is answered
       leaves no hole. `location_class` on each record is what makes the drop
       attributable rather than merely countable.
   Q3  The category histogram.  -> one collector pass per category, counted
-      separately. All eight of duHast's defaults are walked, `OST_GenericModel`
+      separately. All nine of duHast's defaults are walked, `OST_GenericModel`
       included, because that is what the plan commits to pushing.
   Q4  The super-component matrix.  -> `super_component_category_name` per
       record. `nested_opening_ids`' test is "is the parent the same category",
-      which is well defined for ONE category and ambiguous across eight.
+      which is well defined for ONE category and, measured on House A, catches
+      5.6% of the nested population across nine.
   Q5  Is the bbox-derived level the level the item names?  -> both are recorded
       (`level_id_property` against `level_by_bbox_*`), never reconciled here.
   Q6  What unit is each numeric field in?  -> the export is written verbatim,
@@ -85,7 +86,7 @@ WHAT THIS PROBE ADDS THAT ITS WINDOWS SIBLING DID NOT
 WHY THIS IS NOT A ROW IN `probe_windows_export.py`
 That script says adding FF&E is "a row, not a branch", and it was nearly right:
 `rooms_by_phase`, `phase_membership` and the entity spec table all take an FFE
-row unchanged. What does not fit is everything either side of it. FFE is eight
+row unchanged. What does not fit is everything either side of it. FFE is nine
 categories rather than one, so the collector, the histogram and the drop count
 are all per category; its export getter carries no category at all; and three of
 that probe's questions (curtain-wall panels, sill and head heights, host walls)
@@ -150,11 +151,23 @@ def ensure_room_m_importable():
 # probe CHECKS itself against duHast at run time (see `resolve_item_categories`)
 # and records any difference rather than silently measuring the wrong set.
 #
-# All eight, `OST_GenericModel` included, because that is what PLAN-ffe D6
-# commits to pushing. Whether that was wise is exactly what Q3 is for.
+# **That guard is now load-bearing rather than defensive.** `OST_Casework` was
+# added on 2026-09-05 in BOTH places, and the two have to move together: the
+# probe walks this list while `run_export` calls `get_all_item_data(doc)` with
+# no argument, so a list that has drifted has the probe counting one population
+# and the export reporting another. The analyser refuses to interpret a run
+# where they differ.
+#
+# Nine, `OST_GenericModel` included, because that is what PLAN-ffe D6 commits to
+# pushing. Whether that was wise is exactly what Q3 is for -- and on House A it
+# was the largest category of the eight, at 201 of 647.
 FFE_CATEGORY_NAMES = [
     "OST_Furniture",
     "OST_FurnitureSystems",
+    # The House A finding, and the reason this list changed: 87 of 179 nested
+    # instances were furniture components of CASEWORK, which was not exported at
+    # all. The handles shipped and the joinery they belong to did not.
+    "OST_Casework",
     "OST_MechanicalEquipment",
     "OST_ElectricalEquipment",
     "OST_ElectricalFixtures",
@@ -191,7 +204,13 @@ OUT_SUFFIX = {"ffe": "", "doors": "-control"}
 # startup because this script is run by exec'ing its text, so nothing else tells
 # a reader which copy actually ran -- and a stale copy has already cost two runs
 # on the windows probe, both diagnosed from a traceback naming old line numbers.
-PROBE_VERSION = 1
+#
+# v2: `OST_Casework` joined the category list (D6/U4), so a v1 capture and a v2
+# capture describe different populations and their counts must not be compared.
+# The recorded `probe_categories` says which was walked, and the analyser
+# compares that against the export's own list rather than against this number --
+# but a version that did not move would leave two files on disk looking alike.
+PROBE_VERSION = 2
 
 
 # --------------------------------------------------------------------------
@@ -319,7 +338,7 @@ def _super_component(element):
     """`(id, category id, category name)` of the instance containing this one,
     or three Nones.
 
-    Comparing the two CATEGORIES is the nested-leaf test, and across eight
+    Comparing the two CATEGORIES is the nested-leaf test, and across nine
     categories it stops being a yes/no: a generic model inside a furniture item
     is a different statement about the model from a chair inside a chair. The
     name is carried as well as the id so the analyser can build a readable
@@ -451,7 +470,7 @@ def resolve_item_categories(names):
     the authority on which categories its exporter walks, so the probe asks it
     and records any disagreement rather than measuring a set the export never
     saw. A probe that quietly walked seven categories while the export walked
-    eight would report a drop that was its own."""
+    nine would report a drop that was its own."""
     from Autodesk.Revit.DB import BuiltInCategory
 
     resolved = []
@@ -661,7 +680,7 @@ def probe_element(doc, element, context, sides, category_name):
         "super_component_category_name": parent_category_name,
         # The nested-leaf test as `nested_opening_ids` states it, computed here
         # because it needs both categories and only this side has them. Across
-        # eight categories it is a starting point rather than the answer, which
+        # nine categories it is a starting point rather than the answer, which
         # is why the parent's category NAME is carried beside it.
         "is_nested_in_same_category": (
             parent_category_id is not None
@@ -734,7 +753,7 @@ def run_probe(doc, spec, context):
     record each, keyed by element id.
 
     **Per category, and the counts are kept per category.** An FFE run walks
-    eight, and Q2 and Q3 are both per-category questions -- a drop concentrated
+    nine, and Q2 and Q3 are both per-category questions -- a drop concentrated
     in `OST_GenericModel` and a drop spread evenly across furniture are
     different findings that a single total cannot separate.
 
@@ -799,7 +818,7 @@ def plainify(value, path="", problems=None):
     serialisation.
 
     That failure is MORE likely here than it was for windows, not less: FFE
-    walks eight categories of loose families rather than one category of
+    walks nine categories of loose families rather than one category of
     building fabric, so the population of families nobody has round-tripped
     before is far larger.
 
