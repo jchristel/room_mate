@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Answer the six questions that gate `docs/PLAN-ffe.md`, from the files
+"""Answer the six questions that gate `docs/Superseded/PLAN-ffe.md`, from the files
 `probe_ffe_export.py` captured in Revit.
 
     python scripts/analyse_ffe_probe.py
@@ -23,7 +23,7 @@ plan, and the plan is what the argument is actually about.
 
 THE DISTINCTION THIS FILE MUST NOT COLLAPSE
 "No FFE in this model" and "FFE present but unresolvable" are different
-answers, and `docs/PLAN-ffe.md` says so before the data arrives precisely so
+answers, and `docs/Superseded/PLAN-ffe.md` says so before the data arrives precisely so
 that the analyser cannot quietly merge them. The first means find another model
 and costs nothing; the second is the kill condition and stops the plan. A
 verdict that reported "0 items name a room" for a model containing no items

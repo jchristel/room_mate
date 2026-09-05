@@ -32,38 +32,8 @@
 "crate::foo::Bar" = "same worked example"
 "foo.ts" = "CODING-CONVENTIONS:128's 'foo.ts beside foo.test.ts' co-location example"
 
-# --- duHast and Revit symbols PLAN-ffe cites. They live in
-#     SampleCodeRevitBatchProcessor-NET8/src/duHast, not here, and the plan's
-#     whole subject is what that export does and does not carry — so naming
-#     them is the point rather than an accident.
-#
-#     SCOPED to the one document, deliberately. `Transform` in particular is a
-#     word a live doc could reasonably use about our own code, and a bare key
-#     would silence that hit forever. ---
-"DataBase@PLAN-ffe.md" = "duHast base class; the plan turns on DataItem extending it and not DataFamilyBase"
-"DataElementGeometryBase@PLAN-ffe.md" = "duHast geometry mixin an item does not have — the finding the plan exists to record"
-"DataFamilyBase@PLAN-ffe.md" = "duHast base class DataDoor and DataWindow extend"
-"DataItem@PLAN-ffe.md" = "duHast's FFE record, the subject of the plan"
-"DataLevel@PLAN-ffe.md" = "duHast level data object, cited in the level-heuristic risk"
-"DataRoomToPhase@PLAN-ffe.md" = "duHast per-phase room reference, cited in the opening-vs-item table"
-"GetRoomAtPoint@PLAN-ffe.md" = "Revit API Document member; the plan rejects the producer-side fallback that calls it"
-"Transform@PLAN-ffe.md" = "Revit API BoundingBoxXYZ member — the placement the flattening applies"
-"data_window.py@PLAN-ffe.md" = "duHast file, named to say which copy of the library the plan was read against"
-"windows_location_by_rooms.py@PLAN-ffe.md" = "duHast module, named as the rejected precedent for producer-side room resolution"
-
 # --- Designs recorded but not built. Absence is the documented state. ---
 "DocumentIndex" = "STRATEGY-AUTHORED is flagged 'design settled, not built'"
-
-# PLAN-ffe names what it proposes to build. Every one of these SHOULD fail this
-# check today; the day it stops failing is the day the plan is built and the
-# entry comes out. Scoped, so the same names used as live references anywhere
-# else are still reported.
-"Ffe@PLAN-ffe.md" = "the proposed SnapshotKind and ReferenceEntity variant"
-"ItemReport@PLAN-ffe.md" = "the proposed QA report under the new `items` key"
-"ItemResponse@PLAN-ffe.md" = "the proposed read-side response type"
-"post_ffe.py@PLAN-ffe.md" = "proposed extractor module"
-"room_m/exporters/ffe.py@PLAN-ffe.md" = "proposed extractor module"
-"utils/items.py@PLAN-ffe.md" = "proposed extractor module"
 
 # --- History written on purpose: the doc names an old symbol to explain a
 #     rename or a split. Deleting these names would make the docs worse, not

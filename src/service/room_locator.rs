@@ -163,7 +163,7 @@ fn ring(l: &Loop) -> LineString<f64> {
 /// **The mixed units are not fixed here, deliberately.** Changing the wire would
 /// re-scale every level in every snapshot already stored, which is a migration;
 /// this is a constant that was mislabelled. The mix is real and worth knowing
-/// about — see `docs/PLAN-ffe.md` D9, which found it — and the name now says
+/// about — see `docs/Superseded/PLAN-ffe.md` D9, which found it — and the name now says
 /// which side of it this value lives on.
 pub const LEVEL_EPS_MM: f64 = 50.0;
 

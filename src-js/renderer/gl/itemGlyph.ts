@@ -12,7 +12,7 @@
 // **The footprint is the exception here, not the rule.** A door or a window is
 // drawn from its footprint and falls back to a marker; every FF&E item measured
 // so far has NO footprint at all, because `DataItem` carries no geometry until
-// duHast's upstream change lands (`docs/PLAN-ffe.md` U1). So this glyph is
+// duHast's upstream change lands (`docs/Superseded/PLAN-ffe.md` U1). So this glyph is
 // built the other way round: the marker is the normal case and the rectangle is
 // the upgrade. The moment items arrive with `loops`, the same code draws them
 // without a change here.
