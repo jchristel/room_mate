@@ -22,7 +22,7 @@
 #
 """
 Capture the raw duHast FFE (item) export, plus the Revit facts the export
-cannot carry, so the six questions gating `docs/PLAN-ffe.md` are answered off a
+cannot carry, so the six questions gating `docs/Superseded/PLAN-ffe.md` are answered off a
 measurement instead of off a reading of duHast's source.
 
     pyRevit  ->  run this script against the model

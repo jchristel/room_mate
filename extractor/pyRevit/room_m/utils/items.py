@@ -52,7 +52,7 @@ component an item" does not -- a joinery handle is not, a chair nested in a
 workstation group might be -- so it is a project convention, and it lives in the
 server's `[ffe] nested_components`, applied at read time where it can be changed
 after the fact and where the count of what it removed is reported. See
-`docs/PLAN-ffe.md` D10.
+`docs/Superseded/PLAN-ffe.md` D10.
 
 The measurement behind that: on House A, 179 of 647 instances had a
 super-component, and the same-category test doors use would have caught 10 of

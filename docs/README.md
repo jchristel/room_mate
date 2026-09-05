@@ -20,7 +20,7 @@ strategy doc documents what is not".
 | [Browser](STRATEGY-BROWSER.md) | Open: serving and consuming the placement transform, level-of-detail, the framework fork — plus the hybrid renderer's coordinate/paint-order invariant |
 | [MCP](STRATEGY-MCP.md) | Open: resources and prompts, document tools |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data — connections, PDFs, hierarchy scopes. **Nothing here is built**; read it before building any of it |
-| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, what a second entity proved comes for free. Open: door connectivity, design options, FFE |
+| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, and what four of them proved comes for free. Open: door connectivity, design options, the two duHast changes FF&E waits on, FF&E at scale |
 | [Security](STRATEGY-SECURITY.md) | Threat model for a LAN-reachable deployment: trust boundary, invariants, and the two unbuilt bounds (settings backups, rate limiting). **Read before widening the bind past `127.0.0.1`** |
 
 ## Implementation notes
@@ -28,7 +28,6 @@ strategy doc documents what is not".
 | Document | Description |
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
-| [Plan: FFE](PLAN-ffe.md) | **Built end to end (A, C, D, E, F, G); the pyRevit button and duHast's U1/U2 are outside this repo.** The ten decisions behind FFE as the fourth primary entity, the four upstream duHast changes it needs, and the measurement that gated it. Its "As measured" section is the part to read first: the House A probe cleared the kill condition and inverted two of the plan's predictions, and the decisions above it are deliberately left as they were written |
 | [MCP host setup](mcp-host-setup.md) | Client configs for Claude Code and Claude Desktop, plus build and verify steps |
 | [Module plan](module-plan.html) | Interactive map of every module across the extractor, server and browser — sized by line count, with its import edges. Open the file in a browser; it is generated from the module headers, so treat a header as the source and this as the view |
 
