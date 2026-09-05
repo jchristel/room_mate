@@ -152,26 +152,18 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   captured export -- FF&E most thoroughly, since all 644 House A items were
   round-tripped and its millimetre-to-feet conversion checked against Revit's own
   reading on every one -- but the `get_FromRoom` / `get_Room` accessors and the
-  category collectors need a live document. **This is the only unverified half
-  left.** The room extractor's phase filter used to share this
-  standing and was run against a real document on 2026-08-03 — which found the
-  failure that had been named as the first thing to check. That is the argument
-  for doing the same here, not the reassurance that someone else is in the same
-  position.
+  category collectors need a live document. The item footprint joins them:
+  duHast populates it now, and no capture taken from Revit has been seen
+  carrying one. **This is the only unverified half left.** The room extractor's
+  phase filter used to share this standing and was run against a real document
+  on 2026-08-03 — which found the failure that had been named as the first
+  thing to check. That is the argument for doing the same here, not the
+  reassurance that someone else is in the same position.
 
 - **Opening labels on the plan**, and the `door_label` setting they need. Both
   entities draw a glyph now; neither draws a label. Ordinary unbuilt viewer work,
   blocked on nothing — see [Browser](STRATEGY-BROWSER.md)
   for why it is a cost to take deliberately rather than a gap to close.
-
-- **The two duHast changes FF&E is waiting on**, neither of them this
-  repository's to make. **U1**: `DataItem` has no geometry, so every item is
-  drawn as a marker rather than a footprint. The viewer was built around that
-  and draws real footprints the day they arrive with no change, so this is a
-  fidelity gap rather than a blocker. **U2**: the rotation-preserving bounding
-  box does not walk `GetSubComponentIds()` while its axis-aligned sibling does —
-  measured as 4 of 184 box disagreements, so a correctness tidy-up rather than
-  the main event it was predicted to be.
 
 - **The FF&E level heuristic, unverified against intent.** duHast derives an
   item's level from the bottom of its solid geometry rather than reading the
