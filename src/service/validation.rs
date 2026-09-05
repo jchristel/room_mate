@@ -1954,6 +1954,7 @@ mod tests {
             areas: Default::default(),
             doors: Default::default(),
             windows: Default::default(),
+            ffe: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(
@@ -2120,6 +2121,7 @@ mod tests {
             areas: Default::default(),
             doors: Default::default(),
             windows: Default::default(),
+            ffe: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(
@@ -2779,6 +2781,7 @@ mod tests {
             areas: Default::default(),
             doors: Default::default(),
             windows: Default::default(),
+            ffe: Default::default(),
             hierarchy_exclusions: vec![],
         };
         let state = AppState::new(

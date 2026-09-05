@@ -1330,6 +1330,7 @@ mod tests {
                     attachments: std::collections::BTreeMap::from([("m1".to_string(), pinned_ts.to_string())]),
                     door_attachments: std::collections::BTreeMap::new(),
                     window_attachments: Default::default(),
+                    ffe_attachments: Default::default(),
                 }],
                 ..make_bundle("Number")
             },
@@ -1358,6 +1359,7 @@ mod tests {
                 areas: Default::default(),
                 doors: Default::default(),
                 windows: Default::default(),
+                ffe: Default::default(),
                 hierarchy_exclusions: vec![],
             },
             Some(make_drofus(link_property)),
@@ -1854,6 +1856,7 @@ mod tests {
                 attachments: std::collections::BTreeMap::from([("m1".to_string(), pinned_ts.to_string())]),
                 door_attachments: std::collections::BTreeMap::new(),
                 window_attachments: Default::default(),
+                ffe_attachments: Default::default(),
             }],
             ..make_bundle("Number")
         }
@@ -2584,6 +2587,7 @@ mod tests {
                     attachments: std::collections::BTreeMap::from([("m1".to_string(), model_ts.to_string())]),
                     door_attachments: std::collections::BTreeMap::new(),
                     window_attachments: Default::default(),
+                    ffe_attachments: Default::default(),
                 }],
                 ..make_bundle("Number")
             },

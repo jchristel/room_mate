@@ -69,6 +69,7 @@ pub enum SnapshotKind {
     Rooms,
     Doors,
     Windows,
+    Ffe,
 }
 
 impl SnapshotKind {
@@ -85,7 +86,12 @@ impl SnapshotKind {
     /// `position` below is what puts the guard back: it is an exhaustive match,
     /// so a new variant fails to compile there, and the test pairs the two so a
     /// variant left out of this array is caught rather than merely discouraged.
-    pub const ALL: [SnapshotKind; 3] = [SnapshotKind::Rooms, SnapshotKind::Doors, SnapshotKind::Windows];
+    pub const ALL: [SnapshotKind; 4] = [
+        SnapshotKind::Rooms,
+        SnapshotKind::Doors,
+        SnapshotKind::Windows,
+        SnapshotKind::Ffe,
+    ];
 
     /// This kind's index in [`ALL`](Self::ALL).
     ///
@@ -105,6 +111,7 @@ impl SnapshotKind {
             SnapshotKind::Rooms => 0,
             SnapshotKind::Doors => 1,
             SnapshotKind::Windows => 2,
+            SnapshotKind::Ffe => 3,
         }
     }
 
@@ -116,6 +123,7 @@ impl SnapshotKind {
             SnapshotKind::Rooms => None,
             SnapshotKind::Doors => Some("doors"),
             SnapshotKind::Windows => Some("windows"),
+            SnapshotKind::Ffe => Some("ffe"),
         }
     }
 
@@ -125,6 +133,7 @@ impl SnapshotKind {
             SnapshotKind::Rooms => "rooms",
             SnapshotKind::Doors => "doors",
             SnapshotKind::Windows => "windows",
+            SnapshotKind::Ffe => "ffe",
         }
     }
 }
@@ -293,6 +302,20 @@ pub struct ModelEntry {
     /// which is what such a model is.
     #[serde(default)]
     pub windows: Vec<String>,
+
+    /// The same index a fourth time, for **FF&E**.
+    ///
+    /// A fourth flat list, and the *second* time the argument above has been
+    /// paid rather than re-made -- which is the evidence it was right. Adding a
+    /// kind costs one field with a `default` and two match arms the compiler
+    /// insists on; it does not cost a manifest migration, and no manifest
+    /// already on disk needs rewriting.
+    ///
+    /// Note this is the first kind whose entity is not an opening, and the
+    /// manifest did not notice. The index is about *where snapshots live*, not
+    /// about what is in them.
+    #[serde(default)]
+    pub ffe: Vec<String>,
 }
 
 impl ModelEntry {
@@ -303,6 +326,7 @@ impl ModelEntry {
             SnapshotKind::Rooms => &self.snapshots,
             SnapshotKind::Doors => &self.doors,
             SnapshotKind::Windows => &self.windows,
+            SnapshotKind::Ffe => &self.ffe,
         }
     }
 
@@ -311,6 +335,7 @@ impl ModelEntry {
             SnapshotKind::Rooms => &mut self.snapshots,
             SnapshotKind::Doors => &mut self.doors,
             SnapshotKind::Windows => &mut self.windows,
+            SnapshotKind::Ffe => &mut self.ffe,
         }
     }
 }
@@ -576,7 +601,7 @@ mod tests {
     /// went wrong once already.
     #[test]
     fn test_all_kinds_agree_with_their_positions() {
-        assert_eq!(SnapshotKind::ALL.len(), 3, "extend ALL when adding a kind");
+        assert_eq!(SnapshotKind::ALL.len(), 4, "extend ALL when adding a kind");
         for (index, kind) in SnapshotKind::ALL.iter().enumerate() {
             assert_eq!(kind.position(), index, "{} is in the wrong slot of ALL", kind.label());
         }

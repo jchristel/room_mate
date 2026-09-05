@@ -157,6 +157,27 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "OpeningPolicy::is_default")]
     pub windows: OpeningPolicy,
 
+    /// FF&E policy for this project (see `FfePolicy`). Defaulted and skipped
+    /// when empty, so a project file predating FF&E is unchanged on disk and
+    /// unchanged in meaning.
+    ///
+    /// **Its own type rather than a third `OpeningPolicy`, and the reason is
+    /// the one that made `Item` a sibling of `Opening` rather than a widening
+    /// of it.** `OpeningPolicy` carries `room_attribution`, which chooses
+    /// between a `from_room` and a `to_room`. An item sits IN one room -- there
+    /// is no choice to make, and a field offering five ways to make it would be
+    /// right in shape and meaningless in fact. What FF&E adds instead is
+    /// `nested_components`, which no opening needs because a door leaf is never
+    /// a door.
+    ///
+    /// What the two DO share -- `comparison_key`, `room_resolution`,
+    /// `room_reference_property`, `comparison_properties` -- is shared by
+    /// spelling the fields the same way and documenting them against the same
+    /// rules, not by sharing a struct that would then have to carry both
+    /// entities' exceptions.
+    #[serde(default, skip_serializing_if = "FfePolicy::is_default")]
+    pub ffe: FfePolicy,
+
     /// Ordered classification tiers, outermost first. Empty if the section is
     /// omitted (a project with no classification defined).
     #[serde(default)]
@@ -464,6 +485,111 @@ pub struct OpeningPolicy {
 impl OpeningPolicy {
     /// Whether this policy is entirely unset — used to keep an untouched
     /// `[doors]` section out of a written settings file, same as `AreaPolicy`.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Whether a family instance that is a *component of another instance* counts
+/// as an item.
+///
+/// **The one place FF&E deliberately does not follow doors**, and the argument
+/// is about what kind of question it is. `nested_opening_ids` drops a door leaf
+/// at the producer and is right to: "is this door leaf a door" has one answer,
+/// always, everywhere. "Is this component an item" does not -- a joinery handle
+/// is not, a chair nested in a workstation group might be -- so it is a project
+/// convention, and conventions live here and are applied at read time.
+///
+/// That also makes the exclusion *visible*. 2236 of 4134 exported "doors" on one
+/// job were hardware, and they were invisible because the producer had already
+/// dropped them by the time anyone could count them. `ItemReport` states how
+/// many this policy excluded, on every read, from the first push.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NestedComponents {
+    /// A component is not an item. **The default, and it is a measurement
+    /// rather than a preference**: on House A, 179 of 647 instances had a
+    /// super-component and every population in that set was hardware or
+    /// sub-assembly -- 87 joinery handles of one family, 70 generic models
+    /// inside electrical fixtures, 3 generic models inside doors.
+    #[default]
+    Exclude,
+    /// Every instance is an item, components included. For a project that nests
+    /// genuinely schedulable FF&E -- a workstation group whose chair is a real
+    /// line on the schedule.
+    Include,
+}
+
+/// FF&E policy for one project.
+///
+/// Four of these fields are spelled exactly as `OpeningPolicy` spells them and
+/// mean exactly what they mean there. They are not shared through a common
+/// struct, because the two policies differ in both directions: an opening needs
+/// `room_attribution` and an item has nothing to attribute, an item needs
+/// `nested_components` and an opening has nothing to exclude. A shared struct
+/// would carry both exceptions and force every reader to work out which half
+/// applied.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct FfePolicy {
+    /// The item property whose value identifies "the same item" across
+    /// milestones, and `None` (the default) reports "not configured" rather
+    /// than falling back to anything.
+    ///
+    /// **`"$id"` is a worse default here than it is for doors, which is why
+    /// there is still no default at all.** A door's ElementId is stable across
+    /// pushes and identifies the same physical leaf. FF&E is the thing that gets
+    /// deleted and re-placed wholesale between issues -- a re-specified desk is
+    /// a new ElementId and the same desk -- so a project comparing FF&E across
+    /// milestones usually wants an authored `Mark` or an asset number, and
+    /// guessing `$id` would produce a diff that looks authoritative and reports
+    /// every replaced item as one deletion plus one addition.
+    ///
+    /// A scalar declared before `comparison_properties` per the TOML ordering
+    /// rule in CODING-CONVENTIONS.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparison_key: Option<String>,
+
+    /// Whether a component of another instance counts as an item (see
+    /// `NestedComponents`). Defaults to excluding them.
+    #[serde(default)]
+    pub nested_components: NestedComponents,
+
+    /// How far the server may go to work out an item's room from its geometry
+    /// (see `RoomResolution`). Off by default.
+    ///
+    /// **Off is right here where it was arguable for windows**, and the reason
+    /// is the premise of the entity rather than a preference. A facade model
+    /// holds windows and no rooms, so `room_resolution` is the only mechanism by
+    /// which any of its openings is ever attributed. FF&E lives in the same
+    /// document as the rooms it serves -- that is *why* RoomMate performs this
+    /// join, since Revit will not schedule it -- so authored references
+    /// populate: 572 of 647 on House A. Geometry is a fallback for the
+    /// remainder, taken deliberately, not the primary path.
+    #[serde(default)]
+    pub room_resolution: RoomResolution,
+
+    /// The item property carrying an **authored** room reference, reconciled
+    /// against the room the item actually names. Absent -- the default --
+    /// disables the check.
+    ///
+    /// A property name rather than a bool, for the reason `[doors]` gives: which
+    /// parameter carries this is a family-and-office convention, not a fact
+    /// about furniture, and one field states both that the check is wanted and
+    /// what it reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_reference_property: Option<String>,
+
+    /// Ordered item property names compared across milestones, resolved in the
+    /// same vocabulary the `/ffe` filter uses -- so `$room` and `$category` are
+    /// comparable, which is how "this item moved between rooms" becomes a
+    /// reported difference with no machinery of its own.
+    #[serde(default)]
+    pub comparison_properties: Vec<String>,
+}
+
+impl FfePolicy {
+    /// Whether this policy is entirely unset -- used to keep an untouched
+    /// `[ffe]` section out of a written settings file, same as `OpeningPolicy`.
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
@@ -909,6 +1035,7 @@ pub enum ReferenceEntity {
     Rooms,
     Doors,
     Windows,
+    Ffe,
 }
 
 impl ReferenceEntity {
@@ -918,6 +1045,7 @@ impl ReferenceEntity {
             ReferenceEntity::Rooms => "rooms",
             ReferenceEntity::Doors => "doors",
             ReferenceEntity::Windows => "windows",
+            ReferenceEntity::Ffe => "ffe",
         }
     }
 }
@@ -1015,6 +1143,23 @@ pub struct Milestone {
     /// one that pins none -- which is what it is.
     #[serde(default)]
     pub window_attachments: BTreeMap<String, String>,
+
+    /// And again, for **FF&E**. A fourth map, for the reason the second one
+    /// gave and the third one paid: the entities are pushed independently and
+    /// their snapshot ids do not correspond, so pinning one says nothing about
+    /// the others and "the nearest" would silently pair data that never
+    /// coexisted.
+    ///
+    /// That matters more here than for any other entity. A milestone exists to
+    /// answer "what did the model hold on date X", and FF&E is the thing that
+    /// changes between issues while the rooms stand still -- so an FF&E pin
+    /// inferred from a rooms pin would be wrong precisely when someone is
+    /// looking.
+    ///
+    /// `default` keeps every milestone authored before FF&E existed valid, as
+    /// one that pins none.
+    #[serde(default)]
+    pub ffe_attachments: BTreeMap<String, String>,
 }
 
 impl Milestone {
@@ -1152,6 +1297,7 @@ mod tests {
             attachments: Default::default(),
             door_attachments: Default::default(),
             window_attachments: Default::default(),
+            ffe_attachments: Default::default(),
         }
     }
 
@@ -1333,24 +1479,81 @@ boundary_location = "finish_face"
     /// only symptom was a source that never matched anything. Serde's own
     /// message is the specific one, so there is no hand-rolled check.
     ///
-    /// **The example moved from `windows` to `ffe`, which is the interesting
-    /// part.** This test used to prove its point with `entity = "windows"`, and
-    /// windows are now a real entity — so left alone it would still have passed,
-    /// for the wrong reason, right up until somebody read it and believed
-    /// windows were unsupported. A negative test whose example quietly becomes
-    /// positive is worse than no test. `ffe` is the next candidate entity and
-    /// the same trap is set for whoever builds it.
+    /// **The example has now been wrong twice, and the third choice is made on
+    /// a different principle.** It proved its point with `entity = "windows"`
+    /// until windows shipped, then with `entity = "ffe"` — chosen, in as many
+    /// words, because "`ffe` is the next candidate entity and the same trap is
+    /// set for whoever builds it". It was, and this test caught them: it failed
+    /// the moment `ReferenceEntity::Ffe` landed, which is the behaviour wanted
+    /// and the reason it is worth keeping.
+    ///
+    /// So the example is deliberately no longer a *plausible* entity. Picking
+    /// the next candidate guarantees the test breaks again on the day that
+    /// candidate ships, and a test that must be edited every time the thing it
+    /// guards grows is one people learn to edit without reading. The point being
+    /// made is about the mechanism — serde rejects an unknown variant and names
+    /// the accepted ones — and the mechanism does not care whether the rejected
+    /// spelling is a near miss.
     #[test]
     fn test_unknown_reference_entity_is_rejected() {
         let err = toml::from_str::<Settings>(
-            "project_id = \"p1\"\n\n[sources.reference.s]\ntype = \"upload\"\nentity = \"ffe\"\n",
+            "project_id = \"p1\"\n\n[sources.reference.s]\ntype = \"upload\"\nentity = \"sprockets\"\n",
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("ffe"), "names what was written: {err}");
+        assert!(err.contains("sprockets"), "names what was written: {err}");
         assert!(
-            err.contains("rooms") && err.contains("doors") && err.contains("windows"),
-            "names every accepted value, windows included: {err}"
+            err.contains("rooms") && err.contains("doors") && err.contains("windows") && err.contains("ffe"),
+            "names every accepted value, ffe included: {err}"
         );
+    }
+
+    /// The positive half, added because the negative test above stopped
+    /// covering it. A source scoped to FF&E parses and lands as `Ffe` rather
+    /// than falling back to the `Rooms` default — which is the failure this
+    /// pair exists for: an entity-scoped source that silently joins the wrong
+    /// entity looks configured and matches nothing.
+    #[test]
+    fn test_a_reference_source_can_be_scoped_to_ffe() {
+        let settings: Settings = toml::from_str(
+            "project_id = \"p1\"\n\n[sources.reference.schedule]\ntype = \"upload\"\nentity = \"ffe\"\n",
+        )
+        .expect("ffe is an accepted entity");
+        assert_eq!(settings.sources.reference["schedule"].entity, ReferenceEntity::Ffe);
+        assert_eq!(ReferenceEntity::Ffe.as_str(), "ffe");
+    }
+
+    /// `[ffe]` is defaulted and skipped when untouched, so a project file
+    /// written before FF&E existed round-trips unchanged. The same guarantee
+    /// `[doors]` and `[windows]` carry, asserted rather than assumed because it
+    /// is what lets a fourth entity land without rewriting anyone's settings.
+    #[test]
+    fn test_an_untouched_ffe_section_stays_out_of_a_written_file() {
+        let settings: Settings = toml::from_str("project_id = \"p1\"\n").expect("parses with no [ffe]");
+        assert!(settings.ffe.is_default());
+        let text = toml::to_string_pretty(&settings).expect("serializes");
+        assert!(!text.contains("[ffe]"), "an all-default policy is not written: {text}");
+    }
+
+    /// A configured `[ffe]` round-trips, including the one field no opening has.
+    #[test]
+    fn test_ffe_policy_round_trips() {
+        let settings: Settings = toml::from_str(
+            "project_id = \"p1\"\n\n[ffe]\ncomparison_key = \"Mark\"\nnested_components = \"include\"\nroom_resolution = \"same_model\"\n",
+        )
+        .expect("parses");
+        assert_eq!(settings.ffe.comparison_key.as_deref(), Some("Mark"));
+        assert_eq!(settings.ffe.nested_components, NestedComponents::Include);
+        assert_eq!(settings.ffe.room_resolution, RoomResolution::SameModel);
+        assert!(!settings.ffe.is_default());
+    }
+
+    /// Excluding components is the DEFAULT, and it is a measurement rather than
+    /// a preference — 179 of 647 House A instances had a super-component and
+    /// every population in that set was hardware or sub-assembly. Asserted so a
+    /// future edit has to argue with the number rather than with a taste.
+    #[test]
+    fn test_components_are_excluded_by_default() {
+        assert_eq!(FfePolicy::default().nested_components, NestedComponents::Exclude);
     }
 }

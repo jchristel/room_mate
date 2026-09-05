@@ -933,6 +933,7 @@ mod tests {
             areas: Default::default(),
             doors: Default::default(),
             windows: Default::default(),
+            ffe: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
@@ -1975,6 +1976,7 @@ D-101,60
             attachments: BTreeMap::new(),
             door_attachments: BTreeMap::from([("m1".to_string(), "2026-02-01T00:00:00Z".to_string())]),
             window_attachments: Default::default(),
+            ffe_attachments: Default::default(),
         }];
         let state = AppState::new(
             Box::new(

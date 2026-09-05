@@ -77,6 +77,7 @@ mod tests {
             attachments: BTreeMap::from([("m1".to_string(), "2026-01-01T00:00:00Z".to_string())]),
             door_attachments: BTreeMap::new(),
             window_attachments: Default::default(),
+            ffe_attachments: Default::default(),
         }
     }
 
@@ -92,6 +93,7 @@ mod tests {
             areas: Default::default(),
             doors: Default::default(),
             windows: Default::default(),
+            ffe: Default::default(),
             hierarchy_exclusions: vec![],
         }
     }
