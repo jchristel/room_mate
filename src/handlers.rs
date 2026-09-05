@@ -29,6 +29,7 @@ use crate::contract::{
 use crate::service::adjacency;
 use crate::service::areas;
 use crate::service::comparison::{self, ComparisonResponse};
+use crate::service::items;
 use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
@@ -907,7 +908,7 @@ pub async fn ingest_doors(
     for (model_id, doors) in &mut doors_by_model {
         let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
         for door in doors.drain(..) {
-            sink.push(door)?;
+            sink.push(&door)?;
         }
     }
     let outcome = finish_openings(sinks, "door")?;
@@ -964,7 +965,7 @@ fn preflight_openings(
 ///
 /// `preflight_doors` has already refused anything refusable, from the envelope
 /// line alone.
-fn open_opening_sinks<'a, P: crate::contract::OpeningEnvelope + Serialize>(
+fn open_opening_sinks<'a, P: crate::contract::SnapshotEnvelope + Serialize>(
     state: &'a Shared,
     kind: SnapshotKind,
     payloads: Vec<(String, P)>,
@@ -986,8 +987,11 @@ struct OpeningSink<'a> {
 }
 
 impl OpeningSink<'_> {
-    fn push(&mut self, opening: Opening) -> Result<(), (StatusCode, String)> {
-        self.snapshot.push(&opening).map_err(store_failed)
+    /// Generic over the element, so the same sink carries an `Opening` or an
+    /// `Item`. A sink is a model id and a byte stream; what flows through it was
+    /// never its business, and the store's boundary is bytes either way.
+    fn push<T: Serialize>(&mut self, element: &T) -> Result<(), (StatusCode, String)> {
+        self.snapshot.push(element).map_err(store_failed)
     }
 }
 
@@ -1101,7 +1105,7 @@ pub async fn ingest_doors_stream(
         check_declared(&declared, &line.model_id)?;
         let sink = sink_for(&mut sinks, &line.model_id, |s| s.model_id.as_str())
             .expect("check_declared already refused any model without a sink");
-        sink.push(line.door)?;
+        sink.push(&line.door)?;
     }
 
     let outcome = finish_openings(sinks, "door")?;
@@ -1183,6 +1187,208 @@ fn window_payloads(
         .collect()
 }
 
+/// What a finished FF&E push amounts to on the wire.
+///
+/// A fourth response type for the reason there is a fourth envelope: the count's
+/// key is per entity and every producer reads it by name. `IngestOutcome` is the
+/// shared part.
+#[derive(Debug, Serialize)]
+pub struct FfeIngestResponse {
+    /// Always true on a 200 -- an FF&E push has no quarantine branch, so it
+    /// either stored every model or answered an error.
+    pub accepted: bool,
+    /// Items stored across the whole push. **Components included**: the server
+    /// stores what it was sent and `[ffe] nested_components` decides at read
+    /// time, so this counts the push rather than what a reader will see.
+    pub ffe_count: usize,
+    pub snapshot_taken_at: String,
+    pub snapshot_id_generated: bool,
+    pub models: Vec<FfeModelIngestResult>,
+}
+
+/// What became of one model inside a multi-model FF&E push.
+#[derive(Debug, Serialize)]
+pub struct FfeModelIngestResult {
+    pub model_id: String,
+    pub ffe_count: usize,
+}
+
+/// Name a finished push for the FF&E wire shape.
+fn ffe_ingest_response(
+    snapshot_taken_at: String,
+    snapshot_id_generated: bool,
+    outcome: IngestOutcome,
+) -> (StatusCode, Json<FfeIngestResponse>) {
+    (
+        StatusCode::OK,
+        Json(FfeIngestResponse {
+            accepted: true,
+            ffe_count: outcome.total,
+            snapshot_taken_at,
+            snapshot_id_generated,
+            models: outcome
+                .per_model
+                .into_iter()
+                .map(|(model_id, ffe_count)| FfeModelIngestResult { model_id, ffe_count })
+                .collect(),
+        }),
+    )
+}
+
+/// Build one empty payload per model, ready to stream items into.
+fn ffe_payloads(
+    schema_version: u32,
+    project: &Project,
+    snapshot: &Snapshot,
+    phase: Option<&str>,
+    models: Vec<crate::contract::FfeModelEnvelope>,
+) -> Vec<(String, crate::contract::FfePayload)> {
+    models
+        .into_iter()
+        .map(|m| {
+            let id = m.model.id.clone();
+            let payload = m.into_payload(
+                schema_version,
+                project.clone(),
+                snapshot.clone(),
+                phase.map(str::to_string),
+                Vec::new(),
+            );
+            (id, payload)
+        })
+        .collect()
+}
+
+/// Revit posts FF&E data here -- one push, one or more models.
+///
+/// **No quarantine branch and so no 202**, the doors rule for the doors reason:
+/// activating a disagreeing push would re-phase the model while its rooms stayed
+/// behind. See `check_opening_ingest`, which is named for openings and is not
+/// about them -- it is the phase gate every non-rooms entity shares.
+///
+/// **An empty FF&E list is accepted.** A model with rooms and no furniture is
+/// ordinary -- a shell, a base-build package, a plantroom level -- and the server
+/// cannot tell that from a broken export. The producer refuses an empty *run*,
+/// which only it can answer because only it knows how many the export held.
+///
+/// **Components are stored, not filtered.** 179 of 647 House A instances are
+/// components of another instance; they arrive, they are counted here, and
+/// `[ffe] nested_components` decides at read time whether a reader sees them.
+/// That is the one place FF&E deliberately parts company with doors, where
+/// `nested_opening_ids` drops a leaf at the producer -- see
+/// `settings::NestedComponents` for why the same answer would be wrong here.
+pub async fn ingest_ffe(
+    State(state): State<Shared>,
+    Json(mut upload): Json<crate::contract::FfeUpload>,
+) -> Result<(StatusCode, Json<FfeIngestResponse>), (StatusCode, String)> {
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut upload.snapshot);
+    upload.phase = crate::contract::normalize_phase(upload.phase.as_deref());
+    validate_ingest(
+        &state,
+        upload.schema_version,
+        crate::contract::SUPPORTED_FFE_SCHEMA,
+        &upload.project.id,
+        &upload.snapshot.taken_at,
+    )?;
+    validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
+
+    let mut items_by_model: Vec<(String, Vec<crate::contract::Item>)> = upload
+        .models
+        .iter_mut()
+        .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.ffe)))
+        .collect();
+    let models: Vec<crate::contract::FfeModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
+    preflight_openings(
+        &state,
+        SnapshotKind::Ffe,
+        &upload.project.id,
+        upload.phase.as_deref(),
+        models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
+
+    let payloads =
+        ffe_payloads(upload.schema_version, &upload.project, &upload.snapshot, upload.phase.as_deref(), models);
+    let mut sinks = open_opening_sinks(&state, SnapshotKind::Ffe, payloads)?;
+    for (model_id, items) in &mut items_by_model {
+        let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
+        for item in items.drain(..) {
+            sink.push(&item)?;
+        }
+    }
+    let outcome = finish_openings(sinks, "item")?;
+    Ok(ffe_ingest_response(upload.snapshot.taken_at.clone(), snapshot_id_generated, outcome))
+}
+
+/// Streaming FF&E ingest (NDJSON): line 1 is the envelope, every following line
+/// is one `Item` tagged with its model id.
+///
+/// **Load-bearing here in a way it is not for openings.** A doors push is tens of
+/// elements per model; House A alone holds 644 items across nine categories, and
+/// that is a house. The buffered path stays for small manual pushes and fixture
+/// generation, and the tests assert the two produce the same snapshot.
+pub async fn ingest_ffe_stream(
+    State(state): State<Shared>,
+    body: Body,
+) -> Result<(StatusCode, Json<FfeIngestResponse>), (StatusCode, String)> {
+    let stream = body.into_data_stream().map(|r| r.map_err(std::io::Error::other));
+    let reader = StreamReader::new(stream);
+    let mut lines = reader.lines();
+
+    let first = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+        .ok_or((StatusCode::BAD_REQUEST, "empty body".into()))?;
+    let mut envelope: crate::contract::FfeStreamEnvelope =
+        serde_json::from_str(&first).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad envelope line: {e}")))?;
+
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
+    envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
+    validate_ingest(
+        &state,
+        envelope.schema_version,
+        crate::contract::SUPPORTED_FFE_SCHEMA,
+        &envelope.project.id,
+        &envelope.snapshot.taken_at,
+    )?;
+    let declared = validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
+    preflight_openings(
+        &state,
+        SnapshotKind::Ffe,
+        &envelope.project.id,
+        envelope.phase.as_deref(),
+        envelope.models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
+
+    let payloads = ffe_payloads(
+        envelope.schema_version,
+        &envelope.project,
+        &envelope.snapshot,
+        envelope.phase.as_deref(),
+        envelope.models,
+    );
+    let mut sinks = open_opening_sinks(&state, SnapshotKind::Ffe, payloads)?;
+
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+    {
+        if line.trim().is_empty() {
+            continue; // tolerate a trailing blank line
+        }
+        let line: crate::contract::StreamItem =
+            serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad item line: {e}")))?;
+        check_declared(&declared, &line.model_id)?;
+        let sink = sink_for(&mut sinks, &line.model_id, |s| s.model_id.as_str())
+            .expect("check_declared already refused any model without a sink");
+        sink.push(&line.item)?;
+    }
+
+    let outcome = finish_openings(sinks, "item")?;
+    Ok(ffe_ingest_response(envelope.snapshot.taken_at.clone(), snapshot_id_generated, outcome))
+}
+
 /// Revit posts window data here -- one push, one or more models.
 ///
 /// **No quarantine branch and so no 202**, the doors rule for the doors reason:
@@ -1229,7 +1435,7 @@ pub async fn ingest_windows(
     for (model_id, windows) in &mut windows_by_model {
         let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
         for window in windows.drain(..) {
-            sink.push(window)?;
+            sink.push(&window)?;
         }
     }
     let outcome = finish_openings(sinks, "window")?;
@@ -1298,7 +1504,7 @@ pub async fn ingest_windows_stream(
         check_declared(&declared, &line.model_id)?;
         let sink = sink_for(&mut sinks, &line.model_id, |s| s.model_id.as_str())
             .expect("check_declared already refused any model without a sink");
-        sink.push(line.window)?;
+        sink.push(&line.window)?;
     }
 
     let outcome = finish_openings(sinks, "window")?;
@@ -1640,6 +1846,63 @@ pub async fn get_doors(
         Some(assembled) => {
             Ok(([(header::ETAG, etag)], Json(openings::DoorsResult::from_assembled(assembled))).into_response())
         }
+    }
+}
+
+/// The FF&E read.
+///
+/// **Not `get_doors` with two lookups changed** -- which is what `get_windows`
+/// is, and the contrast is the point. An item is a different record, so this
+/// calls a different assembly; what the two share is everything around the
+/// assembly, and none of it is written twice (`service::entity_scope`).
+///
+/// Takes the same query struct as the openings reads. `?building=` works and
+/// means the same thing -- an item's building is its room's building, and a
+/// homeless item matches none. `?filter=` parses against the same registry-wide
+/// source vocabulary, so a predicate means the same thing on every entity;
+/// `$category` and `$room` are the two intrinsics an item adds.
+pub async fn get_ffe(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<DoorsQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let known = state.settings().known_reference_sources();
+    let filter = query
+        .filter
+        .as_deref()
+        .map(|s| rooms::RoomFilter::parse_query(s, &known))
+        .transpose()
+        .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
+        .filter(|f| !f.is_empty());
+
+    let scope = items::ItemScope {
+        project: query.project.as_deref(),
+        building: query.building.as_deref(),
+        milestone: query.milestone.as_deref(),
+        filter: filter.as_ref(),
+    };
+
+    // Both kinds, because an FF&E response is not a function of FF&E alone:
+    // `?building=` and the geometric resolver read the scope's *rooms*, so a
+    // rooms push changes this body.
+    let cursor = scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Rooms, SnapshotKind::Ffe])
+        .map_err(map_service_error)?;
+    let etag = etag_for(
+        &cursor,
+        [
+            query.project.as_deref(),
+            query.building.as_deref(),
+            query.milestone.as_deref(),
+            query.filter.as_deref(),
+        ],
+    );
+    if is_fresh(&headers, &etag) {
+        return Ok(not_modified(&etag));
+    }
+
+    match items::assemble_items(&state, &scope).map_err(map_service_error)? {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
     }
 }
 
@@ -3472,6 +3735,115 @@ mod tests {
         assert_eq!(window.id, "w1");
         assert_eq!(window.from_room.as_deref(), Some("r1"));
         assert_eq!(window.to_room, None, "an external window streams as None, not an error");
+    }
+
+    /// The buffered and streamed FF&E routes must store identical results --
+    /// which route a producer picked cannot change what is stored. Load-bearing
+    /// for this entity in a way it is not for openings: an FF&E push is
+    /// hundreds of elements, so the stream is the one a real producer uses and
+    /// the buffered path is the one the fixtures use.
+    #[tokio::test]
+    async fn test_ffe_stream_matches_the_buffered_path() {
+        let state = state_with_rooms(Some("New Construction")).await;
+
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-03-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit"}]}"#,
+            "\n",
+            r#"{"model_id":"m1","id":"f1","level_id":"1","category":"OST_Furniture","room":"r1","#,
+            r#""type_id":"t1","type_name":"Desk 1600x800"}"#,
+            "\n",
+            "\n", // a trailing blank line is tolerated, as on the other streams
+        );
+        let (status, streamed) = ingest_ffe_stream(State(state.clone()), Body::from(body)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(streamed.ffe_count, 1);
+
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let stored: crate::contract::FfePayload = state
+            .get_opening_snapshot(crate::storage::SnapshotKind::Ffe, &key, "2026-03-01T00:00:00Z")
+            .unwrap()
+            .expect("stored");
+        let item = &stored.ffe[0];
+        assert_eq!(item.id, "f1");
+        assert_eq!(item.category, "OST_Furniture");
+        assert_eq!(item.room.as_deref(), Some("r1"));
+        assert!(item.loops.is_empty(), "no footprint reaches the wire until upstream change U1");
+    }
+
+    /// **A component is stored, not filtered**, which is the whole reason
+    /// `[ffe] nested_components` can be a read-time policy at all. The doors
+    /// path drops a leaf at the producer and nothing downstream can see or
+    /// change that; here the item lands, is counted, and the read decides.
+    #[tokio::test]
+    async fn test_a_component_is_stored_rather_than_refused() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-03-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit"}]}"#,
+            "\n",
+            r#"{"model_id":"m1","id":"f2","level_id":"1","category":"OST_Furniture","room":"r1","#,
+            r#""super_component_id":"3729614","type_id":"t","type_name":"Handle_Joinery_FIJO_900"}"#,
+            "\n",
+        );
+        let (status, streamed) = ingest_ffe_stream(State(state.clone()), Body::from(body)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(streamed.ffe_count, 1, "the push counts what it stored, components included");
+
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let stored: crate::contract::FfePayload = state
+            .get_opening_snapshot(crate::storage::SnapshotKind::Ffe, &key, "2026-03-01T00:00:00Z")
+            .unwrap()
+            .expect("stored");
+        assert_eq!(stored.ffe[0].super_component_id.as_deref(), Some("3729614"));
+    }
+
+    /// An empty FF&E push is accepted and stored, exactly as an empty doors or
+    /// windows push is. A model with rooms and no furniture is ordinary -- a
+    /// shell, a base-build package -- and the server cannot tell that from a
+    /// broken export. The producer refuses an empty run; the server does not.
+    #[tokio::test]
+    async fn test_an_ffe_push_with_no_items_is_accepted() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-03-01T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit"}]}"#,
+            "\n",
+        );
+        let (status, body) = ingest_ffe_stream(State(state.clone()), Body::from(body)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.ffe_count, 0);
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        assert_eq!(
+            state.list_opening_snapshot_ids(crate::storage::SnapshotKind::Ffe, &key).unwrap().len(),
+            1,
+            "the empty snapshot is stored, not silently dropped"
+        );
+    }
+
+    /// **An FF&E push that disagrees on phase is refused, never quarantined** --
+    /// the doors rule, reached through the same gate. Promoting it would move
+    /// the lineage while every room snapshot stayed behind, stranding the rooms
+    /// `Item::room` resolves against. The refusal comes off the envelope line
+    /// alone, so a doomed push costs the producer one line rather than a body
+    /// of several hundred items.
+    #[tokio::test]
+    async fn test_ffe_stream_refuses_a_disagreeing_phase_from_the_envelope_alone() {
+        let state = state_with_rooms(Some("New Construction")).await;
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-03-01T00:00:00Z"},"phase":"Existing","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit"}]}"#,
+            "\n",
+            r#"{"this is not an item and is never parsed"#, // malformed on purpose
+        );
+
+        let (status, message) = ingest_ffe_stream(State(state.clone()), Body::from(body)).await.unwrap_err();
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "the gate ran, not the line parser");
+        assert!(message.contains("Existing") && message.contains("New Construction"), "{message}");
     }
 
     /// The windows stream refuses on the envelope line alone, before reading

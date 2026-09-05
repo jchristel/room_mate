@@ -265,7 +265,7 @@ def check_mcp_parity(findings: Findings) -> None:
     # Route -> tool is judged by hand once, then encoded here: the mapping is
     # not derivable from names (`/areas` -> `get_hierarchy_areas`).
     mapping = {
-        "/rooms": "get_rooms", "/doors": "get_doors", "/windows": "get_windows",
+        "/rooms": "get_rooms", "/doors": "get_doors", "/windows": "get_windows", "/ffe": "get_ffe",
         "/projects": "list_projects",
         "/projects/{id}/buildings": "list_buildings", "/projects/{id}/validation": "get_validation",
         "/projects/{id}/snapshots": "list_snapshots", "/projects/{id}/milestones": "list_milestones",

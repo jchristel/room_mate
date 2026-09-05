@@ -222,7 +222,7 @@ pub struct DoorModelUpload {
 /// merging: the next change to either will move one number and not the other.
 pub const SUPPORTED_DOOR_SCHEMA: u32 = 2;
 
-impl super::openings::OpeningEnvelope for DoorPayload {
+impl super::SnapshotEnvelope for DoorPayload {
     fn project(&self) -> &Project {
         &self.project
     }
@@ -241,6 +241,9 @@ impl super::openings::OpeningEnvelope for DoorPayload {
     fn levels(&self) -> &[Level] {
         &self.levels
     }
+}
+
+impl super::openings::OpeningEnvelope for DoorPayload {
     fn openings(&self) -> &[Opening] {
         &self.doors
     }

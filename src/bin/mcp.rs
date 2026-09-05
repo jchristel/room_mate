@@ -3,10 +3,10 @@
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
-//! `get_reference_snapshot`, `get_doors`, `get_windows` --
+//! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Nineteen in
+//! and the one forwarded mutation (`upload_reference`, below). Twenty in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -48,7 +48,8 @@ use rmcp::{
 use roommate::bootstrap::build_state;
 use roommate::default_http_addr;
 use roommate::service::{
-    adjacency, areas, comparison, milestones, openings, projects, reference, rooms, snapshots, validation, ServiceError,
+    adjacency, areas, comparison, items, milestones, openings, projects, reference, rooms, snapshots, validation,
+    ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -442,6 +443,44 @@ impl RoommateMcp {
         match result {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no windows have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    #[tool(
+        description = "Fetch merged FF&E (furniture, fixtures and equipment) across stored models, optionally scoped by project id, building key, milestone name, \
+                          and property filter. A DIFFERENT record from get_doors/get_windows, and reading it as one will mislead you. \
+                          An item sits IN one room, so it carries a single 'room' and 'owner_rooms' is a list of AT MOST ONE -- there is no from_room/to_room, no swing, \
+                          no through-wall direction, and no attribution policy, because there are no sides to choose between. Empty owner_rooms means homeless: an item in \
+                          a corridor void, a shaft or outside the envelope, which is an ordinary reported state, and a homeless item matches no 'building' filter. \
+                          Each item carries 'category' (the Revit category it was collected under, e.g. OST_Furniture) -- filter on it with $category, which is usually the \
+                          first question worth asking. There is no equivalent on any other entity. \
+                          'loops' is EMPTY on every item today: the upstream exporter carries no footprint for FF&E yet, so an item is placed by 'insertion_point' and \
+                          oriented by 'facing'. Absent geometry is expected and is NOT missing data. \
+                          COMPONENTS: a family instance nested inside another (a joinery handle inside a casework run) carries 'super_component_id'. By default these are \
+                          EXCLUDED from this response and counted in 'excluded_components' -- on one real model 179 of 647 instances were components, nearly all hardware. \
+                          If excluded_components is large that is normal, not a fault. A project may set [ffe] nested_components = \"include\", and then they are returned \
+                          with is_component true. Do NOT infer that a component is not a real item from its room or its Mark: components DO name rooms (97.8% of them on \
+                          the measured model), and only the absence of a Mark weakly distinguishes them. \
+                          Room references are model-scoped: a room id is unique only within one model, so resolve them against rooms of the SAME 'model_id'. \
+                          The FF&E contract is schema_version 1 and moves independently of rooms', doors' and windows'; the payload's element list is keyed 'ffe'. \
+                          IMPORTANT -- like get_rooms, get_doors and get_windows, results are scoped to ONE Revit phase per model, named in 'phase_by_model'. \
+                          Not a complete FF&E schedule."
+    )]
+    fn get_ffe(&self, Parameters(p): Parameters<GetDoorsParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = items::ItemScope {
+            project: p.project.as_deref(),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+        };
+        match items::assemble_items(&self.state, &scope).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no FF&E has been pushed to this server yet",
             )])),
             Some(result) => json_result(&result),
         }

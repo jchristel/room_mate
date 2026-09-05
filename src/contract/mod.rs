@@ -44,6 +44,37 @@ pub use windows::{
     StreamWindow, WindowModelEnvelope, WindowPayload, WindowStreamEnvelope, WindowsUpload, SUPPORTED_WINDOW_SCHEMA,
 };
 
+/// The six facts every entity's stored snapshot answers, whatever it holds.
+///
+/// **The seam that lets one scoping pipeline serve four entities.** Rooms,
+/// doors, windows and FF&E all decompose into per-model snapshots carrying the
+/// same identity block, the same phase, the same placement and the same level
+/// list -- and the read side scopes, pins, hashes and phase-reports all four
+/// identically. Only the element list differs, so only the element list is left
+/// to the sub-trait: [`OpeningEnvelope`](openings::OpeningEnvelope) adds
+/// `openings()`, [`ItemEnvelope`](items::ItemEnvelope) adds `items()`.
+///
+/// This exists because FF&E is the first entity whose *record* is not shared.
+/// Windows could reuse the whole opening assembly by reusing `Opening`; an
+/// `Item` is a different type, so the choice was between a second copy of the
+/// scoping pipeline and a trait that names what the pipeline actually touches.
+/// It touches these six methods and nothing else, which is why they are the
+/// trait.
+///
+/// Kept deliberately narrow, on the terms `OpeningEnvelope` already stated:
+/// every method is a field read, and the trait exists to hide *which struct* the
+/// field came from rather than to grow behaviour. Anything an entity does
+/// differently belongs at the call site with its kind beside it, not behind
+/// another method here.
+pub trait SnapshotEnvelope {
+    fn project(&self) -> &Project;
+    fn model(&self) -> &Model;
+    fn taken_at(&self) -> &str;
+    fn phase(&self) -> Option<&str>;
+    fn model_to_shared(&self) -> Option<&ModelToShared>;
+    fn levels(&self) -> &[Level];
+}
+
 /// A 2D point in Revit model space. Units are decimal feet, Y points UP.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Point2D {
