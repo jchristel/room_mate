@@ -1,10 +1,11 @@
 # RoomMate — FFE implementation plan
 
-> **Status: in progress — A, C, D and E are built; F and G are not.** The
-> pipeline runs end to end: the contract, the store, the settings, `POST /ffe`,
-> `POST /ffe/stream`, `GET /ffe`, the `get_ffe` MCP tool, and the extractor that
-> pushes to them. What is missing is the QA report and the viewer layer — and,
-> outside this repository, the pyRevit button for `ffe_export_entry`.
+> **Status: in progress — A, C, D, E and F are built; only G is not.** The
+> pipeline runs end to end and reports on itself: the contract, the store, the
+> settings, `POST /ffe`, `POST /ffe/stream`, `GET /ffe`, the `get_ffe` MCP tool,
+> the extractor that pushes to them, and `items` on `/validation`. What is
+> missing is the viewer layer — and, outside this repository, the pyRevit button
+> for `ffe_export_entry` and the two duHast changes U1 and U2.
 >
 > This records the design agreed *before* any code, so the implementation did not
 > re-derive it and the open questions were open before the work rather than after
@@ -175,12 +176,33 @@ sitting beside `openings` and `sources` and keyed the same way, so a reader
 navigates all three alike.
 
 Not *inside* `openings`: that key is named for what it holds, and an item is not
-an opening. `ItemReport` reuses `UnresolvedRoomReference`, `PendingRoomReference`,
-`OpeningPhaseDrift`, `RoomGeometryMismatch` and `RoomResolutionCounts` verbatim,
-and drops the two findings that are two-sided by construction — `external`
-("a room on exactly one side") and `room_attribution`. Nothing an existing
-consumer reads is renamed, which is the saving the `doors` → `openings` rename
-was made for, taken without making that key lie.
+an opening. It drops the two findings that are two-sided by construction —
+`external` ("a room on exactly one side") and `room_attribution` — and nothing
+an existing consumer reads is renamed.
+
+**As built, the sharing this section promised was mostly not there, and the
+correction is worth more than the prediction.** This said `ItemReport` would
+reuse `UnresolvedRoomReference`, `PendingRoomReference`, `OpeningPhaseDrift`,
+`RoomGeometryMismatch` and `RoomResolutionCounts` *verbatim*. Reading them, one
+does: `RoomResolutionCounts`, which counts what the geometry answered and has
+nothing entity-shaped in it. Two carry a `side` an item has no equivalent for,
+and three name their element `opening_id` or `openings_phase`.
+
+So the rule that made `Item` a sibling of `Opening` applies one level up —
+**share it unless sharing would make a field mean nothing** — and the report got
+six small structs of its own. That is still far below the ~250 lines the
+`DoorReport` → `OpeningReport` rename was made to avoid, but for a different
+reason than this section assumed: an item simply has fewer findings, not because
+the types were reused.
+
+**One finding is deliberately not a discrepancy, and that is a departure from
+the doors report rather than an inheritance.** An item naming no room is listed
+in `without_room` and left out of `discrepancies`. A door with neither side
+connects nothing and is nearly always a data problem; an item outside every room
+is very often correct — a bollard, external furniture, plant on a roof — and on
+House A that is 75 of 647. Folding 11.6% of a model into a discrepancy count
+would train a reader to ignore the count. `unresolved_room`, which names a room
+the model demonstrably does not have, stays a real finding.
 
 ### D6 — Category is a record field, not yet a setting
 
