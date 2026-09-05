@@ -252,6 +252,11 @@ pub struct ProjectSettings {
     /// wrong policy.
     pub windows: crate::settings::OpeningPolicy,
 
+    /// This project's FF&E policy (see `settings::FfePolicy`). Its own type
+    /// rather than a third `OpeningPolicy`: an item has one room, so there is
+    /// no attribution to choose, and it has components, which no opening does.
+    pub ffe: crate::settings::FfePolicy,
+
     /// Footprint exclusions for the hierarchy-areas feature. Unlike
     /// `colour_plans` (client-only, never in this bundle), exclusions are used by
     /// the SERVER when it computes footprints in `service::areas`, so they belong

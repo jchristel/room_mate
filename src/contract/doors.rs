@@ -101,7 +101,7 @@ pub struct DoorPayload {
     ///
     /// The *elevation* is what this is for, not the id. Level ids are
     /// per-document and never match across models; elevations are what cross,
-    /// which is why `room_locator` compares on them. See `LEVEL_EPS_FT`.
+    /// which is why `room_locator` compares on them. See `LEVEL_EPS_MM`.
     #[serde(default)]
     pub levels: Vec<Level>,
 

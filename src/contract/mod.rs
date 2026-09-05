@@ -31,10 +31,14 @@ use serde::{Deserialize, Serialize};
 use crate::settings::BuiltinPropertyDef;
 
 pub mod doors;
+pub mod ffe;
+pub mod items;
 pub mod openings;
 pub mod windows;
 
 pub use doors::{DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA};
+pub use ffe::{FfeModelEnvelope, FfePayload, FfeStreamEnvelope, FfeUpload, StreamItem, SUPPORTED_FFE_SCHEMA};
+pub use items::{Item, ItemEnvelope};
 pub use openings::{Opening, OpeningEnvelope};
 pub use windows::{
     StreamWindow, WindowModelEnvelope, WindowPayload, WindowStreamEnvelope, WindowsUpload, SUPPORTED_WINDOW_SCHEMA,

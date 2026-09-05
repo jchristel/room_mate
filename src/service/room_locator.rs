@@ -113,7 +113,8 @@ pub struct Candidate {
     /// somewhere an element can be, and treating it as a hole would make a probe
     /// that lands on a column read as "no room".
     pub outline: Polygon<f64>,
-    /// Level elevation in feet — the axis a probe never crosses. Compared by
+    /// Level elevation, in whatever unit the level list states — millimetres
+    /// today; see `LEVEL_EPS_MM`. The axis a probe never crosses. Compared by
     /// elevation rather than by `level_id`, because level ids are per-document
     /// and a linked model names the same floor with a different one.
     pub elevation: f64,
@@ -137,13 +138,34 @@ fn ring(l: &Loop) -> LineString<f64> {
     LineString::from(l.points.iter().map(|p| Coord { x: p.x, y: p.y }).collect::<Vec<_>>())
 }
 
-/// How close two levels must be, in feet, to count as the same floor.
+/// How close two levels must be to count as the same floor, in **the units the
+/// level list is stated in** — which are millimetres, not feet.
 ///
-/// Levels are matched by elevation because ids are per-document. Half a foot is
-/// far tighter than any storey height and far looser than the float noise a
-/// transform introduces, so it separates "the same floor named twice" from "the
-/// floor above" without being sensitive to either.
-pub const LEVEL_EPS_FT: f64 = 0.5;
+/// Levels are matched by elevation because ids are per-document. The intent has
+/// always been "far tighter than any storey height and far looser than the float
+/// noise a transform introduces", so that this separates "the same floor named
+/// twice" from "the floor above" without being sensitive to either.
+///
+/// **This constant was `LEVEL_EPS_FT = 0.5` and was doing neither job.** Level
+/// elevations arrive in millimetres, because duHast's `to_data_level_building`
+/// runs them through `convert_imperial_feet_to_metric_mm` — House A's LEVEL 00
+/// is `110250.0` on the wire — while every polygon on the same wire is decimal
+/// feet. Nothing was ever wrong arithmetically, because an elevation is only
+/// ever compared to another elevation and never to geometry; what was wrong was
+/// the constant, which read as half a foot and behaved as **half a millimetre**.
+/// Two models naming one floor 0.4 mm apart failed to match, silently, as
+/// `UnknownLevel`.
+///
+/// 50 mm is the same *intent* the old value stated: two orders of magnitude
+/// below any storey height, and far above the float noise of an affine
+/// transform through `model_to_shared`.
+///
+/// **The mixed units are not fixed here, deliberately.** Changing the wire would
+/// re-scale every level in every snapshot already stored, which is a migration;
+/// this is a constant that was mislabelled. The mix is real and worth knowing
+/// about — see `docs/PLAN-ffe.md` D9, which found it — and the name now says
+/// which side of it this value lives on.
+pub const LEVEL_EPS_MM: f64 = 50.0;
 
 /// Where an element sits, in the frame its candidates are in.
 pub struct Placement {
@@ -191,7 +213,7 @@ pub fn locate(placement: &Placement, candidates: &[Candidate], probe_ft: f64) ->
 fn probe(at: Point<f64>, elevation: f64, candidates: &[Candidate]) -> Located {
     let mut hit: Option<&Candidate> = None;
     for candidate in candidates {
-        if (candidate.elevation - elevation).abs() > LEVEL_EPS_FT {
+        if (candidate.elevation - elevation).abs() > LEVEL_EPS_MM {
             continue;
         }
         if !candidate.outline.contains(&at) {
@@ -328,9 +350,17 @@ mod tests {
 
     /// **Levels are matched by elevation, not id.** A room directly above is a
     /// different room, and a probe must never reach it.
+    ///
+    /// The storey height here is **3600 mm**, and it used to be `12.0` — twelve
+    /// feet, written when the epsilon was called `LEVEL_EPS_FT`. The unit
+    /// confusion had reached the fixtures, which is exactly why nothing caught
+    /// it: a test stating its storey in feet and an epsilon reading as feet
+    /// agreed with each other and with nothing on the wire. It fails now if the
+    /// epsilon is restored to a foot-scaled value, which is the guard that was
+    /// missing.
     #[test]
     fn test_a_room_on_another_level_is_never_reached() {
-        let upstairs = candidate("m1", "above", square(10.5, 0.0, 20.0, 10.0), 12.0);
+        let upstairs = candidate("m1", "above", square(10.5, 0.0, 20.0, 10.0), 3600.0);
         let placement = Placement {
             point: Point2D { x: 10.25, y: 5.0 },
             normal: Some(Point2D { x: 1.0, y: 0.0 }),
@@ -341,10 +371,15 @@ mod tests {
     }
 
     /// The same floor named twice by two linked models: elevations agree within
-    /// `LEVEL_EPS_FT`, so the probe reaches it.
+    /// `LEVEL_EPS_MM`, so the probe reaches it.
+    ///
+    /// 10 mm apart, which is the realistic disagreement — two documents whose
+    /// survey base differs by a rounding. Under the old half-a-millimetre
+    /// epsilon this pair would have missed, and the model would have been
+    /// reported as `UnknownLevel` rather than matched.
     #[test]
     fn test_the_same_floor_in_a_linked_model_is_reached() {
-        let linked = candidate("m2", "core", square(10.5, 0.0, 20.0, 10.0), 0.01);
+        let linked = candidate("m2", "core", square(10.5, 0.0, 20.0, 10.0), 10.0);
         let placement = Placement {
             point: Point2D { x: 10.25, y: 5.0 },
             normal: Some(Point2D { x: 1.0, y: 0.0 }),
