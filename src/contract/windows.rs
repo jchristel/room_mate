@@ -211,7 +211,7 @@ pub struct WindowModelUpload {
 /// entities, two version lines; three now.
 pub const SUPPORTED_WINDOW_SCHEMA: u32 = 1;
 
-impl super::openings::OpeningEnvelope for WindowPayload {
+impl super::SnapshotEnvelope for WindowPayload {
     fn project(&self) -> &Project {
         &self.project
     }
@@ -230,6 +230,9 @@ impl super::openings::OpeningEnvelope for WindowPayload {
     fn levels(&self) -> &[Level] {
         &self.levels
     }
+}
+
+impl super::openings::OpeningEnvelope for WindowPayload {
     fn openings(&self) -> &[Opening] {
         &self.windows
     }

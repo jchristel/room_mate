@@ -17,25 +17,34 @@
 //! (the attribution rule is in `CLAUDE.md`). Before that, any answer would have
 //! settled that question by accident.
 //!
-//! **Past the ~500-line trigger, judged and kept whole.** The size is the saving
-//! rather than the cost: the alternative to one assembly of this length was a
-//! second copy of it for windows, and a third for whatever comes next. The seams
-//! that can be cut already are — the record lives in `contract::openings`, every
-//! per-entity lookup in `OpeningKind`, the geometry in `room_locator`. What is
-//! left is a single scoping-then-deriving pipeline whose invariants (which
-//! snapshot each model contributed, which rooms the geometry probed against,
-//! which policy attributed the result) only hold when read together.
+//! **Back under the ~500-line trigger, and the seam that did it was not the one
+//! this header used to argue about.** It used to say the size was the saving —
+//! that the alternative to one assembly of this length was a second copy for
+//! windows and a third for whatever came next — and that the seams which could
+//! be cut already were. That was true of a *second opening* and false of a
+//! fourth entity: FF&E does not share `Opening`, so it could not have reused any
+//! of this, and the choice was a second copy of the pipeline or naming what the
+//! pipeline touches. It touches `SnapshotEnvelope`, six field reads, so the
+//! scoping, pinning, revision, phase report, candidate build and probe
+//! preparation now live in `service::entity_scope` and serve both.
+//!
+//! What is left here is the part that genuinely could not move: how many room
+//! references an opening has, and how geometry resolves them. Those are the two
+//! steps `room_locator`'s header predicted would be per category — "the next
+//! category needs the glue, not the geometry" — and they are what this module
+//! now is.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::contract::{ModelToShared, Opening, OpeningEnvelope, Point2D, PropertyPresence};
+use crate::contract::{Opening, OpeningEnvelope, PropertyPresence};
 use crate::reference::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, ReferenceEntity, RoomResolution};
 use crate::state::{AppState, ModelKey};
 use crate::storage::SnapshotKind;
 
+use super::entity_scope::{self, Candidates, Probe, SideOrigin};
 use super::room_locator::{self, RoomRef, Unresolved};
 use super::rooms::{FilterTarget, RoomFilter};
 use super::ServiceError;
@@ -320,268 +329,10 @@ impl WindowsResult {
     }
 }
 
-/// A stable content revision for a `DoorsResult`. Duplicated from
-/// `rooms::scoped_revision` rather than shared: that one takes room-scoped
-/// tuples, and the shared part is three lines of hashing whose meaning ("which
-/// snapshot did each model contribute") is per entity.
-fn openings_revision<P: OpeningEnvelope>(scoped: &[(ModelKey, P)]) -> String {
-    use std::hash::{Hash, Hasher};
-
-    let mut parts: Vec<(&str, &str, &str)> = scoped
-        .iter()
-        .map(|(key, payload)| (key.project_id.as_str(), key.model_id.as_str(), payload.taken_at()))
-        .collect();
-    parts.sort_unstable();
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    parts.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
-}
-
-/// Where one side's room reference came from.
-///
-/// **On the wire because a consumer must be able to tell a stated answer from a
-/// computed one.** The same rule `through_wall_normal` states for direction: a
-/// guessed value nothing can distinguish from a measured one is worse than an
-/// absent one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "origin", content = "value")]
-pub enum SideOrigin {
-    /// The model stated it. Always wins — see `RoomResolution`.
-    Authored(RoomRef),
-    /// The model stated nothing and the geometry found a room.
-    Derived(RoomRef),
-    /// The model stated nothing and the geometry did not resolve one, carrying
-    /// why. `no_candidate` on one side of an otherwise two-sided door is an
-    /// **external door**, which is the correct answer rather than a gap.
-    Unresolved(Unresolved),
-}
-
-impl SideOrigin {
-    /// The room this side resolves to, whatever it came from.
-    fn room(&self) -> Option<&RoomRef> {
-        match self {
-            SideOrigin::Authored(r) | SideOrigin::Derived(r) => Some(r),
-            SideOrigin::Unresolved(_) => None,
-        }
-    }
-}
-
-/// Both of a door's sides, and where each came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RoomOrigin {
     pub from_room: SideOrigin,
     pub to_room: SideOrigin,
-}
-
-/// The smallest step that still leaves the wall, in feet (~15 mm).
-///
-/// A **centreline** model has a wall gap of zero — neighbouring rooms already
-/// tile, so their boundaries are one shared line. Probing by zero would test
-/// that line itself, where containment is undefined and a room may or may not
-/// claim its own edge. Any positive step lands cleanly in one room or the other,
-/// so this is a floor rather than a tolerance to tune.
-const MIN_PROBE_FT: f64 = 0.05;
-
-/// Every room a door could be resolved against, prepared once per read.
-///
-/// Built once rather than per door: the rooms come from storage, and reading
-/// them inside the door loop would be one storage read per door.
-struct Candidates {
-    /// Candidates grouped by the model that owns them. `SameModel` probes one
-    /// group; `Project` probes the union, which is the entire difference between
-    /// the two modes — the same probe, a different set of rooms allowed to
-    /// answer it.
-    by_model: BTreeMap<String, Vec<room_locator::Candidate>>,
-    /// Every candidate, already placed in the shared frame. Empty outside
-    /// `Project` mode, where models are never mixed.
-    shared: Vec<room_locator::Candidate>,
-    /// `(model id, level id)` → elevation, so a *door* — which carries a level
-    /// id, not an elevation — can be put on the same axis as the rooms.
-    elevation: BTreeMap<(String, String), f64>,
-    /// Model id → the wall gap its rooms were drawn to, so a probe is sized by
-    /// the regime of the rooms it is reaching for rather than by a constant.
-    gap_by_model: BTreeMap<String, f64>,
-    /// Model id → its `model_to_shared`, needed in `Project` mode to lift the
-    /// door's own point into the frame the candidates are already in.
-    transform_by_model: BTreeMap<String, ModelToShared>,
-    shared_frame: bool,
-}
-
-/// Apply a 2D affine to a **position**: `shared_x = a*x + c*y + e`.
-fn place(m: &ModelToShared, p: Point2D) -> Point2D {
-    let [a, b, c, d, e, f] = m.matrix;
-    Point2D { x: a * p.x + c * p.y + e, y: b * p.x + d * p.y + f }
-}
-
-/// Apply only the **linear** part to a direction, then renormalise.
-///
-/// A normal is a direction, not a position, so the translation must not reach
-/// it — a door's facing does not move when the model is placed somewhere else on
-/// the survey grid. The transform is a rigid-body rotation
-/// (`ModelToShared::is_rigid`), so renormalising is defensive rather than
-/// corrective: it costs one square root and means a scaled matrix that slipped
-/// past ingest's warning cannot silently lengthen every probe.
-fn place_direction(m: &ModelToShared, p: Point2D) -> Option<Point2D> {
-    let [a, b, c, d, _e, _f] = m.matrix;
-    let (x, y) = (a * p.x + c * p.y, b * p.x + d * p.y);
-    let len = (x * x + y * y).sqrt();
-    if len < 1e-9 {
-        return None;
-    }
-    Some(Point2D { x: x / len, y: y / len })
-}
-
-/// Collect the project's rooms as probe candidates, under the same milestone
-/// scope the doors read is using.
-///
-/// **Scoped through `rooms::scope_payloads`, not by re-reading the store.** A
-/// door has to be resolved against exactly the rooms `/rooms` is serving, or a
-/// milestone read would answer two different questions about one building.
-fn build_candidates<P: OpeningEnvelope>(
-    state: &AppState,
-    scope: &OpeningScope<'_>,
-    mode: RoomResolution,
-    opening_payloads: &[(ModelKey, P)],
-) -> Result<Candidates, ServiceError> {
-    let registry = state.settings();
-    let stored = state.all_snapshots(scope.project).map_err(ServiceError::Internal)?;
-    let (scoped, _) = super::rooms::scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
-
-    let shared_frame = mode == RoomResolution::Project;
-    let mut out = Candidates {
-        by_model: BTreeMap::new(),
-        shared: Vec::new(),
-        elevation: BTreeMap::new(),
-        gap_by_model: BTreeMap::new(),
-        transform_by_model: BTreeMap::new(),
-        shared_frame,
-    };
-
-    for (key, payload, bundle) in scoped {
-        let boundary = bundle.areas.resolve_boundary(payload.room_boundary);
-        out.gap_by_model.insert(key.model_id.clone(), bundle.areas.wall_gap_ft(boundary));
-        if let Some(transform) = payload.model_to_shared {
-            out.transform_by_model.insert(key.model_id.clone(), transform);
-        }
-
-        // Elevations come from this model's own `levels`, never from a merged
-        // list: a level id is per-document, and two linked models name the same
-        // floor with different ids. The elevation is what crosses.
-        for level in &payload.levels {
-            out.elevation.insert((key.model_id.clone(), level.id.clone()), level.elevation);
-        }
-
-        for room in &payload.rooms {
-            let Some(outline) = room_locator::outline_of(room) else {
-                continue; // unplaced room: nothing to probe against
-            };
-            let Some(&elevation) = out.elevation.get(&(key.model_id.clone(), room.level_id.clone())) else {
-                continue; // a room on a level this model does not declare
-            };
-            let reference = RoomRef { model_id: key.model_id.clone(), room_id: room.id.clone() };
-            if shared_frame {
-                let Some(transform) = payload.model_to_shared else {
-                    // Un-placed in a mode where everything else has been placed.
-                    // Including it would probe it in the wrong frame, which is
-                    // worse than leaving it out — a wrong room resolves and
-                    // looks right.
-                    continue;
-                };
-                let placed = geo::MapCoords::map_coords(&outline, |c| {
-                    let p = place(&transform, Point2D { x: c.x, y: c.y });
-                    geo::Coord { x: p.x, y: p.y }
-                });
-                out.shared.push(room_locator::Candidate { reference, outline: placed, elevation });
-            } else {
-                out.by_model.entry(key.model_id.clone()).or_default().push(room_locator::Candidate {
-                    reference,
-                    outline,
-                    elevation,
-                });
-            }
-        }
-    }
-
-    // A doors-only model declares its own levels and placement on the doors
-    // envelope, because it has no rooms snapshot to declare them. Filled in
-    // *after* the rooms pass and only where the key is absent, so a model that
-    // pushes both is answered by its rooms — which keeps the duplicate a
-    // redundancy rather than something that could disagree.
-    //
-    // This is what makes such a model's doors reachable at all: `locate` gives
-    // up before probing when the elevation lookup misses, so without this every
-    // door in a facade or envelope file reports `NoCandidate` however good its
-    // geometry is. It only pays off under `Project` — a model with no rooms has
-    // no same-model candidates to be probed against, whatever its elevations.
-    for (key, payload) in opening_payloads {
-        if scope.project.is_some_and(|p| payload.project().id != p) {
-            continue;
-        }
-        for level in payload.levels() {
-            out.elevation.entry((key.model_id.clone(), level.id.clone())).or_insert(level.elevation);
-        }
-        if let Some(transform) = payload.model_to_shared().cloned() {
-            out.transform_by_model.entry(key.model_id.clone()).or_insert(transform);
-        }
-    }
-    Ok(out)
-}
-
-/// No rooms to probe against at all — the answer when resolution is off, which
-/// is every read that did not ask for it.
-const NO_CANDIDATES: &[room_locator::Candidate] = &[];
-
-impl Candidates {
-    /// Resolve one door's two sides.
-    fn locate(&self, door: &Opening, model_id: &str) -> room_locator::Sides {
-        let unresolved = |why| room_locator::Sides {
-            from: room_locator::Located::Unresolved(why),
-            to: room_locator::Located::Unresolved(why),
-        };
-        let Some(mut point) = room_locator::position_of(door.insertion_point, &door.loops) else {
-            return unresolved(Unresolved::NoPosition);
-        };
-        let Some(&elevation) = self.elevation.get(&(model_id.to_string(), door.level_id.clone())) else {
-            // The opening names a level nothing in scope has an elevation for,
-            // so there is no axis to compare on and nothing is probed.
-            //
-            // Reported as its own state rather than as NoCandidate, which would
-            // read as "the probe found open air" -- the ordinary answer for an
-            // external opening. This is not that: an unhosted element gets an
-            // invalid LevelId from Revit and the export carries -1, so the cause
-            // is upstream of any geometry a reader would go looking at.
-            return unresolved(Unresolved::UnknownLevel);
-        };
-        let mut normal = door.through_wall_normal;
-
-        let candidates: &[room_locator::Candidate] = if self.shared_frame {
-            // The candidates have been placed, so the door has to be too. A
-            // model with no transform cannot be compared against ones that were
-            // placed — it would be probed in the wrong frame.
-            let Some(transform) = self.transform_by_model.get(model_id) else {
-                return unresolved(Unresolved::NoPosition);
-            };
-            point = place(transform, point);
-            normal = normal.and_then(|n| place_direction(transform, n));
-            &self.shared
-        } else {
-            self.by_model.get(model_id).map_or(NO_CANDIDATES, Vec::as_slice)
-        };
-
-        // Sized by the regime of the rooms being reached for. `SameModel` only
-        // ever reaches its own model's rooms; `Project` may reach any, so the
-        // widest gap in scope is the honest step — a shorter one would resolve
-        // some models and silently not others.
-        let gap = if self.shared_frame {
-            self.gap_by_model.values().copied().fold(0.0_f64, |a, b| a.max(b))
-        } else {
-            self.gap_by_model.get(model_id).copied().unwrap_or_default()
-        };
-
-        let placement = room_locator::Placement { point, normal, elevation };
-        room_locator::locate(&placement, candidates, gap.max(MIN_PROBE_FT))
-    }
 }
 
 /// Resolve every door in one project against its rooms, for the QA report.
@@ -602,73 +353,31 @@ pub fn locate_project_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>
     if mode == RoomResolution::Off {
         return Ok(out);
     }
-    let scope = OpeningScope { project: Some(project_id), ..OpeningScope::default() };
-    let candidates = build_candidates(state, &scope, mode, stored)?;
+    let candidates = entity_scope::build_candidates(state, Some(project_id), None, mode, stored)?;
     for (key, payload) in stored.iter().filter(|(_, p)| p.project().id == project_id) {
         for door in payload.openings() {
-            out.insert((key.model_id.clone(), door.id.clone()), candidates.locate(door, &payload.model().id));
-        }
-    }
-    Ok(out)
-}
-
-/// Fold one side's authored reference and one side's derived answer into the
-/// single origin the response carries.
-///
-/// **Authored always wins.** A door's `to_room` is the modeller's assignment —
-/// what the door *serves*, which is not always what it opens into — so geometry
-/// replacing it would be the reconciliation `CLAUDE.md` forbids. Geometry fills
-/// what the model left absent, and disagrees audibly with what it did not
-/// (`OpeningReport::room_geometry_mismatches`).
-fn side_origin(authored: Option<&str>, model_id: &str, derived: &room_locator::Located) -> SideOrigin {
-    if let Some(room_id) = authored {
-        return SideOrigin::Authored(RoomRef { model_id: model_id.to_string(), room_id: room_id.to_string() });
-    }
-    match derived {
-        room_locator::Located::Found(reference) => SideOrigin::Derived(reference.clone()),
-        room_locator::Located::Unresolved(why) => SideOrigin::Unresolved(*why),
-    }
-}
-
-/// `(model id, room id)` → that room's building key, for the rooms in scope.
-///
-/// **Built by calling `assemble_rooms`, not by re-deriving classification.** A
-/// door's building has to mean exactly what a room's building means, or a
-/// building-scoped doors read and a building-scoped rooms read would disagree
-/// about the same building — so this asks the same function `/rooms` does, with
-/// the same project and milestone scope and deliberately *no* building filter
-/// (the filtering happens per door, against the door's owner).
-///
-/// Keyed on the pair because room ids are unique only within a model.
-fn building_by_room(
-    state: &AppState,
-    scope: &OpeningScope<'_>,
-) -> Result<BTreeMap<(String, String), String>, ServiceError> {
-    let rooms = super::rooms::assemble_rooms(
-        state,
-        &super::rooms::RoomScope { project: scope.project, milestone: scope.milestone, ..Default::default() },
-    )?;
-    let Some(rooms) = rooms else {
-        return Ok(BTreeMap::new());
-    };
-
-    let registry = state.settings();
-    let mut out = BTreeMap::new();
-    for room in &rooms.rooms {
-        let Some(tier) = registry
-            .settings_for(&room.project_id)
-            .and_then(|b| super::rooms::building_tier_index(&b.hierarchy))
-        else {
-            continue; // a project with no "Building" tier answers no building
-        };
-        if let Some(value) = room.classification.get(tier) {
             out.insert(
-                (room.model_id.clone(), room.room.id.clone()),
-                super::rooms::building_key(&value.code, &value.name),
+                (key.model_id.clone(), door.id.clone()),
+                candidates.locate_sides(&opening_probe(door), &payload.model().id),
             );
         }
     }
     Ok(out)
+}
+
+/// One opening, as the shared locator wants it.
+///
+/// A named function rather than an inline literal at both call sites, so the
+/// two -- the read path and the QA report -- cannot drift on which fields an
+/// opening probes with. `normal` is `Some` here and `None` for an item, which is
+/// the entire per-entity difference; see `entity_scope::Probe`.
+fn opening_probe(door: &Opening) -> Probe<'_> {
+    Probe {
+        insertion_point: door.insertion_point,
+        loops: &door.loops,
+        level_id: &door.level_id,
+        normal: door.through_wall_normal,
+    }
 }
 
 /// Merge every stored model's doors into one payload, scoped by `OpeningScope`.
@@ -699,51 +408,17 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
     if !state.has_any_snapshot(kind.snapshot_kind()).map_err(ServiceError::Internal)? {
         return Ok(None);
     }
-    let stored: Vec<(ModelKey, P)> = state
-        .all_opening_snapshots(kind.snapshot_kind(), scope.project)
-        .map_err(ServiceError::Internal)?;
     let registry = state.settings();
 
-    // Phase 1 — scope to the request, substituting a milestone's pinned doors
-    // snapshot for the model's latest where one is pinned. Same discipline as
-    // `rooms::scope_payloads`: a project without the named milestone, or a model
-    // that milestone does not pin, contributes nothing, and a pin whose snapshot
-    // no longer exists is skipped with a warning rather than failing the read
-    // ("signal, not error").
-    let mut scoped: Vec<(ModelKey, P)> = Vec::new();
-    for (key, payload) in stored {
-        if scope.project.is_some_and(|p| payload.project().id != p) {
-            continue;
-        }
-        let Some(bundle) = registry.settings_for(&payload.project().id) else {
-            continue;
-        };
-        match scope.milestone {
-            None => scoped.push((key, payload)),
-            Some(wanted) => {
-                let Some(ms) = bundle.milestones.iter().find(|m| m.name == wanted) else {
-                    continue;
-                };
-                let Some(pinned_id) = kind.pins(ms).get(&key.model_id) else {
-                    continue;
-                };
-                match state.get_opening_snapshot::<P>(kind.snapshot_kind(), &key, pinned_id).map_err(ServiceError::Internal)? {
-                    Some(pinned) => scoped.push((key, pinned)),
-                    None => tracing::warn!(
-                        "milestone '{}' pins {} snapshot {:?} for {}/{}, but no such snapshot exists — skipping the model",
-                        wanted,
-                        kind.snapshot_kind().label(),
-                        pinned_id,
-                        key.project_id,
-                        key.model_id
-                    ),
-                }
-            }
-        }
-    }
+    // Phase 1 -- scope to the request, substituting a milestone's pinned
+    // snapshot for the model's latest where one is pinned. The loop that used to
+    // be here is `entity_scope::scope_snapshots`, which four entities share; the
+    // pin map is the only thing that varies and it arrives as a closure.
+    let scoped: Vec<(ModelKey, P)> =
+        entity_scope::scope_snapshots(state, kind.snapshot_kind(), scope.project, scope.milestone, |ms| kind.pins(ms))?;
 
-    let revision = openings_revision(&scoped);
-    let mut phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>> = BTreeMap::new();
+    let revision = entity_scope::revision(&scoped);
+    let phase_by_model = entity_scope::phase_by_model(&scoped);
     let mut openings: Vec<OpeningResponse> = Vec::new();
 
     // A door's building is its owning room's building, so a building scope needs
@@ -751,7 +426,7 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
     // given** — it is a second storage read plus a classification pass, and the
     // overwhelmingly common doors read does not need it.
     let building_of_room = match scope.building {
-        Some(_) => building_by_room(state, scope)?,
+        Some(_) => entity_scope::building_by_room(state, scope.project, scope.milestone)?,
         None => BTreeMap::new(),
     };
 
@@ -771,20 +446,15 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
         if mode == RoomResolution::Off || candidates_by_project.contains_key(&payload.project().id) {
             continue;
         }
-        let project_scope = OpeningScope { project: Some(&payload.project().id), ..OpeningScope::default() };
-        let project_scope = OpeningScope { milestone: scope.milestone, ..project_scope };
-        candidates_by_project
-            .insert(payload.project().id.clone(), build_candidates(state, &project_scope, mode, &scoped)?);
+        candidates_by_project.insert(
+            payload.project().id.clone(),
+            entity_scope::build_candidates(state, Some(&payload.project().id), scope.milestone, mode, &scoped)?,
+        );
     }
 
     // Phase 2 — derive the response doors, applying the property filter *after*
     // assembly so a predicate sees the same resolved vocabulary a consumer does.
-    for (key, payload) in &scoped {
-        phase_by_model
-            .entry(key.project_id.clone())
-            .or_default()
-            .insert(key.model_id.clone(), payload.phase().map(str::to_string));
-
+    for (_key, payload) in &scoped {
         let bundle = registry.settings_for(&payload.project().id);
         let builtin: &[BuiltinPropertyDef] = bundle.map(|b| b.builtin_properties.as_slice()).unwrap_or_default();
         let attribution = bundle.map(|b| kind.policy(b).room_attribution).unwrap_or_default();
@@ -824,7 +494,7 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
             // disagreement is the finding.
             let derived = match candidates_by_project.get(&payload.project().id) {
                 Some(candidates) if door.from_room.is_none() || door.to_room.is_none() => {
-                    candidates.locate(door, &payload.model().id)
+                    candidates.locate_sides(&opening_probe(door), &payload.model().id)
                 }
                 _ => room_locator::Sides {
                     from: room_locator::Located::Unresolved(Unresolved::NoCandidate),
@@ -832,8 +502,8 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
                 },
             };
             let room_origin = RoomOrigin {
-                from_room: side_origin(door.from_room.as_deref(), &payload.model().id, &derived.from),
-                to_room: side_origin(door.to_room.as_deref(), &payload.model().id, &derived.to),
+                from_room: entity_scope::side_origin(door.from_room.as_deref(), &payload.model().id, &derived.from),
+                to_room: entity_scope::side_origin(door.to_room.as_deref(), &payload.model().id, &derived.to),
             };
             let owner_rooms_qualified: Vec<RoomRef> = attribution
                 .owners(room_origin.from_room.room(), room_origin.to_room.room())
@@ -885,7 +555,8 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
 mod tests {
     use super::*;
     use crate::contract::{
-        CustomValue, DoorPayload, Model, Project, RoomPayload, Snapshot, SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
+        CustomValue, DoorPayload, Model, ModelToShared, Project, RoomPayload, Snapshot, SUPPORTED_DOOR_SCHEMA,
+        SUPPORTED_SCHEMA,
     };
     use crate::state::ProjectSettings;
     use crate::storage::MemStore;

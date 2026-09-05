@@ -11,6 +11,7 @@
 pub mod adjacency;
 pub mod areas;
 pub mod comparison;
+pub mod entity_scope;
 pub mod milestones;
 pub mod openings;
 pub mod projects;

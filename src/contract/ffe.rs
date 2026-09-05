@@ -194,7 +194,7 @@ pub struct FfeModelUpload {
 /// to hunt. Four entities, four version lines.
 pub const SUPPORTED_FFE_SCHEMA: u32 = 1;
 
-impl super::items::ItemEnvelope for FfePayload {
+impl super::SnapshotEnvelope for FfePayload {
     fn project(&self) -> &Project {
         &self.project
     }
@@ -213,6 +213,9 @@ impl super::items::ItemEnvelope for FfePayload {
     fn levels(&self) -> &[Level] {
         &self.levels
     }
+}
+
+impl super::items::ItemEnvelope for FfePayload {
     fn items(&self) -> &[Item] {
         &self.ffe
     }

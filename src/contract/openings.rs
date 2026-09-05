@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Level, Loop, Model, ModelToShared, Point2D, Project, PropertyTiers};
+use super::{CustomValue, Loop, Point2D, PropertyTiers};
 
 /// One door instance, as extracted from Revit.
 ///
@@ -293,16 +293,15 @@ impl PropertyTiers for Opening {
 /// to prevent — `project`/`model` are here only because scoping and the model
 /// key need them, and anything an entity does differently belongs at the call
 /// site with a `SnapshotKind` beside it, not behind another method.
-pub trait OpeningEnvelope {
-    fn project(&self) -> &Project;
-    fn model(&self) -> &Model;
-    fn taken_at(&self) -> &str;
-    fn phase(&self) -> Option<&str>;
-    fn model_to_shared(&self) -> Option<&ModelToShared>;
-    fn levels(&self) -> &[Level];
-
+pub trait OpeningEnvelope: super::SnapshotEnvelope {
     /// The elements themselves. The one method whose *implementation* differs
     /// between entities, and it differs only in the field name it reads.
+    ///
+    /// **The other five moved up to [`SnapshotEnvelope`](super::SnapshotEnvelope)**
+    /// when FF&E arrived, because they turned out to be facts about a stored
+    /// snapshot rather than facts about an opening -- and an `Item` snapshot
+    /// answers every one of them identically. What is left here is the only
+    /// thing that made this trait an *opening* trait in the first place.
     fn openings(&self) -> &[Opening];
 }
 

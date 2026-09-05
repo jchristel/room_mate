@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Level, Loop, Model, ModelToShared, Point2D, Project, PropertyTiers};
+use super::{CustomValue, Loop, Point2D, PropertyTiers};
 
 /// One FF&E instance, as extracted from Revit.
 ///
@@ -273,13 +273,11 @@ impl PropertyTiers for Item {
 /// Kept deliberately narrow, on the terms `OpeningEnvelope` states: every method
 /// here is a field read the assembly already did, and the trait exists to hide
 /// *which struct* the field came from, not to grow behaviour.
-pub trait ItemEnvelope {
-    fn project(&self) -> &Project;
-    fn model(&self) -> &Model;
-    fn taken_at(&self) -> &str;
-    fn phase(&self) -> Option<&str>;
-    fn model_to_shared(&self) -> Option<&ModelToShared>;
-    fn levels(&self) -> &[Level];
+pub trait ItemEnvelope: super::SnapshotEnvelope {
+    /// The elements themselves, and the only method this trait adds. The five
+    /// facts an FF&E snapshot shares with every other entity's live on
+    /// [`SnapshotEnvelope`](super::SnapshotEnvelope), which is what lets one
+    /// scoping pipeline serve all four.
     fn items(&self) -> &[Item];
 }
 

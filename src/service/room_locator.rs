@@ -209,6 +209,25 @@ pub fn locate(placement: &Placement, candidates: &[Candidate], probe_ft: f64) ->
     }
 }
 
+/// Resolve the one room an element **stands in**, with no step off a wall.
+///
+/// The counterpart of [`locate`] for an element that sits *in* a room rather
+/// than between two, and the reason this module's header said the next category
+/// would need "the glue, not the geometry": the geometry is `probe`, unchanged
+/// and already here. This is the second caller it grew.
+///
+/// `placement.normal` is ignored, which is the point. Routing an FF&E instance
+/// through `locate` instead would answer `NoDirection` for every one of them --
+/// a true statement about a question nobody asked, since an item has no wall to
+/// pass through and having no through-wall direction is its ordinary condition.
+///
+/// No probe distance either. A door's insertion point lands in the gap between
+/// two rooms' boundaries and must be stepped out of it; an item's lands inside
+/// the room, so stepping would move it *out* of the right answer.
+pub fn locate_within(placement: &Placement, candidates: &[Candidate]) -> Located {
+    probe(Point::new(placement.point.x, placement.point.y), placement.elevation, candidates)
+}
+
 /// Which candidate contains one probe point, on this element's level.
 fn probe(at: Point<f64>, elevation: f64, candidates: &[Candidate]) -> Located {
     let mut hit: Option<&Candidate> = None;
