@@ -346,11 +346,23 @@ def build_identity_envelope(run_envelope, model_blocks, entity, schema_version):
 def write_ndjson_line(gz, obj):
     """Serialize one object to a compact JSON line and write it (UTF-8) into
     the gzip stream, followed by '\n'. One object = one NDJSON line.
-    `ensure_ascii` stays at its default (True) deliberately: pure-ASCII bytes
-    are the safer choice across the CLR seam, and it's the wire-format
-    convention for this module (the `ensure_ascii=False` in the flatten
-    helpers is internal -- that output is parsed right back)."""
-    line = json.dumps(obj, separators=(",", ":")) + "\n"  # compact, no spaces
+
+    `ensure_ascii` is False, and the CLR seam is the reason for it rather than
+    an exception to it. Under IronPython 2.7 a .NET string arrives as a byte
+    oriented `str`, so ensure_ascii=True has to DECODE it in order to escape a
+    non-ASCII character -- using the system code page, which has no mapping for
+    a lone 0xAE. One registered sign in a type property value (a plumbing
+    fixture's "Smartflush(R) Suite") therefore aborted an entire FF&E push,
+    and did so at serialization, far from the parameter that carried it.
+    Encoding.UTF8.GetBytes below performs the same conversion correctly:
+    measured on the wire as C2 AE, not a lone AE.
+
+    Repairing duHast's encode_utf8 instead was tried and is worse. Despite its
+    comment ("do encode and decode to avoid byte string") it returns the byte
+    string unchanged here, and every variant that stopped the crash silently
+    replaced the character with U+FFFD -- the harder failure to notice, and the
+    one this codebase keeps paying for."""
+    line = json.dumps(obj, separators=(",", ":"), ensure_ascii=False) + "\n"
     data = Encoding.UTF8.GetBytes(line)
     gz.Write(data, 0, data.Length)
 
