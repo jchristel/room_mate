@@ -202,9 +202,9 @@ def translate_item(item, contribution):
         "room": facts.get("room"),
         "insertion_point": plan_point_from_mm(location.get("translation_coord")),
         "facing": facing_from_rotation(location.get("rotation_coord")),
-        # Empty on every item until upstream change U1 gives `DataItem` the
-        # geometry mixin. Read from the export the moment it is there, and NOT
-        # measured here -- see the module docstring.
+        # Read from the export and NOT measured here -- see the module
+        # docstring. Empty stays a legal value: a family with no solid geometry
+        # has no footprint, and the viewer draws it as a marker.
         "loops": loops_from_polygon(item.get("polygon")),
         "super_component_id": parent,
         "type_id": str(type_props.get("id", "unknown")),
