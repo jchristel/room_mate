@@ -167,6 +167,25 @@ pub struct SpacesResult {
     /// Construction`. Two models reporting different phases here is ordinary and
     /// correct; it is also the only place a consumer can see it.
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
+
+    /// Each contributing model's levels, keyed by model id.
+    ///
+    /// **Per model, never merged**, which is the opposite of what `/rooms` does
+    /// with its flat `levels` — and the difference is the whole reason this
+    /// field exists. A level id is per document, so a space's `level_id` means
+    /// something only alongside the model it came from; merging the lists would
+    /// produce a set in which two different storeys can share an id.
+    ///
+    /// What a consumer does with it is match on **elevation**, not on id: that
+    /// is what crosses documents (`LEVEL_EPS_MM` is the tolerance the geometric
+    /// resolver already uses for "same storey"). Without this the viewer cannot
+    /// place a space on a storey at all, and drew every level at once — which
+    /// looked like a design choice and was really missing data.
+    ///
+    /// **Empty for a model that pushed no levels**, which is legal (they are
+    /// optional on the payload) and which a consumer must handle rather than
+    /// treat as "no levels match".
+    pub levels_by_model: BTreeMap<String, Vec<crate::contract::Level>>,
 }
 
 /// Merge every scoped model's latest spaces snapshot into one payload.
@@ -192,6 +211,10 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
 
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
+    let levels_by_model: BTreeMap<String, Vec<crate::contract::Level>> = scoped
+        .iter()
+        .map(|(key, payload)| (key.model_id.clone(), payload.levels.clone()))
+        .collect();
     let mut spaces: Vec<SpaceResponse> = Vec::new();
 
     for (_key, payload) in &scoped {
@@ -241,6 +264,7 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
         revision,
         spaces,
         phase_by_model,
+        levels_by_model,
     }))
 }
 
@@ -794,6 +818,14 @@ mod tests {
     }
 
     fn state_with(model: &str, spaces: Vec<Room>) -> AppState {
+        state_with_levels(
+            model,
+            spaces,
+            vec![crate::contract::Level { id: "l1".to_string(), name: "Level 01".to_string(), elevation: 51000.0 }],
+        )
+    }
+
+    fn state_with_levels(model: &str, spaces: Vec<Room>, levels: Vec<crate::contract::Level>) -> AppState {
         let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle())]), None);
         let payload = SpacePayload {
             schema_version: crate::contract::SUPPORTED_SPACE_SCHEMA,
@@ -803,7 +835,7 @@ mod tests {
             phase: Some("New Construction".to_string()),
             model_to_shared: None,
             room_boundary: None,
-            levels: vec![],
+            levels,
             spaces,
         };
         state.set_element_snapshot(SnapshotKind::Spaces, &payload).unwrap();
@@ -848,6 +880,33 @@ mod tests {
 
         assert_eq!(result.spaces.len(), 1);
         assert_eq!(result.spaces[0].space.id, "s2");
+    }
+
+    /// **A space's storey is findable only through its own model's levels**, so
+    /// the read has to carry them per model. Merging them the way `/rooms` does
+    /// would put two different storeys under one id, since level ids are per
+    /// document.
+    #[test]
+    fn test_levels_ride_the_read_keyed_by_model() {
+        let state = state_with("me", vec![space("s1", Some(Enclosure::Enclosed))]);
+        let result = assemble_spaces(&state, &scope()).unwrap().unwrap();
+
+        assert_eq!(result.levels_by_model["me"].len(), 1);
+        assert_eq!(result.levels_by_model["me"][0].id, "l1");
+        assert_eq!(result.levels_by_model["me"][0].elevation, 51000.0);
+    }
+
+    /// **A model that pushed no levels reports an empty list, not an absent
+    /// key.** Levels are optional on a spaces payload, and a consumer has to be
+    /// able to tell "this model declared none" from "this model is not here" --
+    /// the first is the state every probe-loaded snapshot is in.
+    #[test]
+    fn test_a_model_with_no_levels_still_appears() {
+        let state = state_with_levels("me", vec![space("s1", None)], vec![]);
+        let result = assemble_spaces(&state, &scope()).unwrap().unwrap();
+
+        assert!(result.levels_by_model.contains_key("me"), "the model is present");
+        assert!(result.levels_by_model["me"].is_empty(), "and declares no levels");
     }
 
     /// `?model=` narrows to one services model, which is where this entity's
