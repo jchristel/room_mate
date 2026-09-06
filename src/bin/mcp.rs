@@ -3,7 +3,7 @@
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
-//! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe` --
+//! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
 //! and the one forwarded mutation (`upload_reference`, below). Twenty in
@@ -48,8 +48,8 @@ use rmcp::{
 use roommate::bootstrap::build_state;
 use roommate::default_http_addr;
 use roommate::service::{
-    adjacency, areas, comparison, items, milestones, openings, projects, reference, rooms, snapshots, validation,
-    ServiceError,
+    adjacency, areas, comparison, items, milestones, openings, projects, reference, rooms, snapshots, spaces,
+    validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -90,6 +90,31 @@ struct GetRoomsParams {
     /// with no joined record for that source at all -- never matches, negative
     /// operators included. Quote a value containing spaces if in doubt.
     /// Omit for no filter.
+    #[serde(default)]
+    filter: Vec<String>,
+}
+
+/// `get_spaces` parameters. Its own type rather than `GetDoorsParams`: there is
+/// no `building` -- a space cannot be scoped by one -- and there is a `model`,
+/// because this entity's first question is asked per services model.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetSpacesParams {
+    /// Scope the merge to one project id. Omit to merge every stored model.
+    #[serde(default)]
+    project: Option<String>,
+    /// Scope to ONE model id -- the services model whose spaces you want. This
+    /// entity's first question ("does this model have spaces at all") is asked
+    /// per model, which is why this exists here and not on get_rooms.
+    #[serde(default)]
+    model: Option<String>,
+    /// Milestone name from `list_milestones`: serve the spaces snapshots that
+    /// milestone pins instead of each model's latest. Omit for latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Property predicates, ALL of which must hold (AND), one per element:
+    /// ["$enclosure!=enclosed"]. Same operators as get_rooms' filter. An
+    /// unqualified name reads the space's own properties; the intrinsics are
+    /// $id, $name, $level_id, $model_id and $enclosure. Omit for no filter.
     #[serde(default)]
     filter: Vec<String>,
 }
@@ -481,6 +506,41 @@ impl RoommateMcp {
         match items::assemble_items(&self.state, &scope).map_err(to_mcp_error)? {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no FF&E has been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    #[tool(
+        description = "Fetch merged SPACES across stored models, optionally scoped by project id, model id, milestone name, and property filter. \
+                          A Revit SPACE is an MEP concept and is NOT a room: spaces live in the services models (mechanical, hydraulic, electrical, fire) while rooms live in \
+                          the architectural ones, and one services file per service means the SAME room number legitimately names a space in each of them. Two spaces sharing \
+                          a number are therefore two disciplines, NOT a duplicate -- always read 'model_id' before concluding anything about duplication. \
+                          A space carries NO room reference of any kind: it is matched to a room by a user-chosen property value, across models, and that match is not \
+                          performed by this tool. There is no from_room/to_room, no owner_rooms and no room id to resolve. \
+                          Every space carries 'enclosure', one of enclosed / unenclosed / unmeasured, and it is the most useful thing here. 'unenclosed' means the model says \
+                          the space bounds nothing -- a MODEL defect somebody wants to know about. 'unmeasured' means Revit reported an area and the pipeline produced no \
+                          polygon anyway -- a PIPELINE defect. Both carry empty 'loops', which is why they are distinguished on the wire rather than inferred from geometry. \
+                          Filter with $enclosure, e.g. $enclosure!=enclosed to list every defective space; also $id, $name, $level_id and $model_id. \
+                          An EMPTY result for a model is meaningful and is not an error: it means that services model was audited and holds no spaces. That is a different \
+                          fact from the model never having been pushed, which returns no data at all. \
+                          The spaces contract is schema_version 1 and moves independently of every other entity's; the payload's element list is keyed 'spaces'. \
+                          IMPORTANT -- results are scoped to ONE Revit phase per model, named in 'phase_by_model', and on a real project the disciplines DO NOT agree on the \
+                          phase name. A model reporting a different phase from its siblings is ordinary; check phase_by_model before reading a low count as missing data."
+    )]
+    fn get_spaces(&self, Parameters(p): Parameters<GetSpacesParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = spaces::SpaceScope {
+            project: p.project.as_deref(),
+            model: p.model.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+        };
+        match spaces::assemble_spaces(&self.state, &scope).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no spaces have been pushed to this server yet",
             )])),
             Some(result) => json_result(&result),
         }

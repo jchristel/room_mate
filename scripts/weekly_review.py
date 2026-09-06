@@ -266,6 +266,7 @@ def check_mcp_parity(findings: Findings) -> None:
     # not derivable from names (`/areas` -> `get_hierarchy_areas`).
     mapping = {
         "/rooms": "get_rooms", "/doors": "get_doors", "/windows": "get_windows", "/ffe": "get_ffe",
+        "/spaces": "get_spaces",
         "/projects": "list_projects",
         "/projects/{id}/buildings": "list_buildings", "/projects/{id}/validation": "get_validation",
         "/projects/{id}/snapshots": "list_snapshots", "/projects/{id}/milestones": "list_milestones",

@@ -62,3 +62,30 @@ the description has to say that `excluded_components` being large is **normal**
 for to identify a component both fail, because a component names a room 97.8% of
 the time. A number that looks alarming and is not needs the same defending as a
 distribution that looks clean and is not.
+
+**Spaces are the case where the misleading reading is a *count*, and neither of
+the two before it prepares a reader for that.** A space is not an opening and
+not quite a room, but the shape is not what an agent will get wrong. Two things
+about the data are:
+
+- **The same room number legitimately names a space in every services model.**
+  One file per service means four spaces numbered `ENG137` is four disciplines,
+  not a duplicate — and an agent that reports it as one is reporting the
+  project's structure as a defect. Measured on RHH: pooled across models, 3,046
+  keys looked duplicated; per model, 31 actually were. So `get_spaces`' text has
+  to say *read `model_id` before concluding anything about duplication*, in as
+  many words.
+- **An empty answer is a finding, not an absence.** Zero spaces for a model
+  means it was audited and holds none — which is the entity's whole first
+  requirement — and it is a *different fact* from the model never having been
+  pushed, which is what the no-data reply means. Two emptinesses that mean
+  opposite things is exactly the distinction a description has to carry, because
+  nothing in the response shape does.
+
+And one about the phase: **the disciplines do not agree on what the phase is
+called.** A services model reporting `Future` beside siblings on
+`New Construction` is ordinary, so the description points at `phase_by_model`
+before an agent reads a low count as missing data. That is the windows lesson
+again — a correct model that reads as broken — arriving through a different
+door.
+
