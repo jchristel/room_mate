@@ -309,9 +309,11 @@ fn build_router(state: roommate::state::Shared) -> Router {
         .route("/ffe", post(ingest_ffe).get(get_ffe).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)))
         .route("/ffe/stream", post(ingest_ffe_stream).layer(DefaultBodyLimit::disable()))
         // Spaces: the fifth primary entity, and the first whose record is the
-        // ROOMS record rather than the openings one. Ingest only for now -- the
-        // read route lands with the space-to-room reconciliation that gives it
-        // something to say. Two rules here are this entity's alone: an empty
+        // ROOMS record rather than the openings one. The read carries the plan's
+        // spaces layer; the space-to-room reconciliation that gives the entity
+        // something to SAY rides `/validation` instead, because it answers about
+        // a project's models rather than about one model's spaces -- see
+        // `service::spaces::space_report`. Two rules here are this entity's alone: an empty
         // spaces list is accepted because "audited, and holds none" is the
         // finding, and a push whose phase disagrees is QUARANTINED like a rooms
         // push rather than refused like an openings one, because a space carries

@@ -309,11 +309,13 @@ pub enum MeasurementStandard {
 /// model, so both live here. What the resulting number may be *called* is
 /// STRATEGY-AREA-CALCULATION.md, "Relationship to measurement standards".
 ///
-/// `max_wall_thickness` is deliberately **one quantity with two consumers**:
-/// `service::areas` sizes its wall zone by it and `service::adjacency` uses it
-/// as the default gap tolerance. Those were previously two separate constants
+/// `max_wall_thickness` is deliberately **one quantity with three consumers**:
+/// `service::areas` sizes its wall zone by it, `service::adjacency` uses it as
+/// the default gap tolerance, and `service::room_locator` sizes the step it
+/// probes across a wall by it. The first two were previously separate constants
 /// (`areas::MAX_WALL_FT` and `adjacency::WALL_MAX_FT`) holding the same physical
-/// number in two modules — a live drift risk this type removes.
+/// number in two modules — a live drift risk this type removes, and the reason
+/// the third consumer reached for this rather than adding a fourth constant.
 /// One project's **door** policy: how doors are matched and compared across
 /// milestones.
 ///

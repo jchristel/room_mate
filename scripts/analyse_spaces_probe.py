@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Answer the six questions that gate `docs/PLAN-spaces.md`, from the files
+"""Answer the six questions that gate `docs/Superseded/PLAN-spaces.md`, from the files
 `probe_spaces_export.py` captured in Revit.
 
     python scripts/analyse_spaces_probe.py

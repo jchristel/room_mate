@@ -6,19 +6,19 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Browser](STRATEGY-BROWSER.md) · [MCP](STRATEGY-MCP.md) ·
 [Authored](STRATEGY-AUTHORED.md) · [Security](STRATEGY-SECURITY.md)
 
-**Open work only.** Rooms, doors, windows and FF&E all ship — contract, ingest,
-storage, read, QA, MCP, the plan and the pyRevit exporter — and phasing ships
-under them. What each of those does, and the invariants that are expensive to
-rediscover (tier precedence, opening ownership, item attribution, the
-model-scoped element→room join, the phase rules), live in the code and in
-`CLAUDE.md`.
+**Open work only.** Rooms, doors, windows, FF&E and spaces all ship — contract,
+ingest, storage, read, QA, MCP, the plan and the pyRevit exporter — and phasing
+ships under them. What each of those does, and the invariants that are expensive
+to rediscover (tier precedence, opening ownership, item attribution, the
+model-scoped element→room join, the phase rules, and the three rules that are
+spaces' alone), live in the code and in `CLAUDE.md`.
 
 What is left here is the **entity dimension**: the test that decides whether the
-next candidate is an entity at all, what four entities proved comes for free,
+next candidate is an entity at all, what five entities proved comes for free,
 and what is still unbuilt.
 
-**The bet below has been tested twice, and the second test was the one worth
-having.** Windows were the third entity and cost nothing structural — they reuse
+**The bet below has been tested three times, and the second and third tests are
+the ones worth having.** Windows were the third entity and cost nothing structural — they reuse
 the `Opening` record, so they reused the whole opening stack by construction.
 FFE was the first candidate that is *not* an opening, and it is the reason three
 things in this codebase are now named for entities rather than for openings:
@@ -27,10 +27,21 @@ things in this codebase are now named for entities rather than for openings:
 and the extractor's `post_entity` (the transport every push shares). Each was
 opening-shaped only because no non-opening had ever asked.
 
+**Spaces were the third test, and they broke the one rule the first two left
+standing: the element→room join is model-scoped everywhere *except* here.** A
+space lives in a services model and the room it matches lives in the
+architectural one, so its join is keyed and **project-scoped** — the single
+exception, and the reason it is safe is that the key is unique project-wide
+rather than that the rule was wrong. What spaces cost structurally was a
+per-`(model, kind)` pending slot (a quarantined spaces push must not displace a
+quarantined rooms one) and nothing else; what they reused, by being the *rooms*
+record rather than the openings one, was the whole rooms read path.
+
 **What did NOT need widening is the more useful half of that result**: the phase
 envelope, snapshot-id resolution, the bytes-at-the-boundary store, the manifest,
 the property tiers, the filter grammar, the reference-join namespace and the
-`ENTITY_EXPORTERS` table all took a fourth entity without changing shape.
+`ENTITY_EXPORTERS` table took a fourth *and* a fifth entity without changing
+shape.
 
 Two lines decided every split, and the second is the extension the fourth entity
 forced:
@@ -97,9 +108,20 @@ depending on rooms rather than of being new:
 
 - **model-scoped reference resolution** everywhere the join appears.
 
-Every entity so far has needed it, FFE included: an item's `room` is a room id,
-so the join is model-scoped in the read, in QA and in the extractor's per-model
-`facts` map.
+Every entity that joins on a room **id** has needed it, FFE included: an item's
+`room` is a room id, so the join is model-scoped in the read, in QA and in the
+extractor's per-model `facts` map.
+
+**Spaces are the exception, and the test that tells them apart is what the join
+is keyed on, not how new the entity is.** A space matches a room on a *property
+value* rather than an id, across documents, so scoping it per model would match
+nothing — the two live in different Revit files by construction. An id is only
+unique within its model; the space key is unique project-wide, which is what
+makes the wider scope safe rather than merely convenient. So the rule for the
+next dependent entity is: **joining on an id means model-scoped, and nothing
+else may be**; joining on a key means the key's own uniqueness decides the
+scope, and that uniqueness has to be *checked* rather than assumed — which is
+why `SpaceReport` reports ambiguous keys as an invariant violation.
 
 **It used to need two, and losing the second is worth recording.** There was an
 *ingest gate*: a doors push was refused unless the target `(project, model)`
@@ -186,8 +208,8 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   is the instrument and RHH is the model; the analyser refuses to interpret a run
   whose category list has drifted from duHast's, so the two must move together.
 
-- **Windows in milestone comparison.** `MilestonePins.windows` landed with
-  storage, so a milestone can pin them; `ComparisonResponse.windows` was cut
+- **Windows in milestone comparison.** `Milestone::window_attachments` landed
+  with storage, so a milestone can pin them; `ComparisonResponse.windows` was cut
   from the first pass and has no stated demand. Nothing is half-built — the pins
   simply have no consumer yet.
 
@@ -197,6 +219,25 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   trustworthy one. It matters because duHast discriminates curtain-wall doors
   and has no window equivalent, so this is the only instrument for that
   question.
+
+- **Geometric verification of a space against its matched room** — the v2 the
+  spaces plan deferred with a reason rather than a shrug. It wants a
+  point-in-room or boundary-overlap check between the two, and it is blocked on
+  the same thing `RoomResolution::Project` is: nothing has ever checked
+  `model_to_shared` against a real survey, and two models that never had shared
+  coordinates set up emit identity transforms and stack **silently**. Until
+  then the viewer's spaces outline layer is the check — a human sees the drift
+  in a second, which is what that layer was for. When it is built it takes
+  `room_resolution`'s shape exactly: opt-in, reporting disagreement, never
+  overriding the key match.
+
+- **Composite match keys for spaces.** One property is the key today. A
+  composite is deferred with a reason rather than a hope: the single key is
+  unique project-wide on the models measured, so a composite would be machinery
+  answering a question nothing has asked. `SpaceReport`'s ambiguous-key
+  reporting is the instrument that would say otherwise — if duplicates ever
+  appear, that guarantee broke upstream, and *that* is the signal to build
+  this, not a preference for stronger keys.
 
 - **Multi-phase comparison — explicitly out of scope**, recorded so it is not
   re-proposed. It is a second axis crossing the snapshot axis, and milestones
