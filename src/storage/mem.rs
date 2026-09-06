@@ -54,10 +54,11 @@ pub struct MemStore {
     /// keyed by kind: a model's rooms and doors pushes carry the same identity
     /// envelope, so either one names it.
     names: Mutex<BTreeMap<ModelKey, (String, String)>>,
-    /// The one quarantined push per model, invisible to every read path:
-    /// `(taken_at, bytes)`. Not keyed by kind — quarantine is rooms-only, see
-    /// `SnapshotStore::put_pending_raw`.
-    pending: Mutex<BTreeMap<ModelKey, (String, Vec<u8>)>>,
+    /// The one quarantined push per model AND KIND, invisible to every read
+    /// path: `(taken_at, bytes)`. Keyed by kind since spaces joined rooms in
+    /// being quarantinable — see `SnapshotStore::put_pending_raw` for why an
+    /// opening still is not.
+    pending: Mutex<LatestByKindAndModel>,
 }
 
 impl MemStore {
@@ -234,21 +235,32 @@ impl SnapshotStore for MemStore {
         Ok(self.phases.lock().unwrap().get(key).cloned())
     }
 
-    fn put_pending_raw(&self, key: &ModelKey, taken_at: &str, _phase: Option<&str>, json: &[u8]) -> Result<()> {
-        // One slot per model: replacement is the rule here, same as on disk.
-        // The phase is not stored — it rides the bytes, and `promote_pending`
-        // is told which phase to apply by the caller that parsed them.
-        self.pending.lock().unwrap().insert(key.clone(), (taken_at.to_string(), json.to_vec()));
+    fn put_pending_raw(
+        &self,
+        key: &ModelKey,
+        kind: SnapshotKind,
+        taken_at: &str,
+        _phase: Option<&str>,
+        json: &[u8],
+    ) -> Result<()> {
+        // One slot per model and kind: replacement is the rule here, same as on
+        // disk. The phase is not stored — it rides the bytes, and
+        // `promote_pending` is told which phase to apply by the caller that
+        // parsed them.
+        self.pending
+            .lock()
+            .unwrap()
+            .insert((kind, key.clone()), (taken_at.to_string(), json.to_vec()));
         Ok(())
     }
 
-    fn get_pending_raw(&self, key: &ModelKey) -> Result<Option<Vec<u8>>> {
-        Ok(self.pending.lock().unwrap().get(key).map(|(_, bytes)| bytes.clone()))
+    fn get_pending_raw(&self, key: &ModelKey, kind: SnapshotKind) -> Result<Option<Vec<u8>>> {
+        Ok(self.pending.lock().unwrap().get(&(kind, key.clone())).map(|(_, bytes)| bytes.clone()))
     }
 
     fn promote_pending(&self, meta: &SnapshotMeta<'_>) -> Result<bool> {
         let key = meta.key;
-        let Some((taken_at, json)) = self.pending.lock().unwrap().remove(key) else {
+        let Some((taken_at, json)) = self.pending.lock().unwrap().remove(&(meta.kind, key.clone())) else {
             return Ok(false);
         };
         // Re-phase explicitly: `put_raw` only fills an *absent* phase, so the
@@ -257,7 +269,7 @@ impl SnapshotStore for MemStore {
             Some(phase) => self.phases.lock().unwrap().insert(key.clone(), phase.to_string()),
             None => self.phases.lock().unwrap().remove(key),
         };
-        self.latest.lock().unwrap().insert((SnapshotKind::Rooms, key.clone()), (taken_at, json));
+        self.latest.lock().unwrap().insert((meta.kind, key.clone()), (taken_at, json));
         Ok(true)
     }
 
@@ -339,6 +351,7 @@ mod tests {
         fn put_pending(&self, key: &ModelKey, payload: &RoomPayload) -> Result<()> {
             self.put_pending_raw(
                 key,
+                SnapshotKind::Rooms,
                 &payload.snapshot.taken_at,
                 payload.phase.as_deref(),
                 &serde_json::to_vec(payload)?,
@@ -346,7 +359,9 @@ mod tests {
         }
 
         fn get_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
-            self.get_pending_raw(key)?.map(|b| Ok(serde_json::from_slice(&b)?)).transpose()
+            self.get_pending_raw(key, SnapshotKind::Rooms)?
+                .map(|b| Ok(serde_json::from_slice(&b)?))
+                .transpose()
         }
 
         fn promote(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {

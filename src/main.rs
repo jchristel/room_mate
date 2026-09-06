@@ -30,7 +30,7 @@ use roommate::handlers::{
     get_model_pending_snapshot, get_project_adjacency, get_project_areas, get_project_buildings,
     get_project_milestones, get_project_snapshots, get_project_validation, get_projects, get_reference_latest,
     get_reference_snapshots, get_rooms, get_windows, ingest_doors, ingest_doors_stream, ingest_ffe, ingest_ffe_stream,
-    ingest_rooms, ingest_rooms_stream, ingest_windows, ingest_windows_stream,
+    ingest_rooms, ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows, ingest_windows_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
@@ -307,6 +307,16 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // is `ffe` too, so the route and the payload agree.
         .route("/ffe", post(ingest_ffe).get(get_ffe).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)))
         .route("/ffe/stream", post(ingest_ffe_stream).layer(DefaultBodyLimit::disable()))
+        // Spaces: the fifth primary entity, and the first whose record is the
+        // ROOMS record rather than the openings one. Ingest only for now -- the
+        // read route lands with the space-to-room reconciliation that gives it
+        // something to say. Two rules here are this entity's alone: an empty
+        // spaces list is accepted because "audited, and holds none" is the
+        // finding, and a push whose phase disagrees is QUARANTINED like a rooms
+        // push rather than refused like an openings one, because a space carries
+        // no room id to strand. See `handlers::preflight_spaces`.
+        .route("/spaces", post(ingest_spaces).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)))
+        .route("/spaces/stream", post(ingest_spaces_stream).layer(DefaultBodyLimit::disable()))
         .route("/projects", get(get_projects))
         .route("/projects/{id}/buildings", get(get_project_buildings))
         .route("/projects/{id}/validation", get(get_project_validation))

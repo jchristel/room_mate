@@ -280,7 +280,11 @@ mod tests {
         assert!(pending_snapshot(&state, "p1", "m1").unwrap().is_none(), "nothing pending yet");
 
         state
-            .set_pending_snapshot(&key, &phased("p1", "m1", "2026-06-01T00:00:00Z", "Existing"))
+            .set_pending_snapshot(
+                &key,
+                crate::storage::SnapshotKind::Rooms,
+                &phased("p1", "m1", "2026-06-01T00:00:00Z", "Existing"),
+            )
             .unwrap();
 
         let pending = pending_snapshot(&state, "p1", "m1").unwrap().expect("a push is waiting");
@@ -304,7 +308,11 @@ mod tests {
             .set_snapshot(phased("p1", "m1", "2026-01-01T00:00:00Z", "New Construction"))
             .unwrap();
         state
-            .set_pending_snapshot(&key, &phased("p1", "m1", "2026-06-01T00:00:00Z", "Existing"))
+            .set_pending_snapshot(
+                &key,
+                crate::storage::SnapshotKind::Rooms,
+                &phased("p1", "m1", "2026-06-01T00:00:00Z", "Existing"),
+            )
             .unwrap();
 
         let activated = activate_pending_snapshot(&state, "p1", "m1").unwrap().expect("something was pending");
