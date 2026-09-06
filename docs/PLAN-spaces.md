@@ -292,6 +292,35 @@ range test — because a space belongs to one phase. `rooms_in_phase` generalise
 to take a collector; running spaces through `elements_in_phase` would return
 nothing, silently, which is what five empty pushes bought the knowledge of.
 
+### D11 — A disagreeing spaces push is **quarantined**, not refused
+
+Found while reading the ingest spine for PR B, and it is the one place spaces
+must not simply reuse the openings path.
+
+`check_opening_ingest` refuses a doors or windows push that names a different
+phase from its lineage, and the refusal message says exactly why: *"activating it
+would re-phase the model while its rooms stayed on the old phase, leaving these
+openings' room references pointing at rooms from another phase."* **That reason
+does not exist for a space.** A space carries no room id — it matches by a
+user-chosen key, project-wide, across models (D2) — so re-phasing a spaces
+lineage strands nothing. Reusing the openings check would emit a true-sounding
+error whose stated cause is false.
+
+Worse, it would trap this exact project. RHH's mechanical model keeps its spaces
+in `Future`; if it were ever pushed once under `New Construction` — which the
+one-phase-per-run rule makes easy, and which yields precisely one space — the
+lineage would be phased and **no correct push could ever replace it**, because
+the escape hatch for the openings rule is "re-phase the model with a rooms push
+first" and a services model has no rooms to push.
+
+So spaces take the **rooms** rule: quarantine (202) and promote. The rooms
+justification transfers intact — a differently-phased push is a correct export of
+a different phase, real data the user may want to switch the model to — and the
+doors justification for refusing does not transfer at all.
+
+An unphased push stays a 422 for every entity, unchanged: it was never filtered,
+so there is nothing worth activating.
+
 ## Rejected, recorded so they are not re-proposed
 
 - **Spaces inside the rooms envelope with a per-record discriminator.** The
@@ -357,7 +386,8 @@ small rooms", until `tolerance_min` is set from this measurement.
 |---|---|---|
 | **A** | the probe and its analyser | verdict `CLEAR` or `KEYS WEAK` |
 | **U1** | duHast: `get_all_spaces` stops swallowing exceptions | before C |
-| **B** | `contract::spaces`, `SnapshotKind::Spaces`, `Enclosure`, `/spaces` and `/spaces/stream` ingest, `ReferenceEntity::Spaces` | `cargo test`, fmt, clippy |
+| **B1** | `contract::spaces`, `SnapshotKind::Spaces` and its manifest index, `Enclosure`, `ReferenceEntity::Spaces` | `cargo test`, fmt, clippy |
+| **B2** | `/spaces` and `/spaces/stream` ingest, on the openings sink shape with the rooms phase rule (D11) | as above |
 | **C** | extractor: `utils/spaces.py`, `exporters/spaces.py`, the translation, `spaces_export_entry`, one `ENTITY_EXPORTERS` row | a real push from a services model |
 | **D** | read: `GET /spaces`, filter grammar, MCP `get_spaces` (**tool count 20 to 21**, in `bin/mcp.rs`'s header and STRATEGY-MCP.md both) | |
 | **E** | QA: `SpaceReport`, `[spaces]` settings, the match and the property diff | |

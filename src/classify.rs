@@ -115,6 +115,7 @@ mod tests {
 
     fn make_room(id: &str, custom: BTreeMap<&str, (&str, Option<&str>)>) -> Room {
         Room {
+            enclosure: None,
             id: id.to_string(),
             name: "Test Room".to_string(),
             level_id: "1".to_string(),

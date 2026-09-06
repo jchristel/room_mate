@@ -785,6 +785,7 @@ mod tests {
     /// shape `areas.rs`'s tests use, so the two geometry modules read alike.
     fn room(id: &str, loops: &[&[(f64, f64)]]) -> Room {
         Room {
+            enclosure: None,
             id: id.to_string(),
             name: id.to_string(),
             level_id: "L1".to_string(),

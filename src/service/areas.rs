@@ -1100,6 +1100,7 @@ mod tests {
     /// outer boundary; any further loops are the room's own holes.
     fn room(id: &str, loops: &[&[(f64, f64)]]) -> Room {
         Room {
+            enclosure: None,
             id: id.to_string(),
             name: id.to_string(),
             level_id: "L1".to_string(),
@@ -1965,6 +1966,7 @@ mod tests {
             properties.insert("bldg".to_string(), CustomValue { value: bldg.to_string(), storage_type: None });
             properties.insert("dept".to_string(), CustomValue { value: dept.to_string(), storage_type: None });
             Room {
+                enclosure: None,
                 id: id.to_string(),
                 name: id.to_string(),
                 level_id: "L1".to_string(),

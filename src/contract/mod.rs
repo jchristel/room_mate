@@ -34,12 +34,17 @@ pub mod doors;
 pub mod ffe;
 pub mod items;
 pub mod openings;
+pub mod spaces;
 pub mod windows;
 
 pub use doors::{DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA};
 pub use ffe::{FfeModelEnvelope, FfePayload, FfeStreamEnvelope, FfeUpload, StreamItem, SUPPORTED_FFE_SCHEMA};
 pub use items::{Item, ItemEnvelope};
 pub use openings::{Opening, OpeningEnvelope};
+pub use spaces::{
+    SpaceModelEnvelope, SpaceModelUpload, SpacePayload, SpaceStreamEnvelope, SpacesUpload, StreamSpace,
+    SUPPORTED_SPACE_SCHEMA,
+};
 pub use windows::{
     StreamWindow, WindowModelEnvelope, WindowPayload, WindowStreamEnvelope, WindowsUpload, SUPPORTED_WINDOW_SCHEMA,
 };
@@ -117,12 +122,51 @@ pub struct CustomValue {
     pub storage_type: Option<String>,
 }
 
+/// Whether a spatial element is bounded, and if not, whose fault that is.
+///
+/// **Stated by the extractor, never inferred from `loops.is_empty()`**, and the
+/// distinction between the last two variants is the whole reason this type
+/// exists rather than a `bool`. Measured on RHH (2026-09-06): **96.3% of spaces
+/// report zero boundary segments while exporting a perfectly good polygon**,
+/// because their bounding elements live in the linked architectural model and
+/// duHast falls back to measuring the solid. So "no geometry" has two causes
+/// that look identical on the wire and mean opposite things — one is a defect in
+/// the model, the other a defect in the pipeline — and a single flag covering
+/// both would be the `±1e30` sentinel again: a value nothing can distinguish
+/// from a real one.
+///
+/// `Option<Enclosure>` on the record, absent for rooms. Not because a room
+/// cannot be unenclosed — they are, constantly — but because the room extractor
+/// drops both unplaced and unenclosed rooms before they reach the wire and
+/// cannot currently tell them apart (`translate_room` returns `None` on an empty
+/// outer loop). If that is ever revisited, this is already the right field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Enclosure {
+    /// Bounded, and measured. The ordinary state.
+    Enclosed,
+    /// Revit reports no boundary and no area: the element is placed but encloses
+    /// nothing. A **model** defect, and an expected finding.
+    Unenclosed,
+    /// Revit reports area, and the pipeline produced no polygon anyway. A
+    /// **pipeline** defect — the one the RHH probe's kill condition counted, and
+    /// found exactly once in 10,570 spaces.
+    Unmeasured,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Room {
     pub id: String,
     pub name: String,
     pub level_id: String,
     pub loops: Vec<Loop>,
+
+    /// Whether this element is bounded — see [`Enclosure`]. Set on every space;
+    /// absent on every room, which is why it is skipped when serializing rather
+    /// than written as `null`: a rooms snapshot's bytes are unchanged by this
+    /// field existing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enclosure: Option<Enclosure>,
 
     /// Raw properties as extracted, keyed by the *source's own* property name
     /// (e.g. Revit's `p.Definition.Name`). No builtin/custom split at the wire
@@ -1249,6 +1293,7 @@ mod tests {
             CustomValue { value: "25.5".to_string(), storage_type: Some("Double".to_string()) },
         );
         let room = Room {
+            enclosure: None,
             id: "r1".into(),
             name: "Office".into(),
             level_id: "lvl1".into(),
@@ -1275,6 +1320,7 @@ mod tests {
         let mut properties = BTreeMap::new();
         properties.insert("Dept".to_string(), CustomValue { value: "Finance".to_string(), storage_type: None });
         let room = Room {
+            enclosure: None,
             id: "r1".into(),
             name: "Office".into(),
             level_id: "lvl1".into(),
@@ -1345,6 +1391,7 @@ mod tests {
         properties.insert("Blank".to_string(), CustomValue { value: "".to_string(), storage_type: None });
         properties.insert("Filled".to_string(), CustomValue { value: "25.5".to_string(), storage_type: None });
         let room = Room {
+            enclosure: None,
             id: "r1".into(),
             name: "Office".into(),
             level_id: "lvl1".into(),
@@ -1451,6 +1498,7 @@ mod tests {
     #[test]
     fn test_room_exposes_exactly_one_tier() {
         let room = Room {
+            enclosure: None,
             id: "r1".into(),
             name: "Office".into(),
             level_id: "lvl1".into(),
@@ -1468,6 +1516,7 @@ mod tests {
         let mut properties = BTreeMap::new();
         properties.insert("Blank".to_string(), CustomValue { value: "".to_string(), storage_type: None });
         let room = Room {
+            enclosure: None,
             id: "r1".into(),
             name: "Office".into(),
             level_id: "lvl1".into(),

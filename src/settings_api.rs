@@ -924,6 +924,7 @@ ids = ["12345", "67890"]
             models: std::collections::BTreeMap::from([(
                 "m1".to_string(),
                 ModelEntry {
+                    spaces: vec![],
                     name: "ARCH".to_string(),
                     phase: Some("New Construction".to_string()),
                     snapshots: vec!["2026-01-01T00:00:00Z".to_string()],

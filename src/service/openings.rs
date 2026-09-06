@@ -811,6 +811,7 @@ mod tests {
 
     fn room_rect(id: &str, x0: f64, x1: f64) -> crate::contract::Room {
         crate::contract::Room {
+            enclosure: None,
             id: id.to_string(),
             name: id.to_string(),
             level_id: "lvl1".to_string(),
@@ -1567,6 +1568,7 @@ D-101,60
 
         // Two models, each with a room id "r1" — in DIFFERENT buildings.
         let room = |id: &str, building: &str| crate::contract::Room {
+            enclosure: None,
             id: id.to_string(),
             name: id.to_string(),
             level_id: "1".to_string(),
