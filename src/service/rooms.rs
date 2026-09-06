@@ -1323,6 +1323,7 @@ mod tests {
         with_drofus(
             ProjectSettings {
                 milestones: vec![crate::settings::Milestone {
+                    space_attachments: BTreeMap::new(),
                     name: "Design Freeze".to_string(),
                     date: "2026-06-30".to_string(),
                     reference_snapshots: drofus_ts
@@ -1849,6 +1850,7 @@ mod tests {
     fn make_bundle_with_milestone_drofus(pinned_ts: &str, drofus_ts: Option<&str>) -> ProjectSettings {
         ProjectSettings {
             milestones: vec![crate::settings::Milestone {
+                space_attachments: BTreeMap::new(),
                 name: "Design Freeze".to_string(),
                 date: "2026-06-30".to_string(),
                 reference_snapshots: drofus_ts
@@ -2579,6 +2581,7 @@ mod tests {
         let bundle = with_drofus(
             ProjectSettings {
                 milestones: vec![crate::settings::Milestone {
+                    space_attachments: BTreeMap::new(),
                     name: "Design Freeze".to_string(),
                     date: "2026-06-30".to_string(),
                     reference_snapshots: std::collections::BTreeMap::from([(

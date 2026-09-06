@@ -1,8 +1,8 @@
 # RoomMate — Spaces implementation plan
 
-> **Status: PR A run against RHH (kill condition CLEARED); B1, B2 and C built.**
-> Spaces can be exported from Revit and pushed. Read, QA and viewer are still
-> ahead, and the pyRevit button is owed outside this repository.
+> **Status: PR A run against RHH (kill condition CLEARED); B1, B2, C and D built.**
+> Spaces can be exported from Revit, pushed and read. QA and the viewer are
+> still ahead, and the pyRevit button is owed outside this repository.
 > The decisions below were written from a reading of duHast's source and are
 > left standing rather than edited into agreement with the data;
 > [As measured](#as-measured--rhh-2026-09-06) records what the probe found,
@@ -391,7 +391,7 @@ small rooms", until `tolerance_min` is set from this measurement.
 | **B1** | `contract::spaces`, `SnapshotKind::Spaces` and its manifest index, `Enclosure`, `ReferenceEntity::Spaces` | `cargo test`, fmt, clippy |
 | **B2** | `/spaces` and `/spaces/stream` ingest, the per-kind pending slot, and D11's quarantine | as above |
 | **C** | extractor: `utils/spaces.py`, `exporters/spaces.py`, `post_spaces.py`, `spaces_export_entry`, one `ENTITY_EXPORTERS` row | the shipping translation over the captured RHH export |
-| **D** | read: `GET /spaces`, filter grammar, MCP `get_spaces` (**tool count 20 to 21**, in `bin/mcp.rs`'s header and STRATEGY-MCP.md both) | |
+| **D** | read: `GET /spaces`, the `$enclosure` intrinsic, MCP `get_spaces` (tool count 20 to 21) | `cargo test`, fmt, clippy |
 | **E** | QA: `SpaceReport`, `[spaces]` settings, the match and the property diff | |
 | **F** | viewer: a spaces layer and its toggle | driven in the browser, not read in the diff |
 

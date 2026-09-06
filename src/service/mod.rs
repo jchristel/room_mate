@@ -20,6 +20,7 @@ pub mod reference;
 pub mod room_locator;
 pub mod rooms;
 pub mod snapshots;
+pub mod spaces;
 pub mod validation;
 
 /// A content cursor for a scoped read: which snapshot each in-scope model would

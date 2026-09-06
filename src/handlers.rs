@@ -34,6 +34,7 @@ use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
+use crate::service::spaces;
 use crate::service::validation::ValidationResponse;
 use crate::service::{
     milestones, openings, projects, reference, rooms, scope_cursor, snapshots, validation, ServiceError,
@@ -2094,6 +2095,25 @@ pub async fn get_rooms(
 }
 
 /// Data-quality report for the header's validation panel — see
+/// Query parameters for `GET /spaces`.
+///
+/// Its own type rather than `DoorsQuery`, because the two differ in both
+/// directions and a shared struct would advertise parameters that do nothing.
+/// There is no `building` -- see `service::spaces` for why a space cannot be
+/// scoped by one -- and there is a `model`, because this entity's first question
+/// is asked per services model.
+#[derive(Debug, Deserialize)]
+pub struct SpacesQuery {
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<String>,
+    #[serde(default)]
+    pub filter: Option<String>,
+}
+
 /// `service::validation::compute_project_validation`.
 #[derive(Debug, Deserialize)]
 pub struct DoorsQuery {
@@ -2224,6 +2244,56 @@ pub async fn get_ffe(
     }
 
     match items::assemble_items(&state, &scope).map_err(map_service_error)? {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
+    }
+}
+
+/// `GET /spaces` -- every scoped model's latest spaces.
+///
+/// **The ETag depends on spaces alone**, unlike `/ffe` and `/doors` whose bodies
+/// move when a *rooms* push changes what their room references resolve to. A
+/// space names no room, so nothing outside its own snapshot can change this
+/// response. When the space-to-room reconciliation lands it will live in QA,
+/// where the two sides are compared explicitly rather than folded into a cache
+/// key here.
+pub async fn get_spaces(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<SpacesQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let known = state.settings().known_reference_sources();
+    let filter = query
+        .filter
+        .as_deref()
+        .map(|s| rooms::RoomFilter::parse_query(s, &known))
+        .transpose()
+        .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
+        .filter(|f| !f.is_empty());
+
+    let scope = spaces::SpaceScope {
+        project: query.project.as_deref(),
+        model: query.model.as_deref(),
+        milestone: query.milestone.as_deref(),
+        filter: filter.as_ref(),
+    };
+
+    let cursor =
+        scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Spaces]).map_err(map_service_error)?;
+    let etag = etag_for(
+        &cursor,
+        [
+            query.project.as_deref(),
+            query.model.as_deref(),
+            query.milestone.as_deref(),
+            query.filter.as_deref(),
+        ],
+    );
+    if is_fresh(&headers, &etag) {
+        return Ok(not_modified(&etag));
+    }
+
+    match spaces::assemble_spaces(&state, &scope).map_err(map_service_error)? {
         None => Ok(StatusCode::NO_CONTENT.into_response()),
         Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
     }

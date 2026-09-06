@@ -1162,6 +1162,20 @@ pub struct Milestone {
     /// one that pins none.
     #[serde(default)]
     pub ffe_attachments: BTreeMap<String, String>,
+
+    /// Per-model spaces-snapshot pins for this milestone, on the same terms as
+    /// every other entity's map: pushed independently, so pinning one says
+    /// nothing about the others.
+    ///
+    /// **A spaces pin and a rooms pin are the ones most likely to disagree**,
+    /// and that is a reason for the map rather than an argument against it. The
+    /// two live in different documents by construction -- rooms in the
+    /// architectural models, spaces in the services ones -- so they are issued
+    /// on different dates by different people. "What did this milestone hold"
+    /// has to be answerable separately for each, or the answer is whichever one
+    /// happened to be pushed nearest the date.
+    #[serde(default)]
+    pub space_attachments: BTreeMap<String, String>,
 }
 
 impl Milestone {
@@ -1187,6 +1201,7 @@ impl Milestone {
             ("attachment", &self.attachments),
             ("door attachment", &self.door_attachments),
             ("window attachment", &self.window_attachments),
+            ("space attachment", &self.space_attachments),
         ] {
             for (model_id, taken_at) in pins {
                 if model_id.trim().is_empty() {
@@ -1293,6 +1308,7 @@ mod tests {
 
     fn milestone(name: &str, date: &str) -> Milestone {
         Milestone {
+            space_attachments: BTreeMap::new(),
             name: name.to_string(),
             date: date.to_string(),
             reference_snapshots: Default::default(),
