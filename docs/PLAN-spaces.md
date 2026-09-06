@@ -555,6 +555,20 @@ Two consequences worth stating rather than discovering:
   switched on to answer a specific question and polling it for everyone else
   would cost every viewer of every project.
 
+**A model picker, because "all" is only legible on a toy project.** The layer
+first shipped drawing every services model at once, which is right on House A
+(one model, five spaces) and unusable on RHH: one file per service means four
+near-identical outlines stacked on every room, in one colour, with no way to tell
+which discipline is which. The picker scopes **server-side** through the `?model=`
+the read already offered -- on RHH that is the difference between shipping 10,570
+spaces to draw one model's and shipping that model's -- and keeps `all` as an
+explicit option rather than the silent default it was. It hides itself below two
+models, since a control that cannot change the answer is noise.
+
+Worth recording as a process point rather than a design one: the single-model
+verification was real, and it could not have found this. The scenario was too
+small to contain the defect.
+
 **The bug that would have shipped**: `#pushView` names each line mesh explicitly
 (`grid`, `holes`, `outlines`) rather than iterating them, so the spaces mesh
 built, joined the stage and drew with an uninitialised view -- which is to say

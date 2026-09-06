@@ -655,6 +655,7 @@
     <button class="ctl on" id="windowsToggle" title="Show or hide window glyphs">Windows: on</button>
     <button class="ctl on" id="ffeToggle" title="Show or hide furniture, fixtures and equipment">FF&amp;E: on</button>
     <button class="ctl" id="spacesToggle" title="Show or hide MEP space outlines over the rooms">Spaces: off</button>
+    <select class="ctl" id="spacesModelSelect" hidden title="Which services model's spaces to draw"></select>
     <div class="search">
       <input id="searchInput" type="search" placeholder="Search rooms…" autocomplete="off" />
       <button class="ctl" id="fieldsToggle" title="Choose which fields to search">Fields ▾</button>
@@ -871,6 +872,19 @@ let lastFfeRevision = null;
 let spacesPayload = null;
 let lastSpacesRevision = null;
 let lastSpacesEtag = null;
+// Which services model's spaces to draw. "" means ALL of them, and it is the
+// default -- but on a real project it is rarely what anyone wants: RHH has one
+// services file per service, so "all" stacks four near-identical outlines on
+// every room in one colour. The picker exists because that default is only
+// legible on a toy project.
+let spacesModel = "";
+// Every model that has spaces, learned from an UNSCOPED payload's
+// `phase_by_model` -- which lists exactly the models that contributed.
+//
+// Only refreshed while the scope IS unscoped, because a scoped payload lists
+// one model and would collapse the picker to the option already chosen. The
+// default is unscoped, so the list is always learned before it can be narrowed.
+let spacesModels = [];
 let lastRevision = null;     // poll change-detection cursor
 // The server's ETag for the last body we actually received, per entity.
 //
@@ -4089,9 +4103,40 @@ async function pollFfe() {
 function spacesUrl() {
   const params = new URLSearchParams();
   if (projectId) params.set("project", projectId);
+  if (spacesModel) params.set("model", spacesModel);
   if (projectId && milestone) params.set("milestone", milestone);
   const qs = params.toString();
   return qs ? `/spaces?${qs}` : "/spaces";
+}
+
+// Refill the picker from the models the last UNSCOPED payload named.
+//
+// Hidden below two models: a control that cannot change the answer is noise,
+// and a project with one services model is the common small case.
+function refreshSpacesModels(payload) {
+  const byModel = (payload.phase_by_model || {})[projectId] || {};
+  const models = Object.keys(byModel).sort();
+  if (!models.length) return;
+  spacesModels = models;
+  const sel = document.getElementById("spacesModelSelect");
+  sel.innerHTML = "";
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = `All models (${models.length})`;
+  sel.appendChild(all);
+  for (const m of models) {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = m;
+    sel.appendChild(opt);
+  }
+  sel.value = spacesModel;
+  syncSpacesModelVisibility();
+}
+
+function syncSpacesModelVisibility() {
+  const sel = document.getElementById("spacesModelSelect");
+  sel.hidden = !showSpaces || spacesModels.length < 2;
 }
 
 // Every space in the payload, UNFILTERED by level -- which is the one place this
@@ -4127,6 +4172,8 @@ async function pollSpaces() {
     if (incoming === lastSpacesRevision) return false;
     lastSpacesRevision = incoming;
     spacesPayload = payload;
+    // Only while unscoped -- see `spacesModels`.
+    if (!spacesModel) refreshSpacesModels(payload);
     return true;
   } catch (err) {
     return false;   // rooms already report connection loss; one message is enough
@@ -4720,6 +4767,23 @@ document.getElementById("spacesToggle").addEventListener("click", async (e) => {
   e.target.textContent = `Spaces: ${showSpaces ? "on" : "off"}`;
   e.target.classList.toggle("on", showSpaces);
   if (showSpaces) await pollSpaces();
+  syncSpacesModelVisibility();
+  redrawAllZones();
+});
+
+// Changing the scope is a REFETCH, not a client-side filter, and deliberately:
+// `?model=` is what the server already offers, and on RHH it is the difference
+// between shipping 10,570 spaces to draw one model's and shipping that model's.
+//
+// Both cursors are cleared first. They are scope-dependent -- the ETag and the
+// revision both move when the contributing models change -- so leaving them
+// would not serve stale data, but clearing them says so rather than relying on
+// the server to notice.
+document.getElementById("spacesModelSelect").addEventListener("change", async (e) => {
+  spacesModel = e.target.value;
+  lastSpacesEtag = null;
+  lastSpacesRevision = null;
+  await pollSpaces();
   redrawAllZones();
 });
 
