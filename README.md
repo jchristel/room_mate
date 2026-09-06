@@ -26,7 +26,7 @@ it belongs to:
 | [`static/`](static) | The **browser viewer** — HTML/CSS/JS served as-is, plus `vendor/renderer.bundle.js`, which is **generated and committed** so a fresh clone runs with no node installed. |
 | [`src-js/`](src-js) | The viewer's **WebGL plan renderer** — TypeScript, built by Vite into `static/vendor/`. Where new frontend code lands; see [Coding Conventions](docs/CODING-CONVENTIONS.md). |
 | [`settings/`](settings) | Server config, and one TOML per project (classification tiers, sources, area policy). |
-| [`scripts/`](scripts) | Dev tooling run *against* this repo: fixture generators, `fixtures/` (sample data to push or upload), `check_areas.py` (the areas diagnostic), `weekly_review.py` (the docs-vs-code drift check), and the `probe_*`/`analyse_*` pairs that settle an entity's open questions before it is built. Not shipped. |
+| [`scripts/`](scripts) | Dev tooling run *against* this repo: fixture generators, `fixtures/` (sample data to push or upload), `check_areas.py` (the areas diagnostic), `weekly_review.py` (the docs-vs-code drift check), `module_stats.py` (measures the module plan's cells; `--check` reports drift), and the `probe_*`/`analyse_*` pairs that settle an entity's open questions before it is built. Not shipped. |
 | [`docs/`](docs) | Strategy docs, coding conventions, and handovers (landed ones in `docs/Superseded/`). |
 | [`installer/`](installer) | The **Windows package** — an Inno Setup script and the launcher the Start Menu shortcut runs, producing one `RoomMate-Setup.exe` with no prerequisites. See [installer/README.md](installer/README.md). |
 

@@ -29,7 +29,7 @@ strategy doc documents what is not".
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
 | [MCP host setup](mcp-host-setup.md) | Client configs for Claude Code and Claude Desktop, plus build and verify steps |
-| [Module plan](module-plan.html) | Interactive map of every module across the extractor, server and browser — sized by line count, with its import edges. Open the file in a browser; it is generated from the module headers, so treat a header as the source and this as the view |
+| [Module plan](module-plan.html) | Interactive map of every module across the extractor, server and browser — sized by lines of code, with its import edges. Open the file in a browser. **Half generated, half written**: the measured `STATS` come from `scripts/module_stats.py` (`--check` reports drift, and catches a module added or renamed on one side only), while the blurbs and import edges are hand-written from the module headers — so treat a header as the source and this as the view |
 
 ## Archive
 
