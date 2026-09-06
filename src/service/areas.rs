@@ -1934,6 +1934,7 @@ mod tests {
         /// the given footprint exclusions.
         fn bundle(exclusions: Vec<HierarchyExclusion>) -> ProjectSettings {
             ProjectSettings {
+                spaces: Default::default(),
                 reference: BTreeMap::new(),
                 hierarchy: vec![
                     HierarchyTier {

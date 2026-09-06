@@ -444,6 +444,7 @@ mod tests {
 
     fn bundle(ffe: FfePolicy) -> ProjectSettings {
         ProjectSettings {
+            spaces: Default::default(),
             reference: BTreeMap::new(),
             hierarchy: vec![],
             builtin_properties: vec![],

@@ -595,6 +595,7 @@ mod tests {
 
     fn bundle() -> ProjectSettings {
         ProjectSettings {
+            spaces: Default::default(),
             reference: BTreeMap::new(),
             hierarchy: vec![],
             builtin_properties: vec![],

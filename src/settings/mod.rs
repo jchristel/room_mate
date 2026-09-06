@@ -178,6 +178,18 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "FfePolicy::is_default")]
     pub ffe: FfePolicy,
 
+    /// One project's SPACES policy: how a space is matched to a room, and which
+    /// properties are compared once it is.
+    ///
+    /// **Its own section for the reason every entity's is, plus one that is
+    /// this entity's alone.** The others compare an entity against *itself*
+    /// across time, so one property name suffices. This compares two different
+    /// vocabularies -- a space's and a room's -- which is why
+    /// `compared_properties` holds pairs rather than names, and why it could
+    /// not have reused `comparison_properties` however similar it looks.
+    #[serde(default, skip_serializing_if = "SpacePolicy::is_default")]
+    pub spaces: SpacePolicy,
+
     /// Ordered classification tiers, outermost first. Empty if the section is
     /// omitted (a project with no classification defined).
     #[serde(default)]
@@ -1013,6 +1025,133 @@ pub struct ReferenceSourceConfig {
     /// comparison if both sides happen to parse as a number.
     #[serde(default)]
     pub fields: Vec<ReferenceFieldConfig>,
+}
+
+/// One project's spaces policy: the space-to-room match and the property
+/// comparison over it.
+///
+/// **Everything here defaults to off.** An unconfigured project still gets the
+/// presence half of the report -- which models hold no spaces, and which spaces
+/// are unenclosed -- because that needs no configuration to be true. The match
+/// needs a key somebody chose, and the property comparison needs pairs somebody
+/// chose, so both stay silent until they are given one.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpacePolicy {
+    /// The SPACE property whose value links a space to a room, e.g. `"Number"`.
+    ///
+    /// Deliberately not any reference source's `link_property`: that names a
+    /// join to data from outside the model, and this names a join between two
+    /// models. Absent means no matching is attempted and the report says so,
+    /// rather than falling back to a guess -- the same no-fallback rule
+    /// `comparison_key` has kept since before joined-source comparison existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparison_key: Option<String>,
+
+    /// The ROOM property the key matches against, when the two sides spell it
+    /// differently. Defaults to `comparison_key`, which is the common case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_key: Option<String>,
+
+    /// Which models supply the ROOMS this project's spaces are matched against.
+    /// Empty (the default) means every model that holds any.
+    ///
+    /// **This exists because "holds rooms" is not the same as "is the room
+    /// authority", and the difference was measured rather than imagined.** On
+    /// RHH the electrical services model holds 2,945 spaces *and 3,418 rooms of
+    /// its own*, numbered `1`, `2`, `3` against the architects' `ENG137`. Pooled
+    /// into the room side they are 3,418 rooms that name nothing, and they bury
+    /// the 44 architectural rooms that genuinely have no space -- which is the
+    /// finding the report exists to surface.
+    ///
+    /// A value array, declared before `compared_properties` for the TOML
+    /// ordering reason `comparison_key` documents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub room_models: Vec<String>,
+
+    /// Properties compared on a matched space/room pair. Empty (the default)
+    /// means the pair is only reported as matched, never as disagreeing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compared_properties: Vec<SpaceFieldConfig>,
+}
+
+impl SpacePolicy {
+    /// Whether this is the default (unconfigured) policy, so the settings
+    /// serializer can omit the whole section.
+    pub fn is_default(&self) -> bool {
+        *self == SpacePolicy::default()
+    }
+
+    /// The room-side spelling of the key: `room_key` when given, else the
+    /// space-side name.
+    pub fn room_key_name(&self) -> Option<&str> {
+        self.room_key.as_deref().or(self.comparison_key.as_deref())
+    }
+}
+
+/// One property compared between a space and the room it matched.
+///
+/// **A pair, not a name**, and a sibling of `ReferenceFieldConfig` rather than a
+/// widening of it: `label` means nothing here because there are two names, which
+/// is the same test that made `Item` a sibling of `Opening`. If the reference
+/// path ever wants a tolerance it is a two-line copy; do not widen the shared
+/// type for a need only this entity has stated.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceFieldConfig {
+    /// The property name on the space.
+    pub space: String,
+
+    /// The property name on the room, when it differs. Defaults to `space`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+
+    /// How the values are typed for comparison. Same meaning as
+    /// `ReferenceFieldConfig::field_type`.
+    #[serde(default, rename = "type")]
+    pub field_type: FieldType,
+
+    /// Force exact comparison, or skip this field entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa: Option<CompareMode>,
+
+    /// Flag only past this RELATIVE difference, as a percentage of the ROOM's
+    /// value: `|space - room| / room * 100`.
+    ///
+    /// **The room is the denominator, and the asymmetry is deliberate.** The
+    /// architectural model is the authored side and the one a services model is
+    /// checked against, so "varies from the room by more than 30%" is measured
+    /// against the room. Any symmetric denominator would make a stated 30% mean
+    /// something different in each direction, which is worse than an arbitrary
+    /// choice made loudly.
+    ///
+    /// Absent means no tolerance: the values are compared at their stated
+    /// precision, as everywhere else in the codebase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance_pct: Option<f64>,
+
+    /// Flag only past this ABSOLUTE difference as well, in the property's own
+    /// units. Both thresholds must be exceeded.
+    ///
+    /// **A percentage alone flags the wrong rooms, and this is the measurement
+    /// that proved it.** The boundary-regime difference between an MEP space and
+    /// an architectural room scales with perimeter while the value scales with
+    /// area, so on RHH the median relative difference fell from 14.0% on rooms
+    /// under 2 m2 to 0.7% on rooms over 100. A flat 30% flagged 416 pairs of
+    /// 10,066 -- **244 of them (59%) sub-2 m2 rooms**, which is noise that gets
+    /// the whole report ignored. 30% with a 2 m2 floor flags 127.
+    ///
+    /// Defaults to absent, which is a pure percentage: the simple case stays
+    /// simple.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance_min: Option<f64>,
+}
+
+impl SpaceFieldConfig {
+    /// The room-side property name: `room` when given, else the space-side one.
+    pub fn room_name(&self) -> &str {
+        self.room.as_deref().unwrap_or(&self.space)
+    }
 }
 
 /// The primary entity a reference source joins onto.

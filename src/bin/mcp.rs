@@ -639,7 +639,21 @@ impl RoommateMcp {
                        'excluded_components' counts items this project's [ffe] nested_components policy removed from BOTH this report and /ffe, and 'nested_components' echoes that \
                        policy. A large value is normal: 179 of 647 on the measured model, nearly all hardware nested inside other families. \
                        Its 'discrepancies' counts only unresolved_room, room_reference_mismatches, phase_drift and room_geometry_mismatches, and like the openings reports it is NOT \
-                       included in the top-level 'discrepancies'."
+                       included in the top-level 'discrepancies'. \
+                       Finally 'spaces' reconciles the project's SPACES against its ROOMS, and it is a third shape again -- not a map, because there is one such report per project. \
+                       Read it in two halves. The PRESENCE half needs no configuration and is always populated: 'models_not_audited' names models the project knows that have no \
+                       spaces snapshot at all, 'models_without_spaces' names models that pushed one holding ZERO spaces. Those two are NOT the same finding -- the second means \
+                       the model was checked and genuinely has none, which is usually what somebody wants to know. A model that has never pushed anything appears in NEITHER, \
+                       which is a stated limitation rather than an oversight. 'enclosure' counts enclosed / unenclosed / unmeasured across the project; unenclosed is a model \
+                       defect and unmeasured a pipeline one. \
+                       The MATCH half is empty unless [spaces] comparison_key is set -- check 'comparison_key' before reading any empty list as clean, because empty means \
+                       nothing was attempted. 'by_model' has one row per SERVICES model, each with matched / unmatched / without_key / ambiguous_keys. Ambiguity is counted \
+                       WITHIN one model only: one services file per service means the same room number legitimately names a space in each of them, so the same key in four \
+                       models is four disciplines and NOT a duplicate. 'rooms_without_space' is the other direction in full, and 'room_models' says which models supplied the \
+                       rooms -- read it before concluding a room set is small. \
+                       'property_mismatches' carries 'delta_pct' where a numeric tolerance is configured; a large one on a very small room is usually the boundary-regime \
+                       difference between an MEP space and an architectural room rather than a data fault, which is what [spaces] tolerance_min exists to filter. \
+                       'incomparable' is a pair whose ROOM value is zero: neither a pass nor a mismatch, since a relative difference against zero is undefined."
     )]
     fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
         let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;
@@ -957,6 +971,7 @@ mod tests {
     /// A registered project configuring `sources` reference sources by name.
     fn state_with(sources: &[&str]) -> Shared {
         let bundle = ProjectSettings {
+            spaces: Default::default(),
             reference: sources
                 .iter()
                 .map(|name| {

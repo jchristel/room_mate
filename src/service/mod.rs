@@ -149,6 +149,7 @@ mod tests {
 
     fn make_bundle() -> ProjectSettings {
         ProjectSettings {
+            spaces: Default::default(),
             reference: std::collections::BTreeMap::new(),
             hierarchy: vec![],
             builtin_properties: vec![],
