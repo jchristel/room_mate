@@ -1036,6 +1036,7 @@ pub enum ReferenceEntity {
     Doors,
     Windows,
     Ffe,
+    Spaces,
 }
 
 impl ReferenceEntity {
@@ -1046,6 +1047,7 @@ impl ReferenceEntity {
             ReferenceEntity::Doors => "doors",
             ReferenceEntity::Windows => "windows",
             ReferenceEntity::Ffe => "ffe",
+            ReferenceEntity::Spaces => "spaces",
         }
     }
 }
@@ -1463,6 +1465,24 @@ boundary_location = "finish_face"
     /// to rooms. That is the whole point of the field: before it,
     /// `[sources.reference.doors]` parsed, loaded and joined nowhere, and the
     /// only symptom was a source that never matched anything. Serde's own
+    /// **`entity = "spaces"` is accepted**, which is the whole extension point
+    /// R4 built: a fifth entity joins the reference model as one settings line,
+    /// not a design. A services model's spaces can carry their own dRofus-style
+    /// source, verified independently of the rooms one.
+    #[test]
+    fn test_reference_source_entity_accepts_spaces() {
+        let settings: Settings = toml::from_str(
+            "project_id = \"p1\"
+
+[sources.reference.schedule]
+type = \"upload\"
+entity = \"spaces\"
+",
+        )
+        .expect("spaces is an accepted entity");
+        assert_eq!(settings.sources.reference["schedule"].entity, ReferenceEntity::Spaces);
+    }
+
     /// message is the specific one, so there is no hand-rolled check.
     #[test]
     fn test_reference_source_entity_accepts_windows() {

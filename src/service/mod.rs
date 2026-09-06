@@ -174,6 +174,7 @@ mod tests {
             room_boundary: None,
             levels: vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
             rooms: vec![Room {
+                enclosure: None,
                 id: "r1".to_string(),
                 name: "Room".to_string(),
                 level_id: "l1".to_string(),

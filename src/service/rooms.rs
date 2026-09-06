@@ -1256,6 +1256,7 @@ mod tests {
             properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
         }
         Room {
+            enclosure: None,
             id: id.to_string(),
             name: name.to_string(),
             level_id: "1".to_string(),

@@ -70,6 +70,7 @@ pub enum SnapshotKind {
     Doors,
     Windows,
     Ffe,
+    Spaces,
 }
 
 impl SnapshotKind {
@@ -86,11 +87,12 @@ impl SnapshotKind {
     /// `position` below is what puts the guard back: it is an exhaustive match,
     /// so a new variant fails to compile there, and the test pairs the two so a
     /// variant left out of this array is caught rather than merely discouraged.
-    pub const ALL: [SnapshotKind; 4] = [
+    pub const ALL: [SnapshotKind; 5] = [
         SnapshotKind::Rooms,
         SnapshotKind::Doors,
         SnapshotKind::Windows,
         SnapshotKind::Ffe,
+        SnapshotKind::Spaces,
     ];
 
     /// This kind's index in [`ALL`](Self::ALL).
@@ -112,6 +114,7 @@ impl SnapshotKind {
             SnapshotKind::Doors => 1,
             SnapshotKind::Windows => 2,
             SnapshotKind::Ffe => 3,
+            SnapshotKind::Spaces => 4,
         }
     }
 
@@ -124,6 +127,7 @@ impl SnapshotKind {
             SnapshotKind::Doors => Some("doors"),
             SnapshotKind::Windows => Some("windows"),
             SnapshotKind::Ffe => Some("ffe"),
+            SnapshotKind::Spaces => Some("spaces"),
         }
     }
 
@@ -134,6 +138,7 @@ impl SnapshotKind {
             SnapshotKind::Doors => "doors",
             SnapshotKind::Windows => "windows",
             SnapshotKind::Ffe => "ffe",
+            SnapshotKind::Spaces => "spaces",
         }
     }
 }
@@ -316,6 +321,17 @@ pub struct ModelEntry {
     /// about what is in them.
     #[serde(default)]
     pub ffe: Vec<String>,
+
+    /// This model's spaces snapshot ids, on the same terms as `ffe`.
+    ///
+    /// **The first kind whose entity shares the `Room` record**, and the
+    /// manifest did not notice that either. Its own list rather than a shared
+    /// one with `snapshots`: a services model's spaces and an architectural
+    /// model's rooms are separate lineages that happen to carry the same record
+    /// type, and merging their indexes would make "this model has no spaces"
+    /// unanswerable — which is the one question the entity exists to answer.
+    #[serde(default)]
+    pub spaces: Vec<String>,
 }
 
 impl ModelEntry {
@@ -327,6 +343,7 @@ impl ModelEntry {
             SnapshotKind::Doors => &self.doors,
             SnapshotKind::Windows => &self.windows,
             SnapshotKind::Ffe => &self.ffe,
+            SnapshotKind::Spaces => &self.spaces,
         }
     }
 
@@ -336,6 +353,7 @@ impl ModelEntry {
             SnapshotKind::Doors => &mut self.doors,
             SnapshotKind::Windows => &mut self.windows,
             SnapshotKind::Ffe => &mut self.ffe,
+            SnapshotKind::Spaces => &mut self.spaces,
         }
     }
 }
@@ -601,7 +619,7 @@ mod tests {
     /// went wrong once already.
     #[test]
     fn test_all_kinds_agree_with_their_positions() {
-        assert_eq!(SnapshotKind::ALL.len(), 4, "extend ALL when adding a kind");
+        assert_eq!(SnapshotKind::ALL.len(), 5, "extend ALL when adding a kind");
         for (index, kind) in SnapshotKind::ALL.iter().enumerate() {
             assert_eq!(kind.position(), index, "{} is in the wrong slot of ALL", kind.label());
         }

@@ -1402,6 +1402,7 @@ mod tests {
             models: BTreeMap::from([(
                 "modelA".to_string(),
                 ModelEntry {
+                    spaces: vec![],
                     name: "M".to_string(),
                     phase: None,
                     snapshots: vec!["2026-01-01T10:00:00Z".to_string()],
@@ -1468,6 +1469,7 @@ mod tests {
             models: BTreeMap::from([(
                 "m".to_string(),
                 ModelEntry {
+                    spaces: vec![],
                     name: "M".to_string(),
                     phase: None,
                     snapshots: vec!["2026-01-02T10:00:00Z".to_string(), "2026-01-03T10:00:00Z".to_string()],
