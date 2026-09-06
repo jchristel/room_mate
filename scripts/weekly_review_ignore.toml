@@ -34,6 +34,17 @@
 
 # --- Designs recorded but not built. Absence is the documented state. ---
 "DocumentIndex" = "STRATEGY-AUTHORED is flagged 'design settled, not built'"
+"SpaceReport" = "PLAN-spaces D3, built in PR E; the plan names it before it exists on purpose"
+"SpaceFieldConfig" = "PLAN-spaces D8, same — the settings type PR E adds"
+
+# --- Analyser vocabulary, not server vocabulary. `scripts/analyse_spaces_probe.py`
+#     classifies five enclosure states where the contract carries three, because
+#     the extra two are distinctions a modeller acts on and the server cannot.
+"Redundant" = "analyse_spaces_probe state; folds into Enclosure::Unenclosed on the wire"
+"Unplaced" = "analyse_spaces_probe state; the extractor drops these, so they never reach a contract"
+
+# --- Data, not identifiers. ---
+"ENG661" = "a room number from the RHH probe, quoted in PLAN-spaces' worst-pairs finding"
 
 # --- History written on purpose: the doc names an old symbol to explain a
 #     rename or a split. Deleting these names would make the docs worse, not

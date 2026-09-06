@@ -186,7 +186,8 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   is the instrument and RHH is the model; the analyser refuses to interpret a run
   whose category list has drifted from duHast's, so the two must move together.
 
-- **The pyRevit buttons for `windows_export_entry` and `ffe_export_entry`.**
+- **The pyRevit buttons for `windows_export_entry`, `ffe_export_entry` and
+  `spaces_export_entry`.**
   Both extractor entry points exist; their buttons live outside this repository
   and have to be wired there before anyone can push either from Revit. This is
   the one cost adding an entity does not absorb, and it is now owed twice.

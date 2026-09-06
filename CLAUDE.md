@@ -236,14 +236,19 @@ with one, not here.
 **Nothing.** Both long-standing items closed: the extractor's phase filter is
 verified against Revit, and R4 landed.
 
-## The extractor has three entry points, and one of them is a trap
+## The extractor has six entry points, one of them a trap and three unwired
 
 `rooms_export_entry` still pushes **rooms and doors**, despite the name. Its
 pyRevit button lives outside this repo, so narrowing it to rooms would not fail —
 it would keep succeeding while quietly no longer pushing doors. The split is in
-the two siblings instead: `rooms_only_export_entry` and `doors_export_entry`.
-All three are one line over `export_entry(..., entities)`; document selection,
-the one project and the one phase never differ.
+the siblings instead: `rooms_only_export_entry`, `doors_export_entry`,
+`windows_export_entry`, `ffe_export_entry` and `spaces_export_entry`. All six are
+one line over `export_entry(..., entities)`; document selection, the one project
+and the one phase never differ.
+
+**Three of those buttons are owed outside this repository** — windows, FF&E and
+spaces. The server side of each is complete and unreachable until someone wires
+them, which is the one cost adding an entity has never absorbed.
 
 **A run exports every selected model first, then pushes one bucket per entity.**
 So `entities` no longer carries a push *order* — the buckets are independent, and
@@ -255,6 +260,35 @@ are the documents that were exported together", which would be a lie.
 A doors-only push does **not** check that rooms are on the server first, and now
 neither does the server. Doors may be pushed before their rooms; an unresolvable
 reference is reported by `door_report` as *pending* rather than refused.
+
+## Spaces: what the fifth entity does differently
+
+Three rules are this entity's alone, and each was measured on RHH rather than
+reasoned into:
+
+- **An empty spaces push is sent and stored**, where an empty rooms push is a
+  422 on both ends. "This services model was audited and holds no spaces" is the
+  finding the entity exists to report, and a different fact from "never pushed".
+- **A disagreeing phase is quarantined, not refused.** The openings refusal
+  exists because promoting would strand `from_room`/`to_room`; a space carries
+  no room id. And a services model usually holds no rooms, so "re-phase it with
+  a rooms push first" is advice it cannot take — refusing would fix its lineage
+  on the first phase that reached it, permanently. `put_pending_raw` is keyed by
+  `(model, kind)` for this.
+- **Enclosure is stated by the extractor, from `Area` and the export's polygon —
+  never from `GetBoundarySegments`.** 96.3% of RHH's spaces report zero boundary
+  segments while exporting a perfectly good polygon, because their bounding
+  elements are in the linked architectural model. `Perimeter` is `0.0` for the
+  same reason and is no substitute. Unplaced spaces are dropped; unenclosed ones
+  are pushed with empty `loops`, which is the difference `translate_room` cannot
+  make and `translate_space` does.
+
+**A spaces run is per phase, and the disciplines disagree on the name.** RHH's
+mechanical model keeps 1,532 of its 1,533 spaces in `Future` while its siblings
+use `New Construction`, and the push phase is one per *run*. A run under the
+common name pushes three models in full and one space from the fourth, correctly
+and silently — which is why `exporters/spaces.py` reports "N of M spaces are in
+phase X" for every model on every run. Read that line.
 
 ## Phase filtering: rooms and doors are not alike
 
