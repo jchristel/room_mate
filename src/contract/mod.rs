@@ -453,6 +453,35 @@ pub struct RoomPayload {
     pub rooms: Vec<Room>,
 }
 
+/// **Rooms joined the trait last, and only when something needed it.**
+/// `SnapshotEnvelope` was extracted for the entities whose *read* spine is
+/// shared, which rooms' is not -- rooms have their own assembly. What pulled
+/// this impl in was the pending slot growing a kind (D11): quarantining is now a
+/// generic write over "any payload that can name its own model and phase", and a
+/// `RoomPayload` can. Six field reads is the whole cost, and the alternative was
+/// a second `set_pending_*` method per entity -- the parallel method set R1
+/// exists to prevent.
+impl SnapshotEnvelope for RoomPayload {
+    fn project(&self) -> &Project {
+        &self.project
+    }
+    fn model(&self) -> &Model {
+        &self.model
+    }
+    fn taken_at(&self) -> &str {
+        &self.snapshot.taken_at
+    }
+    fn phase(&self) -> Option<&str> {
+        self.phase.as_deref()
+    }
+    fn model_to_shared(&self) -> Option<&ModelToShared> {
+        self.model_to_shared.as_ref()
+    }
+    fn levels(&self) -> &[Level] {
+        &self.levels
+    }
+}
+
 /// One model's block on a multi-model upload — the facts that are true of *one
 /// Revit document* and cannot be shared across a push.
 ///

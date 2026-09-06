@@ -264,11 +264,17 @@ impl FsStore {
         self.project_dir(project_id).join(REFERENCE_DIR).join(source)
     }
 
-    /// The one quarantined push for a model: `<model>/pending/snapshot.json`.
-    /// Inside a subdirectory so the `.json`-extension model-dir scans can't see
-    /// it — see `PENDING_DIR`.
-    fn pending_file(&self, key: &ModelKey) -> PathBuf {
-        self.model_dir(&key.project_id, &key.model_id).join(PENDING_DIR).join(PENDING_FILE)
+    /// The one quarantined push for a model and kind:
+    /// `<model>/pending/snapshot.json` for rooms, `<model>/<kind>/pending/...`
+    /// for every other kind. Inside a subdirectory so the `.json`-extension
+    /// model-dir scans can't see it — see `PENDING_DIR`.
+    ///
+    /// Built on `kind_dir` rather than `model_dir`, which is what makes adding
+    /// the kind free: rooms' `dir_component` is `None`, so a rooms pending file
+    /// resolves to exactly the path it always did and nothing already on disk
+    /// moves.
+    fn pending_file(&self, key: &ModelKey, kind: SnapshotKind) -> PathBuf {
+        self.kind_dir(kind, key).join(PENDING_DIR).join(PENDING_FILE)
     }
 
     /// Reference-source CSV filename from a snapshot id — same `:`
@@ -672,19 +678,33 @@ impl SnapshotStore for FsStore {
             .and_then(|m| m.phase.clone()))
     }
 
-    fn put_pending_raw(&self, key: &ModelKey, taken_at: &str, phase: Option<&str>, json: &[u8]) -> Result<()> {
-        let file = self.pending_file(key);
+    fn put_pending_raw(
+        &self,
+        key: &ModelKey,
+        kind: SnapshotKind,
+        taken_at: &str,
+        phase: Option<&str>,
+        json: &[u8],
+    ) -> Result<()> {
+        let file = self.pending_file(key, kind);
         let dir = file.parent().expect("pending file always has a parent dir");
         fs::create_dir_all(dir).with_context(|| format!("could not create pending dir: {}", dir.display()))?;
         // Overwrite, unlike `put_raw`: there is exactly one pending slot per
         // model and the newest quarantined push is the only one worth promoting.
         write_atomic(&file, json).with_context(|| format!("could not write pending snapshot: {}", file.display()))?;
-        tracing::info!("quarantined push {}/{} @ {} (phase {:?})", key.project_id, key.model_id, taken_at, phase);
+        tracing::info!(
+            "quarantined {} push {}/{} @ {} (phase {:?})",
+            kind.label(),
+            key.project_id,
+            key.model_id,
+            taken_at,
+            phase
+        );
         Ok(())
     }
 
-    fn get_pending_raw(&self, key: &ModelKey) -> Result<Option<Vec<u8>>> {
-        let file = self.pending_file(key);
+    fn get_pending_raw(&self, key: &ModelKey, kind: SnapshotKind) -> Result<Option<Vec<u8>>> {
+        let file = self.pending_file(key, kind);
         if !file.exists() {
             return Ok(None);
         }
@@ -693,7 +713,7 @@ impl SnapshotStore for FsStore {
 
     fn promote_pending(&self, meta: &SnapshotMeta<'_>) -> Result<bool> {
         let key = meta.key;
-        let Some(json) = self.get_pending_raw(key)? else {
+        let Some(json) = self.get_pending_raw(key, meta.kind)? else {
             return Ok(false);
         };
 
@@ -712,7 +732,7 @@ impl SnapshotStore for FsStore {
         // Clear the quarantine only after the snapshot and manifest are both
         // committed: a failure above leaves the pending push intact and
         // retryable, where removing it first could lose it entirely.
-        let file = self.pending_file(key);
+        let file = self.pending_file(key, meta.kind);
         fs::remove_file(&file).with_context(|| format!("could not clear pending snapshot: {}", file.display()))?;
 
         tracing::info!(
@@ -894,6 +914,7 @@ mod tests {
         fn put_pending(&self, key: &ModelKey, payload: &RoomPayload) -> Result<()> {
             self.put_pending_raw(
                 key,
+                SnapshotKind::Rooms,
                 &payload.snapshot.taken_at,
                 payload.phase.as_deref(),
                 &serde_json::to_vec(payload)?,
@@ -901,7 +922,9 @@ mod tests {
         }
 
         fn get_pending(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
-            self.get_pending_raw(key)?.map(|b| Ok(serde_json::from_slice(&b)?)).transpose()
+            self.get_pending_raw(key, SnapshotKind::Rooms)?
+                .map(|b| Ok(serde_json::from_slice(&b)?))
+                .transpose()
         }
 
         fn promote(&self, key: &ModelKey) -> Result<Option<RoomPayload>> {
@@ -1139,6 +1162,45 @@ mod tests {
 
     /// One pending slot per model: a second quarantined push replaces the
     /// first. With no delete route, an accumulating backlog would be
+    /// **A rooms quarantine and a spaces quarantine are different slots**, and
+    /// this is what the kind on `put_pending_raw` buys. Before it, a services
+    /// model that pushed both would have had one overwrite the other and the
+    /// survivor would have been parsed as the wrong type on the way back out.
+    ///
+    /// Also pins the layout promise the change was made under: rooms' pending
+    /// file does not move, because `dir_component` is `None` for rooms and the
+    /// path is built from `kind_dir`.
+    #[test]
+    fn test_pending_slots_are_per_kind_and_rooms_stays_put() {
+        let dir = std::env::temp_dir().join(format!("roommate-pending-kinds-{}", std::process::id()));
+        let store = FsStore::new(dir.clone()).unwrap();
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+
+        let rooms = phased("p", "m", "2026-06-01T10:00:00Z", "New Construction");
+        store.put_pending(&key, &rooms).unwrap();
+        store
+            .put_pending_raw(&key, SnapshotKind::Spaces, "2026-09-06T10:00:00Z", Some("Future"), b"{\"spaces\":[]}")
+            .unwrap();
+
+        assert_eq!(
+            store.get_pending(&key).unwrap().expect("rooms still pending").phase.as_deref(),
+            Some("New Construction"),
+            "a spaces quarantine must not displace the rooms one"
+        );
+        assert_eq!(
+            store.get_pending_raw(&key, SnapshotKind::Spaces).unwrap().expect("spaces pending"),
+            b"{\"spaces\":[]}".to_vec()
+        );
+
+        assert!(
+            dir.join("p").join("m").join(PENDING_DIR).join("snapshot.json").exists(),
+            "rooms' pending path is unchanged by the kind existing"
+        );
+        assert!(dir.join("p").join("m").join("spaces").join(PENDING_DIR).exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// unclearable, and only the newest is ever worth promoting.
     #[test]
     fn test_second_pending_push_replaces_the_first() {

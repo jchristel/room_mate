@@ -521,17 +521,39 @@ pub trait SnapshotStore: Send + Sync {
     /// `get_snapshot_raw` — and cannot be pinned by a milestone. It exists only
     /// to be promoted or overwritten.
     ///
-    /// **Rooms-only, and takes no `SnapshotKind`.** Quarantine exists so a model
-    /// can be re-phased, and promoting is what moves the lineage's phase. A
-    /// doors push has nothing to re-phase towards: promoting it would move the
-    /// lineage while every room snapshot stayed on the old phase, stranding the
-    /// rooms a door's references resolve against. So a doors push whose phase
-    /// disagrees is refused outright rather than quarantined, and there is no
-    /// second pending slot to key by kind.
-    fn put_pending_raw(&self, key: &ModelKey, taken_at: &str, phase: Option<&str>, json: &[u8]) -> Result<()>;
+    /// **One slot per (model, kind)**, which it was not until spaces arrived.
+    ///
+    /// It used to be one slot per model, rooms-only, and the argument for that
+    /// was sound for the entities that existed: quarantine exists so a model can
+    /// be re-phased, and an *opening* has nothing to re-phase towards, because
+    /// promoting it would move the lineage while every room snapshot stayed on
+    /// the old phase, stranding the rooms its `from_room`/`to_room` resolve
+    /// against. So a disagreeing doors or windows push is refused outright.
+    ///
+    /// **That argument does not reach spaces, and assuming it did would have
+    /// trapped a real project.** A space carries no room id — it matches a room
+    /// by a user-chosen key, project-wide, across models — so promoting a spaces
+    /// push strands nothing. And a services model typically holds no rooms at
+    /// all, so "re-phase the model with a rooms push first" is not an escape
+    /// hatch it has: refusing would fix such a lineage on its first phase
+    /// permanently. Measured on RHH, where the mechanical model keeps its spaces
+    /// in a phase called `Future` while every sibling uses `New Construction`.
+    ///
+    /// Keying by kind rather than adding a second slot keeps this one method
+    /// set — the R1 rule — and costs nothing on disk: `FsStore` puts the slot
+    /// under the kind's own directory, and rooms' `dir_component` is `None`, so
+    /// every pending file already written stays exactly where it is.
+    fn put_pending_raw(
+        &self,
+        key: &ModelKey,
+        kind: SnapshotKind,
+        taken_at: &str,
+        phase: Option<&str>,
+        json: &[u8],
+    ) -> Result<()>;
 
-    /// The quarantined push waiting on this model, if any.
-    fn get_pending_raw(&self, key: &ModelKey) -> Result<Option<Vec<u8>>>;
+    /// The quarantined push waiting on this model for one kind, if any.
+    fn get_pending_raw(&self, key: &ModelKey, kind: SnapshotKind) -> Result<Option<Vec<u8>>>;
 
     /// Make the quarantined push live: store it as a normal snapshot, re-phase
     /// the lineage to `meta.phase`, and clear the quarantine. Returns whether

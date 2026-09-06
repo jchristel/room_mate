@@ -1,6 +1,7 @@
 # RoomMate — Spaces implementation plan
 
-> **Status: PR A run against RHH, 2026-09-06. The kill condition is CLEARED.**
+> **Status: PR A run against RHH (kill condition CLEARED); B1 and B2 built.**
+> Spaces can be pushed. Read, QA and viewer are still ahead.
 > The decisions below were written from a reading of duHast's source and are
 > left standing rather than edited into agreement with the data;
 > [As measured](#as-measured--rhh-2026-09-06) records what the probe found,
@@ -387,7 +388,7 @@ small rooms", until `tolerance_min` is set from this measurement.
 | **A** | the probe and its analyser | verdict `CLEAR` or `KEYS WEAK` |
 | **U1** | duHast: `get_all_spaces` stops swallowing exceptions | before C |
 | **B1** | `contract::spaces`, `SnapshotKind::Spaces` and its manifest index, `Enclosure`, `ReferenceEntity::Spaces` | `cargo test`, fmt, clippy |
-| **B2** | `/spaces` and `/spaces/stream` ingest, on the openings sink shape with the rooms phase rule (D11) | as above |
+| **B2** | `/spaces` and `/spaces/stream` ingest, the per-kind pending slot, and D11's quarantine | as above |
 | **C** | extractor: `utils/spaces.py`, `exporters/spaces.py`, the translation, `spaces_export_entry`, one `ENTITY_EXPORTERS` row | a real push from a services model |
 | **D** | read: `GET /spaces`, filter grammar, MCP `get_spaces` (**tool count 20 to 21**, in `bin/mcp.rs`'s header and STRATEGY-MCP.md both) | |
 | **E** | QA: `SpaceReport`, `[spaces]` settings, the match and the property diff | |

@@ -530,7 +530,9 @@ fn finish_rooms(
             }
             RoomDest::Quarantined { payload, lineage } => {
                 let pushed = payload.phase.clone().unwrap_or_default();
-                state.set_pending_snapshot(&key, &payload).map_err(store_failed)?;
+                state
+                    .set_pending_snapshot(&key, SnapshotKind::Rooms, payload.as_ref())
+                    .map_err(store_failed)?;
                 tracing::warn!(
                     "quarantined push for {}/{}: phase {:?} disagrees with the model's {:?}",
                     key.project_id,
@@ -1389,6 +1391,327 @@ pub async fn ingest_ffe_stream(
     Ok(ffe_ingest_response(envelope.snapshot.taken_at.clone(), snapshot_id_generated, outcome))
 }
 
+/// One model's outcome on a spaces push.
+#[derive(Debug, Serialize)]
+pub struct SpaceModelIngestResult {
+    pub model_id: String,
+    pub space_count: usize,
+    /// Set when this model's push was quarantined rather than made live, with
+    /// the reason. `None` is the ordinary case. Present here and absent from
+    /// `FfeModelIngestResult` because spaces quarantine and openings do not --
+    /// see `preflight_spaces`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quarantined: Option<String>,
+}
+
+/// What a spaces push answers with.
+#[derive(Debug, Serialize)]
+pub struct SpaceIngestResponse {
+    /// False when any model was quarantined, in lockstep with the 202.
+    pub accepted: bool,
+    pub space_count: usize,
+    pub snapshot_taken_at: String,
+    pub snapshot_id_generated: bool,
+    pub models: Vec<SpaceModelIngestResult>,
+}
+
+/// Where one model's spaces go while a push is being read -- the spaces
+/// counterpart of `RoomDest`, and it exists for the same reason: **a live model
+/// streams, a quarantined one buffers.** Streaming keeps a large payload off the
+/// heap on its way to disk; quarantine is at most one push per model, kept only
+/// so a human can promote it.
+enum SpaceDest<'a> {
+    Live(StreamingSnapshot<'a>),
+    /// Boxed for `RoomDest::Quarantined`'s reason: the payload is an order of
+    /// magnitude larger than a writer handle, and the overwhelming majority of
+    /// models never use this variant.
+    Quarantined {
+        payload: Box<crate::contract::SpacePayload>,
+        lineage: String,
+    },
+}
+
+struct SpaceSink<'a> {
+    model_id: String,
+    dest: SpaceDest<'a>,
+}
+
+impl SpaceSink<'_> {
+    /// Take one space. Both routes feed sinks through here, so the buffered and
+    /// streamed paths cannot store different things.
+    fn push(&mut self, space: Room) -> Result<(), (StatusCode, String)> {
+        match &mut self.dest {
+            SpaceDest::Live(snapshot) => snapshot.push(&space).map_err(store_failed),
+            SpaceDest::Quarantined { payload, .. } => {
+                payload.spaces.push(space);
+                Ok(())
+            }
+        }
+    }
+
+    fn count(&self) -> usize {
+        match &self.dest {
+            SpaceDest::Live(snapshot) => snapshot.count(),
+            SpaceDest::Quarantined { payload, .. } => payload.spaces.len(),
+        }
+    }
+}
+
+/// The phase half of the spaces ingest contract.
+///
+/// **Deliberately `decide_phase` -- the ROOMS rule -- and not
+/// `check_opening_ingest`.** The openings check refuses a disagreeing push, and
+/// its message states the reason: activating it would re-phase the model while
+/// its rooms stayed behind, stranding the rooms an opening's `from_room` /
+/// `to_room` resolve against. **A space carries no room id.** It matches a room
+/// by a user-chosen key, project-wide and across models, so promoting a spaces
+/// push strands nothing.
+///
+/// Refusing would also trap a real project rather than merely being pedantic. A
+/// services model usually holds no rooms at all, so "re-phase the model with a
+/// rooms push first" -- the escape hatch the openings message offers -- is not
+/// one it has: its lineage would be fixed on whatever phase reached it first,
+/// permanently. Measured on RHH, where the mechanical model keeps 1,532 of its
+/// 1,533 spaces in a phase called `Future` while every sibling model uses `New
+/// Construction`, and the push phase is one per run.
+///
+/// An unphased push stays a 422 for every entity, unchanged: it was never
+/// filtered, so there is nothing worth activating.
+fn preflight_spaces(
+    state: &Shared,
+    project_id: &str,
+    phase: Option<&str>,
+    models: impl Iterator<Item = (String, Option<ModelToShared>)>,
+) -> Result<Vec<PhaseDecision>, (StatusCode, String)> {
+    let mut decisions = Vec::new();
+    for (model_id, transform) in models {
+        let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.clone() };
+        decisions.push(decide_phase(state, &key, phase)?);
+        warn_on_transform_drift(transform.as_ref(), project_id, &model_id);
+    }
+    Ok(decisions)
+}
+
+/// Open one sink per model, live or quarantined, from the decisions
+/// `preflight_spaces` already made.
+///
+/// **Every model is decided before any is stored**, as on the rooms path. What
+/// is deliberately absent is the second loop rooms needs: there is no
+/// `reject_empty_rooms` equivalent, because an empty spaces push is the finding
+/// rather than a fault, so nothing has to be checked after counting.
+fn open_space_sinks<'a>(
+    state: &'a Shared,
+    schema_version: u32,
+    project: &Project,
+    snapshot: &Snapshot,
+    phase: Option<&str>,
+    models: Vec<crate::contract::SpaceModelEnvelope>,
+    decisions: Vec<PhaseDecision>,
+) -> Result<Vec<SpaceSink<'a>>, (StatusCode, String)> {
+    let mut sinks = Vec::with_capacity(models.len());
+    for (envelope, decision) in models.into_iter().zip(decisions) {
+        let model_id = envelope.model.id.clone();
+        let payload = envelope.into_payload(
+            schema_version,
+            project.clone(),
+            snapshot.clone(),
+            phase.map(str::to_string),
+            Vec::new(),
+        );
+        let dest = match decision {
+            PhaseDecision::Accept => {
+                SpaceDest::Live(state.open_opening_snapshot(SnapshotKind::Spaces, &payload).map_err(store_failed)?)
+            }
+            PhaseDecision::Quarantine { lineage } => SpaceDest::Quarantined { payload: Box::new(payload), lineage },
+        };
+        sinks.push(SpaceSink { model_id, dest });
+    }
+    Ok(sinks)
+}
+
+/// Commit every sink and report the push.
+fn finish_spaces(
+    state: &Shared,
+    project: &Project,
+    snapshot_taken_at: String,
+    snapshot_id_generated: bool,
+    sinks: Vec<SpaceSink<'_>>,
+) -> Result<(StatusCode, Json<SpaceIngestResponse>), (StatusCode, String)> {
+    let mut results = Vec::with_capacity(sinks.len());
+    let mut total = 0usize;
+    let mut any_quarantined = false;
+    for sink in sinks {
+        let count = sink.count();
+        total += count;
+        let SpaceSink { model_id, dest } = sink;
+        let key = ModelKey { project_id: project.id.clone(), model_id: model_id.clone() };
+        let quarantined = match dest {
+            SpaceDest::Live(snapshot) => {
+                snapshot.commit().map_err(store_failed)?;
+                None
+            }
+            SpaceDest::Quarantined { payload, lineage } => {
+                let pushed = payload.phase.clone().unwrap_or_default();
+                state
+                    .set_pending_snapshot(&key, SnapshotKind::Spaces, payload.as_ref())
+                    .map_err(store_failed)?;
+                tracing::warn!(
+                    "quarantined spaces push for {}/{}: phase {:?} disagrees with the model's {:?}",
+                    key.project_id,
+                    key.model_id,
+                    pushed,
+                    lineage
+                );
+                Some(format!(
+                    "stored but not live: this push is phase {pushed:?} while the model is {lineage:?}. \
+                     A model's phase is fixed once set; activate this push to re-phase the model."
+                ))
+            }
+        };
+        any_quarantined |= quarantined.is_some();
+        results.push(SpaceModelIngestResult { model_id, space_count: count, quarantined });
+    }
+    tracing::info!("received {} space(s) across {} model(s)", total, results.len());
+
+    let status = if any_quarantined { StatusCode::ACCEPTED } else { StatusCode::OK };
+    Ok((
+        status,
+        Json(SpaceIngestResponse {
+            accepted: !any_quarantined,
+            space_count: total,
+            snapshot_taken_at,
+            snapshot_id_generated,
+            models: results,
+        }),
+    ))
+}
+
+/// Revit posts space data here -- one push, one or more models.
+///
+/// **An empty spaces list is accepted, and unlike every other entity that is the
+/// point rather than a tolerance.** `reject_empty_rooms` exists because a rooms
+/// push happens when someone exported a document that has rooms in it, so an
+/// empty one is a producer fault. Here "this services model was audited and
+/// holds no spaces" is the finding the entity was built to report, and it is a
+/// different fact from "this model was never pushed" -- which is exactly the
+/// pending-versus-dangling distinction `opening_report` draws, on another axis.
+pub async fn ingest_spaces(
+    State(state): State<Shared>,
+    Json(mut upload): Json<crate::contract::SpacesUpload>,
+) -> Result<(StatusCode, Json<SpaceIngestResponse>), (StatusCode, String)> {
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut upload.snapshot);
+    upload.phase = crate::contract::normalize_phase(upload.phase.as_deref());
+    validate_ingest(
+        &state,
+        upload.schema_version,
+        crate::contract::SUPPORTED_SPACE_SCHEMA,
+        &upload.project.id,
+        &upload.snapshot.taken_at,
+    )?;
+    validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
+
+    let mut spaces_by_model: Vec<(String, Vec<Room>)> = upload
+        .models
+        .iter_mut()
+        .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.spaces)))
+        .collect();
+    let models: Vec<crate::contract::SpaceModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
+    let decisions = preflight_spaces(
+        &state,
+        &upload.project.id,
+        upload.phase.as_deref(),
+        models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
+
+    let mut sinks = open_space_sinks(
+        &state,
+        upload.schema_version,
+        &upload.project,
+        &upload.snapshot,
+        upload.phase.as_deref(),
+        models,
+        decisions,
+    )?;
+    for (model_id, spaces) in &mut spaces_by_model {
+        let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
+        for space in spaces.drain(..) {
+            sink.push(space)?;
+        }
+    }
+    finish_spaces(&state, &upload.project, upload.snapshot.taken_at.clone(), snapshot_id_generated, sinks)
+}
+
+/// Streaming NDJSON spaces ingest -- `ingest_spaces` for a push too large to
+/// buffer. RHH's four services models carry 10,570 spaces between them, which is
+/// what this route is for.
+pub async fn ingest_spaces_stream(
+    State(state): State<Shared>,
+    body: Body,
+) -> Result<(StatusCode, Json<SpaceIngestResponse>), (StatusCode, String)> {
+    let stream = body.into_data_stream().map(|r| r.map_err(std::io::Error::other));
+    let reader = StreamReader::new(stream);
+    let mut lines = reader.lines();
+
+    let first = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+        .ok_or((StatusCode::BAD_REQUEST, "empty body".into()))?;
+    let mut envelope: crate::contract::SpaceStreamEnvelope =
+        serde_json::from_str(&first).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad envelope line: {e}")))?;
+
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
+    envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
+    validate_ingest(
+        &state,
+        envelope.schema_version,
+        crate::contract::SUPPORTED_SPACE_SCHEMA,
+        &envelope.project.id,
+        &envelope.snapshot.taken_at,
+    )?;
+    let declared = validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
+    let decisions = preflight_spaces(
+        &state,
+        &envelope.project.id,
+        envelope.phase.as_deref(),
+        envelope.models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
+
+    let mut sinks = open_space_sinks(
+        &state,
+        envelope.schema_version,
+        &envelope.project,
+        &envelope.snapshot,
+        envelope.phase.as_deref(),
+        envelope.models,
+        decisions,
+    )?;
+
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+    {
+        if line.trim().is_empty() {
+            continue; // tolerate a trailing blank line
+        }
+        let line: crate::contract::StreamSpace =
+            serde_json::from_str(&line).map_err(|e| (StatusCode::BAD_REQUEST, format!("bad space line: {e}")))?;
+        check_declared(&declared, &line.model_id)?;
+        let sink = sink_for(&mut sinks, &line.model_id, |s| s.model_id.as_str())
+            .expect("check_declared already refused any model without a sink");
+        sink.push(line.space)?;
+    }
+
+    finish_spaces(
+        &state,
+        &envelope.project,
+        envelope.snapshot.taken_at.clone(),
+        snapshot_id_generated,
+        sinks,
+    )
+}
+
 /// Revit posts window data here -- one push, one or more models.
 ///
 /// **No quarantine branch and so no 202**, the doors rule for the doors reason:
@@ -2200,6 +2523,144 @@ mod tests {
             .await
             .expect("204 is not an error");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    /// One model's spaces as a v1 upload.
+    fn spaces_upload(model: &str, ts: &str, phase: Option<&str>, spaces: Vec<Room>) -> crate::contract::SpacesUpload {
+        crate::contract::SpacesUpload {
+            schema_version: crate::contract::SUPPORTED_SPACE_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: ts.to_string() },
+            phase: phase.map(str::to_string),
+            models: vec![crate::contract::SpaceModelUpload {
+                envelope: crate::contract::SpaceModelEnvelope {
+                    model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+                    model_to_shared: None,
+                    room_boundary: None,
+                    levels: vec![],
+                },
+                spaces,
+            }],
+        }
+    }
+
+    /// **An empty spaces push is accepted, where an empty rooms push is a 422.**
+    /// The single most entity-specific rule here: "this services model was
+    /// audited and holds no spaces" is the finding requirement 1 buys, and a
+    /// different fact from "this model was never pushed". RHH has such a model
+    /// (`RHH-JHA-AV-MDL-HOS`, 0 spaces), so this is the measured case rather
+    /// than a hypothetical one.
+    #[tokio::test]
+    async fn test_an_empty_spaces_push_is_accepted() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let (status, body) = ingest_spaces(
+            State(state),
+            Json(spaces_upload("av", "2026-09-06T00:00:00Z", Some("New Construction"), vec![])),
+        )
+        .await
+        .expect("an empty spaces push is a finding, not a fault");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.accepted);
+        assert_eq!(body.space_count, 0);
+        assert_eq!(body.models.len(), 1, "the model is still recorded as having been audited");
+    }
+
+    /// **A disagreeing phase is quarantined (202), not refused** -- the rooms
+    /// rule, deliberately not the openings one. The openings refusal exists
+    /// because promoting would strand room references, and a space has none.
+    ///
+    /// The push must also be *retrievable* afterwards, which is what the kind on
+    /// the pending slot buys: before it, this payload would have landed in the
+    /// rooms quarantine and been parsed as a `RoomPayload` on the way out.
+    #[tokio::test]
+    async fn test_a_disagreeing_spaces_push_is_quarantined_and_readable() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let (status, _) = ingest_spaces(
+            State(state.clone()),
+            Json(spaces_upload(
+                "me",
+                "2026-09-06T00:00:00Z",
+                Some("New Construction"),
+                vec![make_room("s1", "S")],
+            )),
+        )
+        .await
+        .expect("the first push phases the lineage");
+        assert_eq!(status, StatusCode::OK);
+
+        // The RHH case: the mechanical model's spaces actually live in "Future".
+        let (status, body) = ingest_spaces(
+            State(state.clone()),
+            Json(spaces_upload("me", "2026-09-06T01:00:00Z", Some("Future"), vec![make_room("s2", "S")])),
+        )
+        .await
+        .expect("a disagreeing spaces push is quarantined, never refused");
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(!body.accepted);
+        assert!(body.models[0].quarantined.is_some(), "the model must say why it did not go live");
+
+        let key = ModelKey { project_id: "p1".to_string(), model_id: "me".to_string() };
+        let pending = state.pending_spaces_snapshot(&key).unwrap().expect("the quarantined push is readable");
+        assert_eq!(pending.phase.as_deref(), Some("Future"));
+        assert_eq!(pending.spaces.len(), 1);
+        assert!(
+            state.pending_snapshot(&key).unwrap().is_none(),
+            "a quarantined spaces push must not occupy the rooms slot"
+        );
+    }
+
+    /// Promoting re-phases the lineage, which is the escape hatch a services
+    /// model would not otherwise have: it holds no rooms, so the openings
+    /// message's "re-phase with a rooms push first" is advice it cannot take.
+    #[tokio::test]
+    async fn test_promoting_a_spaces_push_rephases_a_model_with_no_rooms() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let key = ModelKey { project_id: "p1".to_string(), model_id: "me".to_string() };
+
+        let _live = ingest_spaces(
+            State(state.clone()),
+            Json(spaces_upload(
+                "me",
+                "2026-09-06T00:00:00Z",
+                Some("New Construction"),
+                vec![make_room("s1", "S")],
+            )),
+        )
+        .await
+        .unwrap();
+        let _quarantined = ingest_spaces(
+            State(state.clone()),
+            Json(spaces_upload("me", "2026-09-06T01:00:00Z", Some("Future"), vec![make_room("s2", "S")])),
+        )
+        .await
+        .unwrap();
+
+        let promoted = state.promote_pending_spaces_snapshot(&key).unwrap().expect("something was pending");
+        assert_eq!(promoted.phase.as_deref(), Some("Future"));
+        assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("Future"), "the lineage moved");
+        assert!(state.pending_spaces_snapshot(&key).unwrap().is_none(), "the quarantine is cleared");
+    }
+
+    /// An unphased push stays a 422 for spaces exactly as for every other
+    /// entity: it was never filtered, so there is nothing worth activating.
+    /// Quarantine is for a *different* phase, never for no phase.
+    #[tokio::test]
+    async fn test_an_unphased_spaces_push_is_refused() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let error = ingest_spaces(
+            State(state),
+            Json(spaces_upload("me", "2026-09-06T00:00:00Z", None, vec![make_room("s1", "S")])),
+        )
+        .await
+        .expect_err("an unphased push is refused");
+
+        assert_eq!(error.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(error.1.contains("phase"), "the message must name what is missing: {}", error.1);
     }
 
     /// One registered project with one room, for the conditional-request tests.
