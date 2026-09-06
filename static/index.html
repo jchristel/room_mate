@@ -1502,9 +1502,18 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       showWindows,
       ffe: ffeOnLevel(levelId),
       showFfe,
-      spaces: spacesForPlan(),
+      spaces: spacesForPlan(levelId),
       showSpaces,
     });
+    // Immediately after the paint, because only the paint knows whether the
+    // elevation resolved -- and inside the deferred callback, because that is
+    // where `spacesForPlan` actually ran. Refreshing it only from the toggle
+    // meant a project switch could land in the fallback and still read
+    // "Spaces: on", which is the silent state this label exists to prevent.
+    //
+    // Last zone painted wins, which is right: the fallback is a property of the
+    // payload rather than of one zone.
+    syncSpacesToggleLabel();
     // Inside the deferred build, not after it: on a large level these run a
     // frame later than the surrounding code, and re-applying a selection to a
     // level that has not been painted yet marks nothing.
@@ -4139,18 +4148,86 @@ function syncSpacesModelVisibility() {
   sel.hidden = !showSpaces || spacesModels.length < 2;
 }
 
-// Every space in the payload, UNFILTERED by level -- which is the one place this
-// layer departs from doors, windows and FF&E.
+// How far apart two levels' elevations may be and still be the same storey, in
+// millimetres. The server uses this same 50 mm for "same storey across models"
+// (`LEVEL_EPS_MM`, in service::room_locator); matching it here means the plan and
+// the geometric resolver agree about what a storey is.
+const SPACE_LEVEL_EPS_MM = 50;
+
+// True when the last paint fell back to drawing every storey. Read by the
+// toggle's label, because a fallback nobody can see is the failure mode this
+// whole entity keeps being bitten by.
+let spacesLevelFallback = false;
+
+// The spaces on ONE storey, matched by ELEVATION.
 //
-// A space comes from a services model whose level ids are its own; they never
-// match the architectural model's, because level ids are per document. Filtering
-// on `level_id` here would draw nothing on every real project. The honest cost
-// is that a multi-storey project draws every storey's spaces at once, which is
-// why the layer starts off and why this comment exists rather than a filter that
-// silently keeps nothing.
-function spacesForPlan() {
+// **Not by level id, and not unfiltered.** A level id is per document, so a
+// services model's ids never match the architectural model's -- which is why the
+// first version of this drew every storey at once and justified it as a design
+// choice. It was not: elevations are what cross documents, and the read simply
+// did not carry them. It does now (`levels_by_model`, per model because an id
+// means nothing without its model).
+//
+// **Falls back to drawing everything when the elevation cannot be resolved** --
+// a payload whose models pushed no levels, which is every snapshot loaded from a
+// probe capture rather than from the exporter. Drawing nothing would be worse: a
+// reader who switched the layer on would see an empty plan and conclude the
+// spaces were missing. The fallback is announced on the toggle instead of being
+// silent.
+function spacesForPlan(levelId) {
   if (!spacesPayload) return [];
-  return spacesPayload.spaces || [];
+  const spaces = spacesPayload.spaces || [];
+  spacesLevelFallback = false;
+  if (!spaces.length) return spaces;
+
+  const target = elevationOfLevel(levelId);
+  const byModel = spacesPayload.levels_by_model || {};
+  if (target === null) {
+    spacesLevelFallback = true;
+    return spaces;
+  }
+
+  // model id -> (level id -> elevation), built once per paint.
+  const elevations = {};
+  for (const [modelId, levels] of Object.entries(byModel)) {
+    const map = {};
+    for (const lvl of levels || []) map[lvl.id] = lvl.elevation;
+    elevations[modelId] = map;
+  }
+
+  const kept = [];
+  let unresolved = 0;
+  for (const space of spaces) {
+    const elev = (elevations[space.model_id] || {})[space.level_id];
+    if (elev === undefined) { unresolved++; continue; }
+    if (Math.abs(elev - target) <= SPACE_LEVEL_EPS_MM) kept.push(space);
+  }
+  // All or nothing: a payload where SOME models carry levels is filtered on
+  // those and reported for the rest. A payload where none do is the probe case,
+  // and filtering it would empty the layer.
+  if (unresolved === spaces.length) {
+    spacesLevelFallback = true;
+    return spaces;
+  }
+  spacesLevelFallback = unresolved > 0;
+  return kept;
+}
+
+// The displayed level's elevation, from the ROOMS payload -- the architectural
+// side is what defines a storey here, and it is the side the level picker is
+// built from. `null` when it cannot be resolved, which the caller treats as
+// "cannot filter" rather than "matches nothing".
+function elevationOfLevel(levelId) {
+  const levels = (currentPayload && currentPayload.levels) || [];
+  const found = levels.find(l => String(l.id) === String(levelId));
+  return found && typeof found.elevation === "number" ? found.elevation : null;
+}
+
+// The toggle's label, carrying the fallback state so it cannot go unnoticed.
+function syncSpacesToggleLabel() {
+  const btn = document.getElementById("spacesToggle");
+  if (!showSpaces) { btn.textContent = "Spaces: off"; return; }
+  btn.textContent = spacesLevelFallback ? "Spaces: on (all levels)" : "Spaces: on";
 }
 
 // Spaces poll on their own revision, in their own try, and ONLY while the layer
@@ -4764,11 +4841,13 @@ document.getElementById("ffeToggle").addEventListener("click", (e) => {
 // would otherwise be empty until the next poll tick came round.
 document.getElementById("spacesToggle").addEventListener("click", async (e) => {
   showSpaces = !showSpaces;
-  e.target.textContent = `Spaces: ${showSpaces ? "on" : "off"}`;
   e.target.classList.toggle("on", showSpaces);
   if (showSpaces) await pollSpaces();
   syncSpacesModelVisibility();
   redrawAllZones();
+  // AFTER the redraw: the label reports what the paint actually did, and only
+  // the paint knows whether the elevation resolved.
+  syncSpacesToggleLabel();
 });
 
 // Changing the scope is a REFETCH, not a client-side filter, and deliberately:
@@ -4785,6 +4864,7 @@ document.getElementById("spacesModelSelect").addEventListener("change", async (e
   lastSpacesRevision = null;
   await pollSpaces();
   redrawAllZones();
+  syncSpacesToggleLabel();
 });
 
 document.getElementById("labelsToggle").addEventListener("click", (e) => {
