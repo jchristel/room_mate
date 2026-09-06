@@ -25,8 +25,8 @@ Capture the raw duHast space and room exports, plus the Revit facts neither
 export carries, so the questions gating `docs/PLAN-spaces.md` are answered off a
 measurement instead of off a reading of duHast's source.
 
-    pyRevit  ->  run this script, select the SERVICES models AND the
-                 ARCHITECTURAL model in one multiselect run
+    pyRevit  ->  open the FEDERATED HOST and run this script; it walks the
+                 host and every loaded link, narrowed by DOCUMENT_PREFIXES
     outputs  ->  scripts/fixtures/spaces-raw-<document>.json
                  scripts/fixtures/spaces-probe-<document>.json
                  scripts/fixtures/rooms-raw-<document>.json
@@ -65,9 +65,10 @@ THE QUESTIONS, and where each is answered
       space and every room, from the same property-resolution the extractor
       ships. The analyser does the matching; this file only records the values.
   Q5  What does the systematic area difference look like, and where does it
-      cross a percentage threshold?  -> `area_property` (what RoomMate would
-      actually store and compare) and `area_internal_sqft` (Revit's own, in
-      square feet) on both sides.
+      cross a percentage threshold?  -> `area_internal_sqft` here, in Revit's
+      own square feet, against the `Area` the EXPORT carries. The export's is
+      what the server stores; v1 read the parameter instead and got a
+      display-formatted, whole-number-rounded string.
   Q6  Which phase does each element belong to?  -> `phase_name` per element,
       read through `BuiltInParameter.ROOM_PHASE`, which is the parameter a space
       shares with a room. Confirms the equality filter, and makes an
@@ -79,8 +80,12 @@ Unlike every previous probe, the two populations this one compares live in
 DIFFERENT Revit documents -- rooms in the architectural model, spaces in each
 services model, which bounds them against the architectural model as a link.
 Q4 and Q5 are therefore cross-document questions and cannot be answered from a
-single file. The run captures every selected document and the analyser joins
-them, which is also the honest rehearsal of what the server will do.
+single file. The run captures every document it resolves and the analyser
+joins them, which is also the honest rehearsal of what the server will do.
+
+On a real federated project none of these documents are OPEN -- they are all
+links inside one host, which is why `resolve_documents` walks links rather
+than offering a picker.
 
 Every output is named after its document. The FFE and windows probes write
 fixed filenames per entity, which is safe only because they probe one document
@@ -167,10 +172,22 @@ DEFAULT_KEY_PROPERTY = "Number"
 # a text comparison costs nothing to measure alongside a numeric one.
 COMPARED_PROPERTIES = ["Name", "Area"]
 
+# Title prefixes narrowing a federated host's links to the models worth
+# reading. Empty takes every loaded link. RHH ran with
+# ["RHH-HDR-AR-MDL", "RHH-JHA-"].
+DOCUMENT_PREFIXES = []
+
 # Bumped whenever the probe's OUTPUT or its conversion changes. Printed at
 # startup because this script is run by exec'ing its text, so nothing else tells
 # a reader which copy actually ran.
-PROBE_VERSION = 1
+#
+# v2, after the RHH run: documents are resolved by walking the host's LINKS
+# rather than picking from open documents, and the per-element `property_*`
+# reads are gone -- they were display-formatted and rounded, and the export
+# carries the value the server actually stores. A v1 capture still analyses,
+# because the analyser falls back to `key_value` when an export has no
+# properties; its `property_*` fields are simply ignored.
+PROBE_VERSION = 2
 
 
 # --------------------------------------------------------------------------
@@ -331,10 +348,16 @@ def duhast_collected_count(doc, spec):
 def probe_element(doc, element, key_property, compared_properties):
     """Every Revit fact about one SpatialElement that its export does not carry.
 
-    Property VALUES are read from the element's parameters by name, matching how
-    `find_property` reads them off the export's `instance_properties` -- the
-    probe wants the value the server would store, and reading it here means an
-    element the export dropped still contributes one.
+    **Compared property values are NOT read here, and v1 was wrong to.** It read
+    them with `LookupParameter(...).AsValueString()`, which on RHH returned
+    `"71 m2"` for a space duHast exports as `71.27892877719862`: display
+    formatted, unit suffixed, and rounded to the whole number. The server stores
+    the export's value, so calibrating anything on the probe's would set a
+    threshold from the rounding. The analyser reads them from the export.
+
+    `key_value` stays, because the key is often a builtin (`ROOM_NUMBER`) that
+    reads back exactly, and because an element the export dropped still needs
+    one. The analyser prefers the export and falls back to this.
     """
     facts = {
         "id": _element_id_str(element.Id),
@@ -348,8 +371,6 @@ def probe_element(doc, element, key_property, compared_properties):
     }
     facts.update(_boundary_facts(element))
     facts.update(_level_facts(element))
-    for name in compared_properties:
-        facts["property_" + name] = _named_param(element, name)
     return facts
 
 
@@ -553,41 +574,57 @@ def probe_document(doc, out_dir, key_property, compared_properties):
 # --------------------------------------------------------------------------
 
 
-def resolve_documents():
-    """The documents to probe: whatever the user picks, else the active one.
+def linked_documents(host):
+    """The host document plus every loaded link.
 
-    Multiselect is not a convenience here, it is the shape of the question.
+    **The RHH run's first correction.** The draft picked from *open* documents,
+    and on a real federated project none of these are open: the architectural
+    models and the services models are all links inside one host. A picker over
+    open documents finds exactly one document and the cross-document half of the
+    probe answers nothing."""
+    from duHast.Revit.Links.links import get_link_docs
+
+    docs = [host]
+    for _name, link_doc in get_link_docs(
+        host, link_names_filter=[], inverse_filter=True
+    ).items():
+        docs.append(link_doc)
+    return docs
+
+
+def resolve_documents(prefixes=None):
+    """The documents to probe: the host and its links, narrowed by title prefix.
+
+    Multi-document is not a convenience here, it is the shape of the question.
     Q4 and Q5 compare spaces in a services model against rooms in an
     architectural one, so a single-document run can answer Q1, Q2, Q3 and Q6 and
     nothing else -- which the analyser says out loud rather than reporting a 0%
-    key match."""
-    host = None
+    key match.
+
+    `prefixes` is how a federated host with dozens of links is narrowed to the
+    ones worth reading (`["RHH-HDR-AR-MDL", "RHH-JHA-"]` on the RHH run). Empty
+    or None takes every loaded link, which is right for a small project and
+    ruinous on a large one -- so it is an argument, not a constant.
+    """
     try:
         host = __revit__.ActiveUIDocument.Document  # noqa: F821 - pyRevit global
     except Exception:
-        host = None
+        raise RuntimeError(
+            "no Revit document: run this from pyRevit with the federated host "
+            "open, or call probe_document(doc, out_dir, 'Number') yourself"
+        )
 
     try:
-        from pyrevit import forms
-        from duHast.pyRevit.UI.doc_selector import pick_document
+        docs = linked_documents(host)
+    except Exception as error:
+        # A host with no links, or a duHast without `get_link_docs`, is still
+        # worth probing -- it just answers the single-document subset.
+        print("  WARNING: could not read links ({}); probing the host only".format(error))
+        docs = [host]
 
-        picked = pick_document(
-            host,
-            forms,
-            button_name="Select the services model(s) AND the architectural model",
-            multiselect=True,
-        )
-        if picked:
-            return list(picked)
-    except Exception:
-        pass
-
-    if host is None:
-        raise RuntimeError(
-            "no Revit document: run this from pyRevit with a model open, or call "
-            "probe_document(doc, out_dir, 'Number', ['Name', 'Area']) yourself"
-        )
-    return [host]
+    if not prefixes:
+        return docs
+    return [d for d in docs if any(prefix in d.Title for prefix in prefixes)]
 
 
 def main(out_dir=None, key_property=DEFAULT_KEY_PROPERTY, compared_properties=None):
@@ -608,7 +645,7 @@ def main(out_dir=None, key_property=DEFAULT_KEY_PROPERTY, compared_properties=No
         "compared_properties": compared_properties,
         "documents": [],
     }
-    for doc in resolve_documents():
+    for doc in resolve_documents(DOCUMENT_PREFIXES):
         print("probing {} -> {}".format(doc.Title, out_dir))
         written, summary = probe_document(doc, out_dir, key_property, compared_properties)
         for path in written:
