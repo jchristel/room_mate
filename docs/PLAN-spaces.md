@@ -1,6 +1,14 @@
 # RoomMate — Spaces implementation plan
 
-> **Status: PR A drafted, not yet run. Nothing else is built.** This records the design agreed
+> **Status: PR A run against RHH, 2026-09-06. The kill condition is CLEARED.**
+> The decisions below were written from a reading of duHast's source and are
+> left standing rather than edited into agreement with the data;
+> [As measured](#as-measured--rhh-2026-09-06) records what the probe found,
+> including the three predictions it inverted and the one that would have made
+> the first push silently wrong. Read that section before trusting any figure
+> above it. Nothing else is built.
+>
+> **This records the design agreed
 > before any code, so the implementation does not re-derive it and the open
 > questions are open *before* the work rather than after — the discipline the
 > phasing, windows and FF&E plans were all written under.
@@ -358,6 +366,143 @@ small rooms", until `tolerance_min` is set from this measurement.
 F is last for the reason the FF&E viewer PR proved: a fifth draw layer is where
 two bugs appeared that the tests did not catch, and they were separable only
 because nothing else landed with them.
+
+## As measured — RHH, 2026-09-06
+
+14 documents, walked as **links from a federated host** rather than as open
+documents — the first correction, and it changed the probe: `pick_document` over
+open documents finds none of these, so `resolve_documents` became a link walk
+filtered by title prefix.
+
+**10,570 spaces across four services models** (`ME` 1533, `HY` 3035, `FR` 3057,
+`EL` 2945), one per service covering the whole building, against **3,119 rooms
+across seven architectural models**.
+
+### The kill condition is cleared, decisively
+
+**10,395 of 10,570 spaces (98.3%) carry an exported polygon, and exactly one is
+`Unmeasured`.** duHast's `_outer_loop_via_solid` fallback carries the
+linked-boundary case, which was the single thing this probe existed to find out.
+The rest divides as 114 `Unenclosed`, 3 `Redundant` and 57 `Unplaced` — all
+ordinary findings at hospital scale. D5 and D6 stand.
+
+Units also agree everywhere: every document exports `Area` in square metres
+(ratio 0.0929 against internal square feet), so the 10.76x trap Q5 was built to
+catch is not present on this project.
+
+### What the data inverted
+
+- **`GetBoundarySegments` is useless in a services model, and D4 leaned on it.**
+  96.3% of spaces (10,182 of 10,570) report **zero** boundary segments while
+  producing a perfectly good polygon, because their bounding elements are in the
+  linked architectural model. The `Unenclosed`-versus-`Redundant` split D5
+  describes is therefore unobservable there — the 3 `Redundant` all came from the
+  one services model that has some native boundaries. **The extractor must
+  classify enclosure from `Area` and the export's own polygon, not from segment
+  count.** `Perimeter` exports as `0.0` for the same reason, and is not a
+  substitute.
+
+- **Matching cannot be one project-wide pool, which is what D2 said.** One
+  services file per service means a room number legitimately names a space in
+  each of them. Pooled, that reported **3,046 duplicate keys** and made the
+  expected shape of the data into the loudest finding in the report. Per services
+  model, the real number is **31** keys duplicated inside a single model — small,
+  actionable, and exactly the invariant check D2 wanted.
+
+- **"Every model holding rooms" is not the room authority.** `RHH-JHA-EL-MDL-HOS`
+  holds 2,945 spaces **and 3,418 rooms of its own**, numbered `1`, `2`, `3`
+  against the architects' `ENG137`. Pooled into the room side they are 3,418
+  rooms that name nothing, and they buried the 44 architectural rooms that
+  genuinely have no space. The room side needs an explicit scope — the analyser
+  grew `--room-docs` for it, and the server will need the settings equivalent.
+  This is the room-side scope [C2](#c2) said a space cannot supply, arriving from
+  a direction C2 did not consider.
+
+### The finding that would have made the first push silently wrong
+
+**`RHH-JHA-ME-MDL-HOS` has 1,532 of its 1,533 spaces in a phase called
+`Future`.** Every other services model is `New Construction`; the architectural
+models use `New Construction` and `Future Expansion`. No two disciplines spell
+the phase the same way.
+
+`SnapshotEnvelope::phase` is **one per run, not one per model** — `choose_phase`
+offers only names common to every selected document, by construction. So a run
+over all four services models under `New Construction` pushes 3,035 + 3,057 +
+2,945 + **1** spaces, and nothing anywhere says so: the producer's empty-push
+refusal is run-scoped, and the run is very far from empty. That is the five
+empty pushes again, silent and partial rather than loud and empty.
+
+Two consequences, and neither is a contract change — the one-phase-per-run rule
+is load-bearing and correctly argued where it lives:
+
+- **A spaces run is per phase, so RHH needs two.** Recorded here so the first
+  push does not discover it.
+- **The push summary must report a per-model element count**, so a model
+  contributing 1 of its 1,533 spaces is visible at the moment it happens. Cheap,
+  producer-side, and it serves requirement 1 directly.
+
+### What the key and the area threshold actually measure
+
+Per services model, against the architects' rooms only:
+
+| services model | spaces | distinct keys | duplicated within | matched | unmatched |
+|---|---|---|---|---|---|
+| `ME` | 1533 | 1507 | 3 | 1503 | 4 |
+| `HY` | 3035 | 3016 | 11 | 3016 | 0 |
+| `FR` | 3057 | 3037 | 11 | 3037 | 0 |
+| `EL` | 2945 | 2936 | 6 | 2881 | 55 |
+
+**The key works.** Blank keys: zero, in all four. `HY` and `FR` match every
+single space to a room.
+
+The inverse is the more useful number, and it is where requirement 1 lands: of
+3,090 distinct architectural room keys, **`ME` names only 1,503 — 1,587 rooms
+have no mechanical space at all**, against 53 for `FR` and 74 for `HY`. `ME` is
+half a building behind, which is a finding no amount of per-space checking would
+have produced.
+
+[C3](#c3) predicted the area crossover and the data is almost exactly the
+predicted shape — the median relative difference falls monotonically with room
+size:
+
+| room area (m2) | pairs | median delta % | over 30% |
+|---|---|---|---|
+| under 2 | 1889 | 14.0 | 244 |
+| 2 to 5 | 2383 | 10.3 | 78 |
+| 5 to 10 | 1873 | 7.9 | 32 |
+| 10 to 25 | 2551 | 6.0 | 24 |
+| 25 to 100 | 1191 | 3.8 | 30 |
+| over 100 | 179 | 0.7 | 8 |
+
+A flat 30% flags 416 pairs of 10,066, **244 of them (59%) sub-2 m2 rooms** —
+which is the noise `tolerance_min` exists to remove. The analyser now sweeps the
+combinations:
+
+| `tolerance_pct` | min 0 | min 1 | min 2 | min 5 |
+|---|---|---|---|---|
+| 20% | 1019 | 396 | 163 | 92 |
+| 30% | 416 | 183 | **127** | 81 |
+| 50% | 138 | 94 | 86 | 56 |
+| 100% | 44 | 44 | 43 | 25 |
+
+**`tolerance_pct = 30`, `tolerance_min = 2` gives 127 findings from 10,066
+pairs** — 1.3%, a report a person will actually read. The worst are not tolerance
+questions at all: `ENG661` is a 0.62 m2 room against a 110 m2 space sharing its
+number. 219 pairs are `incomparable` (zero room area), which is the state D8
+gives them.
+
+### What the probe got wrong about itself
+
+`property_Area` came back as `"71 m2"` — `AsValueString()` is display-formatted,
+unit-suffixed and **rounded to the whole number**, so it quantises every small
+space by up to half a square metre before anything compares it. duHast's export
+of the same space carries `71.27892877719862`, and that is what the server
+stores. The analyser now reads compared properties from the export and ignores
+the probe's own parameter reads; the probe's `property_*` fields are redundant
+and should be dropped rather than fixed.
+
+Cheap to say now, expensive if it had reached PR E: an area check calibrated on
+rounded values would have set its threshold from the rounding.
 
 ## Self-critique
 

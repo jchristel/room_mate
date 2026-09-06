@@ -114,9 +114,20 @@ def load_inputs(directory):
             raw_path = os.path.join(directory, "{}-raw-{}.json".format(entity, slug))
             if not os.path.isfile(probe_path):
                 continue
+            probe = load(probe_path)
+            # The export is REDUCED as it is read, never retained. A real run is
+            # hundreds of megabytes -- RHH's four services models alone are
+            # 141 MB of space polygons. Holding all of them parsed, to answer one
+            # integer and a handful of properties per element, is how an analyser
+            # that works on a house dies on a hospital.
+            outer_points, properties = reduce_export(
+                load(raw_path) if os.path.isfile(raw_path) else None,
+                probe.get("list_key", entity),
+            )
             loaded["entities"][entity] = {
-                "probe": load(probe_path),
-                "raw": load(raw_path) if os.path.isfile(raw_path) else None,
+                "probe": probe,
+                "outer_points": outer_points,
+                "properties": properties,
             }
         documents.append(loaded)
 
@@ -128,31 +139,41 @@ def load_inputs(directory):
 # --------------------------------------------------------------------------
 
 
-def exported_by_id(raw, list_key):
-    """duHast's export records, keyed by the element id inside
-    `instance_properties` -- the same place `translate_room` reads it from."""
-    out = {}
+def reduce_export(raw, list_key):
+    """The two things this file ever asks a raw export: how many points each
+    element's OUTER loop has, and what its properties say.
+
+    **Property values come from the EXPORT, not from the probe's own parameter
+    reads, and the difference is not cosmetic.** The probe reads
+    `LookupParameter("Area").AsValueString()`, which on RHH returns `"71 m2"` --
+    display-formatted, unit-suffixed and rounded to the whole number. duHast's
+    export of the same space carries `71.27892877719862`. The server stores the
+    export's value, so an analysis run on the probe's is measuring something no
+    consumer will ever see, and quantising every small space by up to half a
+    square metre before comparing it. Fixing that here rather than re-running in
+    Revit is the point of the probe/analyser split.
+
+    Keyed on the id inside `instance_properties`, the same place
+    `translate_room` reads it from. Zero points and absent are folded together:
+    `translate_room` drops both, so for every question asked here they mean the
+    same thing."""
+    outer_points = {}
+    properties = {}
     for record in (raw or {}).get(list_key, []) or []:
-        props = record.get("instance_properties") or {}
-        element_id = props.get("id")
+        instance = record.get("instance_properties") or {}
+        element_id = instance.get("id")
         if element_id is None:
             continue
-        out[str(element_id)] = record
-    return out
-
-
-def outer_point_count(record):
-    """How many points duHast produced for this element's OUTER loop.
-
-    Zero and absent are folded together: `translate_room` drops both, so for
-    every question this file asks they mean the same thing."""
-    if not record:
-        return 0
-    polygons = record.get("polygon") or []
-    if not polygons:
-        return 0
-    outer = (polygons[0] or {}).get("outer_loop") or []
-    return len(outer)
+        element_id = str(element_id)
+        polygons = record.get("polygon") or []
+        outer = (polygons[0] or {}).get("outer_loop") or [] if polygons else []
+        outer_points[element_id] = len(outer)
+        properties[element_id] = dict(
+            (entry.get("name"), entry.get("value"))
+            for entry in (instance.get("properties") or [])
+            if isinstance(entry, dict)
+        )
+    return outer_points, properties
 
 
 # --------------------------------------------------------------------------
@@ -160,7 +181,7 @@ def outer_point_count(record):
 # --------------------------------------------------------------------------
 
 
-def classify(element, exported):
+def classify(element, points):
     """One element's enclosure state.
 
     Ordered so the cheapest, least ambiguous test comes first, and so the two
@@ -180,7 +201,6 @@ def classify(element, exported):
     if element.get("location_is_none"):
         return "unplaced"
 
-    points = outer_point_count(exported)
     if points > 0:
         return "enclosed"
 
@@ -201,17 +221,16 @@ def enclosure_rows(documents):
         if not entry:
             continue
         probe = entry["probe"]
-        exported = exported_by_id(entry["raw"], probe.get("list_key", "space"))
+        points = entry["outer_points"]
         counts = Counter()
         for element in probe.get("elements", []):
-            state = classify(element, exported.get(element.get("id")))
+            state = classify(element, points.get(element.get("id"), 0))
             counts[state] += 1
             classified.append(
                 {
                     "document": probe.get("document"),
                     "state": state,
                     "element": element,
-                    "exported": exported.get(element.get("id")),
                 }
             )
         rows.append(
@@ -261,45 +280,49 @@ def presence_rows(documents):
 # --------------------------------------------------------------------------
 
 
-def key_index(documents, entity):
-    """Key value -> list of (document, element), across every document holding
-    this entity.
+def key_of(element, properties, key_property):
+    """One element's key value, preferring the EXPORT's property over the
+    probe's own parameter read, for `reduce_export`'s reason."""
+    value = (properties.get(element.get("id")) or {}).get(key_property)
+    if value is None:
+        value = element.get("key_value")
+    return ("" if value is None else str(value)).strip()
 
-    Project-wide and hierarchy-blind, which is what the QA report will be
-    (PLAN-spaces D3). A key appearing twice is recorded rather than resolved:
-    the plan's D2 says ambiguity is reported and never guessed, and this is the
-    measurement that says whether the project's uniqueness claim holds."""
+
+def key_index(entries, key_property):
+    """Key value -> list of (document, element), over the given entity entries.
+
+    Hierarchy-blind, which is what the QA report will be (PLAN-spaces D3). A key
+    appearing twice is recorded rather than resolved: D2 says ambiguity is
+    reported and never guessed."""
     index = OrderedDict()
-    for doc in documents:
-        entry = doc["entities"].get(entity)
-        if not entry:
-            continue
+    for entry in entries:
         probe = entry["probe"]
         for element in probe.get("elements", []):
-            value = (element.get("key_value") or "").strip()
-            if not value:
-                value = ""
+            value = key_of(element, entry["properties"], key_property)
             index.setdefault(value, []).append((probe.get("document"), element))
     return index
 
 
-def match_key_sets(space_index, room_index):
-    """Matched, unmatched-either-way, blank and ambiguous, from the two indexes."""
-    space_blank = len(space_index.get("", []))
-    room_blank = len(room_index.get("", []))
+def match_one_way(space_index, room_index):
+    """ONE services model's spaces against the pooled rooms.
+
+    **Scoped to one space document, and that is the correction RHH forced.**
+    PLAN-spaces D2 said "project-wide across every model holding rooms", which
+    quietly assumed one space per room. RHH has one services file PER SERVICE,
+    each covering the whole building, so a room number legitimately names a
+    mechanical space AND a hydraulic one AND an electrical one. Pooling them
+    reported 3046 duplicate keys and made the expected shape of the data into
+    the loudest finding in the report. Duplication WITHIN one services model is
+    the real ambiguity; duplication across them is the design."""
     space_keys = set(k for k in space_index if k)
     room_keys = set(k for k in room_index if k)
-
     return {
         "space_total": sum(len(v) for v in space_index.values()),
-        "room_total": sum(len(v) for v in room_index.values()),
-        "space_blank": space_blank,
-        "room_blank": room_blank,
+        "space_blank": len(space_index.get("", [])),
         "matched": sorted(space_keys & room_keys),
         "space_only": sorted(space_keys - room_keys),
-        "room_only": sorted(room_keys - space_keys),
         "space_duplicates": sorted(k for k in space_keys if len(space_index[k]) > 1),
-        "room_duplicates": sorted(k for k in room_keys if len(room_index[k]) > 1),
     }
 
 
@@ -315,18 +338,18 @@ def as_float(value):
         return None
 
 
-def area_unit(probe):
-    """Which unit this document's `Area` PARAMETER is in, measured rather than
-    assumed: the median of parameter / internal across its elements.
+def area_unit(probe, properties):
+    """Which unit this document's exported `Area` is in, measured rather than
+    assumed: the median of exported / internal across its elements.
 
     This is the check that stops the whole area comparison being nonsense. The
-    server compares stored property STRINGS, so an architectural model
-    displaying square metres against a services model displaying square feet
-    would disagree by 10.76x on every single pair -- a hundred-percent findings
-    rate that says nothing about the data."""
+    server compares stored property values, so an architectural model exporting
+    square metres against a services model exporting square feet would disagree
+    by 10.76x on every single pair -- a hundred-percent findings rate that says
+    nothing about the data."""
     ratios = []
     for element in probe.get("elements", []):
-        stated = as_float(element.get("property_Area"))
+        stated = as_float((properties.get(element.get("id")) or {}).get("Area"))
         internal = element.get("area_internal_sqft")
         if stated is None or not internal:
             continue
@@ -377,18 +400,56 @@ def area_deltas(space_index, room_index, matched, state_by_element):
             excluded["no area recorded"] += 1
             continue
         if not room_area:
-            out.append({"key": key, "room": room_area, "space": space_area, "delta_pct": None})
+            out.append({"key": key, "document": space_doc, "room": room_area,
+                        "space": space_area, "delta_pct": None})
             continue
         delta = abs(space_area - room_area) / room_area * 100.0
         out.append(
             {
                 "key": key,
+                "document": space_doc,
                 "room": room_area,
                 "space": space_area,
                 "delta_pct": round(delta, 1),
             }
         )
     return out, excluded
+
+
+# Candidate thresholds for the sweep below. Percentages are what a reader
+# reaches for; the floors are in the room document's display units, and exist
+# because a percentage alone flags whichever size band sits above it.
+SWEEP_PCTS = [20.0, 30.0, 50.0, 100.0]
+SWEEP_MINS = [0.0, 1.0, 2.0, 5.0]
+
+
+def threshold_sweep(deltas, unit_ratio):
+    """How many pairs each `(tolerance_pct, tolerance_min)` combination would
+    flag.
+
+    The table that turns "flag past 30%, say" into a number. D8's two thresholds
+    are ANDed, so a floor removes the small-room band without touching the large
+    disagreements -- and the only way to choose either is to see what each costs
+    in findings a person has to read."""
+    scale = unit_ratio if unit_ratio else 1.0
+    rows = []
+    for pct_threshold in SWEEP_PCTS:
+        row = [pct_threshold]
+        for floor in SWEEP_MINS:
+            flagged = 0
+            for entry in deltas:
+                if entry["delta_pct"] is None:
+                    continue
+                room_display = entry["room"] * scale
+                space_display = entry["space"] * scale
+                if entry["delta_pct"] <= pct_threshold:
+                    continue
+                if abs(space_display - room_display) <= floor:
+                    continue
+                flagged += 1
+            row.append(flagged)
+        rows.append(row)
+    return rows
 
 
 def bucket_of(area_value):
@@ -517,12 +578,12 @@ def verdict(totals, presence, keys, has_rooms):
         )
 
     notes = []
-    if keys["space_duplicates"] or keys["room_duplicates"]:
+    if keys["duplicates_within"] or keys["room_duplicates"]:
         notes.append(
-            "the key is NOT unique ({} duplicate space keys, {} duplicate room "
-            "keys) - D2's ambiguity reporting stops being an invariant check and "
-            "becomes a finding".format(
-                len(keys["space_duplicates"]), len(keys["room_duplicates"])
+            "the key is NOT unique ({} keys duplicated inside a single services "
+            "model, {} duplicated across the room sources) - D2's ambiguity "
+            "reporting stops being an invariant check and becomes a finding".format(
+                keys["duplicates_within"], len(keys["room_duplicates"])
             )
         )
     if totals["unmeasured"]:
@@ -565,10 +626,49 @@ def build_report(data):
 
     encl_rows, classified = enclosure_rows(documents)
     presence = presence_rows(documents)
-    space_index = key_index(documents, "spaces")
-    room_index = key_index(documents, "rooms")
-    keys = match_key_sets(space_index, room_index)
-    keys["key_property"] = key_property
+
+    # Which documents play which role. A document is a SPACE source if it holds
+    # spaces and a ROOM source if it holds rooms -- and RHH proved those are not
+    # exclusive: `RHH-JHA-EL-MDL-HOS` holds 2945 spaces AND 3418 rooms of its
+    # own, numbered `1`, `2`, `3`... against the architects' `ENG137`. Pooling
+    # those into the room side put 3418 rooms that name nothing into the
+    # unmatched column. `--room-docs` is how a reader says which documents are
+    # actually the room authority; without it the table below shows the
+    # composition so the pollution is at least visible rather than averaged in.
+    space_entries = []
+    room_entries = []
+    for doc in documents:
+        for entity, bucket, wanted in (
+            ("spaces", space_entries, data["space_docs"]),
+            ("rooms", room_entries, data["room_docs"]),
+        ):
+            entry = doc["entities"].get(entity)
+            if not entry or not entry["probe"].get("elements"):
+                continue
+            title = entry["probe"].get("document") or ""
+            if wanted and wanted not in title:
+                continue
+            bucket.append(entry)
+
+    room_index = key_index(room_entries, key_property)
+    per_space_doc = []
+    for entry in space_entries:
+        index_one = key_index([entry], key_property)
+        result = match_one_way(index_one, room_index)
+        result["document"] = entry["probe"].get("document")
+        result["index"] = index_one
+        per_space_doc.append(result)
+
+    keys = {
+        "key_property": key_property,
+        "matched": sorted(set(k for r in per_space_doc for k in r["matched"])),
+        "space_only": sorted(set(k for r in per_space_doc for k in r["space_only"])),
+        "space_blank": sum(r["space_blank"] for r in per_space_doc),
+        "duplicates_within": sum(len(r["space_duplicates"]) for r in per_space_doc),
+        "room_duplicates": sorted(
+            k for k in room_index if k and len(room_index[k]) > 1
+        ),
+    }
 
     state_counts = Counter(c["state"] for c in classified)
     totals = {
@@ -665,34 +765,47 @@ def build_report(data):
         add("against. Re-run with the architectural model selected.")
         add()
     else:
+        add("**One row per services model, matched against the pooled rooms.**")
+        add("Not one project-wide pool: a services file per service means a room")
+        add("number legitimately names a space in each of them, so duplication")
+        add("ACROSS services models is the design and only duplication WITHIN one")
+        add("is ambiguity. `duplicate` below counts the latter.")
+        add()
         add(table(
-            ["measure", "spaces", "rooms"],
+            ["services model", "spaces", "blank key", "distinct", "duplicate",
+             "matched", "unmatched"],
             [
-                ["total elements", keys["space_total"], keys["room_total"]],
-                ["blank key", keys["space_blank"], keys["room_blank"]],
-                ["distinct keys",
-                 len(keys["matched"]) + len(keys["space_only"]),
-                 len(keys["matched"]) + len(keys["room_only"])],
-                ["duplicate keys",
-                 len(keys["space_duplicates"]), len(keys["room_duplicates"])],
-                ["matched", len(keys["matched"]), len(keys["matched"])],
-                ["unmatched", len(keys["space_only"]), len(keys["room_only"])],
+                [
+                    r["document"], r["space_total"], r["space_blank"],
+                    len(r["matched"]) + len(r["space_only"]),
+                    len(r["space_duplicates"]),
+                    len(r["matched"]),
+                    len(r["space_only"]),
+                ]
+                for r in per_space_doc
             ],
         ))
         add()
-        add("**Duplicates are the uniqueness claim under test.** PLAN-spaces D2")
-        add("treats an ambiguous key as a reported state rather than a guess, and")
-        add("this project's review said the key is unique -- so any row above zero")
-        add("promotes that guard from an invariant check to a finding.")
+        add("Room sources, and how much of each is reachable by any space:")
+        add()
+        room_by_doc = OrderedDict()
+        for value, entries in room_index.items():
+            for doc_title, _element in entries:
+                stats = room_by_doc.setdefault(doc_title, {"total": 0, "matched": 0})
+                stats["total"] += 1
+                if value and value in set(keys["matched"]):
+                    stats["matched"] += 1
+        add(table(
+            ["room model", "rooms", "named by some space", "named by none"],
+            [
+                [title, s["total"], s["matched"], s["total"] - s["matched"]]
+                for title, s in room_by_doc.items()
+            ],
+        ))
         add()
         if keys["space_only"]:
-            add("Unmatched space keys (first 20): `{}`".format(
+            add("Space keys matching no room (first 20): `{}`".format(
                 "`, `".join(keys["space_only"][:20])
-            ))
-            add()
-        if keys["room_only"]:
-            add("Unmatched room keys (first 20): `{}`".format(
-                "`, `".join(keys["room_only"][:20])
             ))
             add()
 
@@ -700,19 +813,16 @@ def build_report(data):
     add("## Q5 - Area, its unit, and where a percentage threshold crosses")
     add()
     unit_rows = []
-    for doc in documents:
-        for entity in ("spaces", "rooms"):
-            entry = doc["entities"].get(entity)
-            if not entry:
-                continue
-            unit = area_unit(entry["probe"])
+    for entity, entries in (("spaces", space_entries), ("rooms", room_entries)):
+        for entry in entries:
+            unit = area_unit(entry["probe"], entry["properties"])
             unit_rows.append([
                 entry["probe"].get("document"), entity, unit["unit"], unit["ratio"],
                 unit["samples"],
             ])
-    add("The `Area` parameter's unit per document, measured against Revit's")
+    add("The exported `Area`'s unit per document, measured against Revit's")
     add("internal square feet. **These must agree across documents**: the server")
-    add("compares stored property strings, so a square-metre model against a")
+    add("compares stored property values, so a square-metre model against a")
     add("square-foot one disagrees by 10.76x on every pair -- a 100% findings rate")
     add("that says nothing about the data.")
     add()
@@ -720,18 +830,20 @@ def build_report(data):
     add()
 
     if has_rooms and keys["matched"]:
-        room_unit = None
-        for doc in documents:
-            entry = doc["entities"].get("rooms")
-            if entry:
-                room_unit = area_unit(entry["probe"])
-                break
+        room_unit = area_unit(
+            room_entries[0]["probe"], room_entries[0]["properties"]
+        ) if room_entries else None
         state_by_element = dict(
             ((c["document"], c["element"].get("id")), c["state"]) for c in classified
         )
-        deltas, excluded = area_deltas(
-            space_index, room_index, keys["matched"], state_by_element
-        )
+        deltas = []
+        excluded = Counter()
+        for result in per_space_doc:
+            one, one_excluded = area_deltas(
+                result["index"], room_index, result["matched"], state_by_element
+            )
+            deltas.extend(one)
+            excluded.update(one_excluded)
         rows, incomparable = crossover_rows(deltas, (room_unit or {}).get("ratio"))
         add("Relative area difference `|space - room| / room`, by room size, in")
         add("the room document's display units. **This is the table")
@@ -765,12 +877,26 @@ def build_report(data):
             key=lambda d: d["delta_pct"],
             reverse=True,
         )[:15]
+        sweep = threshold_sweep(deltas, (room_unit or {}).get("ratio"))
+        add("What each threshold pair would actually flag, out of {} comparable".format(
+            len([d for d in deltas if d["delta_pct"] is not None])
+        ))
+        add("pairs. Columns are `tolerance_min` in the room document's display")
+        add("units; D8 ANDs the two, so a floor removes the small-room band")
+        add("without touching a large disagreement.")
+        add()
+        add(table(
+            ["tolerance_pct"] + ["min {}".format(m) for m in SWEEP_MINS],
+            sweep,
+        ))
+        add()
         if worst:
             add("Worst {} pairs:".format(len(worst)))
             add()
             add(table(
-                ["key", "room (sqft)", "space (sqft)", "delta %"],
-                [[w["key"], round(w["room"], 2), round(w["space"], 2), w["delta_pct"]]
+                ["key", "services model", "room (sqft)", "space (sqft)", "delta %"],
+                [[w["key"], w["document"], round(w["room"], 2), round(w["space"], 2),
+                  w["delta_pct"]]
                  for w in worst],
             ))
             add()
@@ -811,9 +937,19 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dir", default=DEFAULT_DIR, help="directory holding the probe files")
     parser.add_argument("--out", default=None, help="report path (default: <dir>/spaces-probe-report.md)")
+    # Role filters, because "holds rooms" does not mean "is the room authority".
+    # RHH's electrical model holds 3418 rooms of its own, numbered on a scheme
+    # nothing else shares; pooled into the room side they are 3418 rooms that
+    # name nothing. A substring is enough to say which documents count.
+    parser.add_argument("--room-docs", default=None,
+                        help="only treat documents whose title contains this as room sources")
+    parser.add_argument("--space-docs", default=None,
+                        help="only treat documents whose title contains this as space sources")
     args = parser.parse_args(argv)
 
     data = load_inputs(args.dir)
+    data["room_docs"] = args.room_docs
+    data["space_docs"] = args.space_docs
     report = build_report(data)
 
     out = args.out or os.path.join(args.dir, "spaces-probe-report.md")
