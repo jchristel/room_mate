@@ -10,7 +10,7 @@
 //! left here is one struct, one `FilterTarget` impl and a loop.
 //!
 //! **Two things a rooms read does that this deliberately does not**, both
-//! recorded in `docs/PLAN-spaces.md` rather than merely omitted:
+//! recorded in `docs/Superseded/PLAN-spaces.md` rather than merely omitted:
 //!
 //! - **No `?building=`.** A room's building comes from its own hierarchy
 //!   properties. A space's would come either from properties nobody has checked

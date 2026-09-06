@@ -1,8 +1,19 @@
 # RoomMate — Spaces implementation plan
 
-> **Status: BUILT.** A through F, and the pyRevit button. Both of the demand's
-> questions are answered end to end, and spaces can be exported from Revit,
-> pushed, read, reconciled against rooms and drawn on the plan.
+> **Superseded — archived 2026-09-06, the day the last of it landed.** A
+> through F and the pyRevit button all shipped, so what the entity *does* is
+> now documented where it is built: `contract/spaces.rs`, `service/spaces.rs`,
+> the `[spaces]` policy in `settings/mod.rs`, `exporters/spaces.py`, and
+> `CLAUDE.md`'s "Spaces: what the fifth entity does differently" for the three
+> rules that are this entity's alone. The two items this plan left genuinely
+> open — the v2 geometric space↔room check (D6) and composite match keys (C4)
+> — moved to [Entities](../STRATEGY-ENTITIES.md)'s deferred list, which is
+> where they are now maintained. **Nothing here is live**; it is kept as the
+> record of how the work was sequenced and what was deliberately not built.
+>
+> **Status at the time: BUILT.** A through F, and the pyRevit button. Both of
+> the demand's questions are answered end to end, and spaces can be exported
+> from Revit, pushed, read, reconciled against rooms and drawn on the plan.
 > The decisions below were written from a reading of duHast's source and are
 > left standing rather than edited into agreement with the data;
 > [As measured](#as-measured--rhh-2026-09-06) records what the probe found,
@@ -27,10 +38,10 @@
 > **all rooms against all spaces, ignoring hierarchy**, which reversed C2 and
 > gave D8 a tolerance it did not have.
 
-Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
-[Entities](STRATEGY-ENTITIES.md) · [Sources](STRATEGY-SOURCES.md) ·
-[Server](STRATEGY-SERVER.md) · [Browser](STRATEGY-BROWSER.md) ·
-[MCP](STRATEGY-MCP.md) · [Conventions](CODING-CONVENTIONS.md)
+Part of the Roommate strategy docs: [Index](../STRATEGY.md) ·
+[Entities](../STRATEGY-ENTITIES.md) · [Sources](../STRATEGY-SOURCES.md) ·
+[Server](../STRATEGY-SERVER.md) · [Browser](../STRATEGY-BROWSER.md) ·
+[MCP](../STRATEGY-MCP.md) · [Conventions](../CODING-CONVENTIONS.md)
 
 ## The demand
 
@@ -48,7 +59,7 @@ model-scoped and this one cannot be.
 
 ## Why this is an entity and not a reference source
 
-[Entities](STRATEGY-ENTITIES.md) sets a three-part test: extracted from the
+[Entities](../STRATEGY-ENTITIES.md) sets a three-part test: extracted from the
 model, carries its own geometry and identity, and other data joins onto it. A
 space passes all three. The rejected alternative — exporting spaces to CSV per
 model and joining them onto rooms as `[sources.reference.spaces]` — fails
@@ -150,7 +161,7 @@ Confirmed the same is true of rooms today, and deliberately left alone:
 `populate_data_room_object` returns `None` when it produces no polygon. **Both
 drop unplaced and unenclosed rooms alike, and cannot tell them apart.** Changing
 that would change the element count of every room snapshot ever taken; it is out
-of scope here, and belongs in [Entities](STRATEGY-ENTITIES.md) if it is ever
+of scope here, and belongs in [Entities](../STRATEGY-ENTITIES.md) if it is ever
 wanted.
 
 The distinction spaces need is **not in the export** — an unplaced space and an
@@ -576,7 +587,7 @@ nowhere. Nothing failed: the batch was non-empty, the mesh was on the stage unde
 its own label, no error reached the console, and the typecheck, the unit tests
 and the diff all looked correct. It was visible only by driving the page and
 seeing an unchanged plan, which is exactly the discipline
-[CODING-CONVENTIONS](CODING-CONVENTIONS.md) states for frontend work and exactly
+[CODING-CONVENTIONS](../CODING-CONVENTIONS.md) states for frontend work and exactly
 the kind of bug it was written about.
 
 ## Self-critique

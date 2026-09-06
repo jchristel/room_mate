@@ -30,8 +30,9 @@ invariants that are expensive to rediscover.
   text, and the hierarchy scopes that bind them — will be stored, pinned by
   milestones, and served. Read it before building any of that.
 - **[Entities](STRATEGY-ENTITIES.md)** — what makes something a primary entity
-  rather than a reference source, and what a second entity proved comes for free.
-  Open: the door connectivity graph, design options, FFE.
+  rather than a reference source, and what five of them proved comes for free.
+  Open: the door connectivity graph, design options, the geometric space↔room
+  check, FF&E at scale.
 - **[Security](STRATEGY-SECURITY.md)** — the threat model for the near-future
   shift from a loopback bind to a LAN-reachable server. Mostly unbuilt by design.
   **Read it before widening the bind past `127.0.0.1`.**

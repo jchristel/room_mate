@@ -20,7 +20,7 @@ strategy doc documents what is not".
 | [Browser](STRATEGY-BROWSER.md) | Open: serving and consuming the placement transform, level-of-detail, the framework fork — plus the hybrid renderer's coordinate/paint-order invariant |
 | [MCP](STRATEGY-MCP.md) | Open: resources and prompts, document tools |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data — connections, PDFs, hierarchy scopes. **Nothing here is built**; read it before building any of it |
-| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, and what four of them proved comes for free. Open: door connectivity, design options, the two duHast changes FF&E waits on, FF&E at scale |
+| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, and what five of them proved comes for free. Open: door connectivity, design options, the geometric space↔room check, FF&E at scale |
 | [Security](STRATEGY-SECURITY.md) | Threat model for a LAN-reachable deployment: trust boundary, invariants, and the two unbuilt bounds (settings backups, rate limiting). **Read before widening the bind past `127.0.0.1`** |
 
 ## Implementation notes

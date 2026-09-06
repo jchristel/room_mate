@@ -48,10 +48,16 @@ become.
   question from the other side.
 
 - **A settings-relative `static/` path.** Every relative path in a settings file
-  resolves against that file's own directory; `static/`, served by
-  `ServeDir::new("static")`, is the one exception and is still resolved against
-  the process's working directory. So the viewer page needs the exe launched
-  from the crate root, or `static/` copied alongside it.
+  resolves against that file's own directory; `static/` is still the one
+  exception. **The installed-build half of this is now built** — `viewer_root`
+  serves the `static/` beside the executable and falls back to a
+  working-directory-relative `./static`, so an installer's exe-plus-`static/`
+  layout works launched from anywhere. What is left is the settings-relative
+  case: a deployment that wants its pages somewhere neither of those two places
+  finds still has nowhere to say so. Note the fallback is deliberately the old
+  wrong-in-the-same-way relative path, so nothing that relies on being run from
+  the crate root changed — which is also why a stale `static/` copied under
+  `target/release/` now silently shadows the repo's.
 
 ## Should validation reuse the rooms join?
 

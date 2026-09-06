@@ -22,7 +22,7 @@
 #
 """
 Capture the raw duHast space and room exports, plus the Revit facts neither
-export carries, so the questions gating `docs/PLAN-spaces.md` are answered off a
+export carries, so the questions gating `docs/Superseded/PLAN-spaces.md` are answered off a
 measurement instead of off a reading of duHast's source.
 
     pyRevit  ->  open the FEDERATED HOST and run this script; it walks the
