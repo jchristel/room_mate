@@ -290,6 +290,15 @@ pub struct ValidationResponse {
     /// a consumer can tell "no FF&E in this project" from "this server does not
     /// do FF&E".
     pub items: BTreeMap<String, ItemReport>,
+
+    /// The space-to-room reconciliation -- see `service::spaces::SpaceReport`.
+    ///
+    /// **Not a map, where `openings` and `items` are.** Those are keyed so a
+    /// second entity of the same shape can join them; there is no second
+    /// spatial entity to come, and a map of one would be inventing a slot for
+    /// something nobody has named. It is also project-wide rather than
+    /// per-entity by construction: the whole report is one set against another.
+    pub spaces: super::spaces::SpaceReport,
 }
 
 /// Which phase each of a project's models is on, and whether they agree.
@@ -809,6 +818,7 @@ impl ValidationResponse {
             phases: PhaseReport::default(),
             openings: BTreeMap::new(),
             items: BTreeMap::new(),
+            spaces: Default::default(),
         }
     }
 }
@@ -1824,6 +1834,23 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
         ),
     );
 
+    let stored_spaces = state
+        .all_opening_snapshots::<crate::contract::SpacePayload>(crate::storage::SnapshotKind::Spaces, Some(project_id))
+        .map_err(ServiceError::Internal)?;
+    // Every model the project has pushed ANYTHING for, which is the only part
+    // of this report that has to come from storage. A model that has never
+    // pushed at all is invisible here -- see `SpaceReport::models_not_audited`,
+    // which states that hole rather than papering over it.
+    let known_models: Vec<String> = state
+        .model_index()
+        .map_err(ServiceError::Internal)?
+        .into_iter()
+        .filter(|row| row.key.project_id == project_id)
+        .map(|row| row.key.model_id)
+        .collect();
+    response.spaces =
+        super::spaces::space_report(&stored, &stored_spaces, &known_models, &bundle.spaces, &bundle.builtin_properties);
+
     if loaded.is_empty() {
         return Ok(response);
     }
@@ -2424,6 +2451,7 @@ mod tests {
             })
             .collect();
         let bundle = crate::state::ProjectSettings {
+            spaces: Default::default(),
             reference,
             hierarchy: vec![],
             builtin_properties: vec![],
@@ -2591,6 +2619,7 @@ mod tests {
             ),
         ]);
         let bundle = crate::state::ProjectSettings {
+            spaces: Default::default(),
             reference,
             hierarchy: vec![],
             builtin_properties: vec![],
@@ -3525,6 +3554,7 @@ mod tests {
     #[test]
     fn test_door_report_survives_the_no_sources_bail() {
         let bundle = crate::state::ProjectSettings {
+            spaces: Default::default(),
             reference: BTreeMap::new(),
             hierarchy: vec![],
             builtin_properties: vec![],

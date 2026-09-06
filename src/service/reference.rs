@@ -96,6 +96,7 @@ mod tests {
 
     fn make_state() -> AppState {
         let bundle = ProjectSettings {
+            spaces: Default::default(),
             reference: std::collections::BTreeMap::new(),
             hierarchy: vec![],
             builtin_properties: vec![],

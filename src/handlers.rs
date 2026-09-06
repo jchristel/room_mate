@@ -2547,6 +2547,7 @@ mod tests {
 
     fn make_bundle() -> ProjectSettings {
         ProjectSettings {
+            spaces: Default::default(),
             reference: BTreeMap::from([(
                 "drofus".to_string(),
                 ProjectReferenceSource {

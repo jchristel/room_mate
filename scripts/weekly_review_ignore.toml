@@ -34,8 +34,6 @@
 
 # --- Designs recorded but not built. Absence is the documented state. ---
 "DocumentIndex" = "STRATEGY-AUTHORED is flagged 'design settled, not built'"
-"SpaceReport" = "PLAN-spaces D3, built in PR E; the plan names it before it exists on purpose"
-"SpaceFieldConfig" = "PLAN-spaces D8, same — the settings type PR E adds"
 
 # --- Analyser vocabulary, not server vocabulary. `scripts/analyse_spaces_probe.py`
 #     classifies five enclosure states where the contract carries three, because
@@ -73,4 +71,5 @@
 "storage/fs.rs" = "one impl of one trait — splitting the impl from its trait contract would separate the rules from the code that keeps them"
 "contract/mod.rs" = "already split once, when doors triggered it; rooms deliberately did not move out alongside them, and its header says why"
 "service/openings.rs" = "split once already, when FFE arrived: 435 lines of scoping, pinning, revision, phase report and candidate build moved to service/entity_scope. What is left is ~553 lines of the two things that could NOT move -- how many room references an opening has and how geometry resolves them -- plus the wire types and one pinned wire-shape fixture. The previous entry claimed the size WAS the saving; that argument was retired rather than reworded, because it was true of a second opening and false of a fourth entity"
+"service/spaces.rs" = "the read and the space-to-room report are the entity's only two answers and they share one vocabulary -- the tiered property lookup that resolves a key or a compared property is the same call in both, and splitting them would put a shared private helper across a module boundary. Judged 2026-09-06 at ~747 lines; if the viewer layer adds a third concern, the seam is read versus report"
 "service/validation.rs" = "one report over one project, and the parts are only correct together -- the phase check, the reference reconciliation and the opening reports all read the same scoped rooms, and splitting them would mean three passes that could disagree about which rooms they were describing"

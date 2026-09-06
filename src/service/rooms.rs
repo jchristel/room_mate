@@ -1351,6 +1351,7 @@ mod tests {
     fn make_bundle(link_property: &str) -> ProjectSettings {
         with_drofus(
             ProjectSettings {
+                spaces: Default::default(),
                 reference: BTreeMap::new(),
                 hierarchy: vec![],
                 builtin_properties: vec![],

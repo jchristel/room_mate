@@ -265,6 +265,10 @@ pub struct ProjectSettings {
     /// no attribution to choose, and it has components, which no opening does.
     pub ffe: crate::settings::FfePolicy,
 
+    /// This project's spaces policy: the space-to-room key and the properties
+    /// compared over it. See `crate::settings::SpacePolicy`.
+    pub spaces: crate::settings::SpacePolicy,
+
     /// Footprint exclusions for the hierarchy-areas feature. Unlike
     /// `colour_plans` (client-only, never in this bundle), exclusions are used by
     /// the SERVER when it computes footprints in `service::areas`, so they belong
