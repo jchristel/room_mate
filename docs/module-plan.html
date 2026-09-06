@@ -575,74 +575,94 @@
   // with Rust's inline #[cfg(test)] modules taken out. Widths follow this number
   // and nothing else, so a cell means the same thing in every language.
   const STATS = {
-    bootstrap: [161, 522, 80, 258],
+    bootstrap: [191, 580, 105, 257],
     check_areas: [311, 496, 99, 0],
-    classify: [33, 172, 39, 92],
-    contract: [285, 1443, 479, 629],
-    contract_doors: [102, 672, 275, 267],
-    docsdir: [1787, 1787, 0, 0],
-    ex_doors: [41, 121, 58, 0],
+    classify: [42, 266, 56, 158],
+    contract: [335, 1560, 537, 633],
+    contract_doors: [106, 415, 127, 163],
+    contract_ffe: [106, 365, 99, 141],
+    contract_items: [33, 411, 232, 127],
+    contract_openings: [32, 475, 258, 167],
+    contract_spaces: [105, 395, 115, 156],
+    contract_windows: [106, 371, 116, 130],
+    docsdir: [1589, 1892, 0, 0],
+    ex_doors: [51, 146, 71, 0],
+    ex_ffe: [50, 160, 84, 0],
     ex_rooms: [54, 159, 79, 0],
+    ex_spaces: [71, 177, 77, 0],
+    ex_windows: [51, 153, 77, 0],
     gen: [434, 712, 158, 0],
-    handlers: [843, 2710, 509, 1268],
-    js_app: [20, 182, 38, 119],
-    js_colour: [53, 120, 20, 39],
-    js_door: [176, 747, 189, 349],
+    handlers: [1608, 4450, 718, 1966],
+    js_app: [20, 182, 55, 88],
+    js_colour: [53, 120, 27, 25],
+    js_door: [176, 747, 271, 239],
     js_fills: [144, 220, 45, 0],
-    js_geom: [90, 275, 30, 146],
-    js_gl: [478, 857, 316, 0],
-    js_index: [34, 53, 15, 0],
+    js_geom: [90, 275, 55, 103],
+    js_gl: [623, 1121, 415, 0],
+    js_index: [39, 58, 15, 0],
+    js_item: [151, 465, 159, 108],
     js_labels: [66, 123, 42, 0],
     js_lines: [190, 319, 96, 0],
-    js_paint: [99, 316, 41, 156],
+    js_paint: [99, 316, 84, 91],
     js_proj: [11, 40, 25, 0],
-    js_seam: [28, 125, 82, 0],
-    js_spatial: [92, 326, 73, 148],
-    js_types: [67, 148, 69, 0],
-    js_viewport: [17, 205, 49, 134],
+    js_seam: [40, 183, 123, 0],
+    js_spatial: [92, 329, 104, 102],
+    js_types: [91, 245, 139, 0],
+    js_viewport: [17, 262, 87, 127],
+    js_window: [176, 567, 204, 133],
     lib: [15, 67, 47, 0],
-    main: [141, 545, 160, 225],
-    mcp: [507, 882, 234, 89],
+    main: [172, 730, 243, 292],
+    mcp: [654, 1054, 252, 91],
     p_bundle: [918, 1122, 45, 0],
     p_common: [67, 174, 88, 0],
-    p_comparison: [400, 493, 48, 0],
+    p_comparison: [448, 493, 0, 0],
     p_graph: [411, 721, 255, 0],
-    p_index: [2974, 4549, 1231, 0],
-    p_settings: [1030, 1254, 136, 0],
-    p_tokens: [19, 22, 1, 0],
-    post_common: [143, 379, 177, 0],
-    post_doors: [121, 308, 135, 0],
-    post_rooms: [138, 284, 102, 0],
-    reference: [85, 310, 93, 113],
-    room_mate: [104, 303, 138, 0],
-    settings: [362, 1289, 657, 196],
-    settings_api: [321, 1145, 148, 634],
-    settings_load: [66, 287, 38, 171],
-    settings_validate: [80, 338, 55, 196],
-    state: [277, 697, 287, 70],
-    storage: [91, 443, 315, 0],
-    storage_fs: [497, 1606, 212, 826],
-    storage_mem: [164, 462, 66, 206],
-    svc_adj: [402, 1265, 313, 493],
-    svc_areas: [531, 2054, 485, 967],
-    svc_cmp: [379, 1535, 261, 845],
-    svc_doors: [409, 1412, 268, 682],
-    svc_locator: [98, 372, 106, 153],
-    svc_mile: [34, 139, 21, 76],
-    svc_mod: [25, 54, 23, 0],
-    svc_proj: [97, 322, 47, 161],
-    svc_ref: [57, 159, 26, 69],
-    svc_rooms: [561, 2513, 531, 1342],
-    svc_snap: [107, 382, 67, 195],
-    svc_val: [661, 2642, 540, 1371],
-    u_doors: [60, 159, 74, 0],
+    p_index: [4850, 5233, 0, 0],
+    p_settings: [1255, 1347, 0, 0],
+    p_tokens: [20, 22, 0, 0],
+    post_common: [181, 504, 240, 0],
+    post_doors: [28, 111, 67, 0],
+    post_entity: [143, 348, 149, 0],
+    post_ffe: [89, 255, 123, 0],
+    post_rooms: [129, 266, 97, 0],
+    post_spaces: [118, 245, 82, 0],
+    post_windows: [28, 122, 73, 0],
+    probes: [3139, 5280, 1384, 0],
+    reference: [85, 310, 93, 112],
+    room_mate: [131, 439, 227, 0],
+    settings: [449, 1737, 889, 298],
+    settings_api: [397, 1501, 223, 827],
+    settings_load: [67, 287, 37, 170],
+    settings_validate: [80, 340, 57, 195],
+    state: [379, 899, 375, 69],
+    storage: [134, 665, 440, 46],
+    storage_fs: [547, 1758, 232, 907],
+    storage_mem: [197, 519, 86, 208],
+    svc_adj: [402, 1269, 313, 496],
+    svc_areas: [531, 2059, 485, 971],
+    svc_cmp: [387, 1554, 261, 855],
+    svc_items: [223, 659, 157, 246],
+    svc_locator: [102, 443, 159, 165],
+    svc_mile: [34, 145, 21, 81],
+    svc_mod: [65, 277, 65, 136],
+    svc_openings: [282, 1710, 232, 1155],
+    svc_proj: [102, 393, 60, 213],
+    svc_ref: [57, 162, 26, 71],
+    svc_rooms: [584, 2669, 580, 1423],
+    svc_scope: [266, 479, 179, 0],
+    svc_snap: [107, 393, 67, 205],
+    svc_spaces: [477, 1205, 236, 423],
+    svc_val: [963, 3590, 791, 1723],
     u_envelope: [62, 227, 133, 0],
     u_generic: [46, 138, 65, 0],
+    u_items: [45, 164, 93, 0],
+    u_openings: [78, 255, 138, 0],
     u_phase: [4, 57, 43, 0],
     u_refs: [5, 64, 47, 0],
     u_rooms: [31, 84, 42, 0],
+    u_spaces: [50, 153, 80, 0],
     u_ui: [65, 136, 51, 0],
-    weekly: [247, 473, 140, 0]
+    weekly: [252, 478, 140, 0]
   };
 
   const LAYERS = [
@@ -654,13 +674,13 @@
 
   const FLOW = [
     { k: "01", t: "Revit document", d: "One phase, N selected models, read through duHast.", layer: "extractor" },
-    { k: "02", t: "Export per model", d: "Rooms, levels and doors translated to the wire contract.", layer: "extractor" },
+    { k: "02", t: "Export per model", d: "Levels plus five entities translated to the wire contract.", layer: "extractor" },
     { k: "03", t: "One bucket push", d: "Gzipped NDJSON, one snapshot id timing the whole run.", layer: "extractor" },
     { k: "04", t: "Ingest", d: "Streamed to disk, decomposed into one snapshot per model.", layer: "server" },
     { k: "05", t: "Store", d: "Manifest is the index; snapshots are the record.", layer: "server" },
     { k: "06", t: "Assemble", d: "Join reference data, classify, derive geometry — at read time.", layer: "server" },
     { k: "07", t: "Serve", d: "HTTP for the viewer, MCP over stdio for agents.", layer: "server" },
-    { k: "08", t: "Draw", d: "WebGL plan: five draw calls, whatever the room count.", layer: "browser" }
+    { k: "08", t: "Draw", d: "WebGL plan: eight meshes plus labels, whatever the count.", layer: "browser" }
   ];
 
   const ZONES = [
@@ -683,8 +703,8 @@
     {
       id: "room_mate", name: "room_mate.py", path: "extractor/pyRevit/room_m/room_mate.py", zone: "run",
       lang: "IronPython",
-      blurb: "The three entry points. <strong>rooms_export_entry still pushes rooms and doors</strong>, despite the name — its pyRevit button lives outside this repo, so narrowing it would keep succeeding while quietly pushing nothing. The split lives in the two siblings instead. A run exports every selected model first, then pushes one bucket per entity; a cancelled run pushes nothing at all.",
-      deps: ["ex_rooms", "ex_doors", "u_generic", "u_envelope", "u_ui"]
+      blurb: "The six entry points, each one line over <strong>export_entry(…, entities)</strong>. <strong>rooms_export_entry still pushes rooms and doors</strong>, despite the name — its pyRevit button lives outside this repo, so narrowing it would keep succeeding while quietly pushing nothing. The split lives in the five siblings instead. A run exports every selected model first, then pushes one bucket per entity, so the buckets are independent and a cancelled run pushes nothing at all. <strong>The buttons live outside this repository, over a COPY of this package</strong> — an edit here is inert until it is copied there, and only <code>diff -rq</code> checks the two are in step.",
+      deps: ["ex_rooms", "ex_doors", "ex_windows", "ex_ffe", "ex_spaces", "u_generic", "u_envelope", "u_ui"]
     },
     {
       id: "ex_rooms", name: "exporters/rooms.py", path: "extractor/pyRevit/room_m/exporters/rooms.py", zone: "run",
@@ -696,15 +716,39 @@
       id: "ex_doors", name: "exporters/doors.py", path: "extractor/pyRevit/room_m/exporters/doors.py", zone: "run",
       lang: "IronPython",
       blurb: "The doors half, same three names. Doors no longer wait on rooms: the server resolves a door's rooms itself and treats “the rooms have not arrived yet” as a state it reports, not one it refuses. So the two buckets are independent.",
-      deps: ["post_doors", "u_doors"]
+      deps: ["post_doors", "u_openings"]
+    },
+    {
+      id: "ex_windows", name: "exporters/windows.py", path: "extractor/pyRevit/room_m/exporters/windows.py", zone: "run",
+      lang: "IronPython",
+      blurb: "The third entity, and it cost nothing structural — a window IS the <strong>Opening</strong> record, so this is the doors exporter with a category swapped. What differs is not the shape but the <em>distribution</em>: a one-sided opening is the exception for doors and the rule for windows, and a facade model that links its interiors carries none at all.",
+      deps: ["post_windows", "u_openings"]
+    },
+    {
+      id: "ex_ffe", name: "exporters/ffe.py", path: "extractor/pyRevit/room_m/exporters/ffe.py", zone: "run",
+      lang: "IronPython",
+      blurb: "The first candidate that is <strong>not an opening</strong> — one room rather than two sides, a category, a component id. Nine categories collected. A large <code>excluded_components</code> is normal, not a fault: 179 of 647 on the measured model, most of them furniture nested inside casework.",
+      deps: ["post_ffe", "u_items"]
+    },
+    {
+      id: "ex_spaces", name: "exporters/spaces.py", path: "extractor/pyRevit/room_m/exporters/spaces.py", zone: "run",
+      lang: "IronPython",
+      blurb: "The fifth entity, and the first whose record is the <em>rooms</em> record. <strong>Reports “N of M spaces are in phase X” for every model on every run — read that line</strong>: the disciplines disagree on the phase name, and a run under the common one pushes three models in full and one space from the fourth, correctly and silently.",
+      deps: ["post_spaces", "u_spaces"]
     },
 
     // ---- extractor: push & wire
     {
       id: "post_common", name: "post_common.py", path: "extractor/pyRevit/room_m/post_common.py", zone: "push",
       lang: "IronPython",
-      blurb: "The parts of the wire contract that belong to no single entity: the transport, the duHast flattening, the NDJSON writer and the identity envelope. Rooms and doors import it and never re-implement it, so two pushes cannot drift on how they talk to the server.",
+      blurb: "The parts of the wire contract that belong to no single entity: the transport, the duHast flattening, the NDJSON writer and the identity envelope. All five entities import it and never re-implement it, so five pushes cannot drift on how they talk to the server.",
       deps: []
+    },
+    {
+      id: "post_entity", name: "post_entity.py", path: "extractor/pyRevit/room_m/post_entity.py", zone: "push",
+      lang: "IronPython",
+      blurb: "The transport every push shares, named for <strong>entities rather than openings</strong> — it was opening-shaped only because no non-opening had ever asked, and FF&amp;E is what asked. One bucket per entity, each independent, so <code>ENTITY_EXPORTERS</code> no longer carries a push order.",
+      deps: ["post_common"]
     },
     {
       id: "post_rooms", name: "post_rooms.py", path: "extractor/pyRevit/room_m/post_rooms.py", zone: "push",
@@ -716,7 +760,25 @@
       id: "post_doors", name: "post_doors.py", path: "extractor/pyRevit/room_m/post_doors.py", zone: "push",
       lang: "IronPython",
       blurb: "Doors into the v2 contract. Built <em>alongside</em> post_rooms on a shared base rather than on top of it. Its empty-push refusal is scoped to the run, not the model — asked per model, a rooms-only document in a multiselect run reddened an otherwise clean push.",
-      deps: ["post_common", "u_phase"]
+      deps: ["post_common", "post_entity", "u_phase"]
+    },
+    {
+      id: "post_windows", name: "post_windows.py", path: "extractor/pyRevit/room_m/post_windows.py", zone: "push",
+      lang: "IronPython",
+      blurb: "Windows into the v1 contract — the doors push with a kind passed in, which is what sharing the <strong>Opening</strong> record buys. The envelope is its own: a stored snapshot names its element list after its own entity, and every file on disk says so.",
+      deps: ["post_common", "post_entity", "u_phase"]
+    },
+    {
+      id: "post_ffe", name: "post_ffe.py", path: "extractor/pyRevit/room_m/post_ffe.py", zone: "push",
+      lang: "IronPython",
+      blurb: "Items into the v1 contract. The footprint is flattened <em>per instance</em> rather than keyed to a type table, because flexed instances of one type genuinely differ — which is also the shape the deferred type-property dedup would have to respect.",
+      deps: ["post_common", "post_entity", "u_phase"]
+    },
+    {
+      id: "post_spaces", name: "post_spaces.py", path: "extractor/pyRevit/room_m/post_spaces.py", zone: "push",
+      lang: "IronPython",
+      blurb: "Spaces into the v1 contract, and the one push that <strong>sends an empty list rather than refusing it</strong>. “This services model was audited and holds no spaces” is the finding the entity exists to report, and a different fact from never having pushed.",
+      deps: ["post_common", "post_entity", "u_phase"]
     },
     {
       id: "u_envelope", name: "utils/post_envelope.py", path: "extractor/pyRevit/room_m/utils/post_envelope.py", zone: "push",
@@ -739,10 +801,22 @@
       deps: ["u_generic"]
     },
     {
-      id: "u_doors", name: "utils/doors.py", path: "extractor/pyRevit/room_m/utils/doors.py", zone: "readers",
+      id: "u_openings", name: "utils/openings.py", path: "extractor/pyRevit/room_m/utils/openings.py", zone: "readers",
       lang: "IronPython",
-      blurb: "The through-wall direction, from FacingOrientation — <strong>facing, not the host wall</strong>. Revit's ToRoom follows the door's orientation, so flipping a door swaps both together; deriving direction from the wall would introduce a second source of truth that could disagree.",
+      blurb: "The through-wall direction, from FacingOrientation — <strong>facing, not the host wall</strong>. Revit's ToRoom follows the door's orientation, so flipping a door swaps both together; deriving direction from the wall would introduce a second source of truth that could disagree. Named for openings, not doors, because windows read it unchanged: <code>room_reference(instance, phase, which)</code> takes the property name as an argument, which is the only thing that varies per category.",
       deps: ["u_generic", "u_refs"]
+    },
+    {
+      id: "u_items", name: "utils/items.py", path: "extractor/pyRevit/room_m/utils/items.py", zone: "readers",
+      lang: "IronPython",
+      blurb: "An item names <strong>one</strong> room, through <code>get_Room</code> rather than <code>FromRoom</code>/<code>ToRoom</code> — the glue an entity needs when its Revit references go unpopulated in a split-model setup, and nothing more. The footprint comes from duHast; this never re-measures it.",
+      deps: ["u_generic", "u_refs"]
+    },
+    {
+      id: "u_spaces", name: "utils/spaces.py", path: "extractor/pyRevit/room_m/utils/spaces.py", zone: "readers",
+      lang: "IronPython",
+      blurb: "<strong>Enclosure is stated here, never inferred from empty loops.</strong> 96.3% of the measured project's spaces report zero boundary segments while exporting a perfectly good polygon, because their bounding elements live in the linked architectural model — so <code>GetBoundarySegments</code> and <code>Perimeter</code> are both useless and <code>Area</code> plus the polygon are not. Unplaced spaces are dropped; unenclosed ones are pushed with empty loops.",
+      deps: ["u_generic"]
     },
     {
       id: "u_refs", name: "utils/room_refs.py", path: "extractor/pyRevit/room_m/utils/room_refs.py", zone: "readers",
@@ -777,7 +851,7 @@
     {
       id: "mcp", name: "bin/mcp.rs", path: "src/bin/mcp.rs", zone: "entry", lang: "Rust",
       blurb: "The MCP stdio server: eighteen tools, one per HTTP <em>read</em> route plus three settings reads and one forwarded mutation. Writes stay HTTP-only — a separate process could not hot-swap this one's registry, which is instant split-brain.",
-      deps: ["bootstrap", "svc_mod", "svc_rooms", "svc_doors", "settings_api", "state"]
+      deps: ["bootstrap", "svc_mod", "svc_rooms", "svc_openings", "svc_items", "svc_spaces", "settings_api", "state"]
     },
     {
       id: "bootstrap", name: "bootstrap.rs", path: "src/bootstrap.rs", zone: "entry", lang: "Rust",
@@ -789,7 +863,7 @@
     {
       id: "handlers", name: "handlers.rs", path: "src/handlers.rs", zone: "transport", lang: "Rust",
       blurb: "Thin Axum adapters: each handler extracts its input, calls exactly one service function, and translates the result. <code>StatusCode</code>, <code>Query</code>, <code>Path</code> and <code>Json</code> never leak past this file. Ingest is the exception and stays here in full — the MCP server deliberately exposes none.",
-      deps: ["contract", "reference", "svc_mod", "svc_rooms", "svc_doors", "svc_areas", "svc_adj", "svc_cmp", "svc_val", "svc_snap", "svc_proj", "svc_mile", "svc_ref", "state", "storage"]
+      deps: ["contract", "reference", "svc_mod", "svc_rooms", "svc_openings", "svc_items", "svc_spaces", "svc_scope", "svc_areas", "svc_adj", "svc_cmp", "svc_val", "svc_snap", "svc_proj", "svc_mile", "svc_ref", "state", "storage"]
     },
     {
       id: "settings_api", name: "settings_api.rs", path: "src/settings_api.rs", zone: "transport", lang: "Rust",
@@ -809,9 +883,24 @@
       deps: ["classify", "contract", "reference", "settings", "state", "storage"]
     },
     {
-      id: "svc_doors", name: "service/doors.rs", path: "src/service/doors.rs", zone: "service", lang: "Rust",
-      blurb: "Deliberately thinner than rooms, and the differences are the point: same filter grammar and milestone pinning, no classification hierarchy, no level dedup. <code>?building=</code> only became answerable once room attribution settled which room owns a door.",
-      deps: ["contract", "reference", "settings", "state", "storage", "svc_locator", "svc_rooms"]
+      id: "svc_openings", name: "service/openings.rs", path: "src/service/openings.rs", zone: "service", lang: "Rust",
+      blurb: "<strong>One read for doors and windows</strong>, which sharing the <code>Opening</code> record buys outright. Deliberately thinner than rooms, and the differences are the point: same filter grammar and milestone pinning, no classification hierarchy, no level dedup. <code>?building=</code> only became answerable once room attribution settled which room owns an opening — and a homeless opening (empty <code>owner_rooms</code>) therefore matches no building, which is a reported state, not a gap.",
+      deps: ["contract", "contract_openings", "reference", "settings", "state", "storage", "svc_locator", "svc_rooms", "svc_scope"]
+    },
+    {
+      id: "svc_items", name: "service/items.rs", path: "src/service/items.rs", zone: "service", lang: "Rust",
+      blurb: "FF&amp;E's read, and a <em>different record</em> rather than a thin opening. Modelling an item as a one-sided <code>Opening</code> would have compiled and kept every serde key, then reported every item in the model as an external opening — a field right in shape and wrong in meaning, which is worse than a new type.",
+      deps: ["contract", "contract_items", "reference", "settings", "state", "storage", "svc_locator", "svc_rooms", "svc_scope"]
+    },
+    {
+      id: "svc_spaces", name: "service/spaces.rs", path: "src/service/spaces.rs", zone: "service", lang: "Rust",
+      blurb: "The read <em>and</em> the space↔room reconciliation. <strong>The one join in this codebase that is not model-scoped</strong> — a space lives in a services model and its room in the architectural one, so the match is keyed and project-scoped, and safe only because the key is unique project-wide. Ambiguous keys are reported as an invariant violation for exactly that reason. Two emptinesses mean opposite things here: zero spaces for a model is a finding, no data is an absence.",
+      deps: ["contract", "contract_spaces", "settings", "state", "storage", "svc_cmp", "svc_rooms", "svc_scope"]
+    },
+    {
+      id: "svc_scope", name: "service/entity_scope.rs", path: "src/service/entity_scope.rs", zone: "service", lang: "Rust",
+      blurb: "The scoping, pinning and geometry <strong>every</strong> entity read shares — named for entities rather than openings once FF&amp;E proved the shape was general. <code>scope_snapshots</code> is one implementation for every opening-shaped entity, with the milestone pin map arriving as a closure rather than a <code>SnapshotKind</code> it would have to match on: <code>Milestone</code> carries four independent maps, and a match here would be a second place to keep in step.",
+      deps: ["contract", "settings", "state", "storage"]
     },
     {
       id: "svc_areas", name: "service/areas.rs", path: "src/service/areas.rs", zone: "service", lang: "Rust",
@@ -826,7 +915,7 @@
     {
       id: "svc_cmp", name: "service/comparison.rs", path: "src/service/comparison.rs", zone: "service", lang: "Rust",
       blurb: "A <em>star</em> diff of N milestones against one baseline, never all-pairs. A new consumer of existing machinery rather than a reimplementation: assemble_rooms already resolves a milestone's pinned snapshots, so a qualified reference field diffs the pinned values with no new resolution logic.",
-      deps: ["contract", "settings", "state", "storage", "svc_rooms", "svc_doors"]
+      deps: ["contract", "settings", "state", "storage", "svc_rooms", "svc_openings"]
     },
     {
       id: "svc_val", name: "service/validation.rs", path: "src/service/validation.rs", zone: "service", lang: "Rust",
@@ -866,8 +955,33 @@
       deps: ["settings"]
     },
     {
+      id: "contract_openings", name: "contract/openings.rs", path: "src/contract/openings.rs", zone: "core", lang: "Rust",
+      blurb: "The <strong>Opening</strong> record itself — shared verbatim by doors and windows, which is why the third entity cost nothing structural. Two <code>from_room</code>/<code>to_room</code> sides, an insertion point and a through-wall normal. <strong>Never read <code>from_room</code>/<code>to_room</code> from the duHast export</strong>: they are per-phase arrays tagged with a phase id that resolves against nothing on the wire.",
+      deps: ["contract"]
+    },
+    {
       id: "contract_doors", name: "contract/doors.rs", path: "src/contract/doors.rs", zone: "core", lang: "Rust",
-      blurb: "The door half of the contract, split out at exactly the size the conventions name for splitting a module. The envelope, the geometry primitives and the property machinery all stay shared — a door gets its own copy of none of them.",
+      blurb: "The door <em>envelope</em>, at v2 — the record itself lives in <code>openings.rs</code>. Envelopes are per entity even where the record is shared: a stored snapshot names its element list after its own entity, and every file already on disk says so, which makes a merged payload type a migration rather than a refactor.",
+      deps: ["contract", "contract_openings"]
+    },
+    {
+      id: "contract_windows", name: "contract/windows.rs", path: "src/contract/windows.rs", zone: "core", lang: "Rust",
+      blurb: "The window envelope, at v1, over the same <code>Opening</code>. Identical in shape to doors and different exactly where it matters — a facade model that links its interiors carries 0 room references on 158 windows, which is a correct model that reads as broken unless <code>room_resolution</code> is on.",
+      deps: ["contract", "contract_openings"]
+    },
+    {
+      id: "contract_items", name: "contract/items.rs", path: "src/contract/items.rs", zone: "core", lang: "Rust",
+      blurb: "The FF&amp;E <strong>Item</strong> record: one room, a category, a component id, and a footprint flattened per instance. The first record that is not an opening, and the reason three things in this codebase are now named for entities.",
+      deps: ["contract"]
+    },
+    {
+      id: "contract_ffe", name: "contract/ffe.rs", path: "src/contract/ffe.rs", zone: "core", lang: "Rust",
+      blurb: "The FF&amp;E envelope, at v1. Same envelope discipline as every other entity — one <code>models</code> list, one shared <code>taken_at</code>, snapshot ids resolved through <code>ensure_taken_at</code>/<code>validate_snapshot_id</code> and never reimplemented.",
+      deps: ["contract", "contract_items"]
+    },
+    {
+      id: "contract_spaces", name: "contract/spaces.rs", path: "src/contract/spaces.rs", zone: "core", lang: "Rust",
+      blurb: "The spaces envelope, at v1 — and the first to reuse the <strong>rooms</strong> record rather than the openings one. It adds <code>Enclosure</code>, a tri-state the extractor <em>states</em>: fusing “unenclosed” with “unmeasured” is the sentinel mistake this type exists to refuse.",
       deps: ["contract"]
     },
     {
@@ -948,7 +1062,7 @@
     },
     {
       id: "js_gl", name: "gl/renderer.ts", path: "src-js/renderer/gl/renderer.ts", zone: "renderer", lang: "TypeScript",
-      blurb: "The WebGL plan renderer, and now the only one. Grid, fills, hover, holes, lines, doors, labels — <strong>five draw calls plus labels, whatever the room or door count</strong>. That is the point: the fitted view is the case culling could never help, because nothing is off screen to hide.",
+      blurb: "The WebGL plan renderer, and now the only one. Grid, fills, holes, outlines, spaces, doors, windows and items — <strong>eight meshes plus labels, whatever the element count</strong>. That is the point: the fitted view is the case culling could never help, because nothing is off screen to hide. Each entity layer is named explicitly in <code>#pushView</code> rather than iterated, which is exactly how the spaces mesh once built, joined the stage and drew with an uninitialised view — nowhere, with no error anywhere.",
       deps: ["js_app", "js_geom", "js_seam", "js_types", "js_colour", "js_door", "js_fills", "js_labels", "js_lines", "js_spatial", "js_viewport"]
     },
     {
@@ -969,6 +1083,16 @@
     {
       id: "js_door", name: "gl/doorGlyph.ts", path: "src-js/renderer/gl/doorGlyph.ts", zone: "renderer", lang: "TypeScript",
       blurb: "The door direction glyph as triangles — all of the geometry and none of the GL, so the shape rules are testable without a canvas. Orientation is <strong>baked into the vertices</strong>, never carried as a uniform, which is what lets every door share the buffer the rooms already fill.",
+      deps: ["js_geom", "js_types"]
+    },
+    {
+      id: "js_window", name: "gl/windowGlyph.ts", path: "src-js/renderer/gl/windowGlyph.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "The window glyph, on the door glyph's rules and deliberately <em>not</em> its shape: a window reads as a sill line across the opening rather than a swing arc, because the two must stay distinguishable at plan scale when both layers are on.",
+      deps: ["js_geom", "js_types"]
+    },
+    {
+      id: "js_item", name: "gl/itemGlyph.ts", path: "src-js/renderer/gl/itemGlyph.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "The FF&amp;E instance glyph. An item is a footprint with a placement rather than a two-sided opening, so this draws the oriented box the export carries and never re-derives it — the same rule the extractor follows on the other side of the wire.",
       deps: ["js_geom", "js_types"]
     },
     {
@@ -1047,7 +1171,12 @@
     },
     {
       id: "check_areas", name: "check_areas.py", path: "scripts/check_areas.py", zone: "bench", lang: "Python",
-      blurb: "An independent read on the area service's output — the contested-definition module is the one worth checking from outside the code that produces it.",
+      blurb: "An independent read on the area service's output — the contested-definition module is the one worth checking from outside the code that produces it. <strong>Its 0.95–1.6 band was calibrated for finish face</strong> and is the wrong instrument on a centreline project, where the expected ratio is exactly 1.000.",
+      deps: []
+    },
+    {
+      id: "probes", name: "probe_*.py · analyse_*.py", path: "scripts/probe_windows_export.py · probe_ffe_export.py · probe_spaces_export.py · analyse_*_probe.py", zone: "bench", lang: "Python",
+      blurb: "<strong>Instruments, not features</strong>, and each ran before its entity was designed — the discipline that let three entities settle their open questions <em>before</em> the code rather than after. Every one pairs a probe that reads a captured export with an analyser that answers a fixed question list, and an analyser <strong>refuses to interpret a run whose category list has drifted from duHast's</strong>, so the two must move together.",
       deps: []
     },
     {
@@ -1210,7 +1339,7 @@
       <div class="ins-kicker"><span>Legend</span><span>how to read it</span></div>
       <p class="ins-blurb">Each cell is one module, and its width follows its <strong>code</strong> lines only —
         comments, doc comments and tests are measured but take no width. That is why the Rust rooms are smaller than
-        their files: <code>src/</code> is 28% code, 24% comment and 44% inline test. The widest room on the plan is
+        their files: <code>src/</code> is 29% code, 25% comment and 42% inline test. The widest room on the plan is
         still <strong>index.html</strong>, the viewer page waiting to be broken up. Bands group modules by the job they
         do; colour marks which side of the wire they live on.</p>
       <div class="legend">
