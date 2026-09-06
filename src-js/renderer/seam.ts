@@ -34,7 +34,7 @@
 // instead. Same call site, two implementations — which is the entire point of
 // having a seam.
 
-import type { Door, Item, Rect, Room, WindowOpening } from "./types.js";
+import type { Door, Item, Rect, Room, Space, WindowOpening } from "./types.js";
 
 /** Search state, applied WITHOUT a re-render. Preserving that property is an
  *  explicit obligation: a search can match thousands of rooms, and a keystroke
@@ -91,6 +91,19 @@ export interface PaintRequest {
   ffe?: readonly Item[] | undefined;
   /** Whether to draw them. Absent means yes when `ffe` is non-empty. */
   showFfe?: boolean | undefined;
+
+  /**
+   * Spaces for this level, drawn as OUTLINES over the rooms.
+   *
+   * The fourth list, and the first that is not a glyph: a space is
+   * room-shaped, so it draws as a ring rather than a mark. It is also the first
+   * that deliberately overlaps the rooms rather than sitting on their edges --
+   * which is the point, since a reader turns this on to see where the two
+   * disagree.
+   */
+  spaces?: readonly Space[] | undefined;
+  /** Whether to draw them. Absent means yes when `spaces` is non-empty. */
+  showSpaces?: boolean | undefined;
 }
 
 /**

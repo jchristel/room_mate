@@ -654,6 +654,7 @@
     <button class="ctl on" id="doorsToggle" title="Show or hide door glyphs">Doors: on</button>
     <button class="ctl on" id="windowsToggle" title="Show or hide window glyphs">Windows: on</button>
     <button class="ctl on" id="ffeToggle" title="Show or hide furniture, fixtures and equipment">FF&amp;E: on</button>
+    <button class="ctl" id="spacesToggle" title="Show or hide MEP space outlines over the rooms">Spaces: off</button>
     <div class="search">
       <input id="searchInput" type="search" placeholder="Search rooms…" autocomplete="off" />
       <button class="ctl" id="fieldsToggle" title="Choose which fields to search">Fields ▾</button>
@@ -858,6 +859,18 @@ let lastWindowsRevision = null;
 // items against tens of openings, so this is the layer a reader turns off first.
 let ffePayload = null;
 let lastFfeRevision = null;
+// The one /spaces payload. A FIFTH list, and the first that is not a glyph
+// layer: a space is room-shaped, so it draws as an outline over the rooms.
+//
+// It also does not poll unless it is switched on, which no other layer does.
+// The others are cheap and usually wanted; this one overlays the rooms it sits
+// on, so it starts OFF and a reader turns it on to answer a specific question --
+// "do the services boundaries agree with the architectural ones". Polling a
+// hidden overlay would cost every viewer of every project for a question most of
+// them are not asking.
+let spacesPayload = null;
+let lastSpacesRevision = null;
+let lastSpacesEtag = null;
 let lastRevision = null;     // poll change-detection cursor
 // The server's ETag for the last body we actually received, per entity.
 //
@@ -919,6 +932,8 @@ let showRoomLabels = true;
 let showDoors = true;
 let showWindows = true;
 let showFfe = true;
+// Starts OFF -- see `spacesPayload`.
+let showSpaces = false;
 
 // Global room search (see the "search" section lower down): one query + one set
 // of enabled field keys, applied to every zone. `searchFields` empty means "not
@@ -1473,6 +1488,8 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       showWindows,
       ffe: ffeOnLevel(levelId),
       showFfe,
+      spaces: spacesForPlan(),
+      showSpaces,
     });
     // Inside the deferred build, not after it: on a large level these run a
     // frame later than the surrounding code, and re-applying a selection to a
@@ -4065,6 +4082,57 @@ async function pollFfe() {
   }
 }
 
+// The /spaces URL. Deliberately NOT filtered by building: a space has no
+// building, because a space's building would come from the room it matches and
+// that is a join rather than a scope -- the server refuses the parameter for the
+// same reason. Project and milestone are both real here.
+function spacesUrl() {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project", projectId);
+  if (projectId && milestone) params.set("milestone", milestone);
+  const qs = params.toString();
+  return qs ? `/spaces?${qs}` : "/spaces";
+}
+
+// Every space in the payload, UNFILTERED by level -- which is the one place this
+// layer departs from doors, windows and FF&E.
+//
+// A space comes from a services model whose level ids are its own; they never
+// match the architectural model's, because level ids are per document. Filtering
+// on `level_id` here would draw nothing on every real project. The honest cost
+// is that a multi-storey project draws every storey's spaces at once, which is
+// why the layer starts off and why this comment exists rather than a filter that
+// silently keeps nothing.
+function spacesForPlan() {
+  if (!spacesPayload) return [];
+  return spacesPayload.spaces || [];
+}
+
+// Spaces poll on their own revision, in their own try, and ONLY while the layer
+// is on -- see `spacesPayload` for why this one is different.
+async function pollSpaces() {
+  if (!showSpaces) return false;
+  try {
+    const res = await fetch(spacesUrl(), { cache: "no-store", headers: condHeaders(lastSpacesEtag) });
+    if (res.status === 304) return false;
+    if (res.status === 204) {
+      lastSpacesEtag = null;
+      if (spacesPayload !== null) { spacesPayload = null; lastSpacesRevision = null; return true; }
+      return false;
+    }
+    if (!res.ok) return false;
+    lastSpacesEtag = res.headers.get("ETag");
+    const payload = await res.json();
+    const incoming = payload.revision ?? JSON.stringify(payload);
+    if (incoming === lastSpacesRevision) return false;
+    lastSpacesRevision = incoming;
+    spacesPayload = payload;
+    return true;
+  } catch (err) {
+    return false;   // rooms already report connection loss; one message is enough
+  }
+}
+
 // Windows poll on their own revision, in their own try -- a windows read that
 // fails or 204s must not take rooms or doors down with it. A model with rooms
 // and no windows is legitimate (a service core, an internal floor), and the
@@ -4171,10 +4239,12 @@ async function poll() {
     const doorsChanged = await pollDoors();
     const windowsChanged = await pollWindows();
     const ffeChanged = await pollFfe();
+    // A no-op while the layer is off, which is its default -- see `pollSpaces`.
+    const spacesChanged = await pollSpaces();
     if (incoming !== lastRevision) {
       lastRevision = incoming;
       ingestAll(payload); // re-fits + rebuilds level controls only on real change
-    } else if (doorsChanged || windowsChanged || ffeChanged) {
+    } else if (doorsChanged || windowsChanged || ffeChanged || spacesChanged) {
       // An element entity moved and rooms did not. Repaint in place: no refit,
       // because such a push must not throw away the user's pan and zoom.
       redrawAllZones();
@@ -4639,6 +4709,17 @@ document.getElementById("ffeToggle").addEventListener("click", (e) => {
   // toggles drop theirs: the inspector would keep describing something the plan
   // no longer draws, and the mark would point at empty space.
   if (!showFfe && itemSelection()) select(null);
+  redrawAllZones();
+});
+
+// Spaces toggle. Unlike the other three this one FETCHES on the way on: the
+// layer does not poll while hidden, so the first paint after switching it on
+// would otherwise be empty until the next poll tick came round.
+document.getElementById("spacesToggle").addEventListener("click", async (e) => {
+  showSpaces = !showSpaces;
+  e.target.textContent = `Spaces: ${showSpaces ? "on" : "off"}`;
+  e.target.classList.toggle("on", showSpaces);
+  if (showSpaces) await pollSpaces();
   redrawAllZones();
 });
 

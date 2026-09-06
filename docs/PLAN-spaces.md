@@ -1,9 +1,8 @@
 # RoomMate — Spaces implementation plan
 
-> **Status: PR A run against RHH (kill condition CLEARED); B1, B2, C, D and E
-> built.** Both of the demand's questions are answered end to end. Only the
-> viewer layer (F) is left, plus the pyRevit button owed outside this
-> repository.
+> **Status: BUILT.** A through F, and the pyRevit button. Both of the demand's
+> questions are answered end to end, and spaces can be exported from Revit,
+> pushed, read, reconciled against rooms and drawn on the plan.
 > The decisions below were written from a reading of duHast's source and are
 > left standing rather than edited into agreement with the data;
 > [As measured](#as-measured--rhh-2026-09-06) records what the probe found,
@@ -394,7 +393,7 @@ small rooms", until `tolerance_min` is set from this measurement.
 | **C** | extractor: `utils/spaces.py`, `exporters/spaces.py`, `post_spaces.py`, `spaces_export_entry`, one `ENTITY_EXPORTERS` row | the shipping translation over the captured RHH export |
 | **D** | read: `GET /spaces`, the `$enclosure` intrinsic, MCP `get_spaces` (tool count 20 to 21) | `cargo test`, fmt, clippy |
 | **E** | QA: `SpaceReport`, `[spaces]` settings, the match and the property diff | `cargo test`, fmt, clippy |
-| **F** | viewer: a spaces layer and its toggle | driven in the browser, not read in the diff |
+| **F** | viewer: a spaces outline layer and its toggle | driven in the browser, which is what caught the bug below |
 
 F is last for the reason the FF&E viewer PR proved: a fifth draw layer is where
 two bugs appeared that the tests did not catch, and they were separable only
@@ -536,6 +535,35 @@ and should be dropped rather than fixed.
 
 Cheap to say now, expensive if it had reached PR E: an area check calibrated on
 rounded values would have set its threshold from the rounding.
+
+## What the viewer layer cost, and the bug only the browser found
+
+**F is a line overlay, not a fill.** A space and its room occupy the same ground,
+so a second filled polygon would either hide the room or be hidden by it. An
+outline lets a reader watch the two boundaries diverge, which is what D6 promised
+when it deferred the automated geometric check.
+
+Two consequences worth stating rather than discovering:
+
+- **The layer is not filtered by level, and cannot be.** A space's `level_id`
+  comes from a services model, and level ids are per document -- they never match
+  the architectural model's. Filtering here would draw nothing on every real
+  project. The cost is that a multi-storey project draws every storey at once,
+  which is part of why the layer starts OFF.
+- **It does not poll while hidden**, which no other layer does. The others are
+  cheap and usually wanted; this one overlays the rooms it sits on, so it is
+  switched on to answer a specific question and polling it for everyone else
+  would cost every viewer of every project.
+
+**The bug that would have shipped**: `#pushView` names each line mesh explicitly
+(`grid`, `holes`, `outlines`) rather than iterating them, so the spaces mesh
+built, joined the stage and drew with an uninitialised view -- which is to say
+nowhere. Nothing failed: the batch was non-empty, the mesh was on the stage under
+its own label, no error reached the console, and the typecheck, the unit tests
+and the diff all looked correct. It was visible only by driving the page and
+seeing an unchanged plan, which is exactly the discipline
+[CODING-CONVENTIONS](CODING-CONVENTIONS.md) states for frontend work and exactly
+the kind of bug it was written about.
 
 ## Self-critique
 
