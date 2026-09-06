@@ -186,20 +186,6 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   is the instrument and RHH is the model; the analyser refuses to interpret a run
   whose category list has drifted from duHast's, so the two must move together.
 
-- **The pyRevit buttons for `windows_export_entry`, `ffe_export_entry` and
-  `spaces_export_entry`.**
-  Both extractor entry points exist; their buttons live outside this repository
-  and have to be wired there before anyone can push either from Revit. This is
-  the one cost adding an entity does not absorb, and it is now owed twice.
-  `rooms_export_entry` was deliberately not widened — it still pushes rooms AND
-  doors despite its name, and adding another entity to it would keep succeeding
-  while changing what every existing button does.
-
-  A combined rooms-and-FF&E entry would be genuinely useful, since the two live
-  in one document and one run could read it once. It is one line of
-  `export_entry(..., (ROOMS, FFE))` and deliberately unwritten: adding it before
-  anyone asks would make a third unwired button rather than a saving.
-
 - **Windows in milestone comparison.** `MilestonePins.windows` landed with
   storage, so a milestone can pin them; `ComparisonResponse.windows` was cut
   from the first pass and has no stated demand. Nothing is half-built — the pins

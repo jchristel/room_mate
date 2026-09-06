@@ -24,7 +24,7 @@ import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
 import { flip, pointsAttr } from "../geometry.js";
 import type { HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
-import type { Door, Item, Rect, Room, WindowOpening } from "../types.js";
+import type { Door, Item, Rect, Room, Space, WindowOpening } from "../types.js";
 import { parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
 import { buildLabels, type RoomLabel } from "./labels.js";
@@ -136,6 +136,7 @@ export class GlPlanRenderer implements PlanRenderer {
   #ffeMesh: FillMesh | null = null;
   #holeLines: LineMesh | null = null;
   #outlines: LineMesh | null = null;
+  #spaceLines: LineMesh | null = null;
   #labelContainer: Container | null = null;
   #labels: RoomLabel[] = [];
 
@@ -258,6 +259,13 @@ export class GlPlanRenderer implements PlanRenderer {
     const opts = this.#lastPaint;
     if (opts.showFfe === false) return [];
     return opts.ffe ?? [];
+  }
+
+  /** The spaces this paint was given, after the `showSpaces` toggle. */
+  #activeSpaces(): readonly Space[] {
+    const opts = this.#lastPaint;
+    if (opts.showSpaces === false) return [];
+    return opts.spaces ?? [];
   }
 
   /** The windows this paint was given, after the `showWindows` toggle. */
@@ -593,6 +601,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#ffeMesh?.destroy();
     this.#holeLines?.destroy();
     this.#outlines?.destroy();
+    this.#spaceLines?.destroy();
     this.#labelContainer?.destroy({ children: true });
     this.#grid = null;
     this.#fills = null;
@@ -602,6 +611,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#ffeMesh = null;
     this.#holeLines = null;
     this.#outlines = null;
+    this.#spaceLines = null;
     this.#labelContainer = null;
   }
 
@@ -785,12 +795,35 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#holeLines = holeBatch.isEmpty ? null : holeBatch.build({ dash: HOLE_DASH });
     this.#outlines = outlineBatch.isEmpty ? null : outlineBatch.build();
 
+    // Spaces: one ring per space, over the rooms.
+    //
+    // **Not clipped to the level and not filtered by room**, deliberately. A
+    // space comes from a services model whose level ids are its own -- they
+    // never match the architectural model's -- so filtering by `level_id` here
+    // would draw nothing on every real project. The caller fetches the spaces it
+    // wants; this draws them.
+    //
+    // A space with no `loops` draws nothing, which is every unenclosed and
+    // unmeasured one. That is the layer's stated limitation: the two states most
+    // worth seeing have no geometry to see, and the QA report is where they are
+    // counted.
+    const spaceBatch = new LineBatch();
+    for (const space of this.#activeSpaces()) {
+      const outer = space.loops?.[0];
+      if (!outer?.points?.length) continue;
+      spaceBatch.push(ringSegments(outer.points.map(flip)), pal.accent, W_OUTLINE);
+    }
+    this.#spaceLines = spaceBatch.isEmpty ? null : spaceBatch.build();
+
     // Paint order is child order, and it mirrors the SVG document exactly:
     // grid behind, then fills, then the strokes that sit on them, then labels.
     if (this.#grid) { this.#grid.mesh.label = "grid"; this.#root.addChild(this.#grid.mesh); }
     if (this.#fills) { this.#fills.mesh.label = "fills"; this.#root.addChild(this.#fills.mesh); }
     if (this.#holeLines) { this.#holeLines.mesh.label = "holes"; this.#root.addChild(this.#holeLines.mesh); }
     if (this.#outlines) { this.#outlines.mesh.label = "outlines"; this.#root.addChild(this.#outlines.mesh); }
+    // Above the room outlines so a coincident boundary shows the space, and
+    // below the openings so a door glyph is never hidden by one.
+    if (this.#spaceLines) { this.#spaceLines.mesh.label = "spaces"; this.#root.addChild(this.#spaceLines.mesh); }
     // Above the outlines, so a glyph is never cut by the wall line it sits in,
     // and above the hover mesh, so hovering a room cannot hide its doors. Below
     // the labels, because a door covering a room's name would trade one
@@ -1058,6 +1091,13 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#grid?.setView(eff, devW, devH, dpr);
     this.#holeLines?.setView(eff, devW, devH, dpr);
     this.#outlines?.setView(eff, devW, devH, dpr);
+    // The spaces overlay is a LINE mesh, so it belongs with the three above and
+    // not with `#worldMeshes()`: a line's stroke width is in device pixels and
+    // must not scale with the view, which is the whole reason `setView` takes a
+    // dpr here and does not there. Omitting it does not fail loudly -- the mesh
+    // builds, joins the stage and draws with an uninitialised view, which is to
+    // say nowhere.
+    this.#spaceLines?.setView(eff, devW, devH, dpr);
     for (const mesh of this.#worldMeshes()) mesh.setView(eff, devW, devH);
     // Labels live in world space, so the scene transform carries them. This is
     // the ONE place a container transform is used, and it is correct here

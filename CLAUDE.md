@@ -246,9 +246,12 @@ the siblings instead: `rooms_only_export_entry`, `doors_export_entry`,
 one line over `export_entry(..., entities)`; document selection, the one project
 and the one phase never differ.
 
-**Three of those buttons are owed outside this repository** — windows, FF&E and
-spaces. The server side of each is complete and unreachable until someone wires
-them, which is the one cost adding an entity has never absorbed.
+**Their buttons live outside this repository**, in
+`SampleCodeRevitBatchProcessor-NET8/.../duHast.tab/RoomMate.panel`, over a COPY
+of `extractor/pyRevit/room_m` under that tab's `lib/`. All six are wired as of
+2026-09-06. **The copy is the trap**: an extractor change here is inert until it
+is copied there, and nothing checks the two are in step — `diff -rq` between them
+is the only check there is.
 
 **A run exports every selected model first, then pushes one bucket per entity.**
 So `entities` no longer carries a push *order* — the buckets are independent, and

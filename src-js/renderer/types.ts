@@ -50,6 +50,34 @@ export interface Room {
 }
 
 /**
+ * One MEP space, as `/spaces` returns it -- a SUBSET, on the same terms as
+ * `Room`.
+ *
+ * **Drawn as an outline over the rooms, never as a fill**, and that is the whole
+ * design of this layer. A space and the room it serves occupy the same ground,
+ * so a second filled polygon would either hide the room or be hidden by it. An
+ * outline lets a reader watch the two boundaries diverge, which is the question
+ * this layer exists to answer and the one the QA report answers numerically.
+ *
+ * `loops` is EMPTY for an unenclosed or unmeasured space, so those draw nothing
+ * -- a real limitation rather than an oversight, and one worth stating: the two
+ * states most worth seeing are exactly the ones with no geometry to see. The QA
+ * report is where they are counted.
+ */
+export interface Space {
+  id: string;
+  name?: string;
+  level_id?: string;
+  loops?: Loop[];
+  /** `"enclosed"` | `"unenclosed"` | `"unmeasured"`, or absent on a snapshot
+   *  written before the field existed. */
+  enclosure?: string;
+  /** The services model this space came from. Load-bearing here: one file per
+   *  service means several spaces legitimately share a number. */
+  model_id?: string;
+}
+
+/**
  * One door, as `/doors` returns it — a SUBSET, on the same terms as `Room`.
  *
  * A door is not a room with different fields. The two that matter here:
