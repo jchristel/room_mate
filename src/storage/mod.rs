@@ -168,6 +168,14 @@ pub struct SnapshotMeta<'a> {
     /// The push's phase. Recorded on a lineage that has none; never overwrites
     /// one that does (see `ModelEntry::phase`).
     pub phase: Option<&'a str>,
+    /// The pushed envelope's `model_to_shared`, refreshed into the manifest on
+    /// every push (see `ModelEntry::placement`).
+    ///
+    /// **A second envelope fact riding the meta, for the reason `phase` does:**
+    /// the index has to be able to answer it without opening a snapshot. Read
+    /// off the payload by the *handler*, which already parses the envelope —
+    /// the store still takes bytes and never parses what it writes.
+    pub model_to_shared: Option<crate::contract::ModelToShared>,
 }
 
 /// Reserved subdirectory name inside a project dir for uploaded reference-
@@ -248,6 +256,11 @@ pub struct ModelIndexRow {
     /// file behind it — filesystem wins, exactly as everywhere else in the
     /// store.
     pub latest: BTreeMap<SnapshotKind, String>,
+
+    /// This model's declared placement, straight off `ModelEntry::placement`.
+    /// `None` for a model that has never pushed one, or whose manifest predates
+    /// the field.
+    pub placement: Option<crate::contract::ModelToShared>,
 }
 
 /// One model's entry in a `ProjectManifest`.
@@ -278,6 +291,29 @@ pub struct ModelEntry {
     /// what it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
+
+    /// This model's `model_to_shared`, as its most recent push declared it —
+    /// the 2D affine placing its geometry in the project's shared coordinate
+    /// system, flattened to the six matrix values.
+    ///
+    /// **In the index so a read can put linked models into ONE frame without
+    /// opening a snapshot**, which is the whole reason it is duplicated here:
+    /// every entity read must agree on the same frame or doors stop sitting on
+    /// rooms, and the only source all five reads share cheaply is this manifest.
+    /// See `service::placement` for the frame it feeds and why that frame is
+    /// project-local rather than survey-absolute.
+    ///
+    /// **Latest push wins**, unlike `phase` and like `name`. A model's
+    /// `ProjectLocation` is a document fact that can legitimately be corrected,
+    /// and there is nothing to enforce against — re-registering a model is a
+    /// re-survey, not a re-phasing.
+    ///
+    /// `default` keeps every manifest written before this field existed
+    /// parseable, as a model whose placement is unknown — which is exactly what
+    /// it is, and which `service::placement` leaves where it was authored
+    /// rather than guessing at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<[f64; 6]>,
     /// Snapshot ids (raw `taken_at` values) stored for this model, ascending.
     /// The manifest's index role extended to snapshots: listing a model's
     /// history reads this, never the (possibly >100 MB) snapshot JSONs.
@@ -510,6 +546,22 @@ pub trait SnapshotStore: Send + Sync {
     /// Answered from the index, never by opening a snapshot — that is the whole
     /// reason the phase is mirrored into the manifest.
     fn get_phase(&self, key: &ModelKey) -> Result<Option<String>>;
+
+    /// Record one model's placement in the index without writing a snapshot.
+    ///
+    /// **Index maintenance, not a second way to push.** `put_raw` and the
+    /// streaming writer already record a placement as part of storing a
+    /// snapshot, and that is how the field is normally filled. This exists for
+    /// the one case they cannot cover: a store written before
+    /// `ModelEntry::placement` existed holds snapshots that *declare* a
+    /// placement in their bytes and manifests that do not carry it, so the
+    /// models cannot be put in one frame until something backfills them
+    /// (`bootstrap::backfill_placements`). Without it the fix would only reach
+    /// data pushed after the upgrade.
+    ///
+    /// Writes nothing but the index, so it can never touch snapshot history —
+    /// which is what keeps a backfill safe to run on every start.
+    fn set_placement(&self, key: &ModelKey, placement: crate::contract::ModelToShared) -> Result<()>;
 
     /// Store a push whose phase disagrees with the lineage's, without making it
     /// live. **At most one per model**: a second quarantined push replaces the

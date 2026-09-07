@@ -37,6 +37,7 @@ fn rooms_meta<'a>(key: &'a ModelKey, payload: &'a RoomPayload) -> SnapshotMeta<'
         model_name: &payload.model.name,
         taken_at: &payload.snapshot.taken_at,
         phase: payload.phase.as_deref(),
+        model_to_shared: payload.model_to_shared,
     }
 }
 
@@ -72,6 +73,7 @@ fn doors_meta<'a>(key: &'a ModelKey, payload: &'a DoorPayload) -> SnapshotMeta<'
         model_name: &payload.model.name,
         taken_at: &payload.snapshot.taken_at,
         phase: payload.phase.as_deref(),
+        model_to_shared: payload.model_to_shared,
     }
 }
 
@@ -228,6 +230,11 @@ pub struct ProjectSettings {
     /// loaded from this project's settings. Read by the milestones listing
     /// and by `assemble_rooms`' milestone filter.
     pub milestones: Vec<Milestone>,
+
+    /// The model whose coordinate space this project's plans are drawn in, or
+    /// `None` to derive it. See `Settings::anchor_model`; read by
+    /// `service::placement::from_index`.
+    pub anchor_model: Option<String>,
 
     /// The user-chosen room property that identifies "the same room" across
     /// milestones, or `None` when unset (see `Settings::comparison_key`). Read
@@ -432,6 +439,7 @@ impl AppState {
             model_name: &envelope.model().name,
             taken_at: envelope.taken_at(),
             phase: envelope.phase(),
+            model_to_shared: envelope.model_to_shared().copied(),
         };
         StreamingSnapshot::open(self.store.as_ref(), &meta, kind, envelope)
     }
@@ -504,6 +512,7 @@ impl AppState {
             model_name: &payload.model().name,
             taken_at: payload.taken_at(),
             phase: payload.phase(),
+            model_to_shared: payload.model_to_shared().copied(),
         };
         self.store.put_raw(&meta, &json)
     }
@@ -654,6 +663,7 @@ impl AppState {
             model_name: &payload.model.name,
             taken_at: &payload.snapshot.taken_at,
             phase: payload.phase.as_deref(),
+            model_to_shared: payload.model_to_shared,
         };
         if self.store.promote_pending(&meta)? {
             Ok(Some(payload))

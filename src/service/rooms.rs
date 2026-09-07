@@ -881,8 +881,12 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
     let revision = scoped_revision(&scoped);
     let phase_by_model = phases_of(&scoped);
     let level_remap = dedup_levels(&scoped);
+    // The project's coordinate frame, from the manifest index rather than from
+    // `scoped` -- every entity read must agree on it, and each of them scopes a
+    // different set of models. See `service::placement::from_index`.
+    let placement = super::placement::from_index(state)?;
     let AssembledRooms { levels, rooms, reference_labels, boundary_by_level } =
-        assemble_scoped_rooms(&scoped, &level_remap, &milestone_reference, scope);
+        assemble_scoped_rooms(&scoped, &level_remap, &milestone_reference, scope, &placement);
 
     Ok(Some(RoomsResult {
         schema_version: SUPPORTED_SCHEMA,
@@ -1085,6 +1089,7 @@ fn assemble_scoped_rooms(
     level_remap: &BTreeMap<(String, String, String), String>,
     milestone_reference: &MilestoneReference,
     scope: &RoomScope<'_>,
+    placement: &super::placement::Placement,
 ) -> AssembledRooms {
     let building = scope.building;
     let mut levels = Vec::new();
@@ -1169,6 +1174,10 @@ fn assemble_scoped_rooms(
             }
         }
 
+        // This model's step into the project frame, resolved once per model
+        // rather than per room.
+        let model_frame = placement.for_model(&key.project_id, &key.model_id);
+
         // Assemble first, filter second: a predicate may name a joined field,
         // which does not exist until `assemble_room` has run.
         let assembled: Vec<RoomResponse> = matching_rooms
@@ -1180,6 +1189,13 @@ fn assemble_scoped_rooms(
                     level_remap.get(&(key.project_id.clone(), key.model_id.clone(), room.level_id.clone()))
                 {
                     response.room.level_id = canonical_id.clone();
+                }
+                // Into the project frame, so a linked model exported from a
+                // different origin lands ON the plan rather than beside it.
+                // Derived at read time and never stored, like `label` and every
+                // other resolved field -- see `service::placement`.
+                if let Some(transform) = model_frame {
+                    super::placement::place_loops(transform, &mut response.room.loops);
                 }
                 response
             })
@@ -1357,6 +1373,7 @@ mod tests {
                 builtin_properties: vec![],
                 room_label: vec!["$name".to_string(), "$id".to_string()],
                 milestones: vec![],
+                anchor_model: None,
                 comparison_key: None,
                 comparison_properties: vec![],
                 areas: Default::default(),
@@ -1531,6 +1548,81 @@ mod tests {
         let fields = vec!["$id".to_string(), "sample.NetArea".to_string()];
         let label = resolve_label_fields(&room, &fields, "revit", &[], &reference, &known);
         assert_eq!(label, vec!["1".to_string()]);
+    }
+
+    /// Two models exported from DIFFERENT origins must draw on top of each
+    /// other, not beside each other.
+    ///
+    /// The RHH bug, in miniature: the services models sit ~250 ft from the
+    /// architectural ones in shared space, and nothing used to apply
+    /// `model_to_shared` to the geometry a consumer draws, so their spaces
+    /// landed off the side of the plan. The frame is project-LOCAL -- see
+    /// `service::placement` for why it must not be shared/survey space -- so
+    /// this also asserts the anchor's own rooms did not move and the placed
+    /// coordinates stayed at model scale.
+    #[test]
+    fn test_assemble_rooms_places_linked_models_in_one_frame() {
+        // One physical point, authored in two models 100 ft apart in shared
+        // space. `make_room`'s square is at the origin in each model's own
+        // space; after placement they must coincide.
+        let anchor = crate::contract::ModelToShared { matrix: [1.0, 0.0, 0.0, 1.0, 1_008_718.0, 20_572_194.0] };
+        let linked = crate::contract::ModelToShared { matrix: [1.0, 0.0, 0.0, 1.0, 1_008_818.0, 20_572_194.0] };
+
+        // A unit square at the same LOCAL coordinates in both models, which is
+        // what makes the placement the only thing that can separate them.
+        let square = || {
+            use crate::contract::{Loop, Point2D};
+            vec![Loop {
+                points: vec![
+                    Point2D { x: 0.0, y: 0.0 },
+                    Point2D { x: 10.0, y: 0.0 },
+                    Point2D { x: 10.0, y: 10.0 },
+                    Point2D { x: 0.0, y: 10.0 },
+                ],
+            }]
+        };
+        let mut room_a = make_room("r1", "Anchor room", &[]);
+        room_a.loops = square();
+        let mut room_b = make_room("r2", "Linked room", &[]);
+        room_b.loops = square();
+
+        let mut payload_a = make_payload(
+            "p1",
+            "modelA",
+            vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
+            vec![room_a],
+        );
+        payload_a.model_to_shared = Some(anchor);
+        let mut payload_b = make_payload(
+            "p1",
+            "modelB",
+            vec![Level { id: "l1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
+            vec![room_b],
+        );
+        payload_b.snapshot.taken_at = "2026-01-01T00:00:01Z".to_string();
+        payload_b.model_to_shared = Some(linked);
+
+        let before = payload_a.rooms[0].loops[0].points[0];
+        let state = AppState::new(Box::new(MemStore::new()), single_project("p1", make_bundle("Number")), None);
+        state.set_snapshot(payload_a).unwrap();
+        state.set_snapshot(payload_b).unwrap();
+
+        let result = assemble_rooms(&state, &scope(Some("p1"), None)).unwrap().expect("store has data");
+        let find =
+            |id: &str| result.rooms.iter().find(|r| r.room.id == id).expect("room present").room.loops[0].points[0];
+        let placed_a = find("r1");
+        let placed_b = find("r2");
+
+        // The anchor is the lowest model id and must be untouched, byte for byte.
+        assert_eq!(placed_a.x, before.x, "the anchor model's geometry must not move");
+        assert_eq!(placed_a.y, before.y);
+        // The linked model was authored 100 ft further east in shared space, so
+        // in the anchor's frame its identical local square lands 100 ft east.
+        assert!((placed_b.x - (placed_a.x + 100.0)).abs() < 1e-9, "linked model landed at {placed_b:?}");
+        assert!((placed_b.y - placed_a.y).abs() < 1e-9);
+        // And nothing acquired survey magnitude, which is what would quantise in
+        // the renderer's f32 vertex buffers.
+        assert!(placed_b.x.abs() < 10_000.0, "escaped model scale: {placed_b:?}");
     }
 
     /// Two models under the same project each define "the same" level (same

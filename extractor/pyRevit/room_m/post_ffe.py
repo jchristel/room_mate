@@ -194,6 +194,21 @@ def translate_item(item, contribution):
 
     return {
         "id": item_id,
+        # duHast's answer, NOT re-derived here. It is the level the modeller
+        # assigned, and it is only that since duHast 2026-09-07 -- before then
+        # `to_data_item` derived it geometrically (nearest level at or below the
+        # item's bounding box) and disagreed with the Properties palette on any
+        # model carrying levels its items are not placed on. RHH's interior
+        # models carry exactly that: reference levels mis-elevated onto other
+        # storeys' heights, and 9,186 of 15,070 items in one of them exported
+        # onto the wrong floor.
+        #
+        # **If an item ever draws on the wrong level again, check which duHast
+        # the extension is running before touching this file.** Computing a
+        # level here would silently discard whatever duHast sends, which is how
+        # a correct upstream fix produces a byte-identical bad export -- the
+        # same trap the door footprint fell into, and it is written up in
+        # CLAUDE.md under "Traps in the door export".
         "level_id": str(level.get("id", "unknown")),
         # Absent rather than guessed. A category the extractor could not read is
         # an empty string, which the server's filter reports as Empty rather

@@ -113,16 +113,15 @@ with their own origin and rotation. Comparing footprints or moving a room across
 projects is meaningless until the two share a datum — a shared survey point, or
 an explicit alignment transform between them.
 
-**The first half exists.** A model may carry a `model_to_shared` transform on
-its upload envelope (see [Coding Conventions](CODING-CONVENTIONS.md), "Identity
-& the upload envelope") that maps its room points into the project's *shared*
-coordinate system, so the rooms of one project's linked models land in one
-frame. It shipped ahead of any consumer, and **it now has one**: `[doors]
-room_resolution = "project"` lifts every model's rooms into the shared frame
-before probing, so a wrong transform there is a wrong `owner_rooms`, not a
-harmless unused field. The transform has still never been checked against a real
-survey — which is why `same_model` is the mode to prefer, and why the *rest* of
-the server still depends on nothing numeric here.
+**Within one project this is built** — `service::placement`, and every read
+serves geometry already in one project-local frame. What the code documents and
+this does not: the frame, the anchor rule, and why it is emphatically *not*
+shared/survey space.
+
+The transform has still never been checked against a real survey. That matters
+less than it did, because the frame is now relative: an error in one model's
+`model_to_shared` misplaces that model against its siblings, which is visible,
+rather than silently misplacing the whole project against the world.
 
 What is **still missing** is a frame shared *across* projects. Two
 survey-registered projects in the same CRS become directly comparable; the

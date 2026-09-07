@@ -460,6 +460,33 @@ pub fn phase_by_model<P: SnapshotEnvelope>(
     out
 }
 
+/// The levels each contributing model declares, keyed by model id.
+///
+/// **Why every element entity has to send this.** A `Level.id` is unique only
+/// within its own document, and the level picker is built from `/rooms`, which
+/// deduped its ids across the project's linked models (`rooms::dedup_levels`).
+/// An element's `level_id` is neither: it is the raw id its own model used. So
+/// matching an element to the displayed storey by id is wrong twice over -- a
+/// model that lost the dedup race has every element silently dropped, and a
+/// model with no rooms at all (a facade package) contributes no canonical id
+/// for its elements to match in the first place. RHH's facade model is exactly
+/// that case: 78 external doors, invisible on every level.
+///
+/// **Elevation is what crosses documents**, so the consumer resolves
+/// `(model_id, level_id) -> elevation` through this map and matches on the
+/// number. `service::spaces` reached the same conclusion first and this is that
+/// map, hoisted so all four element entities share one answer.
+///
+/// **Empty for a model that pushed no levels**, which is legal -- they are
+/// optional on the envelope -- and which a consumer must tell apart from "no
+/// level matches".
+pub fn levels_by_model<P: SnapshotEnvelope>(scoped: &[(ModelKey, P)]) -> BTreeMap<String, Vec<crate::contract::Level>> {
+    scoped
+        .iter()
+        .map(|(key, payload)| (key.model_id.clone(), payload.levels().to_vec()))
+        .collect()
+}
+
 /// What an element gives the locator, whatever entity it is.
 ///
 /// **`normal` is the whole difference between the two entities' geometry.** An

@@ -783,6 +783,7 @@ mod tests {
             builtin_properties: vec![],
             room_label: vec!["$name".to_string()],
             milestones,
+            anchor_model: None,
             comparison_key: comparison_key.map(|s| s.to_string()),
             comparison_properties: comparison_properties.iter().map(|s| s.to_string()).collect(),
             areas: Default::default(),

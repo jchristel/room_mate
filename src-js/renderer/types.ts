@@ -22,6 +22,17 @@ export interface PropertyValue {
   storage_type: string | null;
 }
 
+/** One storey, as a model declares it.
+ *
+ *  `id` is a Revit `ElementId` and is unique only within the document that
+ *  wrote it -- which is why `storey.ts` matches on `name` + `elevation` and
+ *  never on this field. `elevation` is millimetres. */
+export interface Level {
+  id: string;
+  name: string;
+  elevation: number;
+}
+
 export interface ClassificationTier {
   tier: string;
   name: string;

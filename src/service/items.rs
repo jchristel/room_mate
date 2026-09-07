@@ -199,6 +199,11 @@ pub struct FfeResult {
     /// by project id then model id. Read off each snapshot, never off the
     /// lineage's current phase.
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
+    /// Each contributing model's own levels, so a consumer can put an item on a
+    /// storey by ELEVATION. See `entity_scope::levels_by_model`; RHH's interior
+    /// models are the case that forced it, where 7031 items sat on a
+    /// reference-only level the deduped `/rooms` list has no id for.
+    pub levels_by_model: BTreeMap<String, Vec<crate::contract::Level>>,
     /// How many items this read **excluded** as components of another instance,
     /// under `[ffe] nested_components`.
     ///
@@ -245,6 +250,10 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
 
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
+    let levels_by_model = entity_scope::levels_by_model(&scoped);
+    // From the manifest index, so the frame matches `/rooms` -- see
+    // `service::placement::from_index`.
+    let placement = super::placement::from_index(state)?;
     let mut items: Vec<ItemResponse> = Vec::new();
     let mut excluded_components = 0usize;
 
@@ -292,6 +301,9 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
             })
             .unwrap_or_default();
 
+        // This model's step into the project frame, resolved once per model.
+        let model_frame = placement.for_model(&payload.project.id, &payload.model.id);
+
         for item in payload.items() {
             let is_component = item.super_component_id.is_some();
             // Counted before it is dropped, so `excluded_components` is a count
@@ -332,7 +344,7 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
             let room_origin = entity_scope::side_origin(item.room.as_deref(), &payload.model.id, &derived);
             let owner_rooms_qualified: Vec<RoomRef> = room_origin.room().cloned().into_iter().collect();
 
-            let response = ItemResponse {
+            let mut response = ItemResponse {
                 owner_rooms: owner_rooms_qualified
                     .iter()
                     .filter(|r| r.model_id == payload.model.id)
@@ -347,6 +359,14 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
                 reference,
                 source: payload.model.source.clone(),
             };
+            // Into the project frame, AFTER the geometric resolver -- same
+            // ordering and same reason as `service::openings`. `facing` is a
+            // direction and is rotated without the translation.
+            if let Some(transform) = model_frame {
+                super::placement::place_loops(transform, &mut response.item.loops);
+                super::placement::place_point(transform, &mut response.item.insertion_point);
+                super::placement::place_normal(transform, &mut response.item.facing);
+            }
 
             if let Some(wanted) = scope.building
                 && !response.owner_rooms_qualified.iter().any(|room| {
@@ -368,6 +388,7 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
         revision,
         ffe: items,
         phase_by_model,
+        levels_by_model,
         excluded_components,
     }))
 }
@@ -450,6 +471,7 @@ mod tests {
             builtin_properties: vec![],
             room_label: vec![],
             milestones: vec![],
+            anchor_model: None,
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),

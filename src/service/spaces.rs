@@ -211,10 +211,13 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
 
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
-    let levels_by_model: BTreeMap<String, Vec<crate::contract::Level>> = scoped
-        .iter()
-        .map(|(key, payload)| (key.model_id.clone(), payload.levels.clone()))
-        .collect();
+    let levels_by_model = entity_scope::levels_by_model(&scoped);
+    // From the manifest index, so the frame matches `/rooms` -- see
+    // `service::placement::from_index`. THE entity this exists for: RHH's five
+    // services models are exported from an origin ~250 ft from the
+    // architectural one, so their spaces drew beside the plan instead of over
+    // it.
+    let placement = super::placement::from_index(state)?;
     let mut spaces: Vec<SpaceResponse> = Vec::new();
 
     for (_key, payload) in &scoped {
@@ -231,6 +234,9 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
             })
             .unwrap_or_default();
 
+        // This model's step into the project frame, resolved once per model.
+        let model_frame = placement.for_model(&payload.project.id, &payload.model.id);
+
         for space in &payload.spaces {
             let reference: BTreeMap<String, ReferenceRecord> = sources
                 .iter()
@@ -242,13 +248,18 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
                 })
                 .collect();
 
-            let response = SpaceResponse {
+            let mut response = SpaceResponse {
                 space: space.clone(),
                 reference,
                 project_id: payload.project.id.clone(),
                 model_id: payload.model.id.clone(),
                 source: payload.model.source.clone(),
             };
+            // Into the project frame. A space carries loops and nothing else
+            // directional, so this is the whole placement for the entity.
+            if let Some(transform) = model_frame {
+                super::placement::place_loops(transform, &mut response.space.loops);
+            }
 
             // The filter runs *after* assembly so a predicate sees the same
             // resolved vocabulary a consumer does — the rule every entity's read
@@ -807,6 +818,7 @@ mod tests {
             builtin_properties: vec![],
             room_label: vec![],
             milestones: vec![],
+            anchor_model: None,
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),

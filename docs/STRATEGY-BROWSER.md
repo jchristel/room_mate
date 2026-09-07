@@ -14,20 +14,22 @@ rediscover are below rather than in the code, because they are properties of the
 
 ## Deferred
 
-- **Serve `model_to_shared`, then consume it.** A model may carry a placement
-  affine on its *upload* envelope, and the server validates and stores it — but
-  **no read endpoint serves it**, so the renderer does not merely ignore it, it
-  cannot see it. The first step for every feature below is therefore a *server*
-  change (surface the per-model transform on `/rooms`, following the
-  `boundary_by_level` precedent), not a browser one:
+- **Serve `model_to_shared` itself.** *Aligning* linked models is done and is
+  not a browser concern any more: the server places every read's geometry into
+  one project-local frame (`service::placement`), so the renderer draws models
+  that line up without knowing a transform exists. What is still deferred needs
+  the raw, survey-absolute affine, which no read endpoint serves:
   - north alignment,
   - a real-world scale bar,
   - the georeferencing map underlay.
 
-  Composing it is then a browser job — the existing Y-flip *plus* the transform
-  *plus*, for the underlay, a reprojection into the tile frame — and the server
-  stays out of it. It emits the transform as data; the renderer composes the
-  picture.
+  So the first step for these is still a *server* change — surface the per-model
+  transform on `/rooms`, following the `boundary_by_level` precedent. **It must
+  be served as a transform for the renderer to compose with, never applied to
+  the coordinates**: shared space is the survey grid, and survey-magnitude
+  coordinates quantise to ~324 mm in the f32 vertex buffers the GL renderer
+  uploads. That constraint is why the alignment above is project-local, and it
+  is written up in `service::placement`'s module header with the measurements.
 
 - **Surface `measurement_standard` and `wall_gap_by_level` in the band-1 areas
   block.** `/areas` returns both and the UI ignores both. An area figure without

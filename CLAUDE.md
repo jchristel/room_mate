@@ -124,6 +124,79 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   whatever duHast sends, which is exactly how a correct duHast fix produced a
   byte-identical bad export.
 
+## Linked models: one frame, one storey rule
+
+Both were reported as five separate viewer bugs on RHH and are one cause each.
+
+- **Geometry is placed into a PROJECT-LOCAL frame at read time, never into
+  shared space.** `model_to_shared` rode the envelope for a long time with
+  nothing applying it, which is invisible while a project's models share an
+  origin (RHH's four architectural models agree to six decimals) and glaring
+  when they do not (its five services models sit ~250 ft away, so the spaces
+  layer drew beside the plan). `service::placement` composes `anchor⁻¹ ∘ model`
+  in f64; the survey translations cancel and what is applied is a small local
+  delta. **Do not "simplify" this to placing everything into shared space.**
+  Shared space is the survey grid — RHH's is MGA Sydney, 2.06e7 ft — and the GL
+  renderer uploads world coordinates as `Float32Array`, where that magnitude has
+  a ULP of 324 mm. Measured, not feared. The anchor is `[project]
+  anchor_model`, else the lexicographically smallest model id per project, and
+  it must stay request-independent: it comes from `model_index()` because that
+  is the only source all five entity reads share, and five reads disagreeing
+  about the frame means doors that do not sit on rooms. The anchor's own
+  geometry is untransformed, which is why House A and the golden SVGs did not
+  move.
+- **Which model is the anchor cannot make the geometry wrong.** Every model is
+  mapped through the same rigid `anchor⁻¹`, so the choice moves the whole plan
+  as one piece and never changes how models sit relative to each other — even
+  if the anchor's own `model_to_shared` is misregistered. `anchor_model` exists
+  for the two things that *do* leak out: exported coordinates (SVG, `/areas`)
+  come out in the anchor's frame, and the derived anchor shifts if a
+  lower-sorting model id is ever pushed.
+- **`ModelEntry::placement` is an index fact, filled at push time and
+  backfilled once at startup.** `bootstrap::backfill_placements` exists because
+  every snapshot already on disk predates the field; without it the fix would
+  only reach data pushed after the upgrade. It skips a model that already has
+  one, so it costs a manifest read per project after the first run.
+- **An element joins a storey by NAME + ELEVATION, never by level id.** A
+  `Level.id` is per document; the level picker is built from `/rooms`, which has
+  already deduped ids across linked models. Comparing the two directly fails
+  silently in two directions — a model that lost the dedup race has every
+  element dropped, and a model with no rooms (a facade package) contributes no
+  canonical id at all, which is why RHH's 78 external doors were invisible on
+  every level. The rule is `src-js/renderer/storey.ts`, shared by all four
+  element layers, and it deliberately mirrors `rooms::dedup_levels`. Elevation
+  alone is not enough: RHH's car park stacks "C 00" at the hospital GROUND's
+  elevation. Every element read carries `levels_by_model` for it.
+- **A layer that could not resolve exactly says so on its own toggle.** The
+  "(all levels)" / "(by elevation)" suffixes are the point: a fallback nobody
+  can see is the failure mode this area keeps producing.
+- **The building picker has an "All buildings" option and defaults to it.**
+  `?building=` scopes an opening or item *through the room it is attributed to*,
+  so a homeless element — every window and external door in a facade package —
+  matches no building. With every option naming a building there was no way to
+  ask the unscoped question, and half of "I can't see any external doors" was
+  that.
+
+## The FF&E level came from geometry, and that was the bug
+
+Same shape as the door footprint above, same lesson, different field.
+`duHast.Revit.Family.Export.to_data_item` derived an item's level by walking to
+the nearest level at or below its bounding box, and **ignored the level the
+modeller assigned** — which the same export was already sending in
+`instance_properties`. That is right only for a model whose levels are exactly
+its storeys. RHH's interior models carry reference levels mis-elevated onto
+other storeys' heights ("LEVEL 6" at 74000, where LEVEL 4 sits), and 9,186 of
+15,070 items in one model exported onto a floor they were not on.
+
+Fixed upstream 2026-09-07 (`get_item_level_data`: authored first, the walk only
+for an item that states no level — which is what it was written for, a
+face-hosted family). **The extractor must not re-derive it**, for the reason it
+must not re-derive the door footprint: computing a level in `room_m` would
+silently discard a correct duHast and produce a byte-identical bad export. If an
+item draws on the wrong level, check which duHast the extension is running
+first. **Snapshots exported before that date still carry the geometric level**
+and will keep drawing on the wrong storey until they are re-exported.
+
 ## Which document wins
 
 [`docs/README.md`](docs/README.md) indexes everything. **The strategy docs hold
@@ -231,10 +304,22 @@ with one, not here.
   documents were read together" expressible at all. Storing the bucket whole
   would flatten exactly the identity the rest of the codebase is built on.
 
-## Open, as of 2026-08-05
+## Open, as of 2026-09-07
 
-**Nothing.** Both long-standing items closed: the extractor's phase filter is
-verified against Revit, and R4 landed.
+- **`/ffe` is 273 MB and 94 s on RHH** (38,913 items, each with its full
+  instance *and* type property map). The viewer's poll loop is sequential, so
+  this blocks first paint for ~2 minutes. Measured, not fixed — the shape of the
+  fix (drop the per-item type-property repetition, or scope the read) is not
+  decided.
+- **RHH has no windows snapshot at all.** Not a code gap: `windows_export_entry`
+  has simply never been run against it, so `/windows?project=RHH` answers 200
+  with an empty list. The level-id fix above is what windows needed to be
+  visible once pushed, since they live in the facade model that has no rooms.
+- **RHH's FF&E is on the wrong storeys until it is re-exported** — see the FF&E
+  level trap above. The fix is upstream and lands on the next export.
+
+Both older items stay closed: the extractor's phase filter is verified against
+Revit, and R4 landed.
 
 ## The extractor has six entry points, one of them a trap and three unwired
 
