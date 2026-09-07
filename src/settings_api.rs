@@ -931,6 +931,7 @@ ids = ["12345", "67890"]
                     doors: vec![],
                     windows: vec![],
                     ffe: vec![],
+                    placement: None,
                 },
             )]),
             reference_snapshots: std::collections::BTreeMap::from([(

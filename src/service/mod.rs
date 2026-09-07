@@ -15,6 +15,7 @@ pub mod entity_scope;
 pub mod items;
 pub mod milestones;
 pub mod openings;
+pub mod placement;
 pub mod projects;
 pub mod reference;
 pub mod room_locator;
@@ -155,6 +156,7 @@ mod tests {
             builtin_properties: vec![],
             room_label: vec!["$name".to_string()],
             milestones: vec![],
+            anchor_model: None,
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),

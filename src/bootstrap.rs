@@ -204,6 +204,7 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
         builtin_properties: settings.builtin_properties,
         room_label: settings.room_label,
         milestones: settings.milestones,
+        anchor_model: settings.anchor_model,
         comparison_key: settings.comparison_key,
         comparison_properties: settings.comparison_properties,
         areas: settings.areas,
@@ -317,7 +318,79 @@ pub fn build_state(server_settings: &Path, projects_dir: &Path) -> anyhow::Resul
 
     seed_if_test(&state, test_data.as_ref())?;
 
+    // AFTER seeding, so a seeded snapshot is indexed like a pushed one.
+    backfill_placements(&state)?;
+
     Ok(state)
+}
+
+/// Fill in `ModelEntry::placement` for models stored before the manifest
+/// carried it.
+///
+/// **A one-shot migration that costs nothing once it has run.** A model whose
+/// index already names a placement is skipped without opening anything, so the
+/// pass is a manifest read per project on every start after the first. Only
+/// models with a gap pay for a snapshot parse.
+///
+/// **Why it has to exist at all.** The placement is what
+/// `service::placement::from_index` needs to put a project's linked models in
+/// one frame, and it is normally recorded at push time. Every snapshot already
+/// on disk predates that, so without this the alignment would only reach data
+/// pushed after the upgrade — which on a store someone has just copied in from
+/// another machine is every model that matters.
+///
+/// **Failures are warnings, never fatal.** A snapshot that cannot be parsed
+/// leaves its model unplaced, which is exactly the state it was already in; a
+/// server that refused to start over it would trade a cosmetic misalignment for
+/// an outage.
+fn backfill_placements(state: &AppState) -> anyhow::Result<()> {
+    /// Only the envelope field wanted, so the parse ignores the element array
+    /// rather than building it. Every entity's payload carries the key at the
+    /// top level, so one shape reads all five.
+    #[derive(serde::Deserialize)]
+    struct JustPlacement {
+        model_to_shared: Option<crate::contract::ModelToShared>,
+    }
+
+    let index = state.model_index()?;
+    let mut filled = 0usize;
+    for row in index.iter().filter(|row| row.placement.is_none()) {
+        // Any kind will do — `model_to_shared` is a model fact, identical on
+        // every entity's envelope. Smallest snapshot first, because an FF&E
+        // push is two orders of magnitude larger than a spaces one and this
+        // parse is pure overhead.
+        let mut found = None;
+        let mut kinds: Vec<_> = row.latest.keys().copied().collect();
+        kinds.sort_by_key(|kind| state.store().get_latest_raw(*kind, &row.key).map(|b| b.map_or(0, |b| b.len())).ok());
+        for kind in kinds {
+            let Ok(Some(bytes)) = state.store().get_latest_raw(kind, &row.key) else {
+                continue;
+            };
+            match serde_json::from_slice::<JustPlacement>(&bytes) {
+                Ok(JustPlacement { model_to_shared: Some(placement) }) => {
+                    found = Some(placement);
+                    break;
+                }
+                Ok(_) => continue, // parsed fine and declares none: nothing to backfill
+                Err(err) => {
+                    tracing::warn!(
+                        "could not read placement from {}/{} {} snapshot: {err}",
+                        row.key.project_id,
+                        row.key.model_id,
+                        kind.label()
+                    );
+                }
+            }
+        }
+        if let Some(placement) = found {
+            state.store().set_placement(&row.key, placement)?;
+            filled += 1;
+        }
+    }
+    if filled > 0 {
+        tracing::info!("backfilled the placement index for {filled} model(s)");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

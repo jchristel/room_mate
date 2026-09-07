@@ -344,6 +344,79 @@ impl ModelToShared {
     pub fn is_rigid(&self, tol: f64) -> bool {
         (self.determinant().abs() - 1.0).abs() <= tol
     }
+
+    /// The identity placement: a model already in the frame being asked about.
+    pub const IDENTITY: Self = Self { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] };
+
+    /// The inverse placement — shared space back into this model's own space.
+    ///
+    /// `None` for a degenerate linear part, which a rigid transform never has;
+    /// returning the option rather than asserting keeps a malformed matrix that
+    /// slipped past ingest's *warning* from panicking a read.
+    pub fn inverse(&self) -> Option<Self> {
+        let [a, b, c, d, e, f] = self.matrix;
+        let det = a * d - c * b;
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        // [[a c][b d]]^-1 = 1/det * [[d -c][-b a]], and the translation is that
+        // applied to -[e, f].
+        let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
+        Some(Self { matrix: [ia, ib, ic, id, -(ia * e + ic * f), -(ib * e + id * f)] })
+    }
+
+    /// `self ∘ other`: apply `other` first, then `self`.
+    pub fn then(&self, other: &Self) -> Self {
+        // `self` is the outer transform; composing in this order is what makes
+        // `anchor.inverse().then_applied_to(model)` read as "model space into
+        // the anchor's space".
+        let [a, b, c, d, e, f] = self.matrix;
+        let [oa, ob, oc, od, oe, of] = other.matrix;
+        Self {
+            matrix: [
+                a * oa + c * ob,
+                b * oa + d * ob,
+                a * oc + c * od,
+                b * oc + d * od,
+                a * oe + c * of + e,
+                b * oe + d * of + f,
+            ],
+        }
+    }
+
+    /// Map a **position** through this transform.
+    pub fn place(&self, p: Point2D) -> Point2D {
+        let [a, b, c, d, e, f] = self.matrix;
+        Point2D { x: a * p.x + c * p.y + e, y: b * p.x + d * p.y + f }
+    }
+
+    /// Map a **direction** — the linear part only, renormalised.
+    ///
+    /// A normal is a direction, not a position: a door's facing does not move
+    /// when its model is placed elsewhere on the survey grid, so the translation
+    /// must not reach it. `None` for a direction that collapses to zero length.
+    pub fn place_direction(&self, p: Point2D) -> Option<Point2D> {
+        let [a, b, c, d, _e, _f] = self.matrix;
+        let (x, y) = (a * p.x + c * p.y, b * p.x + d * p.y);
+        let len = (x * x + y * y).sqrt();
+        if len < 1e-9 {
+            return None;
+        }
+        Some(Point2D { x: x / len, y: y / len })
+    }
+
+    /// Whether this is the identity to within float noise, so a caller can skip
+    /// the walk over every point of every polygon. The anchor model itself
+    /// always lands here, and a single-model project always does.
+    pub fn is_identity(&self) -> bool {
+        let [a, b, c, d, e, f] = self.matrix;
+        (a - 1.0).abs() < 1e-12
+            && b.abs() < 1e-12
+            && c.abs() < 1e-12
+            && (d - 1.0).abs() < 1e-12
+            && e.abs() < 1e-9
+            && f.abs() < 1e-9
+    }
 }
 
 /// Where a model's room boundaries sit relative to their walls — Revit's

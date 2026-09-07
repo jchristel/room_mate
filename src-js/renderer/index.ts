@@ -22,6 +22,7 @@ export {
   roomBBox,
 } from "./geometry.js";
 export { addLabel, paintLevel } from "./svg/paint.js";
+export { LEVEL_EPS_MM, onStorey, sameStorey } from "./storey.js";
 export { GlPlanRenderer } from "./gl/renderer.js";
 export { DoorIndex, RoomIndex } from "./gl/spatial.js";
 export { buildDoorGlyph, FALLBACK_GLYPH_SIZE, MIN_FOOTPRINT_EXTENT } from "./gl/doorGlyph.js";
@@ -30,6 +31,7 @@ export { buildItemGlyph, MARKER_SIZE } from "./gl/itemGlyph.js";
 export { parseColour, readPalette, withAlpha } from "./gl/colour.js";
 
 export type { PaintOptions } from "./svg/paint.js";
+export type { Placed, StoreyMatch, StoreyResult } from "./storey.js";
 export type { GlRendererOptions } from "./gl/renderer.js";
 export type { DoorGlyph } from "./gl/doorGlyph.js";
 export type { WindowGlyph } from "./gl/windowGlyph.js";
@@ -42,6 +44,7 @@ export type {
   Door,
   WindowOpening,
   Extent,
+  Level,
   Loop,
   Point2D,
   PropertyValue,

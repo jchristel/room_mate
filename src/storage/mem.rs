@@ -54,6 +54,11 @@ pub struct MemStore {
     /// keyed by kind: a model's rooms and doors pushes carry the same identity
     /// envelope, so either one names it.
     names: Mutex<BTreeMap<ModelKey, (String, String)>>,
+    /// Each model's declared `model_to_shared`, latest push wins — the mirror of
+    /// `ModelEntry::placement`, kept here for the reason `names` is: `FsStore`
+    /// reads it off the manifest and this store has none. See
+    /// `service::placement` for what a read does with it.
+    placements: Mutex<BTreeMap<ModelKey, crate::contract::ModelToShared>>,
     /// The one quarantined push per model AND KIND, invisible to every read
     /// path: `(taken_at, bytes)`. Keyed by kind since spaces joined rooms in
     /// being quarantinable — see `SnapshotStore::put_pending_raw` for why an
@@ -88,6 +93,7 @@ struct MemSnapshotWriter<'a> {
     model_name: String,
     taken_at: String,
     phase: Option<String>,
+    model_to_shared: Option<crate::contract::ModelToShared>,
 }
 
 impl SnapshotWriter for MemSnapshotWriter<'_> {
@@ -105,6 +111,7 @@ impl SnapshotWriter for MemSnapshotWriter<'_> {
                 model_name: &self.model_name,
                 taken_at: &self.taken_at,
                 phase: self.phase.as_deref(),
+                model_to_shared: self.model_to_shared,
             },
             &self.buffer,
         )
@@ -123,6 +130,11 @@ impl SnapshotStore for MemStore {
             .lock()
             .unwrap()
             .insert(meta.key.clone(), (meta.project_name.to_string(), meta.model_name.to_string()));
+        // Latest push wins, and a push declaring none leaves the last standing
+        // — identical to `FsStore::index_snapshot`, and for the same reason.
+        if let Some(placement) = meta.model_to_shared {
+            self.placements.lock().unwrap().insert(meta.key.clone(), placement);
+        }
         self.latest
             .lock()
             .unwrap()
@@ -140,7 +152,13 @@ impl SnapshotStore for MemStore {
             model_name: meta.model_name.to_string(),
             taken_at: meta.taken_at.to_string(),
             phase: meta.phase.map(str::to_string),
+            model_to_shared: meta.model_to_shared,
         }))
+    }
+
+    fn set_placement(&self, key: &ModelKey, placement: crate::contract::ModelToShared) -> Result<()> {
+        self.placements.lock().unwrap().insert(key.clone(), placement);
+        Ok(())
     }
 
     fn get_latest_raw(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>> {
@@ -174,6 +192,7 @@ impl SnapshotStore for MemStore {
         // `FsStore` takes towards an unindexed model dir.
         let keys = self.list_models()?;
         let names = self.names.lock().unwrap();
+        let placements = self.placements.lock().unwrap();
         let latest = self.latest.lock().unwrap();
         Ok(keys
             .into_iter()
@@ -187,7 +206,8 @@ impl SnapshotStore for MemStore {
                     .filter(|((_, k), _)| *k == key)
                     .map(|((kind, _), (taken_at, _))| (*kind, taken_at.clone()))
                     .collect();
-                ModelIndexRow { key, project_name, model_name, latest }
+                let placement = placements.get(&key).copied();
+                ModelIndexRow { key, project_name, model_name, latest, placement }
             })
             .collect())
     }
@@ -333,6 +353,7 @@ mod tests {
             model_name: &payload.model.name,
             taken_at: &payload.snapshot.taken_at,
             phase: payload.phase.as_deref(),
+            model_to_shared: payload.model_to_shared,
         }
     }
 
@@ -451,6 +472,7 @@ mod tests {
             model_name: "M",
             taken_at: "2026-06-01T10:00:00Z",
             phase: None,
+            model_to_shared: None,
         };
         store.put_raw(&doors, b"{\"doors\":[]}").unwrap();
 
@@ -484,6 +506,7 @@ mod tests {
                     model_name: "M",
                     taken_at: "2026-01-01T10:00:00Z",
                     phase: Some("New Construction"),
+                    model_to_shared: None,
                 },
                 b"{\"doors\":[]}",
             )

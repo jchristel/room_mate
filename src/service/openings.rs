@@ -227,6 +227,11 @@ pub struct Assembled {
     pub revision: String,
     pub openings: Vec<OpeningResponse>,
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
+    /// Each contributing model's own levels, so a consumer can put an opening
+    /// on a storey by ELEVATION rather than by an id that means nothing outside
+    /// its own document. See `entity_scope::levels_by_model` for why matching
+    /// the raw id against `/rooms`'s deduped one silently loses whole models.
+    pub levels_by_model: BTreeMap<String, Vec<crate::contract::Level>>,
 }
 
 /// Which opening entity a read addresses, and the **only** place the per-entity
@@ -296,6 +301,10 @@ pub struct DoorsResult {
     /// by project id then model id. Read off each snapshot, never off the
     /// lineage's current phase.
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
+    /// See `Assembled::levels_by_model`. On `/doors` because a facade model
+    /// pushes doors and no rooms, so its level ids appear in no `/rooms`
+    /// answer at all.
+    pub levels_by_model: BTreeMap<String, Vec<crate::contract::Level>>,
 }
 
 impl DoorsResult {
@@ -305,6 +314,7 @@ impl DoorsResult {
             revision: assembled.revision,
             doors: assembled.openings,
             phase_by_model: assembled.phase_by_model,
+            levels_by_model: assembled.levels_by_model,
         }
     }
 }
@@ -317,6 +327,7 @@ pub struct WindowsResult {
     pub revision: String,
     pub windows: Vec<OpeningResponse>,
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
+    pub levels_by_model: BTreeMap<String, Vec<crate::contract::Level>>,
 }
 
 impl WindowsResult {
@@ -326,6 +337,7 @@ impl WindowsResult {
             revision: assembled.revision,
             windows: assembled.openings,
             phase_by_model: assembled.phase_by_model,
+            levels_by_model: assembled.levels_by_model,
         }
     }
 }
@@ -420,6 +432,11 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
 
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
+    let levels_by_model = entity_scope::levels_by_model(&scoped);
+    // From the manifest index, not from `scoped`: the frame has to match the one
+    // `/rooms` used, and the two reads scope different models. See
+    // `service::placement::from_index`.
+    let placement = super::placement::from_index(state)?;
     let mut openings: Vec<OpeningResponse> = Vec::new();
 
     // A door's building is its owning room's building, so a building scope needs
@@ -473,6 +490,9 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
             })
             .unwrap_or_default();
 
+        // This model's step into the project frame, resolved once per model.
+        let model_frame = placement.for_model(&payload.project().id, &payload.model().id);
+
         for door in payload.openings() {
             // One join per configured source: read its link property off the
             // DOOR -- instance tier then type tier, the R2 rule -- and look up
@@ -512,7 +532,7 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
                 .cloned()
                 .collect();
 
-            let response = OpeningResponse {
+            let mut response = OpeningResponse {
                 // Same-model owners only, so the field keeps meaning exactly
                 // what it always did. A cross-model owner appears in
                 // `owner_rooms_qualified` and nowhere else.
@@ -529,6 +549,16 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
                 reference,
                 source: payload.model().source.clone(),
             };
+            // Into the project frame. AFTER the geometric resolver has run --
+            // `Candidates` works in its own frame and does its own placing, so
+            // moving the opening first would probe it against rooms that had not
+            // moved. Derived at read time and never stored; see
+            // `service::placement`.
+            if let Some(transform) = model_frame {
+                super::placement::place_loops(transform, &mut response.door.loops);
+                super::placement::place_point(transform, &mut response.door.insertion_point);
+                super::placement::place_normal(transform, &mut response.door.through_wall_normal);
+            }
             // A homeless door matches no building — see `OpeningScope::building`.
             // Room ids are unique only within a model, so the lookup is keyed on
             // the pair, never the bare room id — and it reads the *qualified*
@@ -549,7 +579,7 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
         }
     }
 
-    Ok(Some(Assembled { revision, openings, phase_by_model }))
+    Ok(Some(Assembled { revision, openings, phase_by_model, levels_by_model }))
 }
 
 #[cfg(test)]
@@ -601,6 +631,7 @@ mod tests {
             builtin_properties: vec![],
             room_label: vec![],
             milestones: vec![],
+            anchor_model: None,
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),
@@ -693,6 +724,9 @@ mod tests {
       }
     }
   ],
+  "levels_by_model": {
+    "m1": []
+  },
   "phase_by_model": {
     "p1": {
       "m1": "New Construction"

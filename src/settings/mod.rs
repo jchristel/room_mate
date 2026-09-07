@@ -256,6 +256,31 @@ pub struct Settings {
     /// TOML "value-after-table" ordering footgun (CODING-CONVENTIONS.md).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hierarchy_exclusions: Vec<HierarchyExclusion>,
+
+    /// Which model's coordinate space this project's plans are drawn in — the
+    /// anchor every linked model is placed against (`service::placement`).
+    ///
+    /// **An override, not a requirement.** Absent (the default, and every file
+    /// predating it) the anchor is derived: the lexicographically smallest model
+    /// id that declares a placement. That derivation is deterministic and
+    /// request-independent, which is all *correctness* needs — every model is
+    /// mapped through the same rigid `anchor⁻¹`, so which one is chosen cannot
+    /// change how the models sit relative to each other. It only sets where the
+    /// whole plan's origin and north are, and the viewer refits either way.
+    ///
+    /// It exists because two things do leak out of that choice: **exported
+    /// coordinates** (SVG, `/areas`) come out in the anchor's frame, and "the
+    /// car park, because C sorts first" is a poor frame to compare against
+    /// Revit in; and the derived anchor **moves** if a model with a
+    /// lower-sorting id is ever pushed, which silently shifts every exported
+    /// coordinate. Naming the model pins both.
+    ///
+    /// A name that matches no model with a placement is a **warning, not an
+    /// error** — the derived anchor answers instead, on the "signal, not error"
+    /// rule. A project is drawable with a stale anchor name; refusing to serve
+    /// it would not make the name any more correct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_model: Option<String>,
 }
 
 fn default_room_label() -> Vec<String> {

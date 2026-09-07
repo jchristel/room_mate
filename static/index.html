@@ -1011,7 +1011,7 @@ async function fetchJson(url) {
 //
 // The coordinate rule they encode is unchanged and still load-bearing: payload
 // data is Y-up, everything from here down is Y-down.
-const { flip, bounds, loopBox, pointsAttr, centroid, roomBBox, fittedBounds, addLabel } = PlanRenderer;
+const { flip, bounds, loopBox, pointsAttr, centroid, roomBBox, fittedBounds, addLabel, onStorey } = PlanRenderer;
 
 // Build the ordered list of levels to show. Prefer the payload's `levels`
 // array (ordered by elevation on the server); fall back to deriving from
@@ -1505,15 +1505,15 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       spaces: spacesForPlan(levelId),
       showSpaces,
     });
-    // Immediately after the paint, because only the paint knows whether the
-    // elevation resolved -- and inside the deferred callback, because that is
-    // where `spacesForPlan` actually ran. Refreshing it only from the toggle
-    // meant a project switch could land in the fallback and still read
-    // "Spaces: on", which is the silent state this label exists to prevent.
+    // Immediately after the paint, because only the paint knows how each layer's
+    // storey resolved -- and inside the deferred callback, because that is where
+    // the four `…OnLevel` calls above actually ran. Refreshing only from the
+    // toggles meant a project switch could land in a fallback and still read
+    // "Spaces: on", which is the silent state these labels exist to prevent.
     //
-    // Last zone painted wins, which is right: the fallback is a property of the
+    // Last zone painted wins, which is right: the match is a property of the
     // payload rather than of one zone.
-    syncSpacesToggleLabel();
+    syncLayerToggleLabels();
     // Inside the deferred build, not after it: on a large level these run a
     // frame later than the surrounding code, and re-applying a selection to a
     // level that has not been painted yet marks nothing.
@@ -1720,6 +1720,18 @@ function populateBuildingSelect(data) {
   const sel = scopeEls.building;
   const prevValue = sel.value;
   sel.replaceChildren();
+  // "All buildings" first, on the milestone select's "Latest" pattern — and it
+  // is not cosmetic. `?building=` scopes an opening or an item THROUGH the room
+  // it is attributed to, so a HOMELESS element matches no building at all. With
+  // every option naming a building there was no way to ask for the unscoped
+  // answer, and a facade package — whose windows and external doors reference
+  // no room by design — was unreachable from this page entirely. That is half
+  // of why RHH's 78 external doors could not be found; `storey.ts` is the other
+  // half.
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "All buildings";
+  sel.appendChild(all);
   for (const b of data.buildings) {
     const opt = document.createElement("option");
     opt.value = b.key;
@@ -1728,8 +1740,11 @@ function populateBuildingSelect(data) {
     opt.textContent = label;
     sel.appendChild(opt);
   }
-  sel.classList.toggle("hidden", data.buildings.length <= 1);
-  if (data.buildings.some(b => b.key === prevValue)) sel.value = prevValue;
+  // Shown even for a single building, unlike before: "All buildings" against
+  // that one building is a real choice now, because it is the difference
+  // between including and excluding the homeless elements.
+  sel.classList.toggle("hidden", data.buildings.length === 0);
+  if (prevValue === "" || data.buildings.some(b => b.key === prevValue)) sel.value = prevValue;
 }
 
 function populateMilestoneSelect(data) {
@@ -1843,8 +1858,13 @@ async function loadBuildings(pid) {
   lastBuildingsSignature = signature;
   populateBuildingSelect(data);
 
-  if (!data.buildings.some(b => b.key === buildingKey)) {
-    buildingKey = data.buildings.length ? data.buildings[0].key : null;
+  // Default to ALL buildings rather than the first one. Defaulting into a
+  // building silently hid every homeless door, window and item on first load,
+  // and "the first building alphabetically" was never a meaningful answer to
+  // "what should this project show" — it just happened to be what the list
+  // started with.
+  if (buildingKey !== null && !data.buildings.some(b => b.key === buildingKey)) {
+    buildingKey = null;
   }
 }
 
@@ -4023,13 +4043,12 @@ function doorsUrl() {
   return qs ? `/doors?${qs}` : "/doors";
 }
 
-// The doors on one level. Keyed the same way rooms are, and carrying the same
-// caveat: a level id is unique only WITHIN a model, so this is correct exactly
-// as far as the scope above narrowed the models — which is the same trade
-// roomsOnLevel already makes.
+// The doors on one storey. See `elementsOnStorey` -- this used to compare
+// `level_id` against the picker's id, which dropped every door in a model that
+// pushes no rooms (RHH's facade package: 78 external doors, invisible on every
+// level).
 function doorsOnLevel(levelId) {
-  if (!doorsPayload) return [];
-  return (doorsPayload.doors || []).filter(d => (d.level_id || "unknown") === levelId);
+  return elementsOnStorey("doors", doorsPayload, "doors", levelId);
 }
 
 // The /windows URL. Same caveat as doorsUrl, and it bites harder here: a
@@ -4047,11 +4066,11 @@ function windowsUrl() {
   return qs ? `/windows?${qs}` : "/windows";
 }
 
-// The windows on one level, keyed exactly as doors are and carrying the same
-// within-one-model caveat.
+// The windows on one storey, resolved exactly as doors are -- and this entity
+// needs it most, because windows live in the facade model that has no rooms and
+// therefore contributes no id the picker could ever match.
 function windowsOnLevel(levelId) {
-  if (!windowsPayload) return [];
-  return (windowsPayload.windows || []).filter(w => (w.level_id || "unknown") === levelId);
+  return elementsOnStorey("windows", windowsPayload, "windows", levelId);
 }
 
 // The /ffe URL. Same caveat as doorsUrl and windowsUrl, and the middle ground
@@ -4068,15 +4087,16 @@ function ffeUrl() {
   return qs ? `/ffe?${qs}` : "/ffe";
 }
 
-// The FF&E on one level, keyed exactly as doors and windows are.
+// The FF&E on one storey, resolved exactly as doors and windows are.
 //
-// An item whose level is `-1` -- unhosted, 71 of 644 when measured -- lands
-// under "unknown" like any other unmatched level rather than being dropped. It
-// is a real item with a real position, and hiding it would make a plan quietly
-// incomplete.
+// An item whose level is `-1` — duHast's marker for one it found no solid
+// geometry to measure, 842 of them on RHH — resolves to no level and is not
+// drawn on any storey. That is not new: `"-1"` matched no picker id before this
+// either. What changed is that such an item no longer counts as evidence the
+// level data is missing, which would have tipped the whole layer into its
+// show-everything fallback.
 function ffeOnLevel(levelId) {
-  if (!ffePayload) return [];
-  return (ffePayload.ffe || []).filter(i => (i.level_id || "unknown") === levelId);
+  return elementsOnStorey("ffe", ffePayload, "ffe", levelId);
 }
 
 // FF&E polls on its own revision, in its own try -- an FF&E read that fails or
@@ -4148,86 +4168,83 @@ function syncSpacesModelVisibility() {
   sel.hidden = !showSpaces || spacesModels.length < 2;
 }
 
-// How far apart two levels' elevations may be and still be the same storey, in
-// millimetres. The server uses this same 50 mm for "same storey across models"
-// (`LEVEL_EPS_MM`, in service::room_locator); matching it here means the plan and
-// the geometric resolver agree about what a storey is.
-const SPACE_LEVEL_EPS_MM = 50;
-
-// True when the last paint fell back to drawing every storey. Read by the
-// toggle's label, because a fallback nobody can see is the failure mode this
-// whole entity keeps being bitten by.
-let spacesLevelFallback = false;
-
-// The spaces on ONE storey, matched by ELEVATION.
+// ---------------------------- storey resolution ----------------------------
 //
-// **Not by level id, and not unfiltered.** A level id is per document, so a
-// services model's ids never match the architectural model's -- which is why the
-// first version of this drew every storey at once and justified it as a design
-// choice. It was not: elevations are what cross documents, and the read simply
-// did not carry them. It does now (`levels_by_model`, per model because an id
-// means nothing without its model).
-//
-// **Falls back to drawing everything when the elevation cannot be resolved** --
-// a payload whose models pushed no levels, which is every snapshot loaded from a
-// probe capture rather than from the exporter. Drawing nothing would be worse: a
-// reader who switched the layer on would see an empty plan and conclude the
-// spaces were missing. The fallback is announced on the toggle instead of being
-// silent.
-function spacesForPlan(levelId) {
-  if (!spacesPayload) return [];
-  const spaces = spacesPayload.spaces || [];
-  spacesLevelFallback = false;
-  if (!spaces.length) return spaces;
+// Which elements of a layer stand on the storey a zone is showing. The rule
+// itself is `PlanRenderer.onStorey` (src-js/renderer/storey.ts), which carries
+// the argument for why a level ID is the wrong key and is tested there; what
+// lives here is the viewer-side plumbing around it.
 
-  const target = elevationOfLevel(levelId);
-  const byModel = spacesPayload.levels_by_model || {};
-  if (target === null) {
-    spacesLevelFallback = true;
-    return spaces;
-  }
+// How each layer's last storey resolution went, so a toggle can say when the
+// answer was a guess. A fallback nobody can see is the failure mode this area
+// keeps producing — a reader switches a layer on, sees the wrong thing, and has
+// no way to tell the layer from the data.
+const storeyMatch = { doors: "exact", windows: "exact", ffe: "exact", spaces: "exact" };
 
-  // model id -> (level id -> elevation), built once per paint.
-  const elevations = {};
-  for (const [modelId, levels] of Object.entries(byModel)) {
-    const map = {};
-    for (const lvl of levels || []) map[lvl.id] = lvl.elevation;
-    elevations[modelId] = map;
-  }
-
-  const kept = [];
-  let unresolved = 0;
-  for (const space of spaces) {
-    const elev = (elevations[space.model_id] || {})[space.level_id];
-    if (elev === undefined) { unresolved++; continue; }
-    if (Math.abs(elev - target) <= SPACE_LEVEL_EPS_MM) kept.push(space);
-  }
-  // All or nothing: a payload where SOME models carry levels is filtered on
-  // those and reported for the rest. A payload where none do is the probe case,
-  // and filtering it would empty the layer.
-  if (unresolved === spaces.length) {
-    spacesLevelFallback = true;
-    return spaces;
-  }
-  spacesLevelFallback = unresolved > 0;
-  return kept;
-}
-
-// The displayed level's elevation, from the ROOMS payload -- the architectural
-// side is what defines a storey here, and it is the side the level picker is
-// built from. `null` when it cannot be resolved, which the caller treats as
+// The displayed level as an OBJECT, not an id: storey matching needs its name
+// and elevation. `null` when it cannot be resolved, which `onStorey` treats as
 // "cannot filter" rather than "matches nothing".
-function elevationOfLevel(levelId) {
+//
+// Read off the ROOMS payload, because the architectural side is what defines a
+// storey here and is the side the level picker is built from.
+function levelById(levelId) {
   const levels = (currentPayload && currentPayload.levels) || [];
-  const found = levels.find(l => String(l.id) === String(levelId));
-  return found && typeof found.elevation === "number" ? found.elevation : null;
+  return levels.find(l => String(l.id) === String(levelId)) || null;
 }
 
-// The toggle's label, carrying the fallback state so it cannot go unnoticed.
+// One layer's elements on one storey, recording how the match resolved.
+//
+// `levels_by_model` is on every element read (`service::entity_scope::
+// levels_by_model`); a payload from a server too old to send it resolves
+// nothing, which `onStorey` turns into its announced show-everything fallback
+// rather than an empty layer.
+function elementsOnStorey(layer, payload, listKey, levelId) {
+  if (!payload) return [];
+  const result = onStorey(
+    payload[listKey] || [],
+    payload.levels_by_model,
+    levelById(levelId),
+    // The whole displayed level list, not just the target: whether to trust
+    // elevation alone is a fact about the two vocabularies. See `onStorey`.
+    (currentPayload && currentPayload.levels) || [],
+  );
+  storeyMatch[layer] = result.match;
+  return result.kept;
+}
+
+// The spaces on one storey. Identical to the other three layers now; it was the
+// first to match on elevation rather than id, and generalising it is what fixed
+// the openings.
+function spacesForPlan(levelId) {
+  return elementsOnStorey("spaces", spacesPayload, "spaces", levelId);
+}
+
+// The layer toggles' labels, each carrying its storey-match state so a fallback
+// cannot go unnoticed. All four, not just spaces: the openings were resolving by
+// id and silently dropping whole models, which is the same class of invisible
+// wrongness the spaces label was added to prevent.
+const LAYER_TOGGLES = [
+  ["doors", "doorsToggle", "Doors", () => showDoors],
+  ["windows", "windowsToggle", "Windows", () => showWindows],
+  ["ffe", "ffeToggle", "FF&E", () => showFfe],
+  ["spaces", "spacesToggle", "Spaces", () => showSpaces],
+];
+
+function syncLayerToggleLabels() {
+  for (const [layer, id, name, isOn] of LAYER_TOGGLES) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    if (!isOn()) { btn.textContent = `${name}: off`; continue; }
+    const match = storeyMatch[layer];
+    const suffix = match === "all" ? " (all levels)" : match === "elevation" ? " (by elevation)" : "";
+    btn.textContent = `${name}: on${suffix}`;
+  }
+}
+
+// Kept as its own name because the spaces toggle handler calls it on a path the
+// others have no equivalent for — it fetches on the way on.
 function syncSpacesToggleLabel() {
-  const btn = document.getElementById("spacesToggle");
-  if (!showSpaces) { btn.textContent = "Spaces: off"; return; }
-  btn.textContent = spacesLevelFallback ? "Spaces: on (all levels)" : "Spaces: on";
+  syncLayerToggleLabels();
 }
 
 // Spaces poll on their own revision, in their own try, and ONLY while the layer
@@ -4770,7 +4787,10 @@ scopeEls.project.addEventListener("change", async () => {
 });
 
 scopeEls.building.addEventListener("change", () => {
-  buildingKey = scopeEls.building.value;
+  // "" is the All-buildings option and must become null, not an empty string —
+  // every `…Url()` builder tests `if (buildingKey)`, so "" already meant
+  // unscoped, but null is the value the rest of the page compares against.
+  buildingKey = scopeEls.building.value || null;
   lastRevision = null;
   persistSelection(projectId, { building: buildingKey, milestone });
 });
@@ -4805,35 +4825,37 @@ document.getElementById("linkToggle").addEventListener("click", (e) => {
 
 document.getElementById("doorsToggle").addEventListener("click", (e) => {
   showDoors = !showDoors;
-  e.target.textContent = `Doors: ${showDoors ? "on" : "off"}`;
   e.target.classList.toggle("on", showDoors);
   // Hiding doors must also drop the door SELECTION, or the inspector keeps
   // describing something the plan no longer draws and the mark points at empty
   // space. refit:false for the same reason the labels toggle uses it.
   if (!showDoors && doorSelection()) select(null);
   redrawAllZones();
+  // AFTER the redraw, like the spaces toggle: the label reports what the paint
+  // actually resolved, and only the paint knows.
+  syncLayerToggleLabels();
 });
 
 document.getElementById("windowsToggle").addEventListener("click", (e) => {
   showWindows = !showWindows;
-  e.target.textContent = `Windows: ${showWindows ? "on" : "off"}`;
   e.target.classList.toggle("on", showWindows);
   // Hiding windows must also drop a window SELECTION, for the reason the doors
   // toggle drops a door one: the inspector would keep describing something the
   // plan no longer draws, and the mark would point at empty space.
   if (!showWindows && windowSelection()) select(null);
   redrawAllZones();
+  syncLayerToggleLabels();
 });
 
 document.getElementById("ffeToggle").addEventListener("click", (e) => {
   showFfe = !showFfe;
-  e.target.textContent = `FF&E: ${showFfe ? "on" : "off"}`;
   e.target.classList.toggle("on", showFfe);
   // Hiding FF&E must also drop an item SELECTION, for the reason the other two
   // toggles drop theirs: the inspector would keep describing something the plan
   // no longer draws, and the mark would point at empty space.
   if (!showFfe && itemSelection()) select(null);
   redrawAllZones();
+  syncLayerToggleLabels();
 });
 
 // Spaces toggle. Unlike the other three this one FETCHES on the way on: the

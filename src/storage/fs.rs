@@ -136,6 +136,7 @@ struct FsSnapshotWriter<'a> {
     model_name: String,
     taken_at: String,
     phase: Option<String>,
+    model_to_shared: Option<crate::contract::ModelToShared>,
 }
 
 impl SnapshotWriter for FsSnapshotWriter<'_> {
@@ -169,14 +170,15 @@ impl SnapshotWriter for FsSnapshotWriter<'_> {
         // the directory, so an entry briefly ahead of its file is recoverable;
         // a file ahead of its entry is equally so. Neither ordering is lossy,
         // and matching the buffered path means one thing to remember.
-        self.store.index_snapshot(
-            self.kind,
-            &self.key,
-            &self.project_name,
-            &self.model_name,
-            &self.taken_at,
-            self.phase.as_deref(),
-        )?;
+        self.store.index_snapshot(&SnapshotMeta {
+            kind: self.kind,
+            key: &self.key,
+            project_name: &self.project_name,
+            model_name: &self.model_name,
+            taken_at: &self.taken_at,
+            phase: self.phase.as_deref(),
+            model_to_shared: self.model_to_shared,
+        })?;
 
         fs::rename(&self.tmp, &self.target).with_context(|| {
             format!("could not publish snapshot {} from {}", self.target.display(), self.tmp.display())
@@ -322,19 +324,24 @@ impl FsStore {
     /// about what a stored snapshot leaves in the index, which is the one thing
     /// that would make a streamed snapshot and a buffered one differ in
     /// anything but write order.
-    fn index_snapshot(
-        &self,
-        kind: SnapshotKind,
-        key: &ModelKey,
-        project_name: &str,
-        model_name: &str,
-        taken_at: &str,
-        phase: Option<&str>,
-    ) -> Result<()> {
+    ///
+    /// Takes the whole `SnapshotMeta` rather than its fields one by one: it had
+    /// grown to seven scalars in the same order the struct declares them, which
+    /// is a positional argument list one edit away from swapping two `&str`s
+    /// silently.
+    fn index_snapshot(&self, meta: &SnapshotMeta<'_>) -> Result<()> {
+        let SnapshotMeta { kind, key, project_name, model_name, taken_at, phase, model_to_shared } = *meta;
         let mut manifest = self.read_manifest(&key.project_id)?;
         manifest.name = project_name.to_string();
         let entry = manifest.models.entry(key.model_id.clone()).or_default();
         entry.name = model_name.to_string();
+        // Latest push wins, unlike `phase` below — see `ModelEntry::placement`.
+        // A push that declares none leaves the last known one standing rather
+        // than clearing it: an older extractor omitting the field is not the
+        // model announcing it has moved to nowhere.
+        if let Some(placement) = model_to_shared {
+            entry.placement = Some(placement.matrix);
+        }
         // Record the lineage's phase on the first phased push, and never
         // overwrite it afterwards. The ingest handler is the real gate — a
         // disagreeing rooms push is quarantined and a disagreeing doors push is
@@ -429,7 +436,9 @@ impl SnapshotStore for FsStore {
         // model under a known project, or a re-push of a known model. `create_dir_all`
         // and the manifest `entry(...).or_default()` are each idempotent, so no
         // branching on "does this exist yet" is needed.
-        let SnapshotMeta { kind, key, project_name, model_name, taken_at, phase } = *meta;
+        // Only the three fields this function itself needs; the rest reach the
+        // manifest through `index_snapshot(meta)` below.
+        let SnapshotMeta { kind, key, taken_at, .. } = *meta;
         let project_id = &key.project_id;
         let model_id = &key.model_id;
 
@@ -442,7 +451,7 @@ impl SnapshotStore for FsStore {
         // 2. Upsert the authoritative manifest — see `index_snapshot`. Shared
         //    with the streaming writer so the two cannot drift on what a stored
         //    snapshot leaves in the index.
-        self.index_snapshot(kind, key, project_name, model_name, taken_at, phase)?;
+        self.index_snapshot(meta)?;
 
         // 3. Write the snapshot under its own timestamped filename — never
         //    overwriting a prior one, so the dir accumulates full history.
@@ -461,7 +470,7 @@ impl SnapshotStore for FsStore {
     }
 
     fn put_streaming<'a>(&'a self, meta: &SnapshotMeta<'_>) -> Result<Box<dyn SnapshotWriter + 'a>> {
-        let SnapshotMeta { kind, key, project_name, model_name, taken_at, phase } = *meta;
+        let SnapshotMeta { kind, key, project_name, model_name, taken_at, phase, model_to_shared } = *meta;
 
         // The kind's dir, exactly as `put_raw` does it: `create_dir_all` also
         // makes the model and project dirs when either is brand new.
@@ -483,7 +492,17 @@ impl SnapshotStore for FsStore {
             model_name: model_name.to_string(),
             taken_at: taken_at.to_string(),
             phase: phase.map(str::to_string),
+            model_to_shared,
         }))
+    }
+
+    fn set_placement(&self, key: &ModelKey, placement: crate::contract::ModelToShared) -> Result<()> {
+        let mut manifest = self.read_manifest(&key.project_id)?;
+        // `or_default` rather than a lookup: a model dir with no manifest entry
+        // is the exact state `list_models` warns about and keeps, and refusing
+        // to index it would leave it unplaceable forever.
+        manifest.models.entry(key.model_id.clone()).or_default().placement = Some(placement.matrix);
+        self.write_manifest(&key.project_id, &manifest)
     }
 
     fn get_latest_raw(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>> {
@@ -579,13 +598,18 @@ impl SnapshotStore for FsStore {
                 .map(|e| e.name.clone())
                 .filter(|n| !n.is_empty())
                 .unwrap_or_else(|| key.model_id.clone());
+            let placement = manifest
+                .models
+                .get(&key.model_id)
+                .and_then(|e| e.placement)
+                .map(|matrix| crate::contract::ModelToShared { matrix });
             let mut latest = BTreeMap::new();
             for kind in SnapshotKind::ALL {
                 if let Some(id) = self.list_snapshot_ids(kind, &key)?.pop() {
                     latest.insert(kind, id); // ids are ascending, so the last is the newest
                 }
             }
-            out.push(ModelIndexRow { key, project_name, model_name, latest });
+            out.push(ModelIndexRow { key, project_name, model_name, latest, placement });
         }
         Ok(out)
     }
@@ -883,6 +907,7 @@ mod tests {
             model_name: &payload.model.name,
             taken_at: &payload.snapshot.taken_at,
             phase: payload.phase.as_deref(),
+            model_to_shared: payload.model_to_shared,
         }
     }
 
@@ -1279,6 +1304,7 @@ mod tests {
             model_name: "M",
             taken_at,
             phase: Some("New Construction"),
+            model_to_shared: None,
         }
     }
 
@@ -1471,6 +1497,7 @@ mod tests {
                     doors: vec![],
                     windows: vec![],
                     ffe: vec![],
+                    placement: None,
                 },
             )]),
             reference_snapshots: BTreeMap::new(),
@@ -1538,6 +1565,7 @@ mod tests {
                     doors: vec![],
                     windows: vec![],
                     ffe: vec![],
+                    placement: None,
                 },
             )]),
             reference_snapshots: BTreeMap::new(),
