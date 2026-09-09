@@ -14,6 +14,35 @@ rediscover are below rather than in the code, because they are properties of the
 
 ## Deferred
 
+- **"What is in this room" — related elements in the room inspector.** The
+  room panel renders classification, model properties and reference sources;
+  it says nothing about the room's contents. Every other inspector points *at*
+  a room (the door panel names both of its rooms and the one it is attributed
+  to) and the room panel points back at nothing, so "which items are in here"
+  is answerable only by clicking each item in turn.
+
+  **Most of it needs no server change, and that is the point of listing it
+  here rather than under Entities.** Doors, windows and FF&E already carry
+  `owner_rooms` / `room` on payloads the page has loaded, so the sections are
+  an *inversion of data already in the browser* — the same client-side
+  reshuffle rule that keeps CSV export and area tabulation off the server. The
+  work is a shared "related elements" section with per-entity glue for what a
+  row says, plus a click-through that moves the selection.
+
+  Two things stop it being purely mechanical. **An empty section has to mean
+  something**: a room with no doors is a finding, a room with no windows is
+  ordinary, and a room with no FF&E may mean the payload was never fetched —
+  three different states behind one empty list, and the layer-suffix rule
+  above ("a layer that could not resolve exactly says so on its own toggle")
+  is the precedent for saying which. And **it must not silently force a
+  fetch**: `/ffe` is 273 MB and 94 s on RHH, so a panel that pulls it on the
+  first room click would stall the page on a click that looks free.
+
+  Ceilings are the one contributor that needs the whole entity built first
+  (see [Entities](STRATEGY-ENTITIES.md)) — and the only one whose membership
+  is derived rather than authored, so its rows carry an overlap area the
+  others have no equivalent for.
+
 - **Serve `model_to_shared` itself.** *Aligning* linked models is done and is
   not a browser concern any more: the server places every read's geometry into
   one project-local frame (`service::placement`), so the renderer draws models

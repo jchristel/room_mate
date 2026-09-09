@@ -239,6 +239,55 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   appear, that guarantee broke upstream, and *that* is the signal to build
   this, not a preference for stronger keys.
 
+- **Ceilings, as a sixth entity — gated on a probe.** duHast exports them
+  (`Revit.Ceilings.Export.to_data_ceiling.get_all_ceiling_data`) in the shape
+  `translate_room` already eats: polygon groups, an *authored* level via
+  `CEILING_HEIGHTABOVELEVEL_PARAM`, phasing, both property tiers. It also ships
+  the join itself, in `Data.process_ceilings_to_rooms` — which **cannot run in
+  the extractor**, because it needs shapely and numpy and pyRevit is IronPython
+  2.7. So the join is server-side, at read time, on `geo::BooleanOps`, which is
+  where door ownership already lives and for the same reason: changing the
+  policy changes every answer and rewrites nothing.
+
+  **What makes this entity different is that geometry is not the fallback, it
+  is the only answer.** Doors, windows and FF&E each carry an authored room
+  reference, and `room_resolution` is opt-in *because* there is something
+  authored to disagree with. A Revit ceiling has no room parameter and a room
+  has no ceiling parameter, so there is nothing to prefer geometry over and
+  nothing for it to overwrite. That inverts the precedence rule this codebase
+  applies everywhere else, and it is a rule of ceilings' own, in the way spaces
+  have three.
+
+  Attribution is also **many-to-many and area-weighted**, not a single owner:
+  one ceiling can span rooms, one room can hold several. `room_locator` does
+  not serve — a ceiling is not at a point — so the geometry is genuinely new,
+  which is what "geometry semantics are per-entity work every time" predicts.
+
+  `scripts/probe_ceilings_export.py` and `scripts/analyse_ceilings_probe.py`
+  are the instrument; **nothing should be built before they have been run.**
+  The two kill conditions are Q1 and Q2. Q1: `populate_data_ceiling_object`
+  returns `None` when the geometry walk yields nothing and the export then
+  drops the ceiling silently, so the drop *rate* decides whether the entity can
+  report honestly at all — `solids.py` states its walk does not handle in-place
+  families, which is the first suspected cause. Q2: if a project keeps ceilings
+  in an interiors model and rooms in the architectural one, the model-scoped
+  join matches nothing, and unlike spaces there is no key to widen to — only
+  geometry. That would make ceilings a *second* exception to the model-scoped
+  rule, for a different reason than spaces, which is a thing to discover before
+  the contract is written rather than after.
+
+  Three smaller findings are already banked from reading duHast's source, so
+  they need not be rediscovered. `_intersect_ceiling_vs_room`'s threshold is
+  named `area_intersection_percentage_of_ceiling_vs_room` and divides by
+  `room_polygon.area` — it is a percentage of the **room**, and a port trusting
+  the name would behave differently on a large ceiling clipping a small room.
+  A ceiling takes the **doors range test** on `PHASE_CREATED` /
+  `PHASE_DEMOLISHED`, never the rooms equality test on `ROOM_PHASE`. And a
+  ceiling can export **several disjoint polygons**, one per solid volume, which
+  a room's `loops` cannot express — both `translate_room` and
+  `loops_from_polygon` take `polygon[0]` and discard the rest, correctly for a
+  room and lossily for a ceiling.
+
 - **Multi-phase comparison — explicitly out of scope**, recorded so it is not
   re-proposed. It is a second axis crossing the snapshot axis, and milestones
   already answer "the model as it was on date X" without it. RoomMate supports
