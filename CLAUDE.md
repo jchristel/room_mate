@@ -86,6 +86,63 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   geometry picks an exterior or circulation space over the served room. Absent
   means the check is **off**, not clean — the QA response says which.
 
+## Ceilings: the entity where geometry is the only answer
+
+Ceilings ship server-side and in the extractor (contract, ingest, storage,
+`/ceilings`, MCP, exporter). No viewer layer and no QA report yet.
+
+- **A ceiling has no room parameter and a room has no ceiling parameter.** So
+  the join is geometric or it does not exist. That inverts the precedence rule
+  every other entity follows — doors, windows and FF&E each carry an authored
+  reference and `room_resolution` is opt-in *because* there is something
+  authored to disagree with. `service::ceilings` therefore passes
+  `RoomResolution::SameModel` unconditionally and never reads the project's
+  setting: reading it would let a project switch the entity off and report every
+  ceiling as homeless, which is a wrong answer dressed as a disabled feature.
+- **Attribution is many-to-many, area-weighted, and derived at read time.**
+  `rooms` on a `/ceilings` row is a list ordered largest-overlap-first, so
+  `rooms[0]` is a usable single owner. **Empty means unattributed, which is a
+  reported state** — 8 of House A's 30, being external soffits, a level with no
+  rooms, and two degenerate exports. Nothing is stored, so changing the rule
+  changes every answer and rewrites nothing.
+- **Two thresholds, and one cannot do both jobs** (`MIN_OVERLAP_AREA` 1.0 sqft,
+  `MIN_FRACTION_OF_CEILING` 0.005). Measured: 26 intersecting pairs on House A,
+  22 genuine and 4 not, separated by an **18x gap**. The 4 are two different
+  faults — slivers where a large ceiling grazes a neighbour (0.97 sqft, 0.414%
+  of itself) need the fraction test; ceilings whose whole exported footprint is
+  0.33 and 0.18 sqft overlap by 100% *of themselves* and only the absolute test
+  rejects them. **The fraction is of the CEILING**, which is where duHast's own
+  `_intersect_ceiling_vs_room` is wrong: it divides by the ROOM's area despite
+  naming its variable for the ceiling, so a sliver against a large room passes
+  more easily than a real overlap against a small one.
+- **`loops[0]` is the whole ceiling; never union or sum the polygons.** duHast
+  exports one polygon per *horizontal face*, and a slab has two — 4 of House A's
+  7 multi-polygon ceilings are the same face twice (IoU above 0.98, areas
+  summing to exactly twice their union) and the other 3 are the largest face
+  plus sub-1-sqft edge noise. The largest polygon equalled the union of all of
+  them on every ceiling measured. A polygon count above 1 therefore reads as
+  evidence the `loops` field is too narrow and **is not**; the signal to widen
+  it is `analyse_ceilings_probe.py` reporting "carries genuinely ADDITIONAL
+  geometry" under Q6, which House A does not.
+- **Phase is the DOORS range test**, `PHASE_CREATED` / `PHASE_DEMOLISHED`, never
+  the rooms equality test on `ROOM_PHASE`. No ceiling on House A is demolished,
+  so the two agree there by accident — which is why this is written down rather
+  than inferred from a passing run.
+- **A disagreeing phase is quarantined, not refused.** The openings refusal
+  exists because promoting would strand `from_room`/`to_room`; a ceiling carries
+  no room reference for a promotion to strand. An empty push is accepted by the
+  server and refused by the producer, per run — the doors asymmetry verbatim.
+- **The height offset is read from Revit; the level id is duHast's.** duHast
+  carries the offset as the display STRING `"2700"` (rounded millimetres) where
+  the contract wants decimal feet, so `utils/ceilings.ceiling_offsets` reads the
+  parameter itself. That is not the re-derivation this file forbids — there is
+  no measurement to disagree about, only a rendering not to parse. The *level*
+  is duHast's and must stay so; that one is the FF&E trap.
+- **`/ceilings`' ETag cursor covers ROOMS as well as ceilings**, which no other
+  entity read needs. Attribution derives from the rooms in scope, so a rooms
+  push alone changes every answer and a ceilings-only cursor would serve a stale
+  304.
+
 ## Traps in the door export
 
 - **`±1e30` is not geometry.** duHast used to return Revit's *uninitialized*
@@ -321,22 +378,24 @@ with one, not here.
 Both older items stay closed: the extractor's phase filter is verified against
 Revit, and R4 landed.
 
-## The extractor has six entry points, one of them a trap and three unwired
+## The extractor has seven entry points, one of them a trap and one unwired
 
 `rooms_export_entry` still pushes **rooms and doors**, despite the name. Its
 pyRevit button lives outside this repo, so narrowing it to rooms would not fail —
 it would keep succeeding while quietly no longer pushing doors. The split is in
 the siblings instead: `rooms_only_export_entry`, `doors_export_entry`,
-`windows_export_entry`, `ffe_export_entry` and `spaces_export_entry`. All six are
-one line over `export_entry(..., entities)`; document selection, the one project
-and the one phase never differ.
+`windows_export_entry`, `ffe_export_entry`, `spaces_export_entry` and
+`ceilings_export_entry`. All seven are one line over
+`export_entry(..., entities)`; document selection, the one project and the one
+phase never differ.
 
 **Their buttons live outside this repository**, in
 `SampleCodeRevitBatchProcessor-NET8/.../duHast.tab/RoomMate.panel`, over a COPY
-of `extractor/pyRevit/room_m` under that tab's `lib/`. All six are wired as of
-2026-09-06. **The copy is the trap**: an extractor change here is inert until it
-is copied there, and nothing checks the two are in step — `diff -rq` between them
-is the only check there is.
+of `extractor/pyRevit/room_m` under that tab's `lib/`. Six are wired as of
+2026-09-06; **`ceilings_export_entry` has no button yet** (2026-09-10), so it is
+reachable from code and not from the ribbon. **The copy is the trap**: an
+extractor change here is inert until it is copied there, and nothing checks the
+two are in step — `diff -rq` between them is the only check there is.
 
 **A run exports every selected model first, then pushes one bucket per entity.**
 So `entities` no longer carries a push *order* — the buckets are independent, and

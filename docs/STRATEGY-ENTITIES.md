@@ -8,13 +8,15 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 
 **Open work only.** Rooms, doors, windows, FF&E and spaces all ship — contract,
 ingest, storage, read, QA, MCP, the plan and the pyRevit exporter — and phasing
-ships under them. What each of those does, and the invariants that are expensive
-to rediscover (tier precedence, opening ownership, item attribution, the
-model-scoped element→room join, the phase rules, and the three rules that are
-spaces' alone), live in the code and in `CLAUDE.md`.
+ships under them. **Ceilings ship everywhere except the plan and QA**, which is
+what its entry below is about. What each of those does, and the invariants that
+are expensive to rediscover (tier precedence, opening ownership, item
+attribution, the model-scoped element→room join, the phase rules, the three
+rules that are spaces' alone, and the geometry-only attribution that is
+ceilings' alone), live in the code and in `CLAUDE.md`.
 
 What is left here is the **entity dimension**: the test that decides whether the
-next candidate is an entity at all, what five entities proved comes for free,
+next candidate is an entity at all, what six entities proved comes for free,
 and what is still unbuilt.
 
 **The bet below has been tested three times, and the second and third tests are
@@ -37,11 +39,20 @@ per-`(model, kind)` pending slot (a quarantined spaces push must not displace a
 quarantined rooms one) and nothing else; what they reused, by being the *rooms*
 record rather than the openings one, was the whole rooms read path.
 
+**Ceilings were the fourth test, and they broke a different rule: the join is
+not a reference at all.** Every dependent entity before them named its room and
+used geometry only as an opt-in fallback; a Revit ceiling has no room parameter
+and a room has no ceiling parameter, so overlap IS the join. What that cost
+structurally was two accessors on `entity_scope::Candidates` (the room polygons,
+rather than a point probe) and nothing else — `room_locator` did not generalise
+because a ceiling is not at a point, which is the one place the "next category
+needs the glue, not the geometry" prediction did not hold.
+
 **What did NOT need widening is the more useful half of that result**: the phase
 envelope, snapshot-id resolution, the bytes-at-the-boundary store, the manifest,
 the property tiers, the filter grammar, the reference-join namespace and the
-`ENTITY_EXPORTERS` table took a fourth *and* a fifth entity without changing
-shape.
+`ENTITY_EXPORTERS` table took a fourth, a fifth *and* a sixth entity without
+changing shape.
 
 Two lines decided every split, and the second is the extension the fourth entity
 forced:
@@ -239,74 +250,32 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   appear, that guarantee broke upstream, and *that* is the signal to build
   this, not a preference for stronger keys.
 
-- **Ceilings, as a sixth entity — gated on a probe.** duHast exports them
-  (`Revit.Ceilings.Export.to_data_ceiling.get_all_ceiling_data`) in the shape
-  `translate_room` already eats: polygon groups, an *authored* level via
-  `CEILING_HEIGHTABOVELEVEL_PARAM`, phasing, both property tiers. It also ships
-  the join itself, in `Data.process_ceilings_to_rooms` — which **cannot run in
-  the extractor**, because it needs shapely and numpy and pyRevit is IronPython
-  2.7. So the join is server-side, at read time, on `geo::BooleanOps`, which is
-  where door ownership already lives and for the same reason: changing the
-  policy changes every answer and rewrites nothing.
+- **Ceilings: the viewer layer, the QA report and the pushbutton.** The entity
+  ships otherwise -- contract, ingest, storage, `/ceilings`, MCP tool, exporter
+  -- and what it proved is in `CLAUDE.md` and in `service::ceilings`. Three
+  pieces are genuinely absent rather than half-built:
 
-  **What makes this entity different is that geometry is not the fallback, it
-  is the only answer.** Doors, windows and FF&E each carry an authored room
-  reference, and `room_resolution` is opt-in *because* there is something
-  authored to disagree with. A Revit ceiling has no room parameter and a room
-  has no ceiling parameter, so there is nothing to prefer geometry over and
-  nothing for it to overwrite. That inverts the precedence rule this codebase
-  applies everywhere else, and it is a rule of ceilings' own, in the way spaces
-  have three.
+  - **No plan layer.** A ceiling is room-shaped, so it draws as an outline over
+    the rooms exactly as spaces do, and the storey join is the same name +
+    elevation rule. Ordinary unbuilt viewer work, blocked on nothing.
+  - **No QA report**, and the probe already calibrated what one must not say.
+    12 of House A's 32 rooms have no ceiling and almost all are external -- POOL,
+    DECK, DRIVEWAY, the `EX` suffix throughout -- so "room without a ceiling" is
+    mostly noise as a finding and needs a classification-aware filter before it
+    is worth reporting. The 6 ceilings matching no room are all one type
+    (`CLFS-550`), 4 of them on a level carrying no rooms: a type-level pattern,
+    not six anomalies. The report worth writing is the one that separates those
+    two shapes.
+  - **No pushbutton.** `ceilings_export_entry` is reachable from code and not
+    from the ribbon; the other six have buttons.
 
-  Attribution is also **many-to-many and area-weighted**, not a single owner:
-  one ceiling can span rooms, one room can hold several. `room_locator` does
-  not serve — a ceiling is not at a point — so the geometry is genuinely new,
-  which is what "geometry semantics are per-entity work every time" predicts.
-
-  **Probed on House A, 2026-09-10** (`scripts/probe_ceilings_export.py`, read
-  by `scripts/analyse_ceilings_probe.py`). Both kill conditions pass, and the
-  geometry questions are settled enough to write a contract against:
-
-  - **Q1 — 30 of 30 ceilings exported.** No drops. But House A holds **no
-    in-place ceilings at all**, so the failure mode the question was written
-    for is untested here rather than absent, and the duHast fix for it is
-    unverified against a document. What the run *did* find is a different
-    thing the question did not ask: **2 of 30 exported a footprint of 0.33 and
-    0.18 sqft** against a population whose next smallest is two orders of
-    magnitude larger. Exported is not the same as usable, and those two are
-    where two of the four marginal room overlaps came from.
-  - **Q2 — co-located.** Ceilings and rooms are both in the architectural
-    model, so the model-scoped join survives and ceilings need no exception.
-    **House A is one model, so this establishes very little**; RHH is the test
-    that matters and has not been run.
-  - **Q6 — take `polygon[0]`, and never union or sum.** 7 of 30 ceilings
-    export more than one polygon, and the count is misleading:
-    `convert_solid_to_flattened_2d_points` walks *horizontal faces*, and a slab
-    has two of them. 4 of the 7 are the **same face twice** — IoU above 0.98
-    between the two largest pieces, sum exactly twice the union — and the other
-    3 are the largest face plus sub-1-sqft noise off the side faces. The
-    largest polygon equalled the union of all of them on **every** ceiling
-    measured. So reusing the room `loops` shape verbatim is correct, and
-    aggregating the polygons would double-count area on 4 ceilings.
-  - **Q4 — many-to-many is NOT demonstrated, and the threshold is why.** One
-    ceiling spans three rooms at duHast's 0.1% and nothing spans anything at
-    0.5%, because the two extra matches are 0.97 sqft slivers. duHast's
-    threshold is too low for this geometry, and being a percentage of the
-    *room* it scales with the wrong operand — a sliver against a large room
-    passes more easily than a real overlap against a small one. Keep the
-    list-shaped answer, but keep it because a stored single owner would need a
-    migration to undo, **not** because this model proved it necessary.
-  - **Q5 — no ceiling on House A is demolished**, so the range test and the
-    equality test happen to agree. Use the **doors range test** on
-    `PHASE_CREATED` / `PHASE_DEMOLISHED` anyway: a ceiling can be demolished,
-    and "it worked on this model" is how the five empty rooms pushes were made.
-
-  Two calibrations for the QA report, before it is written. **12 of 32 rooms
-  have no ceiling and almost all are external** — POOL, DECK, DRIVEWAY, FRONT
-  YARD, the `EX` suffix throughout — so "room without a ceiling" is not a
-  finding on its own and a report that flags it will be mostly noise. And **6
-  ceilings match no room**, all of one type (`CLFS-550`), 4 of them on LEVEL 02
-  which carries no rooms at all. A type-level pattern, not six anomalies.
+  Two open questions, both waiting on a second measured project rather than on
+  a decision. `MIN_OVERLAP_AREA` and `MIN_FRACTION_OF_CEILING` are constants
+  because one model has been measured, and they become a `[ceilings]` block when
+  a project disagrees. And **RHH has never been probed**, so Q2 -- whether a
+  project keeps its ceilings and its rooms in the same document -- is answered
+  only for a single-model house. If a project splits them, the model-scoped
+  join matches nothing and, unlike spaces, there is no key to widen to.
 
 - **Multi-phase comparison — explicitly out of scope**, recorded so it is not
   re-proposed. It is a second axis crossing the snapshot axis, and milestones
