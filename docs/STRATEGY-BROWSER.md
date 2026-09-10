@@ -14,6 +14,23 @@ rediscover are below rather than in the code, because they are properties of the
 
 ## Deferred
 
+- **The room inspector's "in this room" section cannot say which model the
+  room is in.** The section ships for doors, windows and FF&E; what is unbuilt
+  is the disambiguation. A room id is unique only *within* a model, and
+  `/rooms` does not serve one — `RoomResponse::model_id` is skip-serialized so
+  the rooms JSON stays byte-for-byte unchanged — so the panel matches on a bare
+  id and can only *detect* an ambiguous one, never resolve it. It says so when
+  it happens, which is the same call the layer toggles make with their "(by
+  elevation)" suffix.
+
+  **Not yet worth the wire change**, and the measurement is why: no room id on
+  RHH is claimed by more than one model, across 3,013 rooms, 1,857 doors and
+  38,913 items in five models. The signal to serve the field is a project where
+  that stops being true — the note is the instrument that would say so — not a
+  preference for stronger keys. Note that the viewer's whole selection model is
+  bare-id (`selectRoom(roomId)`), so serving `model_id` on `/rooms` alone would
+  not finish the job.
+
 - **Serve `model_to_shared` itself.** *Aligning* linked models is done and is
   not a browser concern any more: the server places every read's geometry into
   one project-local frame (`service::placement`), so the renderer draws models

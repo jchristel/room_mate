@@ -158,6 +158,17 @@
      click, drag and wheel. */
   #inspector .insp-v.insp-empty { opacity: 0.45; font-style: italic; }
   #inspector .insp-note { padding: 0.3rem 0.7rem 0.6rem; opacity: 0.6; font-style: italic; }
+  /* A contents row that moves the selection to the element it names. ONLY the
+     "in this room" rows carry it: every other row in this panel is a value, and
+     making a value look clickable is a worse lie than making a link look plain.
+     The indent is what separates an element row from the entity tally above it
+     without a second heading level. */
+  #inspector .insp-row.insp-link { cursor: pointer; }
+  #inspector .insp-row.insp-link:hover { background: rgba(0, 0, 0, 0.07); }
+  #inspector .insp-row.insp-link .insp-k { padding-left: 0.7rem; color: inherit; }
+  /* The tally row above each element list: entity name, then a count or the
+     reason there is no count. Not a link, and not indented. */
+  #inspector .insp-row.insp-tally .insp-k { font-weight: 600; }
 
   .zone {
     position: relative;
@@ -885,6 +896,19 @@ let spacesModel = "";
 // one model and would collapse the picker to the option already chosen. The
 // default is unscoped, so the list is always learned before it can be narrowed.
 let spacesModels = [];
+// What each element read has actually SAID, which a null payload cannot tell
+// you. Three different things leave `doorsPayload` null -- a poll that has not
+// run yet, a 204 saying the scope holds none, and a read that failed -- and
+// the room contents panel has to keep them apart, because "this room has no
+// doors" and "the doors have not arrived" are opposite answers to a reader and
+// only one of them is a finding. Same discipline as the layer toggles' "(all
+// levels)" suffix: a fallback nobody can see is the failure mode this area
+// keeps producing.
+//
+// Written only by the polls, read only by `roomContents`. States: "pending"
+// (no successful response yet), "loaded", "empty" (the server answered 204),
+// "error" (the read failed).
+const entityFetch = { doors: "pending", windows: "pending", ffe: "pending" };
 let lastRevision = null;     // poll change-detection cursor
 // The server's ETag for the last body we actually received, per entity.
 //
@@ -3866,6 +3890,197 @@ function renderAreaInspector(host) {
   host.appendChild(note);
 }
 
+// ---- "in this room": the room's contents ------------------------------------
+//
+// Every other inspector points AT a room -- the door panel names both of its
+// rooms and the one it is attributed to -- and the room panel pointed back at
+// nothing, so "what is in here" was answerable only by clicking each element in
+// turn and reading which room it claimed.
+//
+// **No server call, and that is the design rather than an optimisation.** Doors,
+// windows and FF&E already carry their owning room on payloads the poll loop
+// fetches anyway, so this is an inversion of data the page already holds -- the
+// same client-side reshuffle rule that keeps CSV export and area tabulation off
+// the server (STRATEGY-BROWSER, "UI growth"). It matters more than tidiness
+// here: `/ffe` is 273 MB and 94 s on RHH, so a panel that fetched on the first
+// room click would stall the page on a click that looks free.
+//
+// The entities are a table rather than three branches because exactly four
+// things vary per entity -- the payload, what a row is called, what it says on
+// the right, and what selecting it does -- and nothing else does.
+const ROOM_CONTENTS = [
+  {
+    key: "doors",
+    title: "Doors",
+    list: () => doorsPayload?.doors || [],
+    label: (d) => d.type_name || d.id,
+    detail: (d) => d.id,
+    select: selectDoor,
+  },
+  {
+    key: "windows",
+    title: "Windows",
+    list: () => windowsPayload?.windows || [],
+    label: (w) => w.type_name || w.id,
+    detail: (w) => w.id,
+    select: selectWindow,
+  },
+  {
+    key: "ffe",
+    title: "FF&E",
+    list: () => ffePayload?.ffe || [],
+    // Category first: on a furnished room the type names repeat and the
+    // category is what separates six chairs from six luminaires.
+    label: (i) => (i.category ? `${i.category} · ` : "") + (i.type_name || i.id),
+    detail: (i) => i.id,
+    select: selectItem,
+  },
+];
+
+// How many element rows one entity lists before it stops. A room with 400 items
+// is a scroll, not a reading. The tally row above always states the TRUE count,
+// so the cap hides rows and never a number.
+const ROOM_CONTENTS_LIMIT = 15;
+
+// Which rooms an element is attributed to, as `{room_id, model_id}` refs.
+//
+// `owner_rooms_qualified` rather than `owner_rooms`, and the difference is the
+// whole correctness of this panel. `owner_rooms` is the same-model owners as
+// BARE ids, and a room id is unique only within its model -- so matching on it
+// alone attributes one model's doors to another model's same-numbered room, in
+// the one direction where nobody would notice. The qualified list carries the
+// model with each id.
+//
+// That does not RESOLVE the ambiguity, because `/rooms` does not serve a room's
+// model (`RoomResponse::model_id` is skip-serialized so the rooms JSON stays
+// byte-for-byte unchanged), so the panel cannot know which model the selected
+// room belongs to. It makes the ambiguity DETECTABLE, which is the honest half:
+// an answer that says it is unsure beats a wrong one stated plainly, and it is
+// the same call the layer toggles make with their "(by elevation)" suffix.
+//
+// The fallback keeps an older payload working: a read that predates
+// `owner_rooms_qualified` still lists its bare owners, with no model to check.
+function ownerRefs(element) {
+  const qualified = element.owner_rooms_qualified;
+  if (Array.isArray(qualified) && qualified.length) return qualified;
+  return (element.owner_rooms || []).map((id) => ({ room_id: id, model_id: null }));
+}
+
+// One block per entity: what the read said, which elements matched, and which
+// models claimed to own a room of this id.
+//
+// A linear scan of all three payloads, re-run per render, and MEASURED rather
+// than assumed: 15.5 ms median / 24.2 ms worst on RHH's full set (3,013 rooms,
+// 1,857 doors, 38,913 items). `renderInspector` runs on every keystroke in the
+// property filter, so that is the number that matters, and it is comfortably
+// under the ~50 ms a typist notices. No index, no memo: this is the "take the
+// optimization when measured, not before" rule the type-property dedup is
+// deferred under, applied to the one place someone would reach for a cache.
+function roomContents(roomId) {
+  return ROOM_CONTENTS.map((spec) => {
+    const matched = [];
+    const models = new Set();
+    for (const element of spec.list()) {
+      let hit = false;
+      for (const ref of ownerRefs(element)) {
+        if (ref.room_id !== roomId) continue;
+        hit = true;
+        if (ref.model_id) models.add(ref.model_id);
+      }
+      if (hit) matched.push(element);
+    }
+    matched.sort((a, b) => spec.label(a).localeCompare(spec.label(b)));
+    // A read that answered 200 with an empty list means the same thing to a
+    // reader as one that answered 204, and RHH is the case that proves it: it
+    // has no windows snapshot at all, so `/windows?project=RHH` answers 200
+    // with an empty list. Reporting that as "none in this room" would put a
+    // fact about the project into a sentence about the room, on all 3013 of
+    // them.
+    const empty = !spec.list().length;
+    const state = entityFetch[spec.key] === "loaded" && empty ? "empty" : entityFetch[spec.key];
+    return { spec, state, matched, models };
+  });
+}
+
+// One contents row. A separate builder from `inspRow` because these rows can be
+// clickable and that one's rows are values -- and a value that looks clickable
+// is a worse lie than a link that looks plain.
+function contentsRow(parent, key, value, { onClick = null, muted = false } = {}) {
+  const row = document.createElement("div");
+  row.className = "insp-row" + (onClick ? " insp-link" : " insp-tally");
+  const k = document.createElement("div");
+  k.className = "insp-k";
+  k.textContent = key;
+  const v = document.createElement("div");
+  v.className = "insp-v" + (muted ? " insp-empty" : "");
+  v.textContent = value;
+  row.append(k, v);
+  if (onClick) {
+    row.addEventListener("click", onClick);
+    row.title = "Select this element";
+  }
+  parent.appendChild(row);
+}
+
+function renderRoomContents(host, room) {
+  const h = document.createElement("h4");
+  h.textContent = "In this room";
+  host.appendChild(h);
+  const rows = document.createElement("div");
+  rows.className = "insp-rows";
+
+  // Every model that claimed to own a room of this id, pooled across the three
+  // entities rather than checked within each. Two doors disagreeing is the
+  // obvious case; a door and an item disagreeing is the same fact about the same
+  // room id, and a per-entity check would miss it.
+  const claiming = new Set();
+  for (const { spec, state, matched, models } of roomContents(room.id)) {
+    for (const model of models) claiming.add(model);
+
+    // The tally states a count, or WHY there is no count. Four states rather
+    // than one empty list, because they send a reader to four different places:
+    // "not loaded yet" is wait, "read failed" is a server problem, "none in
+    // this scope" is a project with no such entity pushed at all, and "none in
+    // this room" is the only one that is a fact about this room -- and for
+    // doors, the only one that is a finding.
+    let tally;
+    let muted = true;
+    if (state === "pending") tally = "not loaded yet";
+    else if (state === "error") tally = "read failed";
+    else if (state === "empty") tally = "none in this scope";
+    else if (!matched.length) tally = "none in this room";
+    else { tally = String(matched.length); muted = false; }
+    contentsRow(rows, spec.title, tally, { muted });
+
+    for (const element of matched.slice(0, ROOM_CONTENTS_LIMIT)) {
+      contentsRow(rows, spec.label(element), spec.detail(element), {
+        // `selection.zoneId` carries over so the new selection stays labelled
+        // with the zone the reader is actually looking at -- the same room can
+        // appear in several zones, and the panel header names one of them.
+        onClick: () => spec.select(element.id, selection?.zoneId ?? null),
+      });
+    }
+    if (matched.length > ROOM_CONTENTS_LIMIT) {
+      contentsRow(rows, `+${matched.length - ROOM_CONTENTS_LIMIT} more`, "", { muted: true });
+    }
+  }
+  host.appendChild(rows);
+
+  // Two different ways this room's id can be ambiguous, and both mean the same
+  // thing to a reader, so they share one note. Either two models each claim to
+  // own a room of this id, or this scope simply holds two rooms with it.
+  const twins = (currentPayload?.rooms || []).filter((r) => r.id === room.id).length;
+  if (claiming.size > 1 || twins > 1) {
+    const note = document.createElement("div");
+    note.className = "insp-note";
+    note.textContent =
+      `Room id ${room.id} is not unique across the models in this scope, and /rooms does not ` +
+      `say which model this room is in — these rows may include elements owned by another ` +
+      `model's room of the same id.`;
+    host.appendChild(note);
+  }
+}
+
 // ---- the room inspector -----------------------------------------------------
 function renderRoomInspector(host) {
   const room = currentPayload?.rooms.find(r => r.id === selection.id);
@@ -3908,6 +4123,15 @@ function renderRoomInspector(host) {
   // which is a different statement from "no data".
   const cls = (room.classification || []).map(t => [t.tier, t.undefined ? "(undefined)" : (t.name || t.code || "")]);
   inspSection(host, "Classification", inspApplyFilters(cls, { hideEmpty: false }));
+
+  // ---- what is in the room --------------------------------------------------
+  // Above the model properties on purpose: "what is in here" is a first-order
+  // question about the room, and the 45 property rows below are what a reader
+  // scrolls past to reach anything. Deliberately NOT run through
+  // `inspApplyFilters` -- that filter and the hide-empty box exist for property
+  // names, and letting them cut element rows would make a room look empty
+  // because someone was searching for a property.
+  renderRoomContents(host, room);
 
   // ---- model properties ----------------------------------------------------
   const all = Object.entries(room.properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
@@ -4109,18 +4333,21 @@ async function pollFfe() {
     if (res.status === 304) return false;
     if (res.status === 204) {
       lastFfeEtag = null;
+      entityFetch.ffe = "empty";
       if (ffePayload !== null) { ffePayload = null; lastFfeRevision = null; return true; }
       return false;
     }
-    if (!res.ok) return false;
+    if (!res.ok) { entityFetch.ffe = "error"; return false; }
     lastFfeEtag = res.headers.get("ETag");
     const payload = await res.json();
+    entityFetch.ffe = "loaded";
     const incoming = payload.revision ?? JSON.stringify(payload);
     if (incoming === lastFfeRevision) return false;
     lastFfeRevision = incoming;
     ffePayload = payload;
     return true;
   } catch (err) {
+    entityFetch.ffe = "error";
     return false;   // rooms already report connection loss; one message is enough
   }
 }
@@ -4286,18 +4513,21 @@ async function pollWindows() {
       // Drop the tag with the payload: 204 carries none, so holding the old one
       // would send `If-None-Match` for an entity we no longer have.
       lastWindowsEtag = null;
+      entityFetch.windows = "empty";
       if (windowsPayload !== null) { windowsPayload = null; lastWindowsRevision = null; return true; }
       return false;
     }
-    if (!res.ok) return false;
+    if (!res.ok) { entityFetch.windows = "error"; return false; }
     lastWindowsEtag = res.headers.get("ETag");
     const payload = await res.json();
+    entityFetch.windows = "loaded";
     const incoming = payload.revision ?? JSON.stringify(payload);
     if (incoming === lastWindowsRevision) return false;
     lastWindowsRevision = incoming;
     windowsPayload = payload;
     return true;
   } catch (err) {
+    entityFetch.windows = "error";
     return false;   // rooms already report connection loss; one message is enough
   }
 }
@@ -4318,18 +4548,21 @@ async function pollDoors() {
       // Drop the tag with the payload: 204 carries none, so holding the old
       // one would send `If-None-Match` for an entity we no longer have.
       lastDoorsEtag = null;
+      entityFetch.doors = "empty";
       if (doorsPayload !== null) { doorsPayload = null; lastDoorsRevision = null; return true; }
       return false;
     }
-    if (!res.ok) return false;
+    if (!res.ok) { entityFetch.doors = "error"; return false; }
     lastDoorsEtag = res.headers.get("ETag");
     const payload = await res.json();
+    entityFetch.doors = "loaded";
     const incoming = payload.revision ?? JSON.stringify(payload);
     if (incoming === lastDoorsRevision) return false;
     lastDoorsRevision = incoming;
     doorsPayload = payload;
     return true;
   } catch (err) {
+    entityFetch.doors = "error";
     return false;   // rooms already report connection loss; one message is enough
   }
 }

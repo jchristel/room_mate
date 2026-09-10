@@ -1680,6 +1680,7 @@ D-101,60
         let mut settings = bundle();
         settings.milestones = vec![crate::settings::Milestone {
             space_attachments: BTreeMap::new(),
+            ceiling_attachments: BTreeMap::new(),
             name: "Stage 2".to_string(),
             date: "2026-02-01".to_string(),
             reference_snapshots: BTreeMap::new(),

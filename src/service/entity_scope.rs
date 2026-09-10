@@ -241,6 +241,30 @@ pub fn build_candidates<P: SnapshotEnvelope>(
 const NO_CANDIDATES: &[room_locator::Candidate] = &[];
 
 impl Candidates {
+    /// This model's room candidates, already placed in the frame the set was
+    /// built in.
+    ///
+    /// Exposed for `service::ceilings`, which needs the room POLYGONS rather
+    /// than a point probe: a ceiling is not at a point, so it asks how much of
+    /// itself overlaps each room instead of which room contains it. Reusing the
+    /// candidate set rather than re-reading rooms is what keeps that answer
+    /// scoped to exactly the rooms `/rooms` is serving -- the guarantee
+    /// `build_candidates` exists for, and one a second reader would quietly
+    /// break under a milestone.
+    pub fn rooms_in_model(&self, model_id: &str) -> &[room_locator::Candidate] {
+        self.by_model.get(model_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The elevation this model states for one of its own level ids, or `None`
+    /// when the model declares no such level.
+    ///
+    /// Per model on purpose: a `Level.id` is per document, so the same storey
+    /// carries different ids in two linked models and the ELEVATION is what
+    /// crosses. Same rule `src-js/renderer/storey.ts` follows.
+    pub fn elevation_of(&self, model_id: &str, level_id: &str) -> Option<f64> {
+        self.elevation.get(&(model_id.to_string(), level_id.to_string())).copied()
+    }
+
     /// Everything the probe needs, in the frame the candidates are in -- or the
     /// reason there is nothing to probe.
     ///

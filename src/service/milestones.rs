@@ -72,6 +72,7 @@ mod tests {
     fn make_milestone(name: &str, date: &str) -> Milestone {
         Milestone {
             space_attachments: BTreeMap::new(),
+            ceiling_attachments: BTreeMap::new(),
             name: name.to_string(),
             date: date.to_string(),
             reference_snapshots: BTreeMap::new(),
