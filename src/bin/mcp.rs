@@ -3,10 +3,11 @@
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
-//! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces` --
+//! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
+//! `get_ceilings` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Twenty in
+//! and the one forwarded mutation (`upload_reference`, below). Twenty-two in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -48,7 +49,7 @@ use rmcp::{
 use roommate::bootstrap::build_state;
 use roommate::default_http_addr;
 use roommate::service::{
-    adjacency, areas, comparison, items, milestones, openings, projects, reference, rooms, snapshots, spaces,
+    adjacency, areas, ceilings, comparison, items, milestones, openings, projects, reference, rooms, snapshots, spaces,
     validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
@@ -92,6 +93,24 @@ struct GetRoomsParams {
     /// Omit for no filter.
     #[serde(default)]
     filter: Vec<String>,
+}
+
+/// `get_ceilings` parameters. Its own type rather than `GetSpacesParams`: there
+/// is no `filter` (no reference source declares `entity = "ceilings"`, so the
+/// grammar would advertise an empty vocabulary) and no `model` -- a ceiling is
+/// asked about per project, not per model, because the question the entity
+/// exists for is "which ceilings are in this room".
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetCeilingsParams {
+    /// Scope the merge to one project id. Omit to merge every stored model.
+    #[serde(default)]
+    project: Option<String>,
+    /// Milestone name from `list_milestones`: serve the ceilings snapshots that
+    /// milestone pins instead of each model's latest. Omit for latest. Note the
+    /// ROOMS it attributes against are pinned by the same milestone, so a
+    /// milestone read answers one consistent question.
+    #[serde(default)]
+    milestone: Option<String>,
 }
 
 /// `get_spaces` parameters. Its own type rather than `GetDoorsParams`: there is
@@ -541,6 +560,21 @@ impl RoommateMcp {
         match spaces::assemble_spaces(&self.state, &scope).map_err(to_mcp_error)? {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no spaces have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Serves one project's ceilings with the rooms each lies over -- see
+    /// `service::ceilings::assemble_ceilings`.
+    #[tool(
+        description = "List one project's ceilings, each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit ceiling has no room parameter and a room has no ceiling parameter, so every entry in a ceiling's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet plus two fractions that answer different questions — `fraction_of_ceiling` (how much of this ceiling is in that room, which is what decided the attribution) and `fraction_of_room` (how much of that room this ceiling covers, which is the coverage question a finishes take-off asks). `rooms` is a LIST because a ceiling can lie over several, ordered largest overlap first, so `rooms[0]` is a usable single owner. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR: a ceiling over a stairwell, an external soffit, or one on a level carrying no rooms legitimately belongs to nothing — 8 of House A's 30 do. A ceiling with empty `loops` is one duHast could not measure; it is exported rather than dropped so that 'no such ceiling' and 'a ceiling nobody could measure' stay distinguishable, and it attributes to nothing. Attribution ignores overlaps below 1 sq ft or below 0.5% of the ceiling's own area, which removes two measured artefacts: slivers where a large ceiling grazes a neighbouring room, and ceilings whose exported footprint is degenerate."
+    )]
+    fn get_ceilings(&self, Parameters(p): Parameters<GetCeilingsParams>) -> Result<CallToolResult, McpError> {
+        let scope = ceilings::CeilingScope { project: p.project.as_deref(), milestone: p.milestone.as_deref() };
+        match ceilings::assemble_ceilings(&self.state, &scope).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no ceilings have been pushed to this server yet",
             )])),
             Some(result) => json_result(&result),
         }
