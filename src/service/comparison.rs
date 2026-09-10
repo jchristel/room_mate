@@ -725,6 +725,7 @@ mod tests {
     fn milestone(name: &str, model_id: &str, taken_at: &str) -> Milestone {
         Milestone {
             space_attachments: BTreeMap::new(),
+            ceiling_attachments: BTreeMap::new(),
             name: name.to_string(),
             date: "2026-06-30".to_string(),
             reference_snapshots: BTreeMap::new(),
@@ -1333,6 +1334,7 @@ mod tests {
             .iter()
             .map(|(name, ts)| Milestone {
                 space_attachments: BTreeMap::new(),
+                ceiling_attachments: BTreeMap::new(),
                 name: name.to_string(),
                 date: "2026-06-30".to_string(),
                 reference_snapshots: BTreeMap::new(),

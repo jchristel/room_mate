@@ -1342,6 +1342,17 @@ pub struct Milestone {
     /// happened to be pushed nearest the date.
     #[serde(default)]
     pub space_attachments: BTreeMap<String, String>,
+
+    /// Per-model ceilings snapshot pins, on the same terms as
+    /// `space_attachments`.
+    ///
+    /// Its own map rather than riding the rooms pin, even though a ceiling and
+    /// the rooms it covers are normally in ONE document. A milestone pins what
+    /// was pushed, and ceilings are pushed by their own entry point on their own
+    /// day; sharing the rooms pin would make "which ceilings did this milestone
+    /// hold" answerable only when the two happened to be pushed together.
+    #[serde(default)]
+    pub ceiling_attachments: BTreeMap<String, String>,
 }
 
 impl Milestone {
@@ -1368,6 +1379,7 @@ impl Milestone {
             ("door attachment", &self.door_attachments),
             ("window attachment", &self.window_attachments),
             ("space attachment", &self.space_attachments),
+            ("ceiling attachment", &self.ceiling_attachments),
         ] {
             for (model_id, taken_at) in pins {
                 if model_id.trim().is_empty() {
@@ -1475,6 +1487,7 @@ mod tests {
     fn milestone(name: &str, date: &str) -> Milestone {
         Milestone {
             space_attachments: BTreeMap::new(),
+            ceiling_attachments: BTreeMap::new(),
             name: name.to_string(),
             date: date.to_string(),
             reference_snapshots: Default::default(),

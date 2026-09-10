@@ -10,6 +10,7 @@
 
 pub mod adjacency;
 pub mod areas;
+pub mod ceilings;
 pub mod comparison;
 pub mod entity_scope;
 pub mod items;

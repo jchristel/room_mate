@@ -37,7 +37,7 @@ use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshot
 use crate::service::spaces;
 use crate::service::validation::ValidationResponse;
 use crate::service::{
-    milestones, openings, projects, reference, rooms, scope_cursor, snapshots, validation, ServiceError,
+    ceilings, milestones, openings, projects, reference, rooms, scope_cursor, snapshots, validation, ServiceError,
 };
 use crate::state::{ModelKey, Shared, StreamingSnapshot};
 use crate::storage::SnapshotKind;
@@ -2294,6 +2294,56 @@ pub async fn get_spaces(
     }
 
     match spaces::assemble_spaces(&state, &scope).map_err(map_service_error)? {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
+    }
+}
+
+/// What a `/ceilings` read is scoped to.
+///
+/// No `?filter=` and no `?building=`, and both omissions are deliberate rather
+/// than pending. The filter grammar resolves reference-source names, and no
+/// reference source declares `entity = "ceilings"` yet, so parsing one here
+/// would advertise a vocabulary with nothing in it. `?building=` scopes an
+/// element *through the room that owns it*, which for a ceiling is a list
+/// rather than one room -- a ceiling lying over two rooms in two buildings has
+/// no single building, and inventing one is worse than not offering the
+/// parameter.
+#[derive(Debug, Deserialize)]
+pub struct CeilingsQuery {
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<String>,
+}
+
+/// The ceilings read.
+///
+/// Mirrors `get_spaces` in shape. What differs is entirely inside
+/// `service::ceilings`: every row carries the rooms it lies over, derived
+/// geometrically on this read and never stored.
+pub async fn get_ceilings(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<CeilingsQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let scope = ceilings::CeilingScope { project: query.project.as_deref(), milestone: query.milestone.as_deref() };
+
+    // The cursor covers ROOMS as well as ceilings, which no other entity read
+    // needs to do. Attribution is derived from the rooms in scope, so a rooms
+    // push with no ceilings push behind it still changes every answer here --
+    // a cursor over ceilings alone would serve a stale 304 after the rooms
+    // moved underneath it.
+    let cursor = scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Ceilings, SnapshotKind::Rooms])
+        .map_err(map_service_error)?;
+    // Four slots because `etag_for` takes a fixed-width scope tuple; ceilings
+    // vary on two of them and pass None for the parameters they do not offer.
+    let etag = etag_for(&cursor, [query.project.as_deref(), query.milestone.as_deref(), None, None]);
+    if is_fresh(&headers, &etag) {
+        return Ok(not_modified(&etag));
+    }
+
+    match ceilings::assemble_ceilings(&state, &scope).map_err(map_service_error)? {
         None => Ok(StatusCode::NO_CONTENT.into_response()),
         Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
     }

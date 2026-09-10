@@ -1340,6 +1340,7 @@ mod tests {
             ProjectSettings {
                 milestones: vec![crate::settings::Milestone {
                     space_attachments: BTreeMap::new(),
+                    ceiling_attachments: BTreeMap::new(),
                     name: "Design Freeze".to_string(),
                     date: "2026-06-30".to_string(),
                     reference_snapshots: drofus_ts
@@ -1944,6 +1945,7 @@ mod tests {
         ProjectSettings {
             milestones: vec![crate::settings::Milestone {
                 space_attachments: BTreeMap::new(),
+                ceiling_attachments: BTreeMap::new(),
                 name: "Design Freeze".to_string(),
                 date: "2026-06-30".to_string(),
                 reference_snapshots: drofus_ts
@@ -2675,6 +2677,7 @@ mod tests {
             ProjectSettings {
                 milestones: vec![crate::settings::Milestone {
                     space_attachments: BTreeMap::new(),
+                    ceiling_attachments: BTreeMap::new(),
                     name: "Design Freeze".to_string(),
                     date: "2026-06-30".to_string(),
                     reference_snapshots: std::collections::BTreeMap::from([(

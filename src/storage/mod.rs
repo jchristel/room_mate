@@ -71,6 +71,7 @@ pub enum SnapshotKind {
     Windows,
     Ffe,
     Spaces,
+    Ceilings,
 }
 
 impl SnapshotKind {
@@ -87,12 +88,13 @@ impl SnapshotKind {
     /// `position` below is what puts the guard back: it is an exhaustive match,
     /// so a new variant fails to compile there, and the test pairs the two so a
     /// variant left out of this array is caught rather than merely discouraged.
-    pub const ALL: [SnapshotKind; 5] = [
+    pub const ALL: [SnapshotKind; 6] = [
         SnapshotKind::Rooms,
         SnapshotKind::Doors,
         SnapshotKind::Windows,
         SnapshotKind::Ffe,
         SnapshotKind::Spaces,
+        SnapshotKind::Ceilings,
     ];
 
     /// This kind's index in [`ALL`](Self::ALL).
@@ -115,6 +117,7 @@ impl SnapshotKind {
             SnapshotKind::Windows => 2,
             SnapshotKind::Ffe => 3,
             SnapshotKind::Spaces => 4,
+            SnapshotKind::Ceilings => 5,
         }
     }
 
@@ -128,6 +131,7 @@ impl SnapshotKind {
             SnapshotKind::Windows => Some("windows"),
             SnapshotKind::Ffe => Some("ffe"),
             SnapshotKind::Spaces => Some("spaces"),
+            SnapshotKind::Ceilings => Some("ceilings"),
         }
     }
 
@@ -139,6 +143,7 @@ impl SnapshotKind {
             SnapshotKind::Windows => "windows",
             SnapshotKind::Ffe => "ffe",
             SnapshotKind::Spaces => "spaces",
+            SnapshotKind::Ceilings => "ceilings",
         }
     }
 }
@@ -368,6 +373,15 @@ pub struct ModelEntry {
     /// unanswerable — which is the one question the entity exists to answer.
     #[serde(default)]
     pub spaces: Vec<String>,
+
+    /// This model's ceilings snapshot ids, on the same terms as `ffe`.
+    ///
+    /// **The first kind whose entity joins to rooms by GEOMETRY rather than by
+    /// a reference**, and the manifest did not notice that either — which is
+    /// now three entities in a row proving the index is about *where snapshots
+    /// live*, not about what is in them or how they are joined.
+    #[serde(default)]
+    pub ceilings: Vec<String>,
 }
 
 impl ModelEntry {
@@ -380,6 +394,7 @@ impl ModelEntry {
             SnapshotKind::Windows => &self.windows,
             SnapshotKind::Ffe => &self.ffe,
             SnapshotKind::Spaces => &self.spaces,
+            SnapshotKind::Ceilings => &self.ceilings,
         }
     }
 
@@ -390,6 +405,7 @@ impl ModelEntry {
             SnapshotKind::Windows => &mut self.windows,
             SnapshotKind::Ffe => &mut self.ffe,
             SnapshotKind::Spaces => &mut self.spaces,
+            SnapshotKind::Ceilings => &mut self.ceilings,
         }
     }
 }
@@ -693,7 +709,7 @@ mod tests {
     /// went wrong once already.
     #[test]
     fn test_all_kinds_agree_with_their_positions() {
-        assert_eq!(SnapshotKind::ALL.len(), 5, "extend ALL when adding a kind");
+        assert_eq!(SnapshotKind::ALL.len(), 6, "extend ALL when adding a kind");
         for (index, kind) in SnapshotKind::ALL.iter().enumerate() {
             assert_eq!(kind.position(), index, "{} is in the wrong slot of ALL", kind.label());
         }
