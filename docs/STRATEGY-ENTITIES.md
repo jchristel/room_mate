@@ -263,30 +263,50 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   not serve — a ceiling is not at a point — so the geometry is genuinely new,
   which is what "geometry semantics are per-entity work every time" predicts.
 
-  `scripts/probe_ceilings_export.py` and `scripts/analyse_ceilings_probe.py`
-  are the instrument; **nothing should be built before they have been run.**
-  The two kill conditions are Q1 and Q2. Q1: `populate_data_ceiling_object`
-  returns `None` when the geometry walk yields nothing and the export then
-  drops the ceiling silently, so the drop *rate* decides whether the entity can
-  report honestly at all — `solids.py` states its walk does not handle in-place
-  families, which is the first suspected cause. Q2: if a project keeps ceilings
-  in an interiors model and rooms in the architectural one, the model-scoped
-  join matches nothing, and unlike spaces there is no key to widen to — only
-  geometry. That would make ceilings a *second* exception to the model-scoped
-  rule, for a different reason than spaces, which is a thing to discover before
-  the contract is written rather than after.
+  **Probed on House A, 2026-09-10** (`scripts/probe_ceilings_export.py`, read
+  by `scripts/analyse_ceilings_probe.py`). Both kill conditions pass, and the
+  geometry questions are settled enough to write a contract against:
 
-  Three smaller findings are already banked from reading duHast's source, so
-  they need not be rediscovered. `_intersect_ceiling_vs_room`'s threshold is
-  named `area_intersection_percentage_of_ceiling_vs_room` and divides by
-  `room_polygon.area` — it is a percentage of the **room**, and a port trusting
-  the name would behave differently on a large ceiling clipping a small room.
-  A ceiling takes the **doors range test** on `PHASE_CREATED` /
-  `PHASE_DEMOLISHED`, never the rooms equality test on `ROOM_PHASE`. And a
-  ceiling can export **several disjoint polygons**, one per solid volume, which
-  a room's `loops` cannot express — both `translate_room` and
-  `loops_from_polygon` take `polygon[0]` and discard the rest, correctly for a
-  room and lossily for a ceiling.
+  - **Q1 — 30 of 30 ceilings exported.** No drops. But House A holds **no
+    in-place ceilings at all**, so the failure mode the question was written
+    for is untested here rather than absent, and the duHast fix for it is
+    unverified against a document. What the run *did* find is a different
+    thing the question did not ask: **2 of 30 exported a footprint of 0.33 and
+    0.18 sqft** against a population whose next smallest is two orders of
+    magnitude larger. Exported is not the same as usable, and those two are
+    where two of the four marginal room overlaps came from.
+  - **Q2 — co-located.** Ceilings and rooms are both in the architectural
+    model, so the model-scoped join survives and ceilings need no exception.
+    **House A is one model, so this establishes very little**; RHH is the test
+    that matters and has not been run.
+  - **Q6 — take `polygon[0]`, and never union or sum.** 7 of 30 ceilings
+    export more than one polygon, and the count is misleading:
+    `convert_solid_to_flattened_2d_points` walks *horizontal faces*, and a slab
+    has two of them. 4 of the 7 are the **same face twice** — IoU above 0.98
+    between the two largest pieces, sum exactly twice the union — and the other
+    3 are the largest face plus sub-1-sqft noise off the side faces. The
+    largest polygon equalled the union of all of them on **every** ceiling
+    measured. So reusing the room `loops` shape verbatim is correct, and
+    aggregating the polygons would double-count area on 4 ceilings.
+  - **Q4 — many-to-many is NOT demonstrated, and the threshold is why.** One
+    ceiling spans three rooms at duHast's 0.1% and nothing spans anything at
+    0.5%, because the two extra matches are 0.97 sqft slivers. duHast's
+    threshold is too low for this geometry, and being a percentage of the
+    *room* it scales with the wrong operand — a sliver against a large room
+    passes more easily than a real overlap against a small one. Keep the
+    list-shaped answer, but keep it because a stored single owner would need a
+    migration to undo, **not** because this model proved it necessary.
+  - **Q5 — no ceiling on House A is demolished**, so the range test and the
+    equality test happen to agree. Use the **doors range test** on
+    `PHASE_CREATED` / `PHASE_DEMOLISHED` anyway: a ceiling can be demolished,
+    and "it worked on this model" is how the five empty rooms pushes were made.
+
+  Two calibrations for the QA report, before it is written. **12 of 32 rooms
+  have no ceiling and almost all are external** — POOL, DECK, DRIVEWAY, FRONT
+  YARD, the `EX` suffix throughout — so "room without a ceiling" is not a
+  finding on its own and a report that flags it will be mostly noise. And **6
+  ceilings match no room**, all of one type (`CLFS-550`), 4 of them on LEVEL 02
+  which carries no rooms at all. A type-level pattern, not six anomalies.
 
 - **Multi-phase comparison — explicitly out of scope**, recorded so it is not
   re-proposed. It is a second axis crossing the snapshot axis, and milestones

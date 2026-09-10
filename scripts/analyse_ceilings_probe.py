@@ -182,6 +182,53 @@ def ring_points(loop):
     return [p for p in points if p is not None]
 
 
+def ring_area(ring):
+    """Absolute area of a closed ring, by the shoelace formula.
+
+    Stdlib on purpose. This is what Q6 needs, and Q6 must answer on a machine
+    with no shapely -- the boolean ops are Q4's requirement, not this one. Sign
+    is discarded because ring winding is not consistent in the export and the
+    question here is size, not orientation.
+    """
+    if len(ring) < 3:
+        return 0.0
+    total = 0.0
+    for i in range(len(ring)):
+        x1, y1 = ring[i]
+        x2, y2 = ring[(i + 1) % len(ring)]
+        total += x1 * y2 - x2 * y1
+    return abs(total) / 2.0
+
+
+def polygon_area(outer, inners):
+    """Net area of one exported polygon: its outer ring less its holes."""
+    return max(0.0, ring_area(outer) - sum(ring_area(ring) for ring in inners))
+
+
+# Below this, in square feet, an exported footprint is not a ceiling. House A
+# produced two at 0.33 and 0.37 sqft against a population whose next smallest is
+# two orders of magnitude larger, so the gap is real rather than a chosen line.
+# Reported, never dropped: "exported something unusable" is its own state, and
+# fusing it into either "exported" or "dropped" is what the +/-1e30 sentinel scar
+# is about.
+DEGENERATE_SQFT = 5.0
+
+# How much larger the SUM of a ceiling's polygons may be than its largest one
+# before the extras are read as duplicate faces rather than extra geometry.
+# `convert_solid_to_flattened_2d_points` walks horizontal faces, and a slab has
+# two of them -- top and bottom, near-identical in plan. Measured on House A:
+# three ceilings where the two largest pieces have an IoU above 0.98 and the sum
+# is exactly twice the union.
+DUPLICATE_FACE_RATIO = 1.5
+
+# Below this ratio the extra polygons are noise off the side faces rather than
+# geometry: House A's three cases measured 157.2 against 156.7, 228.0 against
+# 228.0 and 598.8 against 598.8. Kept apart from the genuinely-additional case
+# because they point opposite ways -- noise means `polygon[0]` is the whole
+# ceiling, additional means it is not.
+SLIVER_RATIO = 1.05
+
+
 def polygons_of(element):
     """Every polygon on one exported element, as `(outer, [inners])` tuples.
 
@@ -510,16 +557,27 @@ def phase_rows(documents):
 
 
 def shape_rows(documents):
-    """How many polygons and how many holes a ceiling exports.
+    """How many polygons and holes a ceiling exports, and whether the extra
+    polygons are extra GEOMETRY or the same face twice.
 
-    `polygon_count > 1` is the finding: a room's `loops` is one outer ring plus
-    its holes, so a ceiling with two disjoint polygons cannot be expressed in
-    that field, and both existing translators would keep the first and drop the
-    rest without saying so.
+    **The count alone answers the wrong question, and House A is why this
+    function grew.** A ceiling with five polygons looks like a ceiling in five
+    pieces, and the obvious conclusion -- that a room's `loops` field cannot
+    carry it, since that is one outer ring plus holes -- is wrong.
+    `convert_solid_to_flattened_2d_points` walks the HORIZONTAL FACES of a
+    solid, and a slab has two of them: its top and its bottom, near-identical in
+    plan. The rest are slivers off the side faces.
+
+    So what matters per ceiling is the largest polygon against the SUM of them.
+    Equal means genuinely separate pieces; a sum around twice the largest means
+    duplicate faces, and a consumer that unioned or summed would double-count
+    the area while one taking `polygon[0]` would be right.
     """
     polygon_counts = Counter()
     inner_counts = Counter()
-    multi_examples = []
+    duplicate_face = []
+    slivers = []
+    disjoint = []
     for doc in documents:
         block = doc["entities"].get("ceilings")
         if not block:
@@ -528,11 +586,49 @@ def shape_rows(documents):
         for element_id, element in exported.items():
             polygons = polygons_of(element)
             polygon_counts[len(polygons)] += 1
-            for _outer, inners in polygons:
+            areas = []
+            for outer, inners in polygons:
                 inner_counts[len(inners)] += 1
-            if len(polygons) > 1 and len(multi_examples) < 10:
-                multi_examples.append([doc["document"], element_id, len(polygons)])
-    return polygon_counts, inner_counts, multi_examples
+                areas.append(polygon_area(outer, inners))
+            if len(polygons) < 2:
+                continue
+            largest = max(areas) if areas else 0.0
+            total = sum(areas)
+            row = [doc["document"], element_id, len(polygons),
+                   "{:.1f}".format(largest), "{:.1f}".format(total)]
+            if largest <= 0:
+                continue
+            ratio = total / largest
+            if ratio > DUPLICATE_FACE_RATIO:
+                duplicate_face.append(row)
+            elif ratio <= SLIVER_RATIO:
+                slivers.append(row)
+            else:
+                disjoint.append(row)
+    return polygon_counts, inner_counts, duplicate_face, slivers, disjoint
+
+
+def degenerate_rows(documents):
+    """Ceilings that exported a footprint too small to be one.
+
+    A companion to Q1 rather than part of it, and the distinction is the point:
+    Q1 counts what reached the export, this counts what reached it UNUSABLE.
+    A ceiling measuring a third of a square foot passes every "did it export"
+    check and then matches rooms by slivers, which is how two of House A's four
+    marginal overlaps were made.
+    """
+    rows = []
+    for doc in documents:
+        block = doc["entities"].get("ceilings")
+        if not block:
+            continue
+        exported = reduce_export(block["raw"], block["probe"].get("list_key"))
+        for element_id, element in exported.items():
+            areas = [polygon_area(outer, inners) for outer, inners in polygons_of(element)]
+            largest = max(areas) if areas else 0.0
+            if largest < DEGENERATE_SQFT:
+                rows.append([doc["document"], element_id, "{:.2f}".format(largest)])
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -615,6 +711,23 @@ def build_report(index, documents):
             "contract must be able to say so.".format(totals["in_place"])
         )
     add("")
+
+    # Exported is not the same as usable, and a run can pass Q1 outright while
+    # still carrying ceilings nothing can attribute.
+    degenerate = degenerate_rows(documents)
+    add("### Exported, but too small to be a ceiling")
+    add("")
+    if degenerate:
+        add(
+            "{} ceiling(s) exported a footprint under {} sqft. They pass every "
+            "\"did it export\" check and then match rooms by slivers, so they "
+            "inflate the overlap counts in Q4 rather than showing up as a "
+            "failure here.".format(len(degenerate), DEGENERATE_SQFT)
+        )
+        lines.extend(table(["document", "ceiling id", "largest polygon (sqft)"], degenerate))
+    else:
+        add("None -- every exported ceiling carries a plausible footprint.")
+        add("")
 
     # ---- Q2 ---------------------------------------------------------------
     add("## Q2 -- are ceilings and rooms in the same document?")
@@ -700,20 +813,48 @@ def build_report(index, documents):
             )
         )
         add("")
-        if spanning:
+
+        # **Whether a ceiling spans rooms is a claim about the THRESHOLD as much
+        # as about the model, and reporting the 0.1% figure alone gets it wrong.**
+        # House A: one ceiling spans three rooms at 0.1% and none spans anything
+        # at 0.5%, because its two extra matches are 0.97 sqft slivers off a
+        # duplicate face. Reading that as "many-to-many is real" would have
+        # designed a list-shaped answer off an artefact of duHast's face walk.
+        firm = [p for p in pairs if p["pct_of_room"] >= 0.5]
+        firm_multi = Counter(p["ceiling"] for p in firm)
+        firm_spanning = sum(1 for count in firm_multi.values() if count > 1)
+        add(
+            "At 0.5% of room area: {} pair(s), {} ceiling(s) matched, {} spanning "
+            "more than one room.".format(len(firm), len(firm_multi), firm_spanning)
+        )
+        add("")
+        if firm_spanning:
             add(
-                "**Many-to-many is real, not theoretical.** A single owner per "
-                "ceiling would silently lose {} ceiling(s)' worth of room "
-                "attribution, so the read carries a list with an area per "
-                "entry -- duHast's own `DataCeilingInRoom` shape.".format(spanning)
+                "**Many-to-many survives a threshold that filters slivers**, so "
+                "it is a fact about the model: {} ceiling(s) genuinely cover more "
+                "than one room. The read carries a list with an area per entry, "
+                "duHast's own `DataCeilingInRoom` shape.".format(firm_spanning)
+            )
+        elif spanning:
+            add(
+                "**The spanning case here is an ARTEFACT, not a finding.** It "
+                "appears only at duHast's 0.1% and vanishes by 0.5%, which means "
+                "the extra rooms are sliver overlaps rather than ceiling. Two "
+                "conclusions follow. duHast's threshold is too low for this "
+                "geometry, and it is a percentage of the ROOM, so it scales with "
+                "the wrong operand -- a sliver against a large room passes more "
+                "easily than a real overlap against a small one. And this data "
+                "does NOT demonstrate many-to-many: keep the list-shaped answer "
+                "because a stored single owner would need a migration to undo, "
+                "not because this model proved it necessary."
             )
         else:
             add(
-                "**No ceiling spans two rooms on this data.** That is a fact "
-                "about this model, not a licence to store one owner: a "
-                "bulkhead detail or an open-plan soffit produces the spanning "
-                "case, and a read-time list costs nothing while a stored single "
-                "owner would need a migration."
+                "**No ceiling spans two rooms on this data, at any threshold.** "
+                "That is a fact about this model, not a licence to store one "
+                "owner: a bulkhead detail or an open-plan soffit produces the "
+                "spanning case, and a read-time list costs nothing while a "
+                "stored single owner would need a migration."
             )
         cross = [p for p in kept if not p["same_document"]]
         if cross:
@@ -748,7 +889,7 @@ def build_report(index, documents):
     # ---- Q6 ---------------------------------------------------------------
     add("## Q6 -- what shape is a ceiling polygon?")
     add("")
-    polygon_counts, inner_counts, multi_examples = shape_rows(documents)
+    polygon_counts, inner_counts, duplicate_face, slivers, disjoint = shape_rows(documents)
     lines.extend(
         table(
             ["polygons on the ceiling", "ceilings"],
@@ -762,21 +903,76 @@ def build_report(index, documents):
         )
     )
     multi_total = sum(v for k, v in polygon_counts.items() if k > 1)
-    if multi_total:
-        add(
-            "**{} ceiling(s) export more than one polygon.** A room's `loops` "
-            "cannot express that -- it is one outer ring plus its holes -- and "
-            "both `translate_room` and `loops_from_polygon` take `polygon[0]` "
-            "and discard the rest. A ceiling contract that reused `loops` "
-            "verbatim would silently drop geometry on {} of them.".format(
-                multi_total, multi_total
-            )
-        )
-        lines.extend(table(["document", "ceiling id", "polygons"], multi_examples))
-    else:
+    if not multi_total:
         add(
             "Every ceiling exports exactly one polygon, so the room `loops` "
             "shape carries a ceiling as-is on this data."
+        )
+        add("")
+        return "\n".join(lines) + "\n"
+
+    add(
+        "{} ceiling(s) export more than one polygon. **The count alone is "
+        "misleading**, and the split below is what matters: a slab has two "
+        "horizontal faces, top and bottom, so an extra polygon is usually the "
+        "SAME face again rather than more ceiling.".format(multi_total)
+    )
+    add("")
+    if duplicate_face:
+        add(
+            "**{} of them are duplicate faces** -- the polygons sum to more than "
+            "{}x the largest one. On House A the two largest pieces of each had "
+            "an IoU above 0.98 and the sum was exactly twice the union.".format(
+                len(duplicate_face), DUPLICATE_FACE_RATIO
+            )
+        )
+        lines.extend(
+            table(
+                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)"],
+                duplicate_face,
+            )
+        )
+        add(
+            "So a consumer must take `polygon[0]` and must NOT union or sum: "
+            "`translate_room` and `loops_from_polygon` already take the first and "
+            "discard the rest, and on this data that is exactly right -- the "
+            "largest polygon equalled the union of all of them on every ceiling "
+            "measured. Reusing the room `loops` shape verbatim is correct; "
+            "aggregating the polygons would double-count area."
+        )
+        add("")
+    if slivers:
+        add(
+            "**{} are the largest face plus negligible slivers** -- the polygons "
+            "sum to within {}% of the largest, so the extras are noise off the "
+            "solid's side faces rather than ceiling. `polygon[0]` is the whole "
+            "of these too.".format(len(slivers), int((SLIVER_RATIO - 1) * 100))
+        )
+        lines.extend(
+            table(
+                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)"],
+                slivers,
+            )
+        )
+    if disjoint:
+        add(
+            "**{} carry genuinely ADDITIONAL geometry** -- more than the largest "
+            "face, and not a doubling of it. These are the only ones an "
+            "outer-ring-plus-holes field cannot carry, and they are what decides "
+            "whether the contract needs a list of polygons instead. Look at these "
+            "before settling the geometry field.".format(len(disjoint))
+        )
+        lines.extend(
+            table(
+                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)"],
+                disjoint,
+            )
+        )
+    else:
+        add(
+            "**No ceiling carries geometry beyond its largest face.** On this "
+            "data the room `loops` shape is sufficient for a ceiling, and the "
+            "polygon-count column above is not the reason to widen it."
         )
     add("")
 
