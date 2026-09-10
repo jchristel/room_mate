@@ -2299,6 +2299,314 @@ pub async fn get_spaces(
     }
 }
 
+// ============================ ceilings ingest ============================
+//
+// **Quarantine on a disagreeing phase, like spaces -- not refusal, like
+// openings.** The openings refusal exists for one reason, stated in
+// `preflight_openings`: promoting a doors push would re-phase the lineage while
+// the rooms stayed behind, stranding every `from_room`/`to_room` it carries. A
+// ceiling carries no room reference at all -- its rooms are derived
+// geometrically at read time -- so there is nothing to strand, and geometry does
+// not care what phase the lineage claims.
+//
+// Note the one place ceilings differ from spaces in that argument, since it is
+// the sort of thing that reads as an oversight later. A services model usually
+// holds no rooms, so "re-phase it with a rooms push first" is advice a spaces
+// push cannot take, and that is part of why refusing would be wrong there.
+// Ceilings normally DO live beside their rooms, so the advice is takeable here.
+// It still is not a reason to refuse: quarantine already leaves the operator
+// both options, and refusing would throw away a correct export to enforce an
+// ordering nothing downstream needs.
+
+/// One model's result on a ceilings push.
+#[derive(Debug, Serialize)]
+pub struct CeilingModelIngestResult {
+    pub model_id: String,
+    pub ceiling_count: usize,
+    /// Set when this model's push was quarantined rather than made live, with
+    /// the reason. `None` is the ordinary case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quarantined: Option<String>,
+}
+
+/// The body of a ceilings push response.
+#[derive(Debug, Serialize)]
+pub struct CeilingIngestResponse {
+    /// False when any model was quarantined, in lockstep with the 202.
+    pub accepted: bool,
+    pub ceiling_count: usize,
+    pub snapshot_taken_at: String,
+    pub snapshot_id_generated: bool,
+    pub models: Vec<CeilingModelIngestResult>,
+}
+
+/// Where one model's ceilings go while a push is being read. A live model
+/// streams, a quarantined one buffers -- see `SpaceDest`.
+enum CeilingDest<'a> {
+    Live(StreamingSnapshot<'a>),
+    Quarantined {
+        payload: Box<crate::contract::CeilingPayload>,
+        lineage: String,
+    },
+}
+
+struct CeilingSink<'a> {
+    model_id: String,
+    dest: CeilingDest<'a>,
+}
+
+impl CeilingSink<'_> {
+    /// Take one ceiling. Both routes feed sinks through here, so the buffered
+    /// and streamed paths cannot store different things.
+    fn push(&mut self, ceiling: crate::contract::Ceiling) -> Result<(), (StatusCode, String)> {
+        match &mut self.dest {
+            CeilingDest::Live(snapshot) => snapshot.push(&ceiling).map_err(store_failed),
+            CeilingDest::Quarantined { payload, .. } => {
+                payload.ceilings.push(ceiling);
+                Ok(())
+            }
+        }
+    }
+
+    fn count(&self) -> usize {
+        match &self.dest {
+            CeilingDest::Live(snapshot) => snapshot.count(),
+            CeilingDest::Quarantined { payload, .. } => payload.ceilings.len(),
+        }
+    }
+}
+
+/// Decide every model's fate before any of them is stored.
+fn preflight_ceilings(
+    state: &Shared,
+    project_id: &str,
+    phase: Option<&str>,
+    models: impl Iterator<Item = (String, Option<ModelToShared>)>,
+) -> Result<Vec<PhaseDecision>, (StatusCode, String)> {
+    let mut decisions = Vec::new();
+    for (model_id, transform) in models {
+        let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.clone() };
+        decisions.push(decide_phase(state, &key, phase)?);
+        // Worth more here than on any other entity: the room join is geometric,
+        // so a model placed wrongly does not produce a wrong room -- it produces
+        // no room at all, on every ceiling it holds, and "homeless" is a legal
+        // state this entity reports rather than an error anything raises.
+        warn_on_transform_drift(transform.as_ref(), project_id, &model_id);
+    }
+    Ok(decisions)
+}
+
+/// Open one sink per model, live or quarantined, from the decisions
+/// `preflight_ceilings` already made.
+///
+/// No `reject_empty_rooms` equivalent: a model with rooms and no ceilings is
+/// ordinary, and the server cannot tell that from a broken export -- the same
+/// position it takes on doors. The producer refuses an empty push instead.
+fn open_ceiling_sinks<'a>(
+    state: &'a Shared,
+    schema_version: u32,
+    project: &Project,
+    snapshot: &Snapshot,
+    phase: Option<&str>,
+    models: Vec<crate::contract::CeilingModelEnvelope>,
+    decisions: Vec<PhaseDecision>,
+) -> Result<Vec<CeilingSink<'a>>, (StatusCode, String)> {
+    let mut sinks = Vec::with_capacity(models.len());
+    for (envelope, decision) in models.into_iter().zip(decisions) {
+        let model_id = envelope.model.id.clone();
+        let payload = envelope.into_payload(
+            schema_version,
+            project.clone(),
+            snapshot.clone(),
+            phase.map(str::to_string),
+            Vec::new(),
+        );
+        let dest = match decision {
+            PhaseDecision::Accept => {
+                CeilingDest::Live(state.open_opening_snapshot(SnapshotKind::Ceilings, &payload).map_err(store_failed)?)
+            }
+            PhaseDecision::Quarantine { lineage } => CeilingDest::Quarantined { payload: Box::new(payload), lineage },
+        };
+        sinks.push(CeilingSink { model_id, dest });
+    }
+    Ok(sinks)
+}
+
+/// Commit every sink and report the push.
+fn finish_ceilings(
+    state: &Shared,
+    project: &Project,
+    snapshot_taken_at: String,
+    snapshot_id_generated: bool,
+    sinks: Vec<CeilingSink<'_>>,
+) -> Result<(StatusCode, Json<CeilingIngestResponse>), (StatusCode, String)> {
+    let mut results = Vec::with_capacity(sinks.len());
+    let mut total = 0usize;
+    let mut any_quarantined = false;
+    for sink in sinks {
+        let count = sink.count();
+        total += count;
+        let CeilingSink { model_id, dest } = sink;
+        let key = ModelKey { project_id: project.id.clone(), model_id: model_id.clone() };
+        let quarantined = match dest {
+            CeilingDest::Live(snapshot) => {
+                snapshot.commit().map_err(store_failed)?;
+                None
+            }
+            CeilingDest::Quarantined { payload, lineage } => {
+                let pushed = payload.phase.clone().unwrap_or_default();
+                state
+                    .set_pending_snapshot(&key, SnapshotKind::Ceilings, payload.as_ref())
+                    .map_err(store_failed)?;
+                tracing::warn!(
+                    "quarantined ceilings push for {}/{}: phase {:?} disagrees with the model's {:?}",
+                    key.project_id,
+                    key.model_id,
+                    pushed,
+                    lineage
+                );
+                Some(format!(
+                    "stored but not live: this push is phase {pushed:?} while the model is {lineage:?}. \
+                     A model's phase is fixed once set; activate this push to re-phase the model."
+                ))
+            }
+        };
+        any_quarantined |= quarantined.is_some();
+        results.push(CeilingModelIngestResult { model_id, ceiling_count: count, quarantined });
+    }
+    tracing::info!("received {} ceiling(s) across {} model(s)", total, results.len());
+
+    let status = if any_quarantined { StatusCode::ACCEPTED } else { StatusCode::OK };
+    Ok((
+        status,
+        Json(CeilingIngestResponse {
+            accepted: !any_quarantined,
+            ceiling_count: total,
+            snapshot_taken_at,
+            snapshot_id_generated,
+            models: results,
+        }),
+    ))
+}
+
+/// Buffered ceilings ingest (`POST /ceilings`).
+pub async fn ingest_ceilings(
+    State(state): State<Shared>,
+    Json(mut upload): Json<crate::contract::CeilingsUpload>,
+) -> Result<(StatusCode, Json<CeilingIngestResponse>), (StatusCode, String)> {
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut upload.snapshot);
+    upload.phase = crate::contract::normalize_phase(upload.phase.as_deref());
+    validate_ingest(
+        &state,
+        upload.schema_version,
+        crate::contract::SUPPORTED_CEILING_SCHEMA,
+        &upload.project.id,
+        &upload.snapshot.taken_at,
+    )?;
+    validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
+
+    let mut ceilings_by_model: Vec<(String, Vec<crate::contract::Ceiling>)> = upload
+        .models
+        .iter_mut()
+        .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.ceilings)))
+        .collect();
+    let models: Vec<crate::contract::CeilingModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
+    let decisions = preflight_ceilings(
+        &state,
+        &upload.project.id,
+        upload.phase.as_deref(),
+        models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
+
+    let mut sinks = open_ceiling_sinks(
+        &state,
+        upload.schema_version,
+        &upload.project,
+        &upload.snapshot,
+        upload.phase.as_deref(),
+        models,
+        decisions,
+    )?;
+    for (model_id, ceilings) in &mut ceilings_by_model {
+        let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
+        for ceiling in ceilings.drain(..) {
+            sink.push(ceiling)?;
+        }
+    }
+    finish_ceilings(&state, &upload.project, upload.snapshot.taken_at.clone(), snapshot_id_generated, sinks)
+}
+
+/// Streaming NDJSON ceilings ingest -- `ingest_ceilings` for a push too large to
+/// buffer.
+pub async fn ingest_ceilings_stream(
+    State(state): State<Shared>,
+    body: Body,
+) -> Result<(StatusCode, Json<CeilingIngestResponse>), (StatusCode, String)> {
+    let stream = body.into_data_stream().map(|r| r.map_err(std::io::Error::other));
+    let reader = StreamReader::new(stream);
+    let mut lines = reader.lines();
+
+    let first = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+        .ok_or((StatusCode::BAD_REQUEST, "empty body".into()))?;
+    let mut envelope: crate::contract::CeilingStreamEnvelope =
+        serde_json::from_str(&first).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, format!("bad envelope: {e}")))?;
+
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
+    envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
+    validate_ingest(
+        &state,
+        envelope.schema_version,
+        crate::contract::SUPPORTED_CEILING_SCHEMA,
+        &envelope.project.id,
+        &envelope.snapshot.taken_at,
+    )?;
+    validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
+
+    let decisions = preflight_ceilings(
+        &state,
+        &envelope.project.id,
+        envelope.phase.as_deref(),
+        envelope.models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
+    )?;
+    let mut sinks = open_ceiling_sinks(
+        &state,
+        envelope.schema_version,
+        &envelope.project,
+        &envelope.snapshot,
+        envelope.phase.as_deref(),
+        envelope.models,
+        decisions,
+    )?;
+
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
+    {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let framed: crate::contract::StreamCeiling =
+            serde_json::from_str(&line).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, format!("bad ceiling: {e}")))?;
+        let sink = sink_for(&mut sinks, &framed.model_id, |s| s.model_id.as_str()).ok_or((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("ceiling names model {:?}, which the envelope did not declare", framed.model_id),
+        ))?;
+        sink.push(framed.ceiling)?;
+    }
+
+    finish_ceilings(
+        &state,
+        &envelope.project,
+        envelope.snapshot.taken_at.clone(),
+        snapshot_id_generated,
+        sinks,
+    )
+}
+
 /// What a `/ceilings` read is scoped to.
 ///
 /// No `?filter=` and no `?building=`, and both omissions are deliberate rather
@@ -2648,6 +2956,130 @@ mod tests {
     }
 
     /// One model's spaces as a v1 upload.
+    fn ceilings_upload(
+        model: &str,
+        ts: &str,
+        phase: Option<&str>,
+        ceilings: Vec<crate::contract::Ceiling>,
+    ) -> crate::contract::CeilingsUpload {
+        crate::contract::CeilingsUpload {
+            schema_version: crate::contract::SUPPORTED_CEILING_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: ts.to_string() },
+            phase: phase.map(str::to_string),
+            models: vec![crate::contract::CeilingModelUpload {
+                envelope: crate::contract::CeilingModelEnvelope {
+                    model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+                    model_to_shared: None,
+                    levels: vec![],
+                },
+                ceilings,
+            }],
+        }
+    }
+
+    fn a_ceiling(id: &str) -> crate::contract::Ceiling {
+        crate::contract::Ceiling {
+            id: id.to_string(),
+            level_id: "L1".to_string(),
+            height_offset: Some(8.0),
+            loops: vec![crate::contract::Loop {
+                points: vec![
+                    crate::contract::Point2D { x: 0.0, y: 0.0 },
+                    crate::contract::Point2D { x: 10.0, y: 0.0 },
+                    crate::contract::Point2D { x: 10.0, y: 10.0 },
+                    crate::contract::Point2D { x: 0.0, y: 10.0 },
+                ],
+            }],
+            properties: Default::default(),
+            type_properties: Default::default(),
+            type_id: None,
+            type_name: None,
+        }
+    }
+
+    /// **An empty ceilings push is accepted, where an empty rooms push is a
+    /// 422** -- and the argument is the DOORS one, not the spaces one. A model
+    /// with rooms and no ceilings is ordinary (a shell, a base-build package, an
+    /// external works file) and the server cannot tell that from a broken
+    /// export, so it accepts and the producer refuses instead.
+    #[tokio::test]
+    async fn test_an_empty_ceilings_push_is_accepted() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let (status, body) =
+            ingest_ceilings(State(state), Json(ceilings_upload("m1", "2026-09-10T00:00:00Z", Some("New"), vec![])))
+                .await
+                .expect("the server cannot tell a shell from a broken export, so it accepts");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.accepted);
+        assert_eq!(body.ceiling_count, 0);
+        assert_eq!(body.models.len(), 1, "the model is still recorded as having been pushed");
+    }
+
+    /// **A disagreeing phase is QUARANTINED (202), not refused** -- the spaces
+    /// rule, deliberately not the openings one.
+    ///
+    /// The openings refusal exists because promoting a doors push would re-phase
+    /// the lineage while the rooms stayed behind, stranding every
+    /// `from_room`/`to_room` it carries. A ceiling carries no room reference at
+    /// all -- its rooms are derived geometrically on every read -- so there is
+    /// nothing for a promotion to strand.
+    #[tokio::test]
+    async fn test_a_disagreeing_ceilings_push_is_quarantined() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let (first, _) = ingest_ceilings(
+            State(state.clone()),
+            Json(ceilings_upload(
+                "m1",
+                "2026-09-10T00:00:00Z",
+                Some("New Construction"),
+                vec![a_ceiling("c1")],
+            )),
+        )
+        .await
+        .expect("the first push phases the lineage");
+        assert_eq!(first, StatusCode::OK);
+
+        let (status, body) = ingest_ceilings(
+            State(state),
+            Json(ceilings_upload("m1", "2026-09-10T01:00:00Z", Some("Existing"), vec![a_ceiling("c2")])),
+        )
+        .await
+        .expect("a disagreeing phase is stored, not refused");
+
+        assert_eq!(status, StatusCode::ACCEPTED, "202, not 422");
+        assert!(!body.accepted);
+        let reason = body.models[0].quarantined.as_deref().expect("the reason rides the response");
+        assert!(reason.contains("Existing"), "names the pushed phase: {reason}");
+        assert!(reason.contains("New Construction"), "and the lineage's: {reason}");
+    }
+
+    /// An unphased lineage is phased by whichever push reaches it first, and for
+    /// this entity that can legitimately be the ceilings push -- ceilings may
+    /// arrive before their rooms, exactly as doors may.
+    #[tokio::test]
+    async fn test_a_ceilings_push_phases_an_unphased_model() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let (status, body) = ingest_ceilings(
+            State(state),
+            Json(ceilings_upload(
+                "m1",
+                "2026-09-10T00:00:00Z",
+                Some("New Construction"),
+                vec![a_ceiling("c1")],
+            )),
+        )
+        .await
+        .expect("nothing has phased this model yet");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.accepted);
+        assert!(body.models[0].quarantined.is_none(), "no lineage to disagree with");
+    }
     fn spaces_upload(model: &str, ts: &str, phase: Option<&str>, spaces: Vec<Room>) -> crate::contract::SpacesUpload {
         crate::contract::SpacesUpload {
             schema_version: crate::contract::SUPPORTED_SPACE_SCHEMA,

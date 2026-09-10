@@ -29,9 +29,9 @@ use roommate::handlers::{
     activate_model_pending_snapshot, compare_project_milestones, get_ceilings, get_doors, get_ffe,
     get_model_latest_snapshot, get_model_pending_snapshot, get_project_adjacency, get_project_areas,
     get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation, get_projects,
-    get_reference_latest, get_reference_snapshots, get_rooms, get_spaces, get_windows, ingest_doors,
-    ingest_doors_stream, ingest_ffe, ingest_ffe_stream, ingest_rooms, ingest_rooms_stream, ingest_spaces,
-    ingest_spaces_stream, ingest_windows, ingest_windows_stream,
+    get_reference_latest, get_reference_snapshots, get_rooms, get_spaces, get_windows, ingest_ceilings,
+    ingest_ceilings_stream, ingest_doors, ingest_doors_stream, ingest_ffe, ingest_ffe_stream, ingest_rooms,
+    ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows, ingest_windows_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
@@ -323,14 +323,20 @@ fn build_router(state: roommate::state::Shared) -> Router {
             post(ingest_spaces).get(get_spaces).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
         )
         .route("/spaces/stream", post(ingest_spaces_stream).layer(DefaultBodyLimit::disable()))
-        // Ceilings: READ ONLY for now, and the asymmetry is deliberate rather
-        // than half-built. The read is what "list ceilings by room" needs and
-        // it is complete; the ingest path is a separate piece of work (sinks,
-        // phase preflight, the streaming route) and shipping a POST that only
-        // half-handled a disagreeing phase would be worse than not offering
-        // one. Until it lands, a ceilings snapshot can only reach the store by
-        // being written there directly.
-        .route("/ceilings", get(get_ceilings))
+        // Ceilings: the sixth entity, and the first whose room association is
+        // purely geometric -- a ceiling has no room parameter and a room has no
+        // ceiling parameter, so `service::ceilings` derives the join from
+        // polygon overlap on every read and stores none of it. A disagreeing
+        // phase is QUARANTINED rather than refused: unlike a doors push, this
+        // one carries no room reference for a promotion to strand. See
+        // `handlers::preflight_ceilings`.
+        .route(
+            "/ceilings",
+            post(ingest_ceilings)
+                .get(get_ceilings)
+                .layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
+        )
+        .route("/ceilings/stream", post(ingest_ceilings_stream).layer(DefaultBodyLimit::disable()))
         .route("/projects", get(get_projects))
         .route("/projects/{id}/buildings", get(get_project_buildings))
         .route("/projects/{id}/validation", get(get_project_validation))
