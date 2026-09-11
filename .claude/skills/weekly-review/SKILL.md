@@ -92,6 +92,13 @@ added `doorsPayload`, `lastDoorsRevision` and `showDoors` to the ~44 mutable
 globals in the page. The computation migrates; the state does not. Note it when
 it happens rather than re-discovering the pile later.
 
+That pile was paid down once, and the way it had gone wrong is the reason to
+keep asking. By 2026-09-11 there were four copies of the doors poll's state and
+exchange — doors, windows, FF&E, spaces — and the tick where rooms answered 304
+still asked doors alone, so the three later layers went unpolled on every quiet
+tick. They now live in `src-js/viewer/entityPoll.ts`. Parallel globals that
+differ only in an entity name are the shape to look for.
+
 ### 3. Is a newly-long module missing its "decided, not deferred" header?
 
 `CODING-CONVENTIONS.md:54-57` asks that a module which stays whole past the

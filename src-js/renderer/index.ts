@@ -10,6 +10,13 @@
 // change moves the module it touches into `src-js/`. This file grows as that
 // happens — it is not meant to stay this size, but it is meant to stay
 // deliberate.
+//
+// **Not only the renderer any more, despite the name.** Modules that leave
+// `index.html` for `src-js/viewer/` are published through this same global rather
+// than a second one: Vite's IIFE library build takes one entry, so a second
+// global is a second build config and a second committed artifact under the CI
+// freshness gate, for a name. Renaming `PlanRenderer` would touch every call site
+// for no change in behaviour.
 
 export { resolveRoomAppearance, roomClassName, holeClassName } from "./appearance.js";
 export {
@@ -29,6 +36,7 @@ export { buildDoorGlyph, FALLBACK_GLYPH_SIZE, MIN_FOOTPRINT_EXTENT } from "./gl/
 export { buildWindowGlyph } from "./gl/windowGlyph.js";
 export { buildItemGlyph, MARKER_SIZE } from "./gl/itemGlyph.js";
 export { parseColour, readPalette, withAlpha } from "./gl/colour.js";
+export { EntityPoll, conditionalHeaders, pollInOrder, repaints } from "../viewer/entityPoll.js";
 
 export type { PaintOptions } from "./svg/paint.js";
 export type { Placed, StoreyMatch, StoreyResult } from "./storey.js";
@@ -38,6 +46,7 @@ export type { WindowGlyph } from "./gl/windowGlyph.js";
 export type { ItemGlyph } from "./gl/itemGlyph.js";
 export type { PickableDoor } from "./gl/spatial.js";
 export type { HighlightState, PaintRequest, Pick, PlanRenderer } from "./seam.js";
+export type { EntityPollOptions, FetchState, PollFetch, PollOutcome, PollResponse } from "../viewer/entityPoll.js";
 export type {
   AppearanceContext,
   ClassificationTier,

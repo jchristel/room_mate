@@ -136,6 +136,7 @@ MODULES = {
     "js_viewport": ["src-js/renderer/gl/viewport.ts"],
     "js_colour": ["src-js/renderer/gl/colour.ts"],
     "js_paint": ["src-js/renderer/svg/paint.ts"],
+    "js_poll": ["src-js/viewer/entityPoll.ts"],
     "p_index": ["static/index.html"],
     "p_settings": ["static/settings.html"],
     "p_comparison": ["static/comparison.html"],
@@ -167,6 +168,7 @@ SIBLING_TESTS = {
     "js_spatial": "src-js/renderer/gl/spatial.test.ts",
     "js_viewport": "src-js/renderer/gl/viewport.test.ts",
     "js_paint": "src-js/renderer/svg/paint.test.ts",
+    "js_poll": "src-js/viewer/entityPoll.test.ts",
 }
 
 
