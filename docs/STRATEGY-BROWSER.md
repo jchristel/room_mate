@@ -184,8 +184,11 @@ The goal is a richer browser tool run locally, not a desktop app.
 - **A build step is not a framework.** Vite + TypeScript over `src-js/` emits
   one committed IIFE the viewer calls, and a second Vite config
   (`vite.settings-preview.config.ts`) builds the React settings page into
-  `static/settings-preview/`. The viewer and the other two pages still have no
-  component model, router or store.
+  `static/settings-preview/`, which is what the other pages' `settings` links
+  open. `static/settings.html` is kept as the fallback and links forward to it —
+  deleting it is a separate decision, and the day it happens the two stop being
+  comparable. The viewer and the other two pages still have no component model,
+  router or store.
 
 - **Which signal actually fired is worth knowing, because it was not the
   predicted one.** The advice was "grow the vanilla JS until it hurts", and the

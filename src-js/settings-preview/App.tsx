@@ -1,5 +1,6 @@
-// The settings page, in React — served at /settings-preview/, beside
-// static/settings.html, which stays the real page until this one replaces it.
+// The settings page, in React — served at /settings-preview/, and what the
+// viewer's and the comparison page's "settings" links now open.
+// static/settings.html is kept as the fallback and links forward to this one.
 //
 // It is the half of the 2026-09-11 framework comparison that won (the result and
 // its measurements are in STRATEGY-BROWSER.md, "UI growth"), now grown from one
@@ -263,8 +264,8 @@ export function App() {
     <>
       <header>
         <h1>Room Plan · Settings</h1>
-        <span className="preview">React preview</span>
-        <a href="/settings.html">current settings page</a>
+        <span className="preview">React</span>
+        <a href="/settings.html">old settings page</a>
         <a href="/">← viewer</a>
       </header>
       <main>

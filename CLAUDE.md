@@ -290,7 +290,10 @@ npm run typecheck && npm test && npm run build
 with no node installed), and `.github/workflows/frontend.yml` rebuilds it and
 fails if the committed copy disagrees. Forgetting it means a red PR, or worse a
 green one serving a stale renderer. The same build, and the same gate, cover
-`static/settings-preview/` — the React settings page.
+`static/settings-preview/` — the React settings page, which the viewer's and the
+comparison page's `settings` links now open. `static/settings.html` is still
+there as the fallback, and is the one that drops a milestone's non-room pins on
+save; prefer the React page when editing a real project.
 
 **Changed a settings type in `crates/roommate-shared`?** `cargo test` rewrites
 the TypeScript the settings page reads (`src-js/settings-preview/generated/`,
