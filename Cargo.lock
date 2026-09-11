@@ -1346,6 +1346,7 @@ dependencies = [
  "geo",
  "reqwest",
  "rmcp",
+ "roommate-shared",
  "serde",
  "serde_json",
  "tokio",
@@ -1356,6 +1357,16 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "roommate-shared"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "toml",
 ]
 
 [[package]]

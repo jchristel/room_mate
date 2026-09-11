@@ -44,8 +44,10 @@ IGNORE_FILE = Path(__file__).resolve().parent / "weekly_review_ignore.toml"
 
 # Where a symbol may live. Docs cite Rust types, TypeScript renderer internals,
 # viewer globals and extractor functions interchangeably, so a check that read
-# only `src/` would report every frontend and pyRevit symbol as dead.
-SOURCE_TREES = ("src", "src-js", "static", "extractor", "scripts")
+# only `src/` would report every frontend and pyRevit symbol as dead. `crates`
+# holds `roommate-shared` — the settings types and `RoomBoundary` among them —
+# which the docs still cite as freely as anything in `src/`.
+SOURCE_TREES = ("src", "crates", "src-js", "static", "extractor", "scripts")
 SOURCE_SUFFIXES = {".rs", ".ts", ".js", ".py", ".html"}
 
 # Generated, and megabytes of minified vendor code: it would match almost any
@@ -339,22 +341,29 @@ def check_long_modules(findings: Findings, ignores: dict) -> None:
 
     So the question asked here is the one the *rule* cares about — which modules
     are over the trigger and have not been judged — and the answer comes from
-    `src/`. Being over it is **not a defect**; the trigger is "worth a second
-    look", not a limit. A module judged and kept whole goes in
+    `src/` and `crates/`. Being over it is **not a defect**; the trigger is
+    "worth a second look", not a limit. A module judged and kept whole goes in
     `weekly_review_ignore.toml` under `[modules]` with the reason, exactly as a
     benign symbol does, and the rule asks that the same reason live in the
     module header where the next reader of that file will find it.
+
+    `crates/` is measured too, because a module that moves there has not stopped
+    being a module: the settings types left `src/` whole, 1,700 lines of them,
+    and reading `src/` alone would have quietly dropped them from this list the
+    day they moved. An ignore key is relative to its tree, so `src/` keys
+    (`contract/mod.rs`) read exactly as they always have.
     """
     skip = ignores.get("modules", {})
     hits: list[str] = []
 
-    for path in sorted((ROOT / "src").rglob("*.rs")):
-        rel = path.relative_to(ROOT / "src").as_posix()
-        if rel in skip:
-            continue
-        count = real_lines(path)
-        if count > SPLIT_TRIGGER:
-            hits.append(f"src/{rel:<28} ~{count} real lines -- split candidate, or record why not")
+    for tree in ("src", "crates"):
+        for path in sorted((ROOT / tree).rglob("*.rs")):
+            rel = path.relative_to(ROOT / tree).as_posix()
+            if rel in skip:
+                continue
+            count = real_lines(path)
+            if count > SPLIT_TRIGGER:
+                hits.append(f"{tree}/{rel:<28} ~{count} real lines -- split candidate, or record why not")
 
     findings.add(
         "Modules past the ~500-line split trigger, unjudged",

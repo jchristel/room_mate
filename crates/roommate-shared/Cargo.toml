@@ -1,0 +1,22 @@
+[package]
+name = "roommate-shared"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+# The dependency list IS this crate's contract: nothing that needs a socket, a
+# filesystem or a runtime. See the header of src/lib.rs before adding a line.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+anyhow = "1"
+# Parsing only. Nothing here asks what time it is, so the default `clock`
+# feature — the part that reaches for the OS — stays off. The server keeps its
+# own full-featured `chrono` for `Utc::now`.
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+# The settings tests round-trip real project files, and project files are TOML.
+toml = "0.8"
