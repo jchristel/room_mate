@@ -34,7 +34,7 @@
 // instead. Same call site, two implementations — which is the entire point of
 // having a seam.
 
-import type { Door, Item, Rect, Room, Space, WindowOpening } from "./types.js";
+import type { Ceiling, Door, Item, Rect, Room, Space, WindowOpening } from "./types.js";
 
 /** Search state, applied WITHOUT a re-render. Preserving that property is an
  *  explicit obligation: a search can match thousands of rooms, and a keystroke
@@ -104,6 +104,20 @@ export interface PaintRequest {
   spaces?: readonly Space[] | undefined;
   /** Whether to draw them. Absent means yes when `spaces` is non-empty. */
   showSpaces?: boolean | undefined;
+
+  /**
+   * Ceilings for this level, drawn as DASHED outlines over the rooms.
+   *
+   * The fifth list, and the second that is not a glyph. It differs from
+   * `spaces` in what the reader is being asked to compare: a space is a
+   * services boundary held up against the architecture, so it draws in the
+   * accent; a ceiling IS the architecture, so it draws in the room ink and is
+   * told apart from the room outline underneath it by the dash rather than by
+   * colour.
+   */
+  ceilings?: readonly Ceiling[] | undefined;
+  /** Whether to draw them. Absent means yes when `ceilings` is non-empty. */
+  showCeilings?: boolean | undefined;
 }
 
 /**

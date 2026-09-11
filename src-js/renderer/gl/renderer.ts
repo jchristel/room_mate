@@ -24,7 +24,7 @@ import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
 import { flip, pointsAttr } from "../geometry.js";
 import type { HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
-import type { Door, Item, Rect, Room, Space, WindowOpening } from "../types.js";
+import type { Ceiling, Door, Item, Rect, Room, Space, WindowOpening } from "../types.js";
 import { parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
 import { buildLabels, type RoomLabel } from "./labels.js";
@@ -43,6 +43,10 @@ const W_MATCH = 3;
 const W_HOLE = 1;
 /** `stroke-dasharray: 4 3` on `.hole`. */
 const HOLE_DASH: readonly [number, number] = [4, 3];
+/** The ceiling outline's dash. Longer than `HOLE_DASH` on purpose: a hole and a
+ *  ceiling can sit on the same plan, and two dashes a pixel apart in period read
+ *  as one pattern drawn badly rather than as two different things. */
+const CEILING_DASH: readonly [number, number] = [6, 4];
 /** `.dim { opacity: 0.15 }`. */
 const DIM_ALPHA = 0.15;
 /** The door footprint's fill, as an alpha over the ink colour. Light enough
@@ -137,6 +141,7 @@ export class GlPlanRenderer implements PlanRenderer {
   #holeLines: LineMesh | null = null;
   #outlines: LineMesh | null = null;
   #spaceLines: LineMesh | null = null;
+  #ceilingLines: LineMesh | null = null;
   #labelContainer: Container | null = null;
   #labels: RoomLabel[] = [];
 
@@ -266,6 +271,13 @@ export class GlPlanRenderer implements PlanRenderer {
     const opts = this.#lastPaint;
     if (opts.showSpaces === false) return [];
     return opts.spaces ?? [];
+  }
+
+  /** The ceilings this paint was given, after the `showCeilings` toggle. */
+  #activeCeilings(): readonly Ceiling[] {
+    const opts = this.#lastPaint;
+    if (opts.showCeilings === false) return [];
+    return opts.ceilings ?? [];
   }
 
   /** The windows this paint was given, after the `showWindows` toggle. */
@@ -602,6 +614,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#holeLines?.destroy();
     this.#outlines?.destroy();
     this.#spaceLines?.destroy();
+    this.#ceilingLines?.destroy();
     this.#labelContainer?.destroy({ children: true });
     this.#grid = null;
     this.#fills = null;
@@ -612,6 +625,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#holeLines = null;
     this.#outlines = null;
     this.#spaceLines = null;
+    this.#ceilingLines = null;
     this.#labelContainer = null;
   }
 
@@ -815,6 +829,32 @@ export class GlPlanRenderer implements PlanRenderer {
     }
     this.#spaceLines = spaceBatch.isEmpty ? null : spaceBatch.build();
 
+    // Ceilings: one dashed ring per ceiling, over the rooms.
+    //
+    // Filtered by the CALLER, exactly as spaces are, and for a related but not
+    // identical reason. A ceiling normally shares its model with the rooms, so
+    // its level ids would often match -- but "often" is the problem: the caller
+    // already resolves the storey by name and elevation through `onStorey`,
+    // which is the rule that survives a model whose ids do not line up. Doing
+    // it again here, differently, is how the openings layer used to lose whole
+    // models.
+    //
+    // Ink rather than the accent, and dashed: a space is a services boundary
+    // being compared against the architecture, while a ceiling IS the
+    // architecture. The dash is what separates it from the room outline it sits
+    // directly on top of.
+    //
+    // A ceiling with no `loops` draws nothing -- one duHast could not measure.
+    // It is still counted and still attributed to no room by the server, which
+    // is where that state is visible; a plan cannot show an absent polygon.
+    const ceilingBatch = new LineBatch();
+    for (const ceiling of this.#activeCeilings()) {
+      const outer = ceiling.loops?.[0];
+      if (!outer?.points?.length) continue;
+      ceilingBatch.push(ringSegments(outer.points.map(flip)), pal.ink, W_OUTLINE);
+    }
+    this.#ceilingLines = ceilingBatch.isEmpty ? null : ceilingBatch.build({ dash: CEILING_DASH });
+
     // Paint order is child order, and it mirrors the SVG document exactly:
     // grid behind, then fills, then the strokes that sit on them, then labels.
     if (this.#grid) { this.#grid.mesh.label = "grid"; this.#root.addChild(this.#grid.mesh); }
@@ -823,6 +863,10 @@ export class GlPlanRenderer implements PlanRenderer {
     if (this.#outlines) { this.#outlines.mesh.label = "outlines"; this.#root.addChild(this.#outlines.mesh); }
     // Above the room outlines so a coincident boundary shows the space, and
     // below the openings so a door glyph is never hidden by one.
+    // Below the spaces overlay: where both are on, the reader turned spaces on
+    // to compare them against the architecture, so the services line is the one
+    // that must stay legible where the two coincide.
+    if (this.#ceilingLines) { this.#ceilingLines.mesh.label = "ceilings"; this.#root.addChild(this.#ceilingLines.mesh); }
     if (this.#spaceLines) { this.#spaceLines.mesh.label = "spaces"; this.#root.addChild(this.#spaceLines.mesh); }
     // Above the outlines, so a glyph is never cut by the wall line it sits in,
     // and above the hover mesh, so hovering a room cannot hide its doors. Below
@@ -1098,6 +1142,8 @@ export class GlPlanRenderer implements PlanRenderer {
     // builds, joins the stage and draws with an uninitialised view, which is to
     // say nowhere.
     this.#spaceLines?.setView(eff, devW, devH, dpr);
+    // A LINE mesh, so it takes the dpr here for the reason the spaces one does.
+    this.#ceilingLines?.setView(eff, devW, devH, dpr);
     for (const mesh of this.#worldMeshes()) mesh.setView(eff, devW, devH);
     // Labels live in world space, so the scene transform carries them. This is
     // the ONE place a container transform is used, and it is correct here

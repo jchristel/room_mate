@@ -667,6 +667,7 @@
     <button class="ctl on" id="ffeToggle" title="Show or hide furniture, fixtures and equipment">FF&amp;E: on</button>
     <button class="ctl" id="spacesToggle" title="Show or hide MEP space outlines over the rooms">Spaces: off</button>
     <select class="ctl" id="spacesModelSelect" hidden title="Which services model's spaces to draw"></select>
+    <button class="ctl" id="ceilingsToggle" title="Show or hide ceiling outlines over the rooms">Ceilings: off</button>
     <div class="search">
       <input id="searchInput" type="search" placeholder="Search rooms…" autocomplete="off" />
       <button class="ctl" id="fieldsToggle" title="Choose which fields to search">Fields ▾</button>
@@ -890,7 +891,21 @@ const spacesPoll = new EntityPoll({
 });
 // Every tick asks all four, whatever the rooms read answered. The order is the
 // order they were always asked in; nothing depends on it.
-const ELEMENT_POLLS = [doorsPoll, windowsPoll, ffePoll, spacesPoll];
+// Ceilings: a SIXTH list, and the second that is not a glyph layer -- a ceiling
+// is room-shaped, so it draws as an outline over the rooms.
+//
+// Gated on its toggle like spaces, and for the same reason rather than by
+// imitation: it overlays the rooms it sits on, so it starts off and a reader
+// turns it on to answer a specific question -- "which rooms are ceiled, and
+// where does the ceiling stop". Polling a hidden overlay would cost every
+// viewer of every project a read for a question most of them are not asking.
+//
+// No model picker, unlike spaces. That picker exists because RHH keeps one
+// services file per service, so an unscoped spaces read stacks four
+// near-identical outlines on every room. Ceilings live in the same model as
+// their rooms, and `/ceilings` takes no `?model=` at all.
+const ceilingsPoll = new EntityPoll({ url: ceilingsUrl, enabled: () => showCeilings });
+const ELEMENT_POLLS = [doorsPoll, windowsPoll, ffePoll, spacesPoll, ceilingsPoll];
 // Which services model's spaces to draw. "" means ALL of them, and it is the
 // default -- but on a real project it is rarely what anyone wants: RHH has one
 // services file per service, so "all" stacks four near-identical outlines on
@@ -959,6 +974,8 @@ let showWindows = true;
 let showFfe = true;
 // Starts OFF -- see `spacesPoll`.
 let showSpaces = false;
+// Starts OFF -- see `ceilingsPoll`.
+let showCeilings = false;
 
 // Global room search (see the "search" section lower down): one query + one set
 // of enabled field keys, applied to every zone. `searchFields` empty means "not
@@ -1515,6 +1532,8 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       showFfe,
       spaces: spacesForPlan(levelId),
       showSpaces,
+      ceilings: ceilingsForPlan(levelId),
+      showCeilings,
     });
     // Immediately after the paint, because only the paint knows how each layer's
     // storey resolved -- and inside the deferred callback, because that is where
@@ -4327,6 +4346,18 @@ function spacesUrl() {
   return qs ? `/spaces?${qs}` : "/spaces";
 }
 
+// The /ceilings URL. No `?model=` and no `?building=`: the server offers
+// neither. A ceiling has no building, because a ceiling's building would come
+// from the rooms it lies over and that is a list rather than a scope -- a
+// ceiling spanning two rooms in two buildings has no single one.
+function ceilingsUrl() {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project", projectId);
+  if (projectId && milestone) params.set("milestone", milestone);
+  const qs = params.toString();
+  return qs ? `/ceilings?${qs}` : "/ceilings";
+}
+
 // Refill the picker from the models the last UNSCOPED payload named.
 //
 // Hidden below two models: a control that cannot change the answer is noise,
@@ -4368,7 +4399,7 @@ function syncSpacesModelVisibility() {
 // answer was a guess. A fallback nobody can see is the failure mode this area
 // keeps producing — a reader switches a layer on, sees the wrong thing, and has
 // no way to tell the layer from the data.
-const storeyMatch = { doors: "exact", windows: "exact", ffe: "exact", spaces: "exact" };
+const storeyMatch = { doors: "exact", windows: "exact", ffe: "exact", spaces: "exact", ceilings: "exact" };
 
 // The displayed level as an OBJECT, not an id: storey matching needs its name
 // and elevation. `null` when it cannot be resolved, which `onStorey` treats as
@@ -4408,6 +4439,12 @@ function spacesForPlan(levelId) {
   return elementsOnStorey("spaces", spacesPoll.payload, "spaces", levelId);
 }
 
+// The ceilings on one storey. The same generalised join every other layer uses
+// -- name plus elevation, never a raw level id.
+function ceilingsForPlan(levelId) {
+  return elementsOnStorey("ceilings", ceilingsPoll.payload, "ceilings", levelId);
+}
+
 // The layer toggles' labels, each carrying its storey-match state so a fallback
 // cannot go unnoticed. All four, not just spaces: the openings were resolving by
 // id and silently dropping whole models, which is the same class of invisible
@@ -4417,6 +4454,7 @@ const LAYER_TOGGLES = [
   ["windows", "windowsToggle", "Windows", () => showWindows],
   ["ffe", "ffeToggle", "FF&E", () => showFfe],
   ["spaces", "spacesToggle", "Spaces", () => showSpaces],
+  ["ceilings", "ceilingsToggle", "Ceilings", () => showCeilings],
 ];
 
 function syncLayerToggleLabels() {
@@ -4962,6 +5000,23 @@ document.getElementById("spacesToggle").addEventListener("click", async (e) => {
   // AFTER the redraw: the label reports what the paint actually did, and only
   // the paint knows whether the elevation resolved.
   syncSpacesToggleLabel();
+});
+
+// Ceilings toggle. FETCHES on the way on, like spaces and for the same reason:
+// the layer does not poll while hidden, so the first paint after switching it on
+// would otherwise be empty until the next tick came round.
+//
+// No model-picker sync, which is the one line the spaces handler has and this
+// does not -- see `ceilingsPoll`.
+document.getElementById("ceilingsToggle").addEventListener("click", async (e) => {
+  showCeilings = !showCeilings;
+  e.target.classList.toggle("on", showCeilings);
+  // A no-op on the way off: the poll is gated on `showCeilings`.
+  await ceilingsPoll.poll();
+  redrawAllZones();
+  // AFTER the redraw: the label reports what the paint actually did, and only
+  // the paint knows how the storey resolved.
+  syncLayerToggleLabels();
 });
 
 // Changing the scope is a REFETCH, not a client-side filter, and deliberately:
