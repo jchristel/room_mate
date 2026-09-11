@@ -115,9 +115,16 @@ MODULES = {
     "storage": ["src/storage/mod.rs"],
     "storage_fs": ["src/storage/fs.rs"],
     "storage_mem": ["src/storage/mem.rs"],
-    "settings": ["src/settings/mod.rs"],
+    # The settings TYPES live in roommate-shared; `src/settings/mod.rs` is now a
+    # short re-export and has no cell of its own.
+    "shared": [
+        "crates/roommate-shared/src/lib.rs",
+        "crates/roommate-shared/src/contract.rs",
+        "crates/roommate-shared/src/settings_api.rs",
+    ],
+    "settings": ["crates/roommate-shared/src/settings/mod.rs"],
     "settings_load": ["src/settings/load.rs"],
-    "settings_validate": ["src/settings/validate.rs"],
+    "settings_validate": ["crates/roommate-shared/src/settings/validate.rs"],
     # ---- browser
     "js_index": ["src-js/renderer/index.ts"],
     "js_seam": ["src-js/renderer/seam.ts"],

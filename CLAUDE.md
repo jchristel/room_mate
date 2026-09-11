@@ -289,7 +289,14 @@ npm run typecheck && npm test && npm run build
 **generated file that is committed** (so a fresh clone plus `cargo run` works
 with no node installed), and `.github/workflows/frontend.yml` rebuilds it and
 fails if the committed copy disagrees. Forgetting it means a red PR, or worse a
-green one serving a stale renderer.
+green one serving a stale renderer. The same build, and the same gate, cover
+`static/settings-react/` — the React preview of the settings page.
+
+**The UI framework is React, and that was measured, not preferred.** Rust+WASM
+(Leptos) was built against the same slice and lost, chiefly because a committed
+wasm cannot be reproduced across Windows and Linux. The numbers and what would
+reopen it are in STRATEGY-BROWSER.md's "UI growth" — read that before proposing
+Leptos or Dioxus again.
 
 ## House rules the code won't tell you
 

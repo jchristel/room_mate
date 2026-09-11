@@ -578,7 +578,7 @@
     bootstrap: [191, 580, 105, 257],
     check_areas: [311, 496, 99, 0],
     classify: [42, 266, 56, 158],
-    contract: [335, 1560, 537, 633],
+    contract: [372, 1584, 534, 617],
     contract_doors: [106, 415, 127, 163],
     contract_ffe: [106, 365, 99, 141],
     contract_items: [33, 411, 232, 127],
@@ -631,10 +631,11 @@
     probes: [3139, 5280, 1384, 0],
     reference: [85, 310, 93, 112],
     room_mate: [131, 439, 227, 0],
-    settings: [449, 1737, 889, 298],
-    settings_api: [397, 1501, 223, 827],
+    settings: [452, 1775, 921, 299],
+    settings_api: [376, 1466, 209, 829],
     settings_load: [67, 287, 37, 170],
     settings_validate: [80, 340, 57, 195],
+    shared: [44, 173, 96, 20],
     state: [379, 899, 375, 69],
     storage: [134, 665, 440, 46],
     storage_fs: [547, 1758, 232, 906],
@@ -953,7 +954,7 @@
     {
       id: "contract", name: "contract/mod.rs", path: "src/contract/mod.rs", zone: "core", lang: "Rust",
       blurb: "The shape of the data and nothing else — no I/O, no state, no handlers. Property lookup lives here because it inspects the tiers, so both consumers depend on the contract rather than on each other. Ids ride as strings on the wire and are parsed to i64 only here, where the width is safe.",
-      deps: ["settings"]
+      deps: ["settings", "shared"]
     },
     {
       id: "contract_openings", name: "contract/openings.rs", path: "src/contract/openings.rs", zone: "core", lang: "Rust",
@@ -1020,9 +1021,14 @@
 
     // ---- server: config
     {
-      id: "settings", name: "settings/mod.rs", path: "src/settings/mod.rs", zone: "config", lang: "Rust",
-      blurb: "Config a human hand-edits (hence TOML, with comments); the data it points at stays JSON. Everything resolves once at startup and fails fast — better a loud startup error than a surprise on the first request. The tagged ReferenceOrigin enum is the seam that keeps a future file→API swap loader-only.",
-      deps: ["contract"]
+      id: "shared", name: "roommate-shared lib.rs + contract.rs", path: "crates/roommate-shared/src/lib.rs", zone: "config", lang: "Rust",
+      blurb: "Types a consumer outside the server needs, with none of the server's runtime attached. Its dependency list is its contract — nothing that needs a socket, a filesystem or a runtime — and its module paths mirror the server's, so moving a type in changed no caller. Holds RoomBoundary and validate_snapshot_id only because settings validation needs both.",
+      deps: []
+    },
+    {
+      id: "settings", name: "shared settings/mod.rs", path: "crates/roommate-shared/src/settings/mod.rs", zone: "config", lang: "Rust",
+      blurb: "Config a human hand-edits (hence TOML, with comments); the data it points at stays JSON. Everything resolves once at startup and fails fast — better a loud startup error than a surprise on the first request. In roommate-shared, away from the server's runtime; the server's settings/mod.rs is a glob re-export plus the loaders.",
+      deps: ["shared"]
     },
     {
       id: "settings_load", name: "settings/load.rs", path: "src/settings/load.rs", zone: "config", lang: "Rust",
@@ -1030,7 +1036,7 @@
       deps: ["settings"]
     },
     {
-      id: "settings_validate", name: "settings/validate.rs", path: "src/settings/validate.rs", zone: "config", lang: "Rust",
+      id: "settings_validate", name: "shared settings/validate.rs", path: "crates/roommate-shared/src/settings/validate.rs", zone: "config", lang: "Rust",
       blurb: "The checks that are not a single type's own validate(): “what a field is” and “is this whole declaration coherent” stay legible apart.",
       deps: ["settings"]
     },

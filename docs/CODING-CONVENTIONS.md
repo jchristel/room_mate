@@ -34,11 +34,12 @@ Three modules carry a recorded judgement today. The rest of the backlog is
 whatever the check reports; two of them are worth naming because the answer is
 known and only the writing-down is missing:
 
-- **`settings/mod.rs` reads as unfinished.** The `settings/` split was done — it
-  is the worked example above — yet `mod.rs` kept the bulk rather than becoming
-  the thin re-export the pattern describes. The types are already grouped by
-  concern in the file (area policy, reference field config, hierarchy,
-  milestones, colour plans), so the seams exist.
+- **`roommate-shared`'s `settings/mod.rs` reads as unfinished.** The server's
+  `src/settings/mod.rs` is now the thin re-export the pattern describes, but
+  only because the types moved out *whole* into `crates/roommate-shared` — the
+  bulk moved with them rather than being split.
+  The types are already grouped by concern in the file (area policy, reference
+  field config, hierarchy, milestones, colour plans), so the seams exist.
 - **`areas.rs` and `rooms.rs` are cohesive by argument, not by accident** — one
   geometry pipeline and one assembly pipeline, each with an invariant only
   checkable by reading the parts together. That argument has never been written

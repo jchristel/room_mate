@@ -33,31 +33,10 @@ use crate::reference::load_reference_from_bytes;
 use crate::settings::{validate_reference_fields, ReferenceOrigin, Settings};
 use crate::state::{is_path_safe_component, AppState, SettingsRegistry, Shared};
 
-/// One project-settings file as the UI's list sees it. A file that fails to
-/// parse still gets a row (with `error` set) rather than breaking the whole
-/// list — the settings UI is exactly the tool you'd reach for to notice a
-/// rotten file, so it must stay usable when one exists.
-#[derive(Serialize)]
-pub struct ProjectFileSummary {
-    /// File name within the projects dir (not a full path).
-    pub file: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
-    /// The project's display name, absent when the file sets none — consumers
-    /// fall back to `project_id`. Carried on the summary so the pyRevit push
-    /// picker can both label a project and send `project.name` from one call
-    /// (see room_mate's `fetch_projects`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    pub is_default: bool,
-    /// Every reference source this file declares, by name — the list form of
-    /// what `drofus_configured: bool` used to answer for one hardcoded source.
-    /// A bool could only ever say "is dRofus there", which was already the
-    /// wrong question once a project could configure several.
-    pub reference_sources: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
+// The three wire shapes — the list row, a project read, a save answer — are
+// defined in `roommate_shared::settings_api`, beside the `Settings` they carry.
+// Re-exported so the handlers below and `bin/mcp.rs` name them as before.
+pub use roommate_shared::settings_api::{ProjectFileSummary, ProjectSettingsResponse, SaveResponse};
 
 /// Typed failure for the core functions; each transport maps it itself
 /// (HTTP below, MCP in `bin/mcp.rs`) — same seam discipline as `ServiceError`.
@@ -582,14 +561,6 @@ pub async fn http_list_projects(
     list_project_files(&dir).map(Json).map_err(to_http)
 }
 
-/// Wire shape of one project's settings: the parsed `Settings` plus which
-/// file it lives in.
-#[derive(Serialize)]
-pub struct ProjectSettingsResponse {
-    pub file: String,
-    pub settings: Settings,
-}
-
 /// `GET /api/settings/projects/{id}`
 pub async fn http_get_project(
     State(state): State<Shared>,
@@ -612,14 +583,6 @@ pub async fn http_get_project_resolved(
     let dir = require_dir(&state)?;
     let (file, settings) = resolve_project_file(&dir, &project_id).map_err(to_http)?;
     Ok(Json(ProjectSettingsResponse { file, settings }))
-}
-
-/// Save response: the settings as installed, plus the hot-reload confirmation
-/// the UI shows ("saved & applied live").
-#[derive(Serialize)]
-pub struct SaveResponse {
-    pub applied: bool,
-    pub settings: Settings,
 }
 
 /// `POST /api/settings/projects` (create)

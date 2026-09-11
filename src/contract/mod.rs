@@ -253,23 +253,11 @@ pub fn ensure_taken_at(snapshot: &mut Snapshot) -> bool {
     false
 }
 
-/// Whether a (non-blank) snapshot id is acceptable: it must parse as RFC3339
-/// AND be expressed in UTC (`Z` or `+00:00`). One rule covers everything the
-/// id must guarantee: it's a real date-time (the contract's definition of a
-/// snapshot id), it keeps the store's lexical-max-is-newest ordering sound (a
-/// non-UTC offset would sort wrongly against UTC neighbours), and it can't
-/// smuggle a path escape (no RFC3339 string contains `/`, `\`, or `..`) —
-/// which is why ingest needs no separate filename-safety check for it.
-pub fn validate_snapshot_id(taken_at: &str) -> Result<(), String> {
-    let parsed = chrono::DateTime::parse_from_rfc3339(taken_at)
-        .map_err(|e| format!("snapshot taken_at {taken_at:?} is not an RFC3339 date-time: {e}"))?;
-    if parsed.offset().local_minus_utc() != 0 {
-        return Err(format!(
-            "snapshot taken_at {taken_at:?} must be expressed in UTC (\"Z\" or \"+00:00\"), not a local offset"
-        ));
-    }
-    Ok(())
-}
+// Whether a (non-blank) snapshot id is acceptable. Defined — with its rationale
+// and its test — in `roommate_shared::contract`, because settings validation
+// enforces the same rule on milestone pins and the settings types live in that
+// crate. Re-exported so every ingest path still names it as a contract item.
+pub use roommate_shared::contract::validate_snapshot_id;
 
 /// Normalize a phase name off the wire: trim surrounding whitespace, and treat
 /// an all-whitespace name as absent. Every ingest path runs a pushed phase
@@ -424,37 +412,11 @@ impl ModelToShared {
     }
 }
 
-/// Where a model's room boundaries sit relative to their walls — Revit's
-/// `SpatialElementBoundaryLocation`, forwarded verbatim.
-///
-/// This is a **model fact, not a project policy**: Revit already knows it, and
-/// asking a human to re-assert it in TOML duplicates an authoritative value and
-/// invites getting it wrong. It rides the envelope per *model* rather than per
-/// project because a project legitimately mixes both — each linked model
-/// carries its own document setting.
-///
-/// It exists because `service::areas` otherwise has to *guess* which regime it
-/// is looking at, and sizes its morphological close for the worst case. Every
-/// footprint artifact chased so far — bevelled corners, 45° chamfers, the
-/// million-foot spike, sibling overlaps — is downstream of that guess. Declaring
-/// the regime does not merely improve the tolerance: on a centreline model the
-/// close radius collapses to zero and the entire artifact class cannot arise.
-/// The two regimes and what each implies are in `service::areas`' module
-/// header; what the resulting number may be *called* is
-/// STRATEGY-AREA-CALCULATION.md.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoomBoundary {
-    /// Neighbouring rooms tile edge-to-edge: their shared boundaries are
-    /// coincident and the gap between them is zero up to float noise. Nothing
-    /// needs bridging, and the walls are already inside the room polygons.
-    Centreline,
-    /// Rooms float inside their walls, so neighbours across a partition are
-    /// separated by roughly its thickness. The gap is real and positive, and
-    /// bridging it needs a declared thickness ceiling (`[areas]`
-    /// `max_wall_thickness`).
-    FinishFace,
-}
+// Where a model's room boundaries sit relative to their walls. Defined, with its
+// rationale, in `roommate_shared::contract`: `[areas] boundary_location` in the
+// project settings is one too, and the settings types live in that crate. It is
+// still a contract type, and every envelope below still carries it.
+pub use roommate_shared::contract::RoomBoundary;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomPayload {
@@ -1372,22 +1334,6 @@ mod tests {
         let mut supplied = Snapshot { taken_at: "2026-01-01T00:00:00Z".to_string() };
         assert!(!ensure_taken_at(&mut supplied));
         assert_eq!(supplied.taken_at, "2026-01-01T00:00:00Z");
-    }
-
-    /// The snapshot id rule: RFC3339, expressed in UTC. Non-dates (including
-    /// anything path-shaped) and non-UTC offsets are rejected; "Z" and
-    /// "+00:00" both count as UTC.
-    #[test]
-    fn test_validate_snapshot_id() {
-        assert!(validate_snapshot_id("2026-01-01T00:00:00Z").is_ok());
-        assert!(validate_snapshot_id("2026-01-01T00:00:00.123456Z").is_ok());
-        assert!(validate_snapshot_id("2026-01-01T00:00:00+00:00").is_ok());
-
-        assert!(validate_snapshot_id("2026-01-01T00:00:00+10:00").is_err());
-        assert!(validate_snapshot_id("not-a-date").is_err());
-        assert!(validate_snapshot_id("2026/01/01").is_err());
-        assert!(validate_snapshot_id("..\\..\\evil").is_err());
-        assert!(validate_snapshot_id("").is_err());
     }
 
     /// lookup_property resolves a canonical name to a source-specific raw

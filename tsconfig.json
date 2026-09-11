@@ -25,10 +25,13 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
+    // For the React preview of the settings page (src-js/settings-react/). The
+    // automatic runtime, so a .tsx file needs no `import React`.
+    "jsx": "react-jsx",
     // `node` is here for vite.config.ts alone (`node:path`,
     // `import.meta.dirname`). The renderer itself is browser code and must not
     // reach for a node API -- if one ever compiles, that is the signal.
     "types": ["vite/client", "node"]
   },
-  "include": ["src-js/**/*.ts", "vite.config.ts"]
+  "include": ["src-js/**/*.ts", "src-js/**/*.tsx", "vite.config.ts", "vite.settings-react.config.ts"]
 }
