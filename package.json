@@ -2,9 +2,9 @@
   "name": "roommate-frontend",
   "private": true,
   "type": "module",
-  "description": "Build for the viewer's plan renderer (docs/Superseded/PLAN-webgl-renderer.md), and the React preview of the settings page (vite.settings-react.config.ts).",
+  "description": "Build for the viewer's plan renderer (docs/Superseded/PLAN-webgl-renderer.md), and the React preview of the settings page (vite.settings-preview.config.ts).",
   "scripts": {
-    "build": "vite build && vite build --config vite.settings-react.config.ts",
+    "build": "vite build && vite build --config vite.settings-preview.config.ts",
     "dev": "vite",
     "// test": "--passWithNoTests until P1 lands the first suite; drop the flag then.",
     "test": "vitest run --passWithNoTests",

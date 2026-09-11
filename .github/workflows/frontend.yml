@@ -55,12 +55,12 @@ jobs:
     # The message names the fix because whoever trips this is usually someone
     # who edited src-js/ and never ran the build, not someone debugging CI.
     #
-    # static/settings-react/ is the React preview of the settings page, built by
+    # static/settings-preview/ is the React preview of the settings page, built by
     # the same `npm run build`. `git status --porcelain` rather than `git diff`
     # so a rebuild that ADDS a file the commit lacks is caught too.
     - name: Committed bundle is current
       run: |
-        changes="$(git status --porcelain -- static/vendor/ static/settings-react/)"
+        changes="$(git status --porcelain -- static/vendor/ static/settings-preview/)"
         if [ -n "$changes" ]; then
           echo "$changes"
           echo "::error::A committed frontend build is stale. Run 'npm run build' and commit the result."

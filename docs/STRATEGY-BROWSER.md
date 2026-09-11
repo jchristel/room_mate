@@ -183,11 +183,9 @@ The goal is a richer browser tool run locally, not a desktop app.
 
 - **A build step is not a framework.** Vite + TypeScript over `src-js/` emits
   one committed IIFE the viewer calls, and a second Vite config
-  (`vite.settings-react.config.ts`) builds a React preview of one slice of the
-  settings page into `static/settings-react/`. The live pages have no component
-  model, router or store. The preview is the worked example of how a React page
-  arrives — its own config, output committed, under `frontend.yml`'s freshness
-  gate — not a migration in progress.
+  (`vite.settings-preview.config.ts`) builds the React settings page into
+  `static/settings-preview/`. The viewer and the other two pages still have no
+  component model, router or store.
 
 - **Which signal actually fired is worth knowing, because it was not the
   predicted one.** The advice was "grow the vanilla JS until it hurts", and the
@@ -232,11 +230,12 @@ The goal is a richer browser tool run locally, not a desktop app.
   - **What survived:** `crates/roommate-shared`, the settings types and the
     settings API's wire shapes in a crate with no server dependencies.
 
-- **Open: generate the TypeScript wire types from `roommate-shared`**, rather
-  than hand-writing subsets as `src-js/renderer/types.ts` and the settings
-  preview's `types.ts` do. Not worth it while each subset is a handful of fields.
-  The signal is a page that needs most of a type, or a second page hand-writing
-  the same one.
+- **Open: generate the RENDERER's wire types too.** The settings tree is
+  generated (ts-rs, `crates/roommate-shared` → `src-js/settings-preview/
+  generated/`, gated in `rust.yml`); `src-js/renderer/types.ts` is still a
+  hand-written subset. It stays one while it is a handful of fields the renderer
+  actually touches — the signal is the one the settings page hit: a page that
+  needs *most* of a type.
 
 - **What would reopen Rust+WASM:** stable path trimming in cargo, so a committed
   wasm can pass the rebuild gate; or a need to run shared *logic* in the browser

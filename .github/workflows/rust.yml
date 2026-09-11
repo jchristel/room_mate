@@ -40,6 +40,24 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+
+    # The settings page reads TypeScript types GENERATED from the Rust ones
+    # (ts-rs, in roommate-shared), committed under src-js/settings-preview/
+    # generated/ so `npm run build` needs no Rust toolchain. `cargo test` above
+    # is what writes them, so by this point the tree already holds a fresh copy
+    # — any difference means the committed one is stale.
+    #
+    # ubuntu only, like clippy and fmt: the generator's output is
+    # platform-independent, and the Windows leg is here for behaviour.
+    - name: Committed TypeScript types are current
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        changes="$(git status --porcelain -- src-js/settings-preview/generated/)"
+        if [ -n "$changes" ]; then
+          echo "$changes"
+          echo "::error::src-js/settings-preview/generated/ is stale. Run 'cargo test' and commit the result."
+          exit 1
+        fi
     # Lints, gated. `--all-targets` so test code is covered too (most of this
     # crate's lines are inline `#[cfg(test)] mod tests`, and they drifted just
     # as far as the lib did before this ran).

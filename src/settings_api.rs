@@ -25,7 +25,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::bootstrap::{load_project_bundle, load_project_settings_dir};
 use crate::contract::{ensure_taken_at, validate_snapshot_id, Snapshot};
@@ -432,31 +432,11 @@ fn reload_and_swap(state: &AppState, projects_dir: &Path) -> Result<(), Settings
     }
 }
 
-/// Result of one dRofus CSV upload, echoed to the uploader. Carries the
-/// resolved snapshot id (minted when the request supplied none — same
-/// contract as rooms ingest) and the parsed CSV's headline facts so the
-/// settings UI can refresh its label dropdowns without a second call.
-#[derive(Debug, Serialize)]
-pub struct ReferenceUploadResult {
-    pub accepted: bool,
-    /// False when a dRofus snapshot with this `taken_at` already existed —
-    /// the upload was skipped (never overwritten), same duplicate rule as
-    /// rooms ingest.
-    pub stored: bool,
-    /// Records actually stored — **the deduplicated count**, which is why the
-    /// two fields below matter: a 200-row CSV with five repeated ids reports
-    /// 195 here, and without them nothing would say where the other five went.
-    pub record_count: usize,
-    /// Ids the CSV repeated; only the last row of each survived. Reported at
-    /// upload because that is the moment the operator is looking at the file.
-    pub duplicate_ids: Vec<String>,
-    /// Rows whose id cell was empty, skipped by the loader.
-    pub blank_id_rows: usize,
-    pub link_property: String,
-    pub labels: Vec<String>,
-    pub snapshot_taken_at: String,
-    pub snapshot_id_generated: bool,
-}
+// The upload's wire shape joins the other three in `roommate_shared::
+// settings_api`: the settings page reads it back after a CSV upload, so it is
+// generated into TypeScript with them rather than being the one wire type left
+// behind here.
+pub use roommate_shared::settings_api::ReferenceUploadResult;
 
 /// Store one uploaded CSV against a project's named reference source and
 /// hot-swap it into the running registry.

@@ -16,6 +16,14 @@ anyhow = "1"
 # feature — the part that reaches for the OS — stays off. The server keeps its
 # own full-featured `chrono` for `Utc::now`.
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+# Generates the TypeScript wire types the settings page reads, from these Rust
+# types, so the page cannot hold a second hand-written copy that drifts — the
+# open item STRATEGY-BROWSER.md records against the framework decision. The
+# generation itself runs as a test (`cargo test`), and the emitted files are
+# committed under src-js/settings-preview/generated/. Default features on:
+# `serde-compat` is what makes the output follow `rename_all`, `tag`, `flatten`
+# and `skip_serializing_if` rather than the Rust field names.
+ts-rs = "12.0.1"
 
 [dev-dependencies]
 # The settings tests round-trip real project files, and project files are TOML.

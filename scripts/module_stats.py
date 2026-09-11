@@ -144,6 +144,15 @@ MODULES = {
     "js_colour": ["src-js/renderer/gl/colour.ts"],
     "js_paint": ["src-js/renderer/svg/paint.ts"],
     "js_poll": ["src-js/viewer/entityPoll.ts"],
+    # The React settings page: its own cell as a GROUP, like `gen` and `probes`,
+    # because a section per settings block is the shape the page is meant to
+    # have — one cell per section would draw fifteen rooms that are one page.
+    # `generated/` is measured apart: it is emitted by ts-rs, and mixing written
+    # and generated lines in one width would say nothing about either.
+    "p_preview": sorted(glob.glob("src-js/settings-preview/*.ts"))
+    + sorted(glob.glob("src-js/settings-preview/*.tsx"))
+    + sorted(glob.glob("src-js/settings-preview/sections/*.tsx")),
+    "p_generated": sorted(glob.glob("src-js/settings-preview/generated/*.ts")),
     "p_index": ["static/index.html"],
     "p_settings": ["static/settings.html"],
     "p_comparison": ["static/comparison.html"],
