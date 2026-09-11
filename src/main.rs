@@ -386,7 +386,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         )
         .route("/projects/{id}/reference/{source}/snapshots", get(get_reference_snapshots))
         .route("/projects/{id}/reference/{source}/latest", get(get_reference_latest))
-        // Settings read/save API behind static/settings.html — see
+        // Settings read/save API behind the settings page (src-js/settings) — see
         // `settings_api`'s module doc for the save pipeline and trust model.
         .route("/api/settings/projects", get(http_list_projects).post(http_create_project))
         .route("/api/settings/projects/{id}", get(http_get_project).put(http_update_project))

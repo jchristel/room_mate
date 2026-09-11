@@ -1,5 +1,5 @@
 //! Project-settings read/save API: the machinery behind the settings UI
-//! (`static/settings.html`).
+//! (`src-js/settings/`, served at `/settings/`).
 //!
 //! Layout mirrors the codebase's handler/service split inside one module: a
 //! transport-agnostic core at the top (plain functions over `projects_dir`,
@@ -133,7 +133,7 @@ pub fn get_project_file(projects_dir: &Path, project_id: &str) -> Result<(String
 /// The viewer resolves colour plans by the *payload* project id (e.g.
 /// `"130486"`), which is not a settings `project_id` (e.g. `"Riverside ..."`),
 /// so the exact match 404s and it needs this fallback. The editors
-/// (`settings.html`, `comparison.html`) must NOT get the fallback — they GET and
+/// (the settings page, `comparison.html`) must NOT get the fallback — they GET and
 /// PUT the same path by the real `project_id`, and a silent default-fallback
 /// could load or overwrite the wrong file — which is why this is a separate
 /// function feeding a separate route rather than a change to `get_project_file`.
@@ -256,9 +256,10 @@ fn matching_entry<'a>(
 /// Fill a partial update from the file it is about to replace: any top-level
 /// key the request did not send keeps the value already on disk.
 ///
-/// **This exists because a save is a whole-file write and the settings page
-/// only edits part of a project.** `static/settings.html` has no controls for
-/// `[doors]`, `[areas]` or `hierarchy_exclusions` and never sends them, and
+/// **This exists because a save is a whole-file write and a page may edit only
+/// part of a project.** The hand-written `static/settings.html` this API was
+/// built for had no controls for `[doors]`, `[areas]` or `hierarchy_exclusions`
+/// and never sent them, and
 /// all three are `#[serde(default, skip_serializing_if = ...)]` — so an unsent
 /// section did not stay unedited, it was **deleted**, silently, by editing
 /// something unrelated. RHH lost `[doors] room_resolution = "same_model"` that
@@ -1034,8 +1035,8 @@ name = "Department"
 name_property = "Department"
 "#;
 
-    /// The regression this whole merge exists for: a body shaped like what
-    /// `settings.html` actually sends — no `doors` key anywhere — must not
+    /// The regression this whole merge exists for: a body shaped like what the
+    /// old `settings.html` sent — no `doors` key anywhere — must not
     /// delete `[doors]`. Before `merge_over_stored`, editing a room label
     /// silently dropped `room_resolution` and re-homeless'd 2084 RHH doors.
     #[test]

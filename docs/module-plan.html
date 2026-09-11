@@ -620,8 +620,7 @@
     p_generated: [135, 1199, 1002, 0],
     p_graph: [411, 721, 255, 0],
     p_index: [4957, 5346, 0, 0],
-    p_preview: [2595, 2909, 79, 64],
-    p_settings: [1259, 1351, 0, 0],
+    p_settings: [2599, 2913, 79, 64],
     p_tokens: [20, 22, 0, 0],
     post_common: [181, 504, 240, 0],
     post_doors: [28, 111, 67, 0],
@@ -634,7 +633,7 @@
     reference: [85, 310, 93, 112],
     room_mate: [131, 439, 227, 0],
     settings: [491, 1816, 923, 299],
-    settings_api: [365, 1446, 200, 829],
+    settings_api: [365, 1447, 201, 829],
     settings_load: [67, 287, 37, 170],
     settings_validate: [80, 340, 57, 195],
     shared: [62, 204, 108, 20],
@@ -1142,19 +1141,14 @@
       deps: ["p_common", "p_tokens", "p_bundle"]
     },
     {
-      id: "p_preview", name: "settings-preview/ (React)", path: "src-js/settings-preview/", zone: "pages", lang: "TypeScript + React",
-      blurb: "The settings page in React, served at /settings-preview/ and opened by the other pages' settings links; static/settings.html stays as the fallback. It edits every setting — including the seven that never had a UI: the coordinate anchor, the area policy, the door/window/FF&E/space policies and the hierarchy exclusions — and holds the whole settings object rather than rebuilding the JSON, which is why it cannot drop a milestone's door/window/FF&E/space/ceiling pins the way settings.html does.",
+      id: "p_settings", name: "settings/ (React)", path: "src-js/settings/", zone: "pages", lang: "TypeScript + React",
+      blurb: "The settings page, served at /settings/. It replaced a hand-written settings.html on 2026-09-12 and edits every setting — including the seven that page never showed: the coordinate anchor, the area policy, the door/window/FF&E/space policies and the hierarchy exclusions. It holds the whole settings object as read and sends it back, which is why it cannot silently empty a milestone's door/window/FF&E/space/ceiling pins the way its predecessor did. Mutation lives here and only here, which is what keeps the MCP server's read-only contract honest.",
       deps: ["p_generated", "p_common", "p_tokens"]
     },
     {
-      id: "p_generated", name: "settings-preview/generated/", path: "src-js/settings-preview/generated/", zone: "pages", lang: "TypeScript (generated)",
+      id: "p_generated", name: "settings/generated/", path: "src-js/settings/generated/", zone: "pages", lang: "TypeScript (generated)",
       blurb: "The settings tree as TypeScript, emitted from the Rust types by ts-rs and committed. Written by cargo test and gated in rust.yml: a Rust field added without re-running the tests is a red PR, and one added without a control on the page is a type error there.",
       deps: ["shared"]
-    },
-    {
-      id: "p_settings", name: "settings.html", path: "static/settings.html", zone: "pages", lang: "HTML + JS",
-      blurb: "The human UI behind the settings API — hierarchy tiers, reference sources, milestones, comparison fields. Mutation lives here and only here, which is what keeps the MCP server's read-only contract honest.",
-      deps: ["p_common", "p_tokens"]
     },
     {
       id: "p_comparison", name: "comparison.html", path: "static/comparison.html", zone: "pages", lang: "HTML + JS",

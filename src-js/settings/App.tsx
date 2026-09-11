@@ -1,6 +1,11 @@
-// The settings page, in React — served at /settings-preview/, and what the
-// viewer's and the comparison page's "settings" links now open.
-// static/settings.html is kept as the fallback and links forward to this one.
+// The settings page, in React — served at /settings/, and the only one there is.
+//
+// It replaced a hand-written `static/settings.html` on 2026-09-12. That page is
+// worth knowing about for one reason: it rebuilt the settings JSON field by
+// field on save, so it silently emptied every milestone's door, window, FF&E,
+// space and ceiling pins, and it could not show the seven settings it had no
+// controls for. This page holds the whole settings object as it was read and
+// sends it back, which is what makes both of those impossible here.
 //
 // It is the half of the 2026-09-11 framework comparison that won (the result and
 // its measurements are in STRATEGY-BROWSER.md, "UI growth"), now grown from one
@@ -264,8 +269,7 @@ export function App() {
     <>
       <header>
         <h1>Room Plan · Settings</h1>
-        <span className="preview">React</span>
-        <a href="/settings.html">old settings page</a>
+        <a href="/comparison.html">compare</a>
         <a href="/">← viewer</a>
       </header>
       <main>

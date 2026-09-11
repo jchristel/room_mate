@@ -290,13 +290,16 @@ npm run typecheck && npm test && npm run build
 with no node installed), and `.github/workflows/frontend.yml` rebuilds it and
 fails if the committed copy disagrees. Forgetting it means a red PR, or worse a
 green one serving a stale renderer. The same build, and the same gate, cover
-`static/settings-preview/` — the React settings page, which the viewer's and the
-comparison page's `settings` links now open. `static/settings.html` is still
-there as the fallback, and is the one that drops a milestone's non-room pins on
-save; prefer the React page when editing a real project.
+`static/settings/` — the React settings page, served at `/settings/`, and since
+2026-09-12 the only one: the hand-written `static/settings.html` it replaced is
+deleted. Two things that page did are worth remembering, because they are what
+the replacement is shaped to prevent — it rebuilt the settings JSON field by
+field on save (so it silently emptied every milestone's door, window, FF&E,
+space and ceiling pins), and it had no controls for seven settings, which is why
+`merge_over_stored` exists.
 
 **Changed a settings type in `crates/roommate-shared`?** `cargo test` rewrites
-the TypeScript the settings page reads (`src-js/settings-preview/generated/`,
+the TypeScript the settings page reads (`src-js/settings/generated/`,
 ts-rs), those files are committed, and `rust.yml` fails if the committed copy is
 stale. So a Rust field added without re-running the tests is a red PR — and a
 field added without a control on the page is a type error there, which is the

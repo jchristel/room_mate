@@ -149,12 +149,14 @@ MODULES = {
     # have — one cell per section would draw fifteen rooms that are one page.
     # `generated/` is measured apart: it is emitted by ts-rs, and mixing written
     # and generated lines in one width would say nothing about either.
-    "p_preview": sorted(glob.glob("src-js/settings-preview/*.ts"))
-    + sorted(glob.glob("src-js/settings-preview/*.tsx"))
-    + sorted(glob.glob("src-js/settings-preview/sections/*.tsx")),
-    "p_generated": sorted(glob.glob("src-js/settings-preview/generated/*.ts")),
+    #
+    # There is no `p_settings` any more: `static/settings.html` was the
+    # hand-written page this one replaced, and it is gone.
+    "p_settings": sorted(glob.glob("src-js/settings/*.ts"))
+    + sorted(glob.glob("src-js/settings/*.tsx"))
+    + sorted(glob.glob("src-js/settings/sections/*.tsx")),
+    "p_generated": sorted(glob.glob("src-js/settings/generated/*.ts")),
     "p_index": ["static/index.html"],
-    "p_settings": ["static/settings.html"],
     "p_comparison": ["static/comparison.html"],
     "p_graph": ["static/graph.js"],
     "p_common": ["static/common.js"],
