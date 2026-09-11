@@ -250,24 +250,18 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   appear, that guarantee broke upstream, and *that* is the signal to build
   this, not a preference for stronger keys.
 
-- **Ceilings: the viewer layer, the QA report and the pushbutton.** The entity
-  ships otherwise -- contract, ingest, storage, `/ceilings`, MCP tool, exporter
-  -- and what it proved is in `CLAUDE.md` and in `service::ceilings`. Three
-  pieces are genuinely absent rather than half-built:
+- **Ceilings: the QA report.** The entity ships otherwise -- contract, ingest,
+  storage, `/ceilings`, MCP tool, exporter, pyRevit button and the plan layer --
+  and what it proved is in `CLAUDE.md` and in `service::ceilings`.
 
-  - **No plan layer.** A ceiling is room-shaped, so it draws as an outline over
-    the rooms exactly as spaces do, and the storey join is the same name +
-    elevation rule. Ordinary unbuilt viewer work, blocked on nothing.
-  - **No QA report**, and the probe already calibrated what one must not say.
-    12 of House A's 32 rooms have no ceiling and almost all are external -- POOL,
-    DECK, DRIVEWAY, the `EX` suffix throughout -- so "room without a ceiling" is
-    mostly noise as a finding and needs a classification-aware filter before it
-    is worth reporting. The 6 ceilings matching no room are all one type
-    (`CLFS-550`), 4 of them on a level carrying no rooms: a type-level pattern,
-    not six anomalies. The report worth writing is the one that separates those
-    two shapes.
-  - **No pushbutton.** `ceilings_export_entry` is reachable from code and not
-    from the ribbon; the other six have buttons.
+  What is absent is the report, and the probe already calibrated what one must
+  NOT say. 12 of House A's 32 rooms have no ceiling and almost all are external
+  -- POOL, DECK, DRIVEWAY, the `EX` suffix throughout -- so "room without a
+  ceiling" is mostly noise as a finding and needs a classification-aware filter
+  before it is worth reporting. The 6 ceilings matching no room are all one type
+  (`CLFS-550`), 4 of them on a level carrying no rooms: a type-level pattern,
+  not six anomalies. The report worth writing is the one that separates those
+  two shapes.
 
   Two open questions, both waiting on a second measured project rather than on
   a decision. `MIN_OVERLAP_AREA` and `MIN_FRACTION_OF_CEILING` are constants

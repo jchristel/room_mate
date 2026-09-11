@@ -88,8 +88,8 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 
 ## Ceilings: the entity where geometry is the only answer
 
-Ceilings ship server-side and in the extractor (contract, ingest, storage,
-`/ceilings`, MCP, exporter). No viewer layer and no QA report yet.
+Ceilings ship end to end: contract, ingest, storage, `/ceilings`, MCP,
+exporter, pyRevit button and the plan layer. No QA report yet.
 
 - **A ceiling has no room parameter and a room has no ceiling parameter.** So
   the join is geometric or it does not exist. That inverts the precedence rule
@@ -138,6 +138,22 @@ Ceilings ship server-side and in the extractor (contract, ingest, storage,
   parameter itself. That is not the re-derivation this file forbids — there is
   no measurement to disagree about, only a rendering not to parse. The *level*
   is duHast's and must stay so; that one is the FF&E trap.
+- **The plan layer is a DASHED INK ring, and the contrast with spaces is the
+  point.** A space draws solid in the accent because it is a *services*
+  boundary being held up against the architecture; a ceiling IS the
+  architecture, so it draws in the room ink and is told apart from the room
+  outline directly beneath it by the dash rather than by colour. Ceilings sit
+  BELOW the spaces overlay in paint order: where both are on, the reader turned
+  spaces on to compare them, so the services line is the one that must stay
+  legible where the two coincide. Like spaces it defaults OFF and its poll is
+  gated on the toggle, because it overlays the rooms it sits on and polling a
+  hidden overlay would cost every viewer a read for a question most are not
+  asking. Unlike spaces it has no model picker -- that exists because RHH keeps
+  one services file per service, and `/ceilings` takes no `?model=` at all.
+- **No overlay layer reaches the SVG export, ceilings included.**
+  `svg/paint.ts` draws rooms and labels; doors, windows, FF&E, spaces and
+  ceilings are all GL-only. Pre-existing and not specific to this entity, but
+  worth knowing before promising an export that shows a ceiling.
 - **`/ceilings`' ETag cursor covers ROOMS as well as ceilings**, which no other
   entity read needs. Attribution derives from the rooms in scope, so a rooms
   push alone changes every answer and a ceilings-only cursor would serve a stale

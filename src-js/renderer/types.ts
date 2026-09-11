@@ -89,6 +89,36 @@ export interface Space {
 }
 
 /**
+ * One ceiling, as `/ceilings` returns it -- a SUBSET, on the same terms as
+ * `Room`.
+ *
+ * **Drawn as a dashed outline over the rooms**, for the reason `Space` is drawn
+ * as a ring: a ceiling covers the same ground as the room under it, so a second
+ * filled polygon would either hide the room or be hidden by it. It differs from
+ * the spaces layer in hue and in dash on purpose -- a space is a SERVICES
+ * boundary being compared against the architecture, while a ceiling is part of
+ * the architecture, so it reads in the room ink rather than the accent.
+ *
+ * `loops` is EMPTY for a ceiling duHast could not measure, so those draw
+ * nothing. That is the same stated limitation the spaces layer has, and it is
+ * why such a ceiling is exported at all rather than dropped: the server counts
+ * it and attributes it to no room, which is where it is visible.
+ */
+export interface Ceiling {
+  id: string;
+  level_id?: string;
+  loops?: Loop[];
+  /** The model the ceiling came from. Needed by `onStorey`, which joins a
+   *  storey by name + elevation against this model's own level list. */
+  model_id?: string;
+  /** Height above `level_id`, in decimal feet. Not drawn -- a plan has no axis
+   *  for it -- but carried so a reader inspecting a ceiling can tell a bulkhead
+   *  from the soffit nested inside it. */
+  height_offset?: number | null;
+  type_name?: string | null;
+}
+
+/**
  * One door, as `/doors` returns it — a SUBSET, on the same terms as `Room`.
  *
  * A door is not a room with different fields. The two that matter here:

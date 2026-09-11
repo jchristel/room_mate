@@ -49,6 +49,7 @@ export type { HighlightState, PaintRequest, Pick, PlanRenderer } from "./seam.js
 export type { EntityPollOptions, FetchState, PollFetch, PollOutcome, PollResponse } from "../viewer/entityPoll.js";
 export type {
   AppearanceContext,
+  Ceiling,
   ClassificationTier,
   Door,
   WindowOpening,
