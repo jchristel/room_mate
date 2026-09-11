@@ -19,7 +19,7 @@ use crate::settings::Settings;
 /// list — the settings UI is exactly the tool you'd reach for to notice a
 /// rotten file, so it must stay usable when one exists.
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
 pub struct ProjectFileSummary {
     /// File name within the projects dir (not a full path).
     pub file: String,
@@ -44,7 +44,7 @@ pub struct ProjectFileSummary {
 /// Wire shape of one project's settings: the parsed `Settings` plus which
 /// file it lives in.
 #[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
 pub struct ProjectSettingsResponse {
     pub file: String,
     pub settings: Settings,
@@ -55,7 +55,7 @@ pub struct ProjectSettingsResponse {
 /// contract as rooms ingest) and the parsed CSV's headline facts so the
 /// settings UI can refresh its label dropdowns without a second call.
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
 pub struct ReferenceUploadResult {
     pub accepted: bool,
     /// False when a snapshot with this `taken_at` already existed — the upload
@@ -79,7 +79,7 @@ pub struct ReferenceUploadResult {
 /// Save response: the settings as installed, plus the hot-reload confirmation
 /// the UI shows ("saved & applied live").
 #[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
 pub struct SaveResponse {
     pub applied: bool,
     pub settings: Settings,

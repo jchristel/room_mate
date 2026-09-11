@@ -183,12 +183,12 @@ The goal is a richer browser tool run locally, not a desktop app.
 
 - **A build step is not a framework.** Vite + TypeScript over `src-js/` emits
   one committed IIFE the viewer calls, and a second Vite config
-  (`vite.settings-preview.config.ts`) builds the React settings page into
-  `static/settings-preview/`, which is what the other pages' `settings` links
-  open. `static/settings.html` is kept as the fallback and links forward to it —
-  deleting it is a separate decision, and the day it happens the two stop being
-  comparable. The viewer and the other two pages still have no component model,
-  router or store.
+  (`vite.settings.config.ts`) builds the React settings page into
+  `static/settings/`, served at `/settings/`. The hand-written
+  `static/settings.html` it replaced was deleted on 2026-09-12, so the two are no
+  longer comparable — what they cost relative to each other is the table below,
+  measured while both existed. The viewer and the other two pages still have no
+  component model, router or store.
 
 - **Which signal actually fired is worth knowing, because it was not the
   predicted one.** The advice was "grow the vanilla JS until it hurts", and the
@@ -234,8 +234,8 @@ The goal is a richer browser tool run locally, not a desktop app.
     settings API's wire shapes in a crate with no server dependencies.
 
 - **Open: generate the RENDERER's wire types too.** The settings tree is
-  generated (ts-rs, `crates/roommate-shared` → `src-js/settings-preview/
-  generated/`, gated in `rust.yml`); `src-js/renderer/types.ts` is still a
+  generated (ts-rs, `crates/roommate-shared` → `src-js/settings/generated/`,
+  gated in `rust.yml`); `src-js/renderer/types.ts` is still a
   hand-written subset. It stays one while it is a handful of fields the renderer
   actually touches — the signal is the one the settings page hit: a page that
   needs *most* of a type.

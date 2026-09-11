@@ -3,9 +3,9 @@
 //
 // **Extracted because the sections repeat, not to abstract for its own sake.**
 // The page edits eleven sections and five of them are ordered lists with the
-// same ↑/↓/✕ controls; `static/settings.html` solves that with `rowControls` and
-// `textInput` helpers, and these are their typed equivalents. Anything used by
-// exactly one section stays in that section's file.
+// same ↑/↓/✕ controls; the `static/settings.html` this page replaced solved that
+// with `rowControls` and `textInput` helpers, and these are their typed
+// equivalents. Anything used by exactly one section stays in that section's file.
 //
 // Every input here is CONTROLLED and writes straight through to the settings
 // object the page holds. The one deliberate exception is `NumberInput`: a number

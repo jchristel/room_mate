@@ -126,7 +126,7 @@
     <select class="picker hidden" id="projectSelect"></select>
     <div class="links">
       <a href="/">viewer</a>
-      <a href="/settings-preview/">settings</a>
+      <a href="/settings/">settings</a>
     </div>
   </header>
   <main>
@@ -178,7 +178,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-// --- tiny element helper, same spirit as settings.html's `el` ---
+// --- tiny element helper, same spirit as the settings page's `el` ---
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -192,7 +192,7 @@ function el(tag, attrs = {}, children = []) {
 }
 
 // --- api ---
-// apiGet / apiSend live in common.js (shared with settings.html).
+// apiGet / apiSend live in common.js (shared with the settings page).
 
 // --- state ---
 let activeProjectId = null;
@@ -257,7 +257,7 @@ async function selectProject(projectId) {
 const ROOM_FIXED_KEYS = new Set(["id", "name", "level_id", "loops", "properties", "classification", "label"]);
 
 // The union of property names on this project's rooms, for the two datalists —
-// same source settings.html uses — plus `drofus.`-prefixed entries from the
+// same source the settings page uses — plus `drofus.`-prefixed entries from the
 // response's per-project label set, so joined fields are discoverable in the
 // same vocabulary the server compares them in (a name that filters correctly
 // also compares correctly). The authoritative list for dRofus, not a union of

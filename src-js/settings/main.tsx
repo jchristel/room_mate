@@ -8,7 +8,7 @@ import { App } from "./App.js";
 import "./style.css";
 
 const root = document.getElementById("root");
-if (!root) throw new Error("settings-react: index.html has no #root to mount into");
+if (!root) throw new Error("settings: index.html has no #root to mount into");
 
 createRoot(root).render(
   <StrictMode>
