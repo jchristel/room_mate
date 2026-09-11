@@ -48,6 +48,8 @@ pub fn validate_snapshot_id(taken_at: &str) -> Result<(), String> {
 /// STRATEGY-AREA-CALCULATION.md.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum RoomBoundary {
     /// Neighbouring rooms tile edge-to-edge: their shared boundaries are
     /// coincident and the gap between them is zero up to float noise. Nothing

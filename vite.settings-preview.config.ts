@@ -9,17 +9,17 @@ import { resolve } from "node:path";
 //
 // Same destination shape as the renderer bundle: straight
 // into a directory axum's ServeDir already serves, committed, so a fresh clone
-// plus `cargo run` serves /settings-react/ with no node installed. CI rebuilds it
+// plus `cargo run` serves /settings-preview/ with no node installed. CI rebuilds it
 // and fails on any change (.github/workflows/frontend.yml).
 export default defineConfig({
-  root: resolve(import.meta.dirname, "src-js/settings-react"),
-  base: "/settings-react/",
+  root: resolve(import.meta.dirname, "src-js/settings-preview"),
+  base: "/settings-preview/",
   plugins: [react()],
   // Nothing to copy: tokens.css and common.js are served from static/ by axum
   // and referenced by absolute URL, which Vite leaves alone.
   publicDir: false,
   build: {
-    outDir: resolve(import.meta.dirname, "static/settings-react"),
+    outDir: resolve(import.meta.dirname, "static/settings-preview"),
     // Safe because the directory is this build's alone — never static/ itself.
     emptyOutDir: true,
     sourcemap: false,

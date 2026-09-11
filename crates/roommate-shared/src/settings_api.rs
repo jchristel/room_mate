@@ -18,7 +18,8 @@ use crate::settings::Settings;
 /// parse still gets a row (with `error` set) rather than breaking the whole
 /// list — the settings UI is exactly the tool you'd reach for to notice a
 /// rotten file, so it must stay usable when one exists.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct ProjectFileSummary {
     /// File name within the projects dir (not a full path).
     pub file: String,
@@ -42,15 +43,43 @@ pub struct ProjectFileSummary {
 
 /// Wire shape of one project's settings: the parsed `Settings` plus which
 /// file it lives in.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct ProjectSettingsResponse {
     pub file: String,
     pub settings: Settings,
 }
 
+/// Result of one reference CSV upload, echoed to the uploader. Carries the
+/// resolved snapshot id (minted when the request supplied none — same
+/// contract as rooms ingest) and the parsed CSV's headline facts so the
+/// settings UI can refresh its label dropdowns without a second call.
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
+pub struct ReferenceUploadResult {
+    pub accepted: bool,
+    /// False when a snapshot with this `taken_at` already existed — the upload
+    /// was skipped (never overwritten), same duplicate rule as rooms ingest.
+    pub stored: bool,
+    /// Records actually stored — **the deduplicated count**, which is why the
+    /// two fields below matter: a 200-row CSV with five repeated ids reports
+    /// 195 here, and without them nothing would say where the other five went.
+    pub record_count: usize,
+    /// Ids the CSV repeated; only the last row of each survived. Reported at
+    /// upload because that is the moment the operator is looking at the file.
+    pub duplicate_ids: Vec<String>,
+    /// Rows whose id cell was empty, skipped by the loader.
+    pub blank_id_rows: usize,
+    pub link_property: String,
+    pub labels: Vec<String>,
+    pub snapshot_taken_at: String,
+    pub snapshot_id_generated: bool,
+}
+
 /// Save response: the settings as installed, plus the hot-reload confirmation
 /// the UI shows ("saved & applied live").
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct SaveResponse {
     pub applied: bool,
     pub settings: Settings,

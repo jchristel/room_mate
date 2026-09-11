@@ -38,7 +38,8 @@ pub use validate::{validate_colour_plans, validate_reference_field_shapes, valid
 /// Also derives `Serialize` (as do all the types it contains): the settings
 /// API serves this exact shape as JSON and writes it back as TOML, so the
 /// wire shape and the config-file shape can never drift.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct Settings {
     /// This bundle's project id — matched against `RoomPayload.project.id` to
     /// select which bundle applies to a given model. Must be non-empty
@@ -298,7 +299,8 @@ fn default_room_label() -> Vec<String> {
 /// precisely what measurement standards exist to prevent. Adding a standard is
 /// one variant here; the list is short because these are the ones a UK/EU
 /// healthcare job actually cites.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum MeasurementStandard {
     /// IPMS 1 — the whole building envelope, external walls included.
     #[serde(rename = "IPMS1")]
@@ -350,7 +352,9 @@ pub enum MeasurementStandard {
 /// door and `Mark` on a room are different properties that happen to share a
 /// name — so one shared setting would silently mean two things. That is the
 /// "which canonical property names exist at all" item on
-/// [Entities](../../../../docs/STRATEGY-ENTITIES.md)'s "what does not generalize" list.
+/// `docs/STRATEGY-ENTITIES.md`'s "what does not generalize" list. Cited by name
+/// rather than as a relative link: ts-rs copies this comment into the generated
+/// TypeScript, and no single relative path is right from both places.
 ///
 /// The settings that depend on *which* of a door's two rooms owns it —
 /// `room_attribution` and `room_reference_property` — waited for that question
@@ -374,6 +378,8 @@ pub enum MeasurementStandard {
 /// (`OpeningReport::room_geometry_mismatches`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum RoomResolution {
     /// Never derive. Absent references stay absent, and the geometric drift
     /// check does not run.
@@ -413,6 +419,8 @@ pub enum RoomResolution {
 /// rather than a rule in code, the same stance `measurement_standard` takes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum RoomAttribution {
     /// The room the door opens *into*, falling back to the one it opens *from*.
     /// A door with neither is **homeless** — a reported state, not an error.
@@ -454,7 +462,8 @@ impl RoomAttribution {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct OpeningPolicy {
     /// The door property whose value identifies "the same door" across
     /// milestones — the door counterpart of `Settings::comparison_key`, and
@@ -545,6 +554,8 @@ impl OpeningPolicy {
 /// many this policy excluded, on every read, from the first push.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum NestedComponents {
     /// A component is not an item. **The default, and it is a measurement
     /// rather than a preference**: on House A, 179 of 647 instances had a
@@ -568,7 +579,8 @@ pub enum NestedComponents {
 /// `nested_components` and an opening has nothing to exclude. A shared struct
 /// would carry both exceptions and force every reader to work out which half
 /// applied.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct FfePolicy {
     /// The item property whose value identifies "the same item" across
     /// milestones, and `None` (the default) reports "not configured" rather
@@ -634,7 +646,8 @@ impl FfePolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct AreaPolicy {
     /// What the reported area figure *means*. `None` (the default) is an honest
     /// "undeclared" and is echoed as such — not silently presented as any
@@ -762,7 +775,8 @@ impl AreaPolicy {
 /// always differ. Belongs to the `ReferenceSourceConfig` that declares it —
 /// each source owns its own field list, since a second source's columns are
 /// unrelated to the first's.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct ReferenceFieldConfig {
     pub label: String,
 
@@ -803,6 +817,8 @@ pub struct ReferenceFieldConfig {
 /// case, once real unit conversion rather than adaptive rounding is needed).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum FieldType {
     #[default]
     String,
@@ -815,6 +831,8 @@ pub enum FieldType {
 /// string match) needs overriding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum CompareMode {
     /// Force exact string comparison even when both sides parse as numbers.
     Exact,
@@ -840,7 +858,8 @@ pub enum CompareMode {
 /// so the TOML serializer emits them ahead of the `[colour_plans.mode]` table
 /// — the same footgun `Milestone`'s field order (scalars before
 /// `reference_snapshots`/`attachments`) guards against.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct ColourPlan {
     /// User-facing label shown in the viewer's colour picker.
     pub name: String,
@@ -867,6 +886,8 @@ pub struct ColourPlan {
 /// undefined tier) degrades to a "no data" grey rather than erroring.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum ColourMode {
     /// Categorical hue per parent hierarchy tier, tint/shade per child tier.
     /// `tiers` names which hierarchy tiers participate, parent first (the
@@ -914,6 +935,8 @@ pub enum ColourMode {
 /// How `PropertyCompare` reduces two property values to one number.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum CompareOp {
     /// `A − B`. The natural choice for match (`|A−B| ≤ tol`) and a
     /// zero-centred diverging ramp.
@@ -930,6 +953,8 @@ pub enum CompareOp {
 /// `ColourMode` for why).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "style", rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum Colouring {
     /// Two colours: within `tolerance` of zero (a match) vs. not. This is the
     /// dRofus-vs-Revit QA case. Reuses the *philosophy* of `CompareMode`'s
@@ -958,7 +983,8 @@ pub enum Colouring {
 /// `colour` is a CSS colour string (e.g. `"#b4541f"`); the server never parses
 /// it — validating colour syntax is a browser concern, and an unparseable one
 /// just renders as the browser's fallback.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct Band {
     /// Inclusive lower bound; `None` = open (−∞).
     #[serde(default)]
@@ -1012,7 +1038,8 @@ pub struct Storage {
 /// meant. Before that, `[sources.reference.<name>]` meant "for rooms" with
 /// nothing saying so, and a source configured for anything else parsed, loaded
 /// and joined nowhere.
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct Sources {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reference: BTreeMap<String, ReferenceSourceConfig>,
@@ -1023,7 +1050,8 @@ pub struct Sources {
 /// `#[serde(flatten)]`ed so its `type` tag sits at the same TOML level as
 /// `fields` — `[sources.reference.drofus] type = "upload"` — rather than
 /// nesting under a second table.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct ReferenceSourceConfig {
     #[serde(flatten)]
     pub origin: ReferenceOrigin,
@@ -1064,6 +1092,8 @@ pub struct ReferenceSourceConfig {
 /// chose, so both stay silent until they are given one.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct SpacePolicy {
     /// The SPACE property whose value links a space to a room, e.g. `"Number"`.
     ///
@@ -1125,6 +1155,8 @@ impl SpacePolicy {
 /// type for a need only this entity has stated.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct SpaceFieldConfig {
     /// The property name on the space.
     pub space: String,
@@ -1196,6 +1228,8 @@ impl SpaceFieldConfig {
 /// is ever constructed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum ReferenceEntity {
     #[default]
     Rooms,
@@ -1223,6 +1257,8 @@ impl ReferenceEntity {
 /// loader-only change; all consumers of `AppState` stay untouched.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum ReferenceOrigin {
     /// **Removed. Retained only to fail an old settings file usefully.**
     ///
@@ -1265,7 +1301,8 @@ pub struct TestData {
 /// source name → `taken_at`), so the milestone view joins each source's
 /// reference data as it stood at the milestone rather than the project's
 /// current data — dRofus is the first (and today, only) entry.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct Milestone {
     /// Identity: unique per project, non-empty (validated at load).
     pub name: String,
@@ -1403,7 +1440,8 @@ impl Milestone {
 /// One tier of the classification hierarchy. A tier is keyed by a code and/or a
 /// name property — at least one must be present (validated at startup), since a
 /// tier naming neither is unkeyable.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct HierarchyTier {
     /// Human label for the tier ("Building", "Department").
     pub name: String,
@@ -1445,6 +1483,8 @@ impl HierarchyTier {
 /// `ReferenceOrigin`/`ColourMode` use.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "match", rename_all = "lowercase")]
+#[derive(ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub enum HierarchyExclusion {
     Group { tier: String, value: String },
     Rooms { ids: Vec<String> },
@@ -1454,7 +1494,8 @@ pub enum HierarchyExclusion {
 /// `link_property`, hierarchy tier `code_property`/`name_property`) reference,
 /// resolved per-source to whatever raw property name that source actually
 /// uses. See `Settings::builtin_properties`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings-preview/generated/")]
 pub struct BuiltinPropertyDef {
     /// The stable name consumers reference (e.g. "Area").
     pub canonical: String,
