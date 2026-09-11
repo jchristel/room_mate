@@ -599,11 +599,12 @@
     js_fills: [144, 220, 45, 0],
     js_geom: [90, 275, 55, 103],
     js_gl: [623, 1121, 415, 0],
-    js_index: [39, 58, 15, 0],
+    js_index: [44, 70, 22, 0],
     js_item: [151, 465, 159, 108],
     js_labels: [66, 123, 42, 0],
     js_lines: [190, 319, 96, 0],
     js_paint: [99, 316, 84, 91],
+    js_poll: [80, 481, 124, 223],
     js_proj: [11, 40, 25, 0],
     js_seam: [40, 183, 123, 0],
     js_spatial: [92, 329, 104, 102],
@@ -617,7 +618,7 @@
     p_common: [67, 174, 88, 0],
     p_comparison: [448, 493, 0, 0],
     p_graph: [411, 721, 255, 0],
-    p_index: [4850, 5233, 0, 0],
+    p_index: [4957, 5346, 0, 0],
     p_settings: [1255, 1347, 0, 0],
     p_tokens: [20, 22, 0, 0],
     post_common: [181, 504, 240, 0],
@@ -1038,7 +1039,7 @@
     {
       id: "js_index", name: "index.ts", path: "src-js/renderer/index.ts", zone: "renderer", lang: "TypeScript",
       blurb: "The bundle's single public surface — the one thing index.html may reach for, published as the global <code>PlanRenderer</code>. Kept narrow because TypeScript cannot see those call sites: every name here is an unchecked boundary.",
-      deps: ["js_app", "js_geom", "js_colour", "js_door", "js_gl", "js_spatial", "js_seam", "js_paint", "js_types"]
+      deps: ["js_app", "js_geom", "js_colour", "js_door", "js_gl", "js_spatial", "js_seam", "js_paint", "js_poll", "js_types"]
     },
     {
       id: "js_seam", name: "seam.ts", path: "src-js/renderer/seam.ts", zone: "renderer", lang: "TypeScript",
@@ -1119,6 +1120,11 @@
       id: "js_paint", name: "svg/paint.ts", path: "src-js/renderer/svg/paint.ts", zone: "renderer", lang: "TypeScript",
       blurb: "The SVG painter for the <strong>export</strong>, and nothing else — it used to draw the live plan too, and saying plainly that it no longer does matters, because a comment describing a dead relationship sends the next reader hunting for a path that was deleted.",
       deps: ["js_app", "js_geom", "js_types"]
+    },
+    {
+      id: "js_poll", name: "viewer/entityPoll.ts", path: "src-js/viewer/entityPoll.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "One element layer's poll — the conditional request, its ETag and revision cursors, and what the last read <em>said</em>. The first module out of index.html that is not rendering, and it left because the four hand-written copies had drifted: the quiet-tick path asked doors alone and dropped the answer.",
+      deps: []
     },
 
     // ---- browser: pages

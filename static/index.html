@@ -852,27 +852,27 @@ let projectId = null;
 let buildingKey = null;
 let milestone = null;        // null = Latest
 let currentPayload = null;   // the one /rooms payload every zone renders from
-// The one /doors payload, fetched and revisioned exactly like the rooms one.
-// SEPARATE from currentPayload rather than merged into it: doors are pushed
-// independently of rooms (the extractor has its own entry point for them), so
-// they change on their own schedule and a shared revision would make each
-// entity's poll re-render the other for nothing.
-let doorsPayload = null;
-let lastDoorsRevision = null;
-// The one /windows payload. A THIRD list rather than merging into the doors
-// one: the two are pushed independently, toggled independently, and draw
-// differently, so a shared revision would make each entity's poll re-render the
-// other for nothing -- the same argument that kept doors out of currentPayload.
-let windowsPayload = null;
-let lastWindowsRevision = null;
-// The one /ffe payload. A FOURTH list rather than merging into the openings,
-// for the reason windows got a third: the three draw differently and toggle
-// independently. It matters most here -- a furnished level carries hundreds of
-// items against tens of openings, so this is the layer a reader turns off first.
-let ffePayload = null;
-let lastFfeRevision = null;
-// The one /spaces payload. A FIFTH list, and the first that is not a glyph
-// layer: a space is room-shaped, so it draws as an outline over the rooms.
+// The element layers, one `EntityPoll` each. The exchange, its two cursors and
+// what the last read said (`fetchState`) live in src-js/viewer/entityPoll.ts,
+// once, because the four hand-written copies that used to be here had drifted.
+// `payload` is each layer's data. Rooms are not among them -- see that file's
+// header.
+const { EntityPoll, conditionalHeaders, pollInOrder } = PlanRenderer;
+// Doors: SEPARATE from currentPayload rather than merged into it. Doors are
+// pushed independently of rooms (the extractor has its own entry point for
+// them), so they change on their own schedule and a shared revision would make
+// each entity's poll re-render the other for nothing.
+const doorsPoll = new EntityPoll({ url: doorsUrl });
+// Windows: a THIRD list rather than merging into the doors one. The two are
+// pushed independently, toggled independently, and draw differently -- the same
+// argument that kept doors out of currentPayload.
+const windowsPoll = new EntityPoll({ url: windowsUrl });
+// FF&E: a FOURTH list, for the reason windows got a third. It matters most here
+// -- a furnished level carries hundreds of items against tens of openings, so
+// this is the layer a reader turns off first.
+const ffePoll = new EntityPoll({ url: ffeUrl });
+// Spaces: a FIFTH list, and the first that is not a glyph layer -- a space is
+// room-shaped, so it draws as an outline over the rooms.
 //
 // It also does not poll unless it is switched on, which no other layer does.
 // The others are cheap and usually wanted; this one overlays the rooms it sits
@@ -880,9 +880,17 @@ let lastFfeRevision = null;
 // "do the services boundaries agree with the architectural ones". Polling a
 // hidden overlay would cost every viewer of every project for a question most of
 // them are not asking.
-let spacesPayload = null;
-let lastSpacesRevision = null;
-let lastSpacesEtag = null;
+const spacesPoll = new EntityPoll({
+  url: spacesUrl,
+  enabled: () => showSpaces,
+  // Only while unscoped -- see `spacesModels`. On the poll rather than at its
+  // call sites, because three places poll spaces and each used to have to
+  // remember.
+  onPayload: (payload) => { if (!spacesModel) refreshSpacesModels(payload); },
+});
+// Every tick asks all four, whatever the rooms read answered. The order is the
+// order they were always asked in; nothing depends on it.
+const ELEMENT_POLLS = [doorsPoll, windowsPoll, ffePoll, spacesPoll];
 // Which services model's spaces to draw. "" means ALL of them, and it is the
 // default -- but on a real project it is rarely what anyone wants: RHH has one
 // services file per service, so "all" stacks four near-identical outlines on
@@ -896,39 +904,18 @@ let spacesModel = "";
 // one model and would collapse the picker to the option already chosen. The
 // default is unscoped, so the list is always learned before it can be narrowed.
 let spacesModels = [];
-// What each element read has actually SAID, which a null payload cannot tell
-// you. Three different things leave `doorsPayload` null -- a poll that has not
-// run yet, a 204 saying the scope holds none, and a read that failed -- and
-// the room contents panel has to keep them apart, because "this room has no
-// doors" and "the doors have not arrived" are opposite answers to a reader and
-// only one of them is a finding. Same discipline as the layer toggles' "(all
-// levels)" suffix: a fallback nobody can see is the failure mode this area
-// keeps producing.
-//
-// Written only by the polls, read only by `roomContents`. States: "pending"
-// (no successful response yet), "loaded", "empty" (the server answered 204),
-// "error" (the read failed).
-const entityFetch = { doors: "pending", windows: "pending", ffe: "pending" };
 let lastRevision = null;     // poll change-detection cursor
-// The server's ETag for the last body we actually received, per entity.
+// The rooms read's ETag: a SECOND cursor beside `lastRevision`, not a
+// replacement for it. The two answer different questions and must not be
+// collapsed; the argument is written once, on `EntityPoll`, which keeps the
+// same pair for every element layer.
 //
-// A SECOND cursor beside `lastRevision`, not a replacement for it, and the two
-// answer different questions. `revision` rides in the body and says whether the
-// content we now hold differs from what we drew — it decides whether to
-// re-render. The ETag is sent back up as `If-None-Match` and lets the SERVER
-// decide not to build a body at all; it is deliberately more conservative than
-// the revision (see `service::scope_cursor`), so the two are not interchangeable
-// and must not be collapsed into one.
-//
-// Neither needs clearing on a scope change, unlike `lastRevision` beside them:
-// the tag is computed over the project/building/milestone/filter it was issued
-// for, so a tag from the old scope simply cannot match and the server answers
-// 200. The failure this rules out — a stale 304 hiding a scope switch — is
-// structural rather than something the reset lines below have to remember.
+// Not cleared on a scope change, unlike `lastRevision`: the tag is computed over
+// the project/building/milestone it was issued for, so a tag from the old scope
+// cannot match and the server answers 200. The failure that rules out — a stale
+// 304 hiding a scope switch — is structural rather than something the reset
+// lines below have to remember.
 let lastRoomsEtag = null;
-let lastDoorsEtag = null;
-let lastWindowsEtag = null;
-let lastFfeEtag = null;
 // Picker refresh guards (diff signatures so the 2s tick doesn't fight the user).
 let lastProjectIds = null;
 let lastBuildingsSignature = null;
@@ -970,7 +957,7 @@ let showRoomLabels = true;
 let showDoors = true;
 let showWindows = true;
 let showFfe = true;
-// Starts OFF -- see `spacesPayload`.
+// Starts OFF -- see `spacesPoll`.
 let showSpaces = false;
 
 // Global room search (see the "search" section lower down): one query + one set
@@ -3634,7 +3621,7 @@ function renderInspector() {
 // and a hardware schedule joins against the second — flattening them here would
 // throw away the distinction the contract went out of its way to keep.
 function renderDoorInspector(host) {
-  const door = (doorsPayload?.doors || []).find(d => d.id === selection.id);
+  const door = (doorsPoll.payload?.doors || []).find(d => d.id === selection.id);
   if (!door) {
     const note = document.createElement("div");
     note.className = "insp-note";
@@ -3703,7 +3690,7 @@ function renderDoorInspector(host) {
 // because Revit cannot resolve a room across a link. Telling a reader that a
 // correct model is broken is the failure this wording avoids.
 function renderWindowInspector(host) {
-  const win = (windowsPayload?.windows || []).find(w => w.id === selection.id);
+  const win = (windowsPoll.payload?.windows || []).find(w => w.id === selection.id);
   if (!win) {
     const note = document.createElement("div");
     note.className = "insp-note";
@@ -3776,7 +3763,7 @@ function renderWindowInspector(host) {
 //    real instance the project chose to show; without saying so, an inspector
 //    full of hardware looks like a modelling mess rather than a policy.
 function renderItemInspector(host) {
-  const it = (ffePayload?.ffe || []).find(x => x.id === selection.id);
+  const it = (ffePoll.payload?.ffe || []).find(x => x.id === selection.id);
   if (!it) {
     const note = document.createElement("div");
     note.className = "insp-note";
@@ -3906,13 +3893,14 @@ function renderAreaInspector(host) {
 // room click would stall the page on a click that looks free.
 //
 // The entities are a table rather than three branches because exactly four
-// things vary per entity -- the payload, what a row is called, what it says on
-// the right, and what selecting it does -- and nothing else does.
+// things vary per entity -- the poll it reads, what a row is called, what it
+// says on the right, and what selecting it does -- and nothing else does.
 const ROOM_CONTENTS = [
   {
     key: "doors",
     title: "Doors",
-    list: () => doorsPayload?.doors || [],
+    poll: doorsPoll,
+    list: () => doorsPoll.payload?.doors || [],
     label: (d) => d.type_name || d.id,
     detail: (d) => d.id,
     select: selectDoor,
@@ -3920,7 +3908,8 @@ const ROOM_CONTENTS = [
   {
     key: "windows",
     title: "Windows",
-    list: () => windowsPayload?.windows || [],
+    poll: windowsPoll,
+    list: () => windowsPoll.payload?.windows || [],
     label: (w) => w.type_name || w.id,
     detail: (w) => w.id,
     select: selectWindow,
@@ -3928,7 +3917,8 @@ const ROOM_CONTENTS = [
   {
     key: "ffe",
     title: "FF&E",
-    list: () => ffePayload?.ffe || [],
+    poll: ffePoll,
+    list: () => ffePoll.payload?.ffe || [],
     // Category first: on a furnished room the type names repeat and the
     // category is what separates six chairs from six luminaires.
     label: (i) => (i.category ? `${i.category} · ` : "") + (i.type_name || i.id),
@@ -3997,7 +3987,8 @@ function roomContents(roomId) {
     // fact about the project into a sentence about the room, on all 3013 of
     // them.
     const empty = !spec.list().length;
-    const state = entityFetch[spec.key] === "loaded" && empty ? "empty" : entityFetch[spec.key];
+    const fetched = spec.poll.fetchState;
+    const state = fetched === "loaded" && empty ? "empty" : fetched;
     return { spec, state, matched, models };
   });
 }
@@ -4272,7 +4263,7 @@ function doorsUrl() {
 // pushes no rooms (RHH's facade package: 78 external doors, invisible on every
 // level).
 function doorsOnLevel(levelId) {
-  return elementsOnStorey("doors", doorsPayload, "doors", levelId);
+  return elementsOnStorey("doors", doorsPoll.payload, "doors", levelId);
 }
 
 // The /windows URL. Same caveat as doorsUrl, and it bites harder here: a
@@ -4294,7 +4285,7 @@ function windowsUrl() {
 // needs it most, because windows live in the facade model that has no rooms and
 // therefore contributes no id the picker could ever match.
 function windowsOnLevel(levelId) {
-  return elementsOnStorey("windows", windowsPayload, "windows", levelId);
+  return elementsOnStorey("windows", windowsPoll.payload, "windows", levelId);
 }
 
 // The /ffe URL. Same caveat as doorsUrl and windowsUrl, and the middle ground
@@ -4320,36 +4311,7 @@ function ffeUrl() {
 // level data is missing, which would have tipped the whole layer into its
 // show-everything fallback.
 function ffeOnLevel(levelId) {
-  return elementsOnStorey("ffe", ffePayload, "ffe", levelId);
-}
-
-// FF&E polls on its own revision, in its own try -- an FF&E read that fails or
-// 204s must not take rooms, doors or windows down with it. A model with rooms
-// and no furniture is legitimate (a shell, a base-build package, a plantroom
-// level), and the plan is still worth drawing without it.
-async function pollFfe() {
-  try {
-    const res = await fetch(ffeUrl(), { cache: "no-store", headers: condHeaders(lastFfeEtag) });
-    if (res.status === 304) return false;
-    if (res.status === 204) {
-      lastFfeEtag = null;
-      entityFetch.ffe = "empty";
-      if (ffePayload !== null) { ffePayload = null; lastFfeRevision = null; return true; }
-      return false;
-    }
-    if (!res.ok) { entityFetch.ffe = "error"; return false; }
-    lastFfeEtag = res.headers.get("ETag");
-    const payload = await res.json();
-    entityFetch.ffe = "loaded";
-    const incoming = payload.revision ?? JSON.stringify(payload);
-    if (incoming === lastFfeRevision) return false;
-    lastFfeRevision = incoming;
-    ffePayload = payload;
-    return true;
-  } catch (err) {
-    entityFetch.ffe = "error";
-    return false;   // rooms already report connection loss; one message is enough
-  }
+  return elementsOnStorey("ffe", ffePoll.payload, "ffe", levelId);
 }
 
 // The /spaces URL. Deliberately NOT filtered by building: a space has no
@@ -4443,7 +4405,7 @@ function elementsOnStorey(layer, payload, listKey, levelId) {
 // first to match on elevation rather than id, and generalising it is what fixed
 // the openings.
 function spacesForPlan(levelId) {
-  return elementsOnStorey("spaces", spacesPayload, "spaces", levelId);
+  return elementsOnStorey("spaces", spacesPoll.payload, "spaces", levelId);
 }
 
 // The layer toggles' labels, each carrying its storey-match state so a fallback
@@ -4474,110 +4436,6 @@ function syncSpacesToggleLabel() {
   syncLayerToggleLabels();
 }
 
-// Spaces poll on their own revision, in their own try, and ONLY while the layer
-// is on -- see `spacesPayload` for why this one is different.
-async function pollSpaces() {
-  if (!showSpaces) return false;
-  try {
-    const res = await fetch(spacesUrl(), { cache: "no-store", headers: condHeaders(lastSpacesEtag) });
-    if (res.status === 304) return false;
-    if (res.status === 204) {
-      lastSpacesEtag = null;
-      if (spacesPayload !== null) { spacesPayload = null; lastSpacesRevision = null; return true; }
-      return false;
-    }
-    if (!res.ok) return false;
-    lastSpacesEtag = res.headers.get("ETag");
-    const payload = await res.json();
-    const incoming = payload.revision ?? JSON.stringify(payload);
-    if (incoming === lastSpacesRevision) return false;
-    lastSpacesRevision = incoming;
-    spacesPayload = payload;
-    // Only while unscoped -- see `spacesModels`.
-    if (!spacesModel) refreshSpacesModels(payload);
-    return true;
-  } catch (err) {
-    return false;   // rooms already report connection loss; one message is enough
-  }
-}
-
-// Windows poll on their own revision, in their own try -- a windows read that
-// fails or 204s must not take rooms or doors down with it. A model with rooms
-// and no windows is legitimate (a service core, an internal floor), and the
-// plan is still worth drawing without them.
-async function pollWindows() {
-  try {
-    const res = await fetch(windowsUrl(), { cache: "no-store", headers: condHeaders(lastWindowsEtag) });
-    if (res.status === 304) return false;
-    if (res.status === 204) {
-      // Drop the tag with the payload: 204 carries none, so holding the old one
-      // would send `If-None-Match` for an entity we no longer have.
-      lastWindowsEtag = null;
-      entityFetch.windows = "empty";
-      if (windowsPayload !== null) { windowsPayload = null; lastWindowsRevision = null; return true; }
-      return false;
-    }
-    if (!res.ok) { entityFetch.windows = "error"; return false; }
-    lastWindowsEtag = res.headers.get("ETag");
-    const payload = await res.json();
-    entityFetch.windows = "loaded";
-    const incoming = payload.revision ?? JSON.stringify(payload);
-    if (incoming === lastWindowsRevision) return false;
-    lastWindowsRevision = incoming;
-    windowsPayload = payload;
-    return true;
-  } catch (err) {
-    entityFetch.windows = "error";
-    return false;   // rooms already report connection loss; one message is enough
-  }
-}
-
-// Doors poll on their own revision, in their own try. A doors read that fails
-// or 204s must not take the rooms down with it: a model with rooms and no doors
-// is legitimate (the server says so explicitly), and the plan is still worth
-// drawing without them.
-async function pollDoors() {
-  try {
-    const res = await fetch(doorsUrl(), { cache: "no-store", headers: condHeaders(lastDoorsEtag) });
-    // Nothing changed, and the server spent nothing establishing that. No body
-    // arrives, so there is nothing to compare or repaint.
-    if (res.status === 304) return false;
-    if (res.status === 204) {
-      // No doors in scope. Clear rather than keep the last set — stale doors
-      // over a new project's plan is worse than none.
-      // Drop the tag with the payload: 204 carries none, so holding the old
-      // one would send `If-None-Match` for an entity we no longer have.
-      lastDoorsEtag = null;
-      entityFetch.doors = "empty";
-      if (doorsPayload !== null) { doorsPayload = null; lastDoorsRevision = null; return true; }
-      return false;
-    }
-    if (!res.ok) { entityFetch.doors = "error"; return false; }
-    lastDoorsEtag = res.headers.get("ETag");
-    const payload = await res.json();
-    entityFetch.doors = "loaded";
-    const incoming = payload.revision ?? JSON.stringify(payload);
-    if (incoming === lastDoorsRevision) return false;
-    lastDoorsRevision = incoming;
-    doorsPayload = payload;
-    return true;
-  } catch (err) {
-    entityFetch.doors = "error";
-    return false;   // rooms already report connection loss; one message is enough
-  }
-}
-
-// `If-None-Match` for a poll, or no header at all on the first pass.
-//
-// Sent explicitly rather than relying on `cache: "no-cache"` to revalidate for
-// us, and the difference matters: the browser cache would hand back its stored
-// 200 on a 304, so the page would re-parse 73 MB of doors JSON to discover
-// nothing had changed. Setting the header by hand with `cache: "no-store"` lets
-// the 304 reach this code as a 304, with no body and no parse.
-function condHeaders(etag) {
-  return etag ? { "If-None-Match": etag } : {};
-}
-
 // Every zone's meta line reports poll-level states (waiting / connection lost)
 // identically — they share the one fetch.
 function metaAll(text) {
@@ -4589,36 +4447,36 @@ function metaAll(text) {
 
 async function poll() {
   try {
-    const res = await fetch(roomsUrl(), { cache: "no-store", headers: condHeaders(lastRoomsEtag) });
-    // A 304 settles the whole tick: rooms are unchanged, and `pollDoors` has
-    // its own tag, so there is nothing to re-render on either side. Returning
-    // here (rather than falling through to the revision compare) is what turns
-    // an idle poll into two header exchanges.
-    if (res.status === 304) { await pollDoors(); return; }
+    const res = await fetch(roomsUrl(), { cache: "no-store", headers: conditionalHeaders(lastRoomsEtag) });
     if (res.status === 204) { lastRoomsEtag = null; metaAll("waiting for data"); return; }
-    if (!res.ok) throw new Error(res.status);
-    lastRoomsEtag = res.headers.get("ETag");
-    const payload = await res.json();
+    // A 304 means the ROOMS are unchanged and no body arrives. It does not
+    // settle the tick: every element layer has its own tag and must still be
+    // asked. This used to return here after asking doors alone -- and dropping
+    // the answer -- so for as long as the rooms stayed quiet, windows, FF&E and
+    // spaces were never re-read and a doors push was not repainted.
+    const roomsUnchanged = res.status === 304;
+    if (!roomsUnchanged && !res.ok) throw new Error(res.status);
+    const payload = roomsUnchanged ? null : await res.json();
+    // After the parse, never before: a tag stored ahead of a body that failed
+    // to arrive turns every later tick into a 304 for data we never received.
+    // `EntityPoll.poll` carries the full argument.
+    if (!roomsUnchanged) lastRoomsEtag = res.headers.get("ETag");
     // Change-detection compares the server's one-value content revision instead
     // of re-stringifying the whole payload every poll (see the `revision` field
     // in rooms.rs / STRATEGY-BROWSER.md). A quiet system returns the
     // same revision every tick, so `ingestAll` (full teardown + rebuild) never
     // fires between real pushes. Fall back to a stringify only if an older
     // server omits the field, so the viewer still updates against one.
-    const incoming = payload.revision ?? JSON.stringify(payload);
-    // Doors are fetched on every tick but only re-render when THEY changed.
-    // Awaited before the rooms branch so a tick that changed both paints once
-    // with both, rather than painting rooms and then immediately repainting to
-    // add the doors.
-    const doorsChanged = await pollDoors();
-    const windowsChanged = await pollWindows();
-    const ffeChanged = await pollFfe();
-    // A no-op while the layer is off, which is its default -- see `pollSpaces`.
-    const spacesChanged = await pollSpaces();
-    if (incoming !== lastRevision) {
+    const incoming = payload ? (payload.revision ?? JSON.stringify(payload)) : lastRevision;
+    // Every element layer is asked on every tick but only re-renders when IT
+    // changed. Awaited before the rooms branch so a tick that changed both
+    // paints once with both, rather than painting rooms and then immediately
+    // repainting to add the elements.
+    const elementsChanged = await pollInOrder(ELEMENT_POLLS);
+    if (payload && incoming !== lastRevision) {
       lastRevision = incoming;
       ingestAll(payload); // re-fits + rebuilds level controls only on real change
-    } else if (doorsChanged || windowsChanged || ffeChanged || spacesChanged) {
+    } else if (elementsChanged) {
       // An element entity moved and rooms did not. Repaint in place: no refit,
       // because such a push must not throw away the user's pan and zoom.
       redrawAllZones();
@@ -5097,7 +4955,8 @@ document.getElementById("ffeToggle").addEventListener("click", (e) => {
 document.getElementById("spacesToggle").addEventListener("click", async (e) => {
   showSpaces = !showSpaces;
   e.target.classList.toggle("on", showSpaces);
-  if (showSpaces) await pollSpaces();
+  // A no-op on the way off: the poll is gated on `showSpaces`.
+  await spacesPoll.poll();
   syncSpacesModelVisibility();
   redrawAllZones();
   // AFTER the redraw: the label reports what the paint actually did, and only
@@ -5115,9 +4974,8 @@ document.getElementById("spacesToggle").addEventListener("click", async (e) => {
 // the server to notice.
 document.getElementById("spacesModelSelect").addEventListener("change", async (e) => {
   spacesModel = e.target.value;
-  lastSpacesEtag = null;
-  lastSpacesRevision = null;
-  await pollSpaces();
+  spacesPoll.invalidate();
+  await spacesPoll.poll();
   redrawAllZones();
   syncSpacesToggleLabel();
 });
