@@ -17,7 +17,7 @@ strategy doc documents what is not".
 | [Sources](STRATEGY-SOURCES.md) | Open: an API-polled reference origin, a second producer, incremental extraction — plus why extraction cost decides the optimization axis |
 | [Server](STRATEGY-SERVER.md) | Open: deferred endpoints and storage backends, an owning level above project, a coordinate datum shared across projects |
 | [Area calculation](STRATEGY-AREA-CALCULATION.md) | What the area number *means* and how it relates to IPMS 3 / DIN 277, plus the open items. **Read before quoting an area to anyone external** |
-| [Browser](STRATEGY-BROWSER.md) | Open: serving and consuming the placement transform, level-of-detail, the framework fork — plus the hybrid renderer's coordinate/paint-order invariant |
+| [Browser](STRATEGY-BROWSER.md) | Open: serving and consuming the placement transform, level-of-detail, generated TypeScript wire types — plus the framework decision (React, measured against Rust+WASM) and the hybrid renderer's coordinate/paint-order invariant |
 | [MCP](STRATEGY-MCP.md) | Open: resources and prompts, document tools |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data — connections, PDFs, hierarchy scopes. **Nothing here is built**; read it before building any of it |
 | [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, and what five of them proved comes for free. Open: door connectivity, design options, the geometric space↔room check, FF&E at scale |

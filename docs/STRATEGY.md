@@ -21,7 +21,8 @@ invariants that are expensive to rediscover.
   off the model, and two designs were reversed over exactly that. **Read it
   before quoting an area to anyone external.**
 - **[Browser](STRATEGY-BROWSER.md)** — the plan viewer. Open: serving and then
-  consuming the placement transform, level-of-detail, the framework fork — plus
+  consuming the placement transform, level-of-detail, generated TypeScript wire
+  types — plus the framework decision (React, measured against Rust+WASM) and
   the hybrid renderer's coordinate/paint-order invariant.
 - **[MCP](STRATEGY-MCP.md)** — the stdio MCP server. Open: resources and prompts,
   document tools.

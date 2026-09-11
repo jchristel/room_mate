@@ -6,8 +6,8 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Entities](STRATEGY-ENTITIES.md) · [Security](STRATEGY-SECURITY.md)
 
 **Open work only.** The viewer is a WebGL plan with a thin SVG overlay, three
-sibling static pages, and a `src-js/` TypeScript build emitting one committed
-bundle. How each part works is documented where it is built — `src-js/renderer/`,
+sibling static pages, and a `src-js/` TypeScript build emitting the committed
+renderer bundle and a React preview of the settings page. How each part works is documented where it is built — `src-js/renderer/`,
 `static/index.html`, `static/graph.js` — and the invariants that are expensive to
 rediscover are below rather than in the code, because they are properties of the
 *seam* between two layers and no single file owns them.
@@ -181,36 +181,75 @@ The goal is a richer browser tool run locally, not a desktop app.
   client-side: each is a presentation reshuffle of data the browser already
   holds, so none of them earned a server endpoint.
 
-- **A build step is not a framework, and this is still not one.** Vite +
-  TypeScript over `src-js/` emits one committed IIFE the page calls. There is no
-  component model, no router, no virtual DOM, no reactive store. The fork below
-  is therefore still open — the toolchain does not pre-commit it, though it does
-  lower the cost of the JS-framework branch and raise the relative cost of the
-  Rust+WASM one, which would now be a second toolchain rather than the first.
+- **A build step is not a framework.** Vite + TypeScript over `src-js/` emits
+  one committed IIFE the viewer calls, and a second Vite config
+  (`vite.settings-react.config.ts`) builds a React preview of one slice of the
+  settings page into `static/settings-react/`. The live pages have no component
+  model, router or store. The preview is the worked example of how a React page
+  arrives — its own config, output committed, under `frontend.yml`'s freshness
+  gate — not a migration in progress.
 
 - **Which signal actually fired is worth knowing, because it was not the
   predicted one.** The advice was "grow the vanilla JS until it hurts", and the
   predicted hurt was a feeling — the same state written into several DOM places,
-  drifting. That never arrived, and it still has not. What broke it was a hard
-  capability the page could not reach without dependencies: a WebGL plan layer
-  needs polygon triangulation with holes, a glyph atlas and batched draw calls,
-  all solved problems that must not be written again here. **The framework
-  question and the toolchain question are separate, and only the second has been
-  answered.**
+  drifting. What broke the zero-build rule was instead a hard capability the page
+  could not reach without dependencies: a WebGL plan layer needs polygon
+  triangulation with holes, a glyph atlas and batched draw calls, all solved
+  problems that must not be written again here. **The framework question and the
+  toolchain question were separate**, and the framework one was answered later,
+  by measurement — below.
 
-- **When it does hurt, the fork is JS framework vs. Rust+WASM.** Behind axum,
-  either a JS framework (Svelte gentlest, React most-supported) or a Rust+WASM
-  one (Leptos / Dioxus). The project tilts toward **Leptos / Dioxus**: the Rust
-  `Room` / `Level` / processed-geometry structs can be reused directly in the UI,
-  eliminating the recurring friction of re-describing a carefully versioned
-  contract in TypeScript. The trade is a smaller ecosystem and fewer ready-made
-  components — a fair deal for a single-developer tool valuing one language and
-  shared types end to end.
+- **The fork is answered: a JS framework (React), not Rust+WASM.** This doc used
+  to tilt toward Leptos / Dioxus on one argument — reuse the Rust structs in the
+  UI instead of re-describing a versioned contract in TypeScript. On 2026-09-11
+  the same slice of the settings page (project list, identity, room label, save)
+  was built both ways, against the running server, and put through the same
+  browser tests. Both worked. What they cost:
 
-- **The trigger for a router or a state library is unmet.** Selection
-  persistence is a small URL + `localStorage` fix on purpose. The stated trigger
-  — writing the same state into several DOM places and watching them drift — has
-  not been hit.
+  | | Leptos (Rust+WASM) | React (TypeScript) |
+  |---|---|---|
+  | Download, gzipped | ~164 KB | ~71 KB |
+  | First build | ~6 min | ~5 s |
+  | Rebuild after an edit | 5 s debug, 75 s release | ~5 s, production build |
+  | New tooling | pinned rustc, wasm32 target, trunk, wasm-bindgen, wasm-opt | 5 npm packages |
+  | `common.js` helpers | ported to Rust | reused |
+  | Server types | used directly | 4-field hand-written subset |
+
+  - **The deciding fact is reproducibility, not size.** A committed generated
+    artifact is only safe behind a rebuild-and-compare gate, and a Rust wasm
+    build embeds source paths for its panic locations: absolute registry paths,
+    and on Windows, backslashes inside them. `--remap-path-prefix` removes the
+    machine-specific prefix but not the separators, and `trim-paths` is unstable
+    (cargo 1.95). A wasm built on the development machine therefore never matches
+    a Linux CI rebuild. The Vite output carries no machine path and rebuilds
+    byte-identically.
+  - **Shared types bought less than argued, and brought a bug with them.** Using
+    `Settings` directly meant echoing its TOML-shaped `Serialize`, which *skips* a
+    `None` name; `merge_over_stored` then keeps the stored one, so the typed
+    client could not clear a display name. The React page avoids it only by
+    sending `null` on purpose. The hazard is the merge semantics, not the
+    language, and on either side it is a test that guards it.
+  - **What survived:** `crates/roommate-shared`, the settings types and the
+    settings API's wire shapes in a crate with no server dependencies.
+
+- **Open: generate the TypeScript wire types from `roommate-shared`**, rather
+  than hand-writing subsets as `src-js/renderer/types.ts` and the settings
+  preview's `types.ts` do. Not worth it while each subset is a handful of fields.
+  The signal is a page that needs most of a type, or a second page hand-writing
+  the same one.
+
+- **What would reopen Rust+WASM:** stable path trimming in cargo, so a committed
+  wasm can pass the rebuild gate; or a need to run shared *logic* in the browser
+  — `service::areas` geometry, say — which generated types cannot carry. A
+  preference for one language end to end is not on that list: it was weighed
+  against the table above and lost.
+
+- **The trigger for adopting React on a live page is still unmet**, and it is the
+  one this doc has always named: the same state written into several DOM places
+  and drifting. The one instance found so far — the four copy-pasted entity polls
+  in `index.html` — was fixed by extracting a typed module, not by a framework
+  (PR #120). Selection persistence remains a small URL + `localStorage` fix on
+  purpose.
 
 ## Endpoints follow fetch lifecycle, not data type
 

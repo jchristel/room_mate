@@ -1,0 +1,98 @@
+/* The subset of static/settings.html's inline <style> this preview's slice uses,
+   copied rather than shared: the JS page inlines its CSS, so there is no file to
+   link. If the preview becomes the page, the two become one stylesheet. */
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--ink);
+}
+header h1 {
+  font-size: 0.95rem; font-weight: 600; letter-spacing: 0.18em;
+  text-transform: uppercase; margin: 0;
+}
+header .preview { font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+header a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+header a:first-of-type { margin-left: auto; }
+header a:hover { text-decoration: underline; }
+
+main {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 0;
+}
+
+nav {
+  border-right: 1px solid var(--ink);
+  padding: 1rem;
+  overflow-y: auto;
+}
+nav h2 {
+  font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
+  opacity: 0.6; margin: 0 0 0.75rem;
+}
+nav ul { list-style: none; margin: 0 0 1rem; padding: 0; }
+nav li button {
+  display: block; width: 100%; text-align: left;
+  font-family: var(--mono); font-size: 0.78rem;
+  background: none; border: none; color: var(--ink);
+  padding: 0.35rem 0.4rem; cursor: pointer;
+}
+nav li button:hover { background: var(--fill); }
+nav li button.active { background: var(--fill-hover); }
+nav li button .default-mark { color: var(--accent); }
+nav li .file-error { font-size: 0.62rem; color: var(--accent); padding: 0 0.4rem 0.3rem; }
+
+button.action {
+  font-family: var(--mono); font-size: 0.72rem;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--ink); padding: 0.3rem 0.6rem; cursor: pointer;
+}
+button.action:hover { background: var(--fill); }
+button.action.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+button.action:disabled { opacity: 0.4; cursor: default; }
+
+.editor { padding: 1.25rem 1.5rem 3rem; overflow-y: auto; }
+.placeholder { padding: 2rem; opacity: 0.6; font-size: 0.8rem; }
+.not-ported { font-size: 0.7rem; opacity: 0.7; max-width: 760px; margin: 0 0 1.4rem; }
+
+section.block { margin-bottom: 1.6rem; max-width: 760px; }
+section.block > h2 {
+  font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase;
+  margin: 0 0 0.15rem; border-bottom: 1px solid var(--rule); padding-bottom: 0.25rem;
+}
+section.block > .hint { font-size: 0.65rem; opacity: 0.6; margin: 0.15rem 0 0.6rem; }
+
+label.field { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; margin-right: 1rem; }
+input[type="text"] {
+  font-family: var(--mono); font-size: 0.75rem;
+  background: #fff8; border: 1px solid var(--ink); color: var(--ink);
+  padding: 0.25rem 0.4rem;
+}
+input[type="text"]:read-only { background: var(--fill); opacity: 0.8; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin: 0.4rem 0 0.5rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  background: var(--fill); border: 1px solid var(--ink);
+  font-size: 0.72rem; padding: 0.15rem 0.2rem 0.15rem 0.5rem;
+}
+.chip button { border: none; background: none; cursor: pointer; font-family: var(--mono); font-size: 0.72rem; padding: 0 0.2rem; }
+.chip button:hover { color: var(--accent); }
+
+.save-bar { display: flex; align-items: center; gap: 1rem; max-width: 760px; margin-top: 1rem; }
+.save-message { font-size: 0.72rem; white-space: pre-wrap; }
+.save-message.ok { color: var(--ok); }
+.save-message.bad { color: var(--accent); }
