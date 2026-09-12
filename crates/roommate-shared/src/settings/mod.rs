@@ -282,10 +282,162 @@ pub struct Settings {
     /// it would not make the name any more correct.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_model: Option<String>,
+
+    /// How this project's plan is COLOURED, per entity (see `Appearance`).
+    /// Defaulted and skipped when empty, so a project file predating it is
+    /// unchanged on disk and unchanged in meaning. A table, so it is declared
+    /// after every scalar for the TOML ordering reason `comparison_key`
+    /// documents.
+    #[serde(default, skip_serializing_if = "Appearance::is_default")]
+    pub appearance: Appearance,
 }
 
 fn default_room_label() -> Vec<String> {
     vec!["$name".to_string(), "$id".to_string()]
+}
+
+/// Per-entity colour overrides for the plan.
+///
+/// **Every field is optional, and absent means "whatever the theme says" --
+/// which is the behaviour that existed before this type did.** The viewer's
+/// palette comes from seven CSS custom properties read fresh on every paint, so
+/// it follows the reader's light/dark theme; a project that pinned every colour
+/// would look correct in one theme and unreadable in the other. Overriding only
+/// what is named keeps the rest theme-aware, and makes the whole feature
+/// additive: a project that sets nothing renders exactly as it did.
+///
+/// **Three shapes rather than one, because the entities genuinely differ.** A
+/// single struct with four optional colours for all six would offer a ceiling a
+/// hover colour and a space a selection colour -- neither is drawn, neither is
+/// pickable, and the setting would do nothing. The settings page is generated
+/// from these types, so a field here becomes a control there; giving each
+/// entity exactly the fields it can express is what keeps a dead control
+/// impossible to build rather than merely discouraged.
+///
+/// Values are CSS colour strings, stored VERBATIM and never parsed here -- the
+/// same treatment `Band::colour` gets, and for the same reason: the server
+/// computes nothing about colour, so a spelling it accepted would prove
+/// nothing about what a browser will render. The settings page writes these
+/// with `<input type="color">`, which cannot produce anything but `#rrggbb`.
+#[derive(Debug, Default, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct Appearance {
+    /// Rooms: the only entity with all four. They are the base layer -- the
+    /// only one that is filled, hovered and selected.
+    #[serde(default, skip_serializing_if = "RoomAppearance::is_default")]
+    pub rooms: RoomAppearance,
+
+    /// Doors.
+    #[serde(default, skip_serializing_if = "ElementAppearance::is_default")]
+    pub doors: ElementAppearance,
+
+    /// Windows.
+    #[serde(default, skip_serializing_if = "ElementAppearance::is_default")]
+    pub windows: ElementAppearance,
+
+    /// FF&E.
+    #[serde(default, skip_serializing_if = "ElementAppearance::is_default")]
+    pub ffe: ElementAppearance,
+
+    /// Spaces: an outline over the rooms, with no fill and no pick index, so
+    /// `line` is the whole of what it can express.
+    #[serde(default, skip_serializing_if = "OutlineAppearance::is_default")]
+    pub spaces: OutlineAppearance,
+
+    /// Ceilings: as spaces. The dash is not settable here -- it is what tells a
+    /// ceiling ring apart from the room outline directly beneath it, so it is a
+    /// rule rather than a preference.
+    #[serde(default, skip_serializing_if = "OutlineAppearance::is_default")]
+    pub ceilings: OutlineAppearance,
+}
+
+impl Appearance {
+    /// True when nothing is overridden, so an untouched block stays out of the
+    /// written file.
+    pub fn is_default(&self) -> bool {
+        self.rooms.is_default()
+            && self.doors.is_default()
+            && self.windows.is_default()
+            && self.ffe.is_default()
+            && self.spaces.is_default()
+            && self.ceilings.is_default()
+    }
+}
+
+/// A room's four colours. The outline, the fill, the selection ring and the
+/// hover fill.
+#[derive(Debug, Default, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct RoomAppearance {
+    /// Outline. Theme default: `--ink`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// Fill. Theme default: `--fill`. A room carrying a colour plan's fill is
+    /// unaffected -- the plan is the more specific answer and already wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    /// Selection ring. Theme default: `--accent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<String>,
+    /// Hover fill. Theme default: `--fill-hover`. A room flagged by the QA
+    /// report still hovers to the accent, which is a state beating a
+    /// preference rather than an omission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hover: Option<String>,
+}
+
+impl RoomAppearance {
+    pub fn is_default(&self) -> bool {
+        self.line.is_none() && self.fill.is_none() && self.selection.is_none() && self.hover.is_none()
+    }
+}
+
+/// An element layer's three colours: doors, windows and FF&E each draw a
+/// filled footprint, a glyph over it, and a selection ring. They share a shape
+/// because they share a drawing convention, not by coincidence -- `doorGlyph`,
+/// `windowGlyph` and `itemGlyph` were each written from the one before it.
+///
+/// No `hover`: hover is a room-only state today (`setHover` takes a room id).
+/// Offering the colour would be offering a control with nothing behind it.
+#[derive(Debug, Default, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct ElementAppearance {
+    /// The glyph -- a door's arc, a window's panes, an item's orientation tick
+    /// and marker. Theme default: `--ink`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// The footprint rectangle beneath the glyph, drawn semi-transparent.
+    /// Theme default: `--ink` at the layer's own alpha, which an override
+    /// keeps -- the transparency is what stops a footprint hiding the room
+    /// under it, so it is structural rather than stylistic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    /// Selection ring. Theme default: `--accent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<String>,
+}
+
+impl ElementAppearance {
+    pub fn is_default(&self) -> bool {
+        self.line.is_none() && self.fill.is_none() && self.selection.is_none()
+    }
+}
+
+/// An overlay drawn as an outline only, and neither filled nor pickable.
+#[derive(Debug, Default, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct OutlineAppearance {
+    /// The ring. Theme default: `--accent` for spaces, `--ink` for ceilings --
+    /// and that contrast is the point, so overriding one and not the other is
+    /// a way to lose it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+}
+
+impl OutlineAppearance {
+    pub fn is_default(&self) -> bool {
+        self.line.is_none()
+    }
 }
 
 /// A recognised area-measurement standard. Closed enum on purpose: the whole

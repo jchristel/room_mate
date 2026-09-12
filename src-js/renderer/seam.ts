@@ -44,6 +44,28 @@ export interface HighlightState {
   matchRoomIds: ReadonlySet<string> | null;
 }
 
+/**
+ * Per-entity colour overrides, read from the project's settings.
+ *
+ * Structural rather than imported from `settings/generated/`: the renderer is a
+ * drawing library that knows nothing about the settings contract, and pulling
+ * that type in would make every viewer build depend on the Rust crate's ts-rs
+ * output. The shapes are deliberately the same three the Rust side declares,
+ * for the reason it declares three — an entity is offered only the colours it
+ * can actually draw.
+ *
+ * Every field absent means "use the theme", which is the behaviour that
+ * predates this type and is what an unconfigured project still gets.
+ */
+export interface PlanAppearance {
+  rooms?: { line?: string | null; fill?: string | null; hover?: string | null } | undefined;
+  doors?: { line?: string | null; fill?: string | null } | undefined;
+  windows?: { line?: string | null; fill?: string | null } | undefined;
+  ffe?: { line?: string | null; fill?: string | null } | undefined;
+  spaces?: { line?: string | null } | undefined;
+  ceilings?: { line?: string | null } | undefined;
+}
+
 /** Everything needed to draw a level. Mirrors the appearance context plus the
  *  toggles that are page state rather than per-room state. */
 export interface PaintRequest {
@@ -53,6 +75,15 @@ export interface PaintRequest {
   matchRoomIds?: ReadonlySet<string> | null | undefined;
   searchActive?: boolean | undefined;
   showLabels?: boolean | undefined;
+  /**
+   * Per-entity colour overrides (see `PlanAppearance`).
+   *
+   * SELECTION colours are not here, and that is not an oversight: a selection
+   * ring is an SVG element in the marks overlay, styled by the stylesheet, so
+   * its colour is set by a CSS custom property rather than by a vertex. The
+   * page sets those; this carries only what GL paints.
+   */
+  appearance?: PlanAppearance | undefined;
   /**
    * Whether to draw the ROOMS themselves -- fills, outlines, hole strokes and
    * labels. Absent means yes, which is why every existing call site keeps
