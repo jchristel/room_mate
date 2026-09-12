@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildItemGlyph, MARKER_SIZE, MIN_FOOTPRINT_EXTENT } from "./itemGlyph.js";
+import { buildItemGlyph, MARKER_SIZE, MAX_TICK_SOURCE_SIZE, MIN_FOOTPRINT_EXTENT } from "./itemGlyph.js";
 import type { Item, Point2D } from "../types.js";
 
 function item(over: Partial<Item> = {}): Item {
@@ -127,12 +127,56 @@ describe("buildItemGlyph", () => {
     }
   });
 
-  it("puts the pick ring where the marker is, not where the tick points", () => {
-    // The tick is an annotation reaching away from the object. Making it
-    // clickable would let an item claim floor it does not occupy, and clicking
-    // there would select the item instead of the room.
-    const glyph = buildItemGlyph(item({ insertion_point: { x: 0, y: 0 }, facing: { x: 1, y: 0 } }))!;
-    expect(glyph.pick.maxX).toBeLessThan(extent(glyph.tick).maxX);
+  it("keeps the tick inside the glyph, so an item's drawn extent is its own", () => {
+    // The tick used to reach outward from the edge, which drew the item bigger
+    // than it is -- on a furnished plan those lines crossed into neighbouring
+    // items and through room boundaries, claiming floor nothing occupies.
+    const marker = buildItemGlyph(item({ insertion_point: { x: 0, y: 0 }, facing: { x: 1, y: 0 } }))!;
+    const t = extent(marker.tick);
+    expect(t.maxX).toBeLessThanOrEqual(MARKER_SIZE / 2 + 1e-9);
+    expect(t.minX).toBeGreaterThanOrEqual(-MARKER_SIZE / 2 - 1e-9);
+
+    // And the same for a real footprint, which is the case that will matter
+    // once items arrive with geometry.
+    const box6x2 = buildItemGlyph(item({ loops: box(6, 2), facing: { x: 0, y: 1 } }))!;
+    const r = extent(box6x2.rect);
+    const rt = extent(box6x2.tick);
+    expect(rt.minX).toBeGreaterThanOrEqual(r.minX - 1e-9);
+    expect(rt.maxX).toBeLessThanOrEqual(r.maxX + 1e-9);
+    expect(rt.minY).toBeGreaterThanOrEqual(r.minY - 1e-9);
+    expect(rt.maxY).toBeLessThanOrEqual(r.maxY + 1e-9);
+  });
+
+  it("starts the tick on the edge the item faces, not on its longest side", () => {
+    // A 6 x 2 desk facing along its SHORT axis. Sizing the tick from the box's
+    // larger dimension would start it 3 ft from the centre -- two feet clear of
+    // a desk that is one foot deep, which is the old bug in a new shape.
+    const glyph = buildItemGlyph(item({ loops: box(6, 2), facing: { x: 0, y: 1 } }))!;
+    // Payload Y-up flips to Y-down, so the faced edge is the lower bound.
+    expect(extent(glyph.tick).minY).toBeCloseTo(extent(glyph.rect).minY, 9);
+  });
+
+  it("draws every tick at the same thickness, whatever the item's size", () => {
+    // As a fraction of the glyph the weight reported the item's SIZE, which the
+    // box around it already says -- a bench drew a heavy bar and a stool a
+    // hairline, two conventions on one plan.
+    const thickness = (subject: Item) => {
+      const t = extent(buildItemGlyph(subject)!.tick);
+      return t.maxY - t.minY; // facing is +x, so thickness is the y span
+    };
+    const small = thickness(item({ loops: box(2, 2), facing: { x: 1, y: 0 } }));
+    const large = thickness(item({ loops: box(8, 8), facing: { x: 1, y: 0 } }));
+    expect(large).toBeCloseTo(small, 9);
+    expect(thickness(item({ facing: { x: 1, y: 0 } }))).toBeCloseTo(small, 9);
+  });
+
+  it("caps the tick so a bench run does not draw a line to its distant centre", () => {
+    const glyph = buildItemGlyph(item({ loops: box(20, 20), facing: { x: 1, y: 0 } }))!;
+    const t = extent(glyph.tick);
+    expect(t.maxX - t.minX).toBeCloseTo(MAX_TICK_SOURCE_SIZE / 2, 9);
+    // Still anchored on the edge -- shortened from the centre end, never lifted
+    // off the outline.
+    expect(t.maxX).toBeCloseTo(extent(glyph.rect).maxX, 9);
   });
 
   it("emits whole triangles and finite coordinates for every case", () => {

@@ -27,10 +27,19 @@
 //
 // **The tick is an orientation, not a direction of travel.** An opening's
 // normal points THROUGH a wall and has a meaning on each side; an item's facing
-// is just which way it points, so the tick runs from the marker's centre
-// outward and stops. It is drawn on the same terms as the door arrow: absent
-// facing means no tick, never a guessed one. That is not a rare case — 44 of
-// 644 House A items have no plan facing, because their local X points along Z.
+// is just which way it points. It is drawn on the same terms as the door
+// arrow: absent facing means no tick, never a guessed one. That is not a rare
+// case — 44 of 644 House A items have no plan facing, because their local X
+// points along Z.
+//
+// **The tick is drawn INSIDE the glyph, from the leading edge back toward the
+// centre**, and that is a correction rather than a preference. It used to reach
+// outward from the edge, which made an item's drawn extent larger than the
+// object — on a furnished plan the ticks crossed into neighbouring items and
+// through room boundaries, claiming floor nothing occupies. Inside, the glyph
+// covers exactly what the item covers, which is also what the pick ring has
+// always said: the tick was deliberately NOT clickable, which was an admission
+// that it drew somewhere the item is not.
 
 import type { Extent, Item, Loop, Point2D } from "../types.js";
 import { flip } from "../geometry.js";
@@ -58,7 +67,9 @@ export const MARKER_SIZE = 1.2;
  * The largest footprint dimension the tick will size itself from.
  * The cap the opening glyphs take, for the same reason: a very large item — a
  * bench run, a modular wall — would otherwise put a tick on the drawing longer
- * than the rooms around it.
+ * than the rooms around it. Now that the tick runs INWARD the cap is no longer
+ * what keeps it off the plan — the geometry does that — but a 20 ft bench would
+ * still draw a 10 ft line to its own centre, which reads as a wall.
  */
 export const MAX_TICK_SOURCE_SIZE = 4.0;
 
@@ -66,10 +77,20 @@ export const MAX_TICK_SOURCE_SIZE = 4.0;
  *  already about this size; a real footprint may be far thinner in one axis. */
 export const MIN_PICK_SIZE = 1.0;
 
-/** Tick length, as a fraction of the glyph's size. */
-const TICK_LENGTH = 0.7;
-/** Tick thickness, same fraction basis. */
-const TICK_STROKE = 0.09;
+/**
+ * Tick thickness in WORLD units (feet), not a fraction of the glyph.
+ *
+ * As a fraction the line's weight reported the item's SIZE, so a bench drew a
+ * heavy bar and a stool a hairline — two drawing conventions on one plan,
+ * saying something the box around it already says. One weight for every item
+ * means the tick reads as annotation throughout.
+ *
+ * 0.1 ft is about 30 mm: a little lighter than the marker outline it sits
+ * inside (`MARKER_STROKE` x `MARKER_SIZE` = 0.144 ft), so the box stays the
+ * dominant shape — which is what leaving the box graphic alone asks of
+ * anything drawn within it.
+ */
+const TICK_THICKNESS = 0.1;
 /** Marker outline thickness, same fraction basis. */
 const MARKER_STROKE = 0.12;
 
@@ -150,6 +171,27 @@ function cornersOf(e: Extent): Point2D[] {
   ];
 }
 
+/**
+ * Distance from `centre` to the footprint's leading edge, measured along
+ * `unit` — the largest projection of any vertex onto the facing.
+ *
+ * Exact for the oriented boxes duHast sends, and honest for anything else: a
+ * polygon's furthest point along the facing IS its edge in that direction, so
+ * the tick starts on the outline rather than on a box drawn around it.
+ *
+ * `points` arrive in payload space; `centre` and `unit` are already flipped,
+ * which is why each vertex is flipped here rather than at the call site.
+ */
+function edgeAlong(points: readonly Point2D[], centre: Point2D, unit: Point2D): number {
+  let max = 0;
+  for (const raw of points) {
+    const p = flip(raw);
+    const d = (p.x - centre.x) * unit.x + (p.y - centre.y) * unit.y;
+    if (d > max) max = d;
+  }
+  return max;
+}
+
 /** Grow an extent to at least `MIN_PICK_SIZE` on each axis, so a thin footprint
  *  can still be aimed at. */
 function padded(e: Extent): Extent {
@@ -215,20 +257,35 @@ function markerTriangles(c: Point2D, size: number, unit: Point2D | null): number
 }
 
 /**
- * A bar from the marker's edge outward along the facing.
+ * A bar from the glyph's leading edge INWARD along the facing, toward the
+ * centre.
  *
- * It starts at the edge rather than at the centre so it reads as *pointing*
- * rather than as a line through the object, and so it is still visible when the
- * marker is small on screen.
+ * `halfAlong` is the distance from the centre to the edge measured along the
+ * facing — so the bar starts exactly on the edge whatever the glyph's shape or
+ * angle, and by construction cannot escape it. Taking the box's larger
+ * dimension instead would be wrong for any item that is not square: a 6 x 2 ft
+ * desk facing along its short axis would start its tick 3 ft out, a foot clear
+ * of the desk, which is the bug being fixed wearing a different shape.
+ *
+ * It stops at the centre rather than crossing to the far edge. A line through
+ * the whole box has no near end and so states an AXIS, not a direction; half of
+ * one still says which way the item faces.
  */
-function tickTriangles(c: Point2D, unit: Point2D, size: number): number[] {
+function tickTriangles(c: Point2D, unit: Point2D, halfAlong: number): number[] {
   const out: number[] = [];
-  const px = -unit.y * (TICK_STROKE / 2) * size;
-  const py = unit.x * (TICK_STROKE / 2) * size;
-  const x0 = c.x + unit.x * 0.5 * size;
-  const y0 = c.y + unit.y * 0.5 * size;
-  const x1 = c.x + unit.x * (0.5 + TICK_LENGTH) * size;
-  const y1 = c.y + unit.y * (0.5 + TICK_LENGTH) * size;
+  // Capped, so a bench run does not draw a line to its own distant centre.
+  const length = Math.min(halfAlong, MAX_TICK_SOURCE_SIZE / 2);
+  // A degenerate footprint has no edge to start from, and a zero-length bar is
+  // four coincident vertices rather than nothing — which is a draw the batch
+  // still pays for.
+  if (length < 1e-9) return out;
+
+  const px = -unit.y * (TICK_THICKNESS / 2);
+  const py = unit.x * (TICK_THICKNESS / 2);
+  const x0 = c.x + unit.x * halfAlong;
+  const y0 = c.y + unit.y * halfAlong;
+  const x1 = c.x + unit.x * (halfAlong - length);
+  const y1 = c.y + unit.y * (halfAlong - length);
   quad(out, x0 - px, y0 - py, x1 - px, y1 - py, x1 + px, y1 + py, x0 + px, y0 + py);
   return out;
 }
@@ -284,11 +341,17 @@ export function buildItemGlyph(item: Item): ItemGlyph | null {
   const unit: Point2D | null = f && len > 1e-9 ? flip({ x: f.x / len, y: f.y / len }) : null;
 
   const rect = usableBox ? fanTriangulate(outer!) : [];
-  const size = usableBox
-    ? Math.min(Math.max(box.maxX - box.minX, box.maxY - box.minY), MAX_TICK_SOURCE_SIZE)
-    : MARKER_SIZE;
   const marker = usableBox ? [] : markerTriangles(centre, MARKER_SIZE, unit);
-  const tick = unit ? tickTriangles(centre, unit, size) : [];
+  // Where the glyph's edge is, along the facing. The marker is a square turned
+  // to the facing, so its answer is half a side whatever the angle; a footprint
+  // is measured, because its answer depends on which of its axes the item faces
+  // along.
+  const halfAlong = unit
+    ? usableBox
+      ? edgeAlong(outer!, centre, unit)
+      : MARKER_SIZE / 2
+    : 0;
+  const tick = unit ? tickTriangles(centre, unit, halfAlong) : [];
 
   const pickRing = cornersOf(
     padded(usableBox ? extentOfFlipped(outer!.map(flip)) : {
