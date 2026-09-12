@@ -68,7 +68,39 @@ button.action:disabled { opacity: 0.4; cursor: default; }
 .placeholder { padding: 2rem; opacity: 0.6; font-size: 0.8rem; }
 .not-ported { font-size: 0.7rem; opacity: 0.7; max-width: 760px; margin: 0 0 1.4rem; }
 
-section.block { margin-bottom: 1.6rem; max-width: 760px; }
+/* THE BASE SIZE FOR A BLOCK'S OWN TEXT, and it has to be stated here because
+   nothing else states it.
+
+   `.row-head` carried no rule at all, and the milestone and hierarchy rows
+   label their fields with bare <span>s -- so all of it inherited the document's
+   16px while every control beside it was 0.72rem (11.5px). That put a 16px
+   "name" and "date" next to an 11.5px field, which is what made the milestone
+   rows look like a different page. 25 elements across 9 sections were affected;
+   the milestone rows hold 10 of them, and they sit directly against their
+   inputs, which is why it showed up there first.
+
+   Set on the block rather than on `.row-head`, so the bare spans are covered
+   too and a future section cannot reintroduce this by forgetting a class.
+   0.72rem matches `label.field`, so a row's heading and its fields are one
+   size. Anything with its own rule -- h2, .hint, the appearance grid's column
+   headers -- still wins. */
+section.block { margin-bottom: 1.6rem; max-width: 760px; font-size: 0.72rem; }
+
+/* A ROW IS A FLEX ROW, which `.row` never actually said -- it carried no rule
+   at all, so `<Row>` was a plain block div whose children were separated by
+   nothing but the whitespace JSX strips. What made rows look like rows was the
+   16px text above overflowing 760px and wrapping; correcting the size took that
+   away and left "...christel)rooms" running together.
+
+   `gap` rather than margins on the children, so a row with one control and a
+   row with six space identically, and `wrap` so a long one breaks between
+   controls instead of overflowing the block. 0.4rem matches the gap inside
+   `label.field`, so the space between two fields reads the same as the space
+   between a field's label and its input. */
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.4rem; margin: 0.3rem 0; }
+/* `label.field` already spaces itself; inside a flex row that margin doubles
+   up with the gap and pulls the row apart. */
+.row > label.field { margin-right: 0; }
 section.block > h2 {
   font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase;
   margin: 0 0 0.15rem; border-bottom: 1px solid var(--rule); padding-bottom: 0.25rem;
