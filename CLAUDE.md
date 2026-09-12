@@ -91,8 +91,18 @@ comparison, pyRevit exporter). What is expensive to rediscover:
 Ceilings ship end to end: contract, ingest, storage, `/ceilings`, MCP,
 exporter, pyRevit button and the plan layer. No QA report yet.
 
+**Probed on RHH 2026-09-12** (1,833 ceilings across 9 documents, against House
+A's 30). Everything below is measured on both unless it says otherwise.
+
 - **A ceiling has no room parameter and a room has no ceiling parameter.** So
-  the join is geometric or it does not exist. That inverts the precedence rule
+  the join is geometric or it does not exist. **Model-scoped is correct, and
+  RHH confirms it**: every document holding ceilings also holds rooms, so
+  ceilings are NOT a second exception to the model-scoped rule. A document
+  holding rooms and no ceilings (a base-build package, a site model) is ordinary
+  and says nothing about scope; what would break it is ceilings with no rooms in
+  their own document, and there are none. The 26 cross-document overlaps RHH's
+  geometry shows are what a project-scoped join would wrongly attribute — a
+  ceiling over the one enormous site room another model declares. That inverts the precedence rule
   every other entity follows — doors, windows and FF&E each carry an authored
   reference and `room_resolution` is opt-in *because* there is something
   authored to disagree with. `service::ceilings` therefore passes
@@ -103,7 +113,10 @@ exporter, pyRevit button and the plan layer. No QA report yet.
   `rooms` on a `/ceilings` row is a list ordered largest-overlap-first, so
   `rooms[0]` is a usable single owner. **Empty means unattributed, which is a
   reported state** — 8 of House A's 30, being external soffits, a level with no
-  rooms, and two degenerate exports. Nothing is stored, so changing the rule
+  rooms, and two degenerate exports; 17 of RHH's 1,833. **Many-to-many is real,
+  not defensive**: 419 of RHH's ceilings genuinely cover more than one room at a
+  sliver-filtering threshold, where House A's single apparent case was an
+  artefact. Nothing is stored, so changing the rule
   changes every answer and rewrites nothing.
 - **Two thresholds, and one cannot do both jobs** (`MIN_OVERLAP_AREA` 1.0 sqft,
   `MIN_FRACTION_OF_CEILING` 0.005). Measured: 26 intersecting pairs on House A,
@@ -111,19 +124,35 @@ exporter, pyRevit button and the plan layer. No QA report yet.
   faults — slivers where a large ceiling grazes a neighbour (0.97 sqft, 0.414%
   of itself) need the fraction test; ceilings whose whole exported footprint is
   0.33 and 0.18 sqft overlap by 100% *of themselves* and only the absolute test
-  rejects them. **The fraction is of the CEILING**, which is where duHast's own
+  rejects them. **RHH did not move either value**: it has 3 degenerate ceilings
+  (2.09–4.47 sqft) and the same sliver shape, so the two thresholds stay
+  constants rather than becoming a `[ceilings]` block. **The fraction is of the CEILING**, which is where duHast's own
   `_intersect_ceiling_vs_room` is wrong: it divides by the ROOM's area despite
   naming its variable for the ceiling, so a sliver against a large room passes
   more easily than a real overlap against a small one.
-- **`loops[0]` is the whole ceiling; never union or sum the polygons.** duHast
-  exports one polygon per *horizontal face*, and a slab has two — 4 of House A's
-  7 multi-polygon ceilings are the same face twice (IoU above 0.98, areas
-  summing to exactly twice their union) and the other 3 are the largest face
-  plus sub-1-sqft edge noise. The largest polygon equalled the union of all of
-  them on every ceiling measured. A polygon count above 1 therefore reads as
-  evidence the `loops` field is too narrow and **is not**; the signal to widen
-  it is `analyse_ceilings_probe.py` reporting "carries genuinely ADDITIONAL
-  geometry" under Q6, which House A does not.
+- **A ceiling is a LIST of polygons and the consumer unions them. Never take
+  one piece, and never sum.** This rule was wrong once and the wrong version
+  shipped, so the numbers are here rather than in a commit message. duHast
+  exports one polygon per *horizontal face* and a slab has two, which on House A
+  was the whole story: its 7 multi-polygon ceilings were the same face twice
+  (IoU above 0.98) and the largest piece — which happened to be `polygon[0]` —
+  was the entire ceiling. **RHH's 48 multi-polygon ceilings are genuinely
+  DISJOINT.** Measured against the union: taking `polygon[0]` loses **44.0%** of
+  ceiling area on average and **99.2%** at worst (a 1,457 sqft ceiling whose
+  first piece is 11 sqft); taking the LARGEST piece still loses **25.7%**, with
+  31 of the 48 over 5%. The union is the one operation correct on both — it
+  collapses House A's duplicates (`A ∪ A = A`) and keeps RHH's pieces.
+- **A ratio of summed area to largest area cannot tell a duplicated face from
+  two equal disjoint pieces** — both give `sum ≈ 2 × largest`. Only a real
+  overlap test separates them. That heuristic is exactly what made the House A
+  reading look general, and it is why `analyse_ceilings_probe.py` now classifies
+  on the union and says so when shapely is absent rather than guessing.
+- **Holes are subtracted from a ceiling, unlike a room.** `room_locator::
+  outline_of` drops a room's holes so a probe landing on a column still
+  resolves; a room's hole is a column or a shaft. A ceiling's hole is a light
+  well or a void over an atrium and is routinely large — RHH exports 173 holed
+  polygons — so it comes out of both the overlap and the `fraction_of_ceiling`
+  denominator.
 - **Phase is the DOORS range test**, `PHASE_CREATED` / `PHASE_DEMOLISHED`, never
   the rooms equality test on `ROOM_PHASE`. No ceiling on House A is demolished,
   so the two agree there by accident — which is why this is written down rather
@@ -410,6 +439,13 @@ with one, not here.
   visible once pushed, since they live in the facade model that has no rooms.
 - **RHH's FF&E is on the wrong storeys until it is re-exported** — see the FF&E
   level trap above. The fix is upstream and lands on the next export.
+- **`/ceilings` is 9.25 MB and 33 s on RHH** (1,833 ceilings against 3,112
+  rooms). Unlike `/ffe`, the cost is not payload size but the attribution
+  itself: every read intersects every ceiling with every room on its storey,
+  because nothing is stored. Measured, not fixed. The obvious shapes of a fix
+  are a bounding-box reject before the boolean op, or an index over room
+  bounding boxes per storey — neither attempted, and the layer defaults off so
+  it is not on the first-paint path.
 
 Both older items stay closed: the extractor's phase filter is verified against
 Revit, and R4 landed.
@@ -428,8 +464,9 @@ phase never differ.
 **Their buttons live outside this repository**, in
 `SampleCodeRevitBatchProcessor-NET8/.../duHast.tab/RoomMate.panel`, over a COPY
 of `extractor/pyRevit/room_m` under that tab's `lib/`. Six are wired as of
-2026-09-06; **`ceilings_export_entry` has no button yet** (2026-09-10), so it is
-reachable from code and not from the ribbon. **The copy is the trap**: an
+2026-09-06 and the seventh, `ceilings_export_entry`, since 2026-09-11 —
+`RoomMate.panel/ByCategory.pulldown/Ceilings.pushbutton`. **The copy is the
+trap**: an
 extractor change here is inert until it is copied there, and nothing checks the
 two are in step — `diff -rq` between them is the only check there is.
 

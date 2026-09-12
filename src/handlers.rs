@@ -2983,13 +2983,15 @@ mod tests {
             id: id.to_string(),
             level_id: "L1".to_string(),
             height_offset: Some(8.0),
-            loops: vec![crate::contract::Loop {
-                points: vec![
-                    crate::contract::Point2D { x: 0.0, y: 0.0 },
-                    crate::contract::Point2D { x: 10.0, y: 0.0 },
-                    crate::contract::Point2D { x: 10.0, y: 10.0 },
-                    crate::contract::Point2D { x: 0.0, y: 10.0 },
-                ],
+            polygons: vec![crate::contract::CeilingPolygon {
+                loops: vec![crate::contract::Loop {
+                    points: vec![
+                        crate::contract::Point2D { x: 0.0, y: 0.0 },
+                        crate::contract::Point2D { x: 10.0, y: 0.0 },
+                        crate::contract::Point2D { x: 10.0, y: 10.0 },
+                        crate::contract::Point2D { x: 0.0, y: 10.0 },
+                    ],
+                }],
             }],
             properties: Default::default(),
             type_properties: Default::default(),

@@ -50,6 +50,7 @@ export type { EntityPollOptions, FetchState, PollFetch, PollOutcome, PollRespons
 export type {
   AppearanceContext,
   Ceiling,
+  CeilingPolygon,
   ClassificationTier,
   Door,
   WindowOpening,

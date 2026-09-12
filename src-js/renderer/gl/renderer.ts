@@ -849,9 +849,17 @@ export class GlPlanRenderer implements PlanRenderer {
     // is where that state is visible; a plan cannot show an absent polygon.
     const ceilingBatch = new LineBatch();
     for (const ceiling of this.#activeCeilings()) {
-      const outer = ceiling.loops?.[0];
-      if (!outer?.points?.length) continue;
-      ceilingBatch.push(ringSegments(outer.points.map(flip)), pal.ink, W_OUTLINE);
+      // EVERY piece, and every ring of it. A ceiling is a list of polygons
+      // because RHH's arrive in genuinely disjoint pieces -- drawing only the
+      // first would under-draw 48 of its ceilings, one of them by 99%. Holes
+      // are drawn too: a light well over an atrium is a visible edge, and the
+      // server already subtracts it from the ceiling's area.
+      for (const piece of ceiling.polygons ?? []) {
+        for (const ring of piece.loops ?? []) {
+          if (!ring.points?.length) continue;
+          ceilingBatch.push(ringSegments(ring.points.map(flip)), pal.ink, W_OUTLINE);
+        }
+      }
     }
     this.#ceilingLines = ceilingBatch.isEmpty ? null : ceilingBatch.build({ dash: CEILING_DASH });
 
