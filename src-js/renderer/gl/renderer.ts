@@ -25,7 +25,7 @@ import { resolveRoomAppearance } from "../appearance.js";
 import { flip, pointsAttr } from "../geometry.js";
 import type { HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
 import type { Ceiling, Door, Item, Rect, Room, Space, WindowOpening } from "../types.js";
-import { parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
+import { overrideOr, parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
 import { buildLabels, type RoomLabel } from "./labels.js";
 import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js";
@@ -446,7 +446,11 @@ export class GlPlanRenderer implements PlanRenderer {
     // `.room.error:hover` resolves to the accent, everything else to
     // `--fill-hover`. Same two rules the stylesheet carries.
     const a = resolveRoomAppearance(entry.room, this.#lastPaint);
-    const colour = a.error ? this.#palette.accent : this.#palette.fillHover;
+    // The error state still wins over the project's hover colour: a room the QA
+    // report flagged is reporting something, and a preference must not hide it.
+    const colour = a.error
+      ? this.#palette.accent
+      : overrideOr(this.#lastPaint.appearance?.rooms?.hover, this.#palette.fillHover);
     if (!batch.push(entry.room, colour)) {
       this.#render();
       return;
@@ -670,6 +674,13 @@ export class GlPlanRenderer implements PlanRenderer {
     const holeBatch = new LineBatch();
     const entries: RoomEntry[] = [];
 
+    // Resolved ONCE for the level rather than per room: the override is project
+    // state, and `overrideOr` would otherwise re-test the same string against
+    // the same regex for every room on a 3,000-room plan.
+    const app = opts.appearance ?? {};
+    const roomLine = overrideOr(app.rooms?.line, pal.ink);
+    const roomFill = overrideOr(app.rooms?.fill, pal.fill);
+
     // The rooms toggle gates the LOOP, not the data: `rooms` stays populated so
     // the grid, the fit and every overlay's scope are unchanged, and the three
     // batches below simply stay empty -- which `build()` already turns into null
@@ -683,9 +694,13 @@ export class GlPlanRenderer implements PlanRenderer {
       // The SAME decision the SVG painter makes, from the same function. This
       // is what Decision 3 is for: one appearance resolution, two emitters.
       const a = resolveRoomAppearance(room, opts);
-      const base: Rgba = a.fill !== null ? parseColour(a.fill) : a.error ? pal.error : pal.fill;
+      // PRECEDENCE, and the order is the whole of it: a colour plan is the most
+      // specific answer (it colours THIS room for what it is), the error state
+      // next, the project's room fill after that, and the theme last. An
+      // override that beat the plan would make the plan do nothing.
+      const base: Rgba = a.fill !== null ? parseColour(a.fill) : a.error ? pal.error : roomFill;
       const fillColour = a.dim ? withAlpha(base, DIM_ALPHA) : base;
-      const strokeBase = a.match ? pal.accent : pal.ink;
+      const strokeBase = a.match ? pal.accent : roomLine;
       const strokeColour = a.dim ? withAlpha(strokeBase, DIM_ALPHA) : strokeBase;
 
       const fill = fillBatch.push(room, fillColour);
@@ -697,7 +712,9 @@ export class GlPlanRenderer implements PlanRenderer {
       for (let i = 1; i < loops.length; i++)
         holeBatch.push(
           ringSegments(loops[i]!.points.map(flip)),
-          a.dim ? withAlpha(pal.ink, DIM_ALPHA) : pal.ink,
+          // A hole is part of the room it is cut from, so it follows the room's
+          // line rather than the theme's ink.
+          a.dim ? withAlpha(roomLine, DIM_ALPHA) : roomLine,
           W_HOLE,
         );
 
@@ -731,6 +748,8 @@ export class GlPlanRenderer implements PlanRenderer {
     // computations here — one for the vertices, one for the hit target — is
     // how the two come to disagree about a door in a diagonal wall.
     const doorBatch = new FillBatch();
+    const doorLine = overrideOr(app.doors?.line, pal.ink);
+    const doorFill = overrideOr(app.doors?.fill, pal.ink);
     const pickable: PickableDoor[] = [];
     const doorEntries: DoorEntry[] = [];
     for (const door of this.#activeDoors()) {
@@ -741,13 +760,16 @@ export class GlPlanRenderer implements PlanRenderer {
       // at the origin, where it would claim to be somewhere it is not.
       if (!glyph) continue;
 
+      // The alpha rides the override rather than being replaced by it: the
+      // transparency is what stops a footprint hiding the room under it, which
+      // is structural, not a shade anyone chose.
       const rect = glyph.rect.length
-        ? doorBatch.pushTriangles(glyph.rect, withAlpha(pal.ink, DOOR_RECT_ALPHA))
+        ? doorBatch.pushTriangles(glyph.rect, withAlpha(doorFill, DOOR_RECT_ALPHA))
         : null;
       // Arrow and cross are mutually exclusive by construction, so one range
       // covers whichever was drawn.
       const marks = glyph.arrow.length ? glyph.arrow : glyph.cross;
-      const glyphRange = marks.length ? doorBatch.pushTriangles(marks, pal.ink) : null;
+      const glyphRange = marks.length ? doorBatch.pushTriangles(marks, doorLine) : null;
 
       doorEntries.push({ door, rect, glyph: glyphRange });
       pickable.push({ door, ring: glyph.pickRing, box: glyph.pick });
@@ -764,6 +786,8 @@ export class GlPlanRenderer implements PlanRenderer {
     // moved. Two meshes is two draw calls for the whole plan, not two per
     // element, which is what the one-draw-call-per-layer rule actually asks.
     const windowBatch = new FillBatch();
+    const windowLine = overrideOr(app.windows?.line, pal.ink);
+    const windowFill = overrideOr(app.windows?.fill, pal.ink);
     const pickableWindows: PickableDoor[] = [];
     const windowEntries: WindowEntry[] = [];
     for (const window of this.#activeWindows()) {
@@ -773,12 +797,12 @@ export class GlPlanRenderer implements PlanRenderer {
       if (!glyph) continue;
 
       const rect = glyph.rect.length
-        ? windowBatch.pushTriangles(glyph.rect, withAlpha(pal.ink, DOOR_RECT_ALPHA))
+        ? windowBatch.pushTriangles(glyph.rect, withAlpha(windowFill, DOOR_RECT_ALPHA))
         : null;
       // Symbol and cross are mutually exclusive by construction, so one range
       // covers whichever was drawn.
       const marks = glyph.symbol.length ? glyph.symbol : glyph.cross;
-      const glyphRange = marks.length ? windowBatch.pushTriangles(marks, pal.ink) : null;
+      const glyphRange = marks.length ? windowBatch.pushTriangles(marks, windowLine) : null;
 
       windowEntries.push({ window, rect, glyph: glyphRange });
       pickableWindows.push({ door: window, ring: glyph.pickRing, box: glyph.pick });
@@ -792,6 +816,8 @@ export class GlPlanRenderer implements PlanRenderer {
     // of openings, so this is the layer a reader toggles most and the one whose
     // rebuild cost most wants isolating from the others.
     const ffeBatch = new FillBatch();
+    const ffeLine = overrideOr(app.ffe?.line, pal.ink);
+    const ffeFill = overrideOr(app.ffe?.fill, pal.ink);
     const pickableFfe: PickableDoor[] = [];
     const ffeEntries: ItemEntry[] = [];
     for (const item of this.#activeFfe()) {
@@ -800,12 +826,12 @@ export class GlPlanRenderer implements PlanRenderer {
       if (!glyph) continue;
 
       const rect = glyph.rect.length
-        ? ffeBatch.pushTriangles(glyph.rect, withAlpha(pal.ink, DOOR_RECT_ALPHA))
+        ? ffeBatch.pushTriangles(glyph.rect, withAlpha(ffeFill, DOOR_RECT_ALPHA))
         : null;
       // Marker and rectangle are mutually exclusive by construction; the tick
       // rides with whichever was drawn, so one range covers the marks.
       const marks = glyph.marker.concat(glyph.tick);
-      const glyphRange = marks.length ? ffeBatch.pushTriangles(marks, pal.ink) : null;
+      const glyphRange = marks.length ? ffeBatch.pushTriangles(marks, ffeLine) : null;
 
       ffeEntries.push({ item, rect, glyph: glyphRange });
       pickableFfe.push({ door: item as unknown as Door, ring: glyph.pickRing, box: glyph.pick });
@@ -834,10 +860,13 @@ export class GlPlanRenderer implements PlanRenderer {
     // worth seeing have no geometry to see, and the QA report is where they are
     // counted.
     const spaceBatch = new LineBatch();
+    // Defaults to the ACCENT, where every other layer defaults to ink -- see the
+    // note above. Overriding this and not the ceilings is a way to lose that.
+    const spaceLine = overrideOr(app.spaces?.line, pal.accent);
     for (const space of this.#activeSpaces()) {
       const outer = space.loops?.[0];
       if (!outer?.points?.length) continue;
-      spaceBatch.push(ringSegments(outer.points.map(flip)), pal.accent, W_OUTLINE);
+      spaceBatch.push(ringSegments(outer.points.map(flip)), spaceLine, W_OUTLINE);
     }
     this.#spaceLines = spaceBatch.isEmpty ? null : spaceBatch.build();
 
@@ -860,6 +889,7 @@ export class GlPlanRenderer implements PlanRenderer {
     // It is still counted and still attributed to no room by the server, which
     // is where that state is visible; a plan cannot show an absent polygon.
     const ceilingBatch = new LineBatch();
+    const ceilingLine = overrideOr(app.ceilings?.line, pal.ink);
     for (const ceiling of this.#activeCeilings()) {
       // EVERY piece, and every ring of it. A ceiling is a list of polygons
       // because RHH's arrive in genuinely disjoint pieces -- drawing only the
@@ -869,7 +899,7 @@ export class GlPlanRenderer implements PlanRenderer {
       for (const piece of ceiling.polygons ?? []) {
         for (const ring of piece.loops ?? []) {
           if (!ring.points?.length) continue;
-          ceilingBatch.push(ringSegments(ring.points.map(flip)), pal.ink, W_OUTLINE);
+          ceilingBatch.push(ringSegments(ring.points.map(flip)), ceilingLine, W_OUTLINE);
         }
       }
     }
@@ -1003,7 +1033,7 @@ export class GlPlanRenderer implements PlanRenderer {
         // layer painted underneath still shows. In SVG the selection class went
         // onto the room polygon itself and the fill came from the same element;
         // here the fill is a different technology, so the mark must not cover it.
-        p.setAttribute("class", "room-selected-mark");
+        p.setAttribute("class", "room-selected-mark rooms");
         g.appendChild(p);
       }
     }
@@ -1028,7 +1058,7 @@ export class GlPlanRenderer implements PlanRenderer {
         // written out rather than run through `pointsAttr`, which flips as it
         // formats and would put the mark at the mirror image of the door.
         p.setAttribute("points", glyph.pickRing.map((q) => `${q.x},${q.y}`).join(" "));
-        p.setAttribute("class", "door-selected-mark");
+        p.setAttribute("class", "door-selected-mark doors");
         g.appendChild(p);
       }
     }
@@ -1036,6 +1066,12 @@ export class GlPlanRenderer implements PlanRenderer {
     // The same mark for a selected window, and deliberately the same CSS class:
     // it means "this is what you picked", which is one idea. A second style
     // would imply a second meaning.
+    //
+    // The `doors`/`windows`/`ffe` MODIFIER beside it does not undo that. It
+    // selects which custom property the stroke reads, and all four properties
+    // fall back to the accent -- so the default is still one colour for one
+    // idea, and a project that wants to tell two selections apart has to say
+    // so. Shape stays with the base class either way.
     const window = this.#selectedWindow
       ? this.#windowEntries.find((e) => e.window.id === this.#selectedWindow)
       : undefined;
@@ -1044,7 +1080,7 @@ export class GlPlanRenderer implements PlanRenderer {
       if (glyph) {
         const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
         p.setAttribute("points", glyph.pickRing.map((q) => `${q.x},${q.y}`).join(" "));
-        p.setAttribute("class", "door-selected-mark");
+        p.setAttribute("class", "door-selected-mark windows");
         g.appendChild(p);
       }
     }
@@ -1061,7 +1097,7 @@ export class GlPlanRenderer implements PlanRenderer {
       if (glyph) {
         const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
         p.setAttribute("points", glyph.pickRing.map((q) => `${q.x},${q.y}`).join(" "));
-        p.setAttribute("class", "door-selected-mark");
+        p.setAttribute("class", "door-selected-mark ffe");
         g.appendChild(p);
       }
     }

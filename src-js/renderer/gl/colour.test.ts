@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseColour, withAlpha } from "./colour.js";
+import { overrideOr, parseColour, withAlpha } from "./colour.js";
 
 describe("parseColour", () => {
   it("parses 6-digit hex, which is what tokens.css authors", () => {
@@ -34,5 +34,35 @@ describe("withAlpha", () => {
     // `.dim` is opacity 0.15 layered ON TOP of whatever fill applies, which is
     // exactly why this multiplies.
     expect(withAlpha([1, 0.5, 0.25, 0.8], 0.5)).toEqual([1, 0.5, 0.25, 0.4]);
+  });
+});
+
+describe("overrideOr", () => {
+  const THEME = [0.1, 0.2, 0.3, 1] as const;
+
+  it("falls back to the theme when nothing is set, which is every project by default", () => {
+    // Absent is the ordinary state, not a missing value: a plan with every
+    // colour pinned reads correctly in one theme and badly in the other.
+    expect(overrideOr(undefined, THEME)).toBe(THEME);
+    expect(overrideOr(null, THEME)).toBe(THEME);
+    expect(overrideOr("", THEME)).toBe(THEME);
+    expect(overrideOr("   ", THEME)).toBe(THEME);
+  });
+
+  it("uses the override when there is one", () => {
+    expect(overrideOr("#0066ff", THEME)).toEqual([0, 102 / 255, 1, 1]);
+    expect(overrideOr("  #fff  ", THEME)).toEqual([1, 1, 1, 1]);
+    expect(overrideOr("rgb(255, 0, 0)", THEME)).toEqual([1, 0, 0, 1]);
+  });
+
+  it("falls back rather than blacking a layer out on an unusable value", () => {
+    // THE reason this is not a bare `parseColour`. That answers opaque BLACK
+    // for anything it cannot read, which is right for a computed style -- the
+    // browser only hands back colours -- and wrong here: these strings come
+    // from a project's TOML, which a person may edit by hand, and a typo would
+    // black out a whole layer rather than being ignored.
+    expect(overrideOr("not a colour", THEME)).toBe(THEME);
+    expect(overrideOr("#12345", THEME)).toBe(THEME);
+    expect(overrideOr("oklch(0.7 0.1 200)", THEME)).toBe(THEME);
   });
 });

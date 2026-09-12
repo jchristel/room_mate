@@ -272,8 +272,14 @@
          class went on the room polygon itself, so the fill came free.
        - the hover mark is a real element, so `:hover` (which needs the pointer
          to be over THAT element) cannot drive it -- the pick does. */
+  /* The stroke reads a per-entity custom property that FALLS BACK to the
+     accent, so a project which sets nothing gets exactly what it got before
+     these variables existed -- one colour for one idea. The page sets the
+     variables from `[appearance]`; see `applyAppearance`. Only the colour is
+     per entity: width and dash stay with the class, because they encode what
+     KIND of thing is selected rather than a preference. */
   .plan-marks .room-selected-mark {
-    fill: none; stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3;
+    fill: none; stroke: var(--sel-rooms, var(--accent)); stroke-width: 5; stroke-dasharray: 6 3;
     stroke-linejoin: round; vector-effect: non-scaling-stroke;
   }
   /* A door mark is SOLID and thinner than a room's dashed one. A door glyph is
@@ -284,6 +290,9 @@
     fill: none; stroke: var(--accent); stroke-width: 3;
     stroke-linejoin: round; vector-effect: non-scaling-stroke;
   }
+  .plan-marks .door-selected-mark.doors { stroke: var(--sel-doors, var(--accent)); }
+  .plan-marks .door-selected-mark.windows { stroke: var(--sel-windows, var(--accent)); }
+  .plan-marks .door-selected-mark.ffe { stroke: var(--sel-ffe, var(--accent)); }
   /* No hover rule here on purpose. Hover is a FILL, and a fill in this overlay
      sits above the canvas -- and so above the labels the canvas draws, hiding
      the label of the room being pointed at. It is drawn in the GL layer beneath
@@ -943,6 +952,11 @@ let seededScope = false;
 // Which plan is APPLIED stays per zone — that is presentation.
 let colourPlans = [];
 let colourPlansProjectId = null;
+// The project's `[appearance]` block, or {} when it sets none -- which is the
+// ordinary state and means "every layer follows the theme". Page state, like
+// the colour plans it arrives with: appearance is per PROJECT, and the project
+// is a header-level scope, so one copy serves every zone.
+let appearance = {};
 // Validation is project-scoped: one report, one error set, one results block
 // in the bottom band. Error highlighting on the plans follows the QA block's
 // expansion — page state, since the block it tracks is page-level.
@@ -1536,6 +1550,7 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       searchActive,
       showLabels: showRoomLabels,
       showRooms,
+      appearance,
       doors: doorsOnLevel(levelId),
       showDoors,
       windows: windowsOnLevel(levelId),
@@ -1713,10 +1728,14 @@ function applyColourPlans(zone) {
   zone.els.colourSelect.value = active ? active.name : "";
 }
 
-// Read the project's colour plans from the settings API — the viewer's one
-// read-only use of /api/settings, once per project change (scope is global,
-// so this is one fetch for the page, not one per zone).
-async function loadColourPlans(pid) {
+// Read the project's colour plans AND its appearance from the settings API —
+// the viewer's one read-only use of /api/settings, once per project change
+// (scope is global, so this is one fetch for the page, not one per zone).
+//
+// Both come out of the same response deliberately: they are two fields of one
+// settings file fetched on one trigger, and a second request for the second
+// field would be a second thing to keep in step with the project picker.
+async function loadProjectAppearance(pid) {
   try {
     // Resolving route (not the strict /api/settings/projects/{id} the editors
     // use): the viewer holds the *payload* project id, which is not a settings
@@ -1724,10 +1743,36 @@ async function loadColourPlans(pid) {
     // that carries this project's colour plans. See resolve_project_file.
     const data = await fetchJson(`/api/settings/resolve/${encodeURIComponent(pid)}`);
     colourPlans = (data.settings && data.settings.colour_plans) || [];
+    appearance = (data.settings && data.settings.appearance) || {};
   } catch (err) {
     colourPlans = [];
+    // Reset too, and that matters: a failed fetch after a project that DID set
+    // colours would otherwise leave the previous project's palette painting
+    // this one's plan.
+    appearance = {};
   }
+  applyAppearance();
   for (const zone of zones) applyColourPlans(zone);
+}
+
+// Push the selection colours into CSS custom properties on the document root.
+//
+// Selection rings are SVG elements in the marks overlay styled by the
+// stylesheet, so unlike every other colour here they are not something GL
+// paints and cannot ride the paint request. Each property is REMOVED rather
+// than set to a default when the project does not name it, so the stylesheet's
+// own `var(--sel-x, var(--accent))` fallback answers -- writing the accent in
+// explicitly would pin it and stop it following a theme change.
+function applyAppearance() {
+  const root = document.documentElement;
+  const set = (name, value) => {
+    if (typeof value === "string" && value) root.style.setProperty(name, value);
+    else root.style.removeProperty(name);
+  };
+  set("--sel-rooms", appearance.rooms && appearance.rooms.selection);
+  set("--sel-doors", appearance.doors && appearance.doors.selection);
+  set("--sel-windows", appearance.windows && appearance.windows.selection);
+  set("--sel-ffe", appearance.ffe && appearance.ffe.selection);
 }
 
 // ============================ scope pickers (header, global) =============
@@ -1818,7 +1863,7 @@ async function refreshScope(projects) {
   // colourPlansProjectId guard keeps this to one fetch per project change.
   if (projectId && colourPlansProjectId !== projectId) {
     colourPlansProjectId = projectId;
-    loadColourPlans(projectId);
+    loadProjectAppearance(projectId);
   }
 
   const ids = projects.map(p => p.id).join(",");
@@ -4913,7 +4958,7 @@ scopeEls.project.addEventListener("change", async () => {
   await loadBuildings(projectId);
   await loadMilestones(projectId);
   colourPlansProjectId = projectId; // keep the refresh guard in sync
-  await loadColourPlans(projectId);
+  await loadProjectAppearance(projectId);
   loadValidation(projectId);
   lastRevision = null; // force the next poll tick to render immediately
   // A room id is only meaningful inside its project, so a scope change drops

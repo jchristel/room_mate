@@ -30,6 +30,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiGet, apiSend, persistSelection, seedProjectId } from "./common.js";
 import { saveBody } from "./saveBody.js";
+import { AppearanceSection } from "./sections/appearance.js";
 import { AreasSection } from "./sections/areas.js";
 import { ColourPlansSection } from "./sections/colourPlans.js";
 import { HierarchySection } from "./sections/hierarchy.js";
@@ -400,6 +401,10 @@ function Sections({
         propertyListId={PROPERTY_LIST_ID}
         dateFormatListId={DATE_FORMAT_LIST_ID}
       />
+      {/* After the colour plans, and that order is the precedence being shown:
+          a plan colours SOME rooms by what they are, and this colours every
+          layer by what it is. Where both answer, the plan wins. */}
+      <AppearanceSection settings={settings} edit={edit} />
     </>
   );
 }

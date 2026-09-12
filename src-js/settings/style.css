@@ -96,3 +96,34 @@ input[type="text"]:read-only { background: var(--fill); opacity: 0.8; }
 .save-message { font-size: 0.72rem; white-space: pre-wrap; }
 .save-message.ok { color: var(--ok); }
 .save-message.bad { color: var(--accent); }
+
+/* --- the appearance grid ---
+   A table rather than a stack of rows, because the question it answers is
+   comparative: two colours a few inches apart on the plan have to be
+   comparable a few inches apart here. The dash cells are load-bearing -- they
+   say a layer has nothing to apply that colour to, which is why they are
+   rendered rather than left blank. */
+.appearance-grid { border-collapse: collapse; font-size: 0.72rem; }
+.appearance-grid th, .appearance-grid td { padding: 0.2rem 0.7rem 0.2rem 0; text-align: left; }
+.appearance-grid thead th {
+  font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase;
+  opacity: 0.6; font-weight: normal; border-bottom: 1px solid var(--rule);
+}
+.appearance-grid tbody th { font-weight: normal; padding-right: 1.2rem; }
+.appearance-grid .cell-absent { opacity: 0.35; cursor: help; }
+
+.colour-field { display: inline-flex; align-items: center; gap: 0.3rem; }
+/* Unset swatches are muted so "following the theme" is visible down a column
+   at a glance, rather than needing the button beside each one read. */
+.colour-swatch {
+  width: 2rem; height: 1.1rem; padding: 0; cursor: pointer;
+  border: 1px solid var(--rule); background: none; opacity: 0.45;
+}
+.colour-swatch.set { border-color: var(--ink); opacity: 1; }
+.colour-reset {
+  font-family: var(--mono); font-size: 0.6rem; cursor: pointer;
+  background: none; border: 1px solid var(--rule); color: var(--ink);
+  padding: 0.05rem 0.25rem;
+}
+.colour-reset:disabled { cursor: default; opacity: 0.4; border-style: dashed; }
+.colour-reset:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }

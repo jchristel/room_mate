@@ -193,6 +193,62 @@ export function Check({
 }
 
 /**
+ * One optional colour: a swatch, and a button that hands the answer back to the
+ * theme.
+ *
+ * **Absent is a real, useful value here, not an empty field**, which is why a
+ * bare `<input type="color">` will not do: it has no null. A colour left unset
+ * means "whatever the reader's light/dark theme says", and that is the state
+ * every project starts in and most should stay in for most entities -- a plan
+ * with all fifteen colours pinned looks correct in one theme and unreadable in
+ * the other.
+ *
+ * So the button is the important half of this control. It reads `theme` and is
+ * disabled while the colour is following the theme, and `reset` once it is not,
+ * which makes the two states tellable apart at a glance across a grid of
+ * fifteen.
+ *
+ * `fallback` is what the swatch shows while absent -- the theme's own value for
+ * this colour, passed in by the caller because only it knows which of the seven
+ * palette entries this field falls back to.
+ */
+export function OptionalColour({
+  value,
+  fallback,
+  onChange,
+  title,
+}: {
+  value: string | null | undefined;
+  fallback: string;
+  /** `null` clears the override. NOT `undefined`: the generated types spell an
+   *  absent `Option<String>` as `string | null`, and the page compiles under
+   *  `exactOptionalPropertyTypes`, where those two are not interchangeable. */
+  onChange: (value: string | null) => void;
+  title?: string;
+}) {
+  const set = typeof value === "string" && value !== "";
+  return (
+    <span className="colour-field" title={title ?? undefined}>
+      <input
+        type="color"
+        className={set ? "colour-swatch set" : "colour-swatch"}
+        value={set ? value : fallback}
+        onChange={(ev) => onChange(ev.target.value)}
+      />
+      <button
+        type="button"
+        className="colour-reset"
+        disabled={!set}
+        title={set ? "Clear this override and follow the theme again" : "Following the theme"}
+        onClick={() => onChange(null)}
+      >
+        {set ? "reset" : "theme"}
+      </button>
+    </span>
+  );
+}
+
+/**
  * Move-up / move-down / remove for one entry of an ordered list.
  *
  * Order is meaning in every list that uses this — hierarchy tiers are
