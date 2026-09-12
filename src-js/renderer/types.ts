@@ -99,15 +99,23 @@ export interface Space {
  * boundary being compared against the architecture, while a ceiling is part of
  * the architecture, so it reads in the room ink rather than the accent.
  *
- * `loops` is EMPTY for a ceiling duHast could not measure, so those draw
+ * `polygons` is EMPTY for a ceiling duHast could not measure, so those draw
  * nothing. That is the same stated limitation the spaces layer has, and it is
  * why such a ceiling is exported at all rather than dropped: the server counts
  * it and attributes it to no room, which is where it is visible.
  */
+/** One piece of a ceiling's footprint: `[0]` outer, `[1..]` holes. */
+export interface CeilingPolygon {
+  loops?: Loop[];
+}
+
 export interface Ceiling {
   id: string;
   level_id?: string;
-  loops?: Loop[];
+  /** EVERY piece, not one ring. duHast exports a ceiling once per horizontal
+   *  face and RHH's pieces are genuinely disjoint -- drawing only the first
+   *  would omit 44% of ceiling area on average there, 99.2% at worst. */
+  polygons?: CeilingPolygon[];
   /** The model the ceiling came from. Needed by `onStorey`, which joins a
    *  storey by name + elevation against this model's own level list. */
   model_id?: string;

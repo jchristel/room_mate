@@ -53,7 +53,7 @@
 
 use std::collections::BTreeMap;
 
-use geo::{Area, BooleanOps, Coord, LineString, Polygon};
+use geo::{Area, BooleanOps, Coord, LineString, MultiPolygon, Polygon};
 use serde::Serialize;
 
 use crate::contract::{Ceiling, CeilingPayload, Level, Loop};
@@ -139,25 +139,45 @@ pub struct CeilingsResult {
     pub ceilings: Vec<CeilingResponse>,
 }
 
-/// A ceiling's plan polygon, outer ring only.
+/// A ceiling's plan footprint: the UNION of every piece it exports.
 ///
-/// Outer-only matches `room_locator::outline_of` and `areas::room_outer_polygon`
-/// — a fourth copy of the same six lines, per the house rule that a shared
-/// helper is duplicated per module rather than hoisted. Holes are dropped on
-/// both sides of the intersection, so a shaft through a room and the matching
-/// void in the ceiling over it cancel rather than compound.
+/// **The union, and not the first piece or the largest one** -- the rule House A
+/// taught wrongly and RHH corrected. duHast exports a ceiling once per
+/// horizontal face of its solid, so on House A a slab arrived as its top face,
+/// its bottom face and some edge slivers, and the largest piece was the whole
+/// ceiling. RHH's pieces are genuinely disjoint instead: against the union,
+/// taking the first loses 44.0% of ceiling area on average (99.2% at worst) and
+/// taking the largest still loses 25.7%, with 31 of 48 losing over 5%.
 ///
-/// **`loops.first()` and not a union of every loop.** duHast exports a ceiling
-/// once per horizontal face of its solid, so a slab arrives as its top face,
-/// its bottom face and some edge slivers; unioning them would double-count area
-/// on 4 of House A's 30. Measured: the largest polygon equalled the union of all
-/// of them on every ceiling in the set, and `loops[0]` is that polygon.
-fn ceiling_polygon(ceiling: &Ceiling) -> Option<Polygon<f64>> {
-    let outer = ceiling.loops.first()?;
-    if outer.points.len() < 3 {
-        return None;
+/// The union is the one operation correct on both. It collapses House A's
+/// duplicated faces back to a single face -- `A ∪ A = A` -- and keeps RHH's
+/// separate pieces, so neither document needs a special case. A SUM would have
+/// been wrong on House A for exactly the reason the union is not.
+fn ceiling_shape(ceiling: &Ceiling) -> Option<MultiPolygon<f64>> {
+    let mut merged: Option<MultiPolygon<f64>> = None;
+    for piece in &ceiling.polygons {
+        let Some(outer) = piece.loops.first() else {
+            continue;
+        };
+        if outer.points.len() < 3 {
+            continue;
+        }
+        // Holes ARE carried here, unlike the room side. A room's hole is a
+        // column or a shaft -- small, and `room_locator::outline_of` drops it so
+        // a probe landing on a column still resolves. A ceiling's hole is a
+        // light well or a void over an atrium and is routinely large: RHH
+        // exports 173 holed polygons. Keeping them makes both the overlap and
+        // the `fraction_of_ceiling` denominator measure the ceiling that is
+        // actually there.
+        let holes: Vec<LineString<f64>> =
+            piece.loops.iter().skip(1).filter(|l| l.points.len() >= 3).map(ring).collect();
+        let piece = MultiPolygon::from(vec![Polygon::new(ring(outer), holes)]);
+        merged = Some(match merged {
+            None => piece,
+            Some(acc) => acc.union(&piece),
+        });
     }
-    Some(Polygon::new(ring(outer), vec![]))
+    merged.filter(|m| !m.0.is_empty())
 }
 
 fn ring(l: &Loop) -> LineString<f64> {
@@ -173,7 +193,7 @@ fn ring(l: &Loop) -> LineString<f64> {
 /// a project is measured that needs otherwise. House A holds its ceilings and
 /// its rooms in one model; RHH has not been probed.
 fn attribute(ceiling: &Ceiling, elevation: f64, rooms: &[super::room_locator::Candidate]) -> Vec<CeilingRoom> {
-    let Some(poly) = ceiling_polygon(ceiling) else {
+    let Some(poly) = ceiling_shape(ceiling) else {
         return Vec::new(); // unmeasurable ceiling: exported, but nothing to place
     };
     let ceiling_area = poly.unsigned_area();
@@ -206,7 +226,18 @@ fn attribute(ceiling: &Ceiling, elevation: f64, rooms: &[super::room_locator::Ca
     // Largest first, so the room a ceiling mostly belongs to reads first and a
     // consumer wanting a single owner can take `rooms[0]` without inventing its
     // own rule.
-    out.sort_by(|a, b| b.overlap_area.partial_cmp(&a.overlap_area).unwrap_or(std::cmp::Ordering::Equal));
+    // Largest first, then by room id. **The tie-break is not decoration**: RHH
+    // has ceilings lying over six rooms with byte-identical overlap areas (one
+    // covers six at exactly 86.448 sqft), and `partial_cmp` alone leaves their
+    // order to whatever the scan produced. `rooms[0]` is documented as a usable
+    // single owner, so an arbitrary winner among equals would make that answer
+    // unreproducible between two reads of the same data.
+    out.sort_by(|a, b| {
+        b.overlap_area
+            .partial_cmp(&a.overlap_area)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.room_id.cmp(&b.room_id))
+    });
     out
 }
 
@@ -278,7 +309,12 @@ pub fn assemble_ceilings(state: &AppState, scope: &CeilingScope<'_>) -> Result<O
 
             let mut ceiling = ceiling.clone();
             if let Some(transform) = model_frame {
-                super::placement::place_loops(transform, &mut ceiling.loops);
+                // Every piece, not just the first: a ceiling is a list of
+                // polygons now, and placing one of them would put the rest in
+                // the wrong frame.
+                for piece in &mut ceiling.polygons {
+                    super::placement::place_loops(transform, &mut piece.loops);
+                }
             }
             ceilings.push(CeilingResponse {
                 ceiling,
@@ -313,7 +349,7 @@ pub fn by_room(result: &CeilingsResult) -> BTreeMap<RoomRef, Vec<&CeilingRespons
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::Point2D;
+    use crate::contract::{CeilingPolygon, Point2D};
     use crate::service::room_locator::Candidate;
 
     /// An axis-aligned rectangle as a `Loop`, in feet.
@@ -328,12 +364,13 @@ mod tests {
         }
     }
 
-    fn ceiling(id: &str, loops: Vec<Loop>) -> Ceiling {
+    /// A ceiling from its PIECES -- each piece an outer ring plus any holes.
+    fn ceiling(id: &str, pieces: Vec<Vec<Loop>>) -> Ceiling {
         Ceiling {
             id: id.to_string(),
             level_id: "L1".to_string(),
             height_offset: None,
-            loops,
+            polygons: pieces.into_iter().map(|loops| CeilingPolygon { loops }).collect(),
             properties: Default::default(),
             type_properties: Default::default(),
             type_id: None,
@@ -352,7 +389,7 @@ mod tests {
     #[test]
     fn test_ceiling_inside_one_room_is_attributed_to_it() {
         // 10x10 ceiling wholly inside a 12x12 room.
-        let c = ceiling("c1", vec![rect(1.0, 1.0, 11.0, 11.0)]);
+        let c = ceiling("c1", vec![vec![rect(1.0, 1.0, 11.0, 11.0)]]);
         let rooms = [room("r1", 0.0, 0.0, 12.0, 12.0, 0.0)];
         let out = attribute(&c, 0.0, &rooms);
         assert_eq!(out.len(), 1);
@@ -370,7 +407,7 @@ mod tests {
     fn test_sliver_of_a_large_ceiling_is_not_attributed() {
         // 234 sqft ceiling, overlapping a big room by a 1 x 1.1 ft strip:
         // above MIN_OVERLAP_AREA, below MIN_FRACTION_OF_CEILING.
-        let c = ceiling("c1", vec![rect(0.0, 0.0, 15.6, 15.0)]);
+        let c = ceiling("c1", vec![vec![rect(0.0, 0.0, 15.6, 15.0)]]);
         let rooms = [room("r1", 15.5, 0.0, 40.0, 1.1, 0.0)];
         let out = attribute(&c, 0.0, &rooms);
         let overlap = 0.1 * 1.1;
@@ -383,7 +420,7 @@ mod tests {
     /// each lies 100% inside a room. No fraction test can reject them.
     #[test]
     fn test_degenerate_ceiling_is_rejected_on_absolute_area() {
-        let c = ceiling("c1", vec![rect(0.0, 0.0, 0.6, 0.55)]); // 0.33 sqft
+        let c = ceiling("c1", vec![vec![rect(0.0, 0.0, 0.6, 0.55)]]); // 0.33 sqft
         let rooms = [room("r1", -10.0, -10.0, 10.0, 10.0, 0.0)];
         let out = attribute(&c, 0.0, &rooms);
         assert!(out.is_empty(), "wholly inside, so only the area guard can reject it");
@@ -392,7 +429,7 @@ mod tests {
     #[test]
     fn test_ceiling_spanning_two_rooms_reports_both_largest_first() {
         // 20x10 ceiling over two rooms: 6ft of it in r_small, 14ft in r_big.
-        let c = ceiling("c1", vec![rect(0.0, 0.0, 20.0, 10.0)]);
+        let c = ceiling("c1", vec![vec![rect(0.0, 0.0, 20.0, 10.0)]]);
         let rooms = [
             room("r_small", 0.0, 0.0, 6.0, 10.0, 0.0),
             room("r_big", 6.0, 0.0, 20.0, 10.0, 0.0),
@@ -417,7 +454,12 @@ mod tests {
     /// and `ceiling_polygon` has to reject it before `geo` sees it.
     #[test]
     fn test_two_point_loop_is_not_a_polygon() {
-        let c = ceiling("c1", vec![Loop { points: vec![Point2D { x: 0.0, y: 0.0 }, Point2D { x: 1.0, y: 1.0 }] }]);
+        let c = ceiling(
+            "c1",
+            vec![vec![Loop {
+                points: vec![Point2D { x: 0.0, y: 0.0 }, Point2D { x: 1.0, y: 1.0 }],
+            }]],
+        );
         let rooms = [room("r1", 0.0, 0.0, 10.0, 10.0, 0.0)];
         assert!(attribute(&c, 0.0, &rooms).is_empty());
     }
@@ -426,20 +468,87 @@ mod tests {
     /// per document. A room directly below a ceiling must not claim it.
     #[test]
     fn test_a_room_on_another_storey_does_not_claim_the_ceiling() {
-        let c = ceiling("c1", vec![rect(0.0, 0.0, 10.0, 10.0)]);
+        let c = ceiling("c1", vec![vec![rect(0.0, 0.0, 10.0, 10.0)]]);
         let rooms = [room("r_below", 0.0, 0.0, 10.0, 10.0, -3000.0)];
         assert!(attribute(&c, 0.0, &rooms).is_empty(), "same plan position, different storey");
     }
 
-    /// The extra polygons duHast exports are the same face again, so taking
-    /// `loops[0]` must not be sensitive to them: a second, identical loop is a
-    /// hole in the room convention and is ignored here either way.
+    /// Equal overlaps must order deterministically, or `rooms[0]` -- documented
+    /// as a usable single owner -- is a different room between two reads of the
+    /// same data. RHH has a ceiling over six rooms at identical area.
     #[test]
-    fn test_only_the_first_loop_is_measured() {
-        let c = ceiling("c1", vec![rect(0.0, 0.0, 10.0, 10.0), rect(0.0, 0.0, 10.0, 10.0)]);
+    fn test_equal_overlaps_break_the_tie_on_room_id() {
+        // One 10x10 ceiling split exactly in half by two rooms: 50 sqft each.
+        let c = ceiling("c1", vec![vec![rect(0.0, 0.0, 10.0, 10.0)]]);
+        let forward = [
+            room("b_room", 0.0, 0.0, 5.0, 10.0, 0.0),
+            room("a_room", 5.0, 0.0, 10.0, 10.0, 0.0),
+        ];
+        let reversed = [
+            room("a_room", 5.0, 0.0, 10.0, 10.0, 0.0),
+            room("b_room", 0.0, 0.0, 5.0, 10.0, 0.0),
+        ];
+        let one = attribute(&c, 0.0, &forward);
+        let two = attribute(&c, 0.0, &reversed);
+        assert_eq!(one.len(), 2);
+        assert!((one[0].overlap_area - one[1].overlap_area).abs() < 1e-9, "the areas really are equal");
+        assert_eq!(one[0].room_id, "a_room", "the tie breaks on room id, not on scan order");
+        assert_eq!(
+            one.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>(),
+            two.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>(),
+            "candidate order must not change the answer",
+        );
+    }
+
+    /// **House A's shape.** duHast exports one polygon per horizontal face, so a
+    /// slab arrives as its top and its bottom -- the same ring twice. The union
+    /// must collapse them (`A ∪ A = A`); a sum would report double the area and
+    /// a ceiling covering twice the room it actually covers.
+    #[test]
+    fn test_duplicate_faces_are_not_double_counted() {
+        let c = ceiling("c1", vec![vec![rect(0.0, 0.0, 10.0, 10.0)], vec![rect(0.0, 0.0, 10.0, 10.0)]]);
         let rooms = [room("r1", 0.0, 0.0, 10.0, 10.0, 0.0)];
         let out = attribute(&c, 0.0, &rooms);
         assert_eq!(out.len(), 1);
         assert!((out[0].overlap_area - 100.0).abs() < 1e-6, "the duplicate face must not double the area");
+        assert!((out[0].fraction_of_ceiling - 1.0).abs() < 1e-9, "and the ceiling is 100 sqft, not 200");
+    }
+
+    /// **RHH's shape, and the reason this field is a list.** Two disjoint pieces
+    /// are one ceiling. Taking the first would lose the second entirely -- 44%
+    /// of ceiling area on average across RHH's 48 multi-polygon ceilings, 99.2%
+    /// at worst -- and taking the largest would still lose the smaller piece.
+    #[test]
+    fn test_disjoint_pieces_are_one_ceiling() {
+        // 100 sqft at the origin and 25 sqft well away from it.
+        let c = ceiling("c1", vec![vec![rect(0.0, 0.0, 10.0, 10.0)], vec![rect(50.0, 0.0, 55.0, 5.0)]]);
+        let rooms = [
+            room("r_big", -1.0, -1.0, 11.0, 11.0, 0.0),
+            room("r_far", 49.0, -1.0, 56.0, 6.0, 0.0),
+        ];
+        let out = attribute(&c, 0.0, &rooms);
+        assert_eq!(out.len(), 2, "both pieces attribute, so the ceiling is in both rooms");
+        assert_eq!(out[0].room_id, "r_big", "largest overlap first");
+        assert!((out[0].overlap_area - 100.0).abs() < 1e-6);
+        assert!((out[1].overlap_area - 25.0).abs() < 1e-6);
+        // The denominator is the WHOLE ceiling, both pieces: 125 sqft.
+        assert!((out[0].fraction_of_ceiling - 100.0 / 125.0).abs() < 1e-9);
+    }
+
+    /// A ceiling's hole is a light well or a void over an atrium, and RHH
+    /// exports 173 holed polygons. It must come out of the ceiling's own area,
+    /// or a ceiling with a large void reports covering ground it does not.
+    #[test]
+    fn test_a_hole_is_subtracted_from_the_ceiling() {
+        // 10x10 outer with a 4x4 void punched out of the middle: 100 - 16 = 84.
+        let c = ceiling("c1", vec![vec![rect(0.0, 0.0, 10.0, 10.0), rect(3.0, 3.0, 7.0, 7.0)]]);
+        let rooms = [room("r1", 0.0, 0.0, 10.0, 10.0, 0.0)];
+        let out = attribute(&c, 0.0, &rooms);
+        assert_eq!(out.len(), 1);
+        assert!((out[0].overlap_area - 84.0).abs() < 1e-6, "the void is not ceiling");
+        assert!(
+            (out[0].fraction_of_ceiling - 1.0).abs() < 1e-9,
+            "all of the ceiling that exists is in the room"
+        );
     }
 }

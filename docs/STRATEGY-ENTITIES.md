@@ -8,8 +8,8 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 
 **Open work only.** Rooms, doors, windows, FF&E and spaces all ship — contract,
 ingest, storage, read, QA, MCP, the plan and the pyRevit exporter — and phasing
-ships under them. **Ceilings ship everywhere except the plan and QA**, which is
-what its entry below is about. What each of those does, and the invariants that
+ships under them. **Ceilings ship everywhere except QA**, which is what its
+entry below is about. What each of those does, and the invariants that
 are expensive to rediscover (tier precedence, opening ownership, item
 attribution, the model-scoped element→room join, the phase rules, the three
 rules that are spaces' alone, and the geometry-only attribution that is
@@ -252,24 +252,34 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
 
 - **Ceilings: the QA report.** The entity ships otherwise -- contract, ingest,
   storage, `/ceilings`, MCP tool, exporter, pyRevit button and the plan layer --
-  and what it proved is in `CLAUDE.md` and in `service::ceilings`.
+  and what it proved is in `CLAUDE.md` and in `service::ceilings`. Probed on
+  House A (30 ceilings) and RHH (1,833 across 9 documents, 2026-09-12), so the
+  design now rests on two documents rather than one.
 
-  What is absent is the report, and the probe already calibrated what one must
-  NOT say. 12 of House A's 32 rooms have no ceiling and almost all are external
-  -- POOL, DECK, DRIVEWAY, the `EX` suffix throughout -- so "room without a
-  ceiling" is mostly noise as a finding and needs a classification-aware filter
-  before it is worth reporting. The 6 ceilings matching no room are all one type
-  (`CLFS-550`), 4 of them on a level carrying no rooms: a type-level pattern,
-  not six anomalies. The report worth writing is the one that separates those
-  two shapes.
+  **Both questions this entry used to carry are answered, and one of them
+  changed the contract.** Ceilings and rooms are co-located in every RHH
+  document, so the model-scoped join stands and ceilings are not a second
+  exception to it. The thresholds did not move either: RHH shows the same
+  degenerate and sliver shapes House A did, so `MIN_OVERLAP_AREA` and
+  `MIN_FRACTION_OF_CEILING` stay constants rather than becoming a `[ceilings]`
+  block. What DID change is the geometry field -- RHH's ceilings arrive in
+  genuinely disjoint pieces, so a ceiling is a LIST of polygons and the consumer
+  unions them.
 
-  Two open questions, both waiting on a second measured project rather than on
-  a decision. `MIN_OVERLAP_AREA` and `MIN_FRACTION_OF_CEILING` are constants
-  because one model has been measured, and they become a `[ceilings]` block when
-  a project disagrees. And **RHH has never been probed**, so Q2 -- whether a
-  project keeps its ceilings and its rooms in the same document -- is answered
-  only for a single-model house. If a project splits them, the model-scoped
-  join matches nothing and, unlike spaces, there is no key to widen to.
+  What is left is the report, and **the probe already calibrated what it must
+  not say**. On House A, 12 of 32 rooms have no ceiling and almost all are
+  external -- POOL, DECK, DRIVEWAY, the `EX` suffix throughout -- so "room
+  without a ceiling" is mostly noise as a finding and needs a
+  classification-aware filter before it is worth reporting. The ceilings that
+  match no room cluster by TYPE rather than scattering: House A's 6 are all
+  `CLFS-550`, 4 of them on a level with no rooms. A report listing every
+  unattributed ceiling individually would bury the signal in the expected.
+
+  Three RHH findings the report should be built to surface: **3 ceilings
+  exported a footprint under 5 sqft** (2.09-4.47) and match rooms only by
+  slivers; **17 of 1,833 attribute to no room at all**; and the storey join
+  leans on name *plus* elevation, because CPB-MAIN's "C 00" sits at 182.087 ft,
+  the same elevation as the hospital's GROUND.
 
 - **Multi-phase comparison — explicitly out of scope**, recorded so it is not
   re-proposed. It is a second axis crossing the snapshot axis, and milestones

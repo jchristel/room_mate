@@ -556,6 +556,35 @@ def phase_rows(documents):
 # --------------------------------------------------------------------------
 
 
+def union_area(polygons):
+    """Area of the UNION of a ceiling's pieces, or None without shapely.
+
+    The only measurement that separates a duplicated face from two disjoint
+    pieces. `A u A = A`, so duplicates union to the area of one face; genuinely
+    separate pieces union to more. The sum/largest ratio cannot do this and got
+    RHH wrong by 35 ceilings.
+    """
+    if not HAVE_SHAPELY:
+        return None
+    from shapely.ops import unary_union
+
+    shapes = []
+    for outer, inners in polygons:
+        if len(outer) < 3:
+            continue
+        try:
+            g = ShapelyPolygon(outer, [r for r in inners if len(r) >= 3])
+            if not g.is_valid:
+                g = g.buffer(0)
+            if not g.is_empty:
+                shapes.append(g)
+        except Exception:
+            continue
+    if not shapes:
+        return None
+    return unary_union(shapes).area
+
+
 def shape_rows(documents):
     """How many polygons and holes a ceiling exports, and whether the extra
     polygons are extra GEOMETRY or the same face twice.
@@ -578,6 +607,7 @@ def shape_rows(documents):
     duplicate_face = []
     slivers = []
     disjoint = []
+    unclassified = []
     for doc in documents:
         block = doc["entities"].get("ceilings")
         if not block:
@@ -598,14 +628,25 @@ def shape_rows(documents):
                    "{:.1f}".format(largest), "{:.1f}".format(total)]
             if largest <= 0:
                 continue
-            ratio = total / largest
-            if ratio > DUPLICATE_FACE_RATIO:
-                duplicate_face.append(row)
-            elif ratio <= SLIVER_RATIO:
-                slivers.append(row)
+            # **Classify on the UNION, never on sum/largest.** That ratio cannot
+            # tell a duplicated face from two equal disjoint pieces -- both give
+            # `sum` about twice `largest` -- and on RHH it called 35 genuinely
+            # disjoint ceilings "duplicate faces", which is how the contract came
+            # to take one polygon and lose 44% of ceiling area on average.
+            # `union == largest` means the extras add nothing; `union > largest`
+            # means they are more ceiling.
+            union = union_area(polygons)
+            if union is None:
+                # No shapely: say so rather than guess, since the ratio is what
+                # got this wrong in the first place.
+                unclassified.append(row)
+            elif union <= largest * (1.0 + 1e-6):
+                duplicate_face.append(row + ["{:.1f}".format(union)])
+            elif union <= largest * SLIVER_RATIO:
+                slivers.append(row + ["{:.1f}".format(union)])
             else:
-                disjoint.append(row)
-    return polygon_counts, inner_counts, duplicate_face, slivers, disjoint
+                disjoint.append(row + ["{:.1f}".format(union)])
+    return polygon_counts, inner_counts, duplicate_face, slivers, disjoint, unclassified
 
 
 def degenerate_rows(documents):
@@ -734,16 +775,23 @@ def build_report(index, documents):
     add("")
     rows, colocation = colocation_rows(documents)
     lines.extend(table(["document", "ceilings", "rooms", "holds"], rows))
-    if colocation["ceilings_only"] or colocation["rooms_only"]:
+
+    # **Only `ceilings_only` decides this question, and an earlier version of
+    # this verdict got that wrong on RHH.** It fired on `rooms_only` too and
+    # announced "split populations -- the join has to be project-scoped", which
+    # would have argued for undoing a correct design decision. A document
+    # holding rooms and no ceilings is ordinary: a base-build package, a site
+    # model, a shell. It says nothing whatever about what the join can be keyed
+    # on. What would break a model-scoped join is a document holding CEILINGS
+    # with no rooms to attribute them to, and nothing else.
+    if colocation["ceilings_only"]:
         add(
-            "**Split populations.** {} document(s) hold ceilings without rooms and "
-            "{} hold rooms without ceilings. A model-scoped join would match "
-            "nothing across that split, and unlike spaces there is no key to "
-            "widen to -- only geometry. The join has to be project-scoped, and "
-            "that makes ceilings the SECOND exception to CLAUDE.md's "
-            "model-scoped rule, for a different reason than spaces.".format(
-                colocation["ceilings_only"], colocation["rooms_only"]
-            )
+            "**Split populations.** {} document(s) hold ceilings WITHOUT rooms. "
+            "A model-scoped join matches nothing for those, and unlike spaces "
+            "there is no key to widen to -- only geometry. The join has to be "
+            "project-scoped, and that makes ceilings the SECOND exception to "
+            "CLAUDE.md's model-scoped rule, for a different reason than "
+            "spaces.".format(colocation["ceilings_only"])
         )
     else:
         add(
@@ -751,6 +799,15 @@ def build_report(index, documents):
             "the model-scoped join survives untouched and ceilings need no "
             "exception."
         )
+        if colocation["rooms_only"]:
+            add("")
+            add(
+                "{} document(s) hold rooms and no ceilings. That is ordinary -- a "
+                "base-build package, a site model, a shell -- and is NOT a split "
+                "population: it constrains nothing about how the join is keyed. "
+                "Those rooms simply have no ceiling over them, which the QA "
+                "report is where to count.".format(colocation["rooms_only"])
+            )
     add("")
 
     # ---- Q3 ---------------------------------------------------------------
@@ -859,9 +916,25 @@ def build_report(index, documents):
         cross = [p for p in kept if not p["same_document"]]
         if cross:
             add("")
+            # **A cross-document overlap is an argument FOR model scoping, not
+            # against it, and an earlier version of this line said the
+            # opposite.** These pairs are found because `overlap_pairs` is
+            # deliberately project-wide -- it measures what geometry does, so
+            # the scope question can be decided on numbers rather than assumed.
+            # What it actually finds on RHH is a ceiling in an interiors model
+            # lying over the single site-wide or base-build room another
+            # document declares at the same storey. Attributing a ceiling to a
+            # site boundary is a WRONG answer, and the model-scoped join is what
+            # excludes it. Q2 is the question that decides the scope, and it
+            # turns on ceilings with no rooms in their own document.
             add(
-                "{} matched pair(s) cross a document boundary. See Q2 -- the "
-                "join cannot be model-scoped.".format(len(cross))
+                "{} matched pair(s) cross a document boundary, out of {}. These "
+                "are NOT evidence for a project-scoped join -- they are what a "
+                "project-scoped join would wrongly attribute. On a federated "
+                "project a site or base-build model declares one very large room "
+                "per storey, and every ceiling above it overlaps. Q2 decides the "
+                "scope; this is a count of what model scoping correctly "
+                "discards.".format(len(cross), len(kept))
             )
         add("")
 
@@ -889,7 +962,7 @@ def build_report(index, documents):
     # ---- Q6 ---------------------------------------------------------------
     add("## Q6 -- what shape is a ceiling polygon?")
     add("")
-    polygon_counts, inner_counts, duplicate_face, slivers, disjoint = shape_rows(documents)
+    polygon_counts, inner_counts, duplicate_face, slivers, disjoint, unclassified = shape_rows(documents)
     lines.extend(
         table(
             ["polygons on the ceiling", "ceilings"],
@@ -912,23 +985,25 @@ def build_report(index, documents):
         return "\n".join(lines) + "\n"
 
     add(
-        "{} ceiling(s) export more than one polygon. **The count alone is "
-        "misleading**, and the split below is what matters: a slab has two "
-        "horizontal faces, top and bottom, so an extra polygon is usually the "
-        "SAME face again rather than more ceiling.".format(multi_total)
+        "{} ceiling(s) export more than one polygon, and the split below is what "
+        "matters. A slab has two horizontal faces, so an extra polygon MAY be the "
+        "same face again -- that is all House A had. It may equally be a separate "
+        "piece of the same ceiling, which is what RHH mostly has. The "
+        "classification is on the UNION, never on summed area: `sum` is about "
+        "twice `largest` in BOTH cases, which is how the first reading of this "
+        "got it wrong.".format(multi_total)
     )
     add("")
     if duplicate_face:
         add(
-            "**{} of them are duplicate faces** -- the polygons sum to more than "
-            "{}x the largest one. On House A the two largest pieces of each had "
-            "an IoU above 0.98 and the sum was exactly twice the union.".format(
-                len(duplicate_face), DUPLICATE_FACE_RATIO
-            )
+            "**{} of them are duplicate faces** -- their union is no larger than "
+            "the largest piece, so the extras add nothing (`A u A = A`). "
+            "Unioning is correct and costs nothing; summing would report double "
+            "the ceiling.".format(len(duplicate_face))
         )
         lines.extend(
             table(
-                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)"],
+                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)", "union (sqft)"],
                 duplicate_face,
             )
         )
@@ -943,28 +1018,31 @@ def build_report(index, documents):
         add("")
     if slivers:
         add(
-            "**{} are the largest face plus negligible slivers** -- the polygons "
-            "sum to within {}% of the largest, so the extras are noise off the "
-            "solid's side faces rather than ceiling. `polygon[0]` is the whole "
-            "of these too.".format(len(slivers), int((SLIVER_RATIO - 1) * 100))
+            "**{} are the largest face plus negligible slivers** -- their union "
+            "exceeds the largest piece by under {}%, so the extras are noise off "
+            "the solid's side faces. The union carries them anyway, which is "
+            "harmless and saves a special case.".format(
+                len(slivers), int((SLIVER_RATIO - 1) * 100)
+            )
         )
         lines.extend(
             table(
-                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)"],
+                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)", "union (sqft)"],
                 slivers,
             )
         )
     if disjoint:
         add(
-            "**{} carry genuinely ADDITIONAL geometry** -- more than the largest "
-            "face, and not a doubling of it. These are the only ones an "
-            "outer-ring-plus-holes field cannot carry, and they are what decides "
-            "whether the contract needs a list of polygons instead. Look at these "
-            "before settling the geometry field.".format(len(disjoint))
+            "**{} carry genuinely ADDITIONAL geometry** -- their union is larger "
+            "than any single piece, so the pieces are disjoint parts of one "
+            "ceiling. A single outer-ring-plus-holes field cannot carry these, "
+            "which is why the contract carries a LIST of polygons and the "
+            "consumer unions them. Taking one piece loses real ceiling: on RHH, "
+            "44.0% of area on average and 99.2% at worst.".format(len(disjoint))
         )
         lines.extend(
             table(
-                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)"],
+                ["document", "ceiling id", "polygons", "largest (sqft)", "sum (sqft)", "union (sqft)"],
                 disjoint,
             )
         )

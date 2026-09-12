@@ -39,8 +39,8 @@ pub mod spaces;
 pub mod windows;
 
 pub use ceilings::{
-    Ceiling, CeilingModelEnvelope, CeilingModelUpload, CeilingPayload, CeilingStreamEnvelope, CeilingsUpload,
-    StreamCeiling, SUPPORTED_CEILING_SCHEMA,
+    Ceiling, CeilingModelEnvelope, CeilingModelUpload, CeilingPayload, CeilingPolygon, CeilingStreamEnvelope,
+    CeilingsUpload, StreamCeiling, SUPPORTED_CEILING_SCHEMA,
 };
 pub use doors::{DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA};
 pub use ffe::{FfeModelEnvelope, FfePayload, FfeStreamEnvelope, FfeUpload, StreamItem, SUPPORTED_FFE_SCHEMA};
