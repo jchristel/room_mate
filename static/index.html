@@ -1753,6 +1753,20 @@ async function loadProjectAppearance(pid) {
   }
   applyAppearance();
   for (const zone of zones) applyColourPlans(zone);
+  // REPAINT, and this is not belt-and-braces -- it is the whole of what makes
+  // the appearance visible on a first load.
+  //
+  // This fetch and the rooms poll race, and the poll usually wins: the plan is
+  // painted with `appearance` still `{}`, and nothing repaints it afterwards
+  // because the payload has not changed. `applyColourPlans` above does not
+  // cover it either -- it repaints only a zone with an ACTIVE plan, and a
+  // project with no colour plans (the ordinary case) has none, which is exactly
+  // the configuration the bug was found in.
+  //
+  // A no-op before the first payload arrives, since `redrawAllZones` skips a
+  // zone with no data; that ordering needs nothing, because the paint reads
+  // `appearance` when it runs.
+  redrawAllZones();
 }
 
 // Push the selection colours into CSS custom properties on the document root.
