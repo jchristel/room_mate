@@ -10,10 +10,6 @@ colour_plans = []
 
 [sources]
 
-[[hierarchy]]
-name = "Department"
-name_property = "Department"
-
 # Doors, the project's second primary entity. This project is the doors sample:
 # its rooms and its doors come from the same Revit model, so every door's
 # from_room/to_room resolves against rooms already in the store.
@@ -31,6 +27,7 @@ comparison_key = "$id"
 # A door belongs to the room it opens into, else the one it opens from, else it
 # is homeless. The default, stated explicitly here because this is the sample.
 room_attribution = "to_room_then_from_room"
+room_resolution = "off"
 # Reconcile the modeller's authored reference against the attributed room.
 room_reference_property = "Door Room Reference"
 comparison_properties = [
@@ -38,6 +35,10 @@ comparison_properties = [
     "$from_room",
     "Mark",
 ]
+
+[[hierarchy]]
+name = "Department"
+name_property = "Department"
 
 # Two milestones over the data actually in the store. The first predates the
 # doors push and deliberately pins NO doors: a model a milestone doesn't pin
@@ -51,10 +52,43 @@ comparison_properties = [
 [[milestones]]
 name = "Rooms only"
 date = "2026-07-15"
-attachments = { "Building_BF_Framing_jan.r.christel" = "2026-07-15T11:18:58.186000Z" }
+
+[milestones.reference_snapshots]
+
+[milestones.attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-07-15T11:18:58.186000Z"
+
+[milestones.door_attachments]
+
+[milestones.window_attachments]
+
+[milestones.ffe_attachments]
+
+[milestones.space_attachments]
+
+[milestones.ceiling_attachments]
 
 [[milestones]]
 name = "Rooms and doors"
 date = "2026-07-29"
-attachments = { "Building_BF_Framing_jan.r.christel" = "2026-07-24T23:19:10.227000Z" }
-door_attachments = { "Building_BF_Framing_jan.r.christel" = "2026-07-29T20:03:41Z" }
+
+[milestones.reference_snapshots]
+
+[milestones.attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-07-24T23:19:10.227000Z"
+
+[milestones.door_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-07-29T20:03:41Z"
+
+[milestones.window_attachments]
+
+[milestones.ffe_attachments]
+
+[milestones.space_attachments]
+
+[milestones.ceiling_attachments]
+
+[appearance.rooms]
+line = "#f0c800"
+fill = "#f60404"
+hover = "#3649d3"
