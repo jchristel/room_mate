@@ -662,6 +662,7 @@
     <button class="ctl" id="removeZone" title="Remove the last zone">− zone</button>
     <button class="ctl" id="linkToggle" title="Sync zoom/pan across all zones">Link views: off</button>
     <button class="ctl on" id="labelsToggle" title="Show or hide room labels (SVG export follows)">Labels: on</button>
+    <button class="ctl on" id="roomsToggle" title="Show or hide the rooms themselves, so the overlays can be read on their own (SVG export keeps them)">Rooms: on</button>
     <button class="ctl on" id="doorsToggle" title="Show or hide door glyphs">Doors: on</button>
     <button class="ctl on" id="windowsToggle" title="Show or hide window glyphs">Windows: on</button>
     <button class="ctl on" id="ffeToggle" title="Show or hide furniture, fixtures and equipment">FF&amp;E: on</button>
@@ -966,6 +967,16 @@ let linkViews = false;
 // persisted: linkViews isn't either, and view prefs should persist together
 // or not at all (STRATEGY-BROWSER.md, "UI growth").
 let showRoomLabels = true;
+// Rooms default to ON, and this is the only toggle that hides the layer every
+// other one is drawn over. It exists because the overlays are read AGAINST the
+// rooms and sometimes that is the problem: a ceiling ring sits a few inches
+// inside the room outline beneath it, and the two dark lines are hard to tell
+// apart until one of them goes. Page state like the rest.
+//
+// It does NOT change what is fetched or fitted -- the rooms are still polled,
+// still scope every overlay, and still set the frame. See `showRooms` in
+// seam.ts for why they stay in the paint request.
+let showRooms = true;
 // Doors default to ON: a door is plan information, not an annotation, and the
 // people who asked for the glyph want it by default. Page state, not per zone,
 // matching how labels work.
@@ -1524,6 +1535,7 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       matchRoomIds: searchMatchIds,        // one payload -> one match set
       searchActive,
       showLabels: showRoomLabels,
+      showRooms,
       doors: doorsOnLevel(levelId),
       showDoors,
       windows: windowsOnLevel(levelId),
@@ -2349,6 +2361,12 @@ async function exportZoneLevels(zone) {
       colourPlan: zone.activeColourPlan, // per-zone presentation still applies
       errorRoomIds,
       showLabels: showRoomLabels, // export follows the header toggle
+      // The ROOMS toggle deliberately does NOT reach the export, which is the
+      // one place it and the labels toggle part company. `svg/paint.ts` draws
+      // rooms and labels and nothing else -- every overlay is GL-only -- so an
+      // export honouring it would not be a plan without rooms, it would be an
+      // empty file. Hiding rooms is a way of LOOKING at the overlays on screen,
+      // and there are no overlays here to look at.
     });
     if (!svgText) continue; // level with no drawable rooms
     downloadSvg(svgText, svgFilename(lvl.name, withErrors));
@@ -5033,6 +5051,24 @@ document.getElementById("spacesModelSelect").addEventListener("change", async (e
   await spacesPoll.poll();
   redrawAllZones();
   syncSpacesToggleLabel();
+});
+
+// Rooms toggle. Deliberately NOT in `LAYER_TOGGLES`: that table exists so each
+// element layer's storey-match fallback shows up on its own button, and rooms
+// are what the storeys are derived FROM -- there is no match state for this one
+// to report, and an entry with a permanently empty suffix would dilute a table
+// whose whole point is that the suffix is never silently absent.
+document.getElementById("roomsToggle").addEventListener("click", (e) => {
+  showRooms = !showRooms;
+  e.target.textContent = `Rooms: ${showRooms ? "on" : "off"}`;
+  e.target.classList.toggle("on", showRooms);
+  // Hiding rooms drops a ROOM selection, the rule the three element toggles
+  // already follow: the inspector would go on describing something the plan no
+  // longer draws, and the selection ring would circle blank paper.
+  if (!showRooms && roomSelection()) select(null);
+  // refit:false, like every other display toggle -- hiding a layer must not
+  // snap the zones back to fitted bounds and throw away the reader's pan/zoom.
+  redrawAllZones();
 });
 
 document.getElementById("labelsToggle").addEventListener("click", (e) => {

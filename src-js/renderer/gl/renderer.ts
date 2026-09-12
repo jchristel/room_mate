@@ -248,7 +248,13 @@ export class GlPlanRenderer implements PlanRenderer {
     // Re-read every paint: the theme can change under a running page, and a
     // cached palette would strand the plan in the old one.
     this.#palette = readPalette(this.#themeRoot);
-    this.#index = new RoomIndex(rooms);
+    // EMPTY when the rooms are hidden, rather than indexing rooms nobody can
+    // see. This is the one line that keeps `pickAt`, `roomAt` and the hover
+    // honest at once -- all three read this index, so gating it here is what
+    // stops a hidden room answering a click. Turning rooms off to read the
+    // ceilings over them and still selecting a room through the blank is the
+    // failure this prevents.
+    this.#index = new RoomIndex(opts.showRooms === false ? [] : rooms);
     if (this.#app) this.#rebuild();
   }
 
@@ -664,7 +670,13 @@ export class GlPlanRenderer implements PlanRenderer {
     const holeBatch = new LineBatch();
     const entries: RoomEntry[] = [];
 
-    for (const room of rooms) {
+    // The rooms toggle gates the LOOP, not the data: `rooms` stays populated so
+    // the grid, the fit and every overlay's scope are unchanged, and the three
+    // batches below simply stay empty -- which `build()` already turns into null
+    // meshes. Leaving `entries` empty is what silently disables the hover fill,
+    // the selection mark and `applyHighlight`, each of which looks a room up in
+    // it; none needed a flag of its own.
+    for (const room of opts.showRooms === false ? [] : rooms) {
       const loops = room.loops;
       if (!loops?.[0]) continue;
 
@@ -894,7 +906,10 @@ export class GlPlanRenderer implements PlanRenderer {
     // furniture. Below the labels, on the rule every element layer follows.
     if (this.#ffeMesh) { this.#ffeMesh.mesh.label = "ffe"; this.#root.addChild(this.#ffeMesh.mesh); }
 
-    if (opts.showLabels !== false) {
+    // Labels follow the rooms as well as their own toggle. A label is the room's
+    // name written on the room; with the room gone it is a caption floating over
+    // whatever overlay the reader turned the rooms off to look at.
+    if (opts.showLabels !== false && opts.showRooms !== false) {
       const built = buildLabels(rooms, fitted, {
         ink: pal.ink,
         accent: pal.accent,

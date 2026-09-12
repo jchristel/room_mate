@@ -54,6 +54,19 @@ export interface PaintRequest {
   searchActive?: boolean | undefined;
   showLabels?: boolean | undefined;
   /**
+   * Whether to draw the ROOMS themselves -- fills, outlines, hole strokes and
+   * labels. Absent means yes, which is why every existing call site keeps
+   * working: rooms are the base layer and nothing before this could hide them.
+   *
+   * The rooms are still PASSED when this is false, and that is the whole
+   * design. They are what `fitted` was computed from and what every overlay is
+   * scoped to, so dropping them from the request would blank the plan instead
+   * of undressing it. What the flag removes is the drawing and the PICKING --
+   * a room that is not on screen must not answer a click, on the same rule the
+   * opening toggles follow.
+   */
+  showRooms?: boolean | undefined;
+  /**
    * The doors to draw on this level, already scoped by the caller.
    *
    * Carried in the paint REQUEST rather than as a second positional argument
