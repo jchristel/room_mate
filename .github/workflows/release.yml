@@ -63,17 +63,40 @@ jobs:
     - name: Install frontend dependencies
       run: npm ci
 
-    # Rebuild rather than trust the committed bundle, then fail if the rebuild
-    # disagrees with it. static/vendor/renderer.bundle.js is generated AND
-    # committed, so a release could otherwise ship a renderer that no commit
-    # produced -- and the viewer inside the installer is the whole product.
-    # frontend.yml makes the same check on PRs; this one exists because tags
-    # do not run it.
-    - name: Rebuild the renderer bundle
+    # Rebuild rather than trust the committed artifacts, then fail if the
+    # rebuild disagrees with them. They are generated AND committed, so a
+    # release could otherwise ship a frontend that no commit produced -- and
+    # the viewer inside the installer is the whole product. frontend.yml makes
+    # the same check on PRs; this one exists because tags do not run it.
+    #
+    # `npm run build` is TWO vite builds -- the renderer bundle and the React
+    # settings page -- so this step has always rebuilt both. The name said
+    # otherwise, which is half of how the check below came to cover only one.
+    - name: Rebuild the committed frontend
       run: npm run build
 
-    - name: Fail if the committed bundle is stale
-      run: git diff --exit-code -- static/vendor/renderer.bundle.js
+    # Scoped to the same paths frontend.yml checks, and by the same means.
+    #
+    # It used to be `git diff --exit-code -- static/vendor/renderer.bundle.js`,
+    # which missed two things. static/settings/ is equally generated, equally
+    # committed and equally shipped (roommate.iss packages static\* with
+    # recursesubdirs), so a stale settings page released green -- and what ships
+    # then differs from what whoever tagged it tested locally against the
+    # committed copy, which is the exact property this check exists to hold.
+    # src-js/settings/generated/ is the ts-rs output `cargo test` above rewrites;
+    # nothing here typechecks against it, so a stale one had nothing to catch it
+    # either now that rust.yml does not run on a tag.
+    #
+    # `git status --porcelain` rather than `git diff`, matching frontend.yml, so
+    # a rebuild that ADDS a file the commit lacks is caught too -- which
+    # `emptyOutDir: true` on the settings build makes a live possibility.
+    - name: Fail if a committed frontend build is stale
+      run: |
+        $changes = git status --porcelain -- static/vendor/ static/settings/ src-js/settings/generated/
+        if ($changes) {
+          $changes
+          throw "A committed frontend build is stale. Run 'npm run build' and commit the result."
+        }
 
     # Inno Setup 6.7 is preinstalled on the windows runner images, at the path
     # build.ps1 already probes -- so there is no install step and no version to
