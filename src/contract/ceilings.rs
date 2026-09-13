@@ -1,49 +1,12 @@
-//! The **ceilings envelope**: how a push, a stored snapshot and a stream frame
-//! of `Ceiling`s are shaped.
+//! The **ceilings envelope**: how a push and a stored snapshot of ceilings are
+//! shaped. The record itself is `surfaces::Surface`, shared with floors -- see
+//! that module for why sharing it changes no key.
 //!
 //! The sixth entity, and the first whose room association is **purely
-//! geometric**. Doors, windows and FF&E each carry an authored room reference
-//! and use geometry only as the opt-in fallback `[doors] room_resolution`
-//! names. A Revit ceiling has no room parameter and a room has no ceiling
-//! parameter, so there is nothing here to prefer an authored answer over and
-//! nothing for geometry to overwrite. That inverts the precedence rule applied
-//! everywhere else in this codebase, and it is this entity's own rule in the
-//! way spaces have three.
-//!
-//! Two consequences follow, and both are in `service::ceilings` rather than
-//! here, because **attribution is derived at read time and never stored** —
-//! the rule `[doors] room_attribution` already follows, for the same reason:
-//! changing the policy changes every answer and rewrites nothing.
-//!
-//! ## The footprint is a LIST of pieces, and one document taught that wrongly
-//!
-//! `id`, `level_id` and `properties` mean for a ceiling what they mean for a
-//! room. The geometry does not, and the difference cost a revision.
-//!
-//! House A said a single outer-ring-plus-holes field was enough. 7 of its 30
-//! ceilings exported more than one polygon, and every extra was the same
-//! horizontal face again -- IoU above 0.98, areas summing to exactly twice
-//! their union -- because `convert_solid_to_flattened_2d_points` walks the
-//! horizontal faces of a solid and a slab has two. The largest piece was the
-//! whole ceiling on every one of them, and it happened to be `polygon[0]`.
-//!
-//! **RHH says otherwise, and it is the document to believe.** Of its 48
-//! multi-polygon ceilings the pieces are genuinely DISJOINT. Measured against
-//! the union of the pieces: taking `polygon[0]` loses 44.0% of the ceiling's
-//! area on average and 99.2% at worst -- a 1,457 sqft ceiling whose first piece
-//! is 11 sqft -- and taking the LARGEST piece still loses 25.7% on average,
-//! with 31 of the 48 losing more than 5%.
-//!
-//! So the footprint is every piece, and the consumer takes their **union**.
-//! That is the one operation correct on both documents: it collapses House A's
-//! duplicated faces back to one face (`A ∪ A = A`) and keeps RHH's separate
-//! pieces. A SUM would have been wrong on House A for precisely the reason the
-//! union is not.
-//!
-//! The lesson worth keeping past this field: a ratio of summed area to largest
-//! area CANNOT tell a duplicated face from two equal disjoint pieces -- both
-//! give `sum ≈ 2 × largest`. Only an actual overlap test separates them, which
-//! is why the House A reading looked solid and was not general.
+//! geometric**. What was specific to ceilings when they were the only such
+//! entity -- the footprint as a list of pieces, the union, the thresholds --
+//! turned out to be specific to *slabs*, and moved to `surfaces` and
+//! `service::surface_attribution` when floors arrived.
 //!
 //! ## Phase is the doors range test, not the rooms equality test
 //!
@@ -62,11 +25,10 @@
 //! bytes on disk, so a merged payload type would be a migration rather than a
 //! refactor.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Level, Loop, Model, ModelToShared, Project, Snapshot};
+use super::surfaces::{Surface, SurfaceEnvelope, SurfaceModelEnvelope, SurfaceStreamEnvelope, SurfaceUploadParts};
+use super::{Level, Model, ModelToShared, Project, Snapshot};
 
 /// One timestamped push of one model's ceilings.
 ///
@@ -76,7 +38,7 @@ use super::{CustomValue, Level, Loop, Model, ModelToShared, Project, Snapshot};
 /// reimplementations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CeilingPayload {
-    /// **Ceilings version independently of the other five** — see
+    /// **Ceilings version independently of the other entities** — see
     /// `SUPPORTED_CEILING_SCHEMA`.
     pub schema_version: u32,
 
@@ -97,10 +59,10 @@ pub struct CeilingPayload {
     /// Model→shared placement, in lockstep with every other payload. **Per
     /// push, never per ceiling.**
     ///
-    /// It carries more weight here than for any previous entity, because the
-    /// room join is geometric: two models whose placements disagree produce
-    /// ceilings that miss their rooms entirely, where a door with an authored
-    /// reference would still resolve. `service::placement` composes
+    /// It carries more weight here than for an entity with an authored
+    /// reference, because the room join is geometric: two models whose
+    /// placements disagree produce ceilings that miss their rooms entirely,
+    /// where a door would still resolve. `service::placement` composes
     /// `anchor⁻¹ ∘ model` for every read, so ceilings and rooms are compared in
     /// one project-local frame or the answer is meaningless.
     #[serde(default)]
@@ -122,155 +84,7 @@ pub struct CeilingPayload {
     /// and the producer refuses to send zero, which is the asymmetry
     /// `post_doors.empty_push_refusal` already documents: the two are answering
     /// different questions rather than disagreeing.
-    pub ceilings: Vec<Ceiling>,
-}
-
-/// One ceiling, as stored and as served.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Ceiling {
-    pub id: String,
-
-    /// The level the MODELLER assigned, via `CEILING_HEIGHTABOVELEVEL_PARAM`.
-    ///
-    /// **Never re-derived from geometry**, and the FF&E level trap is why: a
-    /// derived level looks correct, so `duHast.Revit.Family.Export.to_data_item`
-    /// put 9,186 of 15,070 items on the wrong storey and nothing noticed until
-    /// somebody compared a chair against its own `Level` parameter. duHast's
-    /// `get_level_data` reads the authored value for a ceiling; the extractor
-    /// must not compete with it.
-    pub level_id: String,
-
-    /// Height above `level_id`, in decimal feet.
-    ///
-    /// The only field that separates two ceilings stacked over one room — a
-    /// bulkhead over a flat soffit — since their plan polygons may be nested.
-    /// Carried rather than derived because the geometric attribution in
-    /// `service::ceilings` works in plan and would otherwise report both as
-    /// covering the room with no way to say which is which.
-    #[serde(default)]
-    pub height_offset: Option<f64>,
-
-    /// Plan footprint: **every** piece duHast measured, each an outer ring plus
-    /// its holes, in decimal feet, model space, Y up.
-    ///
-    /// **A list of pieces rather than one ring, and RHH is what forced that.**
-    /// House A's 30 ceilings made a single `loops` look sufficient: 7 exported
-    /// more than one polygon and every extra was the same horizontal face again
-    /// (IoU above 0.98), so the largest piece *was* the whole ceiling and
-    /// `polygon[0]` happened to be it. RHH is not like that. Of its 48
-    /// multi-polygon ceilings the pieces are genuinely DISJOINT, and the two
-    /// shortcuts cost real area — measured against the union, taking
-    /// `polygon[0]` loses 44.0% on average and 99.2% at worst (a 1,457 sqft
-    /// ceiling whose first piece is 11 sqft), and even taking the LARGEST piece
-    /// loses 25.7% on average, with 31 of the 48 losing more than 5%.
-    ///
-    /// So the only operation that is correct on both documents is the **union**
-    /// of the pieces, which needs the pieces to be on the wire. That is what
-    /// this field is. It also collapses House A's duplicate faces back to one
-    /// face for free, which is why this is not a special case for one project.
-    ///
-    /// **Empty is a reported state, not an absence.** A ceiling duHast cannot
-    /// measure is exported with no pieces rather than dropped (fixed upstream
-    /// 2026-09-10), because it still carries a good id, level, phase and both
-    /// property maps — and because a dropped ceiling is indistinguishable
-    /// downstream from one nobody modelled. Such a ceiling is attributed to no
-    /// room and says so.
-    pub polygons: Vec<CeilingPolygon>,
-
-    /// Instance properties, source-native and flat, like every other entity.
-    #[serde(default)]
-    pub properties: BTreeMap<String, CustomValue>,
-
-    /// Type properties, same tiering rule as doors: a tier wins only when it is
-    /// `Present`, and a blank instance value does not shadow a real type one.
-    #[serde(default)]
-    pub type_properties: BTreeMap<String, CustomValue>,
-
-    /// The ceiling's type id, carried for the same reason a door's is — it is
-    /// ready to key a shared type table if the payload-size optimization the
-    /// entities doc defers is ever taken.
-    #[serde(default)]
-    pub type_id: Option<String>,
-
-    /// The ceiling's type name, when the export carried one.
-    #[serde(default)]
-    pub type_name: Option<String>,
-}
-
-/// One piece of a ceiling's plan footprint: an outer ring and its holes.
-///
-/// The room convention verbatim (`[0]` outer, `[1..]` holes), so one renderer
-/// and one placement transform serve a ceiling piece and a room alike. What a
-/// ceiling adds is that there may be SEVERAL of these — see
-/// `Ceiling::polygons`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CeilingPolygon {
-    pub loops: Vec<Loop>,
-}
-
-/// One model's block on a multi-model ceilings upload.
-///
-/// No `room_boundary`, unlike `SpaceModelEnvelope`: a boundary regime describes
-/// how a *room* was drawn, and it is what `service::areas` needs to know how
-/// much wall sits between two rooms. A ceiling is a slab with its own edges and
-/// nothing about it is measured to a finish face or a centreline.
-#[derive(Debug, Clone, Deserialize)]
-pub struct CeilingModelEnvelope {
-    #[serde(flatten)]
-    pub model: Model,
-    #[serde(default)]
-    pub model_to_shared: Option<ModelToShared>,
-    #[serde(default)]
-    pub levels: Vec<Level>,
-}
-
-impl CeilingModelEnvelope {
-    /// Rebuild the single-model `CeilingPayload` this block plus the run's
-    /// shared envelope describes — see `RoomModelEnvelope::into_payload`, which
-    /// this mirrors and which explains why a push decomposes at all.
-    pub fn into_payload(
-        self,
-        schema_version: u32,
-        project: Project,
-        snapshot: Snapshot,
-        phase: Option<String>,
-        ceilings: Vec<Ceiling>,
-    ) -> CeilingPayload {
-        CeilingPayload {
-            schema_version,
-            project,
-            model: self.model,
-            snapshot,
-            phase,
-            model_to_shared: self.model_to_shared,
-            levels: self.levels,
-            ceilings,
-        }
-    }
-}
-
-/// The first NDJSON line of a streamed ceilings push (`POST /ceilings/stream`):
-/// the run's shared identity plus one `CeilingModelEnvelope` per model, with
-/// every ceiling arriving on a following line as a `StreamCeiling`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct CeilingStreamEnvelope {
-    pub schema_version: u32,
-    pub project: Project,
-    #[serde(default)]
-    pub snapshot: Snapshot,
-    #[serde(default)]
-    pub phase: Option<String>,
-    pub models: Vec<CeilingModelEnvelope>,
-}
-
-/// One ceiling line of a streamed push: the ceiling, plus the id of the model
-/// it belongs to. See `StreamRoom` for why the id rides every element rather
-/// than a grouping marker.
-#[derive(Debug, Clone, Deserialize)]
-pub struct StreamCeiling {
-    pub model_id: String,
-    #[serde(flatten)]
-    pub ceiling: Ceiling,
+    pub ceilings: Vec<Surface>,
 }
 
 /// The buffered multi-model ceilings upload (`POST /ceilings`).
@@ -285,21 +99,42 @@ pub struct CeilingsUpload {
     pub models: Vec<CeilingModelUpload>,
 }
 
+impl CeilingsUpload {
+    /// This upload as the streamed route would have received it -- see
+    /// `SurfaceUploadParts`.
+    pub fn into_parts(self) -> SurfaceUploadParts {
+        let mut models = Vec::with_capacity(self.models.len());
+        let mut elements = Vec::with_capacity(self.models.len());
+        for m in self.models {
+            elements.push((m.envelope.model.id.clone(), m.ceilings));
+            models.push(m.envelope);
+        }
+        let envelope = SurfaceStreamEnvelope {
+            schema_version: self.schema_version,
+            project: self.project,
+            snapshot: self.snapshot,
+            phase: self.phase,
+            models,
+        };
+        (envelope, elements)
+    }
+}
+
 /// One model's block on a buffered ceilings upload: its
-/// `CeilingModelEnvelope` plus its ceilings.
+/// `SurfaceModelEnvelope` plus its ceilings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CeilingModelUpload {
     #[serde(flatten)]
-    pub envelope: CeilingModelEnvelope,
-    pub ceilings: Vec<Ceiling>,
+    pub envelope: SurfaceModelEnvelope,
+    pub ceilings: Vec<Surface>,
 }
 
 /// The ceilings schema this build accepts. **Starts at 1, and moves
-/// independently of the other five.**
+/// independently of the others.**
 ///
 /// Same argument doors made against starting at 6 to match rooms, and windows
 /// against starting at 2 to match doors: a version number records *a contract's
-/// own* history, and this contract has none. Six entities, six version lines.
+/// own* history, and this contract has none.
 pub const SUPPORTED_CEILING_SCHEMA: u32 = 1;
 
 impl super::SnapshotEnvelope for CeilingPayload {
@@ -320,5 +155,32 @@ impl super::SnapshotEnvelope for CeilingPayload {
     }
     fn levels(&self) -> &[Level] {
         &self.levels
+    }
+}
+
+impl SurfaceEnvelope for CeilingPayload {
+    fn surfaces(&self) -> &[Surface] {
+        &self.ceilings
+    }
+    fn surfaces_mut(&mut self) -> &mut Vec<Surface> {
+        &mut self.ceilings
+    }
+    fn from_model_envelope(
+        schema_version: u32,
+        project: Project,
+        snapshot: Snapshot,
+        phase: Option<String>,
+        envelope: SurfaceModelEnvelope,
+    ) -> Self {
+        CeilingPayload {
+            schema_version,
+            project,
+            model: envelope.model,
+            snapshot,
+            phase,
+            model_to_shared: envelope.model_to_shared,
+            levels: envelope.levels,
+            ceilings: Vec::new(),
+        }
     }
 }

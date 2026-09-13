@@ -56,4 +56,11 @@ spaces?: OutlineAppearance,
  * ceiling ring apart from the room outline directly beneath it, so it is a
  * rule rather than a preference.
  */
-ceilings?: OutlineAppearance, };
+ceilings?: OutlineAppearance, 
+/**
+ * Floors: as ceilings, and the dash is not settable for the same reason.
+ * A floor, a ceiling and a room outline can all sit on one line of the
+ * plan, so the three are told apart by their stroke pattern -- solid,
+ * long dash, dot -- and a colour override cannot take that away.
+ */
+floors?: OutlineAppearance, };

@@ -4,10 +4,10 @@
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
-//! `get_ceilings` --
+//! `get_ceilings`, `get_floors` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Twenty-two in
+//! and the one forwarded mutation (`upload_reference`, below). Twenty-three in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -47,9 +47,10 @@ use rmcp::{
 };
 
 use roommate::bootstrap::build_state;
+use roommate::contract::{CeilingPayload, FloorPayload};
 use roommate::default_http_addr;
 use roommate::service::{
-    adjacency, areas, ceilings, comparison, items, milestones, openings, projects, reference, rooms, snapshots, spaces,
+    adjacency, areas, comparison, items, milestones, openings, projects, reference, rooms, snapshots, spaces, surfaces,
     validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
@@ -95,17 +96,17 @@ struct GetRoomsParams {
     filter: Vec<String>,
 }
 
-/// `get_ceilings` parameters. Its own type rather than `GetSpacesParams`: there
-/// is no `filter` (no reference source declares `entity = "ceilings"`, so the
-/// grammar would advertise an empty vocabulary) and no `model` -- a ceiling is
-/// asked about per project, not per model, because the question the entity
-/// exists for is "which ceilings are in this room".
+/// `get_ceilings` and `get_floors` parameters. Its own type rather than
+/// `GetSpacesParams`: there is no `filter` (no reference source declares either
+/// entity, so the grammar would advertise an empty vocabulary) and no `model` --
+/// a surface is asked about per project, not per model, because the question
+/// these entities exist for is "which ceilings / floors are in this room".
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct GetCeilingsParams {
+struct GetSurfacesParams {
     /// Scope the merge to one project id. Omit to merge every stored model.
     #[serde(default)]
     project: Option<String>,
-    /// Milestone name from `list_milestones`: serve the ceilings snapshots that
+    /// Milestone name from `list_milestones`: serve the snapshots that
     /// milestone pins instead of each model's latest. Omit for latest. Note the
     /// ROOMS it attributes against are pinned by the same milestone, so a
     /// milestone read answers one consistent question.
@@ -566,17 +567,32 @@ impl RoommateMcp {
     }
 
     /// Serves one project's ceilings with the rooms each lies over -- see
-    /// `service::ceilings::assemble_ceilings`.
+    /// `service::surfaces::assemble_surfaces`.
     #[tool(
-        description = "List one project's ceilings, each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit ceiling has no room parameter and a room has no ceiling parameter, so every entry in a ceiling's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet plus two fractions that answer different questions — `fraction_of_ceiling` (how much of this ceiling is in that room, which is what decided the attribution) and `fraction_of_room` (how much of that room this ceiling covers, which is the coverage question a finishes take-off asks). `rooms` is a LIST because a ceiling can lie over several, ordered largest overlap first, so `rooms[0]` is a usable single owner. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR: a ceiling over a stairwell, an external soffit, or one on a level carrying no rooms legitimately belongs to nothing — 8 of House A's 30 do. A ceiling with empty `loops` is one duHast could not measure; it is exported rather than dropped so that 'no such ceiling' and 'a ceiling nobody could measure' stay distinguishable, and it attributes to nothing. Attribution ignores overlaps below 1 sq ft or below 0.5% of the ceiling's own area, which removes two measured artefacts: slivers where a large ceiling grazes a neighbouring room, and ceilings whose exported footprint is degenerate."
+        description = "List one project's ceilings, each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit ceiling has no room parameter and a room has no ceiling parameter, so every entry in a ceiling's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet plus `mean_width` and two fractions that answer different questions — `fraction_of_element` (how much of this ceiling is in that room, which is what decided the attribution) and `fraction_of_room` (how much of that room this ceiling covers, which is the coverage question a finishes take-off asks). `rooms` is a LIST because a ceiling can lie over several, ordered largest overlap first, so `rooms[0]` is a usable single owner. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR: a ceiling over a stairwell, an external soffit, or one on a level carrying no rooms legitimately belongs to nothing — 8 of House A's 30 do. A ceiling with empty `loops` is one duHast could not measure; it is exported rather than dropped so that 'no such ceiling' and 'a ceiling nobody could measure' stay distinguishable, and it attributes to nothing. Attribution ignores overlaps below 1 sq ft or below 0.5% of the ceiling's own area, which removes two measured artefacts: slivers where a large ceiling grazes a neighbouring room, and ceilings whose exported footprint is degenerate."
     )]
-    fn get_ceilings(&self, Parameters(p): Parameters<GetCeilingsParams>) -> Result<CallToolResult, McpError> {
-        let scope = ceilings::CeilingScope { project: p.project.as_deref(), milestone: p.milestone.as_deref() };
-        match ceilings::assemble_ceilings(&self.state, &scope).map_err(to_mcp_error)? {
+    fn get_ceilings(&self, Parameters(p): Parameters<GetSurfacesParams>) -> Result<CallToolResult, McpError> {
+        let scope = surfaces::SurfaceScope { project: p.project.as_deref(), milestone: p.milestone.as_deref() };
+        match surfaces::assemble_surfaces::<CeilingPayload>(&self.state, &scope).map_err(to_mcp_error)? {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no ceilings have been pushed to this server yet",
             )])),
-            Some(result) => json_result(&result),
+            Some(assembled) => json_result(&surfaces::CeilingsResult::from(assembled)),
+        }
+    }
+
+    /// Serves one project's floors with the rooms each lies over -- the
+    /// ceilings read under its own key, with the floor sliver rule.
+    #[tool(
+        description = "List one project's floors (Revit category Floors), each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit floor has no room parameter, so every entry in a floor's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet, `fraction_of_element` (how much of this floor is in that room), `fraction_of_room` (how much of that room this floor covers -- the finishes take-off question) and `mean_width` (2 x overlap area / overlap perimeter, in feet). `rooms` is a LIST ordered largest overlap first, so `rooms[0]` is a usable single owner. The category holds structural slabs AND finish floors AND balconies; the `Structural` instance property tells them apart, and a room can legitimately lie on both a slab and a finish floor -- `height_offset` (feet above the level, to the TOP of the floor) separates them. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR. A floor with empty `polygons` is one duHast could not measure and attributes to nothing. Attribution ignores overlaps below 1 sq ft, and overlaps narrower than 1.5 ft mean width unless they cover at least half the room OR are at least half of the floor -- a strip of floor reaching under a wall into a neighbour is not that floor being in that room, while a hob or a step wholly inside one room is. Unlike the ceiling rule this is NOT a fraction of the floor, because a storey-sized slab would make every small room a sliver. The floor rule has been checked against one small project only, and the room association is model-scoped: floors in one Revit document are never attributed to rooms in another."
+    )]
+    fn get_floors(&self, Parameters(p): Parameters<GetSurfacesParams>) -> Result<CallToolResult, McpError> {
+        let scope = surfaces::SurfaceScope { project: p.project.as_deref(), milestone: p.milestone.as_deref() };
+        match surfaces::assemble_surfaces::<FloorPayload>(&self.state, &scope).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no floors have been pushed to this server yet",
+            )])),
+            Some(assembled) => json_result(&surfaces::FloorsResult::from(assembled)),
         }
     }
 

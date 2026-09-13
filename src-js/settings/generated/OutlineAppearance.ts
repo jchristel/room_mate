@@ -5,8 +5,8 @@
  */
 export type OutlineAppearance = { 
 /**
- * The ring. Theme default: `--accent` for spaces, `--ink` for ceilings --
- * and that contrast is the point, so overriding one and not the other is
- * a way to lose it.
+ * The ring. Theme default: `--accent` for spaces, `--ink` for ceilings and
+ * floors -- and that contrast is the point, so overriding one and not the
+ * other is a way to lose it.
  */
 line?: string | null, };

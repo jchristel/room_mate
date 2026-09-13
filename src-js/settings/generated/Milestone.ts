@@ -103,4 +103,11 @@ space_attachments: { [key in string]: string },
  * day; sharing the rooms pin would make "which ceilings did this milestone
  * hold" answerable only when the two happened to be pushed together.
  */
-ceiling_attachments: { [key in string]: string }, };
+ceiling_attachments: { [key in string]: string }, 
+/**
+ * Per-model floors snapshot pins, on the same terms as
+ * `ceiling_attachments`. Floors and ceilings share a record and a read,
+ * but not a push: each has its own entry point, so each is pinned on its
+ * own.
+ */
+floor_attachments: { [key in string]: string }, };

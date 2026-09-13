@@ -726,6 +726,7 @@ mod tests {
         Milestone {
             space_attachments: BTreeMap::new(),
             ceiling_attachments: BTreeMap::new(),
+            floor_attachments: BTreeMap::new(),
             name: name.to_string(),
             date: "2026-06-30".to_string(),
             reference_snapshots: BTreeMap::new(),
@@ -1335,6 +1336,7 @@ mod tests {
             .map(|(name, ts)| Milestone {
                 space_attachments: BTreeMap::new(),
                 ceiling_attachments: BTreeMap::new(),
+                floor_attachments: BTreeMap::new(),
                 name: name.to_string(),
                 date: "2026-06-30".to_string(),
                 reference_snapshots: BTreeMap::new(),

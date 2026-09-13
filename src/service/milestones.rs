@@ -73,6 +73,7 @@ mod tests {
         Milestone {
             space_attachments: BTreeMap::new(),
             ceiling_attachments: BTreeMap::new(),
+            floor_attachments: BTreeMap::new(),
             name: name.to_string(),
             date: date.to_string(),
             reference_snapshots: BTreeMap::new(),

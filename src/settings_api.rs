@@ -870,6 +870,7 @@ ids = ["12345", "67890"]
                 ModelEntry {
                     spaces: vec![],
                     ceilings: vec![],
+                    floors: vec![],
                     name: "ARCH".to_string(),
                     phase: Some("New Construction".to_string()),
                     snapshots: vec!["2026-01-01T00:00:00Z".to_string()],
