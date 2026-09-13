@@ -136,7 +136,46 @@ ENTITY_SPECS = {
 DOCUMENT_PREFIXES = []
 
 # Bumped whenever the probe's OUTPUT or its conversion changes.
-PROBE_VERSION = 1
+PROBE_VERSION = 2
+
+
+def duhast_self_check():
+    """Which duHast this run ACTUALLY executed, tested by behaviour rather than
+    read off disk.
+
+    **Why a behaviour test and not a file check.** On 2026-09-13 duHast's
+    point-in-polygon fix (`geometry.adjust_delta`, the +2 quadrant case) was on
+    disk in every copy pyRevit could load, and a floors probe run an hour later
+    still exported holes as islands: the file was fixed, the MODULE was not. A
+    script exec'd into a console keeps `duHast` in `sys.modules` for as long as
+    the console lives, so nothing short of running the loaded code says which
+    version ran. This asks it one question the old code answers wrongly -- is
+    (2, 3) inside the clockwise triangle (0,10), (10,0), (0,0)? -- and records
+    the module's file beside the answer.
+
+    Recorded in the index and never raised: the run is still worth keeping, and
+    the analyser is where a stale duHast becomes a warning.
+    """
+    from collections import namedtuple
+
+    uv = namedtuple("UV", "U V")
+    out = {"geometry_module": None, "point_in_polygon_fixed": None, "error": None}
+    try:
+        from duHast.Revit.Common.Geometry import geometry
+
+        out["geometry_module"] = getattr(geometry, "__file__", None)
+        triangle = [uv(0.0, 10.0), uv(10.0, 0.0), uv(0.0, 0.0)]
+        out["point_in_polygon_fixed"] = bool(geometry.is_point_within_polygon(triangle, uv(2.0, 3.0)))
+    except Exception as error:
+        out["error"] = str(error)
+    if out["point_in_polygon_fixed"] is False:
+        print(
+            "  WARNING: the duHast this run loaded is STALE -- point-in-polygon still has the +2 "
+            "quadrant bug ({}). Restart Revit before trusting any polygon with holes.".format(
+                out["geometry_module"]
+            )
+        )
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -550,6 +589,7 @@ def main(out_dir=None):
 
     print("probe_floors_export v{}".format(PROBE_VERSION))
     index = {"probe_version": PROBE_VERSION, "documents": []}
+    index["duhast_self_check"] = duhast_self_check()
     for doc in resolve_documents(DOCUMENT_PREFIXES):
         print("probing {} -> {}".format(doc.Title, out_dir))
         written, summary = probe_document(doc, out_dir)

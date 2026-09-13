@@ -191,8 +191,8 @@ A's 30). Everything below is measured on both unless it says otherwise.
 ## Floors: the second slab, built before it was probed
 
 Floors ship end to end on the ceilings stack (2026-09-13): contract, ingest,
-storage, `/floors`, MCP, exporter and the plan layer. No pyRevit button and no
-QA report. **Probed on House A only** (85 floors across the building and site
+storage, `/floors`, MCP, exporter, pyRevit button and the plan layer. No QA
+report. **Probed on House A only** (85 floors across the building and site
 documents, `temp/floors-*`); RHH is not probed.
 
 - **One stack, not two copies.** duHast's `to_data_floor` is `to_data_ceiling`
@@ -243,10 +243,13 @@ documents, `temp/floors-*`); RHH is not probed.
     confirmed by re-running duHast's own classifier on the exported rings:
     `geometry.adjust_delta` returns `+2` without the x-intercept test The
     Building Coder applies to `+2` and `-2`; corrected, it gives Revit's area to
-    0.1 sqft. **Fixed upstream 2026-09-13** (`src/duHast` and the extension's
-    `lib/duHast` copy); snapshots exported before then keep the filled holes
-    until re-exported. The same code classifies CEILING loops -- no House A
-    ceiling changes, RHH's are unchecked.
+    0.1 sqft. **Fixed upstream 2026-09-13 and confirmed in Revit**: re-probed
+    with the self-check passing, those two floors export one piece with holes at
+    exactly Revit's area and no other floor's geometry changed. The surround had
+    been attributed to POOL EX.03 at 99.8% of the pool; the pool is in its hole.
+    Snapshots exported before the fix keep the filled holes until re-exported.
+    The same code classifies CEILING loops -- no House A ceiling changed; RHH's
+    are unchecked.
   - **Sloped and shape-edited floors lose area**: 20 floors export under 90% of
     Revit's area, 7 of them nothing -- mostly site lawn, road and driveway.
     `get_unique_horizontal_faces` skips non-planar faces and admits
@@ -483,6 +486,14 @@ with one, not here.
 
 ## Traps
 
+- **A fixed duHast file is not a fixed duHast run.** A script exec'd into a
+  Revit console keeps `duHast` in `sys.modules` for the life of the session,
+  so an upstream fix on disk does nothing until Revit restarts. Measured
+  2026-09-13: a House A floors probe run an hour after the `adjust_delta` fix
+  had landed in every copy pyRevit loads still exported both holes as islands.
+  The probes (v2) now ask the LOADED module a question the old code gets wrong
+  and record the answer; the analysers warn on a stale run. "Check which duHast
+  the extension is running" means the one in memory, not the one on disk.
 - **Line endings are LF**, enforced by `.gitattributes`. Writing files through a
   Python heredoc on Windows silently converts them to CRLF — check with
   `git diff --stat` (it warns) after any scripted file write.
@@ -522,7 +533,7 @@ with one, not here.
 Both older items stay closed: the extractor's phase filter is verified against
 Revit, and R4 landed.
 
-## The extractor has eight entry points, one of them a trap and one unwired
+## The extractor has eight entry points, and one of them is a trap
 
 `rooms_export_entry` still pushes **rooms and doors**, despite the name. Its
 pyRevit button lives outside this repo, so narrowing it to rooms would not fail —
@@ -538,7 +549,8 @@ phase never differ.
 of `extractor/pyRevit/room_m` under that tab's `lib/`. Six are wired as of
 2026-09-06 and the seventh, `ceilings_export_entry`, since 2026-09-11 —
 `RoomMate.panel/ByCategory.pulldown/Ceilings.pushbutton`. The eighth,
-`floors_export_entry`, is **not wired yet**. **The copy is the trap**: an
+`floors_export_entry`, since 2026-09-13 --
+`RoomMate.panel/ByCategory.pulldown/Floors.pushbutton`. **The copy is the trap**: an
 extractor change here is inert until it is copied there, and nothing checks the
 two are in step — `diff -rq` between them is the only check there is.
 

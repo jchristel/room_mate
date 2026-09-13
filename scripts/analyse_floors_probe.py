@@ -763,6 +763,17 @@ def build_report(index, documents):
         index.get("probe_version"), len(documents), "yes" if HAVE_SHAPELY else "NO -- F3 partial, F6 skipped"))
     add("")
 
+    duhast = index.get("duhast_self_check") or {}
+    if duhast.get("point_in_polygon_fixed") is False:
+        add("> **STALE duHast.** This run executed a duHast whose point-in-polygon test still has the "
+            "`+2` quadrant bug (`{}`), fixed upstream 2026-09-13, so holes may be exported as separate "
+            "polygons. A console that exec'd the probe keeps the old module loaded: restart Revit and "
+            "re-run.".format(duhast.get("geometry_module")))
+        add("")
+    elif not duhast:
+        add("_This run did not record which duHast it executed (probe predates the self-check)._")
+        add("")
+
     add("## F1 -- does every floor export a usable polygon?")
     extend(table(
         ["document", "collected", "duHast collector", "exported", "exported EMPTY",
