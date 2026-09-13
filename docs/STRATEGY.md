@@ -34,6 +34,9 @@ invariants that are expensive to rediscover.
   rather than a reference source, and what five of them proved comes for free.
   Open: the door connectivity graph, design options, the geometric space↔room
   check, FF&E at scale.
+- **[Reports](STRATEGY-REPORTS.md)** — *nothing here is built.* The `/reports/`
+  page and the association reports on it — ceilings, spaces and FF&E by room —
+  and why the user picks an association rather than defining a join.
 - **[Security](STRATEGY-SECURITY.md)** — the threat model for the near-future
   shift from a loopback bind to a LAN-reachable server. Mostly unbuilt by design.
   **Read it before widening the bind past `127.0.0.1`.**

@@ -21,6 +21,7 @@ strategy doc documents what is not".
 | [MCP](STRATEGY-MCP.md) | Open: resources and prompts, document tools |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data — connections, PDFs, hierarchy scopes. **Nothing here is built**; read it before building any of it |
 | [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, and what five of them proved comes for free. Open: door connectivity, design options, the geometric space↔room check, FF&E at scale |
+| [Reports](STRATEGY-REPORTS.md) | The `/reports/` page. **Nothing here is built**: a registry of report types assembled from form sections, association reports (ceilings, spaces, FF&E by room) where the join is chosen and never defined, an AND/OR filter tree, why a node editor was rejected, and how many matches each room can have |
 | [Security](STRATEGY-SECURITY.md) | Threat model for a LAN-reachable deployment: trust boundary, invariants, and the two unbuilt bounds (settings backups, rate limiting). **Read before widening the bind past `127.0.0.1`** |
 
 ## Implementation notes
@@ -29,6 +30,7 @@ strategy doc documents what is not".
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
 | [MCP host setup](mcp-host-setup.md) | Client configs for Claude Code and Claude Desktop, plus build and verify steps |
+| [Reports mockup](reports-mockup.html) | Clickable mockup of the unbuilt `/reports/` page, over sample rows. Open the file in a browser. Goes with [Reports](STRATEGY-REPORTS.md), and is deleted when the page ships |
 | [Module plan](module-plan.html) | Interactive map of every module across the extractor, server and browser — sized by lines of code, with its import edges. Open the file in a browser. **Half generated, half written**: the measured `STATS` come from `scripts/module_stats.py` (`--check` reports drift, and catches a module added or renamed on one side only), while the blurbs and import edges are hand-written from the module headers — so treat a header as the source and this as the view |
 
 ## Archive
