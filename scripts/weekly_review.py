@@ -261,14 +261,17 @@ def check_mcp_parity(findings: Findings) -> None:
         routes.append("/projects/{id}/comparison")
 
     tool_count = len(re.findall(r"#\[tool\(", mcp))
-    claimed = re.search(r"(\w+) in total", mcp)
+    # `[\w-]`, and a line break allowed inside the phrase: the header wraps "in
+    # total" across a `//!` line and past twenty the count is hyphenated, so the
+    # plain `(\w+) in total` matched nothing and this check was silently off.
+    claimed = re.search(r"([\w-]+) in(?:\s|//!)+total", mcp)
 
     hits: list[str] = []
     # Route -> tool is judged by hand once, then encoded here: the mapping is
     # not derivable from names (`/areas` -> `get_hierarchy_areas`).
     mapping = {
         "/rooms": "get_rooms", "/doors": "get_doors", "/windows": "get_windows", "/ffe": "get_ffe",
-        "/spaces": "get_spaces",
+        "/spaces": "get_spaces", "/ceilings": "get_ceilings", "/floors": "get_floors",
         "/projects": "list_projects",
         "/projects/{id}/buildings": "list_buildings", "/projects/{id}/validation": "get_validation",
         "/projects/{id}/snapshots": "list_snapshots", "/projects/{id}/milestones": "list_milestones",
@@ -293,7 +296,7 @@ def check_mcp_parity(findings: Findings) -> None:
 
     numbers = {
         "Fourteen": 14, "Fifteen": 15, "Sixteen": 16, "Seventeen": 17, "Eighteen": 18,
-        "Nineteen": 19, "Twenty": 20,
+        "Nineteen": 19, "Twenty": 20, "Twenty-one": 21, "Twenty-two": 22, "Twenty-three": 23,
     }
     if claimed:
         said = numbers.get(claimed.group(1).capitalize())

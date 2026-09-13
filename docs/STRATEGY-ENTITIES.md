@@ -8,8 +8,9 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 
 **Open work only.** Rooms, doors, windows, FF&E and spaces all ship — contract,
 ingest, storage, read, QA, MCP, the plan and the pyRevit exporter — and phasing
-ships under them. **Ceilings ship everywhere except QA**, which is what its
-entry below is about. What each of those does, and the invariants that
+ships under them. **Ceilings ship everywhere except QA**, and **floors ship on
+the ceilings stack everywhere except QA and the pyRevit button, probed on House
+A only** — their entries below are about what is left. What each of those does, and the invariants that
 are expensive to rediscover (tier precedence, opening ownership, item
 attribution, the model-scoped element→room join, the phase rules, the three
 rules that are spaces' alone, and the geometry-only attribution that is
@@ -252,7 +253,7 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
 
 - **Ceilings: the QA report.** The entity ships otherwise -- contract, ingest,
   storage, `/ceilings`, MCP tool, exporter, pyRevit button and the plan layer --
-  and what it proved is in `CLAUDE.md` and in `service::ceilings`. Probed on
+  and what it proved is in `CLAUDE.md` and in `service::surfaces`. Probed on
   House A (30 ceilings) and RHH (1,833 across 9 documents, 2026-09-12), so the
   design now rests on two documents rather than one.
 
@@ -280,6 +281,46 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   slivers; **17 of 1,833 attribute to no room at all**; and the storey join
   leans on name *plus* elevation, because CPB-MAIN's "C 00" sits at 182.087 ft,
   the same elevation as the hospital's GROUND.
+
+- **Floors: what House A settled, and what it could not.** Probed 2026-09-13
+  (85 floors, building and site documents); what it proved is in `CLAUDE.md`.
+  It moved the sliver rule once (a second escape, for a narrow floor wholly in
+  one room) and settled that the storey is the host `Level`. Left open:
+
+  **RHH, for the two questions House A is too small to ask.** Scope (F2): the
+  server attributes a floor only to rooms in its own document, and RHH's
+  `HOS-BASE` beside four `INT_*` models is the base-build shape that would
+  leave every slab roomless. The answer is not to widen the join by default --
+  a floor joins on geometry, not a key, so there is no uniqueness guarantee
+  like the one that made the spaces exception safe; it would take
+  `room_resolution`'s shape, opt-in and reported. And the plate case (F6):
+  House A's largest slab is 1,618 sqft, so the reason floors have their own
+  sliver rule has never been seen, and its 1.5 ft line does not yet sit in a
+  gap.
+
+  **duHast, where the footprint is wrong and the fix is upstream.** The
+  `adjust_delta` +2 case is fixed (2026-09-13): re-running duHast's own
+  classifier on House A's exported rings, it turns both affected floors into an
+  outer loop with holes at Revit's area and leaves every House A ceiling as it
+  was. What is left is the re-export of floors and ceilings, and a re-run of the
+  RHH ceilings probe -- the same classifier drew its loops, and nothing has
+  checked them. The lost
+  faces on sloped and shape-edited floors (20 of 85 under 90% of Revit's area)
+  are diagnosed only as far as their shape -- non-planar faces skipped,
+  near-vertical ones admitted as slivers, faces paired by equal area wherever
+  they lie -- and need Revit to confirm. `get_all_floor_types_by_category` also
+  calls a function its filter module does not define; not on the export path.
+
+  **The probe cannot see across documents yet.** It records no
+  `model_to_shared`, so House A's site floors -- landscaping under the building
+  document's external rooms -- cannot be placed against them, and a
+  cross-document overlap count is not possible until it does.
+
+  **Which floor is "the floor".** A House A room lies on up to 7 floors: joist
+  zone, build-up, finish, insulation and, hosted on the level below, its roof.
+  Nothing on the wire says which is the finish, `Structural` does not, and the
+  answer is a type-naming convention per project -- a filter or a reference
+  source, not a rule in the read.
 
 - **Multi-phase comparison — explicitly out of scope**, recorded so it is not
   re-proposed. It is a second axis crossing the snapshot axis, and milestones
