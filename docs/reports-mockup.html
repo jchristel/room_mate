@@ -1,0 +1,881 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoomMate Reports</title>
+<style>
+:root {
+  --paper: #f3efe6;
+  --ink: #1f2421;
+  --muted: #6b6a60;
+  --rule: #cfc7b4;
+  --fill: #e4ddc9;
+  --fill-hover: #d4c9a8;
+  --accent: #b4541f;
+  --accent-soft: #f0dccb;
+  --ok: #5a7a4f;
+  --warn-bg: #efe3c2;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #1b1d1b; --ink: #e6e0d2; --muted: #9a978b; --rule: #3b3e38;
+    --fill: #272a26; --fill-hover: #33372f; --accent: #e08650; --accent-soft: #3a2a1f;
+    --ok: #93b384; --warn-bg: #35301f;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #1b1d1b; --ink: #e6e0d2; --muted: #9a978b; --rule: #3b3e38;
+  --fill: #272a26; --fill-hover: #33372f; --accent: #e08650; --accent-soft: #3a2a1f;
+  --ok: #93b384; --warn-bg: #35301f;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--mono); font-size: 13px; line-height: 1.5;
+}
+button, select, input { font-family: var(--mono); font-size: 0.78rem; color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.mock-banner {
+  background: var(--warn-bg); border-bottom: 1px solid var(--rule);
+  padding: 0.35rem 1.25rem; font-size: 0.7rem;
+}
+header {
+  display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+  padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--ink);
+}
+header h1 { font-size: 0.95rem; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; margin: 0; }
+header select { background: var(--paper); border: 1px solid var(--rule); padding: 0.2rem 0.4rem; }
+header .links { margin-left: auto; display: flex; gap: 1rem; }
+header a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+header a[aria-current] { color: var(--ink); font-weight: 600; }
+
+main { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: calc(100vh - 80px); }
+@media (max-width: 760px) { main { grid-template-columns: 1fr; } nav { border-right: none; border-bottom: 1px solid var(--ink); } }
+
+nav { border-right: 1px solid var(--ink); padding: 1rem; }
+h2 {
+  font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--muted); font-weight: 600; margin: 0 0 0.6rem;
+}
+nav ul { list-style: none; margin: 0 0 1.25rem; padding: 0; }
+nav li button {
+  display: grid; width: 100%; text-align: left;
+  background: none; border: none; padding: 0.35rem 0.4rem; cursor: pointer;
+}
+nav li button:hover { background: var(--fill); }
+nav li button.active { background: var(--fill-hover); }
+nav li button .kind { font-size: 0.62rem; color: var(--muted); }
+nav .new { width: 100%; }
+
+.content { padding: 1.25rem 1.5rem 3rem; display: grid; gap: 1.5rem; align-content: start; min-width: 0; }
+
+.titlebar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.titlebar input.name {
+  font-size: 1rem; font-weight: 600; background: transparent; border: none;
+  border-bottom: 1px dashed var(--rule); padding: 0.1rem 0; min-width: 20ch;
+}
+.titlebar .spacer { flex: 1; }
+
+button.action {
+  background: var(--paper); border: 1px solid var(--ink); padding: 0.3rem 0.7rem; cursor: pointer;
+}
+button.action:hover { background: var(--fill); }
+button.action.primary { background: var(--ink); color: var(--paper); }
+button.action.primary:hover { background: var(--accent); border-color: var(--accent); }
+
+/* report type */
+.kind-block { display: grid; gap: 0.6rem; }
+.kind-row { display: flex; gap: 0.9rem; align-items: baseline; flex-wrap: wrap; }
+select.kind {
+  font-size: 0.9rem; font-weight: 600; background: var(--paper);
+  border: 1px solid var(--ink); padding: 0.4rem 0.6rem; min-width: 30ch;
+}
+.kind-desc { font-size: 0.74rem; color: var(--muted); max-width: 70ch; }
+.kind-desc strong { color: var(--ink); font-weight: 600; }
+.sections-list { font-size: 0.64rem; color: var(--muted); letter-spacing: 0.04em; }
+.sections-list span { border: 1px solid var(--rule); padding: 0 0.35rem; margin-right: 0.25rem; white-space: nowrap; }
+
+.rule {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 0.25rem 0.9rem; align-items: baseline;
+  border: 1px solid var(--rule); background: var(--fill); padding: 0.6rem 0.8rem; max-width: 78ch;
+}
+.rule .k { font-size: 0.6rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+.rule .v { font-weight: 600; }
+.rule .src { font-size: 0.68rem; color: var(--muted); }
+.rule a { color: var(--accent); font-size: 0.7rem; text-decoration: none; white-space: nowrap; }
+.rule a:hover { text-decoration: underline; }
+.rule .why { grid-column: 1 / -1; font-size: 0.7rem; color: var(--muted); }
+
+/* column pickers */
+.pickers { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); border: 1px solid var(--ink); }
+@media (max-width: 1000px) { .pickers { grid-template-columns: 1fr; } .picker + .picker { border-left: none !important; border-top: 1px solid var(--ink); } }
+.picker { padding: 0.75rem; display: grid; gap: 0.55rem; align-content: start; }
+.picker + .picker { border-left: 1px solid var(--ink); }
+.picker .hint { font-size: 0.68rem; color: var(--muted); margin: -0.3rem 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; min-height: 1.7rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  border: 1px solid var(--rule); background: var(--paper); padding: 0.12rem 0.2rem 0.12rem 0.45rem; font-size: 0.74rem;
+}
+.chip.measure { border-color: var(--accent); background: var(--accent-soft); }
+.chip button { background: none; border: none; cursor: pointer; padding: 0 0.25rem; color: var(--muted); font-size: 0.8rem; line-height: 1; }
+.chip button:hover { color: var(--accent); }
+.add select { width: 100%; background: var(--paper); border: 1px dashed var(--rule); padding: 0.25rem; }
+
+/* controls */
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem 1.5rem; }
+.field { display: grid; gap: 0.2rem; }
+.field label, .field .lbl { font-size: 0.68rem; color: var(--muted); }
+.field select, .field input[type="text"] { background: var(--paper); border: 1px solid var(--rule); padding: 0.28rem 0.4rem; width: 100%; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+.check { display: flex; gap: 0.5rem; align-items: baseline; cursor: pointer; font-size: 0.78rem; }
+.check input { accent-color: var(--accent); }
+.check .n { color: var(--muted); font-size: 0.68rem; }
+.group { display: grid; gap: 0.45rem; align-content: start; }
+
+.milestones { display: grid; grid-template-columns: auto auto 1fr; gap: 0.25rem 0.9rem; align-items: baseline; width: fit-content; }
+.milestones .hd { font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+.milestones .date { color: var(--muted); font-variant-numeric: tabular-nums; }
+.milestones input { accent-color: var(--accent); }
+
+/* preview */
+.preview-head { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.preview-head .count { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.note {
+  font-size: 0.72rem; border-left: 3px solid var(--accent); padding: 0.3rem 0.6rem;
+  background: var(--accent-soft); max-width: 78ch;
+}
+.table-wrap { overflow-x: auto; border: 1px solid var(--ink); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 0.32rem 0.6rem; text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; vertical-align: top; }
+thead th { font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; background: var(--fill); border-bottom: 1px solid var(--ink); }
+thead tr.side th { font-size: 0.58rem; color: var(--muted); background: var(--paper); border-bottom: 1px solid var(--rule); letter-spacing: 0.16em; }
+th.num, td.num { text-align: right; }
+th.edge, td.edge { border-left: 1px solid var(--rule); }
+thead th .agg { color: var(--accent); text-transform: none; letter-spacing: 0; font-weight: 400; }
+tbody tr:hover td { background: var(--fill); }
+td.none { color: var(--muted); }
+tr.unattributed td { background: var(--warn-bg); }
+tr.unattributed td.lead { font-style: italic; }
+.pill { font-size: 0.66rem; padding: 0 0.35rem; border: 1px solid currentColor; }
+.pill.stated, .pill.added { color: var(--ok); }
+.pill.geometry, .pill.changed { color: var(--accent); }
+.pill.removed, .pill.unresolved { color: var(--muted); }
+.foot { font-size: 0.68rem; color: var(--muted); margin: 0; }
+
+/* filter builder */
+.fgroup { border: 1px solid var(--ink); background: var(--paper); padding: 0.6rem 0.7rem; display: grid; gap: 0.45rem; }
+.fgroup .fgroup { border: 1px solid var(--rule); border-left: 3px solid var(--accent); background: var(--fill); }
+.fgroup-head { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; font-size: 0.76rem; }
+.fgroup-head select { background: var(--paper); border: 1px solid var(--ink); padding: 0.15rem 0.3rem; font-weight: 600; }
+.fgroup-head .spacer { flex: 1; }
+.cond, .nest { display: grid; grid-template-columns: 3.4rem minmax(0, 1fr); gap: 0.45rem; align-items: start; }
+.cond-body { display: grid; grid-template-columns: minmax(12rem, 1.3fr) minmax(9rem, 0.8fr) minmax(10rem, 1fr) auto; gap: 0.4rem; align-items: center; }
+.conn { font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); text-align: right; padding-top: 0.35rem; }
+.conn.op { color: var(--accent); font-weight: 600; }
+.cond select, .cond input { background: var(--paper); border: 1px solid var(--rule); padding: 0.26rem 0.35rem; width: 100%; min-width: 0; }
+.fieldcell { display: flex; gap: 0.3rem; align-items: center; min-width: 0; }
+.ftype { font-size: 0.58rem; border: 1px solid var(--rule); padding: 0 0.25rem; color: var(--muted); white-space: nowrap; }
+.valcell { display: flex; gap: 0.3rem; align-items: center; min-width: 0; }
+.valcell .and { font-size: 0.66rem; color: var(--muted); }
+.valcell .unit { font-size: 0.7rem; color: var(--muted); }
+.valcell .na { font-size: 0.68rem; color: var(--muted); }
+.icon { background: none; border: 1px solid transparent; cursor: pointer; color: var(--muted); padding: 0.1rem 0.4rem; font-size: 0.85rem; }
+.icon:hover { color: var(--accent); border-color: var(--rule); }
+.cond .warn { grid-column: 1 / -1; font-size: 0.66rem; color: var(--muted); }
+.cond .warn button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 0.66rem; text-decoration: underline; }
+.cond.incomplete .conn { opacity: 0.5; }
+.fadd { display: flex; gap: 0.4rem; padding-left: 3.85rem; }
+.fadd button { background: none; border: 1px dashed var(--rule); padding: 0.2rem 0.55rem; cursor: pointer; font-size: 0.72rem; }
+.fadd button:hover { border-color: var(--accent); color: var(--accent); }
+.fsummary { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem; font-size: 0.74rem; align-items: baseline; }
+.fsummary .k { font-size: 0.6rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+.fsummary code { font-family: var(--mono); overflow-wrap: anywhere; }
+.fsummary code b { color: var(--accent); font-weight: 600; }
+@media (max-width: 900px) { .cond-body { grid-template-columns: 1fr; } .fadd { padding-left: 0; } }
+</style>
+
+<div class="mock-banner"><strong>Mockup.</strong> Sample rows shaped like House A. Nothing here reads the server or saves anything.</div>
+
+<header>
+  <h1>Reports</h1>
+  <select aria-label="Project"><option>House A</option><option>RHH</option></select>
+  <div class="links">
+    <a href="#" aria-current="page">reports</a>
+    <a href="#">viewer</a>
+    <a href="#">settings</a>
+  </div>
+</header>
+
+<main>
+  <nav>
+    <h2>Saved reports</h2>
+    <ul id="saved"></ul>
+    <button class="action new" id="newBtn" type="button">+ New report</button>
+  </nav>
+
+  <div class="content">
+    <div class="titlebar">
+      <input class="name" id="reportName" aria-label="Report name" />
+      <span class="spacer"></span>
+      <button class="action" type="button">Export CSV</button>
+      <button class="action primary" type="button">Save to project</button>
+    </div>
+
+    <section class="kind-block">
+      <h2><label for="kind">Report type</label></h2>
+      <div class="kind-row">
+        <select class="kind" id="kind"></select>
+        <span class="sections-list" id="sectionsList"></span>
+      </div>
+      <div class="kind-desc" id="kindDesc"></div>
+    </section>
+
+    <div id="sections" class="group" style="gap:1.5rem"></div>
+  </div>
+</main>
+
+<script>
+/* ---------- sample data ---------- */
+const ROOMS = {
+  G01: { Number: "G01", Name: "ENTRY", Level: "LEVEL 00", Department: "Circulation", Area: 64.2 },
+  G02: { Number: "G02", Name: "KITCHEN", Level: "LEVEL 00", Department: "Living", Area: 171.0 },
+  G03: { Number: "G03", Name: "LIVING", Level: "LEVEL 00", Department: "Living", Area: 264.1 },
+  G04: { Number: "G04", Name: "WC", Level: "LEVEL 00", Department: "Wet areas", Area: 39.4 },
+  G05: { Number: "G05", Name: "POOL EX", Level: "LEVEL 00", Department: "External", Area: 402.7 },
+  L01: { Number: "L01", Name: "BED 1", Level: "LEVEL 01", Department: "Sleeping", Area: 154.2 },
+};
+const ROOM_PROPS = ["Number", "Name", "Level", "Department", "Area", "drofus.RoomFunction"];
+
+const C = {
+  C1: { Mark: "C1", Type: "CLG-2700 PLASTERBOARD", Level: "LEVEL 00", "Height Offset From Level": 8.86, "Ceiling area": 142.3 },
+  C2: { Mark: "C2", Type: "CLG-2400 BULKHEAD", Level: "LEVEL 00", "Height Offset From Level": 7.87, "Ceiling area": 391.6 },
+  C3: { Mark: "C3", Type: "CLG-2700 PLASTERBOARD", Level: "LEVEL 00", "Height Offset From Level": 8.86, "Ceiling area": 49.2 },
+  C4: { Mark: "C4", Type: "CLFS-550 SOFFIT", Level: "LEVEL 00", "Height Offset From Level": 7.55, "Ceiling area": 36.0 },
+  C5: { Mark: "C5", Type: "CLG-2700 PLASTERBOARD", Level: "LEVEL 01", "Height Offset From Level": 8.86, "Ceiling area": 152.8 },
+};
+const S = {
+  m1: { Number: "G01", Name: "ENTRY", Model: "HouseA-MECH", "Specified Supply Airflow": "40 L/s", "Space Type": "Lobby" },
+  e1: { Number: "G01", Name: "ENTRY", Model: "HouseA-ELEC", "Specified Supply Airflow": "—", "Space Type": "Lobby" },
+  m2: { Number: "G02", Name: "KITCHEN", Model: "HouseA-MECH", "Specified Supply Airflow": "120 L/s", "Space Type": "Kitchen" },
+  e2: { Number: "G02", Name: "KITCHEN", Model: "HouseA-ELEC", "Specified Supply Airflow": "—", "Space Type": "Kitchen" },
+  m3: { Number: "G03", Name: "LIVING", Model: "HouseA-MECH", "Specified Supply Airflow": "85 L/s", "Space Type": "Living" },
+  m4: { Number: "L01", Name: "BED 1", Model: "HouseA-MECH", "Specified Supply Airflow": "60 L/s", "Space Type": "Bedroom" },
+  p1: { Number: "P01", Name: "PLANT 01", Model: "HouseA-MECH", "Specified Supply Airflow": "—", "Space Type": "Plant" },
+};
+const F = {
+  f12: { Mark: "F-12", Family: "Dining Chair", Type: "Oak", Level: "LEVEL 00", Manufacturer: "Thonet" },
+  f13: { Mark: "F-13", Family: "Dining Chair", Type: "Oak", Level: "LEVEL 00", Manufacturer: "Thonet" },
+  f10: { Mark: "F-10", Family: "Dining Table", Type: "1800x900", Level: "LEVEL 00", Manufacturer: "Thonet" },
+  l04: { Mark: "L-04", Family: "Pendant Light", Type: "Globe 400", Level: "LEVEL 00", Manufacturer: "Artemide" },
+  f20: { Mark: "F-20", Family: "Sofa", Type: "3 Seat", Level: "LEVEL 00", Manufacturer: "Jardan" },
+  f31: { Mark: "F-31", Family: "Bed", Type: "Queen", Level: "LEVEL 01", Manufacturer: "Jardan" },
+  e02: { Mark: "E-02", Family: "Planter Box", Type: "1200", Level: "LEVEL 00", Manufacturer: "—" },
+};
+
+/* Entities a schedule can list, and the "by room" associations over them. */
+const ENTITY = {
+  rooms:    { one: "room", many: "rooms", props: ROOM_PROPS, cols: ["Number", "Name", "Level", "Area"], rows: Object.values(ROOMS), numeric: { Area: true } },
+  ceilings: { one: "ceiling", many: "ceilings", props: Object.keys(C.C1), cols: ["Mark", "Type", "Level", "Ceiling area"], rows: Object.values(C), numeric: { "Ceiling area": true, "Height Offset From Level": true } },
+  spaces:   { one: "space", many: "spaces", props: Object.keys(S.m1), cols: ["Number", "Name", "Model"], rows: Object.values(S), numeric: {} },
+  ffe:      { one: "item", many: "items", props: Object.keys(F.f12), cols: ["Mark", "Family", "Type", "Level"], rows: Object.values(F), numeric: {} },
+};
+
+const ASSOC = {
+  ceilings: {
+    entity: "ceilings",
+    rule: { v: "overlap area: at least 1 sqft and at least 0.5% of the ceiling", src: "Geometry, within each model", link: null,
+      why: "A ceiling has no room parameter, so its footprint is the only link. One ceiling can cover several rooms, largest overlap first." },
+    cols: ["Type", "Height Offset From Level", "Ceiling area"],
+    measures: ["overlap_area", "fraction_of_room", "fraction_of_ceiling"], defaultMeasures: ["overlap_area", "fraction_of_room"],
+    summable: { overlap_area: true },
+    rows: [
+      ["G01", C.C1, { overlap_area: 64.2, fraction_of_room: 1.0, fraction_of_ceiling: 0.451 }],
+      ["G04", C.C1, { overlap_area: 38.0, fraction_of_room: 0.964, fraction_of_ceiling: 0.267 }],
+      ["G02", C.C2, { overlap_area: 168.9, fraction_of_room: 0.988, fraction_of_ceiling: 0.431 }],
+      ["G03", C.C2, { overlap_area: 214.5, fraction_of_room: 0.812, fraction_of_ceiling: 0.548 }],
+      ["G03", C.C3, { overlap_area: 48.6, fraction_of_room: 0.184, fraction_of_ceiling: 0.988 }],
+      ["L01", C.C5, { overlap_area: 152.8, fraction_of_room: 0.991, fraction_of_ceiling: 1.0 }],
+      [null, C.C4, {}], ["G05", null, {}],
+    ],
+    perMatchNote: "Ceiling C1 appears under ENTRY and WC because it covers both. That is correct for one row per match. Don't add up ceiling area in this shape; use overlap area.",
+    perRoomNote: "Ceiling area is listed, not added up. A ceiling over two rooms would be counted twice. Overlap area is what adds up per room.",
+  },
+  spaces: {
+    entity: "spaces",
+    rule: { v: "space Number = room Number", src: "Across the whole project · rooms from HouseA-ARCH", link: "Change in Settings → Spaces",
+      why: "Each services model holds its own spaces, so one room can match a mechanical and an electrical space. The model column tells them apart." },
+    cols: ["Name", "Model", "Specified Supply Airflow"], measures: [], defaultMeasures: [], summable: {},
+    rows: [["G01", S.m1, {}], ["G01", S.e1, {}], ["G02", S.m2, {}], ["G02", S.e2, {}], ["G03", S.m3, {}], ["L01", S.m4, {}], [null, S.p1, {}], ["G04", null, {}], ["G05", null, {}]],
+    perRoomNote: "ENTRY and KITCHEN each match two spaces, one per services model. That's expected with one file per discipline, not a duplicate.",
+  },
+  ffe: {
+    entity: "ffe",
+    rule: { v: "the room set on the item in Revit", src: "Within each model · geometry fills a missing room (on)", link: "Change in Settings → Policies",
+      why: "An item has at most one room. Where the model states none, its position decides, and the “room from” column says which happened." },
+    cols: ["Family", "Type"], measures: ["room_origin"], defaultMeasures: ["room_origin"], summable: {},
+    rows: [["G02", F.f12, { room_origin: "stated" }], ["G02", F.f13, { room_origin: "stated" }], ["G02", F.f10, { room_origin: "stated" }],
+      ["G03", F.l04, { room_origin: "geometry" }], ["G03", F.f20, { room_origin: "stated" }], ["L01", F.f31, { room_origin: "stated" }],
+      [null, F.e02, { room_origin: "unresolved" }], ["G01", null, {}], ["G04", null, {}], ["G05", null, {}]],
+  },
+};
+const MEASURE_LABEL = { overlap_area: "overlap area", fraction_of_room: "% of room", fraction_of_ceiling: "% of ceiling", room_origin: "room from" };
+
+/* ---------- the report-type registry ----------
+   Each type names the form sections it needs. The page only knows how to draw
+   sections; adding a type is a registry entry, not a new screen. */
+const KINDS = [
+  { id: "sched_rooms", group: "Schedules", label: "Room schedule", form: "schedule", entity: "rooms",
+    desc: "One row per room, with the columns you pick." },
+  { id: "sched_ceilings", group: "Schedules", label: "Ceiling schedule", form: "schedule", entity: "ceilings",
+    desc: "One row per ceiling. To see which rooms each ceiling covers, use <strong>Ceilings by room</strong>." },
+  { id: "sched_spaces", group: "Schedules", label: "Space schedule", form: "schedule", entity: "spaces", desc: "One row per space, across every services model." },
+  { id: "sched_ffe", group: "Schedules", label: "FF&E schedule", form: "schedule", entity: "ffe", desc: "One row per item." },
+  { id: "sched_doors", group: "Schedules", label: "Door schedule", later: true },
+  { id: "sched_windows", group: "Schedules", label: "Window schedule", later: true },
+
+  { id: "by_room_ceilings", group: "By room", label: "Ceilings by room", form: "association", assoc: "ceilings",
+    desc: "Each room with the ceilings over it, and how much of the room each one covers." },
+  { id: "by_room_spaces", group: "By room", label: "Spaces by room", form: "association", assoc: "spaces",
+    desc: "Each architectural room with the services spaces that match it." },
+  { id: "by_room_ffe", group: "By room", label: "FF&E by room", form: "association", assoc: "ffe",
+    desc: "Each room with the furniture, fittings and equipment in it." },
+  { id: "by_room_doors", group: "By room", label: "Doors by room", later: true },
+  { id: "by_room_windows", group: "By room", label: "Windows by room", later: true },
+
+  { id: "cmp_rooms", group: "Between milestones", label: "Room changes", form: "comparison",
+    desc: "Rooms added, removed or changed between a baseline milestone and the others. Replaces the old comparison page." },
+  { id: "cmp_doors", group: "Between milestones", label: "Door changes", later: true },
+
+  { id: "qa_ceilings", group: "Checks", label: "Rooms without a ceiling", later: true },
+  { id: "qa_spaces", group: "Checks", label: "Unmatched spaces and rooms", later: true },
+];
+const FORMS = {
+  schedule:    ["Columns", "Filter", "Scope", "Preview"],
+  association: ["Join rule", "Columns and measures", "Filter", "Scope", "Rows", "Unmatched", "Preview"],
+  comparison:  ["Comparison key", "Compared properties", "Milestones", "Preview"],
+};
+
+const SAVED = [
+  { name: "Ceilings by room", kind: "by_room_ceilings" },
+  { name: "Level 00 room schedule", kind: "sched_rooms" },
+  { name: "FF&E by room", kind: "by_room_ffe" },
+  { name: "Mechanical spaces by room", kind: "by_room_spaces" },
+  { name: "DD issue vs latest", kind: "cmp_rooms" },
+];
+
+/* ---------- state ---------- */
+const state = {
+  saved: 0, name: SAVED[0].name, kind: SAVED[0].kind,
+  roomCols: ["Number", "Name", "Level"],
+  schedCols: Object.fromEntries(Object.entries(ENTITY).map(([k, e]) => [k, [...e.cols]])),
+  assocCols: Object.fromEntries(Object.entries(ASSOC).map(([k, a]) => [k, [...a.cols]])),
+  measures: Object.fromEntries(Object.entries(ASSOC).map(([k, a]) => [k, [...a.defaultMeasures]])),
+  shape: "per_match", incRooms: false, incOrphans: true,
+  cmpKey: "Number", cmpProps: ["Name", "Department", "Area"], baseline: "dd", others: ["latest"],
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const isNum = (v) => typeof v === "number";
+function fmt(key, v) {
+  if (v == null || v === "") return "";
+  if (key.startsWith("fraction")) return (v * 100).toFixed(1) + "%";
+  if (isNum(v)) return v.toFixed(1);
+  return v;
+}
+const kindOf = () => KINDS.find((k) => k.id === state.kind);
+const PILLS = ["stated", "geometry", "unresolved", "added", "removed", "changed"];
+function cell(key, v, extra = "") {
+  if (PILLS.includes(v)) return `<td class="${extra}"><span class="pill ${v}">${esc(v)}</span></td>`;
+  return `<td class="${extra}${isNum(v) ? " num" : ""}">${esc(fmt(key, v))}</td>`;
+}
+function section(title, inner, cls = "group") {
+  const s = document.createElement("section");
+  s.className = cls;
+  s.innerHTML = (title ? `<h2>${esc(title)}</h2>` : "") + inner;
+  return s;
+}
+
+/* ---------- chrome ---------- */
+function renderSaved() {
+  $("saved").innerHTML = SAVED.map((r, i) => {
+    const k = KINDS.find((x) => x.id === r.kind);
+    return `<li><button type="button" data-i="${i}" class="${i === state.saved ? "active" : ""}">${esc(r.name)}<span class="kind">${esc(k.group)} · ${esc(k.label)}</span></button></li>`;
+  }).join("");
+  $("saved").querySelectorAll("button").forEach((b) => b.onclick = () => {
+    const r = SAVED[+b.dataset.i];
+    Object.assign(state, { saved: +b.dataset.i, name: r.name, kind: r.kind });
+    render();
+  });
+}
+
+function renderKind() {
+  const groups = [...new Set(KINDS.map((k) => k.group))];
+  $("kind").innerHTML = groups.map((g) =>
+    `<optgroup label="${esc(g)}">${KINDS.filter((k) => k.group === g).map((k) =>
+      `<option value="${k.id}" ${k.later ? "disabled" : ""} ${k.id === state.kind ? "selected" : ""}>${esc(k.label)}${k.later ? "  (later)" : ""}</option>`).join("")}</optgroup>`
+  ).join("");
+  const k = kindOf();
+  $("kindDesc").innerHTML = k.desc;
+  $("sectionsList").innerHTML = "Shows: " + FORMS[k.form].map((s) => `<span>${esc(s)}</span>`).join("");
+}
+$("kind").onchange = (e) => {
+  state.kind = e.target.value;
+  state.saved = -1;
+  state.name = "Untitled " + kindOf().label.toLowerCase();
+  render();
+};
+$("newBtn").onclick = () => { Object.assign(state, { saved: -1, kind: "sched_rooms", name: "Untitled report" }); render(); $("kind").focus(); };
+$("reportName").oninput = (e) => { state.name = e.target.value; };
+
+/* ---------- shared sections ---------- */
+function picker(title, hint, chosen, options, cls, labelFn) {
+  const left = options.filter((o) => !chosen.includes(o));
+  const div = document.createElement("div");
+  div.className = "picker";
+  div.innerHTML = `<h2>${esc(title)}</h2><p class="hint">${esc(hint)}</p>
+    <div class="chips">${chosen.map((c, i) => `<span class="chip ${cls}">${esc(labelFn(c))}<button type="button" aria-label="Remove ${esc(c)}" data-i="${i}">×</button></span>`).join("") || `<span class="hint">none</span>`}</div>
+    <div class="add"><select aria-label="Add to ${esc(title)}"><option value="">+ add ${cls === "measure" ? "measure" : "column"}…</option>${left.map((o) => `<option value="${esc(o)}">${esc(labelFn(o))}</option>`).join("")}</select></div>`;
+  div.querySelectorAll(".chip button").forEach((b) => b.onclick = () => { chosen.splice(+b.dataset.i, 1); renderSections(); });
+  div.querySelector("select").onchange = (e) => { if (e.target.value) { chosen.push(e.target.value); renderSections(); } };
+  return div;
+}
+function pickers(list) {
+  const p = document.createElement("section");
+  p.className = "pickers";
+  p.style.setProperty("--n", list.length);
+  p.append(...list);
+  return p;
+}
+function scopeSection(withFilterLabel) {
+  return section("Scope", `
+    <div class="controls" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+      <div class="field"><label>Building</label><select><option>All buildings</option><option>House</option></select></div>
+      <div class="field"><label>Level</label><select><option>All levels</option><option>LEVEL 00</option><option>LEVEL 01</option></select></div>
+      <div class="field"><label>Read from</label><select><option>Latest snapshot</option><option>Milestone: DD issue (2026-08-14)</option></select></div>
+    </div>`);
+}
+function previewSection(count, notes, head, body, foot) {
+  return section("", `
+    <div class="preview-head"><h2 style="margin:0">Preview</h2><span class="count">${count}</span></div>
+    ${notes.map((t) => `<div class="note">${esc(t)}</div>`).join("")}
+    <div class="table-wrap"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>
+    <p class="foot">${foot}</p>`);
+}
+
+/* ---------- forms ---------- */
+function schedule(k) {
+  const e = ENTITY[k.entity];
+  const cols = state.schedCols[k.entity];
+  const out = [];
+  out.push(pickers([picker("Columns", `Any ${e.one} property, instance then type, or a joined reference field.`, cols, e.props, "", (x) => x)]));
+  out.push(filterSection(k));
+  out.push(scopeSection(""));
+  out.push(schedulePreview(k));
+  return out;
+}
+
+function schedulePreview(k) {
+  const e = ENTITY[k.entity];
+  const cols = state.schedCols[k.entity];
+  const fields = fieldsFor(k);
+  const root = filterOf(k);
+  const rows = e.rows.filter((r) => test(root, (f) => valueOf(f, r, k), fields));
+  const notes = isActive(root) ? [`Filter keeps ${rows.length} of ${e.rows.length} ${e.many}.`] : [];
+  const head = `<tr>${cols.map((c) => `<th class="${e.numeric[c] ? "num" : ""}">${esc(c)}</th>`).join("")}</tr>`;
+  const body = rows.map((r) => `<tr>${cols.map((c) => cell(c, r[c] ?? "")).join("")}</tr>`).join("")
+    || `<tr><td class="none" colspan="${cols.length}">No ${esc(e.many)} match the filter.</td></tr>`;
+  const sec = previewSection(`${rows.length} rows · sample`, notes, head, body, "Areas in square feet, as stored.");
+  sec.id = "preview";
+  return sec;
+}
+
+/* ---------- filter builder ----------
+   A tree: groups hold conditions and other groups, each group matching ALL or
+   ANY of its children. Incomplete conditions are ignored rather than failing. */
+let nid = 0;
+const cond = (field, op, value = "", value2 = "") => ({ id: ++nid, t: "cond", field, op, value, value2 });
+const grp = (mode, items = []) => ({ id: ++nid, t: "group", mode, items });
+
+const OPS = {
+  text: [["eq", "is"], ["ne", "is not"], ["contains", "contains"], ["not_contains", "does not contain"],
+    ["starts", "starts with"], ["ends", "ends with"], ["blank", "is blank"], ["has", "has a value"]],
+  number: [["eq", "="], ["ne", "≠"], ["lt", "<"], ["le", "≤"], ["gt", ">"], ["ge", "≥"],
+    ["between", "between"], ["blank", "is blank"], ["has", "has a value"]],
+};
+const NO_VALUE = ["blank", "has"];
+const NEGATIVE = ["ne", "not_contains"];
+const opLabel = (type, op) => (OPS[type].find((o) => o[0] === op) || ["", op])[1];
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+
+function fieldsFor(k) {
+  const out = [];
+  const type = (num) => (num ? "number" : "text");
+  if (k.form === "schedule") {
+    const e = ENTITY[k.entity];
+    e.props.forEach((p) => out.push({ key: "el:" + p, side: cap(e.one), name: p, type: type(e.numeric[p]) }));
+  } else if (k.form === "association") {
+    const a = ASSOC[k.assoc], e = ENTITY[a.entity];
+    ROOM_PROPS.forEach((p) => out.push({ key: "room:" + p, side: "Room", name: p, type: type(ENTITY.rooms.numeric[p]) }));
+    e.props.forEach((p) => out.push({ key: "el:" + p, side: cap(e.one), name: p, type: type(e.numeric[p]) }));
+    a.measures.forEach((m) => out.push({ key: "m:" + m, side: "Join", name: MEASURE_LABEL[m], type: m === "room_origin" ? "text" : "number", pct: m.startsWith("fraction") }));
+  }
+  return out;
+}
+
+function valueOf(f, row, k) {
+  const i = f.key.indexOf(":");
+  const side = f.key.slice(0, i), name = f.key.slice(i + 1);
+  if (k.form === "schedule") return row[name];
+  const [rid, el, m] = row;
+  if (side === "room") return rid ? ROOMS[rid][name] : undefined;
+  if (side === "el") return el ? el[name] : undefined;
+  const v = m ? m[name] : undefined;
+  return v != null && f.pct ? v * 100 : v;
+}
+
+const DEFAULT_FILTERS = {
+  sched_rooms: () => grp("all", [cond("el:Level", "eq", "LEVEL 00")]),
+  by_room_ceilings: () => grp("all", [
+    cond("room:Level", "eq", "LEVEL 00"),
+    grp("any", [cond("el:Type", "contains", "plasterboard"), cond("m:fraction_of_room", "ge", "90")]),
+  ]),
+  by_room_spaces: () => grp("all", [cond("el:Model", "eq", "HouseA-MECH")]),
+};
+state.filters = {};
+function filterOf(k) {
+  if (!state.filters[k.id]) state.filters[k.id] = (DEFAULT_FILTERS[k.id] || (() => grp("all")))();
+  return state.filters[k.id];
+}
+
+function complete(n) {
+  if (n.t === "group") return n.items.some(complete);
+  if (NO_VALUE.includes(n.op)) return true;
+  return n.value.trim() !== "" && (n.op !== "between" || n.value2.trim() !== "");
+}
+const isActive = (root) => complete(root);
+
+function test(n, get, fields) {
+  if (n.t === "group") {
+    const live = n.items.filter(complete);
+    if (!live.length) return true;
+    const r = live.map((x) => test(x, get, fields));
+    return n.mode === "all" ? r.every(Boolean) : r.some(Boolean);
+  }
+  const f = fields.find((x) => x.key === n.field);
+  const v = get(f);
+  const blank = v == null || v === "" || v === "—";
+  if (n.op === "blank") return blank;
+  if (n.op === "has") return !blank;
+  if (blank) return false; // a missing value never matches, not even "is not"
+  if (f.type === "number") {
+    const a = Number(v), b = parseFloat(n.value), c = parseFloat(n.value2);
+    if (isNaN(a) || isNaN(b)) return false;
+    switch (n.op) {
+      case "eq": return Math.abs(a - b) < 1e-9;
+      case "ne": return Math.abs(a - b) >= 1e-9;
+      case "lt": return a < b;
+      case "le": return a <= b;
+      case "gt": return a > b;
+      case "ge": return a >= b;
+      case "between": return !isNaN(c) && a >= Math.min(b, c) && a <= Math.max(b, c);
+    }
+    return false;
+  }
+  const s = String(v).toLowerCase(), q = n.value.trim().toLowerCase();
+  switch (n.op) {
+    case "eq": return s === q;
+    case "ne": return s !== q;
+    case "contains": return s.includes(q);
+    case "not_contains": return !s.includes(q);
+    case "starts": return s.startsWith(q);
+    case "ends": return s.endsWith(q);
+  }
+  return false;
+}
+
+function summaryHtml(n, fields, top = true) {
+  if (n.t === "group") {
+    const live = n.items.filter(complete);
+    if (!live.length) return top ? "every row" : "";
+    const s = live.map((x) => summaryHtml(x, fields, false)).join(n.mode === "all" ? " <b>AND</b> " : " <b>OR</b> ");
+    return top || live.length === 1 ? s : `(${s})`;
+  }
+  const f = fields.find((x) => x.key === n.field);
+  const unit = f.pct ? "%" : "";
+  const val = NO_VALUE.includes(n.op) ? ""
+    : n.op === "between" ? ` ${esc(n.value)}${unit} and ${esc(n.value2)}${unit}`
+    : f.type === "number" ? ` ${esc(n.value)}${unit}` : ` "${esc(n.value)}"`;
+  return `${esc(f.side)}.${esc(f.name)} ${esc(opLabel(f.type, n.op))}${val}`;
+}
+
+function el(tag, attrs = {}, ...kids) {
+  const node = document.createElement(tag);
+  for (const [key, v] of Object.entries(attrs)) {
+    if (key.startsWith("on")) node[key] = v;
+    else if (key === "class") node.className = v;
+    else if (v != null && v !== false) node.setAttribute(key, v);
+  }
+  node.append(...kids.filter((x) => x != null));
+  return node;
+}
+
+function refreshPreview() {
+  const k = kindOf();
+  const p = $("preview");
+  if (p) p.replaceWith(k.form === "schedule" ? schedulePreview(k) : associationPreview(k));
+  const s = $("fsummary");
+  if (s) s.querySelector("code").innerHTML = summaryHtml(filterOf(k), fieldsFor(k));
+}
+
+function filterSection(k) {
+  const fields = fieldsFor(k);
+  const root = filterOf(k);
+  const sec = el("section", { class: "group" }, el("h2", {}, "Filter"));
+  sec.append(groupEl(root, 0, null, fields));
+  const sum = el("div", { class: "fsummary", id: "fsummary" }, el("span", { class: "k" }, "Reads as"), el("code"));
+  sum.querySelector("code").innerHTML = summaryHtml(root, fields);
+  sec.append(sum);
+  return sec;
+}
+
+function groupEl(g, depth, parent, fields) {
+  const mode = el("select", { "aria-label": "Match all or any", onchange: (e) => { g.mode = e.target.value; renderSections(); } },
+    el("option", { value: "all", selected: g.mode === "all" }, "all"),
+    el("option", { value: "any", selected: g.mode === "any" }, "any"));
+  const head = el("div", { class: "fgroup-head" },
+    depth === 0 ? "Include rows that match" : "Match", mode, "of these conditions",
+    el("span", { class: "spacer" }),
+    parent ? el("button", { class: "icon", type: "button", "aria-label": "Remove group", title: "Remove group",
+      onclick: () => { parent.items.splice(parent.items.indexOf(g), 1); renderSections(); } }, "×") : null);
+  const box = el("div", { class: "fgroup" }, head);
+
+  g.items.forEach((item, i) => {
+    const conn = i === 0 ? "where" : g.mode === "all" ? "and" : "or";
+    box.append(item.t === "group" ? el("div", { class: "nest" }, el("span", { class: `conn${i ? " op" : ""}` }, conn), groupEl(item, depth + 1, g, fields))
+      : condEl(item, conn, i > 0, g, fields));
+  });
+  if (!g.items.length) box.append(el("p", { class: "foot", style: "padding-left:3.85rem" }, "No conditions yet, so every row is included."));
+
+  const firstField = fields[0];
+  const add = el("div", { class: "fadd" },
+    el("button", { type: "button", onclick: () => { g.items.push(cond(firstField.key, "eq")); renderSections(); } }, "+ condition"),
+    depth < 2 ? el("button", { type: "button", onclick: () => { g.items.push(grp(g.mode === "all" ? "any" : "all", [cond(firstField.key, "eq")])); renderSections(); } }, `+ group (${g.mode === "all" ? "any" : "all"} of)`) : null);
+  box.append(add);
+  return box;
+}
+
+function condEl(c, conn, isOp, parent, fields) {
+  const f = fields.find((x) => x.key === c.field) || fields[0];
+  const sides = [...new Set(fields.map((x) => x.side))];
+  const fieldSel = el("select", { "aria-label": "Field", onchange: (e) => {
+    const nf = fields.find((x) => x.key === e.target.value);
+    if (nf.type !== f.type) { c.op = OPS[nf.type][0][0]; c.value = ""; c.value2 = ""; }
+    c.field = nf.key; renderSections();
+  } }, ...sides.map((s) => el("optgroup", { label: s }, ...fields.filter((x) => x.side === s).map((x) =>
+    el("option", { value: x.key, selected: x.key === f.key }, x.name)))));
+  const opSel = el("select", { "aria-label": "Operator", onchange: (e) => { c.op = e.target.value; renderSections(); } },
+    ...OPS[f.type].map(([v, l]) => el("option", { value: v, selected: v === c.op }, l)));
+
+  const input = (key, label) => el("input", {
+    type: "text", value: c[key], "aria-label": label, inputmode: f.type === "number" ? "decimal" : null,
+    placeholder: f.type === "number" ? "number" : "text",
+    oninput: (e) => {
+      c[key] = e.target.value;
+      row.classList.toggle("incomplete", !complete(c));
+      refreshPreview();
+    },
+  });
+  const unit = f.pct ? el("span", { class: "unit" }, "%") : null;
+  const val = NO_VALUE.includes(c.op) ? el("div", { class: "valcell" }, el("span", { class: "na" }, "no value needed"))
+    : c.op === "between" ? el("div", { class: "valcell" }, input("value", "From"), el("span", { class: "and" }, "and"), input("value2", "To"), unit)
+    : el("div", { class: "valcell" }, input("value", "Value"), unit);
+
+  const body = el("div", { class: "cond-body" },
+    el("div", { class: "fieldcell" }, fieldSel, el("span", { class: "ftype", title: f.type === "number" ? "Number" : "Text" }, f.type === "number" ? "123" : "abc")),
+    opSel, val,
+    el("button", { class: "icon", type: "button", "aria-label": "Remove condition", title: "Remove condition",
+      onclick: () => { parent.items.splice(parent.items.indexOf(c), 1); renderSections(); } }, "×"));
+  if (NEGATIVE.includes(c.op)) {
+    body.append(el("div", { class: "warn" }, `Rows where ${f.name} is blank don't match this either. `,
+      el("button", { type: "button", onclick: () => {
+        const i = parent.items.indexOf(c);
+        parent.items.splice(i, 1, grp("any", [c, cond(c.field, "blank")]));
+        renderSections();
+      } }, "Keep blanks too")));
+  }
+  const row = el("div", { class: `cond${complete(c) ? "" : " incomplete"}` }, el("span", { class: `conn${isOp ? " op" : ""}` }, conn), body);
+  return row;
+}
+
+function association(k) {
+  const a = ASSOC[k.assoc];
+  const e = ENTITY[a.entity];
+  const rc = state.roomCols, ac = state.assocCols[k.assoc], ms = state.measures[k.assoc];
+  const Side = e.one[0].toUpperCase() + e.one.slice(1);
+  const out = [];
+
+  const r = a.rule;
+  out.push(section("", `<div class="rule">
+    <span class="k">Joined by</span>
+    <span><span class="v">${esc(r.v)}</span><br><span class="src">${esc(r.src)}</span></span>
+    ${r.link ? `<a href="#">${esc(r.link)} →</a>` : `<span class="src">fixed rule</span>`}
+    <span class="why">${esc(r.why)}</span></div>`));
+
+  const list = [
+    picker("Room columns", "Any room property, or a joined reference field.", rc, ROOM_PROPS, "", (x) => x),
+    picker(`${Side} columns`, `Properties of each ${e.one}, instance then type.`, ac, e.props, "", (x) => x),
+  ];
+  if (a.measures.length) list.push(picker("Measures from the join", "What linking them produced. Belongs to neither side.", ms, a.measures, "measure", (x) => MEASURE_LABEL[x] || x));
+  out.push(pickers(list));
+  out.push(filterSection(k));
+
+  const ctl = section("", `<div class="controls">
+    <div class="group"><h2>Scope</h2>
+      <div class="row2">
+        <div class="field"><label>Building</label><select><option>All buildings</option><option>House</option></select></div>
+        <div class="field"><label>Level</label><select><option>All levels</option><option>LEVEL 00</option><option>LEVEL 01</option></select></div>
+      </div>
+      <div class="field"><label>Read from</label><select><option>Latest snapshot</option><option>Milestone: DD issue (2026-08-14)</option></select></div>
+    </div>
+    <div class="group"><h2>Rows</h2>
+      <label class="check"><input type="radio" name="shape" value="per_match" ${state.shape === "per_match" ? "checked" : ""} /> One row per match <span class="n">(best for export)</span></label>
+      <label class="check"><input type="radio" name="shape" value="per_room" ${state.shape === "per_room" ? "checked" : ""} /> One row per room <span class="n">(totals and value lists)</span></label>
+    </div>
+    <div class="group"><h2>Unmatched</h2>
+      <label class="check"><input type="checkbox" data-t="incRooms" ${state.incRooms ? "checked" : ""} /> Include rooms with no ${esc(e.many)}</label>
+      <label class="check"><input type="checkbox" data-t="incOrphans" ${state.incOrphans ? "checked" : ""} /> Include ${esc(e.many)} with no room <span class="n">(grouped as “no room”)</span></label>
+    </div></div>`);
+  ctl.querySelectorAll('input[name="shape"]').forEach((i) => i.onchange = () => { state.shape = i.value; renderSections(); });
+  ctl.querySelectorAll("input[data-t]").forEach((i) => i.onchange = () => { state[i.dataset.t] = i.checked; renderSections(); });
+  out.push(ctl);
+  out.push(associationPreview(k));
+  return out;
+}
+
+function associationPreview(k) {
+  const a = ASSOC[k.assoc];
+  const e = ENTITY[a.entity];
+  const rc = state.roomCols, ac = state.assocCols[k.assoc], ms = state.measures[k.assoc];
+  const Side = e.one[0].toUpperCase() + e.one.slice(1);
+  const fields = fieldsFor(k);
+  const root = filterOf(k);
+  const base = a.rows.filter(([room, el]) => (el || state.incRooms) && (room || state.incOrphans));
+  const rows = base.filter((r) => test(root, (f) => valueOf(f, r, k), fields));
+  const notes = [];
+  if (isActive(root)) notes.push(`Filter keeps ${rows.length} of ${base.length} matches.`);
+  let head, body, n;
+  const sideRow = (cnt) => `<tr class="side"><th colspan="${rc.length}">Room</th><th class="edge" colspan="${cnt}">${esc(Side)}${ms.length ? " and join" : ""}</th></tr>`;
+  const roomCells = (room) => room ? rc.map((c) => cell(c, room[c] ?? "")).join("")
+    : rc.map((c, i) => `<td class="lead none">${i === 0 ? "no room" : ""}</td>`).join("");
+
+  if (state.shape === "per_match") {
+    head = sideRow(ac.length + ms.length) + `<tr>${rc.map((c) => `<th>${esc(c)}</th>`).join("")}${ac.map((c, i) => `<th class="${i === 0 ? "edge" : ""}${e.numeric[c] ? " num" : ""}">${esc(c)}</th>`).join("")}${ms.map((m) => `<th class="${a.summable[m] || m.startsWith("fraction") ? "num" : ""}">${esc(MEASURE_LABEL[m])}</th>`).join("")}</tr>`;
+    body = rows.map(([rid, el, m]) => {
+      const room = rid ? ROOMS[rid] : null;
+      const aCells = el ? ac.map((c, i) => cell(c, el[c] ?? "", i === 0 ? "edge" : "")).join("")
+        : ac.map((c, i) => `<td class="none${i === 0 ? " edge" : ""}">${i === 0 ? `no ${e.one}` : ""}</td>`).join("");
+      return `<tr class="${room ? "" : "unattributed"}">${roomCells(room)}${aCells}${ms.map((x) => cell(x, m[x] ?? "")).join("")}</tr>`;
+    }).join("");
+    n = rows.length;
+    if (a.perMatchNote) notes.push(a.perMatchNote);
+  } else {
+    const groups = new Map();
+    for (const row of rows) { const key = row[0] ?? "__none"; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
+    head = sideRow(1 + ac.length + ms.length) + `<tr>${rc.map((c) => `<th>${esc(c)}</th>`).join("")}<th class="edge num">${esc(e.many)} <span class="agg">count</span></th>${ac.map((c) => `<th>${esc(c)} <span class="agg">${e.numeric[c] ? "values, not summed" : "values"}</span></th>`).join("")}${ms.map((m) => `<th class="${a.summable[m] ? "num" : ""}">${esc(MEASURE_LABEL[m])} <span class="agg">${a.summable[m] ? "sum" : "values"}</span></th>`).join("")}</tr>`;
+    const distinct = (vals) => [...new Set(vals.filter((v) => v !== "" && v != null).map((v) => fmt("", v)))].join(", ");
+    body = [...groups.entries()].map(([rid, rs]) => {
+      const room = rid === "__none" ? null : ROOMS[rid];
+      const els = rs.filter((x) => x[1]);
+      const mCells = ms.map((m) => {
+        if (a.summable[m]) return `<td class="num">${els.length ? els.reduce((t, x) => t + (x[2][m] || 0), 0).toFixed(1) : ""}</td>`;
+        if (m.startsWith("fraction")) return `<td>${esc(els.map((x) => fmt(m, x[2][m])).join(", "))}</td>`;
+        return `<td>${esc(distinct(els.map((x) => x[2][m])))}</td>`;
+      }).join("");
+      return `<tr class="${room ? "" : "unattributed"}">${roomCells(room)}<td class="edge num">${els.length}</td>${ac.map((c) => `<td>${esc(distinct(els.map((x) => x[1][c])))}</td>`).join("")}${mCells}</tr>`;
+    }).join("");
+    n = groups.size;
+    if (a.perRoomNote) notes.push(a.perRoomNote);
+  }
+  if (!state.incRooms) {
+    const h = a.rows.filter(([, el]) => !el).length;
+    if (h) notes.push(`${h} room${h > 1 ? "s" : ""} with no ${e.many} hidden. Tick “Include rooms with no ${e.many}” to list them. Most are usually external spaces, so add a room filter first.`);
+  }
+  if (!state.incOrphans) {
+    const h = a.rows.filter(([room]) => !room).length;
+    if (h) notes.push(`${h} ${h > 1 ? e.many : e.one} with no room hidden, so totals won't cover the whole model.`);
+  }
+  const sec = previewSection(`${n} row${n === 1 ? "" : "s"} · sample`, notes, head, body,
+    "Areas in square feet, as stored. Unmatched rows are shown on purpose: they are part of the answer, not errors.");
+  sec.id = "preview";
+  return sec;
+}
+
+const MILESTONES = [
+  { id: "sd", name: "SD issue", date: "2026-06-02" },
+  { id: "dd", name: "DD issue", date: "2026-08-14" },
+  { id: "latest", name: "Latest snapshot", date: "2026-09-12" },
+];
+const CMP_ROWS = [
+  ["G02", "KITCHEN", "Area", 168.0, 171.0, "changed"],
+  ["G03", "LIVING", "Name", "LOUNGE", "LIVING", "changed"],
+  ["G05", "POOL EX", "", "", "", "added"],
+  ["L02", "STUDY", "", "", "", "removed"],
+];
+
+function comparison() {
+  const out = [];
+  const keyS = section("", `<div class="controls">
+    <div class="group"><h2>Comparison key</h2>
+      <div class="field"><label>Room property that identifies “the same room” across milestones</label>
+      <select data-t="cmpKey">${ROOM_PROPS.map((p) => `<option ${p === state.cmpKey ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></div>
+      <p class="foot">Saved to the project, as the comparison page does today.</p>
+    </div>
+    <div class="group"><h2>Milestones</h2>
+      <div class="milestones">
+        <span class="hd">Baseline</span><span class="hd">Compare</span><span></span>
+        ${MILESTONES.map((m) => `
+          <input type="radio" name="baseline" value="${m.id}" ${m.id === state.baseline ? "checked" : ""} aria-label="Baseline ${esc(m.name)}" />
+          <input type="checkbox" value="${m.id}" ${state.others.includes(m.id) ? "checked" : ""} ${m.id === state.baseline ? "disabled" : ""} aria-label="Compare ${esc(m.name)}" />
+          <span>${esc(m.name)} <span class="date">${m.date}</span></span>`).join("")}
+      </div>
+    </div></div>`);
+  keyS.querySelector("select").onchange = (ev) => { state.cmpKey = ev.target.value; };
+  keyS.querySelectorAll('input[name="baseline"]').forEach((i) => i.onchange = () => { state.baseline = i.value; state.others = state.others.filter((o) => o !== i.value); renderSections(); });
+  keyS.querySelectorAll('.milestones input[type="checkbox"]').forEach((i) => i.onchange = () => {
+    state.others = i.checked ? [...state.others, i.value] : state.others.filter((o) => o !== i.value); renderSections();
+  });
+  out.push(keyS);
+  out.push(pickers([picker("Compared properties", "Checked on rooms present in both milestones. A property missing on one side is reported as missing, not as a change.", state.cmpProps, ROOM_PROPS.filter((p) => p !== state.cmpKey), "", (x) => x)]));
+
+  const base = MILESTONES.find((m) => m.id === state.baseline);
+  const other = MILESTONES.find((m) => state.others.includes(m.id));
+  if (!other) {
+    out.push(previewSection("", ["Tick at least one milestone to compare against the baseline."], "<tr><th>Nothing to compare</th></tr>", "", ""));
+    return out;
+  }
+  const shown = CMP_ROWS.filter((r) => !r[2] || state.cmpProps.includes(r[2]));
+  const head = `<tr><th>${esc(state.cmpKey)}</th><th>Name</th><th class="edge">Property</th><th>${esc(base.name)}</th><th>${esc(other.name)}</th><th>Status</th></tr>`;
+  const body = shown.map(([num, name, prop, a, b, st]) =>
+    `<tr><td>${esc(num)}</td><td>${esc(name)}</td><td class="edge ${prop ? "" : "none"}">${esc(prop || "whole room")}</td>${cell("", a)}${cell("", b)}${st ? cell("", st) : `<td class="none">same</td>`}</tr>`).join("");
+  out.push(previewSection(`${shown.length} rows · sample`, state.others.length > 1 ? [`Previewing ${other.name} only. The report adds one column pair per ticked milestone.`] : [], head, body, "Only rooms with a difference are listed."));
+  return out;
+}
+
+function renderSections() {
+  const k = kindOf();
+  const host = $("sections");
+  host.innerHTML = "";
+  const parts = k.form === "schedule" ? schedule(k) : k.form === "association" ? association(k) : comparison(k);
+  host.append(...parts);
+}
+
+function render() {
+  $("reportName").value = state.name;
+  renderSaved(); renderKind(); renderSections();
+}
+render();
+</script>
