@@ -1,8 +1,8 @@
 // Milestones: a named date, and what each entity's data was at that date.
 //
-// **Six pin maps, where the JavaScript page shows one.** Rooms, doors, windows,
-// FF&E, spaces and ceilings are pushed independently and their snapshot ids do
-// not correspond, so each entity carries its own map — and the old page rebuilt
+// **Seven pin maps, where the JavaScript page showed one.** Rooms, doors,
+// windows, FF&E, spaces, ceilings and floors are pushed independently and their
+// snapshot ids do not correspond, so each entity carries its own map — and the old page rebuilt
 // a milestone from four fields on every save, which silently emptied the other
 // five. That is not a display gap; it is data loss, and it is why this page
 // holds the whole object and sends it back.
@@ -18,6 +18,7 @@ const PIN_MAPS = [
   ["ffe_attachments", "FF&E"],
   ["space_attachments", "spaces"],
   ["ceiling_attachments", "ceilings"],
+  ["floor_attachments", "floors"],
 ] as const;
 
 type PinMap = (typeof PIN_MAPS)[number][0];
@@ -74,6 +75,7 @@ export function MilestonesSection({
               ffe_attachments: {},
               space_attachments: {},
               ceiling_attachments: {},
+              floor_attachments: {},
             },
           ])
         }

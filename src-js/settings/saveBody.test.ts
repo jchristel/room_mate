@@ -64,6 +64,7 @@ describe("saveBody", () => {
             ffe_attachments: {},
             space_attachments: {},
             ceiling_attachments: {},
+            floor_attachments: {},
           },
         ],
       }),

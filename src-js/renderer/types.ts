@@ -127,6 +127,18 @@ export interface Ceiling {
 }
 
 /**
+ * One floor, as `/floors` returns it. The SAME record as `Ceiling` -- the
+ * server serves both from one `Surface` type -- so this is an alias rather
+ * than a copy that could drift from it.
+ *
+ * **Drawn as a DOTTED ring**, under the ceilings. A floor, a ceiling and the
+ * room outline can all sit on one line of the plan, and the three are told
+ * apart by stroke pattern -- solid, long dash, dot -- rather than by colour,
+ * which a project may override. `height_offset` is to the floor's TOP.
+ */
+export type Floor = Ceiling;
+
+/**
  * One door, as `/doors` returns it — a SUBSET, on the same terms as `Room`.
  *
  * A door is not a room with different fields. The two that matter here:
