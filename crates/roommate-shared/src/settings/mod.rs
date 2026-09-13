@@ -349,6 +349,13 @@ pub struct Appearance {
     /// rule rather than a preference.
     #[serde(default, skip_serializing_if = "OutlineAppearance::is_default")]
     pub ceilings: OutlineAppearance,
+
+    /// Floors: as ceilings, and the dash is not settable for the same reason.
+    /// A floor, a ceiling and a room outline can all sit on one line of the
+    /// plan, so the three are told apart by their stroke pattern -- solid,
+    /// long dash, dot -- and a colour override cannot take that away.
+    #[serde(default, skip_serializing_if = "OutlineAppearance::is_default")]
+    pub floors: OutlineAppearance,
 }
 
 impl Appearance {
@@ -361,6 +368,7 @@ impl Appearance {
             && self.ffe.is_default()
             && self.spaces.is_default()
             && self.ceilings.is_default()
+            && self.floors.is_default()
     }
 }
 
@@ -427,9 +435,9 @@ impl ElementAppearance {
 #[derive(Debug, Default, Deserialize, Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../src-js/settings/generated/")]
 pub struct OutlineAppearance {
-    /// The ring. Theme default: `--accent` for spaces, `--ink` for ceilings --
-    /// and that contrast is the point, so overriding one and not the other is
-    /// a way to lose it.
+    /// The ring. Theme default: `--accent` for spaces, `--ink` for ceilings and
+    /// floors -- and that contrast is the point, so overriding one and not the
+    /// other is a way to lose it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
 }
@@ -1542,6 +1550,13 @@ pub struct Milestone {
     /// hold" answerable only when the two happened to be pushed together.
     #[serde(default)]
     pub ceiling_attachments: BTreeMap<String, String>,
+
+    /// Per-model floors snapshot pins, on the same terms as
+    /// `ceiling_attachments`. Floors and ceilings share a record and a read,
+    /// but not a push: each has its own entry point, so each is pinned on its
+    /// own.
+    #[serde(default)]
+    pub floor_attachments: BTreeMap<String, String>,
 }
 
 impl Milestone {
@@ -1567,8 +1582,10 @@ impl Milestone {
             ("attachment", &self.attachments),
             ("door attachment", &self.door_attachments),
             ("window attachment", &self.window_attachments),
+            ("ffe attachment", &self.ffe_attachments),
             ("space attachment", &self.space_attachments),
             ("ceiling attachment", &self.ceiling_attachments),
+            ("floor attachment", &self.floor_attachments),
         ] {
             for (model_id, taken_at) in pins {
                 if model_id.trim().is_empty() {
@@ -1681,6 +1698,7 @@ mod tests {
         Milestone {
             space_attachments: BTreeMap::new(),
             ceiling_attachments: BTreeMap::new(),
+            floor_attachments: BTreeMap::new(),
             name: name.to_string(),
             date: date.to_string(),
             reference_snapshots: Default::default(),

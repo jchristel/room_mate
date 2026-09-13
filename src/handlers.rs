@@ -22,9 +22,9 @@ use tokio_util::io::StreamReader;
 use std::collections::BTreeSet;
 
 use crate::contract::{
-    DoorModelEnvelope, DoorStreamEnvelope, DoorsUpload, ModelToShared, Opening, Project, Room, RoomBoundary,
-    RoomModelEnvelope, RoomPayload, RoomsUpload, Snapshot, StreamDoor, StreamEnvelope, StreamRoom,
-    SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
+    CeilingPayload, DoorModelEnvelope, DoorStreamEnvelope, DoorsUpload, FloorPayload, ModelToShared, Opening, Project,
+    Room, RoomBoundary, RoomModelEnvelope, RoomPayload, RoomsUpload, Snapshot, StreamDoor, StreamEnvelope, StreamRoom,
+    StreamSurface, Surface, SurfaceStreamEnvelope, SurfaceUploadParts, SUPPORTED_DOOR_SCHEMA, SUPPORTED_SCHEMA,
 };
 use crate::service::adjacency;
 use crate::service::areas;
@@ -35,9 +35,10 @@ use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
 use crate::service::spaces;
+use crate::service::surfaces::{SurfaceKind, SurfacePayloadKind};
 use crate::service::validation::ValidationResponse;
 use crate::service::{
-    ceilings, milestones, openings, projects, reference, rooms, scope_cursor, snapshots, validation, ServiceError,
+    milestones, openings, projects, reference, rooms, scope_cursor, snapshots, surfaces, validation, ServiceError,
 };
 use crate::state::{ModelKey, Shared, StreamingSnapshot};
 use crate::storage::SnapshotKind;
@@ -2299,24 +2300,30 @@ pub async fn get_spaces(
     }
 }
 
-// ============================ ceilings ingest ============================
+// ======================= ceilings and floors ingest =======================
+//
+// **One ingest for both, fed by all four routes.** A ceilings push and a floors
+// push differ in the list key their payload is stored under, the schema they
+// version, and the count key their response names -- all of which are lookups
+// on `SurfaceKind` or a type parameter. Everything else below is shared, so the
+// buffered and streamed routes of both entities cannot store different things.
 //
 // **Quarantine on a disagreeing phase, like spaces -- not refusal, like
 // openings.** The openings refusal exists for one reason, stated in
 // `preflight_openings`: promoting a doors push would re-phase the lineage while
 // the rooms stayed behind, stranding every `from_room`/`to_room` it carries. A
-// ceiling carries no room reference at all -- its rooms are derived
+// ceiling or a floor carries no room reference at all -- its rooms are derived
 // geometrically at read time -- so there is nothing to strand, and geometry does
 // not care what phase the lineage claims.
 //
-// Note the one place ceilings differ from spaces in that argument, since it is
+// Note the one place these differ from spaces in that argument, since it is
 // the sort of thing that reads as an oversight later. A services model usually
 // holds no rooms, so "re-phase it with a rooms push first" is advice a spaces
 // push cannot take, and that is part of why refusing would be wrong there.
-// Ceilings normally DO live beside their rooms, so the advice is takeable here.
-// It still is not a reason to refuse: quarantine already leaves the operator
-// both options, and refusing would throw away a correct export to enforce an
-// ordering nothing downstream needs.
+// Ceilings and floors normally DO live beside their rooms, so the advice is
+// takeable here. It still is not a reason to refuse: quarantine already leaves
+// the operator both options, and refusing would throw away a correct export to
+// enforce an ordering nothing downstream needs.
 
 /// One model's result on a ceilings push.
 #[derive(Debug, Serialize)]
@@ -2340,29 +2347,113 @@ pub struct CeilingIngestResponse {
     pub models: Vec<CeilingModelIngestResult>,
 }
 
-/// Where one model's ceilings go while a push is being read. A live model
-/// streams, a quarantined one buffers -- see `SpaceDest`.
-enum CeilingDest<'a> {
-    Live(StreamingSnapshot<'a>),
-    Quarantined {
-        payload: Box<crate::contract::CeilingPayload>,
-        lineage: String,
-    },
+impl From<SurfaceOutcome> for CeilingIngestResponse {
+    fn from(o: SurfaceOutcome) -> Self {
+        Self {
+            accepted: !o.any_quarantined,
+            ceiling_count: o.total,
+            snapshot_taken_at: o.snapshot_taken_at,
+            snapshot_id_generated: o.snapshot_id_generated,
+            models: o
+                .models
+                .into_iter()
+                .map(|m| CeilingModelIngestResult {
+                    model_id: m.model_id,
+                    ceiling_count: m.count,
+                    quarantined: m.quarantined,
+                })
+                .collect(),
+        }
+    }
 }
 
-struct CeilingSink<'a> {
+/// One model's result on a floors push. `CeilingModelIngestResult` with its
+/// count key renamed, and nothing else.
+#[derive(Debug, Serialize)]
+pub struct FloorModelIngestResult {
+    pub model_id: String,
+    pub floor_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quarantined: Option<String>,
+}
+
+/// The body of a floors push response.
+#[derive(Debug, Serialize)]
+pub struct FloorIngestResponse {
+    pub accepted: bool,
+    pub floor_count: usize,
+    pub snapshot_taken_at: String,
+    pub snapshot_id_generated: bool,
+    pub models: Vec<FloorModelIngestResult>,
+}
+
+impl From<SurfaceOutcome> for FloorIngestResponse {
+    fn from(o: SurfaceOutcome) -> Self {
+        Self {
+            accepted: !o.any_quarantined,
+            floor_count: o.total,
+            snapshot_taken_at: o.snapshot_taken_at,
+            snapshot_id_generated: o.snapshot_id_generated,
+            models: o
+                .models
+                .into_iter()
+                .map(|m| FloorModelIngestResult {
+                    model_id: m.model_id,
+                    floor_count: m.count,
+                    quarantined: m.quarantined,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What a finished surface push amounts to, before it is named for an entity
+/// -- `IngestOutcome`'s role, plus the quarantine these entities have and
+/// openings do not.
+pub struct SurfaceOutcome {
+    total: usize,
+    any_quarantined: bool,
+    snapshot_taken_at: String,
+    snapshot_id_generated: bool,
+    models: Vec<SurfaceModelOutcome>,
+}
+
+struct SurfaceModelOutcome {
     model_id: String,
-    dest: CeilingDest<'a>,
+    count: usize,
+    quarantined: Option<String>,
 }
 
-impl CeilingSink<'_> {
-    /// Take one ceiling. Both routes feed sinks through here, so the buffered
+impl SurfaceOutcome {
+    fn status(&self) -> StatusCode {
+        if self.any_quarantined {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        }
+    }
+}
+
+/// Where one model's surfaces go while a push is being read. A live model
+/// streams, a quarantined one buffers -- see `SpaceDest`.
+enum SurfaceDest<'a, P> {
+    Live(StreamingSnapshot<'a>),
+    Quarantined { payload: Box<P>, lineage: String },
+}
+
+struct SurfaceSink<'a, P> {
+    model_id: String,
+    dest: SurfaceDest<'a, P>,
+}
+
+impl<P: SurfacePayloadKind> SurfaceSink<'_, P> {
+    /// Take one surface. Every route feeds sinks through here, so the buffered
     /// and streamed paths cannot store different things.
-    fn push(&mut self, ceiling: crate::contract::Ceiling) -> Result<(), (StatusCode, String)> {
+    fn push(&mut self, surface: Surface) -> Result<(), (StatusCode, String)> {
         match &mut self.dest {
-            CeilingDest::Live(snapshot) => snapshot.push(&ceiling).map_err(store_failed),
-            CeilingDest::Quarantined { payload, .. } => {
-                payload.ceilings.push(ceiling);
+            SurfaceDest::Live(snapshot) => snapshot.push(&surface).map_err(store_failed),
+            SurfaceDest::Quarantined { payload, .. } => {
+                payload.surfaces_mut().push(surface);
                 Ok(())
             }
         }
@@ -2370,96 +2461,103 @@ impl CeilingSink<'_> {
 
     fn count(&self) -> usize {
         match &self.dest {
-            CeilingDest::Live(snapshot) => snapshot.count(),
-            CeilingDest::Quarantined { payload, .. } => payload.ceilings.len(),
+            SurfaceDest::Live(snapshot) => snapshot.count(),
+            SurfaceDest::Quarantined { payload, .. } => payload.surfaces().len(),
         }
     }
 }
 
-/// Decide every model's fate before any of them is stored.
-fn preflight_ceilings(
-    state: &Shared,
-    project_id: &str,
-    phase: Option<&str>,
-    models: impl Iterator<Item = (String, Option<ModelToShared>)>,
-) -> Result<Vec<PhaseDecision>, (StatusCode, String)> {
-    let mut decisions = Vec::new();
-    for (model_id, transform) in models {
-        let key = ModelKey { project_id: project_id.to_string(), model_id: model_id.clone() };
-        decisions.push(decide_phase(state, &key, phase)?);
-        // Worth more here than on any other entity: the room join is geometric,
-        // so a model placed wrongly does not produce a wrong room -- it produces
-        // no room at all, on every ceiling it holds, and "homeless" is a legal
-        // state this entity reports rather than an error anything raises.
-        warn_on_transform_drift(transform.as_ref(), project_id, &model_id);
-    }
-    Ok(decisions)
-}
+/// Whether the snapshot id was generated, and one sink per declared model.
+type OpenedSurfaceSinks<'a, P> = (bool, Vec<SurfaceSink<'a, P>>);
 
-/// Open one sink per model, live or quarantined, from the decisions
-/// `preflight_ceilings` already made.
+/// Everything a surface push is checked for before any element is read, and
+/// one sink per model opened from the decisions -- live or quarantined.
 ///
-/// No `reject_empty_rooms` equivalent: a model with rooms and no ceilings is
-/// ordinary, and the server cannot tell that from a broken export -- the same
-/// position it takes on doors. The producer refuses an empty push instead.
-fn open_ceiling_sinks<'a>(
+/// Normalises the envelope in place and answers whether the snapshot id was
+/// generated. No `reject_empty_rooms` equivalent: a model with rooms and no
+/// ceilings or floors is ordinary, and the server cannot tell that from a
+/// broken export -- the same position it takes on doors. The producer refuses
+/// an empty run instead.
+fn begin_surface_ingest<'a, P: SurfacePayloadKind>(
     state: &'a Shared,
-    schema_version: u32,
-    project: &Project,
-    snapshot: &Snapshot,
-    phase: Option<&str>,
-    models: Vec<crate::contract::CeilingModelEnvelope>,
-    decisions: Vec<PhaseDecision>,
-) -> Result<Vec<CeilingSink<'a>>, (StatusCode, String)> {
-    let mut sinks = Vec::with_capacity(models.len());
-    for (envelope, decision) in models.into_iter().zip(decisions) {
-        let model_id = envelope.model.id.clone();
-        let payload = envelope.into_payload(
-            schema_version,
-            project.clone(),
-            snapshot.clone(),
-            phase.map(str::to_string),
-            Vec::new(),
+    envelope: &mut SurfaceStreamEnvelope,
+) -> Result<OpenedSurfaceSinks<'a, P>, (StatusCode, String)> {
+    let kind = SurfaceKind::of::<P>();
+    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
+    envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
+    validate_ingest(
+        state,
+        envelope.schema_version,
+        kind.supported_schema(),
+        &envelope.project.id,
+        &envelope.snapshot.taken_at,
+    )?;
+    validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
+
+    // Decide every model's fate before any of them is stored.
+    let mut decisions = Vec::with_capacity(envelope.models.len());
+    for m in &envelope.models {
+        let key = ModelKey { project_id: envelope.project.id.clone(), model_id: m.model.id.clone() };
+        decisions.push(decide_phase(state, &key, envelope.phase.as_deref())?);
+        // Worth more here than on an entity with an authored reference: the
+        // room join is geometric, so a model placed wrongly does not produce a
+        // wrong room -- it produces no room at all, on every element it holds,
+        // and "homeless" is a legal state these entities report rather than an
+        // error anything raises.
+        warn_on_transform_drift(m.model_to_shared.as_ref(), &envelope.project.id, &m.model.id);
+    }
+
+    let mut sinks = Vec::with_capacity(envelope.models.len());
+    for (model, decision) in std::mem::take(&mut envelope.models).into_iter().zip(decisions) {
+        let model_id = model.model.id.clone();
+        let payload = P::from_model_envelope(
+            envelope.schema_version,
+            envelope.project.clone(),
+            envelope.snapshot.clone(),
+            envelope.phase.clone(),
+            model,
         );
         let dest = match decision {
             PhaseDecision::Accept => {
-                CeilingDest::Live(state.open_opening_snapshot(SnapshotKind::Ceilings, &payload).map_err(store_failed)?)
+                SurfaceDest::Live(state.open_opening_snapshot(kind.snapshot_kind(), &payload).map_err(store_failed)?)
             }
-            PhaseDecision::Quarantine { lineage } => CeilingDest::Quarantined { payload: Box::new(payload), lineage },
+            PhaseDecision::Quarantine { lineage } => SurfaceDest::Quarantined { payload: Box::new(payload), lineage },
         };
-        sinks.push(CeilingSink { model_id, dest });
+        sinks.push(SurfaceSink { model_id, dest });
     }
-    Ok(sinks)
+    Ok((snapshot_id_generated, sinks))
 }
 
 /// Commit every sink and report the push.
-fn finish_ceilings(
+fn finish_surfaces<P: SurfacePayloadKind>(
     state: &Shared,
     project: &Project,
     snapshot_taken_at: String,
     snapshot_id_generated: bool,
-    sinks: Vec<CeilingSink<'_>>,
-) -> Result<(StatusCode, Json<CeilingIngestResponse>), (StatusCode, String)> {
-    let mut results = Vec::with_capacity(sinks.len());
+    sinks: Vec<SurfaceSink<'_, P>>,
+) -> Result<SurfaceOutcome, (StatusCode, String)> {
+    let kind = SurfaceKind::of::<P>();
+    let mut models = Vec::with_capacity(sinks.len());
     let mut total = 0usize;
     let mut any_quarantined = false;
     for sink in sinks {
         let count = sink.count();
         total += count;
-        let CeilingSink { model_id, dest } = sink;
+        let SurfaceSink { model_id, dest } = sink;
         let key = ModelKey { project_id: project.id.clone(), model_id: model_id.clone() };
         let quarantined = match dest {
-            CeilingDest::Live(snapshot) => {
+            SurfaceDest::Live(snapshot) => {
                 snapshot.commit().map_err(store_failed)?;
                 None
             }
-            CeilingDest::Quarantined { payload, lineage } => {
-                let pushed = payload.phase.clone().unwrap_or_default();
+            SurfaceDest::Quarantined { payload, lineage } => {
+                let pushed = payload.phase().unwrap_or_default().to_string();
                 state
-                    .set_pending_snapshot(&key, SnapshotKind::Ceilings, payload.as_ref())
+                    .set_pending_snapshot(&key, kind.snapshot_kind(), payload.as_ref())
                     .map_err(store_failed)?;
                 tracing::warn!(
-                    "quarantined ceilings push for {}/{}: phase {:?} disagrees with the model's {:?}",
+                    "quarantined {} push for {}/{}: phase {:?} disagrees with the model's {:?}",
+                    kind.snapshot_kind().label(),
                     key.project_id,
                     key.model_id,
                     pushed,
@@ -2472,76 +2570,34 @@ fn finish_ceilings(
             }
         };
         any_quarantined |= quarantined.is_some();
-        results.push(CeilingModelIngestResult { model_id, ceiling_count: count, quarantined });
+        models.push(SurfaceModelOutcome { model_id, count, quarantined });
     }
-    tracing::info!("received {} ceiling(s) across {} model(s)", total, results.len());
-
-    let status = if any_quarantined { StatusCode::ACCEPTED } else { StatusCode::OK };
-    Ok((
-        status,
-        Json(CeilingIngestResponse {
-            accepted: !any_quarantined,
-            ceiling_count: total,
-            snapshot_taken_at,
-            snapshot_id_generated,
-            models: results,
-        }),
-    ))
+    tracing::info!("received {} {}(s) across {} model(s)", total, kind.element_label(), models.len());
+    Ok(SurfaceOutcome { total, any_quarantined, snapshot_taken_at, snapshot_id_generated, models })
 }
 
-/// Buffered ceilings ingest (`POST /ceilings`).
-pub async fn ingest_ceilings(
-    State(state): State<Shared>,
-    Json(mut upload): Json<crate::contract::CeilingsUpload>,
-) -> Result<(StatusCode, Json<CeilingIngestResponse>), (StatusCode, String)> {
-    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut upload.snapshot);
-    upload.phase = crate::contract::normalize_phase(upload.phase.as_deref());
-    validate_ingest(
-        &state,
-        upload.schema_version,
-        crate::contract::SUPPORTED_CEILING_SCHEMA,
-        &upload.project.id,
-        &upload.snapshot.taken_at,
-    )?;
-    validate_models(upload.models.iter().map(|m| m.envelope.model.id.as_str()))?;
-
-    let mut ceilings_by_model: Vec<(String, Vec<crate::contract::Ceiling>)> = upload
-        .models
-        .iter_mut()
-        .map(|m| (m.envelope.model.id.clone(), std::mem::take(&mut m.ceilings)))
-        .collect();
-    let models: Vec<crate::contract::CeilingModelEnvelope> = upload.models.into_iter().map(|m| m.envelope).collect();
-    let decisions = preflight_ceilings(
-        &state,
-        &upload.project.id,
-        upload.phase.as_deref(),
-        models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
-    )?;
-
-    let mut sinks = open_ceiling_sinks(
-        &state,
-        upload.schema_version,
-        &upload.project,
-        &upload.snapshot,
-        upload.phase.as_deref(),
-        models,
-        decisions,
-    )?;
-    for (model_id, ceilings) in &mut ceilings_by_model {
-        let sink = sink_for(&mut sinks, model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
-        for ceiling in ceilings.drain(..) {
-            sink.push(ceiling)?;
+/// A buffered push, already taken apart into the streamed route's shape.
+fn ingest_surface_parts<P: SurfacePayloadKind>(
+    state: &Shared,
+    (mut envelope, elements): SurfaceUploadParts,
+) -> Result<SurfaceOutcome, (StatusCode, String)> {
+    let (generated, mut sinks) = begin_surface_ingest::<P>(state, &mut envelope)?;
+    for (model_id, surfaces) in elements {
+        let sink = sink_for(&mut sinks, &model_id, |s| s.model_id.as_str()).expect("every declared model has a sink");
+        for surface in surfaces {
+            sink.push(surface)?;
         }
     }
-    finish_ceilings(&state, &upload.project, upload.snapshot.taken_at.clone(), snapshot_id_generated, sinks)
+    finish_surfaces(state, &envelope.project, envelope.snapshot.taken_at.clone(), generated, sinks)
 }
 
-/// Streaming NDJSON ceilings ingest -- `ingest_ceilings` for a push too large to
-/// buffer.
-pub async fn ingest_ceilings_stream(
-    State(state): State<Shared>,
+/// A streamed NDJSON push: line 1 is the envelope, every following line one
+/// `StreamSurface` tagged with its model.
+async fn ingest_surface_stream<P: SurfacePayloadKind>(
+    state: &Shared,
     body: Body,
-) -> Result<(StatusCode, Json<CeilingIngestResponse>), (StatusCode, String)> {
+) -> Result<SurfaceOutcome, (StatusCode, String)> {
+    let kind = SurfaceKind::of::<P>();
     let stream = body.into_data_stream().map(|r| r.map_err(std::io::Error::other));
     let reader = StreamReader::new(stream);
     let mut lines = reader.lines();
@@ -2551,35 +2607,9 @@ pub async fn ingest_ceilings_stream(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("read error: {e}")))?
         .ok_or((StatusCode::BAD_REQUEST, "empty body".into()))?;
-    let mut envelope: crate::contract::CeilingStreamEnvelope =
+    let mut envelope: SurfaceStreamEnvelope =
         serde_json::from_str(&first).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, format!("bad envelope: {e}")))?;
-
-    let snapshot_id_generated = crate::contract::ensure_taken_at(&mut envelope.snapshot);
-    envelope.phase = crate::contract::normalize_phase(envelope.phase.as_deref());
-    validate_ingest(
-        &state,
-        envelope.schema_version,
-        crate::contract::SUPPORTED_CEILING_SCHEMA,
-        &envelope.project.id,
-        &envelope.snapshot.taken_at,
-    )?;
-    validate_models(envelope.models.iter().map(|m| m.model.id.as_str()))?;
-
-    let decisions = preflight_ceilings(
-        &state,
-        &envelope.project.id,
-        envelope.phase.as_deref(),
-        envelope.models.iter().map(|m| (m.model.id.clone(), m.model_to_shared)),
-    )?;
-    let mut sinks = open_ceiling_sinks(
-        &state,
-        envelope.schema_version,
-        &envelope.project,
-        &envelope.snapshot,
-        envelope.phase.as_deref(),
-        envelope.models,
-        decisions,
-    )?;
+    let (generated, mut sinks) = begin_surface_ingest::<P>(state, &mut envelope)?;
 
     while let Some(line) = lines
         .next_line()
@@ -2589,72 +2619,125 @@ pub async fn ingest_ceilings_stream(
         if line.trim().is_empty() {
             continue;
         }
-        let framed: crate::contract::StreamCeiling =
-            serde_json::from_str(&line).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, format!("bad ceiling: {e}")))?;
+        let label = kind.element_label();
+        let framed: StreamSurface =
+            serde_json::from_str(&line).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, format!("bad {label}: {e}")))?;
         let sink = sink_for(&mut sinks, &framed.model_id, |s| s.model_id.as_str()).ok_or((
             StatusCode::UNPROCESSABLE_ENTITY,
-            format!("ceiling names model {:?}, which the envelope did not declare", framed.model_id),
+            format!("{label} names model {:?}, which the envelope did not declare", framed.model_id),
         ))?;
-        sink.push(framed.ceiling)?;
+        sink.push(framed.surface)?;
     }
 
-    finish_ceilings(
-        &state,
-        &envelope.project,
-        envelope.snapshot.taken_at.clone(),
-        snapshot_id_generated,
-        sinks,
-    )
+    finish_surfaces(state, &envelope.project, envelope.snapshot.taken_at.clone(), generated, sinks)
 }
 
-/// What a `/ceilings` read is scoped to.
+/// Buffered ceilings ingest (`POST /ceilings`).
+pub async fn ingest_ceilings(
+    State(state): State<Shared>,
+    Json(upload): Json<crate::contract::CeilingsUpload>,
+) -> Result<(StatusCode, Json<CeilingIngestResponse>), (StatusCode, String)> {
+    let outcome = ingest_surface_parts::<CeilingPayload>(&state, upload.into_parts())?;
+    Ok((outcome.status(), Json(outcome.into())))
+}
+
+/// Streaming NDJSON ceilings ingest -- `ingest_ceilings` for a push too large to
+/// buffer.
+pub async fn ingest_ceilings_stream(
+    State(state): State<Shared>,
+    body: Body,
+) -> Result<(StatusCode, Json<CeilingIngestResponse>), (StatusCode, String)> {
+    let outcome = ingest_surface_stream::<CeilingPayload>(&state, body).await?;
+    Ok((outcome.status(), Json(outcome.into())))
+}
+
+/// Buffered floors ingest (`POST /floors`).
+///
+/// Every rule is the ceilings one, and on purpose: an empty push is accepted,
+/// a disagreeing phase is quarantined, and a floors push may arrive before its
+/// rooms. See the section comment above.
+pub async fn ingest_floors(
+    State(state): State<Shared>,
+    Json(upload): Json<crate::contract::FloorsUpload>,
+) -> Result<(StatusCode, Json<FloorIngestResponse>), (StatusCode, String)> {
+    let outcome = ingest_surface_parts::<FloorPayload>(&state, upload.into_parts())?;
+    Ok((outcome.status(), Json(outcome.into())))
+}
+
+/// Streaming NDJSON floors ingest.
+pub async fn ingest_floors_stream(
+    State(state): State<Shared>,
+    body: Body,
+) -> Result<(StatusCode, Json<FloorIngestResponse>), (StatusCode, String)> {
+    let outcome = ingest_surface_stream::<FloorPayload>(&state, body).await?;
+    Ok((outcome.status(), Json(outcome.into())))
+}
+
+/// What a `/ceilings` or `/floors` read is scoped to.
 ///
 /// No `?filter=` and no `?building=`, and both omissions are deliberate rather
 /// than pending. The filter grammar resolves reference-source names, and no
-/// reference source declares `entity = "ceilings"` yet, so parsing one here
-/// would advertise a vocabulary with nothing in it. `?building=` scopes an
-/// element *through the room that owns it*, which for a ceiling is a list
-/// rather than one room -- a ceiling lying over two rooms in two buildings has
-/// no single building, and inventing one is worse than not offering the
-/// parameter.
+/// reference source declares either entity yet, so parsing one here would
+/// advertise a vocabulary with nothing in it. `?building=` scopes an element
+/// *through the room that owns it*, which for a surface is a list rather than
+/// one room -- a ceiling lying over two rooms in two buildings has no single
+/// building, and inventing one is worse than not offering the parameter.
 #[derive(Debug, Deserialize)]
-pub struct CeilingsQuery {
+pub struct SurfacesQuery {
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
     pub milestone: Option<String>,
 }
 
-/// The ceilings read.
-///
-/// Mirrors `get_spaces` in shape. What differs is entirely inside
-/// `service::ceilings`: every row carries the rooms it lies over, derived
+/// The shared read behind `/ceilings` and `/floors`: `R` names the body.
+fn get_surfaces<P: SurfacePayloadKind, R: From<surfaces::Assembled> + Serialize>(
+    state: &Shared,
+    headers: &HeaderMap,
+    query: &SurfacesQuery,
+) -> Result<Response, (StatusCode, String)> {
+    let kind = SurfaceKind::of::<P>();
+    let scope = surfaces::SurfaceScope { project: query.project.as_deref(), milestone: query.milestone.as_deref() };
+
+    // The cursor covers ROOMS as well as the entity, which no reference-joined
+    // entity read needs to do. Attribution is derived from the rooms in scope,
+    // so a rooms push with no surfaces push behind it still changes every
+    // answer here -- a cursor over the entity alone would serve a stale 304
+    // after the rooms moved underneath it.
+    let cursor = scope_cursor(state, scope.project, scope.milestone, &[kind.snapshot_kind(), SnapshotKind::Rooms])
+        .map_err(map_service_error)?;
+    // Four slots because `etag_for` takes a fixed-width scope tuple; these
+    // reads vary on two of them and pass None for the parameters they do not
+    // offer. The kind needs no slot: the cursor already hashes it.
+    let etag = etag_for(&cursor, [query.project.as_deref(), query.milestone.as_deref(), None, None]);
+    if is_fresh(headers, &etag) {
+        return Ok(not_modified(&etag));
+    }
+
+    match surfaces::assemble_surfaces::<P>(state, &scope).map_err(map_service_error)? {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(assembled) => Ok(([(header::ETAG, etag)], Json(R::from(assembled))).into_response()),
+    }
+}
+
+/// The ceilings read. Every row carries the rooms it lies over, derived
 /// geometrically on this read and never stored.
 pub async fn get_ceilings(
     State(state): State<Shared>,
     headers: HeaderMap,
-    Query(query): Query<CeilingsQuery>,
+    Query(query): Query<SurfacesQuery>,
 ) -> Result<Response, (StatusCode, String)> {
-    let scope = ceilings::CeilingScope { project: query.project.as_deref(), milestone: query.milestone.as_deref() };
+    get_surfaces::<CeilingPayload, surfaces::CeilingsResult>(&state, &headers, &query)
+}
 
-    // The cursor covers ROOMS as well as ceilings, which no other entity read
-    // needs to do. Attribution is derived from the rooms in scope, so a rooms
-    // push with no ceilings push behind it still changes every answer here --
-    // a cursor over ceilings alone would serve a stale 304 after the rooms
-    // moved underneath it.
-    let cursor = scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Ceilings, SnapshotKind::Rooms])
-        .map_err(map_service_error)?;
-    // Four slots because `etag_for` takes a fixed-width scope tuple; ceilings
-    // vary on two of them and pass None for the parameters they do not offer.
-    let etag = etag_for(&cursor, [query.project.as_deref(), query.milestone.as_deref(), None, None]);
-    if is_fresh(&headers, &etag) {
-        return Ok(not_modified(&etag));
-    }
-
-    match ceilings::assemble_ceilings(&state, &scope).map_err(map_service_error)? {
-        None => Ok(StatusCode::NO_CONTENT.into_response()),
-        Some(result) => Ok(([(header::ETAG, etag)], Json(result)).into_response()),
-    }
+/// The floors read -- the ceilings read under its own key, with the floor
+/// sliver rule. See `service::surface_attribution`.
+pub async fn get_floors(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    Query(query): Query<SurfacesQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    get_surfaces::<FloorPayload, surfaces::FloorsResult>(&state, &headers, &query)
 }
 
 /// The windows read. The doors read with two lookups changed, which is the
@@ -2955,49 +3038,73 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 
-    /// One model's spaces as a v1 upload.
+    /// One model's surfaces as a model block, with one level at elevation 0.
+    fn surface_model(model: &str) -> crate::contract::SurfaceModelEnvelope {
+        crate::contract::SurfaceModelEnvelope {
+            model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
+            model_to_shared: None,
+            levels: vec![crate::contract::Level { id: "L1".to_string(), name: "Level 1".to_string(), elevation: 0.0 }],
+        }
+    }
+
+    /// One model's ceilings as a v1 upload.
     fn ceilings_upload(
         model: &str,
         ts: &str,
         phase: Option<&str>,
-        ceilings: Vec<crate::contract::Ceiling>,
+        ceilings: Vec<crate::contract::Surface>,
     ) -> crate::contract::CeilingsUpload {
         crate::contract::CeilingsUpload {
             schema_version: crate::contract::SUPPORTED_CEILING_SCHEMA,
             project: Project { id: "p1".to_string(), name: "P".to_string() },
             snapshot: Snapshot { taken_at: ts.to_string() },
             phase: phase.map(str::to_string),
-            models: vec![crate::contract::CeilingModelUpload {
-                envelope: crate::contract::CeilingModelEnvelope {
-                    model: Model { id: model.to_string(), name: "M".to_string(), source: "revit".to_string() },
-                    model_to_shared: None,
-                    levels: vec![],
-                },
-                ceilings,
-            }],
+            models: vec![crate::contract::CeilingModelUpload { envelope: surface_model(model), ceilings }],
         }
     }
 
-    fn a_ceiling(id: &str) -> crate::contract::Ceiling {
-        crate::contract::Ceiling {
+    /// One model's floors as a v1 upload.
+    fn floors_upload(
+        model: &str,
+        ts: &str,
+        phase: Option<&str>,
+        floors: Vec<crate::contract::Surface>,
+    ) -> crate::contract::FloorsUpload {
+        crate::contract::FloorsUpload {
+            schema_version: crate::contract::SUPPORTED_FLOOR_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            snapshot: Snapshot { taken_at: ts.to_string() },
+            phase: phase.map(str::to_string),
+            models: vec![crate::contract::FloorModelUpload { envelope: surface_model(model), floors }],
+        }
+    }
+
+    fn square(x0: f64, y0: f64, x1: f64, y1: f64) -> crate::contract::Loop {
+        crate::contract::Loop {
+            points: vec![
+                crate::contract::Point2D { x: x0, y: y0 },
+                crate::contract::Point2D { x: x1, y: y0 },
+                crate::contract::Point2D { x: x1, y: y1 },
+                crate::contract::Point2D { x: x0, y: y1 },
+            ],
+        }
+    }
+
+    fn a_surface_over(id: &str, outer: crate::contract::Loop) -> crate::contract::Surface {
+        crate::contract::Surface {
             id: id.to_string(),
             level_id: "L1".to_string(),
             height_offset: Some(8.0),
-            polygons: vec![crate::contract::CeilingPolygon {
-                loops: vec![crate::contract::Loop {
-                    points: vec![
-                        crate::contract::Point2D { x: 0.0, y: 0.0 },
-                        crate::contract::Point2D { x: 10.0, y: 0.0 },
-                        crate::contract::Point2D { x: 10.0, y: 10.0 },
-                        crate::contract::Point2D { x: 0.0, y: 10.0 },
-                    ],
-                }],
-            }],
+            polygons: vec![crate::contract::SurfacePolygon { loops: vec![outer] }],
             properties: Default::default(),
             type_properties: Default::default(),
             type_id: None,
             type_name: None,
         }
+    }
+
+    fn a_ceiling(id: &str) -> crate::contract::Surface {
+        a_surface_over(id, square(0.0, 0.0, 10.0, 10.0))
     }
 
     /// **An empty ceilings push is accepted, where an empty rooms push is a
@@ -3082,6 +3189,161 @@ mod tests {
         assert!(body.accepted);
         assert!(body.models[0].quarantined.is_none(), "no lineage to disagree with");
     }
+
+    /// A floors push runs the ceilings ingest, so it inherits the ceilings
+    /// rules -- and these two are the ones worth pinning, because each is a
+    /// deliberate departure from a sibling entity. Zero floors is accepted (the
+    /// doors argument: a fit-out model whose slabs live in the base build is
+    /// ordinary), and a disagreeing phase is quarantined rather than refused (a
+    /// floor carries no room reference for a promotion to strand).
+    #[tokio::test]
+    async fn test_floors_push_accepts_empty_and_quarantines_a_phase_change() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let (status, body) = ingest_floors(
+            State(state.clone()),
+            Json(floors_upload("m1", "2026-09-13T00:00:00Z", Some("New"), vec![])),
+        )
+        .await
+        .expect("an empty floors push is accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.floor_count, 0);
+
+        let (status, body) = ingest_floors(
+            State(state),
+            Json(floors_upload("m1", "2026-09-13T01:00:00Z", Some("Existing"), vec![a_ceiling("f1")])),
+        )
+        .await
+        .expect("a disagreeing phase is stored, not refused");
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(!body.accepted);
+        assert!(body.models[0].quarantined.is_some());
+    }
+
+    /// The buffered and streamed floors routes must store identical results --
+    /// and store them under `floors`, not `ceilings`. The two entities share
+    /// every line of ingest, so the one way they could cross is the kind a
+    /// sink is opened with, and this is the test that would see it.
+    #[tokio::test]
+    async fn test_floors_stream_matches_the_buffered_path() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+
+        let body = concat!(
+            r#"{"schema_version":1,"project":{"id":"p1","name":"P"},"#,
+            r#""snapshot":{"taken_at":"2026-09-13T00:00:00Z"},"phase":"New Construction","#,
+            r#""models":[{"id":"m1","name":"M","source":"revit","levels":[{"id":"L1","name":"Level 1","elevation":0.0}]}]}"#,
+            "\n",
+            r#"{"model_id":"m1","id":"f1","level_id":"L1","height_offset":0.0,"#,
+            r#""polygons":[{"loops":[{"points":[{"x":0,"y":0},{"x":10,"y":0},{"x":10,"y":10}]}]}]}"#,
+            "\n",
+            "\n", // a trailing blank line is tolerated, as on the other streams
+        );
+        let (status, streamed) = ingest_floors_stream(State(state.clone()), Body::from(body)).await.expect("accepted");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(streamed.floor_count, 1);
+
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let stored: crate::contract::FloorPayload = state
+            .get_opening_snapshot(SnapshotKind::Floors, &key, "2026-09-13T00:00:00Z")
+            .unwrap()
+            .expect("stored as floors");
+        assert_eq!(stored.floors[0].id, "f1");
+        assert_eq!(stored.floors[0].polygons[0].loops[0].points.len(), 3);
+        assert!(
+            state
+                .get_opening_snapshot::<crate::contract::CeilingPayload>(
+                    SnapshotKind::Ceilings,
+                    &key,
+                    "2026-09-13T00:00:00Z"
+                )
+                .unwrap()
+                .is_none(),
+            "and nothing landed in the ceilings slot"
+        );
+
+        let buffered_state: Shared =
+            std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let mut floor = a_surface_over("f1", square(0.0, 0.0, 10.0, 10.0));
+        floor.polygons[0].loops[0].points.pop();
+        floor.height_offset = Some(0.0);
+        let (_, buffered) = ingest_floors(
+            State(buffered_state),
+            Json(floors_upload("m1", "2026-09-13T00:00:00Z", Some("New Construction"), vec![floor])),
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(buffered.floor_count, streamed.floor_count);
+    }
+
+    /// **The route picks the floor rule, end to end.** A 30,000 sqft slab with
+    /// an 80 sqft store room on it: `/floors` attributes the room, and the same
+    /// geometry pushed as a ceiling does not, because the ceiling rule reads a
+    /// room that small as a sliver of the element. A handler that paired the
+    /// floors payload with the ceilings rule would pass every storage test and
+    /// fail this one.
+    #[tokio::test]
+    async fn test_the_floors_read_uses_its_own_key_and_rule() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let mut store = make_room("store", "Store");
+        store.level_id = "L1".to_string();
+        store.loops = vec![square(50.0, 50.0, 58.0, 60.0)];
+        state
+            .set_snapshot(RoomPayload {
+                schema_version: SUPPORTED_SCHEMA,
+                project: Project { id: "p1".to_string(), name: "P".to_string() },
+                model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+                snapshot: Snapshot { taken_at: "2026-09-01T00:00:00Z".to_string() },
+                phase: Some("New Construction".to_string()),
+                model_to_shared: None,
+                room_boundary: None,
+                levels: vec![crate::contract::Level {
+                    id: "L1".to_string(),
+                    name: "Level 1".to_string(),
+                    elevation: 0.0,
+                }],
+                rooms: vec![store],
+            })
+            .unwrap();
+        let slab = a_surface_over("slab", square(0.0, 0.0, 200.0, 150.0));
+        let phase = Some("New Construction");
+        let _ = ingest_floors(
+            State(state.clone()),
+            Json(floors_upload("m1", "2026-09-13T00:00:00Z", phase, vec![slab.clone()])),
+        )
+        .await
+        .expect("floors accepted");
+        let _ = ingest_ceilings(
+            State(state.clone()),
+            Json(ceilings_upload("m1", "2026-09-13T00:00:00Z", phase, vec![slab])),
+        )
+        .await
+        .expect("ceilings accepted");
+
+        let read = |response: Response| async move {
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+            serde_json::from_slice::<serde_json::Value>(&bytes).expect("json")
+        };
+        let query = || Query(SurfacesQuery { project: Some("p1".to_string()), milestone: None });
+
+        let floors = read(get_floors(State(state.clone()), HeaderMap::new(), query()).await.expect("read")).await;
+        assert!(
+            floors.get("floors").is_some() && floors.get("ceilings").is_none(),
+            "floors answer under `floors`"
+        );
+        let rooms = floors["floors"][0]["rooms"].as_array().expect("rooms list");
+        assert_eq!(rooms.len(), 1, "the floor rule keeps a small room on a large slab");
+        assert_eq!(rooms[0]["room_id"], "store");
+        assert!(rooms[0].get("fraction_of_element").is_some() && rooms[0].get("mean_width").is_some());
+
+        let ceilings = read(get_ceilings(State(state), HeaderMap::new(), query()).await.expect("read")).await;
+        assert!(ceilings.get("ceilings").is_some() && ceilings.get("floors").is_none());
+        assert!(
+            ceilings["ceilings"][0]["rooms"].as_array().expect("rooms list").is_empty(),
+            "the ceiling rule does not -- which is why the rule is per entity"
+        );
+    }
+
     fn spaces_upload(model: &str, ts: &str, phase: Option<&str>, spaces: Vec<Room>) -> crate::contract::SpacesUpload {
         crate::contract::SpacesUpload {
             schema_version: crate::contract::SUPPORTED_SPACE_SCHEMA,

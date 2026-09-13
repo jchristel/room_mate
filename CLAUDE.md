@@ -105,7 +105,7 @@ A's 30). Everything below is measured on both unless it says otherwise.
   ceiling over the one enormous site room another model declares. That inverts the precedence rule
   every other entity follows — doors, windows and FF&E each carry an authored
   reference and `room_resolution` is opt-in *because* there is something
-  authored to disagree with. `service::ceilings` therefore passes
+  authored to disagree with. `service::surfaces` therefore passes
   `RoomResolution::SameModel` unconditionally and never reads the project's
   setting: reading it would let a project switch the entity off and report every
   ceiling as homeless, which is a wrong answer dressed as a disabled feature.
@@ -151,7 +151,7 @@ A's 30). Everything below is measured on both unless it says otherwise.
   outline_of` drops a room's holes so a probe landing on a column still
   resolves; a room's hole is a column or a shaft. A ceiling's hole is a light
   well or a void over an atrium and is routinely large — RHH exports 173 holed
-  polygons — so it comes out of both the overlap and the `fraction_of_ceiling`
+  polygons — so it comes out of both the overlap and the `fraction_of_element`
   denominator.
 - **Phase is the DOORS range test**, `PHASE_CREATED` / `PHASE_DEMOLISHED`, never
   the rooms equality test on `ROOM_PHASE`. No ceiling on House A is demolished,
@@ -163,7 +163,7 @@ A's 30). Everything below is measured on both unless it says otherwise.
   server and refused by the producer, per run — the doors asymmetry verbatim.
 - **The height offset is read from Revit; the level id is duHast's.** duHast
   carries the offset as the display STRING `"2700"` (rounded millimetres) where
-  the contract wants decimal feet, so `utils/ceilings.ceiling_offsets` reads the
+  the contract wants decimal feet, so `utils/surfaces.host_offsets` reads the
   parameter itself. That is not the re-derivation this file forbids — there is
   no measurement to disagree about, only a rendering not to parse. The *level*
   is duHast's and must stay so; that one is the FF&E trap.
@@ -187,6 +187,77 @@ A's 30). Everything below is measured on both unless it says otherwise.
   entity read needs. Attribution derives from the rooms in scope, so a rooms
   push alone changes every answer and a ceilings-only cursor would serve a stale
   304.
+
+## Floors: the second slab, built before it was probed
+
+Floors ship end to end on the ceilings stack (2026-09-13): contract, ingest,
+storage, `/floors`, MCP, exporter and the plan layer. No pyRevit button and no
+QA report. **Probed on House A only** (85 floors across the building and site
+documents, `temp/floors-*`); RHH is not probed.
+
+- **One stack, not two copies.** duHast's `to_data_floor` is `to_data_ceiling`
+  with the category and offset parameter swapped, so everything the ceilings
+  bullets above say about the footprint (a list, unioned, holes subtracted,
+  empty is a reported state), the phase test, quarantine and the offset read
+  holds for floors verbatim. The code is shared to match: `contract::Surface`
+  is both records, `service::surfaces` both reads, one ingest path in
+  `handlers.rs`, `post_surfaces` / `exporters.surfaces` on the producer.
+  What differs is a lookup on `SurfaceKind` or a thin per-entity module --
+  list key, schema version, milestone pins, sliver rule. **Adding a third slab
+  is a variant, not a copy**; writing `service::floors` beside it is the R1
+  failure. `fraction_of_ceiling` was renamed `fraction_of_element` on the wire
+  when floors made it a lie; it was never stored, so nothing migrated.
+- **The sliver rule is per entity, and House A moved it once.** A ceiling is
+  roughly room-sized; a slab can be a whole plate, where 0.5% of the element
+  drops every small room. So floors test the overlap's mean width (`2A/P`)
+  against the default wall thickness, unless it is half the ROOM or half the
+  FLOOR. The second escape is the measurement: the server attributed House A's
+  geometry under both rules, and 7 floors 92-100% inside one room (a hob, a
+  stair surround, a step) were roomless without it; the 14 pairs still dropped
+  are strips. **Not proven**: House A has no slab big enough to exercise the
+  plate case, and 1.5 ft sits between a kept 1.52 and a dropped 1.46 rather
+  than in a gap. `analyse_floors_probe.py` copies the Rust constants.
+- **The storey is the host `Level`, never elevation plus offset** (decided
+  2026-09-13). The export carries it -- `level.id` equals the host Level on all
+  85 -- and the join uses it. That has a visible cost, accepted: House A hosts
+  its roof build-ups (`RafterZone_200mm`, `INS-104`, `INS-106`) on LEVEL 01 at
+  +11.3 to +12.5 ft, so BED 01 01.06 "lies on" 7 floors and 3 are its roof; 18 of
+  93 attributions come from them. Re-deriving the storey would fix those and
+  break ordinary ones -- 20 floors, joist zones and build-ups among them, sit
+  up to 2 ft below their level -- and it is the FF&E trap in another field. `height_offset`
+  rides every row; filter on it, do not reassign.
+- **`OST_Floors` is a room's whole build-up, not its floor.** Joist zone,
+  timber build-up, finish, insulation, lawn, paving, driveway, kerb, hob and
+  roof layers are all floors on House A, and `Structural` does not separate
+  them (the rafter zone and `INS-106` are structural). Which one is "the
+  floor" is the consumer's question; nothing here answers it.
+- **Model-scoped holds on House A, and is untested where it would break.** The
+  building document holds floors and rooms; the site document holds 16
+  landscaping floors and no rooms, which report no room correctly. A base
+  build holding slabs beside fit-out rooms (RHH's shape) is still unprobed --
+  probe F2 before believing `/floors` on a federated project.
+- **The footprint is wrong on some floors, upstream, measured.** Check which
+  duHast the extension runs before touching `room_m`:
+  - **Holes exported as islands** on 2 floors, which the union fills back in
+    (a travertine pool surround at 558.6 against Revit's 289.1 sqft). Cause
+    confirmed by re-running duHast's own classifier on the exported rings:
+    `geometry.adjust_delta` returns `+2` without the x-intercept test The
+    Building Coder applies to `+2` and `-2`; corrected, it gives Revit's area to
+    0.1 sqft. **Fixed upstream 2026-09-13** (`src/duHast` and the extension's
+    `lib/duHast` copy); snapshots exported before then keep the filled holes
+    until re-exported. The same code classifies CEILING loops -- no House A
+    ceiling changes, RHH's are unchecked.
+  - **Sloped and shape-edited floors lose area**: 20 floors export under 90% of
+    Revit's area, 7 of them nothing -- mostly site lawn, road and driveway.
+    `get_unique_horizontal_faces` skips non-planar faces and admits
+    near-vertical ones (51 sliver rings), and `pair_faces_by_area` pairs any two
+    faces of equal area wherever they are.
+  - Edge orientation (arcs tessellated against the loop) is NOT a measured
+    problem: one crossing ring, on one floor.
+- **The plan layer is a DOTTED ink ring below the ceilings.** Room outline,
+  ceiling and floor can share a line, so they are told apart by stroke pattern
+  (solid, dash, dot) and dot duty cycle rather than colour. Off by default, poll
+  gated, no model picker, `/floors`' ETag covers rooms -- the ceilings reasons.
 
 ## Traps in the door export
 
@@ -442,22 +513,23 @@ with one, not here.
 - **`/ceilings` is 9.25 MB and 33 s on RHH** (1,833 ceilings against 3,112
   rooms). Unlike `/ffe`, the cost is not payload size but the attribution
   itself: every read intersects every ceiling with every room on its storey,
-  because nothing is stored. Measured, not fixed. The obvious shapes of a fix
-  are a bounding-box reject before the boolean op, or an index over room
-  bounding boxes per storey — neither attempted, and the layer defaults off so
-  it is not on the first-paint path.
+  because nothing is stored. A bounding-box reject now runs before the boolean
+  op (added with floors, which are the worse case: one slab, every room) and
+  has **not been re-measured on RHH**; an index over room bounding boxes per
+  storey is the next shape. The layer defaults off so it is not on the
+  first-paint path.
 
 Both older items stay closed: the extractor's phase filter is verified against
 Revit, and R4 landed.
 
-## The extractor has seven entry points, one of them a trap and one unwired
+## The extractor has eight entry points, one of them a trap and one unwired
 
 `rooms_export_entry` still pushes **rooms and doors**, despite the name. Its
 pyRevit button lives outside this repo, so narrowing it to rooms would not fail —
 it would keep succeeding while quietly no longer pushing doors. The split is in
 the siblings instead: `rooms_only_export_entry`, `doors_export_entry`,
-`windows_export_entry`, `ffe_export_entry`, `spaces_export_entry` and
-`ceilings_export_entry`. All seven are one line over
+`windows_export_entry`, `ffe_export_entry`, `spaces_export_entry`,
+`ceilings_export_entry` and `floors_export_entry`. All eight are one line over
 `export_entry(..., entities)`; document selection, the one project and the one
 phase never differ.
 
@@ -465,8 +537,8 @@ phase never differ.
 `SampleCodeRevitBatchProcessor-NET8/.../duHast.tab/RoomMate.panel`, over a COPY
 of `extractor/pyRevit/room_m` under that tab's `lib/`. Six are wired as of
 2026-09-06 and the seventh, `ceilings_export_entry`, since 2026-09-11 —
-`RoomMate.panel/ByCategory.pulldown/Ceilings.pushbutton`. **The copy is the
-trap**: an
+`RoomMate.panel/ByCategory.pulldown/Ceilings.pushbutton`. The eighth,
+`floors_export_entry`, is **not wired yet**. **The copy is the trap**: an
 extractor change here is inert until it is copied there, and nothing checks the
 two are in step — `diff -rq` between them is the only check there is.
 

@@ -33,22 +33,26 @@ use crate::settings::BuiltinPropertyDef;
 pub mod ceilings;
 pub mod doors;
 pub mod ffe;
+pub mod floors;
 pub mod items;
 pub mod openings;
 pub mod spaces;
+pub mod surfaces;
 pub mod windows;
 
-pub use ceilings::{
-    Ceiling, CeilingModelEnvelope, CeilingModelUpload, CeilingPayload, CeilingPolygon, CeilingStreamEnvelope,
-    CeilingsUpload, StreamCeiling, SUPPORTED_CEILING_SCHEMA,
-};
+pub use ceilings::{CeilingModelUpload, CeilingPayload, CeilingsUpload, SUPPORTED_CEILING_SCHEMA};
 pub use doors::{DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA};
 pub use ffe::{FfeModelEnvelope, FfePayload, FfeStreamEnvelope, FfeUpload, StreamItem, SUPPORTED_FFE_SCHEMA};
+pub use floors::{FloorModelUpload, FloorPayload, FloorsUpload, SUPPORTED_FLOOR_SCHEMA};
 pub use items::{Item, ItemEnvelope};
 pub use openings::{Opening, OpeningEnvelope};
 pub use spaces::{
     SpaceModelEnvelope, SpaceModelUpload, SpacePayload, SpaceStreamEnvelope, SpacesUpload, StreamSpace,
     SUPPORTED_SPACE_SCHEMA,
+};
+pub use surfaces::{
+    StreamSurface, Surface, SurfaceEnvelope, SurfaceModelEnvelope, SurfacePolygon, SurfaceStreamEnvelope,
+    SurfaceUploadParts,
 };
 pub use windows::{
     StreamWindow, WindowModelEnvelope, WindowPayload, WindowStreamEnvelope, WindowsUpload, SUPPORTED_WINDOW_SCHEMA,

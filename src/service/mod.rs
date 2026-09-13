@@ -10,7 +10,6 @@
 
 pub mod adjacency;
 pub mod areas;
-pub mod ceilings;
 pub mod comparison;
 pub mod entity_scope;
 pub mod items;
@@ -23,6 +22,8 @@ pub mod room_locator;
 pub mod rooms;
 pub mod snapshots;
 pub mod spaces;
+pub mod surface_attribution;
+pub mod surfaces;
 pub mod validation;
 
 /// A content cursor for a scoped read: which snapshot each in-scope model would

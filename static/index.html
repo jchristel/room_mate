@@ -678,6 +678,7 @@
     <button class="ctl" id="spacesToggle" title="Show or hide MEP space outlines over the rooms">Spaces: off</button>
     <select class="ctl" id="spacesModelSelect" hidden title="Which services model's spaces to draw"></select>
     <button class="ctl" id="ceilingsToggle" title="Show or hide ceiling outlines over the rooms">Ceilings: off</button>
+    <button class="ctl" id="floorsToggle" title="Show or hide floor outlines over the rooms">Floors: off</button>
     <div class="search">
       <input id="searchInput" type="search" placeholder="Search rooms…" autocomplete="off" />
       <button class="ctl" id="fieldsToggle" title="Choose which fields to search">Fields ▾</button>
@@ -915,7 +916,12 @@ const spacesPoll = new EntityPoll({
 // near-identical outlines on every room. Ceilings live in the same model as
 // their rooms, and `/ceilings` takes no `?model=` at all.
 const ceilingsPoll = new EntityPoll({ url: ceilingsUrl, enabled: () => showCeilings });
-const ELEMENT_POLLS = [doorsPoll, windowsPoll, ffePoll, spacesPoll, ceilingsPoll];
+// Floors: the seventh list, on every term ceilings are -- gated on the toggle,
+// no model picker. `/floors` is a structural slab AND a finish floor under
+// every room, so on a real project it is at least as heavy as `/ceilings`, and
+// polling it hidden would cost every viewer that read for nothing.
+const floorsPoll = new EntityPoll({ url: floorsUrl, enabled: () => showFloors });
+const ELEMENT_POLLS = [doorsPoll, windowsPoll, ffePoll, spacesPoll, ceilingsPoll, floorsPoll];
 // Which services model's spaces to draw. "" means ALL of them, and it is the
 // default -- but on a real project it is rarely what anyone wants: RHH has one
 // services file per service, so "all" stacks four near-identical outlines on
@@ -1001,6 +1007,8 @@ let showFfe = true;
 let showSpaces = false;
 // Starts OFF -- see `ceilingsPoll`.
 let showCeilings = false;
+// Starts OFF -- see `floorsPoll`.
+let showFloors = false;
 
 // Global room search (see the "search" section lower down): one query + one set
 // of enabled field keys, applied to every zone. `searchFields` empty means "not
@@ -1561,6 +1569,8 @@ function renderLevel(zone, payload, levelId, { refit = true } = {}) {
       showSpaces,
       ceilings: ceilingsForPlan(levelId),
       showCeilings,
+      floors: floorsForPlan(levelId),
+      showFloors,
     });
     // Immediately after the paint, because only the paint knows how each layer's
     // storey resolved -- and inside the deferred callback, because that is where
@@ -4435,6 +4445,15 @@ function ceilingsUrl() {
   return qs ? `/ceilings?${qs}` : "/ceilings";
 }
 
+// The /floors URL, on exactly the ceilings terms: no `?model=`, no `?building=`.
+function floorsUrl() {
+  const params = new URLSearchParams();
+  if (projectId) params.set("project", projectId);
+  if (projectId && milestone) params.set("milestone", milestone);
+  const qs = params.toString();
+  return qs ? `/floors?${qs}` : "/floors";
+}
+
 // Refill the picker from the models the last UNSCOPED payload named.
 //
 // Hidden below two models: a control that cannot change the answer is noise,
@@ -4476,7 +4495,7 @@ function syncSpacesModelVisibility() {
 // answer was a guess. A fallback nobody can see is the failure mode this area
 // keeps producing — a reader switches a layer on, sees the wrong thing, and has
 // no way to tell the layer from the data.
-const storeyMatch = { doors: "exact", windows: "exact", ffe: "exact", spaces: "exact", ceilings: "exact" };
+const storeyMatch = { doors: "exact", windows: "exact", ffe: "exact", spaces: "exact", ceilings: "exact", floors: "exact" };
 
 // The displayed level as an OBJECT, not an id: storey matching needs its name
 // and elevation. `null` when it cannot be resolved, which `onStorey` treats as
@@ -4522,6 +4541,11 @@ function ceilingsForPlan(levelId) {
   return elementsOnStorey("ceilings", ceilingsPoll.payload, "ceilings", levelId);
 }
 
+// The floors on one storey, by the same join.
+function floorsForPlan(levelId) {
+  return elementsOnStorey("floors", floorsPoll.payload, "floors", levelId);
+}
+
 // The layer toggles' labels, each carrying its storey-match state so a fallback
 // cannot go unnoticed. All four, not just spaces: the openings were resolving by
 // id and silently dropping whole models, which is the same class of invisible
@@ -4532,6 +4556,7 @@ const LAYER_TOGGLES = [
   ["ffe", "ffeToggle", "FF&E", () => showFfe],
   ["spaces", "spacesToggle", "Spaces", () => showSpaces],
   ["ceilings", "ceilingsToggle", "Ceilings", () => showCeilings],
+  ["floors", "floorsToggle", "Floors", () => showFloors],
 ];
 
 function syncLayerToggleLabels() {
@@ -5093,6 +5118,15 @@ document.getElementById("ceilingsToggle").addEventListener("click", async (e) =>
   redrawAllZones();
   // AFTER the redraw: the label reports what the paint actually did, and only
   // the paint knows how the storey resolved.
+  syncLayerToggleLabels();
+});
+
+// Floors toggle: the ceilings toggle, line for line, and for its reasons.
+document.getElementById("floorsToggle").addEventListener("click", async (e) => {
+  showFloors = !showFloors;
+  e.target.classList.toggle("on", showFloors);
+  await floorsPoll.poll();
+  redrawAllZones();
   syncLayerToggleLabels();
 });
 

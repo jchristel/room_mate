@@ -26,12 +26,13 @@ use tower_http::{
 
 use roommate::bootstrap::build_state;
 use roommate::handlers::{
-    activate_model_pending_snapshot, compare_project_milestones, get_ceilings, get_doors, get_ffe,
+    activate_model_pending_snapshot, compare_project_milestones, get_ceilings, get_doors, get_ffe, get_floors,
     get_model_latest_snapshot, get_model_pending_snapshot, get_project_adjacency, get_project_areas,
     get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation, get_projects,
     get_reference_latest, get_reference_snapshots, get_rooms, get_spaces, get_windows, ingest_ceilings,
-    ingest_ceilings_stream, ingest_doors, ingest_doors_stream, ingest_ffe, ingest_ffe_stream, ingest_rooms,
-    ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows, ingest_windows_stream,
+    ingest_ceilings_stream, ingest_doors, ingest_doors_stream, ingest_ffe, ingest_ffe_stream, ingest_floors,
+    ingest_floors_stream, ingest_rooms, ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows,
+    ingest_windows_stream,
 };
 use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
@@ -325,11 +326,11 @@ fn build_router(state: roommate::state::Shared) -> Router {
         .route("/spaces/stream", post(ingest_spaces_stream).layer(DefaultBodyLimit::disable()))
         // Ceilings: the sixth entity, and the first whose room association is
         // purely geometric -- a ceiling has no room parameter and a room has no
-        // ceiling parameter, so `service::ceilings` derives the join from
+        // ceiling parameter, so `service::surfaces` derives the join from
         // polygon overlap on every read and stores none of it. A disagreeing
         // phase is QUARANTINED rather than refused: unlike a doors push, this
         // one carries no room reference for a promotion to strand. See
-        // `handlers::preflight_ceilings`.
+        // `handlers::begin_surface_ingest`.
         .route(
             "/ceilings",
             post(ingest_ceilings)
@@ -337,6 +338,14 @@ fn build_router(state: roommate::state::Shared) -> Router {
                 .layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
         )
         .route("/ceilings/stream", post(ingest_ceilings_stream).layer(DefaultBodyLimit::disable()))
+        // Floors: the seventh entity and the second slab. The same record, the
+        // same ingest and the same read as ceilings, under their own key and
+        // with their own sliver rule -- see `service::surface_attribution`.
+        .route(
+            "/floors",
+            post(ingest_floors).get(get_floors).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),
+        )
+        .route("/floors/stream", post(ingest_floors_stream).layer(DefaultBodyLimit::disable()))
         .route("/projects", get(get_projects))
         .route("/projects/{id}/buildings", get(get_project_buildings))
         .route("/projects/{id}/validation", get(get_project_validation))

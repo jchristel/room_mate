@@ -244,8 +244,8 @@ impl Candidates {
     /// This model's room candidates, already placed in the frame the set was
     /// built in.
     ///
-    /// Exposed for `service::ceilings`, which needs the room POLYGONS rather
-    /// than a point probe: a ceiling is not at a point, so it asks how much of
+    /// Exposed for `service::surfaces`, which needs the room POLYGONS rather
+    /// than a point probe: a ceiling or a floor is not at a point, so it asks how much of
     /// itself overlaps each room instead of which room contains it. Reusing the
     /// candidate set rather than re-reading rooms is what keeps that answer
     /// scoped to exactly the rooms `/rooms` is serving -- the guarantee

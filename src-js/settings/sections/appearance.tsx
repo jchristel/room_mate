@@ -92,7 +92,7 @@ export function AppearanceSection({
   };
 
   const outlineRow = (
-    key: "spaces" | "ceilings",
+    key: "spaces" | "ceilings" | "floors",
     label: string,
     fallback: string,
     note: string,
@@ -194,6 +194,12 @@ export function AppearanceSection({
             "Ceilings",
             INK,
             "The ceiling ring. It draws in the room ink by default and is told apart from the room outline beneath it by its DASH, which is not settable here.",
+          )}
+          {outlineRow(
+            "floors",
+            "Floors",
+            INK,
+            "The floor ring. It draws in the room ink by default, like ceilings, and is told apart from both the room outline and the ceiling ring by its DOT, which is not settable here.",
           )}
         </tbody>
       </table>

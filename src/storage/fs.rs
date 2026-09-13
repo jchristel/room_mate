@@ -1492,6 +1492,7 @@ mod tests {
                 ModelEntry {
                     spaces: vec![],
                     ceilings: vec![],
+                    floors: vec![],
                     name: "M".to_string(),
                     phase: None,
                     snapshots: vec!["2026-01-01T10:00:00Z".to_string()],
@@ -1561,6 +1562,7 @@ mod tests {
                 ModelEntry {
                     spaces: vec![],
                     ceilings: vec![],
+                    floors: vec![],
                     name: "M".to_string(),
                     phase: None,
                     snapshots: vec!["2026-01-02T10:00:00Z".to_string(), "2026-01-03T10:00:00Z".to_string()],

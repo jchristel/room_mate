@@ -51,6 +51,7 @@ export type {
   AppearanceContext,
   Ceiling,
   CeilingPolygon,
+  Floor,
   ClassificationTier,
   Door,
   WindowOpening,

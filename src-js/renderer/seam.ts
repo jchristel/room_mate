@@ -34,7 +34,7 @@
 // instead. Same call site, two implementations — which is the entire point of
 // having a seam.
 
-import type { Ceiling, Door, Item, Rect, Room, Space, WindowOpening } from "./types.js";
+import type { Ceiling, Door, Floor, Item, Rect, Room, Space, WindowOpening } from "./types.js";
 
 /** Search state, applied WITHOUT a re-render. Preserving that property is an
  *  explicit obligation: a search can match thousands of rooms, and a keystroke
@@ -64,6 +64,7 @@ export interface PlanAppearance {
   ffe?: { line?: string | null; fill?: string | null } | undefined;
   spaces?: { line?: string | null } | undefined;
   ceilings?: { line?: string | null } | undefined;
+  floors?: { line?: string | null } | undefined;
 }
 
 /** Everything needed to draw a level. Mirrors the appearance context plus the
@@ -162,6 +163,18 @@ export interface PaintRequest {
   ceilings?: readonly Ceiling[] | undefined;
   /** Whether to draw them. Absent means yes when `ceilings` is non-empty. */
   showCeilings?: boolean | undefined;
+
+  /**
+   * Floors for this level, drawn as DOTTED outlines over the rooms.
+   *
+   * The sixth list, and the third that is not a glyph. In the room ink like
+   * ceilings, because a floor is architecture too; told apart from the room
+   * outline and from a ceiling ring by its dot. Painted BELOW the ceilings,
+   * which is also where a floor is.
+   */
+  floors?: readonly Floor[] | undefined;
+  /** Whether to draw them. Absent means yes when `floors` is non-empty. */
+  showFloors?: boolean | undefined;
 }
 
 /**
