@@ -9,8 +9,7 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 **Open work only.** Rooms, doors, windows, FF&E and spaces all ship — contract,
 ingest, storage, read, QA, MCP, the plan and the pyRevit exporter — and phasing
 ships under them. **Ceilings ship everywhere except QA**, and **floors ship on
-the ceilings stack everywhere except QA and the pyRevit button, probed on House
-A only** — their entries below are about what is left. What each of those does, and the invariants that
+the ceilings stack everywhere except QA, probed on House A only** — their entries below are about what is left. What each of those does, and the invariants that
 are expensive to rediscover (tier precedence, opening ownership, item
 attribution, the model-scoped element→room join, the phase rules, the three
 rules that are spaces' alone, and the geometry-only attribution that is
@@ -299,12 +298,11 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   gap.
 
   **duHast, where the footprint is wrong and the fix is upstream.** The
-  `adjust_delta` +2 case is fixed (2026-09-13): re-running duHast's own
-  classifier on House A's exported rings, it turns both affected floors into an
-  outer loop with holes at Revit's area and leaves every House A ceiling as it
-  was. What is left is the re-export of floors and ceilings, and a re-run of the
-  RHH ceilings probe -- the same classifier drew its loops, and nothing has
-  checked them. The lost
+  `adjust_delta` +2 case is fixed (2026-09-13) and confirmed by a House A
+  re-probe in Revit: both affected floors now export an outer loop with holes
+  at Revit's area, and no other floor or ceiling changed. What is left is the
+  re-export of floors and ceilings, and a re-run of the RHH ceilings probe --
+  the same classifier drew its loops, and nothing has checked them. The lost
   faces on sloped and shape-edited floors (20 of 85 under 90% of Revit's area)
   are diagnosed only as far as their shape -- non-planar faces skipped,
   near-vertical ones admitted as slivers, faces paired by equal area wherever
