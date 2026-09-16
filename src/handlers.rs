@@ -2730,8 +2730,8 @@ pub async fn get_ceilings(
     get_surfaces::<CeilingPayload, surfaces::CeilingsResult>(&state, &headers, &query)
 }
 
-/// The floors read -- the ceilings read under its own key, with the floor
-/// sliver rule. See `service::surface_attribution`.
+/// The floors read -- the ceilings read under its own key, attributed by the
+/// same rule. See `service::surface_attribution`.
 pub async fn get_floors(
     State(state): State<Shared>,
     headers: HeaderMap,
@@ -3275,14 +3275,13 @@ mod tests {
         assert_eq!(buffered.floor_count, streamed.floor_count);
     }
 
-    /// **The route picks the floor rule, end to end.** A 30,000 sqft slab with
-    /// an 80 sqft store room on it: `/floors` attributes the room, and the same
-    /// geometry pushed as a ceiling does not, because the ceiling rule reads a
-    /// room that small as a sliver of the element. A handler that paired the
-    /// floors payload with the ceilings rule would pass every storage test and
-    /// fail this one.
+    /// **Each route answers under its own key, with one attribution rule.** A
+    /// 30,000 sqft slab with an 80 sqft store room on it, pushed as a floor and
+    /// as a ceiling: both reads attribute the room. Ceilings once used a
+    /// fraction-of-the-ceiling line that dropped a room this small, and floors
+    /// a rule of their own; both are gone, so the two answers must agree.
     #[tokio::test]
-    async fn test_the_floors_read_uses_its_own_key_and_rule() {
+    async fn test_the_floors_and_ceilings_reads_use_their_own_key_and_one_rule() {
         let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
         let mut store = make_room("store", "Store");
         store.level_id = "L1".to_string();
@@ -3332,16 +3331,15 @@ mod tests {
             "floors answer under `floors`"
         );
         let rooms = floors["floors"][0]["rooms"].as_array().expect("rooms list");
-        assert_eq!(rooms.len(), 1, "the floor rule keeps a small room on a large slab");
+        assert_eq!(rooms.len(), 1, "a small room on a large slab is on it");
         assert_eq!(rooms[0]["room_id"], "store");
         assert!(rooms[0].get("fraction_of_element").is_some() && rooms[0].get("mean_width").is_some());
 
         let ceilings = read(get_ceilings(State(state), HeaderMap::new(), query()).await.expect("read")).await;
         assert!(ceilings.get("ceilings").is_some() && ceilings.get("floors").is_none());
-        assert!(
-            ceilings["ceilings"][0]["rooms"].as_array().expect("rooms list").is_empty(),
-            "the ceiling rule does not -- which is why the rule is per entity"
-        );
+        let ceiling_rooms = ceilings["ceilings"][0]["rooms"].as_array().expect("rooms list");
+        assert_eq!(ceiling_rooms.len(), 1, "and the same geometry as a ceiling agrees");
+        assert_eq!(ceiling_rooms[0]["room_id"], "store");
     }
 
     fn spaces_upload(model: &str, ts: &str, phase: Option<&str>, spaces: Vec<Room>) -> crate::contract::SpacesUpload {

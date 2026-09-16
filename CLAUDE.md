@@ -92,7 +92,10 @@ Ceilings ship end to end: contract, ingest, storage, `/ceilings`, MCP,
 exporter, pyRevit button and the plan layer. No QA report yet.
 
 **Probed on RHH 2026-09-12** (1,833 ceilings across 9 documents, against House
-A's 30). Everything below is measured on both unless it says otherwise.
+A's 30). Everything below is measured on both unless it says otherwise. The
+store's RHH ceilings for the four `HOS-INT_*` models were re-exported
+2026-09-14 (1,806; 17 fewer, all on one level of `INT_L1-L2` bar one); `CPB-MAIN`'s
+10 were not, so its latest is still the 2026-09-12 set.
 
 - **A ceiling has no room parameter and a room has no ceiling parameter.** So
   the join is geometric or it does not exist. **Model-scoped is correct, and
@@ -118,18 +121,29 @@ A's 30). Everything below is measured on both unless it says otherwise.
   sliver-filtering threshold, where House A's single apparent case was an
   artefact. Nothing is stored, so changing the rule
   changes every answer and rewrites nothing.
-- **Two thresholds, and one cannot do both jobs** (`MIN_OVERLAP_AREA` 1.0 sqft,
-  `MIN_FRACTION_OF_CEILING` 0.005). Measured: 26 intersecting pairs on House A,
-  22 genuine and 4 not, separated by an **18x gap**. The 4 are two different
-  faults — slivers where a large ceiling grazes a neighbour (0.97 sqft, 0.414%
-  of itself) need the fraction test; ceilings whose whole exported footprint is
-  0.33 and 0.18 sqft overlap by 100% *of themselves* and only the absolute test
-  rejects them. **RHH did not move either value**: it has 3 degenerate ceilings
-  (2.09–4.47 sqft) and the same sliver shape, so the two thresholds stay
-  constants rather than becoming a `[ceilings]` block. **The fraction is of the CEILING**, which is where duHast's own
-  `_intersect_ceiling_vs_room` is wrong: it divides by the ROOM's area despite
-  naming its variable for the ceiling, so a sliver against a large room passes
-  more easily than a real overlap against a small one.
+- **One tolerance, and it is for imprecision, not for slivers** (decided
+  2026-09-16). An overlap counts when its mean width (`2A/P`) is at least
+  `MIN_OVERLAP_MEAN_WIDTH_FT`, **10 mm**, for ceilings and floors alike. It
+  exists for the case duHast guards in shapely -- `intersects()` is true for
+  polygons that only touch, and the boolean op returns rounding -- plus a
+  finish edge a few mm past a room boundary. **A width, because an area
+  cannot**: that strip grows with the wall's length and its width does not.
+  Measured on RHH with a 0.001 sqm area tolerance instead, 243 admitted pairs
+  were 0.001-0.01 sqm at a median 3-4 mm wide.
+- **The sliver rules are gone, and re-adding one is re-opening a closed
+  question.** Ceilings dropped overlaps under 0.5% of the ceiling and floors
+  had a 1.5 ft width rule with two escapes, over a 1 sqft minimum. Every one
+  drew a line through a population with no gap in it, and each needed another
+  escape for the case the last one missed; on RHH the ceiling rule dropped 17
+  rooms at least half covered by a ceiling they were under 0.5% of. Which real
+  overlaps matter is the consumer's policy: `fraction_of_element`,
+  `fraction_of_room` and `mean_width` ride every row. Removing them added 222
+  RHH ceiling pairs and 557 floor pairs, **lost none, and changed `rooms[0]`
+  for no element**. Two costs, accepted: a strip under a wall IS listed (behind
+  the room it serves), and a degenerate export (House A's 0.33 and 0.18 sqft
+  ceilings) attributes -- surfacing that is QA's job. duHast's own test divides
+  by the ROOM, so a sliver into a SMALL room passes it and a small real
+  overlap in a LARGE room fails it.
 - **A ceiling is a LIST of polygons and the consumer unions them. Never take
   one piece, and never sum.** This rule was wrong once and the wrong version
   shipped, so the numbers are here rather than in a commit message. duHast
@@ -192,8 +206,10 @@ A's 30). Everything below is measured on both unless it says otherwise.
 
 Floors ship end to end on the ceilings stack (2026-09-13): contract, ingest,
 storage, `/floors`, MCP, exporter, pyRevit button and the plan layer. No QA
-report. **Probed on House A only** (85 floors across the building and site
-documents, `temp/floors-*`); RHH is not probed.
+report. **Probed on House A** (85 floors, building and site documents) **and
+measured on RHH's first export** (2026-09-14: 1,749 floors in the four
+`HOS-INT_*` models, against their 2,858 rooms; the server attributed it under
+the sliver rules since removed, and again after).
 
 - **One stack, not two copies.** duHast's `to_data_floor` is `to_data_ceiling`
   with the category and offset parameter swapped, so everything the ceilings
@@ -203,20 +219,20 @@ documents, `temp/floors-*`); RHH is not probed.
   is both records, `service::surfaces` both reads, one ingest path in
   `handlers.rs`, `post_surfaces` / `exporters.surfaces` on the producer.
   What differs is a lookup on `SurfaceKind` or a thin per-entity module --
-  list key, schema version, milestone pins, sliver rule. **Adding a third slab
+  list key, schema version, milestone pins. **Adding a third slab
   is a variant, not a copy**; writing `service::floors` beside it is the R1
   failure. `fraction_of_ceiling` was renamed `fraction_of_element` on the wire
   when floors made it a lie; it was never stored, so nothing migrated.
-- **The sliver rule is per entity, and House A moved it once.** A ceiling is
-  roughly room-sized; a slab can be a whole plate, where 0.5% of the element
-  drops every small room. So floors test the overlap's mean width (`2A/P`)
-  against the default wall thickness, unless it is half the ROOM or half the
-  FLOOR. The second escape is the measurement: the server attributed House A's
-  geometry under both rules, and 7 floors 92-100% inside one room (a hob, a
-  stair surround, a step) were roomless without it; the 14 pairs still dropped
-  are strips. **Not proven**: House A has no slab big enough to exercise the
-  plate case, and 1.5 ft sits between a kept 1.52 and a dropped 1.46 rather
-  than in a gap. `analyse_floors_probe.py` copies the Rust constants.
+- **Why floors never had a working threshold of their own** -- the history
+  behind the single tolerance above. A slab can be a whole plate, where a
+  fraction of the element drops every small room: RHH has 25 rooms 80-100%
+  covered by a floor they are 0.08-0.49% of (fire hose reel cupboards, 4-7 sqft
+  bays under corridor finishes). The 1.5 ft width rule that replaced it needed
+  an escape for a narrow floor wholly in one room (House A's hob, stair
+  surround, step), and still dropped 43% of a 9 sqft water-fountain niche
+  (`FLVY-007.E` into `WATER IMG003`); RHH's overlaps ran continuously through
+  the line. `analyse_floors_probe.py` still re-runs those retired rules, for the
+  comparison it was written to make.
 - **The storey is the host `Level`, never elevation plus offset** (decided
   2026-09-13). The export carries it -- `level.id` equals the host Level on all
   85 -- and the join uses it. That has a visible cost, accepted: House A hosts
@@ -231,11 +247,13 @@ documents, `temp/floors-*`); RHH is not probed.
   roof layers are all floors on House A, and `Structural` does not separate
   them (the rafter zone and `INS-106` are structural). Which one is "the
   floor" is the consumer's question; nothing here answers it.
-- **Model-scoped holds on House A, and is untested where it would break.** The
-  building document holds floors and rooms; the site document holds 16
-  landscaping floors and no rooms, which report no room correctly. A base
-  build holding slabs beside fit-out rooms (RHH's shape) is still unprobed --
-  probe F2 before believing `/floors` on a federated project.
+- **Model-scoped holds on House A and on RHH's fit-out models.** House A's
+  site document holds 16 landscaping floors and no rooms, which report no room
+  correctly. RHH's export put every floor in a `HOS-INT_*` model beside its
+  rooms, and 1,744 of 1,749 attribute; the 5 roomless are all `FLGE-004`. None
+  is `Structural` -- these are finishes. **The base-build question is still
+  open**: the export did not include `HOS-BASE`, so whether RHH's slabs live
+  there, beside no rooms, is unmeasured.
 - **The footprint is wrong on some floors, upstream, measured.** Check which
   duHast the extension runs before touching `room_m`:
   - **Holes exported as islands** on 2 floors, which the union fills back in
@@ -248,8 +266,11 @@ documents, `temp/floors-*`); RHH is not probed.
     exactly Revit's area and no other floor's geometry changed. The surround had
     been attributed to POOL EX.03 at 99.8% of the pool; the pool is in its hole.
     Snapshots exported before the fix keep the filled holes until re-exported.
-    The same code classifies CEILING loops -- no House A ceiling changed; RHH's
-    are unchecked.
+    The same code classifies CEILING loops: no House A ceiling changed, and on
+    RHH's re-export (2026-09-14) **14 ceilings reclassified an island as a
+    hole**, the rest identical to float noise. Owners barely moved (3 room
+    lists changed), but coverage did: one ceiling's overlap with its only room
+    fell from 554 to 94 sqft, because the old export had filled its void.
   - **Sloped and shape-edited floors lose area**: 20 floors export under 90% of
     Revit's area, 7 of them nothing -- mostly site lawn, road and driveway.
     `get_unique_horizontal_faces` skips non-planar faces and admits
@@ -521,14 +542,15 @@ with one, not here.
   visible once pushed, since they live in the facade model that has no rooms.
 - **RHH's FF&E is on the wrong storeys until it is re-exported** — see the FF&E
   level trap above. The fix is upstream and lands on the next export.
-- **`/ceilings` is 9.25 MB and 33 s on RHH** (1,833 ceilings against 3,112
+- **`/ceilings` was 9.25 MB and 33 s on RHH** (1,833 ceilings against 3,112
   rooms). Unlike `/ffe`, the cost is not payload size but the attribution
   itself: every read intersects every ceiling with every room on its storey,
-  because nothing is stored. A bounding-box reject now runs before the boolean
-  op (added with floors, which are the worse case: one slab, every room) and
-  has **not been re-measured on RHH**; an index over room bounding boxes per
-  storey is the next shape. The layer defaults off so it is not on the
-  first-paint path.
+  because nothing is stored. With the bounding-box reject added alongside
+  floors, a DEBUG build answers `/ceilings` in 7.8 s (1,816 ceilings) and
+  `/floors` in 8.5 s (1,749 floors, 10.5 MB), 2026-09-16. The 33 s figure did
+  not record its build profile, so the two are not a like-for-like speed-up.
+  An index over room bounding boxes per storey is the next shape if it matters.
+  Both layers default off so neither is on the first-paint path.
 
 Both older items stay closed: the extractor's phase filter is verified against
 Revit, and R4 landed.

@@ -339,8 +339,8 @@ fn build_router(state: roommate::state::Shared) -> Router {
         )
         .route("/ceilings/stream", post(ingest_ceilings_stream).layer(DefaultBodyLimit::disable()))
         // Floors: the seventh entity and the second slab. The same record, the
-        // same ingest and the same read as ceilings, under their own key and
-        // with their own sliver rule -- see `service::surface_attribution`.
+        // same ingest and the same read as ceilings, under their own key --
+        // see `service::surfaces`.
         .route(
             "/floors",
             post(ingest_floors).get(get_floors).layer(DefaultBodyLimit::max(ROOMS_BODY_LIMIT_BYTES)),

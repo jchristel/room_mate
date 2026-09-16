@@ -9,14 +9,14 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 **Open work only.** Rooms, doors, windows, FF&E and spaces all ship — contract,
 ingest, storage, read, QA, MCP, the plan and the pyRevit exporter — and phasing
 ships under them. **Ceilings ship everywhere except QA**, and **floors ship on
-the ceilings stack everywhere except QA, probed on House A only** — their entries below are about what is left. What each of those does, and the invariants that
+the ceilings stack everywhere except QA, probed on House A and measured on RHH** — their entries below are about what is left. What each of those does, and the invariants that
 are expensive to rediscover (tier precedence, opening ownership, item
 attribution, the model-scoped element→room join, the phase rules, the three
 rules that are spaces' alone, and the geometry-only attribution that is
 ceilings' alone), live in the code and in `CLAUDE.md`.
 
 What is left here is the **entity dimension**: the test that decides whether the
-next candidate is an entity at all, what six entities proved comes for free,
+next candidate is an entity at all, what seven entities proved comes for free,
 and what is still unbuilt.
 
 **The bet below has been tested three times, and the second and third tests are
@@ -57,11 +57,16 @@ changing shape.
 Two lines decided every split, and the second is the extension the fourth entity
 forced:
 
-- **Share it unless sharing would change a serde key.** That is why the
+- **Share it unless sharing would change a *stored* serde key.** That is why the
   `Opening` record is shared while the doors and windows *envelopes* are not — a
   stored snapshot names its element list after its own entity, and every file
-  already on disk says so, making a merged
-payload type a migration rather than a refactor.
+  already on disk says so, making a merged payload type a migration rather than
+  a refactor. The word *stored* is the whole rule, not a softening of it: a key
+  that only exists on a read response is recomputed on every request, so
+  renaming it costs a client update and nothing on disk. Floors are the worked
+  example — sharing the ceilings read renamed `fraction_of_ceiling` to
+  `fraction_of_element` on the wire, which was right, because nothing had ever
+  stored it.
 - **Share it unless sharing would make a field mean nothing.** The first line
   cannot decide a case where the records genuinely differ, and FFE is that case.
   Modelling an item as a one-sided `Opening` would have compiled, kept every key,
@@ -256,16 +261,6 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   House A (30 ceilings) and RHH (1,833 across 9 documents, 2026-09-12), so the
   design now rests on two documents rather than one.
 
-  **Both questions this entry used to carry are answered, and one of them
-  changed the contract.** Ceilings and rooms are co-located in every RHH
-  document, so the model-scoped join stands and ceilings are not a second
-  exception to it. The thresholds did not move either: RHH shows the same
-  degenerate and sliver shapes House A did, so `MIN_OVERLAP_AREA` and
-  `MIN_FRACTION_OF_CEILING` stay constants rather than becoming a `[ceilings]`
-  block. What DID change is the geometry field -- RHH's ceilings arrive in
-  genuinely disjoint pieces, so a ceiling is a LIST of polygons and the consumer
-  unions them.
-
   What is left is the report, and **the probe already calibrated what it must
   not say**. On House A, 12 of 32 rooms have no ceiling and almost all are
   external -- POOL, DECK, DRIVEWAY, the `EX` suffix throughout -- so "room
@@ -276,33 +271,28 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   unattributed ceiling individually would bury the signal in the expected.
 
   Three RHH findings the report should be built to surface: **3 ceilings
-  exported a footprint under 5 sqft** (2.09-4.47) and match rooms only by
-  slivers; **17 of 1,833 attribute to no room at all**; and the storey join
+  exported a footprint under 5 sqft** (2.09-4.47), which the read now
+  attributes like any other since it stopped dropping slivers; **17 of 1,833 attribute to no room at all**; and the storey join
   leans on name *plus* elevation, because CPB-MAIN's "C 00" sits at 182.087 ft,
   the same elevation as the hospital's GROUND.
 
-- **Floors: what House A settled, and what it could not.** Probed 2026-09-13
-  (85 floors, building and site documents); what it proved is in `CLAUDE.md`.
-  It moved the sliver rule once (a second escape, for a narrow floor wholly in
-  one room) and settled that the storey is the host `Level`. Left open:
+- **Floors: what is left.** Probed on House A (85 floors, 2026-09-13) and
+  measured on RHH's four `HOS-INT_*` models (1,749 floors, 2026-09-14); what both
+  proved is in `CLAUDE.md`. Left open:
 
-  **RHH, for the two questions House A is too small to ask.** Scope (F2): the
-  server attributes a floor only to rooms in its own document, and RHH's
-  `HOS-BASE` beside four `INT_*` models is the base-build shape that would
-  leave every slab roomless. The answer is not to widen the join by default --
+  **Scope (F2).** Every exported floor sat beside its rooms, but `HOS-BASE`
+  was not in the run, so whether its slabs exist and would be roomless is
+  unmeasured. If they do, the answer is not to widen the join by default --
   a floor joins on geometry, not a key, so there is no uniqueness guarantee
   like the one that made the spaces exception safe; it would take
-  `room_resolution`'s shape, opt-in and reported. And the plate case (F6):
-  House A's largest slab is 1,618 sqft, so the reason floors have their own
-  sliver rule has never been seen, and its 1.5 ft line does not yet sit in a
-  gap.
+  `room_resolution`'s shape, opt-in and reported.
 
   **duHast, where the footprint is wrong and the fix is upstream.** The
   `adjust_delta` +2 case is fixed (2026-09-13) and confirmed by a House A
   re-probe in Revit: both affected floors now export an outer loop with holes
-  at Revit's area, and no other floor or ceiling changed. What is left is the
-  re-export of floors and ceilings, and a re-run of the RHH ceilings probe --
-  the same classifier drew its loops, and nothing has checked them. The lost
+  at Revit's area, and no other floor or ceiling changed. RHH's ceilings
+  re-export shows the same fix on 14 of 1,806. What is left is re-exporting
+  `CPB-MAIN`'s ceilings and House A's floors and ceilings. The lost
   faces on sloped and shape-edited floors (20 of 85 under 90% of Revit's area)
   are diagnosed only as far as their shape -- non-planar faces skipped,
   near-vertical ones admitted as slivers, faces paired by equal area wherever
