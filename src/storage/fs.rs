@@ -404,6 +404,57 @@ impl FsStore {
         String::from_utf8(bytes).unwrap_or_else(|_| stem.to_string())
     }
 
+    /// One model's snapshot ids of one kind, ascending: the manifest's index
+    /// list reconciled against the directory, which is the record.
+    ///
+    /// Same reconciliation stance as `list_models`: on disagreement the
+    /// filesystem wins — a file the manifest doesn't index is included (with a
+    /// best-effort id recovered from its name, since the sanitised filename
+    /// lost its `:`), and a manifest id with no file behind it is dropped. Both
+    /// are warned about, so drift is noticeable rather than silent.
+    ///
+    /// **Takes the manifest rather than reading it** because the index sweep
+    /// asks this for every model and every kind, and a manifest is per project:
+    /// reading it here made `model_index` parse the same TOML file seven times
+    /// per model.
+    fn reconciled_ids(&self, manifest: &ProjectManifest, kind: SnapshotKind, key: &ModelKey) -> Result<Vec<String>> {
+        let indexed = manifest.models.get(&key.model_id).map(|m| m.index(kind).as_slice()).unwrap_or_default();
+
+        let mut on_disk = Self::snapshot_filenames(&self.kind_dir(kind, key))?;
+
+        let mut ids = Vec::new();
+        for id in indexed {
+            let filename = Self::snapshot_filename(id);
+            if let Some(pos) = on_disk.iter().position(|f| *f == filename) {
+                on_disk.swap_remove(pos);
+                ids.push(id.clone());
+            } else {
+                tracing::warn!(
+                    "manifest lists {} snapshot {:?} for {}/{} but no file exists — dropping it (filesystem wins)",
+                    kind.label(),
+                    id,
+                    key.project_id,
+                    key.model_id
+                );
+            }
+        }
+        for filename in on_disk {
+            let stem = filename.strip_suffix(".json").unwrap_or(&filename);
+            let id = Self::id_from_file_stem(stem);
+            tracing::warn!(
+                "{} snapshot file {}/{}/{} is missing from project.toml — including it as {:?} (filesystem wins)",
+                kind.label(),
+                key.project_id,
+                key.model_id,
+                filename,
+                id
+            );
+            ids.push(id);
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
     /// Every `.json` filename directly inside `dir`, or an empty list when the
     /// directory doesn't exist. Shared by the two scans that need it so
     /// "a snapshot file is a `.json` file, and subdirectories are not snapshots"
@@ -605,7 +656,12 @@ impl SnapshotStore for FsStore {
                 .map(|matrix| crate::contract::ModelToShared { matrix });
             let mut latest = BTreeMap::new();
             for kind in SnapshotKind::ALL {
-                if let Some(id) = self.list_snapshot_ids(kind, &key)?.pop() {
+                // Reconciled against the manifest already in hand. Asking
+                // `list_snapshot_ids` instead re-read and re-parsed project.toml
+                // once per model per kind -- measured, 65 ms for a 20-model
+                // store, paid by every read that consults the index, which on a
+                // small project was most of the read.
+                if let Some(id) = self.reconciled_ids(manifest, kind, &key)?.pop() {
                     latest.insert(kind, id); // ids are ascending, so the last is the newest
                 }
             }
@@ -638,52 +694,7 @@ impl SnapshotStore for FsStore {
     }
 
     fn list_snapshot_ids(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Vec<String>> {
-        // The manifest's per-kind index list; the directory is the record. Same
-        // reconciliation stance as `list_models`: on disagreement the filesystem
-        // wins — a file the manifest doesn't index is included (with a
-        // best-effort id recovered from its name, since the sanitised filename
-        // lost its `:`), and a manifest id with no file behind it is dropped.
-        // Both are warned about, so drift is noticeable rather than silent.
-        let indexed = self
-            .read_manifest(&key.project_id)?
-            .models
-            .get(&key.model_id)
-            .map(|m| m.index(kind).clone())
-            .unwrap_or_default();
-
-        let mut on_disk = Self::snapshot_filenames(&self.kind_dir(kind, key))?;
-
-        let mut ids = Vec::new();
-        for id in indexed {
-            let filename = Self::snapshot_filename(&id);
-            if let Some(pos) = on_disk.iter().position(|f| *f == filename) {
-                on_disk.swap_remove(pos);
-                ids.push(id);
-            } else {
-                tracing::warn!(
-                    "manifest lists {} snapshot {:?} for {}/{} but no file exists — dropping it (filesystem wins)",
-                    kind.label(),
-                    id,
-                    key.project_id,
-                    key.model_id
-                );
-            }
-        }
-        for filename in on_disk {
-            let stem = filename.strip_suffix(".json").unwrap_or(&filename);
-            let id = Self::id_from_file_stem(stem);
-            tracing::warn!(
-                "{} snapshot file {}/{}/{} is missing from project.toml — including it as {:?} (filesystem wins)",
-                kind.label(),
-                key.project_id,
-                key.model_id,
-                filename,
-                id
-            );
-            ids.push(id);
-        }
-        ids.sort();
-        Ok(ids)
+        self.reconciled_ids(&self.read_manifest(&key.project_id)?, kind, key)
     }
 
     fn get_snapshot_raw(&self, kind: SnapshotKind, key: &ModelKey, taken_at: &str) -> Result<Option<Vec<u8>>> {
@@ -1059,6 +1070,47 @@ mod tests {
             store.get_latest_raw(SnapshotKind::Rooms, &orphaned).unwrap().is_none(),
             "the file really is gone — the scoped read simply never asked for it"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The id the index names as a model's latest reads back, through
+    /// `get_snapshot_raw`, the very file `get_latest_raw` would have served.
+    ///
+    /// **This is the invariant a planned read stands on.** The scoped reads
+    /// decide which snapshot to open from `model_index` and then open it by id,
+    /// where they used to ask for "the newest file" directly. Those are two
+    /// different lookups — one sorts sanitised filenames, the other maps an id
+    /// through `snapshot_filename` — and if they ever disagreed a model would
+    /// silently contribute nothing. The unindexed file is the case worth
+    /// pinning: its id is *recovered* from a filename that lost its `:`, so it
+    /// only reads back if `id_from_file_stem` inverts the sanitiser exactly.
+    #[test]
+    fn test_the_indexed_latest_id_reads_back_the_latest_file() {
+        let dir = std::env::temp_dir().join(format!("roommate-index-roundtrip-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let store = FsStore::new(dir.clone()).unwrap();
+        store.put(&payload("p", "indexed", "2026-01-01T10:00:00Z")).unwrap();
+        store.put(&payload("p", "indexed", "2026-03-01T10:00:00.123456Z")).unwrap();
+        store.put(&payload("p", "hand", "2026-01-01T10:00:00Z")).unwrap();
+
+        // Newer than anything the manifest indexes, and placed behind its back.
+        let bytes = serde_json::to_vec(&payload("p", "hand", "2026-05-01T08:30:15.5Z")).unwrap();
+        std::fs::write(dir.join("p").join("hand").join("2026-05-01T08-30-15.5Z.json"), &bytes).unwrap();
+
+        let index = store.model_index().unwrap();
+        assert_eq!(index.len(), 2);
+        for row in &index {
+            let id = row.latest.get(&SnapshotKind::Rooms).expect("both models hold rooms");
+            assert_eq!(
+                store.get_snapshot_raw(SnapshotKind::Rooms, &row.key, id).unwrap(),
+                store.get_latest_raw(SnapshotKind::Rooms, &row.key).unwrap(),
+                "{}: index names {id:?}, which must be the newest file",
+                row.key.model_id
+            );
+        }
+        let hand = index.iter().find(|r| r.key.model_id == "hand").unwrap();
+        assert_eq!(hand.latest[&SnapshotKind::Rooms], "2026-05-01T08:30:15.5Z", "recovered with its colons");
 
         std::fs::remove_dir_all(&dir).ok();
     }
