@@ -1782,11 +1782,16 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     // same rooms. An entity with nothing pushed still reports -- zero totals and
     // empty lists -- so a reader can tell "no windows here" from "this server
     // does not report windows", which an absent key could not say.
+    //
+    // Every resolver below is handed `stored` -- the rooms already read above --
+    // rather than reading them again. Each used to, so a project resolving
+    // doors, windows and FF&E by geometry parsed its rooms four times per report.
+    let rooms = || stored.iter().map(|(key, payload)| (key, payload, bundle));
     let stored_doors = state
         .all_opening_snapshots::<crate::contract::DoorPayload>(crate::storage::SnapshotKind::Doors, Some(project_id))
         .map_err(ServiceError::Internal)?;
     let located_doors =
-        super::openings::locate_project_openings(state, project_id, bundle.doors.room_resolution, &stored_doors)?;
+        super::openings::locate_project_openings(rooms(), project_id, bundle.doors.room_resolution, &stored_doors);
     response.openings.insert(
         "doors".to_string(),
         opening_report(
@@ -1806,7 +1811,7 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
         )
         .map_err(ServiceError::Internal)?;
     let located_windows =
-        super::openings::locate_project_openings(state, project_id, bundle.windows.room_resolution, &stored_windows)?;
+        super::openings::locate_project_openings(rooms(), project_id, bundle.windows.room_resolution, &stored_windows);
     response.openings.insert(
         "windows".to_string(),
         opening_report(
@@ -1821,7 +1826,8 @@ pub fn compute_project_validation(state: &AppState, project_id: &str) -> Result<
     let stored_ffe = state
         .all_opening_snapshots::<crate::contract::FfePayload>(crate::storage::SnapshotKind::Ffe, Some(project_id))
         .map_err(ServiceError::Internal)?;
-    let located_items = super::items::locate_project_items(state, project_id, bundle.ffe.room_resolution, &stored_ffe)?;
+    let located_items =
+        super::items::locate_project_items(rooms(), project_id, bundle.ffe.room_resolution, &stored_ffe);
     response.items.insert(
         "ffe".to_string(),
         item_report(

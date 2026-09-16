@@ -241,12 +241,9 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
     }
     let registry = state.settings();
 
-    // Phase 1 -- scope, through the same function every entity uses. The pin map
-    // is the only per-entity argument, and it arrives as a closure.
+    // Phase 1 -- scope, through the same function every entity uses.
     let scoped: Vec<(ModelKey, crate::contract::FfePayload)> =
-        entity_scope::scope_snapshots(state, SnapshotKind::Ffe, scope.project, scope.milestone, |ms| {
-            &ms.ffe_attachments
-        })?;
+        entity_scope::scope_snapshots(state, SnapshotKind::Ffe, scope.project, scope.milestone)?;
 
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
@@ -257,12 +254,28 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
     let mut items: Vec<ItemResponse> = Vec::new();
     let mut excluded_components = 0usize;
 
-    // An item's building is its room's building, resolved only when a building
-    // filter is actually given -- a second storage read plus a classification
-    // pass, and the common read does not need it.
-    let building_of_room = match scope.building {
-        Some(_) => entity_scope::building_by_room(state, scope.project, scope.milestone)?,
-        None => BTreeMap::new(),
+    // The scope's rooms, read at most once and only when a building filter or
+    // geometric resolution asks for them -- the doors read's rule, for the doors
+    // reason.
+    let mode_of = |payload: &crate::contract::FfePayload| {
+        registry
+            .settings_for(&payload.project.id)
+            .map(|b| b.ffe.room_resolution)
+            .unwrap_or_default()
+    };
+    let rooms = if scope.building.is_some() || scoped.iter().any(|(_, p)| mode_of(p) != RoomResolution::Off) {
+        Some(super::rooms::scope_payloads(state, &registry, scope.project, scope.milestone)?)
+    } else {
+        None
+    };
+
+    // An item's building is its room's building, so a building scope needs the
+    // rooms classified.
+    let building_of_room = match (scope.building, &rooms) {
+        (Some(_), Some(rooms)) => {
+            entity_scope::building_by_room(state, &registry, rooms, scope.project, scope.milestone)?
+        }
+        _ => BTreeMap::new(),
     };
 
     // Geometric resolution, when a project asks for it. Off by default and
@@ -271,16 +284,14 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
     // rooms and authored references populate.
     let mut candidates_by_project: BTreeMap<String, entity_scope::Candidates> = BTreeMap::new();
     for (_, payload) in &scoped {
-        let mode = registry
-            .settings_for(&payload.project.id)
-            .map(|b| b.ffe.room_resolution)
-            .unwrap_or_default();
+        let mode = mode_of(payload);
         if mode == RoomResolution::Off || candidates_by_project.contains_key(&payload.project.id) {
             continue;
         }
+        let rooms = rooms.iter().flat_map(super::rooms::ScopedRooms::models);
         candidates_by_project.insert(
             payload.project.id.clone(),
-            entity_scope::build_candidates(state, Some(&payload.project.id), scope.milestone, mode, &scoped)?,
+            entity_scope::build_candidates(rooms, Some(&payload.project.id), mode, &scoped),
         );
     }
 
@@ -401,17 +412,20 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
 ///
 /// Returns an empty map when resolution is off, so the caller needs no branch
 /// beyond the one that decides whether to ask.
-pub fn locate_project_items(
-    state: &AppState,
+///
+/// `rooms` are the project's latest rooms, handed over by the report that has
+/// already read them -- see `openings::locate_project_openings`.
+pub fn locate_project_items<'a>(
+    rooms: impl IntoIterator<Item = (&'a ModelKey, &'a crate::contract::RoomPayload, &'a crate::state::ProjectSettings)>,
     project_id: &str,
     mode: RoomResolution,
     stored: &[(ModelKey, crate::contract::FfePayload)],
-) -> Result<BTreeMap<(String, String), room_locator::Located>, ServiceError> {
+) -> BTreeMap<(String, String), room_locator::Located> {
     let mut out = BTreeMap::new();
     if mode == RoomResolution::Off {
-        return Ok(out);
+        return out;
     }
-    let candidates = entity_scope::build_candidates(state, Some(project_id), None, mode, stored)?;
+    let candidates = entity_scope::build_candidates(rooms, Some(project_id), mode, stored);
     for (key, payload) in stored.iter().filter(|(_, p)| p.project.id == project_id) {
         for item in payload.items() {
             out.insert(
@@ -428,7 +442,7 @@ pub fn locate_project_items(
             );
         }
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]

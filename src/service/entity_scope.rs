@@ -26,10 +26,10 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::contract::{Loop, ModelToShared, Point2D, SnapshotEnvelope};
+use crate::contract::{Loop, ModelToShared, Point2D, RoomPayload, SnapshotEnvelope};
 use crate::settings::{Milestone, RoomResolution};
-use crate::state::{AppState, ModelKey};
-use crate::storage::SnapshotKind;
+use crate::state::{AppState, ModelKey, ProjectSettings, SettingsRegistry};
+use crate::storage::{ModelIndexRow, SnapshotKind};
 
 use super::room_locator::{self, RoomRef, Unresolved};
 use super::ServiceError;
@@ -139,22 +139,25 @@ fn place_direction(m: &ModelToShared, p: Point2D) -> Option<Point2D> {
     Some(Point2D { x: x / len, y: y / len })
 }
 
-/// Collect the project's rooms as probe candidates, under the same milestone
-/// scope the doors read is using.
+/// Collect one project's rooms as probe candidates.
 ///
-/// **Scoped through `rooms::scope_payloads`, not by re-reading the store.** A
-/// door has to be resolved against exactly the rooms `/rooms` is serving, or a
-/// milestone read would answer two different questions about one building.
-pub fn build_candidates<P: SnapshotEnvelope>(
-    state: &AppState,
+/// **Handed the rooms, never reads them.** They must be the rooms
+/// `rooms::scope_payloads` scoped for the same request, so an element is
+/// resolved against exactly the rooms `/rooms` is serving — otherwise a
+/// milestone read would answer two different questions about one building. It
+/// used to do that scoping itself, which was right about *which* rooms and
+/// costly about how often: every consumer in one request re-read and re-parsed
+/// the same snapshots, up to four times in `/validation`.
+///
+/// `project` narrows `rooms` (and `element_payloads`) to one project, since a
+/// read spanning projects builds one candidate set per project that wants one.
+pub fn build_candidates<'a, P: SnapshotEnvelope>(
+    rooms: impl IntoIterator<Item = (&'a ModelKey, &'a RoomPayload, &'a ProjectSettings)>,
     project: Option<&str>,
-    milestone: Option<&str>,
     mode: RoomResolution,
     element_payloads: &[(ModelKey, P)],
-) -> Result<Candidates, ServiceError> {
-    let registry = state.settings();
-    let stored = state.all_snapshots(project).map_err(ServiceError::Internal)?;
-    let (scoped, _) = super::rooms::scope_payloads(state, &registry, stored, project, milestone)?;
+) -> Candidates {
+    let scoped = rooms.into_iter().filter(|(key, _, _)| project.is_none_or(|p| key.project_id == p));
 
     let shared_frame = mode == RoomResolution::Project;
     let mut out = Candidates {
@@ -233,7 +236,7 @@ pub fn build_candidates<P: SnapshotEnvelope>(
             out.transform_by_model.entry(key.model_id.clone()).or_insert(transform);
         }
     }
-    Ok(out)
+    out
 }
 
 /// No rooms to probe against at all — the answer when resolution is off, which
@@ -370,26 +373,31 @@ pub fn side_origin(authored: Option<&str>, model_id: &str, derived: &room_locato
 
 /// `(model id, room id)` → that room's building key, for the rooms in scope.
 ///
-/// **Built by calling `assemble_rooms`, not by re-deriving classification.** A
-/// door's building has to mean exactly what a room's building means, or a
+/// **Classified by the function `/rooms` uses, not re-derived.** A door's
+/// building has to mean exactly what a room's building means, or a
 /// building-scoped doors read and a building-scoped rooms read would disagree
-/// about the same building — so this asks the same function `/rooms` does, with
-/// the same project and milestone scope and deliberately *no* building filter
-/// (the filtering happens per door, against the door's owner).
+/// about the same building — so this runs `rooms::rooms_result`, over rooms
+/// scoped to the same project and milestone and deliberately *no* building
+/// filter (the filtering happens per door, against the door's owner).
+///
+/// Takes the rooms rather than reading them: the same read resolves geometry
+/// against them (`build_candidates`), and reading them here as well parsed them
+/// twice. `rooms` must be scoped to `project` and `milestone`.
 ///
 /// Keyed on the pair because room ids are unique only within a model.
-pub fn building_by_room(
+pub(crate) fn building_by_room(
     state: &AppState,
+    registry: &SettingsRegistry,
+    rooms: &super::rooms::ScopedRooms<'_>,
     project: Option<&str>,
     milestone: Option<&str>,
 ) -> Result<BTreeMap<(String, String), String>, ServiceError> {
-    let rooms =
-        super::rooms::assemble_rooms(state, &super::rooms::RoomScope { project, milestone, ..Default::default() })?;
-    let Some(rooms) = rooms else {
-        return Ok(BTreeMap::new());
-    };
+    let rooms = super::rooms::rooms_result(
+        state,
+        rooms,
+        &super::rooms::RoomScope { project, milestone, ..Default::default() },
+    )?;
 
-    let registry = state.settings();
     let mut out = BTreeMap::new();
     for room in &rooms.rooms {
         let Some(tier) = registry
@@ -408,59 +416,158 @@ pub fn building_by_room(
     Ok(out)
 }
 
+/// This kind's snapshot pins on one milestone: model id → snapshot id.
+///
+/// **The one place a kind is paired with its pin map**, and an exhaustive match
+/// so a new kind cannot compile without choosing one. `Milestone` carries a map
+/// per entity because the entities are pushed independently and their snapshot
+/// ids do not correspond.
+///
+/// The pairing used to be written three ways: a closure at every
+/// `scope_snapshots` call, a `pins` method on each entity family, and -- in
+/// `scope_cursor`, which is handed only a kind -- `attachments`, the *rooms*
+/// map, for every kind. So the ETag of `/doors?milestone=` hashed a rooms
+/// snapshot id the doors read never served. Two copies of one rule, and the copy
+/// without the closure guessed.
+pub fn milestone_pins(milestone: &Milestone, kind: SnapshotKind) -> &BTreeMap<String, String> {
+    match kind {
+        SnapshotKind::Rooms => &milestone.attachments,
+        SnapshotKind::Doors => &milestone.door_attachments,
+        SnapshotKind::Windows => &milestone.window_attachments,
+        SnapshotKind::Ffe => &milestone.ffe_attachments,
+        SnapshotKind::Spaces => &milestone.space_attachments,
+        SnapshotKind::Ceilings => &milestone.ceiling_attachments,
+        SnapshotKind::Floors => &milestone.floor_attachments,
+    }
+}
+
+/// One model's contribution to a scoped read, decided before any snapshot is
+/// opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedRead {
+    pub key: ModelKey,
+    /// The snapshot id (`taken_at`) to serve: the model's latest, or the id a
+    /// milestone pins.
+    pub id: String,
+}
+
+/// Which snapshot of `kind` each in-scope model contributes, decided from the
+/// store index and the settings alone.
+///
+/// **Parsing is what a read costs, so everything that can be decided without it
+/// is decided here, first.** The loop this replaced parsed every model's latest
+/// snapshot and only then asked whether the request wanted it -- so under a
+/// milestone each one was parsed, discarded, and its pinned snapshot parsed in
+/// its place: two parses for one answer, the larger of them thrown away.
+///
+/// **Shared with `scope_cursor`, and that is the correctness half.** The cursor
+/// is the ETag. A cursor and a read that each decide "which snapshot" can
+/// disagree, and the unsafe direction of that disagreement is a 304 for a body
+/// that changed -- which is exactly how the cursor came to hash rooms pins for
+/// every kind (see `milestone_pins`). One function cannot disagree with itself.
+///
+/// The rules are the ones the two loops already applied: an unregistered
+/// project contributes nothing; without a milestone a model contributes its
+/// latest; with one, a project lacking that milestone contributes nothing and a
+/// model it does not pin contributes nothing. A model holding no snapshot of
+/// this kind contributes nothing even when pinned -- nothing was ever pushed for
+/// the pin to name.
+///
+/// **Whether a pinned snapshot still exists is not decided here.** The index
+/// knows each model's latest and nothing older, so a dangling pin is planned and
+/// the read drops it with a warning. For the cursor that errs the safe way: it
+/// counts a model the body will not contain, which can only over-report change.
+///
+/// Takes the index and registry rather than the state so a caller holding one
+/// settings snapshot for the whole request plans against *that* snapshot.
+pub fn plan_reads(
+    index: &[ModelIndexRow],
+    registry: &SettingsRegistry,
+    kind: SnapshotKind,
+    project: Option<&str>,
+    milestone: Option<&str>,
+) -> Vec<PlannedRead> {
+    let mut plan = Vec::new();
+    for row in index {
+        if project.is_some_and(|p| row.key.project_id != p) {
+            continue;
+        }
+        let Some(bundle) = registry.settings_for(&row.key.project_id) else {
+            continue;
+        };
+        let Some(latest) = row.latest.get(&kind) else {
+            continue;
+        };
+        let id = match milestone {
+            None => latest,
+            Some(wanted) => {
+                let Some(ms) = bundle.milestones.iter().find(|m| m.name == wanted) else {
+                    continue;
+                };
+                let Some(pinned) = milestone_pins(ms, kind).get(&row.key.model_id) else {
+                    continue;
+                };
+                pinned
+            }
+        };
+        plan.push(PlannedRead { key: row.key.clone(), id: id.clone() });
+    }
+    plan
+}
+
 /// Scope one entity's stored snapshots to the request, substituting a
 /// milestone's pinned snapshot for a model's latest where one is pinned.
 ///
-/// **One implementation for four entities, and the milestone pin map is the
-/// only thing that varies** -- which is why it arrives as a closure rather than
-/// as a `SnapshotKind` this function would have to match on. `Milestone` carries
-/// four independent maps because the entities are pushed independently and their
-/// snapshot ids do not correspond; the caller knows which of the four it means,
-/// and a match here would be a second place that has to be kept in step.
-///
-/// The discipline is `rooms::scope_payloads`' verbatim: a project without the
-/// named milestone contributes nothing, a model that milestone does not pin
-/// contributes nothing, and a pin whose snapshot no longer exists is skipped
-/// with a warning rather than failing the read -- "signal, not error".
+/// **One implementation for every entity**: plan from the index
+/// (`plan_reads`), then open exactly the snapshots the plan names. A pin whose
+/// snapshot no longer exists is skipped with a warning rather than failing the
+/// read -- "signal, not error".
 pub fn scope_snapshots<P: SnapshotEnvelope + serde::de::DeserializeOwned>(
     state: &AppState,
     kind: SnapshotKind,
     project: Option<&str>,
     milestone: Option<&str>,
-    pins: impl Fn(&Milestone) -> &BTreeMap<String, String>,
 ) -> Result<Vec<(ModelKey, P)>, ServiceError> {
-    let stored: Vec<(ModelKey, P)> = state.all_opening_snapshots(kind, project).map_err(ServiceError::Internal)?;
-    let registry = state.settings();
+    let index = state.model_index().map_err(ServiceError::Internal)?;
+    let plan = plan_reads(&index, &state.settings(), kind, project, milestone);
+    read_planned(state, kind, plan, milestone)
+}
 
-    let mut scoped: Vec<(ModelKey, P)> = Vec::new();
-    for (key, payload) in stored {
-        if project.is_some_and(|p| payload.project().id != p) {
-            continue;
-        }
-        let Some(bundle) = registry.settings_for(&payload.project().id) else {
-            continue;
-        };
-        match milestone {
-            None => scoped.push((key, payload)),
-            Some(wanted) => {
-                let Some(ms) = bundle.milestones.iter().find(|m| m.name == wanted) else {
-                    continue;
-                };
-                let Some(pinned_id) = pins(ms).get(&key.model_id) else {
-                    continue;
-                };
-                match state.get_opening_snapshot::<P>(kind, &key, pinned_id).map_err(ServiceError::Internal)? {
-                    Some(pinned) => scoped.push((key, pinned)),
-                    None => tracing::warn!(
-                        "milestone '{}' pins {} snapshot {:?} for {}/{}, but no such snapshot exists -- skipping the model",
-                        wanted,
-                        kind.label(),
-                        pinned_id,
-                        key.project_id,
-                        key.model_id
-                    ),
-                }
-            }
+/// Open and parse the snapshots a plan names, in plan order.
+///
+/// Split from `scope_snapshots` for the rooms read, which plans against the
+/// settings snapshot it holds for the whole request rather than taking a fresh
+/// one here.
+pub(crate) fn read_planned<P: serde::de::DeserializeOwned>(
+    state: &AppState,
+    kind: SnapshotKind,
+    plan: Vec<PlannedRead>,
+    milestone: Option<&str>,
+) -> Result<Vec<(ModelKey, P)>, ServiceError> {
+    let mut scoped = Vec::with_capacity(plan.len());
+    for PlannedRead { key, id } in plan {
+        match state.get_opening_snapshot::<P>(kind, &key, &id).map_err(ServiceError::Internal)? {
+            Some(payload) => scoped.push((key, payload)),
+            None => match milestone {
+                Some(wanted) => tracing::warn!(
+                    "milestone '{}' pins {} snapshot {:?} for {}/{}, but no such snapshot exists -- skipping the model",
+                    wanted,
+                    kind.label(),
+                    id,
+                    key.project_id,
+                    key.model_id
+                ),
+                // The index named it a moment ago, so the file went between the
+                // two reads -- a hand deletion, since nothing in the server
+                // deletes a snapshot.
+                None => tracing::warn!(
+                    "{} snapshot {:?} for {}/{} is indexed as the latest but could not be read -- skipping the model",
+                    kind.label(),
+                    id,
+                    key.project_id,
+                    key.model_id
+                ),
+            },
         }
     }
     Ok(scoped)
@@ -526,4 +633,195 @@ pub struct Probe<'a> {
     /// The plan direction to step along. `None` for an element that sits in a
     /// room rather than between two, where there is nothing to step off.
     pub normal: Option<Point2D>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+
+    use super::*;
+    use crate::contract::{DoorPayload, Model, Project, Snapshot, SUPPORTED_DOOR_SCHEMA};
+    use crate::storage::{FsStore, SnapshotMeta, SnapshotStore};
+
+    fn bundle(milestones: Vec<Milestone>) -> ProjectSettings {
+        ProjectSettings {
+            spaces: Default::default(),
+            reference: BTreeMap::new(),
+            hierarchy: vec![],
+            builtin_properties: vec![],
+            room_label: vec![],
+            milestones,
+            anchor_model: None,
+            comparison_key: None,
+            comparison_properties: vec![],
+            areas: Default::default(),
+            doors: Default::default(),
+            windows: Default::default(),
+            ffe: Default::default(),
+            hierarchy_exclusions: vec![],
+        }
+    }
+
+    fn milestone(name: &str, rooms: &[(&str, &str)], doors: &[(&str, &str)]) -> Milestone {
+        let pins = |p: &[(&str, &str)]| p.iter().map(|(m, id)| (m.to_string(), id.to_string())).collect();
+        Milestone {
+            name: name.to_string(),
+            date: "2026-01-01".to_string(),
+            reference_snapshots: BTreeMap::new(),
+            attachments: pins(rooms),
+            door_attachments: pins(doors),
+            window_attachments: BTreeMap::new(),
+            ffe_attachments: BTreeMap::new(),
+            space_attachments: BTreeMap::new(),
+            ceiling_attachments: BTreeMap::new(),
+            floor_attachments: BTreeMap::new(),
+        }
+    }
+
+    fn row(project: &str, model: &str, latest: &[(SnapshotKind, &str)]) -> ModelIndexRow {
+        ModelIndexRow {
+            key: ModelKey { project_id: project.to_string(), model_id: model.to_string() },
+            project_name: project.to_string(),
+            model_name: model.to_string(),
+            latest: latest.iter().map(|(k, id)| (*k, id.to_string())).collect(),
+            placement: None,
+        }
+    }
+
+    fn planned(plan: &[PlannedRead]) -> Vec<(&str, &str)> {
+        plan.iter().map(|p| (p.key.model_id.as_str(), p.id.as_str())).collect()
+    }
+
+    fn door_meta<'a>(key: &'a ModelKey, taken_at: &'a str) -> SnapshotMeta<'a> {
+        SnapshotMeta {
+            kind: SnapshotKind::Doors,
+            key,
+            project_name: "P",
+            model_name: "M",
+            taken_at,
+            phase: None,
+            model_to_shared: None,
+        }
+    }
+
+    fn doors(taken_at: &str) -> DoorPayload {
+        DoorPayload {
+            schema_version: SUPPORTED_DOOR_SCHEMA,
+            project: Project { id: "p1".to_string(), name: "P".to_string() },
+            model: Model { id: "m1".to_string(), name: "M".to_string(), source: "revit".to_string() },
+            snapshot: Snapshot { taken_at: taken_at.to_string() },
+            phase: None,
+            model_to_shared: None,
+            levels: vec![],
+            doors: vec![],
+        }
+    }
+
+    /// The rules the two loops this replaced applied, stated once: registered
+    /// projects only, the latest without a milestone, and under one a model
+    /// must be both pinned and hold a snapshot of the kind.
+    #[test]
+    fn test_the_plan_admits_exactly_what_the_read_serves() {
+        use SnapshotKind::{Doors, Rooms};
+        let index = vec![
+            row("p1", "m1", &[(Rooms, "r-new"), (Doors, "d-new")]),
+            row("p1", "m2", &[(Rooms, "r-new")]),
+            row("unregistered", "m3", &[(Rooms, "r-new")]),
+        ];
+        let registry = SettingsRegistry {
+            by_project: HashMap::from([(
+                "p1".to_string(),
+                bundle(vec![milestone(
+                    "M",
+                    &[("m1", "r-old")],
+                    &[("m1", "d-old"), ("m2", "d-dangling")],
+                )]),
+            )]),
+            default: None,
+        };
+        let plan = |kind, project, ms| plan_reads(&index, &registry, kind, project, ms);
+
+        assert_eq!(
+            planned(&plan(Rooms, None, None)),
+            [("m1", "r-new"), ("m2", "r-new")],
+            "no bundle, no read"
+        );
+        assert_eq!(planned(&plan(Doors, None, None)), [("m1", "d-new")], "m2 holds no doors");
+        assert!(plan(Rooms, Some("unregistered"), None).is_empty());
+
+        assert_eq!(planned(&plan(Rooms, None, Some("M"))), [("m1", "r-old")], "m2 is not pinned for rooms");
+        assert_eq!(
+            planned(&plan(Doors, None, Some("M"))),
+            [("m1", "d-old")],
+            "the m2 doors pin names nothing that was ever pushed"
+        );
+        assert!(plan(Rooms, None, Some("no such milestone")).is_empty());
+    }
+
+    /// The ETag of a milestone read follows that entity's OWN pin.
+    ///
+    /// Written against the bug it fixes: `scope_cursor` used to read the rooms
+    /// map (`attachments`) for every kind, so two milestones pinning the same
+    /// rooms snapshot and different doors snapshots produced one doors cursor
+    /// for two different doors bodies. The store is identical in both states
+    /// below; only the doors snapshot the milestone names differs.
+    #[test]
+    fn test_a_milestone_cursor_hashes_each_kinds_own_pin() {
+        let dir = std::env::temp_dir().join(format!("roommate-plan-cursor-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let key = ModelKey { project_id: "p1".to_string(), model_id: "m1".to_string() };
+        let store = FsStore::new(dir.clone()).unwrap();
+        for ts in ["2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"] {
+            store.put_raw(&door_meta(&key, ts), &serde_json::to_vec(&doors(ts)).unwrap()).unwrap();
+        }
+
+        let cursor_pinning = |doors_pin: &str| {
+            let ms = milestone("M", &[("m1", "2026-01-01T00:00:00Z")], &[("m1", doors_pin)]);
+            let state = AppState::new(
+                Box::new(FsStore::new(dir.clone()).unwrap()),
+                HashMap::from([("p1".to_string(), bundle(vec![ms]))]),
+                None,
+            );
+            super::super::scope_cursor(&state, Some("p1"), Some("M"), &[SnapshotKind::Doors]).unwrap()
+        };
+        assert_ne!(cursor_pinning("2026-02-01T00:00:00Z"), cursor_pinning("2026-03-01T00:00:00Z"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A milestone read opens the pinned snapshot and never the latest.
+    ///
+    /// Proven by making the latest unreadable: the old loop parsed every
+    /// model's latest before looking at the milestone, so a malformed latest
+    /// failed a read that was never going to serve it. Counting results could
+    /// not show this -- both versions return the pinned snapshot when every
+    /// file parses.
+    #[test]
+    fn test_a_milestone_read_never_parses_the_latest() {
+        let dir = std::env::temp_dir().join(format!("roommate-plan-pinned-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let key = ModelKey { project_id: "p1".to_string(), model_id: "m1".to_string() };
+        let store = FsStore::new(dir.clone()).unwrap();
+        let pinned = "2026-02-01T00:00:00Z";
+        store
+            .put_raw(&door_meta(&key, pinned), &serde_json::to_vec(&doors(pinned)).unwrap())
+            .unwrap();
+        store.put_raw(&door_meta(&key, "2026-06-01T00:00:00Z"), b"not a snapshot").unwrap();
+
+        let state = AppState::new(
+            Box::new(store),
+            HashMap::from([("p1".to_string(), bundle(vec![milestone("M", &[], &[("m1", pinned)])]))]),
+            None,
+        );
+
+        let read = scope_snapshots::<DoorPayload>(&state, SnapshotKind::Doors, Some("p1"), Some("M")).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].1.snapshot.taken_at, pinned);
+        assert!(
+            scope_snapshots::<DoorPayload>(&state, SnapshotKind::Doors, Some("p1"), None).is_err(),
+            "the latest really is malformed -- the milestone read simply never opened it"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
