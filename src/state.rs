@@ -16,6 +16,7 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
 
+use crate::contract::property_codec::{Decoder, Encoder, TRAILER_MARKER};
 use crate::contract::{DoorPayload, RoomPayload, SpacePayload};
 use crate::reference::ReferenceData;
 use crate::settings::{
@@ -48,16 +49,14 @@ fn rooms_meta<'a>(key: &'a ModelKey, payload: &'a RoomPayload) -> SnapshotMeta<'
 /// the settings and the manifest for, and it stays meaningful for a store that
 /// has no paths at all.
 fn parse_rooms(key: &ModelKey, bytes: &[u8]) -> anyhow::Result<RoomPayload> {
-    serde_json::from_slice(bytes)
-        .with_context(|| format!("malformed rooms snapshot for {}/{}", key.project_id, key.model_id))
+    decode_snapshot(bytes).with_context(|| format!("malformed rooms snapshot for {}/{}", key.project_id, key.model_id))
 }
 
 /// `parse_rooms`' spaces counterpart. A separate function rather than a generic
 /// one so the error names the entity a reader is actually looking for: a
 /// services model can hold both, and "malformed snapshot" would not say which.
 fn parse_spaces(key: &ModelKey, bytes: &[u8]) -> anyhow::Result<SpacePayload> {
-    serde_json::from_slice(bytes)
-        .with_context(|| format!("malformed spaces snapshot for {}/{}", key.project_id, key.model_id))
+    decode_snapshot(bytes).with_context(|| format!("malformed spaces snapshot for {}/{}", key.project_id, key.model_id))
 }
 
 /// `rooms_meta`'s counterpart for doors. Deliberately a second small function
@@ -92,8 +91,58 @@ fn parse_opening<P: serde::de::DeserializeOwned>(
     key: &ModelKey,
     bytes: &[u8],
 ) -> anyhow::Result<P> {
-    serde_json::from_slice(bytes)
+    decode_snapshot(bytes)
         .with_context(|| format!("malformed {} snapshot for {}/{}", kind.label(), key.project_id, key.model_id))
+}
+
+/// A whole payload as stored bytes: its property maps encoded against a
+/// dictionary, and the dictionary appended as the last line.
+///
+/// The buffered twin of `StreamingSnapshot`, and the two must produce the same
+/// layout -- the last line is how `decode_snapshot` finds the dictionary, so a
+/// buffered write that put it anywhere else would be read back as a legacy
+/// snapshot and fail on its first triple. Compact rather than pretty for the
+/// same reason: `to_vec_pretty` ends on a line of its own that is not the
+/// trailer.
+fn encode_snapshot<T: serde::Serialize>(payload: &T) -> anyhow::Result<Vec<u8>> {
+    let mut encoder = Encoder::default();
+    let mut bytes = encoder.encode(|| serde_json::to_vec(payload))?;
+    // A compact top-level object ends on its closing brace; the trailer goes
+    // inside it, on a line of its own.
+    anyhow::ensure!(
+        bytes.len() > 2 && bytes.last() == Some(&b'}'),
+        "a snapshot must serialise to a non-empty JSON object"
+    );
+    bytes.pop();
+    bytes.push(b'\n');
+    bytes.extend(encoder.trailer()?);
+    bytes.extend_from_slice(b"}\n");
+    Ok(bytes)
+}
+
+/// Parse stored snapshot bytes of either layout.
+///
+/// **The last line decides.** A snapshot written through `property_codec` ends
+/// on its dictionary line; one written before ends on `]}` or `}`. Only the last
+/// line is ever inspected, so telling the two apart costs nothing on a 300 MB
+/// legacy file, and a legacy file that happens to contain the marker text
+/// somewhere inside it is not mistaken for an encoded one.
+///
+/// A last line that carries the marker but is not a dictionary falls back to the
+/// legacy parse, whose error then names what is actually wrong with the file.
+fn decode_snapshot<P: serde::de::DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<P> {
+    let decoder = trailer_line(bytes)
+        .and_then(|line| Decoder::from_trailer(line).ok())
+        .unwrap_or_else(Decoder::legacy);
+    decoder.decode(|| serde_json::from_slice(bytes))
+}
+
+/// The snapshot's last line, when it is a property-codec trailer.
+fn trailer_line(bytes: &[u8]) -> Option<&[u8]> {
+    let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let start = body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let line = &body[start..];
+    line.starts_with(TRAILER_MARKER).then_some(line)
 }
 
 /// Composite key identifying one storage bucket: a model within a project.
@@ -398,7 +447,7 @@ impl AppState {
     /// "serialize this whole thing" is what those callers actually mean.
     pub fn set_snapshot(&self, payload: RoomPayload) -> anyhow::Result<()> {
         let key = ModelKey::from_payload(&payload);
-        let json = serde_json::to_vec_pretty(&payload).context("could not serialise snapshot")?;
+        let json = encode_snapshot(&payload).context("could not serialise snapshot")?;
         self.store.put_raw(&rooms_meta(&key, &payload), &json)
     }
 
@@ -481,7 +530,7 @@ impl AppState {
     /// route streams instead; this is for callers holding a complete payload.
     pub fn set_door_snapshot(&self, payload: DoorPayload) -> anyhow::Result<()> {
         let key = ModelKey::from_door_payload(&payload);
-        let json = serde_json::to_vec_pretty(&payload).context("could not serialise doors snapshot")?;
+        let json = encode_snapshot(&payload).context("could not serialise doors snapshot")?;
         self.store.put_raw(&doors_meta(&key, &payload), &json)
     }
 
@@ -503,8 +552,8 @@ impl AppState {
         payload: &P,
     ) -> anyhow::Result<()> {
         let key = ModelKey { project_id: payload.project().id.clone(), model_id: payload.model().id.clone() };
-        let json = serde_json::to_vec_pretty(payload)
-            .with_context(|| format!("could not serialise {} snapshot", kind.label()))?;
+        let json =
+            encode_snapshot(payload).with_context(|| format!("could not serialise {} snapshot", kind.label()))?;
         let meta = SnapshotMeta {
             kind,
             key: &key,
@@ -598,7 +647,7 @@ impl AppState {
         kind: SnapshotKind,
         payload: &P,
     ) -> anyhow::Result<()> {
-        let json = serde_json::to_vec_pretty(payload).context("could not serialise pending snapshot")?;
+        let json = encode_snapshot(payload).context("could not serialise pending snapshot")?;
         self.store.put_pending_raw(key, kind, payload.taken_at(), payload.phase(), &json)
     }
 
@@ -726,20 +775,29 @@ impl AppState {
 /// the one that knows a snapshot is a JSON object with an array of elements in
 /// it.
 ///
-/// The file it produces is **one element per line**:
+/// The file it produces is **one element per line, then the property
+/// dictionary as the last line**:
 ///
 /// ```text
 /// {"schema_version":7,...,"rooms":[
-/// {"id":"r1",...},
-/// {"id":"r2",...}
-/// ]}
+/// {"id":"r1",...,"properties":[[0,1,"Kitchen"],[1,0,"12.5"]]},
+/// {"id":"r2",...,"properties":[[0,1,"Store"]]}
+/// ]
+/// ,"property_codec":1,"property_keys":["Name","Area"],"storage_types":[null,"String"],"type_property_sets":[]}
 /// ```
 ///
-/// Not `to_vec_pretty`'s indented output, which the buffered path still writes.
-/// The two differ only in whitespace and key order, and nothing re-reads a
-/// snapshot by shape — serde does not care. What one-per-line buys is that it is
-/// writable incrementally at all, while staying greppable and diffable in a way
-/// a single long line would not be.
+/// Every property map in an element is written as index triples against that
+/// dictionary, and a type-property bag as an index into its table of distinct
+/// bags — see `contract::property_codec` for why. **The dictionary comes last
+/// because it cannot come first**: a push is streamed, and the keys are only all
+/// known once every element has gone by.
+///
+/// The buffered path (`encode_snapshot`) writes the same layout on fewer lines;
+/// the two differ only in whitespace and key order, and nothing re-reads a
+/// snapshot by shape beyond finding that last line. One-per-line is what makes
+/// the file writable incrementally at all, and still diffable line by line —
+/// though a line now names its properties by index, so reading one by eye takes
+/// the dictionary beside it.
 ///
 /// **Dropping without committing discards the whole snapshot**, and that is the
 /// ordinary path rather than an error one: a rooms push is only known to be
@@ -748,6 +806,9 @@ pub struct StreamingSnapshot<'a> {
     writer: Box<dyn SnapshotWriter + 'a>,
     /// Elements written so far — also what tells `push` whether it owes a comma.
     count: usize,
+    /// The property dictionary every element so far was encoded against,
+    /// written out at `commit`.
+    encoder: Box<Encoder>,
 }
 
 impl<'a> StreamingSnapshot<'a> {
@@ -787,7 +848,7 @@ impl<'a> StreamingSnapshot<'a> {
             writer.write(b",")?;
         }
         writer.write(format!("\"{}\":[\n", kind.label()).as_bytes())?;
-        Ok(Self { writer, count: 0 })
+        Ok(Self { writer, count: 0, encoder: Box::default() })
     }
 
     /// Append one element. The separator is written *before* the element rather
@@ -797,7 +858,10 @@ impl<'a> StreamingSnapshot<'a> {
         if self.count > 0 {
             self.writer.write(b",\n")?;
         }
-        let bytes = serde_json::to_vec(element).context("could not serialise snapshot element")?;
+        let bytes = self
+            .encoder
+            .encode(|| serde_json::to_vec(element))
+            .context("could not serialise snapshot element")?;
         self.writer.write(&bytes)?;
         self.count += 1;
         Ok(())
@@ -809,9 +873,13 @@ impl<'a> StreamingSnapshot<'a> {
         self.count
     }
 
-    /// Close the array and publish the snapshot.
+    /// Close the array, write the dictionary as the last line, and publish the
+    /// snapshot.
     pub fn commit(mut self) -> anyhow::Result<()> {
-        self.writer.write(b"\n]}\n")?;
+        self.writer.write(b"\n]\n")?;
+        self.writer
+            .write(&self.encoder.trailer().context("could not serialise property dictionary")?)?;
+        self.writer.write(b"}\n")?;
         self.writer.commit()
     }
 }
@@ -904,5 +972,171 @@ mod tests {
             assert!(!is_path_safe_component(id), "{id:?} aliases to its stripped form on Windows");
         }
         assert!(is_path_safe_component("Ward"), "the stripped form itself is fine");
+    }
+
+    // ---------- the stored property codec, through its framing ----------
+
+    use crate::contract::property_codec::{map as property_map, shared_map};
+    use crate::contract::{CustomValue, PropertyMap};
+
+    /// The smallest two-tier element: enough to exercise both field codecs
+    /// without dragging a whole contract record's fixture along.
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Element {
+        id: String,
+        #[serde(with = "property_map")]
+        properties: PropertyMap,
+        #[serde(with = "shared_map")]
+        type_properties: Arc<PropertyMap>,
+    }
+
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Doc {
+        schema_version: u32,
+        elements: Vec<Element>,
+    }
+
+    fn props(pairs: &[(&str, &str)]) -> PropertyMap {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).into(), CustomValue { value: v.to_string(), storage_type: Some("String".into()) }))
+            .collect()
+    }
+
+    fn element(id: &str, instance: &[(&str, &str)], type_properties: &[(&str, &str)]) -> Element {
+        Element {
+            id: id.into(),
+            properties: props(instance),
+            type_properties: Arc::new(props(type_properties)),
+        }
+    }
+
+    /// What goes in comes out, and what repeated is stored once and shared once.
+    ///
+    /// The sharing is the point of the codec, so it is asserted directly rather
+    /// than inferred from equality: two elements with equal type bags must hold
+    /// the SAME allocation after a read, and a key used by both must be one
+    /// `Arc<str>`. Equality alone would pass on the uncompressed layout.
+    #[test]
+    fn test_an_encoded_snapshot_round_trips_and_shares_what_repeats() {
+        let doc = Doc {
+            schema_version: 3,
+            elements: vec![
+                element("a", &[("Mark", "A-1")], &[("Width", "820"), ("Fire", "FD30")]),
+                element("b", &[("Mark", "B-1")], &[("Width", "820"), ("Fire", "FD30")]),
+            ],
+        };
+        let bytes = encode_snapshot(&doc).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert_eq!(text.matches("FD30").count(), 1, "one type bag stored, not two:\n{text}");
+        assert_eq!(text.matches("\"Mark\"").count(), 1, "one key stored, not two:\n{text}");
+
+        let read: Doc = decode_snapshot(&bytes).unwrap();
+        assert_eq!(read, doc);
+        assert!(Arc::ptr_eq(&read.elements[0].type_properties, &read.elements[1].type_properties));
+        let key = |e: &Element| e.properties.keys().next().unwrap().clone();
+        assert!(Arc::ptr_eq(&key(&read.elements[0]), &key(&read.elements[1])));
+    }
+
+    /// Type bags are stored by content, never by anything like a type id, so two
+    /// instances that disagree both keep their own bag -- nothing is silently
+    /// replaced by whichever arrived first.
+    #[test]
+    fn test_differing_type_bags_are_both_kept() {
+        let doc = Doc {
+            schema_version: 1,
+            elements: vec![
+                element("a", &[], &[("Width", "820")]),
+                element("b", &[], &[("Width", "920")]),
+            ],
+        };
+        let read: Doc = decode_snapshot(&encode_snapshot(&doc).unwrap()).unwrap();
+        assert_eq!(read, doc);
+        assert!(!Arc::ptr_eq(&read.elements[0].type_properties, &read.elements[1].type_properties));
+    }
+
+    /// Every snapshot written before the codec reads unchanged, in both layouts
+    /// it was ever written in -- and still shares its keys, because the legacy
+    /// path interns them.
+    #[test]
+    fn test_a_legacy_snapshot_still_reads() {
+        let doc = Doc {
+            schema_version: 1,
+            elements: vec![
+                element("a", &[("Mark", "A-1")], &[]),
+                element("b", &[("Mark", "B-1")], &[]),
+            ],
+        };
+        for bytes in [
+            serde_json::to_vec_pretty(&doc).unwrap(),
+            serde_json::to_vec(&doc).unwrap(),
+        ] {
+            let read: Doc = decode_snapshot(&bytes).unwrap();
+            assert_eq!(read, doc);
+            let key = |e: &Element| e.properties.keys().next().unwrap().clone();
+            assert!(Arc::ptr_eq(&key(&read.elements[0]), &key(&read.elements[1])));
+        }
+    }
+
+    /// A legacy snapshot is not mistaken for an encoded one because a property
+    /// happens to share the marker's name -- the trailer is only ever looked for
+    /// on the last line.
+    #[test]
+    fn test_the_marker_inside_a_legacy_snapshot_is_not_a_trailer() {
+        let doc = Doc { schema_version: 1, elements: vec![element("a", &[("property_codec", "1")], &[])] };
+        let bytes = serde_json::to_vec_pretty(&doc).unwrap();
+        assert_eq!(decode_snapshot::<Doc>(&bytes).unwrap(), doc);
+    }
+
+    /// The streamed writer and the buffered one produce the same record: both
+    /// end on the dictionary line and read back to the same payload.
+    #[test]
+    fn test_a_streamed_snapshot_reads_back_like_a_buffered_one() {
+        use crate::storage::MemStore;
+
+        let key = ModelKey { project_id: "p".into(), model_id: "m".into() };
+        let meta = SnapshotMeta {
+            kind: SnapshotKind::Doors,
+            key: &key,
+            project_name: "P",
+            model_name: "M",
+            taken_at: "2026-01-01T00:00:00Z",
+            phase: None,
+            model_to_shared: None,
+        };
+        let store = MemStore::new();
+        let doc = Doc {
+            schema_version: 2,
+            elements: vec![
+                element("a", &[("Mark", "A-1")], &[("Width", "820")]),
+                element("b", &[], &[("Width", "820")]),
+            ],
+        };
+
+        #[derive(serde::Serialize)]
+        struct Envelope {
+            schema_version: u32,
+            doors: Vec<Element>,
+        }
+        let mut streaming =
+            StreamingSnapshot::open(&store, &meta, SnapshotKind::Doors, &Envelope { schema_version: 2, doors: vec![] })
+                .unwrap();
+        for e in &doc.elements {
+            streaming.push(e).unwrap();
+        }
+        streaming.commit().unwrap();
+
+        let stored = store.get_latest_raw(SnapshotKind::Doors, &key).unwrap().unwrap();
+        assert!(trailer_line(&stored).is_some(), "the dictionary is the last line");
+
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        struct Stored {
+            schema_version: u32,
+            doors: Vec<Element>,
+        }
+        let read: Stored = decode_snapshot(&stored).unwrap();
+        assert_eq!(read.schema_version, doc.schema_version);
+        assert_eq!(read.doors, doc.elements);
+        assert!(Arc::ptr_eq(&read.doors[0].type_properties, &read.doors[1].type_properties));
     }
 }

@@ -4457,7 +4457,7 @@ mod tests {
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties: BTreeMap::new(),
-            type_properties: BTreeMap::new(),
+            type_properties: Default::default(),
         }
     }
 

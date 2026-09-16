@@ -173,10 +173,14 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   varying sample data — all 26 House A doors sit in `{"option_name": "-",
   "set_name": "Main Model"}` — so there is nothing to design against yet.
 
-- **Type-property deduplication.** `type_properties` rides per instance today; a
-  shared type table is a payload-size optimization to take **when measured, not
-  before**. The figure to start from: the House A doors snapshot is 414 KB for 26
-  doors, and `type_id` is already on the wire ready to key a shared table.
+- **Type-property deduplication on the wire.** Storage and memory already hold
+  one copy per distinct bag (`contract::property_codec`); what is left is the
+  push and the response, where `type_properties` still rides per instance. On
+  RHH that is most of `/ffe`'s body. A wire table is a contract change on both
+  ends — the extractor and every consumer of `/ffe`, `/doors`, `/windows`,
+  `/ceilings` and `/floors` — so take it **when the response size is what hurts,
+  not before**. `type_id` is on the wire ready to key it, though the stored table
+  deliberately keys by content instead: nothing enforces one bag per type id.
 
   FF&E is what makes this worth measuring rather than deferring — hundreds of
   instances per model against tens of openings. It is also where the shape of

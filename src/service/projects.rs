@@ -286,7 +286,7 @@ mod tests {
     fn make_room(id: &str, props: &[(&str, &str)]) -> Room {
         let mut properties = std::collections::BTreeMap::new();
         for (k, v) in props {
-            properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+            properties.insert((*k).into(), CustomValue { value: v.to_string(), storage_type: None });
         }
         Room {
             enclosure: None,
