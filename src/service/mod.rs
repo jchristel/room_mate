@@ -48,9 +48,9 @@ pub mod validation;
 ///   models that *contributed a row*. A building or property filter can exclude
 ///   a model with no matching rooms; the cursor still counts it, so its next
 ///   push moves the cursor even though the body might not change.
-/// - Under a milestone it hashes the pinned ids, since that is what the read
-///   would serve — but a model whose pin dangles is counted rather than skipped
-///   (`scope_payloads` warns and drops it), which again only over-reports.
+/// - Under a milestone it hashes each kind's own pinned ids, since that is what
+///   the read would serve — but a model whose pin dangles is counted rather than
+///   skipped (the read warns and drops it), which again only over-reports.
 ///
 /// The one thing it does **not** track is settings: a colour plan or a dRofus
 /// mapping changes derived data without touching a stored snapshot. That is not
@@ -72,32 +72,13 @@ pub(crate) fn scope_cursor(
     let index = state.model_index().map_err(ServiceError::Internal)?;
     let registry = state.settings();
 
-    let mut parts: Vec<(&str, &str, &str, String)> = Vec::new();
-    for row in &index {
-        if project.is_some_and(|p| row.key.project_id != p) {
-            continue;
-        }
-        // Same "skip on read" policy `scope_payloads` applies: an unregistered
-        // project contributes nothing, so its pushes must not move the cursor.
-        let Some(bundle) = registry.settings_for(&row.key.project_id) else {
-            continue;
-        };
-        for kind in kinds {
-            let id = match milestone {
-                None => row.latest.get(kind).cloned(),
-                // A milestone pins one id per model and is not per kind — the
-                // pin names a rooms snapshot and the doors read follows it, the
-                // same substitution `scope_payloads` performs.
-                Some(wanted) => bundle
-                    .milestones
-                    .iter()
-                    .find(|m| m.name == wanted)
-                    .and_then(|m| m.attachments.get(&row.key.model_id))
-                    .cloned(),
-            };
-            if let Some(id) = id {
-                parts.push((row.key.project_id.as_str(), row.key.model_id.as_str(), kind.label(), id));
-            }
+    // The plan the read itself opens, per kind -- not a second derivation of it.
+    // See `entity_scope::plan_reads` for why that is the correctness property
+    // and not merely less code.
+    let mut parts: Vec<(String, String, &str, String)> = Vec::new();
+    for &kind in kinds {
+        for planned in entity_scope::plan_reads(&index, &registry, kind, project, milestone) {
+            parts.push((planned.key.project_id, planned.key.model_id, kind.label(), planned.id));
         }
     }
     // Sorted before hashing for the same reason `scoped_revision` sorts: model

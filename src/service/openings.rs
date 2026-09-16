@@ -276,16 +276,6 @@ impl OpeningKind {
             OpeningKind::Windows => &bundle.windows,
         }
     }
-
-    /// This entity's snapshot pins on one milestone. Three separate maps,
-    /// because the entities are pushed independently and their snapshot ids do
-    /// not correspond.
-    pub fn pins(self, milestone: &crate::settings::Milestone) -> &BTreeMap<String, String> {
-        match self {
-            OpeningKind::Doors => &milestone.door_attachments,
-            OpeningKind::Windows => &milestone.window_attachments,
-        }
-    }
 }
 
 /// The merged doors payload, exactly as `/doors` has always answered it.
@@ -356,17 +346,21 @@ pub struct RoomOrigin {
 ///
 /// Returns an empty map when resolution is off, so the caller needs no branch
 /// beyond the one that decides whether to ask.
-pub fn locate_project_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
-    state: &AppState,
+///
+/// `rooms` are the project's latest rooms, which the report has already read
+/// for its own findings and hands over rather than having each entity's
+/// resolution read them again.
+pub fn locate_project_openings<'a, P: OpeningEnvelope>(
+    rooms: impl IntoIterator<Item = (&'a ModelKey, &'a crate::contract::RoomPayload, &'a crate::state::ProjectSettings)>,
     project_id: &str,
     mode: RoomResolution,
     stored: &[(ModelKey, P)],
-) -> Result<BTreeMap<(String, String), room_locator::Sides>, ServiceError> {
+) -> BTreeMap<(String, String), room_locator::Sides> {
     let mut out = BTreeMap::new();
     if mode == RoomResolution::Off {
-        return Ok(out);
+        return out;
     }
-    let candidates = entity_scope::build_candidates(state, Some(project_id), None, mode, stored)?;
+    let candidates = entity_scope::build_candidates(rooms, Some(project_id), mode, stored);
     for (key, payload) in stored.iter().filter(|(_, p)| p.project().id == project_id) {
         for door in payload.openings() {
             out.insert(
@@ -375,7 +369,7 @@ pub fn locate_project_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>
             );
         }
     }
-    Ok(out)
+    out
 }
 
 /// One opening, as the shared locator wants it.
@@ -425,10 +419,9 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
 
     // Phase 1 -- scope to the request, substituting a milestone's pinned
     // snapshot for the model's latest where one is pinned. The loop that used to
-    // be here is `entity_scope::scope_snapshots`, which four entities share; the
-    // pin map is the only thing that varies and it arrives as a closure.
+    // be here is `entity_scope::scope_snapshots`, which every entity shares.
     let scoped: Vec<(ModelKey, P)> =
-        entity_scope::scope_snapshots(state, kind.snapshot_kind(), scope.project, scope.milestone, |ms| kind.pins(ms))?;
+        entity_scope::scope_snapshots(state, kind.snapshot_kind(), scope.project, scope.milestone)?;
 
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
@@ -439,34 +432,48 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
     let placement = super::placement::from_index(state)?;
     let mut openings: Vec<OpeningResponse> = Vec::new();
 
+    // The scope's rooms, read at most once for both uses below and only when one
+    // of them is asked for: a building filter needs them classified, geometric
+    // resolution needs them as geometry. The overwhelmingly common doors read
+    // wants neither, and costs no rooms read at all.
+    let mode_of = |payload: &P| {
+        registry
+            .settings_for(&payload.project().id)
+            .map(|b| kind.policy(b).room_resolution)
+            .unwrap_or_default()
+    };
+    let rooms = if scope.building.is_some() || scoped.iter().any(|(_, p)| mode_of(p) != RoomResolution::Off) {
+        Some(super::rooms::scope_payloads(state, &registry, scope.project, scope.milestone)?)
+    } else {
+        None
+    };
+
     // A door's building is its owning room's building, so a building scope needs
-    // the rooms classified. Resolved **only when a building filter is actually
-    // given** — it is a second storage read plus a classification pass, and the
-    // overwhelmingly common doors read does not need it.
-    let building_of_room = match scope.building {
-        Some(_) => entity_scope::building_by_room(state, scope.project, scope.milestone)?,
-        None => BTreeMap::new(),
+    // the rooms classified.
+    let building_of_room = match (scope.building, &rooms) {
+        (Some(_), Some(rooms)) => {
+            entity_scope::building_by_room(state, &registry, rooms, scope.project, scope.milestone)?
+        }
+        _ => BTreeMap::new(),
     };
 
     // Geometric resolution, when a project asks for it. Off is the default and
-    // costs nothing: no storage read, no candidates, and every side reports
-    // whatever the model stated.
+    // costs nothing: no candidates, and every side reports whatever the model
+    // stated.
     //
     // Resolved per project rather than per model, because `Project` mode probes
     // across models by design. A read spanning projects with different settings
     // therefore builds one candidate set per project that wants one.
     let mut candidates_by_project: BTreeMap<String, Candidates> = BTreeMap::new();
     for (_, payload) in &scoped {
-        let mode = registry
-            .settings_for(&payload.project().id)
-            .map(|b| kind.policy(b).room_resolution)
-            .unwrap_or_default();
+        let mode = mode_of(payload);
         if mode == RoomResolution::Off || candidates_by_project.contains_key(&payload.project().id) {
             continue;
         }
+        let rooms = rooms.iter().flat_map(super::rooms::ScopedRooms::models);
         candidates_by_project.insert(
             payload.project().id.clone(),
-            entity_scope::build_candidates(state, Some(&payload.project().id), scope.milestone, mode, &scoped)?,
+            entity_scope::build_candidates(rooms, Some(&payload.project().id), mode, &scoped),
         );
     }
 

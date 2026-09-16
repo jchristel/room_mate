@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::contract::{CeilingPayload, FloorPayload, Level, Surface, SurfaceEnvelope};
-use crate::settings::{Milestone, RoomResolution};
+use crate::settings::RoomResolution;
 use crate::state::{AppState, ModelKey};
 use crate::storage::SnapshotKind;
 
@@ -69,16 +69,6 @@ impl SurfaceKind {
         match self {
             SurfaceKind::Ceilings => SnapshotKind::Ceilings,
             SurfaceKind::Floors => SnapshotKind::Floors,
-        }
-    }
-
-    /// This entity's snapshot pins on one milestone. Separate maps, because
-    /// the entities are pushed independently and their snapshot ids do not
-    /// correspond.
-    pub fn pins(self, milestone: &Milestone) -> &BTreeMap<String, String> {
-        match self {
-            SurfaceKind::Ceilings => &milestone.ceiling_attachments,
-            SurfaceKind::Floors => &milestone.floor_attachments,
         }
     }
 
@@ -191,7 +181,7 @@ pub fn assemble_surfaces<P: SurfacePayloadKind>(
 
     // Phase 1 -- scope, through the same function every entity uses.
     let scoped: Vec<(ModelKey, P)> =
-        entity_scope::scope_snapshots(state, kind.snapshot_kind(), scope.project, scope.milestone, |ms| kind.pins(ms))?;
+        entity_scope::scope_snapshots(state, kind.snapshot_kind(), scope.project, scope.milestone)?;
 
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
@@ -206,20 +196,24 @@ pub fn assemble_surfaces<P: SurfacePayloadKind>(
     // absent. Reading it here would let a project switch this entity off
     // entirely and report every ceiling or floor as homeless, which is a wrong
     // answer rather than a disabled feature.
+    //
+    // The rooms are read once for every project in scope, and not at all when
+    // no surface is.
+    let registry = state.settings();
+    let rooms = if scoped.is_empty() {
+        None
+    } else {
+        Some(super::rooms::scope_payloads(state, &registry, scope.project, scope.milestone)?)
+    };
     let mut candidates_by_project: BTreeMap<String, entity_scope::Candidates> = BTreeMap::new();
     for (_, payload) in &scoped {
         if candidates_by_project.contains_key(&payload.project().id) {
             continue;
         }
+        let rooms = rooms.iter().flat_map(super::rooms::ScopedRooms::models);
         candidates_by_project.insert(
             payload.project().id.clone(),
-            entity_scope::build_candidates(
-                state,
-                Some(&payload.project().id),
-                scope.milestone,
-                RoomResolution::SameModel,
-                &scoped,
-            )?,
+            entity_scope::build_candidates(rooms, Some(&payload.project().id), RoomResolution::SameModel, &scoped),
         );
     }
 

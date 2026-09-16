@@ -34,6 +34,28 @@ type ScopedPayload<'a> = (ModelKey, RoomPayload, &'a ProjectSettings);
 /// nor re-warned). Empty on the non-milestone path.
 type MilestoneReference = BTreeMap<(String, String), Option<ReferenceData>>;
 
+/// The rooms one request is scoped to, read once and handed to everything in
+/// that request that needs them.
+///
+/// **A named value rather than a read each consumer repeats.** An element read
+/// can need its scope's rooms twice -- classified, to know a building, and as
+/// geometry, to know which room an element is beside -- and a QA report needs
+/// them for every entity it resolves. Each consumer used to read and parse them
+/// itself, so a building-scoped doors read parsed the same rooms twice and
+/// `/validation` up to four times.
+pub(crate) struct ScopedRooms<'r> {
+    pub(crate) payloads: Vec<ScopedPayload<'r>>,
+    pub(crate) milestone_reference: MilestoneReference,
+}
+
+impl ScopedRooms<'_> {
+    /// Each scoped model with the bundle it resolves against, in the shape
+    /// `entity_scope::build_candidates` takes.
+    pub(crate) fn models(&self) -> impl Iterator<Item = (&ModelKey, &RoomPayload, &ProjectSettings)> {
+        self.payloads.iter().map(|(key, payload, bundle)| (key, payload, *bundle))
+    }
+}
+
 /// A room as sent to the viewer: the stored room plus any attached reference-
 /// source data and its resolved classification path. Separate response type
 /// so the join never mutates the stored snapshot, and so each joined source
@@ -867,8 +889,6 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
     if !state.has_any_snapshot(SnapshotKind::Rooms).map_err(ServiceError::Internal)? {
         return Ok(None);
     }
-    let stored = state.all_snapshots(scope.project).map_err(ServiceError::Internal)?;
-
     // One settings snapshot for the whole request — a save landing mid-merge
     // can't mix old and new bundles in one response. Held here for the length
     // of the request so `scoped`'s `&ProjectSettings` borrows stay valid.
@@ -877,18 +897,35 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
     // Three phases, each its own helper: scope the stored payloads to the
     // request (and resolve any milestone substitutions), dedup levels across
     // linked models, then derive the response rooms/levels.
-    let (scoped, milestone_reference) = scope_payloads(state, &registry, stored, scope.project, scope.milestone)?;
-    let revision = scoped_revision(&scoped);
-    let phase_by_model = phases_of(&scoped);
-    let level_remap = dedup_levels(&scoped);
+    let scoped = scope_payloads(state, &registry, scope.project, scope.milestone)?;
+    rooms_result(state, &scoped, scope).map(Some)
+}
+
+/// Phases 2 and 3 of `assemble_rooms`, over rooms already scoped.
+///
+/// **Split out so an element read classifies the rooms it already holds.** A
+/// building-scoped doors read needs the rooms twice -- classified, for which
+/// building each belongs to, and as geometry, for which room each door is beside
+/// -- and used to read and parse them once for each. `scoped` must have been
+/// scoped to `scope.project` and `scope.milestone`; the building and property
+/// filters are applied here.
+pub(crate) fn rooms_result(
+    state: &AppState,
+    scoped: &ScopedRooms<'_>,
+    scope: &RoomScope<'_>,
+) -> Result<RoomsResult, ServiceError> {
+    let ScopedRooms { payloads: scoped, milestone_reference } = scoped;
+    let revision = scoped_revision(scoped);
+    let phase_by_model = phases_of(scoped);
+    let level_remap = dedup_levels(scoped);
     // The project's coordinate frame, from the manifest index rather than from
     // `scoped` -- every entity read must agree on it, and each of them scopes a
     // different set of models. See `service::placement::from_index`.
     let placement = super::placement::from_index(state)?;
     let AssembledRooms { levels, rooms, reference_labels, boundary_by_level } =
-        assemble_scoped_rooms(&scoped, &level_remap, &milestone_reference, scope, &placement);
+        assemble_scoped_rooms(scoped, &level_remap, milestone_reference, scope, &placement);
 
-    Ok(Some(RoomsResult {
+    Ok(RoomsResult {
         schema_version: SUPPORTED_SCHEMA,
         revision,
         levels,
@@ -896,7 +933,7 @@ pub fn assemble_rooms(state: &AppState, scope: &RoomScope<'_>) -> Result<Option<
         reference_labels,
         boundary_by_level,
         phase_by_model,
-    }))
+    })
 }
 
 /// Each contributing model's phase, read off the payload actually in this
@@ -913,81 +950,70 @@ fn phases_of(scoped: &[ScopedPayload<'_>]) -> BTreeMap<String, BTreeMap<String, 
     out
 }
 
-/// Phase 1 — scope the stored payloads to the request. Drops any payload whose
+/// Phase 1 — scope the stored payloads to the request. Drops any model whose
 /// project has no registered settings bundle (an unscoped merge is
 /// per-project, so a model with nothing to classify/join against has no
-/// home), and, under a
-/// milestone filter, *replaces* each surviving model's latest payload with the
-/// snapshot the milestone pins for it (owned payloads, hence no `&` on the
+/// home), and, under a milestone filter, serves the snapshot the milestone pins
+/// for each model instead of its latest (owned payloads, hence no `&` on the
 /// tuple's payload slot). A project without the named milestone, or a model it
 /// doesn't pin, contributes nothing — the building-filter discipline.
 ///
-/// `pub(crate)` since the doors read needs the same scoped room payloads to
-/// resolve a door against room *geometry* — the cheap first move this codebase
-/// prescribes when a second consumer appears, rather than a second copy of the
-/// milestone-substitution rules that could pin a different snapshot than
+/// **Which snapshot is decided before any is opened** (`plan_reads`), so a
+/// milestone read parses the pinned snapshot only. It used to take every
+/// model's parsed latest as an argument and replace it — paying for a parse of
+/// each one only to throw it away.
+///
+/// `pub(crate)` since the element reads need the same scoped room payloads to
+/// resolve an element against room *geometry* — the cheap first move this
+/// codebase prescribes when a second consumer appears, rather than a second copy
+/// of the milestone-substitution rules that could pin a different snapshot than
 /// `/rooms` does.
 ///
-/// The second return value is each milestone-pinned reference source,
-/// resolved once per (project id, source name): `Some(data)` = joined instead
-/// of that source's current data; a `None` *value* means "attempted, fall
-/// back to current" (a missing or unparseable pin), memoised so it's neither
-/// re-parsed nor re-warned across a project's models. Empty on the
-/// non-milestone path. Kept together with the scoping loop that fills it,
+/// `milestone_reference` on the result is each milestone-pinned reference
+/// source, resolved once per (project id, source name) — see
+/// `MilestoneReference`. Kept together with the scoping loop that fills it,
 /// since that's where the pin is known.
 pub(crate) fn scope_payloads<'r>(
     state: &AppState,
     registry: &'r SettingsRegistry,
-    stored: Vec<(ModelKey, RoomPayload)>,
     project: Option<&str>,
     milestone: Option<&str>,
-) -> Result<(Vec<ScopedPayload<'r>>, MilestoneReference), ServiceError> {
-    let mut milestone_reference: MilestoneReference = BTreeMap::new();
-    let mut scoped: Vec<ScopedPayload> = Vec::new();
+) -> Result<ScopedRooms<'r>, ServiceError> {
+    // Planned against the caller's registry, not a fresh `state.settings()`:
+    // this read holds one settings snapshot for the whole request, and the
+    // models chosen must come from the same snapshot as the bundles attached.
+    let index = state.model_index().map_err(ServiceError::Internal)?;
+    let plan = super::entity_scope::plan_reads(&index, registry, SnapshotKind::Rooms, project, milestone);
+    let stored: Vec<(ModelKey, RoomPayload)> =
+        super::entity_scope::read_planned(state, SnapshotKind::Rooms, plan, milestone)?;
 
+    let mut milestone_reference: MilestoneReference = BTreeMap::new();
+    let mut scoped: Vec<ScopedPayload> = Vec::with_capacity(stored.len());
     for (key, payload) in stored {
-        if project.is_some_and(|p| payload.project.id != p) {
-            continue;
-        }
-        let Some(bundle) = registry.settings_for(&payload.project.id) else {
+        // Always `Some`: the plan only admits models whose project resolves.
+        let Some(bundle) = registry.settings_for(&key.project_id) else {
             continue;
         };
-        match milestone {
-            None => scoped.push((key, payload, bundle)),
-            Some(wanted) => {
-                let Some(ms) = bundle.milestones.iter().find(|m| m.name == wanted) else {
-                    continue;
-                };
-                let Some(pinned_id) = ms.attachments.get(&key.model_id) else {
-                    continue;
-                };
-                match state.get_snapshot(&key, pinned_id).map_err(ServiceError::Internal)? {
-                    Some(pinned) => {
-                        // One resolution per (project, source) pin — a
-                        // project may pin several sources for one milestone,
-                        // each memoised independently the first time any of
-                        // its models is seen.
-                        for (source, pin) in &ms.reference_snapshots {
-                            let map_key = (key.project_id.clone(), source.clone());
-                            if let std::collections::btree_map::Entry::Vacant(e) = milestone_reference.entry(map_key) {
-                                let resolved = resolve_pinned_reference(state, wanted, &key.project_id, source, pin)?;
-                                e.insert(resolved);
-                            }
-                        }
-                        scoped.push((key, pinned, bundle));
-                    }
-                    None => {
-                        tracing::warn!(
-                        "milestone '{}' pins snapshot {:?} for {}/{}, but no such snapshot exists — skipping the model",
-                        wanted, pinned_id, key.project_id, key.model_id
-                    )
-                    }
+        if let Some(wanted) = milestone
+            && let Some(ms) = bundle.milestones.iter().find(|m| m.name == wanted)
+        {
+            // One resolution per (project, source) pin — a project may pin
+            // several sources for one milestone, each memoised independently
+            // the first time any of its models is seen. Only for a model whose
+            // pinned snapshot was actually read, as before: a project whose
+            // every pin dangles contributes no rooms to join anything onto.
+            for (source, pin) in &ms.reference_snapshots {
+                let map_key = (key.project_id.clone(), source.clone());
+                if let std::collections::btree_map::Entry::Vacant(e) = milestone_reference.entry(map_key) {
+                    let resolved = resolve_pinned_reference(state, wanted, &key.project_id, source, pin)?;
+                    e.insert(resolved);
                 }
             }
         }
+        scoped.push((key, payload, bundle));
     }
 
-    Ok((scoped, milestone_reference))
+    Ok(ScopedRooms { payloads: scoped, milestone_reference })
 }
 
 /// Load and parse a milestone's pinned CSV for one project's reference

@@ -201,13 +201,16 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
     }
     let registry = state.settings();
 
-    let mut scoped: Vec<(ModelKey, crate::contract::SpacePayload)> =
-        entity_scope::scope_snapshots(state, SnapshotKind::Spaces, scope.project, scope.milestone, |ms| {
-            &ms.space_attachments
-        })?;
+    // The model filter narrows the PLAN, not the parsed payloads. Applied after
+    // the read, as it used to be, a picker set to one of RHH's services models
+    // parsed all of them to serve one.
+    let index = state.model_index().map_err(ServiceError::Internal)?;
+    let mut plan = entity_scope::plan_reads(&index, &registry, SnapshotKind::Spaces, scope.project, scope.milestone);
     if let Some(wanted) = scope.model {
-        scoped.retain(|(key, _)| key.model_id == wanted);
+        plan.retain(|planned| planned.key.model_id == wanted);
     }
+    let scoped: Vec<(ModelKey, crate::contract::SpacePayload)> =
+        entity_scope::read_planned(state, SnapshotKind::Spaces, plan, scope.milestone)?;
 
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
