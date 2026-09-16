@@ -59,7 +59,7 @@ and the fourth already has one in project settings:
 
 | Association | How the server already joins it | What a user could pick |
 |---|---|---|
-| Ceilings → rooms | Geometry only, area-weighted, many-to-many, model-scoped (`service::ceilings`, `MIN_OVERLAP_AREA`, `MIN_FRACTION_OF_CEILING`) | Nothing — a ceiling has no room parameter |
+| Ceilings → rooms | Geometry only, area-weighted, many-to-many, model-scoped (`service::surface_attribution`, `MIN_OVERLAP_MEAN_WIDTH_FT`) | Nothing — a ceiling has no room parameter |
 | FF&E → rooms | Authored room id, model-scoped, geometry fallback under `room_resolution` (`ItemResponse::owner_rooms_qualified`) | Nothing — it is an id, not a property |
 | Spaces → rooms | Property key, project-scoped (`[spaces] comparison_key` / `room_key` / `room_models`) | The key — already a setting, and `SpaceReport` reads it |
 | Doors, windows → rooms | `to_room` / `from_room` under `room_attribution` | The policy — already a setting |
@@ -68,13 +68,13 @@ and the fourth already has one in project settings:
 one of them has a recorded way to be wrong.** FF&E joined on a "Room Number"
 property project-wide reintroduces the project-scoped false match the
 model-scoped rule exists to prevent — a wrong answer that looks right. A
-ceiling join that skips the two thresholds counts slivers as coverage. A second
+ceiling join that skips the tolerance counts touching edges as coverage. A second
 space-key picker gives the report and `SpaceReport` two answers to one
 question.
 
 So the user chooses **which association** from a fixed list, and the page
-**states the rule** it runs under, in words, beside the choice — "overlap ≥ 1
-sqft and ≥ 0.5% of the ceiling", "`Number` = `Number`, project-wide, rooms from
+**states the rule** it runs under, in words, beside the choice — "overlap at
+least 10 mm wide", "`Number` = `Number`, project-wide, rooms from
 the ARCH models". Where the rule is a project setting, the statement links to
 it. The report never edits a join; the settings page does.
 
@@ -138,7 +138,7 @@ Three parts, left to right, under the report type:
 - **Associated columns** — the same, over the associated entity, tiered
   instance-then-type where the entity has tiers.
 - **Measures** — what the *join itself* produced, which is per association and
-  not a property of either side: `overlap_area`, `fraction_of_ceiling`,
+  not a property of either side: `overlap_area`, `fraction_of_element`,
   `fraction_of_room` for ceilings; `room_origin` for FF&E; `model_id` for
   spaces; the side (`to` / `from`) for openings.
 
@@ -201,7 +201,10 @@ Each association has a different cardinality, and a report that ignores it
 produces a total that is wrong without looking wrong.
 
 - **Ceilings are many-to-many.** 419 of RHH's 1,833 ceilings cover more than
-  one room above the sliver threshold. Summing *ceiling area* per room counts a
+  one room at a sliver threshold the read has since dropped (2026-09-16), so it
+  now lists slivers too and a report that means "the rooms this ceiling is
+  in" states its own line over `fraction_of_element` or `fraction_of_room`.
+  Summing *ceiling area* per room counts a
   ceiling once per room it touches. **So ceiling area is not offered as a
   summable measure in the grouped shape; `overlap_area` is**, and
   `fraction_of_room` answers "how much of this room is ceiled" — the finishes
@@ -251,7 +254,7 @@ scale: `/ffe` is 273 MB / 94 s and `/ceilings` 33 s (see `CLAUDE.md`, "Open").
   Dropping the full per-item property maps is also a partial answer to the
   `/ffe` payload problem, for the one consumer that never needed them.
 - It reuses, never re-derives: `entity_scope` for scoping and milestone pins,
-  `service::ceilings` for attribution, the items and openings reads for owners,
+  `service::surfaces` for attribution, the items and openings reads for owners,
   and the spaces match for spaces. A report that computed its own attribution
   would be the extractor-footprint lesson in a new place.
 - **`POST /projects/{id}/reports`**, body the definition. A POST read has

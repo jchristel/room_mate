@@ -7,7 +7,7 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 
 **Open work only.** The viewer is a WebGL plan with a thin SVG overlay, three
 sibling static pages, and a `src-js/` TypeScript build emitting the committed
-renderer bundle and a React preview of the settings page. How each part works is documented where it is built — `src-js/renderer/`,
+renderer bundle and the React settings page. How each part works is documented where it is built — `src-js/renderer/`,
 `static/index.html`, `static/graph.js` — and the invariants that are expensive to
 rediscover are below rather than in the code, because they are properties of the
 *seam* between two layers and no single file owns them.

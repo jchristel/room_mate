@@ -52,9 +52,11 @@ from collections import Counter, OrderedDict
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DIR = os.path.join(HERE, "fixtures")
 
-# Copied from `src/service/surface_attribution.rs`. The analyser re-runs the
-# server's rule, so these must be the server's numbers; a change there is a
-# change here in the same commit.
+# The ceiling and floor sliver rules as they were in `src/service/
+# surface_attribution.rs` until 2026-09-16, when both were replaced by one
+# 10 mm mean-width tolerance. F6 compares these retired rules, which is the
+# question this analyser was written to answer; they are NOT the server's
+# rule any more, so an F6 result is history, not a prediction of `/floors`.
 MIN_OVERLAP_AREA = 1.0
 MIN_FRACTION_OF_CEILING = 0.005
 MIN_FLOOR_MEAN_WIDTH_FT = 1.5

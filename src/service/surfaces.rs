@@ -4,7 +4,7 @@
 //!
 //! One assembly for both, on the `service::openings` pattern: the things that
 //! vary between a ceilings read and a floors read -- the storage kind, the
-//! milestone pin map and how a sliver is recognised -- are lookups on
+//! milestone pin map and the schema version -- are lookups on
 //! [`SurfaceKind`], so nothing here says `if floors`. What would change a serde
 //! key (the list name on the response) is the only thing split, into
 //! [`CeilingsResult`] and [`FloorsResult`].
@@ -31,7 +31,7 @@ use crate::state::{AppState, ModelKey};
 use crate::storage::SnapshotKind;
 
 use super::room_locator::RoomRef;
-use super::surface_attribution::{attribute, SliverRule, SurfaceRoom};
+use super::surface_attribution::{attribute, SurfaceRoom};
 use super::{entity_scope, ServiceError};
 
 /// Which surface entity a read or a push addresses.
@@ -79,15 +79,6 @@ impl SurfaceKind {
         match self {
             SurfaceKind::Ceilings => &milestone.ceiling_attachments,
             SurfaceKind::Floors => &milestone.floor_attachments,
-        }
-    }
-
-    /// How a sliver is recognised -- see `surface_attribution`'s header for why
-    /// this is the one rule the two entities cannot share.
-    pub fn sliver_rule(self) -> SliverRule {
-        match self {
-            SurfaceKind::Ceilings => SliverRule::FractionOfSurface,
-            SurfaceKind::Floors => SliverRule::NarrowOverlap,
         }
     }
 
@@ -254,7 +245,7 @@ pub fn assemble_surfaces<P: SurfacePayloadKind>(
             let rooms = candidates
                 .and_then(|c| {
                     let elevation = c.elevation_of(&model.id, &surface.level_id)?;
-                    Some(attribute(surface, elevation, c.rooms_in_model(&model.id), kind.sliver_rule()))
+                    Some(attribute(surface, elevation, c.rooms_in_model(&model.id)))
                 })
                 .unwrap_or_default();
 

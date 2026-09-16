@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
-// The React preview of the settings page — an APP build, which is why it is a
+// The React settings page — an APP build, which is why it is a
 // second config rather than a second entry in vite.config.ts. That file is a
 // library build (one IIFE the viewer calls), and Vite's IIFE output takes one
 // entry; this one owns an index.html of its own.

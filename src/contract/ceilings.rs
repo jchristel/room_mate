@@ -4,7 +4,7 @@
 //!
 //! The sixth entity, and the first whose room association is **purely
 //! geometric**. What was specific to ceilings when they were the only such
-//! entity -- the footprint as a list of pieces, the union, the thresholds --
+//! entity -- the footprint as a list of pieces, the union, the tolerance --
 //! turned out to be specific to *slabs*, and moved to `surfaces` and
 //! `service::surface_attribution` when floors arrived.
 //!

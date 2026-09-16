@@ -11,7 +11,7 @@
 // its measurements are in STRATEGY-BROWSER.md, "UI growth"), now grown from one
 // slice to the whole page.
 //
-// **Two things it does that the JavaScript page does not.**
+// **Two things it does that the JavaScript page did not.**
 //
 // 1. **It edits every setting, including the seven that never had a UI**: the
 //    coordinate anchor, the area policy, the door/window/FF&E/space policies,

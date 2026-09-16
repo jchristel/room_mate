@@ -30,8 +30,8 @@ script re-verifying the numbers. It drifted to +47% and named a deleted file
 before anyone noticed — the exact failure this section warns about, committed by
 the section itself. Measure the code, never a sentence about the code.
 
-Three modules carry a recorded judgement today. The rest of the backlog is
-whatever the check reports; two of them are worth naming because the answer is
+The recorded judgements are the ignore file's `[modules]` section; the rest of
+the backlog is whatever the check reports; two of them are worth naming because the answer is
 known and only the writing-down is missing:
 
 - **`roommate-shared`'s `settings/mod.rs` reads as unfinished.** The server's

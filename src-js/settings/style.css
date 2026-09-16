@@ -1,6 +1,7 @@
-/* The subset of static/settings.html's inline <style> this preview's slice uses,
-   copied rather than shared: the JS page inlines its CSS, so there is no file to
-   link. If the preview becomes the page, the two become one stylesheet. */
+/* The settings page's own stylesheet. It began as the subset of the hand-written
+   static/settings.html's inline <style> that the first React slice used; that
+   page is deleted, so this is now the only copy and there is nothing to keep in
+   step. The palette tokens are shared with the other pages through tokens.css. */
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
