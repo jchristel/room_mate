@@ -1879,7 +1879,7 @@ mod tests {
     fn make_room(id: &str, name: &str, props: &[(&str, &str)]) -> Room {
         let mut properties = BTreeMap::new();
         for (k, v) in props {
-            properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+            properties.insert((*k).into(), CustomValue { value: v.to_string(), storage_type: None });
         }
         Room {
             enclosure: None,
@@ -2673,7 +2673,7 @@ mod tests {
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties: BTreeMap::new(),
-            type_properties: BTreeMap::new(),
+            type_properties: Default::default(),
         }
     }
 
@@ -2686,7 +2686,7 @@ mod tests {
         let mut door = make_door(id, from_room, to_room);
         for (k, v) in props {
             door.properties
-                .insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+                .insert((*k).into(), CustomValue { value: v.to_string(), storage_type: None });
         }
         door
     }
@@ -2773,7 +2773,7 @@ mod tests {
             type_id: "t1".to_string(),
             type_name: "Desk 1600x800".to_string(),
             properties: BTreeMap::new(),
-            type_properties: BTreeMap::new(),
+            type_properties: Default::default(),
         }
     }
 
@@ -2781,7 +2781,7 @@ mod tests {
         let mut item = make_item(id, room, None);
         for (k, v) in props {
             item.properties
-                .insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+                .insert((*k).into(), CustomValue { value: v.to_string(), storage_type: None });
         }
         item
     }
@@ -2953,7 +2953,7 @@ mod tests {
         let (rk, mut rooms_payload) = rooms_for("p1", "m1", &["r1"]);
         rooms_payload.rooms[0]
             .properties
-            .insert("Number".to_string(), CustomValue { value: "01.12".to_string(), storage_type: None });
+            .insert("Number".into(), CustomValue { value: "01.12".to_string(), storage_type: None });
         let rooms = vec![(rk, rooms_payload)];
         let ffe = vec![make_ffe(
             "p1",

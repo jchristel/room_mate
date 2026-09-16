@@ -28,11 +28,11 @@
 //! Figures throughout cite the House A probe (`docs/Superseded/PLAN-ffe.md`,
 //! "As measured"): 647 instances collected across nine categories, 644 exported.
 
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Loop, Point2D, PropertyTiers};
+use super::{Loop, Point2D, PropertyMap, PropertyTiers};
 
 /// One FF&E instance, as extracted from Revit.
 ///
@@ -233,8 +233,8 @@ pub struct Item {
 
     /// This instance's own properties, keyed by the *source's own* property
     /// name, exactly as `Room.properties` and `Opening::properties` are.
-    #[serde(default)]
-    pub properties: BTreeMap<String, CustomValue>,
+    #[serde(default, with = "super::property_codec::map")]
+    pub properties: PropertyMap,
 
     /// The family **type's** properties — shared by every instance of
     /// `type_id`, and kept as a separate map rather than merged into
@@ -245,8 +245,11 @@ pub struct Item {
     /// `get_instance_properties` / `get_type_properties` helpers. That is why
     /// `post_common.properties_to_map` works on an item with no modification,
     /// and it is the single largest thing this entity got for free.
-    #[serde(default)]
-    pub type_properties: BTreeMap<String, CustomValue>,
+    ///
+    /// Behind an `Arc` because every instance of a type holds the same bag --
+    /// on RHH, 16,397 items in one model against 1,005 distinct bags.
+    #[serde(default, with = "super::property_codec::shared_map")]
+    pub type_properties: Arc<PropertyMap>,
 }
 
 /// An item is two-tier: its own properties first, its family type's second.
@@ -257,8 +260,8 @@ pub struct Item {
 /// declares the same one an `Opening` does, because the question is the same
 /// question.
 impl PropertyTiers for Item {
-    fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>> {
-        vec![&self.properties, &self.type_properties]
+    fn tiers(&self) -> Vec<&PropertyMap> {
+        vec![&self.properties, &*self.type_properties]
     }
 }
 
@@ -284,7 +287,8 @@ pub trait ItemEnvelope: super::SnapshotEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::{lookup_property, PropertyPresence};
+    use crate::contract::{lookup_property, CustomValue, PropertyPresence};
+    use std::collections::BTreeMap;
 
     fn value(v: &str) -> CustomValue {
         CustomValue { value: v.to_string(), storage_type: None }
@@ -388,11 +392,11 @@ mod tests {
             super_component_id: None,
             type_id: "t".into(),
             type_name: "Desk".into(),
-            properties: BTreeMap::from([("Mark".to_string(), value("F-101")), ("Depth".to_string(), value(""))]),
-            type_properties: BTreeMap::from([
-                ("Depth".to_string(), value("800")),
-                ("Manufacturer".to_string(), value("Acme")),
-            ]),
+            properties: BTreeMap::from([("Mark".into(), value("F-101")), ("Depth".into(), value(""))]),
+            type_properties: Arc::new(BTreeMap::from([
+                ("Depth".into(), value("800")),
+                ("Manufacturer".into(), value("Acme")),
+            ])),
         };
 
         assert_eq!(lookup_property(&item, "Mark", "revit", &[]), Some("F-101".to_string()));

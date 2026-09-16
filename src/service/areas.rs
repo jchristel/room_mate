@@ -1965,8 +1965,8 @@ mod tests {
         /// A room with an outer rectangle and `bldg`/`dept` classification props.
         fn geo_room(id: &str, bldg: &str, dept: &str, r: Vec<(f64, f64)>) -> Room {
             let mut properties = BTreeMap::new();
-            properties.insert("bldg".to_string(), CustomValue { value: bldg.to_string(), storage_type: None });
-            properties.insert("dept".to_string(), CustomValue { value: dept.to_string(), storage_type: None });
+            properties.insert("bldg".into(), CustomValue { value: bldg.to_string(), storage_type: None });
+            properties.insert("dept".into(), CustomValue { value: dept.to_string(), storage_type: None });
             Room {
                 enclosure: None,
                 id: id.to_string(),

@@ -27,12 +27,12 @@
 //! stored file, so a merged payload would be a migration rather than a
 //! refactor. That is the `Opening` split exactly -- one record, two envelopes.
 
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Level, Loop, Model, ModelToShared, Project, Snapshot};
+use super::{Level, Loop, Model, ModelToShared, Project, PropertyMap, Snapshot};
 
 /// One ceiling or one floor, as stored and as served.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,17 +105,19 @@ pub struct Surface {
     /// For a floor this is where `Structural` rides: a structural slab and a
     /// finish floor are both `OST_Floors`, and the flag is a Revit parameter
     /// rather than a category.
-    #[serde(default)]
-    pub properties: BTreeMap<String, CustomValue>,
+    #[serde(default, with = "super::property_codec::map")]
+    pub properties: PropertyMap,
 
     /// Type properties, same tiering rule as doors: a tier wins only when it is
     /// `Present`, and a blank instance value does not shadow a real type one.
-    #[serde(default)]
-    pub type_properties: BTreeMap<String, CustomValue>,
+    /// Shared behind an `Arc`, one copy per distinct bag in a snapshot.
+    #[serde(default, with = "super::property_codec::shared_map")]
+    pub type_properties: Arc<PropertyMap>,
 
     /// The type id, carried for the same reason a door's is — it is ready to
-    /// key a shared type table if the payload-size optimization the entities
-    /// doc defers is ever taken.
+    /// key a shared type table on the *wire* if the payload-size optimization
+    /// the entities doc defers is ever taken. Storage no longer needs it: the
+    /// stored table is keyed by content (`property_codec`).
     #[serde(default)]
     pub type_id: Option<String>,
 

@@ -710,7 +710,7 @@ mod tests {
     fn make_room(id: &str, props: &[(&str, &str)]) -> Room {
         let mut properties = BTreeMap::new();
         for (k, v) in props {
-            properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+            properties.insert((*k).into(), CustomValue { value: v.to_string(), storage_type: None });
         }
         Room {
             enclosure: None,
@@ -1295,7 +1295,7 @@ mod tests {
     fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>, props: &[(&str, &str)]) -> Opening {
         let mut properties = BTreeMap::new();
         for (k, v) in props {
-            properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+            properties.insert((*k).into(), CustomValue { value: v.to_string(), storage_type: None });
         }
         Opening {
             id: id.to_string(),
@@ -1311,7 +1311,7 @@ mod tests {
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties,
-            type_properties: BTreeMap::new(),
+            type_properties: Default::default(),
         }
     }
 

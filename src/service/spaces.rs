@@ -951,11 +951,11 @@ mod tests {
 
     fn keyed(id: &str, number: &str, extra: &[(&str, &str)]) -> Room {
         let mut properties = BTreeMap::from([(
-            "Number".to_string(),
+            "Number".into(),
             crate::contract::CustomValue { value: number.to_string(), storage_type: None },
         )]);
         for (k, v) in extra {
-            properties.insert(k.to_string(), crate::contract::CustomValue { value: v.to_string(), storage_type: None });
+            properties.insert((*k).into(), crate::contract::CustomValue { value: v.to_string(), storage_type: None });
         }
         Room {
             id: id.to_string(),

@@ -36,6 +36,7 @@ pub mod ffe;
 pub mod floors;
 pub mod items;
 pub mod openings;
+pub mod property_codec;
 pub mod spaces;
 pub mod surfaces;
 pub mod windows;
@@ -110,10 +111,21 @@ pub struct Level {
     pub elevation: f64,
 }
 
+/// A property name, shared across every element of a snapshot that uses it.
+///
+/// `Arc<str>` rather than `String` because a snapshot names a few hundred
+/// distinct properties across tens of thousands of elements: one allocation
+/// each, not one per element. Lookups by `&str` still work (`Arc<str>:
+/// Borrow<str>`), and it serializes as a plain string. See `property_codec`.
+pub type PropertyKey = std::sync::Arc<str>;
+
+/// One tier of an element's properties, keyed by the source's own names.
+pub type PropertyMap = BTreeMap<PropertyKey, CustomValue>;
+
 /// One custom property: the raw string value plus an optional storage-type
 /// hint from Revit. Paired in one struct (not two parallel maps) so value and
 /// type can't drift and an absent type degrades to "treat as string".
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CustomValue {
     /// Raw value, always a string. Revit hands most params back as strings;
     /// any typing is deferred and done server-side, lazily.
@@ -127,8 +139,11 @@ pub struct CustomValue {
     ///
     /// Set by the Python extractor's DataProperty.storage_type field
     /// (str(p.StorageType) on the Revit parameter).
+    ///
+    /// Shared like a `PropertyKey`, for the same reason: four distinct values
+    /// on every property of every element.
     #[serde(default)]
-    pub storage_type: Option<String>,
+    pub storage_type: Option<std::sync::Arc<str>>,
 }
 
 /// Whether a spatial element is bounded, and if not, whose fault that is.
@@ -184,8 +199,8 @@ pub struct Room {
     /// because no single fixed schema is guaranteed once a second source (e.g.
     /// IFC) can produce rooms alongside Revit. `#[serde(default)]` so a room
     /// with no properties still deserializes rather than failing.
-    #[serde(default)]
-    pub properties: BTreeMap<String, CustomValue>,
+    #[serde(default, with = "property_codec::map")]
+    pub properties: PropertyMap,
 }
 
 /// The human-meaningful container a model belongs to ("the hospital job").
@@ -776,14 +791,14 @@ pub enum PropertyPresence {
 /// (PLAN-generalisation.md R2).
 pub trait PropertyTiers {
     /// This entity's property maps, **highest precedence first**.
-    fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>>;
+    fn tiers(&self) -> Vec<&PropertyMap>;
 }
 
 /// A room is single-tier: it has no type-level properties, so there is nothing
 /// for a lookup to fall through to. Every pre-doors caller therefore keeps
 /// exactly the behaviour it had.
 impl PropertyTiers for Room {
-    fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>> {
+    fn tiers(&self) -> Vec<&PropertyMap> {
         vec![&self.properties]
     }
 }
@@ -1002,7 +1017,7 @@ mod tests {
         assert_eq!(payload.model.source, "revit");
         assert_eq!(room.properties["Number"].value, "101");
         assert_eq!(room.properties["Area"].value, "25.5");
-        assert_eq!(room.properties["Dept"].storage_type, Some("String".to_string()));
+        assert_eq!(room.properties["Dept"].storage_type, Some("String".into()));
 
         // Confirm round-trip: serialise and re-parse.
         let serialised = serde_json::to_string(&payload).unwrap();
@@ -1346,8 +1361,8 @@ mod tests {
     fn test_lookup_property_resolves_via_source_mapping() {
         let mut properties = BTreeMap::new();
         properties.insert(
-            "Fläche".to_string(),
-            CustomValue { value: "25.5".to_string(), storage_type: Some("Double".to_string()) },
+            "Fläche".into(),
+            CustomValue { value: "25.5".to_string(), storage_type: Some("Double".into()) },
         );
         let room = Room {
             enclosure: None,
@@ -1375,7 +1390,7 @@ mod tests {
     #[test]
     fn test_lookup_property_falls_through_with_no_defs() {
         let mut properties = BTreeMap::new();
-        properties.insert("Dept".to_string(), CustomValue { value: "Finance".to_string(), storage_type: None });
+        properties.insert("Dept".into(), CustomValue { value: "Finance".to_string(), storage_type: None });
         let room = Room {
             enclosure: None,
             id: "r1".into(),
@@ -1445,8 +1460,8 @@ mod tests {
     #[test]
     fn test_property_presence_distinguishes_absent_empty_present() {
         let mut properties = BTreeMap::new();
-        properties.insert("Blank".to_string(), CustomValue { value: "".to_string(), storage_type: None });
-        properties.insert("Filled".to_string(), CustomValue { value: "25.5".to_string(), storage_type: None });
+        properties.insert("Blank".into(), CustomValue { value: "".to_string(), storage_type: None });
+        properties.insert("Filled".into(), CustomValue { value: "25.5".to_string(), storage_type: None });
         let room = Room {
             enclosure: None,
             id: "r1".into(),
@@ -1470,12 +1485,12 @@ mod tests {
     /// the rule is a contract decision, and a decision with no test is one the
     /// next reader is free to re-derive differently.
     struct TwoTier {
-        instance: BTreeMap<String, CustomValue>,
-        type_properties: BTreeMap<String, CustomValue>,
+        instance: PropertyMap,
+        type_properties: PropertyMap,
     }
 
     impl PropertyTiers for TwoTier {
-        fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>> {
+        fn tiers(&self) -> Vec<&PropertyMap> {
             vec![&self.instance, &self.type_properties]
         }
     }
@@ -1484,7 +1499,7 @@ mod tests {
         let map = |pairs: &[(&str, &str)]| {
             pairs
                 .iter()
-                .map(|(k, v)| (k.to_string(), CustomValue { value: v.to_string(), storage_type: None }))
+                .map(|(k, v)| ((*k).into(), CustomValue { value: v.to_string(), storage_type: None }))
                 .collect()
         };
         TwoTier { instance: map(instance), type_properties: map(type_properties) }
@@ -1571,7 +1586,7 @@ mod tests {
     #[test]
     fn test_lookup_property_still_collapses_absent_and_empty_to_none() {
         let mut properties = BTreeMap::new();
-        properties.insert("Blank".to_string(), CustomValue { value: "".to_string(), storage_type: None });
+        properties.insert("Blank".into(), CustomValue { value: "".to_string(), storage_type: None });
         let room = Room {
             enclosure: None,
             id: "r1".into(),

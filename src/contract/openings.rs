@@ -19,11 +19,11 @@
 //! (`CustomValue`, `PropertyTiers`, `lookup_property`) all stay in `mod.rs`: an
 //! opening does not get its own copy of any of them.
 
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::{CustomValue, Loop, Point2D, PropertyTiers};
+use super::{Loop, Point2D, PropertyMap, PropertyTiers};
 
 /// One door instance, as extracted from Revit.
 ///
@@ -245,8 +245,8 @@ pub struct Opening {
 
     /// This door instance's own properties, keyed by the *source's own* property
     /// name, exactly as `Room.properties` is.
-    #[serde(default)]
-    pub properties: BTreeMap<String, CustomValue>,
+    #[serde(default, with = "super::property_codec::map")]
+    pub properties: PropertyMap,
 
     /// The family **type's** properties — shared by every instance of
     /// `type_id`, and kept as a separate map rather than merged into
@@ -261,8 +261,11 @@ pub struct Opening {
     ///
     /// A *lookup* across the two is a different question from how they are
     /// stored, and is answered by `PropertyTiers` below.
-    #[serde(default)]
-    pub type_properties: BTreeMap<String, CustomValue>,
+    ///
+    /// Behind an `Arc` because every instance of a type holds the same bag: one
+    /// copy per distinct bag in a snapshot, not one per door.
+    #[serde(default, with = "super::property_codec::shared_map")]
+    pub type_properties: Arc<PropertyMap>,
 }
 
 /// A door is two-tier: its own properties first, its family type's second.
@@ -272,8 +275,8 @@ pub struct Opening {
 /// `property_presence` in `mod.rs`, measured against this very export. This impl
 /// only declares the order.
 impl PropertyTiers for Opening {
-    fn tiers(&self) -> Vec<&BTreeMap<String, CustomValue>> {
-        vec![&self.properties, &self.type_properties]
+    fn tiers(&self) -> Vec<&PropertyMap> {
+        vec![&self.properties, &*self.type_properties]
     }
 }
 

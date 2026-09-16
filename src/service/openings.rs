@@ -599,6 +599,7 @@ mod tests {
     use crate::state::ProjectSettings;
     use crate::storage::MemStore;
     use std::collections::{BTreeSet, HashMap};
+    use std::sync::Arc;
 
     /// The kind this module's tests exercise. Doors, because doors are what
     /// has real stored data and a pinned wire shape to regress against --
@@ -610,7 +611,7 @@ mod tests {
     fn make_door(id: &str, from_room: Option<&str>, to_room: Option<&str>, props: &[(&str, &str)]) -> Opening {
         let mut properties = BTreeMap::new();
         for (k, v) in props {
-            properties.insert(k.to_string(), CustomValue { value: v.to_string(), storage_type: None });
+            properties.insert((*k).into(), CustomValue { value: v.to_string(), storage_type: None });
         }
         Opening {
             id: id.to_string(),
@@ -626,7 +627,7 @@ mod tests {
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties,
-            type_properties: BTreeMap::new(),
+            type_properties: Default::default(),
         }
     }
 
@@ -785,13 +786,13 @@ mod tests {
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties: BTreeMap::from([(
-                "Mark".to_string(),
-                CustomValue { value: "D-101".to_string(), storage_type: Some("String".to_string()) },
+                "Mark".into(),
+                CustomValue { value: "D-101".to_string(), storage_type: Some("String".into()) },
             )]),
-            type_properties: BTreeMap::from([(
-                "Door Leaf Thickness".to_string(),
+            type_properties: Arc::new(BTreeMap::from([(
+                "Door Leaf Thickness".into(),
                 CustomValue { value: "40.0".to_string(), storage_type: None },
-            )]),
+            )])),
         };
 
         let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle())]), None);
@@ -1445,8 +1446,8 @@ D-101,60
     #[test]
     fn test_filter_reaches_the_type_tier() {
         let mut door = make_door("d1", Some("r1"), None, &[("Door Leaf Thickness", "")]);
-        door.type_properties.insert(
-            "Door Leaf Thickness".to_string(),
+        Arc::make_mut(&mut door.type_properties).insert(
+            "Door Leaf Thickness".into(),
             CustomValue { value: "40.0".to_string(), storage_type: None },
         );
         let state = state_with(vec![("p1", "m1", vec![door])]);
@@ -1616,7 +1617,7 @@ D-101,60
             level_id: "1".to_string(),
             loops: vec![],
             properties: BTreeMap::from([(
-                "Building".to_string(),
+                "Building".into(),
                 CustomValue { value: building.to_string(), storage_type: None },
             )]),
         };

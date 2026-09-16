@@ -123,10 +123,7 @@ mod tests {
             properties: custom
                 .into_iter()
                 .map(|(k, (val, st))| {
-                    (
-                        k.to_string(),
-                        CustomValue { value: val.to_string(), storage_type: st.map(|s| s.to_string()) },
-                    )
+                    (k.into(), CustomValue { value: val.to_string(), storage_type: st.map(Into::into) })
                 })
                 .collect(),
         }
