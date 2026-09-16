@@ -128,6 +128,44 @@ RUST_PATH = re.compile(r"[a-z_]+(?:::[a-zA-Z_][a-zA-Z0-9_]*)+")
 TYPE_NAME = re.compile(r"[A-Z][A-Za-z0-9]+")
 FN_CALL = re.compile(r"[a-z_][a-z0-9_]*\(\)")
 SRC_FILE = re.compile(r"(?:[a-z_][a-z0-9_]*/)*[a-z_][a-z0-9_]*\.(?:rs|ts|py)")
+RUST_ITEM = re.compile(r"\b(?:fn|mod|macro_rules!)\s+([a-z_][a-z0-9_]*)")
+
+# First segments that make a path OURS. Anything else (`std::`, `geo::`) is an
+# external crate this check cannot see into, so it keeps the leaf-only test.
+LOCAL_ROOTS = {"crate", "super", "self", "roommate", "roommate_shared"}
+
+
+def rust_names() -> dict[str, set[str]]:
+    """Module name -> every lowercase name reachable directly under it.
+
+    What is under `foo` is its child modules (`foo/bar.rs`, `foo/bar/`) and every
+    `fn`, inline `mod` or `macro_rules!` in `foo.rs` or anywhere below `foo/` --
+    below rather than directly in, because a `mod.rs` re-exports its children's
+    items and a doc cites them by the re-exported path. Keyed by NAME, not by
+    location, so the two `settings` modules (the server's re-export and
+    `roommate-shared`'s types) pool: the docs cite them as one. The `""` key
+    holds everything, for a parent this cannot place (`crate::`, `super::`).
+    """
+    under: dict[str, set[str]] = {"": set()}
+    for tree in ("src", "crates"):
+        for path in (ROOT / tree).rglob("*.rs"):
+            names = set(RUST_ITEM.findall(path.read_text(encoding="utf-8")))
+            parts = path.relative_to(ROOT / tree).with_suffix("").parts
+            under[""].update(names | set(parts))
+            for i, directory in enumerate(parts[:-1]):
+                below = under.setdefault(directory, set())
+                below.update(names)
+                if parts[i + 1] != "mod":
+                    below.add(parts[i + 1])
+            # `foo.rs` holds foo's own items, same as `foo/mod.rs`.
+            own = parts[-2] if parts[-1] == "mod" and len(parts) > 1 else parts[-1]
+            under.setdefault(own, set()).update(names)
+            # An inline `mod tests { .. }` is a parent too, and a doc cites a test
+            # through it. Its items are pooled with the file's, which is loose but
+            # only ever errs towards passing.
+            for inline in re.findall(r"\bmod\s+([a-z_][a-z0-9_]*)\s*\{", path.read_text(encoding="utf-8")):
+                under.setdefault(inline, set()).update(names)
+    return under
 
 
 def check_symbols(findings: Findings, words: set[str], files: set[str], ignores: dict) -> None:
@@ -142,9 +180,31 @@ def check_symbols(findings: Findings, words: set[str], files: set[str], ignores:
     """
     skip = set(ignores.get("symbols", {}).keys())
     hits: dict[str, list[str]] = {}
+    under = rust_names()
 
     def ignored(span: str, doc_name: str) -> bool:
         return span in skip or f"{span}@{doc_name}" in skip
+
+    def path_is_dead(span: str) -> bool:
+        """A `module::lowercase` path whose leaf is neither a module nor a fn.
+
+        **The leaf-only word test was a checker bug for exactly this shape.** It
+        asked whether the last segment appeared anywhere in the tree, and a
+        module name almost always does: `service::ceilings` passed for three
+        days after floors renamed the module to `service::surfaces`, because
+        "ceilings" is in hundreds of lines -- and even "is there a module named
+        ceilings" says yes, because `contract::ceilings` exists. A lowercase
+        leaf under a lowercase parent can only be a module or an item OF THAT
+        PARENT, so that is what it must be. A leaf under a TYPE
+        (`ProjectSettings::comparison_key`) may be a field, which this cannot
+        resolve, so it keeps the word test.
+        """
+        segs = span.split("::")
+        local = segs[0] in under or segs[0] in LOCAL_ROOTS
+        if len(segs) < 2 or not local or not segs[-2][0].islower() or not segs[-1][0].islower():
+            return segs[-1] not in words
+        parent = "" if segs[-2] in LOCAL_ROOTS else segs[-2]
+        return segs[-1] not in under.get(parent, set())
 
     for doc in live_docs():
         for lineno, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
@@ -154,9 +214,11 @@ def check_symbols(findings: Findings, words: set[str], files: set[str], ignores:
                 if SRC_FILE.fullmatch(span):
                     if not any(f == span or f.endswith("/" + span) for f in files):
                         hits.setdefault(span, []).append(f"{doc.name}:{lineno}")
-                elif RUST_PATH.fullmatch(span) or TYPE_NAME.fullmatch(span) or FN_CALL.fullmatch(span):
-                    leaf = span.replace("()", "").split("::")[-1]
-                    if leaf not in words:
+                elif RUST_PATH.fullmatch(span):
+                    if path_is_dead(span):
+                        hits.setdefault(span, []).append(f"{doc.name}:{lineno}")
+                elif TYPE_NAME.fullmatch(span) or FN_CALL.fullmatch(span):
+                    if span.replace("()", "") not in words:
                         hits.setdefault(span, []).append(f"{doc.name}:{lineno}")
 
     # Every site, never a truncated list: capping the locations at four silently

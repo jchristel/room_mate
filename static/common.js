@@ -10,8 +10,10 @@
 // four into needing the bundle for no benefit. See CODING-CONVENTIONS.md,
 // "`static/`".
 //
-// settings.html and comparison.html both talk to the same settings API in the
-// same shape, so the two helpers below were byte-identical copies in each page.
+// The settings page and comparison.html both talk to the same settings API in
+// the same shape, so the two helpers below were byte-identical copies in the
+// hand-written settings.html and comparison.html; the React settings page reaches
+// them through src-js/settings/common.ts.
 // index.html keeps its own `fetchJson` (a GET-only variant with a different
 // error message) and does not use these.
 

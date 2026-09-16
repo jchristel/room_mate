@@ -1,5 +1,5 @@
-// Entry point for the React preview of the settings page. What the preview is
-// for, and what it is compared against, is in App.tsx's header.
+// Entry point for the React settings page. What the page is for, and what it
+// replaced, is in App.tsx's header.
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
