@@ -248,7 +248,11 @@ pub struct Item {
     ///
     /// Behind an `Arc` because every instance of a type holds the same bag --
     /// on RHH, 16,397 items in one model against 1,005 distinct bags.
-    #[serde(default, with = "super::property_codec::shared_map")]
+    #[serde(
+        default,
+        with = "super::property_codec::shared_map",
+        skip_serializing_if = "super::property_codec::is_empty"
+    )]
     pub type_properties: Arc<PropertyMap>,
 }
 

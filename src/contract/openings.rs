@@ -264,7 +264,11 @@ pub struct Opening {
     ///
     /// Behind an `Arc` because every instance of a type holds the same bag: one
     /// copy per distinct bag in a snapshot, not one per door.
-    #[serde(default, with = "super::property_codec::shared_map")]
+    #[serde(
+        default,
+        with = "super::property_codec::shared_map",
+        skip_serializing_if = "super::property_codec::is_empty"
+    )]
     pub type_properties: Arc<PropertyMap>,
 }
 
