@@ -27,10 +27,11 @@
 //! two call sites below instead.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::contract::{Item, ItemEnvelope, PropertyPresence};
+use crate::contract::{Item, ItemEnvelope, PropertyMap, PropertyPresence};
 use crate::reference::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, NestedComponents, ReferenceEntity, RoomResolution};
 use crate::state::{AppState, ModelKey};
@@ -47,6 +48,11 @@ use super::ServiceError;
 pub struct ItemResponse {
     #[serde(flatten)]
     pub item: Item,
+
+    /// This item's row in `FfeResult::type_property_sets`. See
+    /// `OpeningResponse::type_properties_ref`, which this mirrors exactly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_properties_ref: Option<u32>,
 
     /// The project this item's model belongs to.
     pub project_id: String,
@@ -195,6 +201,11 @@ pub struct FfeResult {
     /// same role and same construction as `RoomsResult::revision`.
     pub revision: String,
     pub ffe: Vec<ItemResponse>,
+    /// Each distinct type-property bag once; every item names its row in
+    /// `type_properties_ref`. On RHH this is what took the body from repeating
+    /// 1,005 bags across 38,913 items to sending each once. See
+    /// `service::type_table`.
+    pub type_property_sets: Vec<Arc<PropertyMap>>,
     /// The Revit phase each contributing model's items were filtered to, keyed
     /// by project id then model id. Read off each snapshot, never off the
     /// lineage's current phase.
@@ -356,6 +367,7 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
             let owner_rooms_qualified: Vec<RoomRef> = room_origin.room().cloned().into_iter().collect();
 
             let mut response = ItemResponse {
+                type_properties_ref: None,
                 owner_rooms: owner_rooms_qualified
                     .iter()
                     .filter(|r| r.model_id == payload.model.id)
@@ -394,10 +406,15 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
         }
     }
 
+    // Last, after every filter has read the type tier: the table MOVES each bag
+    // out of its item.
+    let type_property_sets =
+        super::type_table::tabulate(&mut items, |i| (&mut i.item.type_properties, &mut i.type_properties_ref));
     Ok(Some(FfeResult {
         schema_version: crate::contract::SUPPORTED_FFE_SCHEMA,
         revision,
         ffe: items,
+        type_property_sets,
         phase_by_model,
         levels_by_model,
         excluded_components,

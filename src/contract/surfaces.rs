@@ -111,13 +111,17 @@ pub struct Surface {
     /// Type properties, same tiering rule as doors: a tier wins only when it is
     /// `Present`, and a blank instance value does not shadow a real type one.
     /// Shared behind an `Arc`, one copy per distinct bag in a snapshot.
-    #[serde(default, with = "super::property_codec::shared_map")]
+    #[serde(
+        default,
+        with = "super::property_codec::shared_map",
+        skip_serializing_if = "super::property_codec::is_empty"
+    )]
     pub type_properties: Arc<PropertyMap>,
 
-    /// The type id, carried for the same reason a door's is — it is ready to
-    /// key a shared type table on the *wire* if the payload-size optimization
-    /// the entities doc defers is ever taken. Storage no longer needs it: the
-    /// stored table is keyed by content (`property_codec`).
+    /// The type id, carried for the same reason a door's is. Not the key of any
+    /// type table: both the stored one (`property_codec`) and the response one
+    /// (`service::type_table`) key by content, because nothing enforces one bag
+    /// per type id.
     #[serde(default)]
     pub type_id: Option<String>,
 

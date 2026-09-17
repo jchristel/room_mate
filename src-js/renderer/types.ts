@@ -175,7 +175,10 @@ export interface Door {
    *  means homeless** — a reported state, not a missing value. */
   owner_rooms?: string[];
   properties?: Record<string, PropertyValue>;
-  type_properties?: Record<string, PropertyValue>;
+  /** This element's row in the response's `type_property_sets`, which sends each
+   *  distinct family-type bag once. Indexes THAT payload only; absent when the
+   *  element has no type properties. */
+  type_properties_ref?: number;
 }
 
 /**
@@ -244,7 +247,10 @@ export interface Item {
    *  means homeless** — a reported state, not a missing value. */
   owner_rooms?: string[];
   properties?: Record<string, PropertyValue>;
-  type_properties?: Record<string, PropertyValue>;
+  /** This element's row in the response's `type_property_sets`, which sends each
+   *  distinct family-type bag once. Indexes THAT payload only; absent when the
+   *  element has no type properties. */
+  type_properties_ref?: number;
 }
 
 /** A rectangle in the **flipped** (Y-down) space — the same space as

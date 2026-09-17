@@ -347,6 +347,15 @@ pub mod map {
     }
 }
 
+/// `skip_serializing_if` for a type-property bag: an empty one is not written.
+///
+/// Absent and empty mean the same on every reader (`#[serde(default)]`), so this
+/// loses nothing -- and it is how a wire result drops each element's copy of its
+/// bag once `service::type_table` has moved the bag into the response's table.
+pub fn is_empty(map: &Arc<PropertyMap>) -> bool {
+    map.is_empty()
+}
+
 /// `#[serde(with = "property_codec::shared_map")]` for a type-property bag,
 /// `Arc<PropertyMap>`: stored as an index into the snapshot's table of bags.
 pub mod shared_map {

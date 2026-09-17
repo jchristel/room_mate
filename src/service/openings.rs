@@ -36,10 +36,11 @@
 //! now is.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::contract::{Opening, OpeningEnvelope, PropertyPresence};
+use crate::contract::{Opening, OpeningEnvelope, PropertyMap, PropertyPresence};
 use crate::reference::{ReferenceData, ReferenceRecord};
 use crate::settings::{BuiltinPropertyDef, ReferenceEntity, RoomResolution};
 use crate::state::{AppState, ModelKey};
@@ -63,6 +64,13 @@ use super::ServiceError;
 pub struct OpeningResponse {
     #[serde(flatten)]
     pub door: Opening,
+
+    /// This opening's row in the result's `type_property_sets`, set when a wire
+    /// result is built and `None` before -- see `service::type_table`. The bag
+    /// itself is moved out of `door.type_properties` at the same moment, so a
+    /// serialized opening carries one or the other, never both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_properties_ref: Option<u32>,
 
     /// The project this door's model belongs to.
     pub project_id: String,
@@ -287,6 +295,9 @@ pub struct DoorsResult {
     /// compares this one field instead of re-hashing the payload.
     pub revision: String,
     pub doors: Vec<OpeningResponse>,
+    /// Each distinct type-property bag once; every door names its row in
+    /// `type_properties_ref`. See `service::type_table`.
+    pub type_property_sets: Vec<Arc<PropertyMap>>,
     /// The Revit phase each contributing model's doors were filtered to, keyed
     /// by project id then model id. Read off each snapshot, never off the
     /// lineage's current phase.
@@ -299,10 +310,12 @@ pub struct DoorsResult {
 
 impl DoorsResult {
     pub fn from_assembled(assembled: Assembled) -> Self {
+        let mut openings = assembled.openings;
         Self {
             schema_version: crate::contract::SUPPORTED_DOOR_SCHEMA,
             revision: assembled.revision,
-            doors: assembled.openings,
+            type_property_sets: tabulate_openings(&mut openings),
+            doors: openings,
             phase_by_model: assembled.phase_by_model,
             levels_by_model: assembled.levels_by_model,
         }
@@ -316,20 +329,30 @@ pub struct WindowsResult {
     pub schema_version: u32,
     pub revision: String,
     pub windows: Vec<OpeningResponse>,
+    /// See `DoorsResult::type_property_sets`.
+    pub type_property_sets: Vec<Arc<PropertyMap>>,
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
     pub levels_by_model: BTreeMap<String, Vec<crate::contract::Level>>,
 }
 
 impl WindowsResult {
     pub fn from_assembled(assembled: Assembled) -> Self {
+        let mut openings = assembled.openings;
         Self {
             schema_version: crate::contract::SUPPORTED_WINDOW_SCHEMA,
             revision: assembled.revision,
-            windows: assembled.openings,
+            type_property_sets: tabulate_openings(&mut openings),
+            windows: openings,
             phase_by_model: assembled.phase_by_model,
             levels_by_model: assembled.levels_by_model,
         }
     }
+}
+
+/// The doors and windows use of `type_table::tabulate`: the one place an
+/// opening's bag field and row field are named.
+fn tabulate_openings(openings: &mut [OpeningResponse]) -> Vec<Arc<PropertyMap>> {
+    super::type_table::tabulate(openings, |o| (&mut o.door.type_properties, &mut o.type_properties_ref))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -540,6 +563,7 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
                 .collect();
 
             let mut response = OpeningResponse {
+                type_properties_ref: None,
                 // Same-model owners only, so the field keeps meaning exactly
                 // what it always did. A cross-model owner appears in
                 // `owner_rooms_qualified` and nowhere else.
@@ -724,12 +748,7 @@ mod tests {
       "to_room": "r2",
       "type_id": "t1",
       "type_name": "Single",
-      "type_properties": {
-        "Door Leaf Thickness": {
-          "storage_type": null,
-          "value": "40.0"
-        }
-      }
+      "type_properties_ref": 0
     }
   ],
   "levels_by_model": {
@@ -741,7 +760,15 @@ mod tests {
     }
   },
   "revision": "<pinned-out>",
-  "schema_version": 2
+  "schema_version": 2,
+  "type_property_sets": [
+    {
+      "Door Leaf Thickness": {
+        "storage_type": null,
+        "value": "40.0"
+      }
+    }
+  ]
 }"#;
 
     /// **The `/doors` response, pinned byte for byte.**

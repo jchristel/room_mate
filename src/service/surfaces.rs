@@ -22,10 +22,11 @@
 //! changes every answer and rewrites nothing.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::contract::{CeilingPayload, FloorPayload, Level, Surface, SurfaceEnvelope};
+use crate::contract::{CeilingPayload, FloorPayload, Level, PropertyMap, Surface, SurfaceEnvelope};
 use crate::settings::RoomResolution;
 use crate::state::{AppState, ModelKey};
 use crate::storage::SnapshotKind;
@@ -95,6 +96,10 @@ impl SurfaceKind {
 pub struct SurfaceResponse {
     #[serde(flatten)]
     pub surface: Surface,
+    /// This surface's row in the result's `type_property_sets`. See
+    /// `OpeningResponse::type_properties_ref`, which this mirrors exactly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_properties_ref: Option<u32>,
     pub project_id: String,
     /// The model that owns the surface — which is not necessarily the model
     /// that owns the rooms in `rooms` below, though on every document measured
@@ -127,6 +132,12 @@ pub struct Assembled {
     pub surfaces: Vec<SurfaceResponse>,
 }
 
+/// The ceilings and floors use of `type_table::tabulate`: the one place a
+/// surface's bag field and row field are named.
+fn tabulate_surfaces(surfaces: &mut [SurfaceResponse]) -> Vec<Arc<PropertyMap>> {
+    super::type_table::tabulate(surfaces, |s| (&mut s.surface.type_properties, &mut s.type_properties_ref))
+}
+
 /// The whole `/ceilings` body.
 #[derive(Debug, Clone, Serialize)]
 pub struct CeilingsResult {
@@ -134,11 +145,14 @@ pub struct CeilingsResult {
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
     pub levels_by_model: BTreeMap<String, Vec<Level>>,
     pub ceilings: Vec<SurfaceResponse>,
+    /// Each distinct type-property bag once; see `service::type_table`.
+    pub type_property_sets: Vec<Arc<PropertyMap>>,
 }
 
 impl From<Assembled> for CeilingsResult {
-    fn from(a: Assembled) -> Self {
+    fn from(mut a: Assembled) -> Self {
         Self {
+            type_property_sets: tabulate_surfaces(&mut a.surfaces),
             revision: a.revision,
             phase_by_model: a.phase_by_model,
             levels_by_model: a.levels_by_model,
@@ -155,11 +169,14 @@ pub struct FloorsResult {
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
     pub levels_by_model: BTreeMap<String, Vec<Level>>,
     pub floors: Vec<SurfaceResponse>,
+    /// Each distinct type-property bag once; see `service::type_table`.
+    pub type_property_sets: Vec<Arc<PropertyMap>>,
 }
 
 impl From<Assembled> for FloorsResult {
-    fn from(a: Assembled) -> Self {
+    fn from(mut a: Assembled) -> Self {
         Self {
+            type_property_sets: tabulate_surfaces(&mut a.surfaces),
             revision: a.revision,
             phase_by_model: a.phase_by_model,
             levels_by_model: a.levels_by_model,
@@ -253,6 +270,7 @@ pub fn assemble_surfaces<P: SurfacePayloadKind>(
             }
             surfaces.push(SurfaceResponse {
                 surface,
+                type_properties_ref: None,
                 project_id: project_id.clone(),
                 model_id: model.id.clone(),
                 source: model.source.clone(),

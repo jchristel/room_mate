@@ -3778,9 +3778,20 @@ function renderDoorInspector(host) {
   inst.sort((a, b) => a[0].localeCompare(b[0]));
   inspSection(host, "Instance properties", inspApplyFilters(inst));
 
-  const type = Object.entries(door.type_properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  const type = Object.entries(typePropertiesOf(doorsPoll.payload, door)).map(([k, v]) => [k, v?.value ?? ""]);
   type.sort((a, b) => a[0].localeCompare(b[0]));
   inspSection(host, "Type properties", inspApplyFilters(type));
+}
+
+// An element's family-type properties. An element read sends each distinct bag
+// ONCE, in `type_property_sets`, and each element names its row in
+// `type_properties_ref` -- the same bag on 1,000 chairs used to arrive 1,000
+// times, which on RHH was most of a 293 MB `/ffe` body. The row indexes THIS
+// payload only, so it is always resolved against the payload the element came
+// from. An element with no type properties names no row.
+function typePropertiesOf(payload, element) {
+  const row = element?.type_properties_ref;
+  return (row != null && payload?.type_property_sets?.[row]) || {};
 }
 
 // ---- the window inspector ---------------------------------------------------
@@ -3843,7 +3854,7 @@ function renderWindowInspector(host) {
   inst.sort((a, b) => a[0].localeCompare(b[0]));
   inspSection(host, "Instance properties", inspApplyFilters(inst));
 
-  const type = Object.entries(win.type_properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  const type = Object.entries(typePropertiesOf(windowsPoll.payload, win)).map(([k, v]) => [k, v?.value ?? ""]);
   type.sort((a, b) => a[0].localeCompare(b[0]));
   inspSection(host, "Type properties", inspApplyFilters(type));
 }
@@ -3926,7 +3937,7 @@ function renderItemInspector(host) {
   inst.sort((a, b) => a[0].localeCompare(b[0]));
   inspSection(host, "Instance properties", inspApplyFilters(inst));
 
-  const type = Object.entries(it.type_properties || {}).map(([k, v]) => [k, v?.value ?? ""]);
+  const type = Object.entries(typePropertiesOf(ffePoll.payload, it)).map(([k, v]) => [k, v?.value ?? ""]);
   type.sort((a, b) => a[0].localeCompare(b[0]));
   inspSection(host, "Type properties", inspApplyFilters(type));
 }

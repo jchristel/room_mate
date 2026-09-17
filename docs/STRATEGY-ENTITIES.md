@@ -173,21 +173,17 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   varying sample data — all 26 House A doors sit in `{"option_name": "-",
   "set_name": "Main Model"}` — so there is nothing to design against yet.
 
-- **Type-property deduplication on the wire.** Storage and memory already hold
-  one copy per distinct bag (`contract::property_codec`); what is left is the
-  push and the response, where `type_properties` still rides per instance. On
-  RHH that is most of `/ffe`'s body. A wire table is a contract change on both
-  ends — the extractor and every consumer of `/ffe`, `/doors`, `/windows`,
-  `/ceilings` and `/floors` — so take it **when the response size is what hurts,
-  not before**. `type_id` is on the wire ready to key it, though the stored table
-  deliberately keys by content instead: nothing enforces one bag per type id.
-
-  FF&E is what makes this worth measuring rather than deferring — hundreds of
-  instances per model against tens of openings. It is also where the shape of
-  the answer would show: an item's footprint is close to a *type* fact, so a
-  type table could carry a local-frame box and let every instance keep only its
-  placement. Close to, not exactly, because flexed instances of one type differ
-  — which is why FF&E ships with the footprint flattened per instance instead.
+- **A per-type footprint for FF&E.** Type properties are already sent once per
+  distinct bag (`service::type_table`); the footprint is not. An item's
+  footprint is close to a *type* fact, so a type table could carry a local-frame
+  box and let every instance keep only its placement. Close to, not exactly,
+  because flexed instances of one type differ — which is why FF&E ships with the
+  footprint flattened per instance instead. Take it when footprints arrive (they
+  are empty on every item today) and their size is measured to matter.
+- **Type-property deduplication on the PUSH.** Storage, memory and responses
+  hold one copy per distinct bag; the extractor still sends one per instance.
+  Push size has not been what hurts, so this waits for a measurement that says
+  it does — it is the only half of the change that would touch the extractor.
 
 - **Verifying the doors, windows and FF&E extractors against a live Revit
   document.** All three are verified by running their real translation over a

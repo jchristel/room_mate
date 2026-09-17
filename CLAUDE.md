@@ -33,7 +33,7 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   `type_properties` an index into a table of distinct bags, keyed by *content*
   (never `type_id` — nothing enforces one bag per type). Last because ingest
   streams; a reader looks only at the last line, so a legacy snapshot costs
-  nothing to detect and still reads. **Both wires are unchanged**: the field
+  nothing to detect and still reads. **The push wire is unchanged**: the field
   codecs write plain maps unless a thread-local `Encoder` is active, so never
   serialize a stored snapshot any way but `encode_snapshot`/`StreamingSnapshot`
   — `to_vec_pretty` would write maps with no trailer, which still reads, but
@@ -41,6 +41,15 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   `Arc<PropertyMap>`; that sharing, not the file, is most of the speed (RHH
   FF&E parse + clone: 29 s owned strings, 9 s dictionary expanded back to
   `String`, 4.3 s shared).
+- **Element responses send each type bag once, too** (`service::type_table`,
+  2026-09-17): `/doors`, `/windows`, `/ffe`, `/ceilings` and `/floors` carry a
+  top-level `type_property_sets` and each element a `type_properties_ref` row,
+  never an inline `type_properties`. **Built last** — when the wire result is
+  made from `Assembled` for openings and surfaces, at the very end of
+  `assemble_items` for FF&E — and the bag is *moved* out of the element, so anything
+  that reads the type tier (the property filter, milestone comparison) must run
+  on `Assembled`, before that step. A row indexes its own response only; the
+  viewer resolves it with `typePropertiesOf(payload, element)`.
 - **A writer dropped without committing must leave no trace**, and dropping is
   the *ordinary* path, not an error one: a rooms push is only known to be empty
   once its rooms have been counted, which is after writing has started. That is
@@ -549,10 +558,10 @@ with one, not here.
   release assembly 17.3 s → 3.4 s, `/validation` 14.5 s → 4.5 s, the whole
   local store 1,459 MB → 279 MB. **Only for snapshots written since** — a legacy
   snapshot still reads (9.1 s) but keeps its old layout until re-pushed, and
-  nothing rewrites the store for you. What is left is the 293 MB *body*, which
-  still repeats every type bag per item: that is the wire table
-  STRATEGY-ENTITIES defers, and `assemble_items` still clones each item into
-  its response.
+  nothing rewrites the store for you. The *body* sends each type bag once since
+  `service::type_table`: 279.6 MB → 133.2 MB. What is left is its size itself —
+  every storey in one poll, instance property keys repeated per item — and
+  `assemble_items` still clones each item into its response.
 - **RHH has no windows snapshot at all.** Not a code gap: `windows_export_entry`
   has simply never been run against it, so `/windows?project=RHH` answers 200
   with an empty list. The level-id fix above is what windows needed to be
