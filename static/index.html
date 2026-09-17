@@ -1622,6 +1622,8 @@ function selectLevel(zone, levelId) {
   zone.activeLevelId = levelId;
   renderLevel(zone, currentPayload, levelId, { refit: true });
   updateMeta(zone);
+  // The element layers only hold the storeys that WERE on screen.
+  onStoreysChanged();
   // The overlay follows via renderLevel; the bottom band's figures span all
   // levels, so a level switch doesn't touch them.
 }
@@ -4081,9 +4083,19 @@ function ownerRefs(element) {
 // 1,857 doors, 38,913 items). `renderInspector` runs on every keystroke in the
 // property filter, so that is the number that matters, and it is comfortably
 // under the ~50 ms a typist notices. No index, no memo: this is the "take the
-// optimization when measured, not before" rule the type-property dedup is
-// deferred under, applied to the one place someone would reach for a cache.
-function roomContents(roomId) {
+// optimization when measured, not before" rule, applied to the one place
+// someone would reach for a cache. (That figure predates storey-scoped reads;
+// the payloads scanned now are the storeys on screen, so it is a ceiling.)
+//
+// **The payloads hold only the storeys on screen**, so a room selected from the
+// rooms table or the search on a storey no zone shows has had its contents not
+// fetched at all -- and "none in this room" would be a false finding. Such a room
+// answers `hidden` instead. A layer still fetching after a storey switch answers
+// `pending`, not the previous storeys' answer.
+function roomContents(room) {
+  const roomId = room.id;
+  const storeys = visibleStoreys();
+  const storeyShown = !storeys || !storeys.length || storeys.some(l => String(l.id) === String(room.level_id));
   return ROOM_CONTENTS.map((spec) => {
     const matched = [];
     const models = new Set();
@@ -4105,7 +4117,14 @@ function roomContents(roomId) {
     // them.
     const empty = !spec.list().length;
     const fetched = spec.poll.fetchState;
-    const state = fetched === "loaded" && empty ? "empty" : fetched;
+    let state = fetched === "loaded" && empty ? "empty" : fetched;
+    if (!storeyShown) state = "hidden";
+    else if (state !== "error" && !spec.poll.isCurrent()) state = "pending";
+    // What is held for a storey not on screen, or for the storeys that were on
+    // screen before a switch, is not this room's answer -- listing it under a
+    // "not loaded yet" tally would contradict the tally. Only a current read
+    // lists rows or names claiming models.
+    if (state === "hidden" || state === "pending") return { spec, state, matched: [], models: new Set() };
     return { spec, state, matched, models };
   });
 }
@@ -4142,18 +4161,20 @@ function renderRoomContents(host, room) {
   // obvious case; a door and an item disagreeing is the same fact about the same
   // room id, and a per-entity check would miss it.
   const claiming = new Set();
-  for (const { spec, state, matched, models } of roomContents(room.id)) {
+  for (const { spec, state, matched, models } of roomContents(room)) {
     for (const model of models) claiming.add(model);
 
-    // The tally states a count, or WHY there is no count. Four states rather
-    // than one empty list, because they send a reader to four different places:
-    // "not loaded yet" is wait, "read failed" is a server problem, "none in
-    // this scope" is a project with no such entity pushed at all, and "none in
-    // this room" is the only one that is a fact about this room -- and for
-    // doors, the only one that is a finding.
+    // The tally states a count, or WHY there is no count. Five states rather
+    // than one empty list, because they send a reader to five different places:
+    // "not loaded yet" is wait, "read failed" is a server problem, "storey not
+    // on screen" is show that storey, "none in this scope" is nothing of this
+    // entity on the storeys shown, and "none in this room" is the only one that
+    // is a fact about this room -- and for doors, the only one that is a
+    // finding.
     let tally;
     let muted = true;
-    if (state === "pending") tally = "not loaded yet";
+    if (state === "hidden") tally = "storey not on screen — show it to list";
+    else if (state === "pending") tally = "not loaded yet";
     else if (state === "error") tally = "read failed";
     else if (state === "empty") tally = "none in this scope";
     else if (!matched.length) tally = "none in this room";
@@ -4359,6 +4380,61 @@ function roomsUrl() {
   return qs ? `/rooms?${qs}` : "/rooms";
 }
 
+// ---------------------------- storey-scoped reads ----------------------------
+//
+// Every element read asks only for the storeys some zone is SHOWING. They used
+// to ship every storey and let `onStorey` discard most of it in the browser --
+// on RHH, 38,913 items to draw the few hundred on the one or two floors being
+// looked at. The server keeps a SUPERSET of what `onStorey` can keep for these
+// storeys (see `service::entity_scope::StoreyScope`), so every storey decision,
+// and every "(by elevation)" / "(all levels)" label, comes out as it did.
+
+// The storeys on screen as Level objects, deduped: several zones may show one.
+// `null` when that cannot be known yet -- no rooms payload, so no level list --
+// in which case the element polls wait a tick rather than ask for everything.
+// Empty when the rooms carry no levels at all, which is `onStorey`'s show-all
+// case, and so an unscoped read.
+function visibleStoreys() {
+  if (!currentPayload) return null;
+  const shown = new Map();
+  for (const zone of zones) {
+    const level = levelById(zone.activeLevelId);
+    if (level) shown.set(String(level.id), level);
+  }
+  return [...shown.values()];
+}
+
+// Add the storey scope to an element read's parameters. False when the storeys
+// cannot be known yet, which the URL builders turn into "skip this poll".
+function withStoreys(params) {
+  const storeys = visibleStoreys();
+  if (storeys === null) return false;
+  if (storeys.length) {
+    params.set("storey_elevations", storeys.map(l => l.elevation).join(","));
+    params.set("storey_level_ids", storeys.map(l => l.id).join(","));
+  }
+  return true;
+}
+
+// Re-read the element layers when the set of storeys on screen changed: a level
+// switch, a zone added or removed, or a first rooms payload choosing each zone's
+// default. A switch between storeys already on screen changes nothing and asks
+// nothing. Until the new bodies land, each layer keeps drawing what it holds,
+// and `EntityPoll` drops any answer for a storey set that is no longer current.
+//
+// Keyed on a whole element URL rather than on the storey ids: level ids repeat
+// across projects, and a project switch that happened to land on the same ids
+// with different elevations must still re-ask.
+let lastStoreysKey = null;
+async function onStoreysChanged() {
+  const key = doorsUrl();
+  if (key === null) return;
+  if (key === lastStoreysKey) return;
+  lastStoreysKey = key;
+  if (await pollInOrder(ELEMENT_POLLS)) redrawAllZones();
+  syncLayerToggleLabels();
+}
+
 // The /doors URL, from the same global scope as roomsUrl.
 //
 // ONE CAVEAT WORTH KNOWING: `building` scopes a door through the room it is
@@ -4371,6 +4447,7 @@ function doorsUrl() {
   if (projectId) params.set("project", projectId);
   if (buildingKey) params.set("building", buildingKey);
   if (projectId && milestone) params.set("milestone", milestone);
+  if (!withStoreys(params)) return null;
   const qs = params.toString();
   return qs ? `/doors?${qs}` : "/doors";
 }
@@ -4394,6 +4471,7 @@ function windowsUrl() {
   if (projectId) params.set("project", projectId);
   if (buildingKey) params.set("building", buildingKey);
   if (projectId && milestone) params.set("milestone", milestone);
+  if (!withStoreys(params)) return null;
   const qs = params.toString();
   return qs ? `/windows?${qs}` : "/windows";
 }
@@ -4415,6 +4493,7 @@ function ffeUrl() {
   if (projectId) params.set("project", projectId);
   if (buildingKey) params.set("building", buildingKey);
   if (projectId && milestone) params.set("milestone", milestone);
+  if (!withStoreys(params)) return null;
   const qs = params.toString();
   return qs ? `/ffe?${qs}` : "/ffe";
 }
@@ -4440,6 +4519,7 @@ function spacesUrl() {
   if (projectId) params.set("project", projectId);
   if (spacesModel) params.set("model", spacesModel);
   if (projectId && milestone) params.set("milestone", milestone);
+  if (!withStoreys(params)) return null;
   const qs = params.toString();
   return qs ? `/spaces?${qs}` : "/spaces";
 }
@@ -4452,6 +4532,7 @@ function ceilingsUrl() {
   const params = new URLSearchParams();
   if (projectId) params.set("project", projectId);
   if (projectId && milestone) params.set("milestone", milestone);
+  if (!withStoreys(params)) return null;
   const qs = params.toString();
   return qs ? `/ceilings?${qs}` : "/ceilings";
 }
@@ -4461,6 +4542,7 @@ function floorsUrl() {
   const params = new URLSearchParams();
   if (projectId) params.set("project", projectId);
   if (projectId && milestone) params.set("milestone", milestone);
+  if (!withStoreys(params)) return null;
   const qs = params.toString();
   return qs ? `/floors?${qs}` : "/floors";
 }
@@ -4627,6 +4709,10 @@ async function poll() {
     if (payload && incoming !== lastRevision) {
       lastRevision = incoming;
       ingestAll(payload); // re-fits + rebuilds level controls only on real change
+      // The element polls above ran before this payload said which storeys are
+      // on screen -- on first load they could not ask at all -- so ask again now
+      // that it has. A no-op when the storeys did not move.
+      await onStoreysChanged();
     } else if (elementsChanged) {
       // An element entity moved and rooms did not. Repaint in place: no refit,
       // because such a push must not throw away the user's pan and zoom.
@@ -4930,6 +5016,7 @@ function removeZone() {
   zone.renderer.destroy?.();
   zone.root.remove();
   setLayout();
+  onStoreysChanged();
 }
 
 // Hard ceiling on open zones, and it exists for the GL renderer specifically.
@@ -5047,11 +5134,14 @@ document.getElementById("addZone").addEventListener("click", () => {
   if (zones.length >= MAX_ZONES) return; // see MAX_ZONES; the button is disabled too
   const zone = createZone();
   setLayout();
-  // Catch the new zone up from the globals — no refetch needed: the payload
-  // and colour plans are already in memory, and QA/areas results live in the
-  // bottom band, which is page-level and already rendered.
+  // Catch the new zone up from the globals — no refetch needed for the rooms:
+  // the payload and colour plans are already in memory, and QA/areas results
+  // live in the bottom band, which is page-level and already rendered. The
+  // element layers are the exception: they hold only the storeys that were on
+  // screen, and this zone may show another.
   applyColourPlans(zone);
   ingestZone(zone);
+  onStoreysChanged();
 });
 
 document.getElementById("removeZone").addEventListener("click", removeZone);

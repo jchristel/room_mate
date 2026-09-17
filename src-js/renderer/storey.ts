@@ -8,9 +8,12 @@
 // below for what it costs. This module is the spaces answer, generalised,
 // tightened, and given the tests the inline versions never had.
 //
-// **Nothing here draws.** It is a pure filter over already-fetched payloads, so
-// a level switch pays a scan and no fetch, which is what the viewer's poll loop
-// assumes.
+// **Nothing here draws.** It is a pure filter over already-fetched payloads.
+// Those payloads are themselves narrowed server-side to the storeys on screen
+// (`service::entity_scope::StoreyScope`), so a switch to a storey no zone was
+// showing costs a fetch. The server keeps a SUPERSET of what this module can
+// keep for the storeys it was asked about, which is what lets this stay the one
+// rule: change the rule here and that superset has to be re-checked there.
 
 import type { Level } from "./types.js";
 

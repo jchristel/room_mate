@@ -147,6 +147,9 @@ pub struct SpaceScope<'a> {
     pub model: Option<&'a str>,
     pub milestone: Option<&'a str>,
     pub filter: Option<&'a RoomFilter>,
+    /// The storeys the viewer is showing; `None` reads every storey. See
+    /// `entity_scope::StoreyScope`.
+    pub storeys: Option<&'a entity_scope::StoreyScope>,
 }
 
 /// One assembled `/spaces` response.
@@ -215,6 +218,8 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
     let levels_by_model = entity_scope::levels_by_model(&scoped);
+    // Resolved once per read, asked once per space below.
+    let storeys = scope.storeys.map(|s| s.admitter(&levels_by_model));
     // From the manifest index, so the frame matches `/rooms` -- see
     // `service::placement::from_index`. THE entity this exists for: RHH's five
     // services models are exported from an origin ~250 ft from the
@@ -241,6 +246,9 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
         let model_frame = placement.for_model(&payload.project.id, &payload.model.id);
 
         for space in &payload.spaces {
+            if storeys.as_ref().is_some_and(|s| !s.admits(&payload.model.id, &space.level_id)) {
+                continue;
+            }
             let reference: BTreeMap<String, ReferenceRecord> = sources
                 .iter()
                 .filter_map(|(name, data)| {
@@ -858,7 +866,7 @@ mod tests {
     }
 
     fn scope<'a>() -> SpaceScope<'a> {
-        SpaceScope { project: None, model: None, milestone: None, filter: None }
+        SpaceScope { project: None, model: None, milestone: None, filter: None, storeys: None }
     }
 
     /// **Nothing pushed and pushed-but-empty are different answers**, and the

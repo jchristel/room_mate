@@ -220,6 +220,10 @@ pub struct OpeningScope<'a> {
     pub building: Option<&'a str>,
     pub milestone: Option<&'a str>,
     pub filter: Option<&'a RoomFilter>,
+    /// The storeys the viewer is showing, when it says; `None` reads every
+    /// storey. See `entity_scope::StoreyScope` for why the body is a superset of
+    /// what the viewer draws rather than exactly it.
+    pub storeys: Option<&'a entity_scope::StoreyScope>,
 }
 
 /// One assembled read, before it is named for an entity.
@@ -449,6 +453,8 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
     let levels_by_model = entity_scope::levels_by_model(&scoped);
+    // Resolved once per read, asked once per opening below.
+    let storeys = scope.storeys.map(|s| s.admitter(&levels_by_model));
     // From the manifest index, not from `scoped`: the frame has to match the one
     // `/rooms` used, and the two reads scope different models. See
     // `service::placement::from_index`.
@@ -524,6 +530,11 @@ pub fn assemble_openings<P: OpeningEnvelope + serde::de::DeserializeOwned>(
         let model_frame = placement.for_model(&payload.project().id, &payload.model().id);
 
         for door in payload.openings() {
+            // First, so an opening on a storey nobody is looking at costs no
+            // join, no probe and no clone.
+            if storeys.as_ref().is_some_and(|s| !s.admits(&payload.model().id, &door.level_id)) {
+                continue;
+            }
             // One join per configured source: read its link property off the
             // DOOR -- instance tier then type tier, the R2 rule -- and look up
             // the record. `lookup_property` is the same function rooms use; a

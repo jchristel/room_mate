@@ -2012,7 +2012,7 @@ pub struct RoomsQuery {
 /// building switch look like "nothing changed". Hashing the parsed fields rather
 /// than the raw query string also means `?a=1&b=2` and `?b=2&a=1` agree, which
 /// a raw-string tag would not.
-fn etag_for(cursor: &str, scope: [Option<&str>; 4]) -> String {
+fn etag_for(cursor: &str, scope: &[Option<&str>]) -> String {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -2021,6 +2021,17 @@ fn etag_for(cursor: &str, scope: [Option<&str>; 4]) -> String {
     // Quoted: a bare token is not a legal entity tag, and a proxy that
     // normalises one would break the comparison below.
     format!("\"{:016x}\"", hasher.finish())
+}
+
+/// The storey scope an element read was asked for, or a 400 naming the bad
+/// value -- the property filter's convention, since a typo that silently read
+/// every storey would look exactly like a slow server.
+fn parse_storeys(
+    elevations: Option<&str>,
+    level_ids: Option<&str>,
+) -> Result<Option<crate::service::entity_scope::StoreyScope>, (StatusCode, String)> {
+    crate::service::entity_scope::StoreyScope::parse(elevations, level_ids)
+        .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))
 }
 
 /// Whether the client already holds this exact entity — an `If-None-Match` hit.
@@ -2074,7 +2085,7 @@ pub async fn get_rooms(
         scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Rooms]).map_err(map_service_error)?;
     let etag = etag_for(
         &cursor,
-        [
+        &[
             query.project.as_deref(),
             query.building.as_deref(),
             query.milestone.as_deref(),
@@ -2113,6 +2124,13 @@ pub struct SpacesQuery {
     pub milestone: Option<String>,
     #[serde(default)]
     pub filter: Option<String>,
+    /// The storeys the viewer is showing, as two comma-separated lists: their
+    /// elevations and their level ids. Omitted, every storey is read. See
+    /// `service::entity_scope::StoreyScope`.
+    #[serde(default)]
+    pub storey_elevations: Option<String>,
+    #[serde(default)]
+    pub storey_level_ids: Option<String>,
 }
 
 /// `service::validation::compute_project_validation`.
@@ -2132,6 +2150,13 @@ pub struct DoorsQuery {
     /// `$from_room` and `$to_room`.
     #[serde(default)]
     pub filter: Option<String>,
+    /// The storeys the viewer is showing, as two comma-separated lists: their
+    /// elevations and their level ids. Omitted, every storey is read. See
+    /// `service::entity_scope::StoreyScope`.
+    #[serde(default)]
+    pub storey_elevations: Option<String>,
+    #[serde(default)]
+    pub storey_level_ids: Option<String>,
 }
 
 /// The doors read. Mirrors `get_rooms`, minus `?building=` — a door's building
@@ -2156,11 +2181,13 @@ pub async fn get_doors(
         .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
         .filter(|f| !f.is_empty());
 
+    let storeys = parse_storeys(query.storey_elevations.as_deref(), query.storey_level_ids.as_deref())?;
     let scope = openings::OpeningScope {
         project: query.project.as_deref(),
         building: query.building.as_deref(),
         milestone: query.milestone.as_deref(),
         filter: filter.as_ref(),
+        storeys: storeys.as_ref(),
     };
 
     // Both kinds, because a doors response is not a function of doors alone:
@@ -2170,11 +2197,13 @@ pub async fn get_doors(
         .map_err(map_service_error)?;
     let etag = etag_for(
         &cursor,
-        [
+        &[
             query.project.as_deref(),
             query.building.as_deref(),
             query.milestone.as_deref(),
             query.filter.as_deref(),
+            query.storey_elevations.as_deref(),
+            query.storey_level_ids.as_deref(),
         ],
     );
     if is_fresh(&headers, &etag) {
@@ -2219,11 +2248,13 @@ pub async fn get_ffe(
         .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
         .filter(|f| !f.is_empty());
 
+    let storeys = parse_storeys(query.storey_elevations.as_deref(), query.storey_level_ids.as_deref())?;
     let scope = items::ItemScope {
         project: query.project.as_deref(),
         building: query.building.as_deref(),
         milestone: query.milestone.as_deref(),
         filter: filter.as_ref(),
+        storeys: storeys.as_ref(),
     };
 
     // Both kinds, because an FF&E response is not a function of FF&E alone:
@@ -2233,11 +2264,13 @@ pub async fn get_ffe(
         .map_err(map_service_error)?;
     let etag = etag_for(
         &cursor,
-        [
+        &[
             query.project.as_deref(),
             query.building.as_deref(),
             query.milestone.as_deref(),
             query.filter.as_deref(),
+            query.storey_elevations.as_deref(),
+            query.storey_level_ids.as_deref(),
         ],
     );
     if is_fresh(&headers, &etag) {
@@ -2272,22 +2305,26 @@ pub async fn get_spaces(
         .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
         .filter(|f| !f.is_empty());
 
+    let storeys = parse_storeys(query.storey_elevations.as_deref(), query.storey_level_ids.as_deref())?;
     let scope = spaces::SpaceScope {
         project: query.project.as_deref(),
         model: query.model.as_deref(),
         milestone: query.milestone.as_deref(),
         filter: filter.as_ref(),
+        storeys: storeys.as_ref(),
     };
 
     let cursor =
         scope_cursor(&state, scope.project, scope.milestone, &[SnapshotKind::Spaces]).map_err(map_service_error)?;
     let etag = etag_for(
         &cursor,
-        [
+        &[
             query.project.as_deref(),
             query.model.as_deref(),
             query.milestone.as_deref(),
             query.filter.as_deref(),
+            query.storey_elevations.as_deref(),
+            query.storey_level_ids.as_deref(),
         ],
     );
     if is_fresh(&headers, &etag) {
@@ -2688,6 +2725,13 @@ pub struct SurfacesQuery {
     pub project: Option<String>,
     #[serde(default)]
     pub milestone: Option<String>,
+    /// The storeys the viewer is showing, as two comma-separated lists: their
+    /// elevations and their level ids. Omitted, every storey is read. See
+    /// `service::entity_scope::StoreyScope`.
+    #[serde(default)]
+    pub storey_elevations: Option<String>,
+    #[serde(default)]
+    pub storey_level_ids: Option<String>,
 }
 
 /// The shared read behind `/ceilings` and `/floors`: `R` names the body.
@@ -2697,7 +2741,12 @@ fn get_surfaces<P: SurfacePayloadKind, R: From<surfaces::Assembled> + Serialize>
     query: &SurfacesQuery,
 ) -> Result<Response, (StatusCode, String)> {
     let kind = SurfaceKind::of::<P>();
-    let scope = surfaces::SurfaceScope { project: query.project.as_deref(), milestone: query.milestone.as_deref() };
+    let storeys = parse_storeys(query.storey_elevations.as_deref(), query.storey_level_ids.as_deref())?;
+    let scope = surfaces::SurfaceScope {
+        project: query.project.as_deref(),
+        milestone: query.milestone.as_deref(),
+        storeys: storeys.as_ref(),
+    };
 
     // The cursor covers ROOMS as well as the entity, which no reference-joined
     // entity read needs to do. Attribution is derived from the rooms in scope,
@@ -2706,10 +2755,16 @@ fn get_surfaces<P: SurfacePayloadKind, R: From<surfaces::Assembled> + Serialize>
     // after the rooms moved underneath it.
     let cursor = scope_cursor(state, scope.project, scope.milestone, &[kind.snapshot_kind(), SnapshotKind::Rooms])
         .map_err(map_service_error)?;
-    // Four slots because `etag_for` takes a fixed-width scope tuple; these
-    // reads vary on two of them and pass None for the parameters they do not
-    // offer. The kind needs no slot: the cursor already hashes it.
-    let etag = etag_for(&cursor, [query.project.as_deref(), query.milestone.as_deref(), None, None]);
+    // The kind needs no slot: the cursor already hashes it.
+    let etag = etag_for(
+        &cursor,
+        &[
+            query.project.as_deref(),
+            query.milestone.as_deref(),
+            query.storey_elevations.as_deref(),
+            query.storey_level_ids.as_deref(),
+        ],
+    );
     if is_fresh(headers, &etag) {
         return Ok(not_modified(&etag));
     }
@@ -2765,11 +2820,13 @@ pub async fn get_windows(
         .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
         .filter(|f| !f.is_empty());
 
+    let storeys = parse_storeys(query.storey_elevations.as_deref(), query.storey_level_ids.as_deref())?;
     let scope = openings::OpeningScope {
         project: query.project.as_deref(),
         building: query.building.as_deref(),
         milestone: query.milestone.as_deref(),
         filter: filter.as_ref(),
+        storeys: storeys.as_ref(),
     };
 
     // Both kinds, because a doors response is not a function of doors alone:
@@ -2779,11 +2836,13 @@ pub async fn get_windows(
         .map_err(map_service_error)?;
     let etag = etag_for(
         &cursor,
-        [
+        &[
             query.project.as_deref(),
             query.building.as_deref(),
             query.milestone.as_deref(),
             query.filter.as_deref(),
+            query.storey_elevations.as_deref(),
+            query.storey_level_ids.as_deref(),
         ],
     );
     if is_fresh(&headers, &etag) {
@@ -3323,7 +3382,14 @@ mod tests {
             let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
             serde_json::from_slice::<serde_json::Value>(&bytes).expect("json")
         };
-        let query = || Query(SurfacesQuery { project: Some("p1".to_string()), milestone: None });
+        let query = || {
+            Query(SurfacesQuery {
+                project: Some("p1".to_string()),
+                milestone: None,
+                storey_elevations: None,
+                storey_level_ids: None,
+            })
+        };
 
         let floors = read(get_floors(State(state.clone()), HeaderMap::new(), query()).await.expect("read")).await;
         assert!(
@@ -3754,6 +3820,8 @@ mod tests {
             building: None,
             milestone: None,
             filter: None,
+            storey_elevations: None,
+            storey_level_ids: None,
         };
         let response = get_doors(State(state), HeaderMap::new(), Query(query)).await.unwrap();
 
@@ -5179,7 +5247,14 @@ mod tests {
         .await
         .expect("accepted");
 
-        let query = DoorsQuery { project: Some("p1".to_string()), building: None, milestone: None, filter: None };
+        let query = DoorsQuery {
+            project: Some("p1".to_string()),
+            building: None,
+            milestone: None,
+            filter: None,
+            storey_elevations: None,
+            storey_level_ids: None,
+        };
         let response = get_windows(State(state), HeaderMap::new(), Query(query)).await.expect("read");
         assert_eq!(response.status(), StatusCode::OK);
 

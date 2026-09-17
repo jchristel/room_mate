@@ -121,6 +121,10 @@ pub struct SurfaceResponse {
 pub struct SurfaceScope<'a> {
     pub project: Option<&'a str>,
     pub milestone: Option<&'a str>,
+    /// The storeys the viewer is showing; `None` reads every storey. Narrows
+    /// which surfaces are served, never which rooms they are attributed
+    /// against. See `entity_scope::StoreyScope`.
+    pub storeys: Option<&'a entity_scope::StoreyScope>,
 }
 
 /// A surface read before it is named for its entity. See `openings::Assembled`,
@@ -203,6 +207,8 @@ pub fn assemble_surfaces<P: SurfacePayloadKind>(
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
     let levels_by_model = entity_scope::levels_by_model(&scoped);
+    // Resolved once per read, asked once per surface below.
+    let storeys = scope.storeys.map(|s| s.admitter(&levels_by_model));
     let placement = super::placement::from_index(state)?;
 
     // Phase 2 -- the room candidates, once per project.
@@ -243,6 +249,10 @@ pub fn assemble_surfaces<P: SurfacePayloadKind>(
         let candidates = candidates_by_project.get(project_id);
 
         for surface in payload.surfaces() {
+            // Before attribution, which is the expensive half of this read.
+            if storeys.as_ref().is_some_and(|s| !s.admits(&model.id, &surface.level_id)) {
+                continue;
+            }
             // Attribution runs in the MODEL's own frame, before placement --
             // the room candidates were built in that frame too under
             // `SameModel`, so placing the surface first would compare a placed
