@@ -166,6 +166,21 @@ otherwise from its values. An incomplete condition (no value yet) is left out
 of evaluation rather than failing, so a half-built filter never empties the
 preview.
 
+**Text comparison ignores case unless the condition says otherwise** (decided
+2026-09-18). Every text operator — is, is not, contains, starts with, ends
+with — is case-insensitive by default, with a **Match case** toggle on the
+condition for the rare time someone means `CLG` and not `clg`. Stored as a
+`case_sensitive` flag on the predicate, defaulting false, so the default is
+also what an unset field means. A modeller's capitalisation is not data, and a
+report that silently misses `Plasterboard` because the user typed
+`plasterboard` is wrong in the way that never gets noticed.
+
+That is one rule everywhere, so **`=` in `?filter=` becomes case-insensitive
+too**, matching the `~` beside it. It is a behaviour change for programmatic
+callers, and the honest one: the alternative is two spellings of equality that
+differ invisibly. The query string has no way to *ask* for case sensitivity;
+`==` is the obvious spelling if anything ever needs one, and nothing does yet.
+
 **In an association report, every field names its side**: room, the associated
 entity, or the join (`overlap_area`, `% of room`). The side is a separate
 field in the stored definition, never a prefix in the field name. The
@@ -188,12 +203,46 @@ named `room`.
 3. **Explicit blank tests.** Today an empty value is a parse error, and an
    absent or blank property matches no operator at all.
 
-**That last rule stays, and the form has to show it**, because a user will not
-expect it: **`Department is not Living` also drops every room with no
-Department.** It is the right rule, since a missing value is not evidence of
-anything. But a "does not" condition in the builder carries a one-line note and
-a **Keep blanks too** action. The action rewrites the condition into
-`any(is not Living, is blank)`; the rule itself does not change.
+**That last rule stays for a ROOM property, and the form has to show it**,
+because a user will not expect it: **`Department is not Living` also drops
+every room with no Department.** It is the right rule, since a missing value is
+not evidence of anything. But a "does not" condition in the builder carries a
+one-line note and a **Keep blanks too** action. The action rewrites the
+condition into `any(is not Living, is blank)`; the rule itself does not change.
+
+### A condition on the associated side asks about the SET, not the row
+
+Decided 2026-09-18, and it is the rule the missing-value rule cannot give:
+
+> "Ceiling type is X" and "ceiling type is not X" are not each other's
+> complement over one row. They are `EXISTS` and `NOT EXISTS` over the
+> **room's matched ceilings**.
+
+- **`Ceiling.Type is X`** keeps a room when at least one of its ceilings is X,
+  and keeps that ceiling's rows. **A room with no ceilings is not a match** —
+  it cannot have one of type X. This holds even with "include rooms with no
+  ceilings" ticked: an explicit condition outranks a default.
+- **`Ceiling.Type is not X`** keeps a room when **none** of its ceilings is X,
+  and **a room with no ceilings is a match**: nothing it has is X. So the room
+  is dropped whole if *any* of its ceilings is X — the negation quantifies over
+  the set, and per-row negation would answer a different question, keeping the
+  room because of its other ceilings.
+
+**Per-row evaluation is the trap here.** "Rooms without a type X ceiling" is
+the question people actually ask of this data, and a per-row filter answers
+"ceilings that are not X", which lists almost every room. The two differ only
+on the rooms the user cares about.
+
+So the two unmatched-row switches state the **default**, and a condition on the
+associated side overrides it for the rooms it speaks about: a positive
+condition excludes rooms with none, a negative one includes them. The preview
+says which is in force, for the reason every fallback in this codebase
+announces itself.
+
+An **any** group mixing a room condition with a negative associated one is the
+one shape whose reading is genuinely ambiguous. The builder keeps negative
+associated conditions in **all** groups and says so, rather than picking a
+quantifier the user cannot see.
 
 ## Cardinality is the design problem, not the picker
 
@@ -266,53 +315,85 @@ scale: `/ffe` is 273 MB / 94 s and `/ceilings` 33 s (see `CLAUDE.md`, "Open").
   `/ceilings`' already covers rooms: attribution derives from the rooms in
   scope, so a rooms push alone changes the answer.
 
-## Saved reports
+## Saved reports are documents, not settings
 
-**Server-side, in project settings** — shareable and per project, which is
-[Browser](STRATEGY-BROWSER.md)'s standing answer to "users re-pick the same
-columns" rather than `localStorage`. A sketch, scalars first for the TOML
-ordering rule:
+**Server-side**, which is [Browser](STRATEGY-BROWSER.md)'s standing answer to
+"users re-pick the same columns" rather than `localStorage`. **But one JSON
+document per report, beside the project settings — not a `[[reports]]` block
+inside them** (decided 2026-09-18).
 
-```toml
-[[reports]]
-name = "Ceilings by room"
-type = "by_room.ceilings"         # a registry id: schedule.rooms, cmp.rooms, ...
-shape = "per_match"               # per_match | per_room
-include_rooms_without = false
-include_unattributed = true
-room_columns = ["Number", "Name", "Level"]
-associated_columns = ["Type", "Height Offset From Level"]
-measures = ["overlap_area", "fraction_of_room"]
+**The line is what a thing does to an answer.** A *setting* changes what every
+read means: `room_attribution` re-owns every door, the space key re-matches
+every space, the area policy re-measures every room. A saved report changes
+nothing — delete one and every other answer in the system is identical. That is
+the test for the next thing that wants a home: if removing it would change an
+answer somewhere else, it is a setting; if it only stops a question being asked
+twice, it is a document.
 
-[reports.filter]                  # Level 00 AND (plasterboard OR >= 90% of room)
-mode = "all"
-[[reports.filter.items]]
-side = "room"
-field = "Level"
-op = "eq"
-value = "LEVEL 00"
-[[reports.filter.items]]
-mode = "any"
-items = [
-  { side = "ceilings", field = "Type", op = "contains", value = "plasterboard" },
-  { side = "join", field = "fraction_of_room", op = "ge", value = "0.9" },
-]
+Four consequences follow, and each is a cost the settings file would carry for
+no gain:
+
+- **Validation blast radius.** A settings file is validated through
+  `bootstrap::load_project_bundle` on save *and* on every boot, which is what
+  makes "a file this API accepts can never fail the next boot" true. Putting
+  report definitions in it means a malformed report can fail a project's
+  settings — so a saved question could stop rooms being served. As a separate
+  document, a broken report is one broken row on one page.
+- **Read-modify-write.** Every settings save rewrites the whole file and
+  hot-swaps the registry. That is the exact path that silently emptied every
+  milestone's pins, and `merge_over_stored` exists because of it. One file per
+  report means a report save touches one report, and two people saving
+  different reports cannot clobber each other.
+- **The settings page's exhaustiveness rule keeps its teeth.** A field on a
+  settings type with no control there is a type error *on purpose* — the page
+  cannot silently stop exposing a setting. Reports would be the first
+  deliberate exemption, and an exemption is how that rule starts eroding. The
+  reports page is their editor; the settings page never needs to know they
+  exist.
+- **TOML is the wrong shape for a filter tree.** Arbitrary nesting is where
+  array-of-tables syntax turns unreadable, and the TOML ordering footgun in
+  [Coding Conventions](CODING-CONVENTIONS.md) lives in exactly that shape. JSON
+  holds a tree natively and round-trips what the builder produced.
+
+**Where:** beside the project settings, in the settings directory — not in the
+snapshot store. The store's discipline is append-only history, and a report is
+edited in place; a mutable document in an immutable store is a rule waiting to
+be broken. Sketch: `<projects_dir>/reports/<project-id>/<report-id>.json`,
+written temp-then-rename, id checked with `is_path_safe_component` like every
+other path component from a request. Its CRUD is the reports page's own routes
+(list, read, save, delete), not `/api/settings`.
+
+**The definition type still lives in `roommate-shared` with ts-rs**, so the
+reports page's TypeScript is generated and the committed-copy CI gate covers
+it. What it does *not* do is join `Settings`.
+
+A sketch of one document:
+
+```json
+{
+  "name": "Ceilings by room",
+  "type": "by_room.ceilings",
+  "shape": "per_match",
+  "include_rooms_without": false,
+  "include_unattributed": true,
+  "room_columns": ["Number", "Name", "Level"],
+  "associated_columns": ["Type", "Height Offset From Level"],
+  "measures": ["overlap_area", "fraction_of_room"],
+  "filter": {
+    "mode": "all",
+    "items": [
+      { "side": "room", "field": "Level", "op": "eq", "value": "LEVEL 00" },
+      { "mode": "any", "items": [
+        { "side": "ceilings", "field": "Type", "op": "contains", "value": "plasterboard" },
+        { "side": "join", "field": "fraction_of_room", "op": "ge", "value": "0.9" }
+      ] }
+    ]
+  }
+}
 ```
-
-**The filter tree is where TOML starts to hurt.** Two levels already read
-badly, and a tree is exactly the nested table-in-array shape the TOML ordering
-rule in [Coding Conventions](CODING-CONVENTIONS.md) guards against. That is an
-argument for storing a report's definition as a JSON document beside the
-project settings rather than inside them. It is an open question below, not a
-decision.
 
 ## Open questions
 
-- **Who owns editing `[[reports]]`.** A field added to a settings type in
-  `roommate-shared` is a type error on the settings page until it has a control
-  there — deliberately. Either the settings page gets a control, or the reports
-  page is the sole editor and that exclusion is made explicit. Decide before
-  adding the field, not after the type error.
 - **Does a changed rule move the ETag?** Changing `room_attribution` or the
   space key changes every report row without any push. Check how the existing
   entity reads' cursors treat a settings change before assuming the report's
@@ -322,22 +403,6 @@ decision.
   CSV route is unmeasured — measure it, per [Index](STRATEGY.md)'s caveat.
 - **CSV export client-side or server-side.** Client-side from the rows already
   fetched is free until the volume question says otherwise.
-- **Report definitions: TOML in settings, or JSON beside them.** Filter trees
-  push hard towards JSON. Settings, though, are where "shareable per project"
-  already works, milestone pins included. Decide together with the
-  `[[reports]]` ownership question above.
-- **Should text "is" ignore case?** The builder is friendlier if it does. But
-  `=` in `?filter=` is exact today, and `numeric_match` tolerates `25.50` =
-  `25.5`. Recommended: the builder's text operators ignore case, while the query
-  string's `=` keeps its meaning and gains no new one. That means the tree needs
-  a case-insensitive equality operator of its own, not a change to `Op::Eq`.
-- **What a filter does to an unmatched row.** A room with no ceilings has no
-  ceiling fields, so under the missing-value rule any AND'd ceiling condition
-  drops it, even with "include rooms with no ceilings" ticked. That is
-  consistent, but probably not what someone asking "Living rooms and their
-  plasterboard ceilings, including rooms with none" means. The likely answer is
-  that conditions on the associated side filter *matches* and never remove a
-  room outright. Settle it against a real request before building.
 - **Doors and windows in v1.** Not asked for. They fit the same definition and
   cost a row in the association list, so they are in the shape but out of the
   first build.
