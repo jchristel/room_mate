@@ -439,6 +439,9 @@ impl RoommateMcp {
             building: p.building.as_deref(),
             milestone: p.milestone.as_deref(),
             filter: Some(&filter).filter(|f| !f.is_empty()),
+            // Every storey: a storey scope is how the viewer narrows its polls to
+            // what it is drawing, and a tool caller is drawing nothing.
+            storeys: None,
         };
         let result = openings::assemble_openings::<roommate::contract::DoorPayload>(
             &self.state,
@@ -479,6 +482,9 @@ impl RoommateMcp {
             building: p.building.as_deref(),
             milestone: p.milestone.as_deref(),
             filter: Some(&filter).filter(|f| !f.is_empty()),
+            // Every storey: a storey scope is how the viewer narrows its polls to
+            // what it is drawing, and a tool caller is drawing nothing.
+            storeys: None,
         };
         let result = openings::assemble_openings::<roommate::contract::WindowPayload>(
             &self.state,
@@ -526,6 +532,9 @@ impl RoommateMcp {
             building: p.building.as_deref(),
             milestone: p.milestone.as_deref(),
             filter: Some(&filter).filter(|f| !f.is_empty()),
+            // Every storey: a storey scope is how the viewer narrows its polls to
+            // what it is drawing, and a tool caller is drawing nothing.
+            storeys: None,
         };
         match items::assemble_items(&self.state, &scope).map_err(to_mcp_error)? {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -561,6 +570,9 @@ impl RoommateMcp {
             model: p.model.as_deref(),
             milestone: p.milestone.as_deref(),
             filter: Some(&filter).filter(|f| !f.is_empty()),
+            // Every storey: a storey scope is how the viewer narrows its polls to
+            // what it is drawing, and a tool caller is drawing nothing.
+            storeys: None,
         };
         match spaces::assemble_spaces(&self.state, &scope).map_err(to_mcp_error)? {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -576,7 +588,8 @@ impl RoommateMcp {
         description = "List one project's ceilings, each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit ceiling has no room parameter and a room has no ceiling parameter, so every entry in a ceiling's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet plus `mean_width` and two fractions that answer different questions — `fraction_of_element` (how much of this ceiling is in that room) and `fraction_of_room` (how much of that room this ceiling covers, which is the coverage question a finishes take-off asks). `rooms` is a LIST because a ceiling can lie over several, ordered largest overlap first, so `rooms[0]` is a usable single owner. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR: a ceiling over a stairwell, an external soffit, or one on a level carrying no rooms legitimately belongs to nothing — 8 of House A's 30 do. A ceiling with empty `loops` is one duHast could not measure; it is exported rather than dropped so that 'no such ceiling' and 'a ceiling nobody could measure' stay distinguishable, and it attributes to nothing. Attribution ignores only overlaps narrower than 10 mm mean width, which is imprecision (edges that merely touch, a finish a few mm past a wall line), not a judgement about size: EVERY real overlap is listed, including a sliver where a large ceiling grazes a neighbouring room and a degenerate exported footprint. To ignore slivers, filter on `fraction_of_element`, `fraction_of_room` or `mean_width` -- the read deliberately does not. Type properties are sent ONCE per distinct bag in the top-level `type_property_sets` array; each ceiling names its row in `type_properties_ref`."
     )]
     fn get_ceilings(&self, Parameters(p): Parameters<GetSurfacesParams>) -> Result<CallToolResult, McpError> {
-        let scope = surfaces::SurfaceScope { project: p.project.as_deref(), milestone: p.milestone.as_deref() };
+        let scope =
+            surfaces::SurfaceScope { project: p.project.as_deref(), milestone: p.milestone.as_deref(), storeys: None };
         match surfaces::assemble_surfaces::<CeilingPayload>(&self.state, &scope).map_err(to_mcp_error)? {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no ceilings have been pushed to this server yet",
@@ -591,7 +604,8 @@ impl RoommateMcp {
         description = "List one project's floors (Revit category Floors), each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit floor has no room parameter, so every entry in a floor's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet, `fraction_of_element` (how much of this floor is in that room), `fraction_of_room` (how much of that room this floor covers -- the finishes take-off question) and `mean_width` (2 x overlap area / overlap perimeter, in feet). `rooms` is a LIST ordered largest overlap first, so `rooms[0]` is a usable single owner. The category holds structural slabs AND finish floors AND balconies; the `Structural` instance property tells them apart, and a room can legitimately lie on both a slab and a finish floor -- `height_offset` (feet above the level, to the TOP of the floor) separates them. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR. A floor with empty `polygons` is one duHast could not measure and attributes to nothing. Attribution is the ceilings rule exactly: only overlaps narrower than 10 mm mean width are ignored, as imprecision. EVERY real overlap is listed, so a strip of floor reaching under a wall into a neighbour appears behind the room the floor serves, with a small `fraction_of_room` and a `mean_width` under a wall's thickness -- filter on those to ignore it. The room association is model-scoped: floors in one Revit document are never attributed to rooms in another. Type properties are sent ONCE per distinct bag in the top-level `type_property_sets` array; each floor names its row in `type_properties_ref`."
     )]
     fn get_floors(&self, Parameters(p): Parameters<GetSurfacesParams>) -> Result<CallToolResult, McpError> {
-        let scope = surfaces::SurfaceScope { project: p.project.as_deref(), milestone: p.milestone.as_deref() };
+        let scope =
+            surfaces::SurfaceScope { project: p.project.as_deref(), milestone: p.milestone.as_deref(), storeys: None };
         match surfaces::assemble_surfaces::<FloorPayload>(&self.state, &scope).map_err(to_mcp_error)? {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no floors have been pushed to this server yet",

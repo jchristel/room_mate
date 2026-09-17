@@ -214,6 +214,52 @@ describe("EntityPoll", () => {
     await poll.poll();
     expect(urls).toEqual(["/doors?project=A", "/doors?project=B"]);
   });
+
+  // A storey switch or `?building=` leaves the contributing snapshots -- and so
+  // the revision -- unchanged while changing the body completely. Compared
+  // across scopes the revision said "unchanged" and the layer kept drawing the
+  // previous storey.
+  it("accepts a new scope's body even when it carries the same revision", async () => {
+    let storey = "0";
+    const server = scriptedServer([
+      { status: 200, etag: '"t0"', body: doors("r1", ["ground"]) },
+      { status: 200, etag: '"t1"', body: doors("r1", ["first"]) },
+    ]);
+    const poll = new EntityPoll({ url: () => `/doors?storey_elevations=${storey}`, fetch: server.fetch });
+
+    expect(await poll.poll()).toBe("changed");
+    storey = "3000";
+    expect(poll.isCurrent()).toBe(false);
+    expect(await poll.poll()).toBe("changed");
+    expect(poll.payload).toEqual(doors("r1", ["first"]));
+    expect(poll.isCurrent()).toBe(true);
+    // And no tag from the old scope was offered for the new one.
+    expect(server.sent).toEqual([{}, {}]);
+  });
+
+  it("drops an answer whose scope moved while it was in flight", async () => {
+    let storey = "0";
+    const server = scriptedServer([{ status: 200, etag: '"t0"', body: doors("r0", ["ground"]) }]);
+    const poll = new EntityPoll({
+      url: () => `/doors?storey_elevations=${storey}`,
+      fetch: async (url, init) => {
+        storey = "3000"; // the reader switched storey before this came back
+        return server.fetch(url, init);
+      },
+    });
+
+    expect(await poll.poll()).toBe("skipped");
+    expect(poll.payload).toBeNull();
+    expect(poll.acceptedUrl).toBeNull();
+  });
+
+  it("does not ask while the scope cannot be known", async () => {
+    const server = scriptedServer([]);
+    const poll = new EntityPoll({ url: () => null, fetch: server.fetch });
+    expect(await poll.poll()).toBe("skipped");
+    expect(server.sent).toEqual([]);
+    expect(poll.isCurrent()).toBe(false);
+  });
 });
 
 describe("repaints", () => {

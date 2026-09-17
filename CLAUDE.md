@@ -386,6 +386,23 @@ Both were reported as five separate viewer bugs on RHH and are one cause each.
   element layers, and it deliberately mirrors `rooms::dedup_levels`. Elevation
   alone is not enough: RHH's car park stacks "C 00" at the hospital GROUND's
   elevation. Every element read carries `levels_by_model` for it.
+- **Element reads fetch only the storeys on screen, and the server's filter
+  must stay a SUPERSET of `storey.ts`** (2026-09-17). The viewer sends
+  `storey_elevations` + `storey_level_ids` for every zone's storey;
+  `entity_scope::StoreyScope` keeps an element within `LEVEL_EPS_MM` of any
+  requested elevation, keeps by id for a model declaring no levels, and
+  narrows nothing when no model declares any. It never re-implements
+  `onStorey`'s name-and-elevation rule, because that rule's fallbacks are
+  decided over the whole payload: **change the rule in `storey.ts` and
+  re-check the superset**, or a "(by elevation)" layer silently loses
+  elements. RHH `/ffe`: 133.2 MB for every storey, 23.6 MB for one.
+- **An `EntityPoll` revision only vouches for the URL that produced it.** A
+  storey switch or `?building=` changes the body and not the contributing
+  snapshots, so the revision stays equal; the poll treats a changed URL as a
+  new scope and drops an answer whose URL moved in flight. A null URL (storeys
+  not knowable before the first rooms payload) skips, so nothing asks for
+  every storey on first load. The room contents panel says "storey not on
+  screen" for a room whose storey no zone shows, rather than "none".
 - **A layer that could not resolve exactly says so on its own toggle.** The
   "(all levels)" / "(by elevation)" suffixes are the point: a fallback nobody
   can see is the failure mode this area keeps producing.
@@ -559,9 +576,10 @@ with one, not here.
   local store 1,459 MB → 279 MB. **Only for snapshots written since** — a legacy
   snapshot still reads (9.1 s) but keeps its old layout until re-pushed, and
   nothing rewrites the store for you. The *body* sends each type bag once since
-  `service::type_table`: 279.6 MB → 133.2 MB. What is left is its size itself —
-  every storey in one poll, instance property keys repeated per item — and
-  `assemble_items` still clones each item into its response.
+  `service::type_table`: 279.6 MB → 133.2 MB, and only the storeys on screen
+  since `StoreyScope` (one RHH storey: 23.6 MB). What is left: every snapshot is
+  still parsed whole before the storey filter, instance property keys repeat
+  per item on the wire, and `assemble_items` still clones each item it serves.
 - **RHH has no windows snapshot at all.** Not a code gap: `windows_export_entry`
   has simply never been run against it, so `/windows?project=RHH` answers 200
   with an empty list. The level-id fix above is what windows needed to be

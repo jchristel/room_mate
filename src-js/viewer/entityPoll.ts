@@ -60,8 +60,11 @@ export type PollFetch = (
 ) => Promise<PollResponse>;
 
 export interface EntityPollOptions<P> {
-  /** The request URL for the page's CURRENT scope, asked afresh every poll. */
-  url: () => string;
+  /** The request URL for the page's CURRENT scope, asked afresh every poll.
+   *  `null` when the scope cannot be known yet -- the element layers before the
+   *  rooms say which storeys are showing -- which skips the poll rather than
+   *  asking for everything. */
+  url: () => string | null;
   /** `false` skips the poll entirely. Spaces is the one layer that uses it: it
    *  overlays the rooms it sits on, so it starts off and does not cost every
    *  viewer a read for a question most of them are not asking. */
@@ -110,14 +113,32 @@ export class EntityPoll<P> {
    * at all; it is deliberately more conservative than the revision (see
    * `service::scope_cursor`).
    *
-   * Neither needs clearing on a scope change: the tag is computed over the scope
-   * it was issued for, so a tag from the old scope cannot match and the server
-   * answers 200. `invalidate` exists for a caller that wants to say so anyway.
+   * **Both are only meaningful for the URL that produced them**, which is why
+   * `acceptedUrl` is kept beside them. The tag is safe across a scope change --
+   * it hashes the scope, so an old one cannot match -- but the revision is NOT:
+   * it hashes which snapshots contributed, and `?building=` or a storey switch
+   * leaves those unchanged while changing the body completely. Compared across
+   * scopes, it answered "unchanged" to a body that was not, and the layer kept
+   * drawing the previous scope. So a poll whose URL differs from the accepted
+   * one is a new scope: no tag sent, and whatever arrives is accepted.
    */
   private etag: string | null = null;
   private revision: string | null = null;
+  private accepted: string | null = null;
 
   constructor(private readonly options: EntityPollOptions<P>) {}
+
+  /** The URL the held payload (or 204) answered, or null before any. */
+  get acceptedUrl(): string | null {
+    return this.accepted;
+  }
+
+  /** Whether what is held answers the page's CURRENT scope. False while a scope
+   *  change is in flight -- the room contents panel says "not loaded yet" then
+   *  rather than reporting the previous scope's answer as this one's. */
+  isCurrent(): boolean {
+    return this.accepted !== null && this.accepted === this.options.url();
+  }
 
   /**
    * Ask once. Never throws: a layer that fails must not take the rooms, or any
@@ -127,9 +148,20 @@ export class EntityPoll<P> {
   async poll(): Promise<PollOutcome> {
     const { enabled, onPayload, url } = this.options;
     if (enabled && !enabled()) return "skipped";
+    const target = url();
+    if (target === null) return "skipped";
+    const sameScope = target === this.accepted;
     const doFetch = this.options.fetch ?? ((u, init) => fetch(u, init));
     try {
-      const res = await doFetch(url(), { cache: "no-store", headers: conditionalHeaders(this.etag) });
+      const res = await doFetch(target, {
+        cache: "no-store",
+        headers: conditionalHeaders(sameScope ? this.etag : null),
+      });
+      // The scope moved while this was in flight -- a storey switch, typically,
+      // whose own poll may already have landed. Accepting this answer would put
+      // the older scope back on screen, so it is dropped unread; the next poll
+      // asks for the current one.
+      if (url() !== target) return "skipped";
       if (res.status === 304) {
         // A tag is only ever held alongside an accepted payload (see below), so
         // a 304 means what we hold is current — including after a transient
@@ -145,6 +177,7 @@ export class EntityPoll<P> {
         // entity we no longer have.
         this.etag = null;
         this.fetchState = "empty";
+        this.accepted = target;
         if (this.payload === null) return "empty";
         this.payload = null;
         this.revision = null;
@@ -164,7 +197,10 @@ export class EntityPoll<P> {
       this.etag = res.headers.get("ETag");
       this.fetchState = "loaded";
       const incoming = revisionOf(payload);
-      if (incoming === this.revision) return "unchanged";
+      // Only a revision from the SAME scope can vouch for the body -- see the
+      // cursors' doc comment.
+      if (sameScope && incoming === this.revision) return "unchanged";
+      this.accepted = target;
       this.revision = incoming;
       this.payload = payload;
       onPayload?.(payload);

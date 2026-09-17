@@ -191,6 +191,9 @@ pub struct ItemScope<'a> {
     pub building: Option<&'a str>,
     pub milestone: Option<&'a str>,
     pub filter: Option<&'a RoomFilter>,
+    /// The storeys the viewer is showing; `None` reads every storey. See
+    /// `entity_scope::StoreyScope`.
+    pub storeys: Option<&'a entity_scope::StoreyScope>,
 }
 
 /// The merged FF&E payload, as `/ffe` answers it.
@@ -259,6 +262,8 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
     let revision = entity_scope::revision(&scoped);
     let phase_by_model = entity_scope::phase_by_model(&scoped);
     let levels_by_model = entity_scope::levels_by_model(&scoped);
+    // Resolved once per read, asked once per item below.
+    let storeys = scope.storeys.map(|s| s.admitter(&levels_by_model));
     // From the manifest index, so the frame matches `/rooms` -- see
     // `service::placement::from_index`.
     let placement = super::placement::from_index(state)?;
@@ -334,6 +339,11 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
             // homeless-looking model is a data artifact.
             if is_component && nested == NestedComponents::Exclude {
                 excluded_components += 1;
+                continue;
+            }
+            // After the component count, so `excluded_components` stays a count
+            // over the whole read rather than over the storeys on screen.
+            if storeys.as_ref().is_some_and(|s| !s.admits(&payload.model.id, &item.level_id)) {
                 continue;
             }
 
