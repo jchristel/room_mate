@@ -53,10 +53,15 @@ pub mod validation;
 ///   the read would serve — but a model whose pin dangles is counted rather than
 ///   skipped (the read warns and drops it), which again only over-reports.
 ///
-/// The one thing it does **not** track is settings: a colour plan or a dRofus
-/// mapping changes derived data without touching a stored snapshot. That is not
-/// a new gap — `scoped_revision` documents the same exclusion, and the viewer
-/// re-fetches on a settings change through its own trigger rather than the poll.
+/// It tracks **settings too**, through `SettingsRegistry::revision`, and that
+/// was the one hole in the asymmetry above rather than a documented exclusion:
+/// a policy change (ownership, attribution, a room label, a re-uploaded dRofus
+/// CSV) rewrites rows while every snapshot id stays put, so a cursor built from
+/// ids alone *matched* on a changed body — the unsafe direction. Note
+/// `scoped_revision` still excludes settings; it is a re-render hint for a
+/// viewer that re-fetches on a settings change through its own trigger, not a
+/// cache validator, and being wrong there costs a needless repaint rather than
+/// a stale plan.
 ///
 /// `kinds` is a list because a doors read is not doors-only: `assemble_doors`
 /// resolves ownership and geometry against the *rooms* of the same scope
@@ -88,6 +93,10 @@ pub(crate) fn scope_cursor(
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     parts.hash(&mut hasher);
+    // Settings are the other half of "what would this read answer": policy
+    // decides ownership, attribution, labels and the reference join, none of
+    // which touches a snapshot id. See `SettingsRegistry::revision`.
+    registry.revision.hash(&mut hasher);
     Ok(format!("{:016x}", hasher.finish()))
 }
 

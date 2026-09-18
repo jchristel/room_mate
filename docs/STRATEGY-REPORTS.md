@@ -315,6 +315,33 @@ scale: `/ffe` is 273 MB / 94 s and `/ceilings` 33 s (see `CLAUDE.md`, "Open").
   `/ceilings`' already covers rooms: attribution derives from the rooms in
   scope, so a rooms push alone changes the answer.
 
+### CSV is rendered here too (decided 2026-09-19)
+
+**A `format` parameter on the report read, not a second route and not a
+client-side writer.** `format=csv` renders the same rows the JSON form
+returns.
+
+- **One formatter, one answer.** A CSV built in the browser is a second
+  implementation of quoting, number formatting, column order and how "no room"
+  is spelled, and the two drift the first time one is fixed. The MCP host and
+  the download would then disagree about the same report.
+- **MCP gets it by being one route.** The one-tool-per-read-route rule means a
+  second CSV route would mean a second tool; a `format` argument on the report
+  tool keeps it at one, and a host can ask for CSV directly. The MCP process
+  reads the store itself, so this works with no HTTP server running — and it
+  returns the CSV as text, since that process writes nothing.
+- **It can stream**, which the browser cannot do while building a string in
+  memory. That is what takes 39,000 FF&E rows off the volume question below.
+- **A saved report has an id, so its CSV has a plain URL** —
+  `GET /projects/{id}/reports/{report_id}/rows.csv` — bookmarkable, and
+  fetchable by a script that never opens the page. An unsaved definition still
+  goes through the POST, and the page turns that response into a download.
+- **What has to be decided once, in one place:** quoting and escaping, the
+  header row's names, how a blank and an unattributed row differ, and how many
+  decimals an area carries. Those are the choices that make two formatters
+  drift, which is the argument above, so write them down where the formatter
+  lives.
+
 ## Saved reports are documents, not settings
 
 **Server-side**, which is [Browser](STRATEGY-BROWSER.md)'s standing answer to
@@ -394,15 +421,27 @@ A sketch of one document:
 
 ## Open questions
 
-- **Does a changed rule move the ETag?** Changing `room_attribution` or the
-  space key changes every report row without any push. Check how the existing
-  entity reads' cursors treat a settings change before assuming the report's
-  can copy them.
-- **Row volume.** One-row-per-match FF&E on RHH is ~39,000 rows. Projected
-  columns make that small per row, but whether it wants paging or a streamed
-  CSV route is unmeasured — measure it, per [Index](STRATEGY.md)'s caveat.
-- **CSV export client-side or server-side.** Client-side from the rows already
-  fetched is free until the volume question says otherwise.
+- **Row volume: the preview is capped, the CSV is not** (decided 2026-09-19).
+  One row per match over RHH FF&E is ~39,000 rows. The page asks for the first
+  N and says what it is showing -- "first 500 of 39,412" -- and anyone who
+  wants all of it takes the streamed CSV. Honest about what the cap buys:
+  payload and browser memory, not server work, since the join still runs to
+  produce the count.
+
+  **Streaming the JSON instead is the answer to reach for last.** An MCP tool
+  returns one `CallToolResult`, so the consumer that justified rendering CSV
+  server-side cannot consume a stream at all; the preview holds every row in
+  the DOM regardless unless it virtualises; and no read streams today --
+  `assemble_rooms` and `assemble_items` are value-in, value-out, and the 304
+  path wants the cursor before any row. (Ingest's `put_streaming` is not the
+  precedent it looks like: it writes bytes through and assembles nothing.)
+  What would reopen it: a projected body measured past ~20 MB, or a streaming
+  read arriving for another reason, at which point reports ride it rather than
+  lead it.
+
+  Still unmeasured, and worth measuring before building even the cap: the read
+  projects to the requested columns, so those rows are a few MB rather than the
+  273 MB `/ffe` taught everyone to fear.
 - **Doors and windows in v1.** Not asked for. They fit the same definition and
   cost a row in the association list, so they are in the shape but out of the
   first build.
