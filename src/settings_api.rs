@@ -422,8 +422,8 @@ pub fn save_project(
 /// loudly and keep serving the old registry.
 fn reload_and_swap(state: &AppState, projects_dir: &Path) -> Result<(), SettingsError> {
     match load_project_settings_dir(projects_dir, state.store()) {
-        Ok((by_project, default)) => {
-            state.swap_registry(SettingsRegistry { by_project, default });
+        Ok((by_project, default, files_digest)) => {
+            state.swap_registry(SettingsRegistry::new(by_project, default, files_digest));
             Ok(())
         }
         Err(e) => Err(SettingsError::Internal(anyhow::anyhow!(

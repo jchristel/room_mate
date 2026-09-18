@@ -833,8 +833,8 @@ mod tests {
             row("p1", "m2", &[(Rooms, "r-new")]),
             row("unregistered", "m3", &[(Rooms, "r-new")]),
         ];
-        let registry = SettingsRegistry {
-            by_project: HashMap::from([(
+        let registry = SettingsRegistry::from_bundles(
+            HashMap::from([(
                 "p1".to_string(),
                 bundle(vec![milestone(
                     "M",
@@ -842,8 +842,8 @@ mod tests {
                     &[("m1", "d-old"), ("m2", "d-dangling")],
                 )]),
             )]),
-            default: None,
-        };
+            None,
+        );
         let plan = |kind, project, ms| plan_reads(&index, &registry, kind, project, ms);
 
         assert_eq!(

@@ -3622,6 +3622,27 @@ mod tests {
         assert_eq!(after.status(), StatusCode::OK, "the pushed snapshot must not hide behind the old tag");
     }
 
+    /// A settings save moves the tag too, and that is the half a snapshot
+    /// cursor cannot see: policy decides ownership, attribution, labels and the
+    /// reference join, so a changed policy rewrites every row while every
+    /// snapshot id stays exactly where it was. Before the registry carried a
+    /// revision this request was answered 304, over the old body, until the
+    /// next push -- the one direction `scope_cursor` may never be wrong in.
+    #[tokio::test]
+    async fn test_get_rooms_etag_moves_on_a_settings_change() {
+        let state = state_with_one_room("2026-01-01T00:00:00Z");
+        let first = get_rooms(State(state.clone()), HeaderMap::new(), Query(unscoped_query())).await.unwrap();
+        let etag = first.headers().get(header::ETAG).unwrap().to_str().unwrap().to_string();
+
+        // What a save installs: the same bundles, rebuilt from settings files
+        // whose bytes changed (`bootstrap::load_project_settings_dir`).
+        state.swap_registry(crate::state::SettingsRegistry::new(single_project("p1"), None, 0x5eed_1234));
+
+        let after = get_rooms(State(state), if_none_match(&etag), Query(unscoped_query())).await.unwrap();
+
+        assert_eq!(after.status(), StatusCode::OK, "a settings change must not hide behind the old tag");
+    }
+
     /// A tag issued for one scope must not satisfy a request for another. The
     /// data cursor is identical across these two — same store, same snapshots —
     /// so only the scope going into the tag separates them, and the viewer

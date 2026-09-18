@@ -25,7 +25,7 @@ use crate::settings::{
     load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields, ColourMode,
     ColourPlan, ReferenceOrigin, ServerConfig,
 };
-use crate::state::{seed_if_test, AppState, ProjectReferenceSource, ProjectSettings, Shared};
+use crate::state::{seed_if_test, AppState, ProjectReferenceSource, ProjectSettings, SettingsRegistry, Shared};
 use crate::storage::{FsStore, MemStore, SnapshotStore};
 
 /// Refuse a reference source whose name would shadow a room's own wire field.
@@ -242,12 +242,23 @@ fn colour_plan_fields(plan: &ColourPlan) -> Vec<(String, &String)> {
 /// a silent no-op" discipline `load_settings` already uses for hierarchy
 /// tiers and builtin properties. Also re-run by the settings API after a
 /// save, to build the registry it hot-swaps in.
+/// The third return value is a digest of every settings file's **bytes**, for
+/// `SettingsRegistry::new` to hash into the revision every read's ETag carries.
+/// Taken from the bytes rather than from the parsed bundles on purpose: a field
+/// added to `Settings` is covered without anyone remembering to list it, which
+/// is the failure mode a hand-written digest has and cannot detect.
 pub fn load_project_settings_dir(
     projects_dir: &Path,
     store: &dyn SnapshotStore,
-) -> anyhow::Result<(HashMap<String, ProjectSettings>, Option<ProjectSettings>)> {
+) -> anyhow::Result<(HashMap<String, ProjectSettings>, Option<ProjectSettings>, u64)> {
+    use std::hash::{Hash, Hasher};
+
     let mut registry = HashMap::new();
     let mut default_bundle: Option<(String, ProjectSettings)> = None;
+    // (file name, bytes) per settings file, sorted before hashing: a directory
+    // walk's order is an artefact, and a revision that moved with it would
+    // invalidate every cached read for nothing.
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
 
     let entries = std::fs::read_dir(projects_dir)
         .with_context(|| format!("could not read project settings directory: {}", projects_dir.display()))?;
@@ -261,6 +272,14 @@ pub fn load_project_settings_dir(
 
         let (project_id, is_default, bundle) = load_project_bundle(&path, store)?;
         tracing::info!("project settings loaded from {} (project_id = {})", path.display(), project_id);
+
+        // Read a second time, for the digest only. Cheap where it happens —
+        // startup and a settings save, never a request — and it keeps
+        // `load_project_bundle` a parser rather than a parser that also
+        // fingerprints.
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("could not re-read settings file for its digest: {}", path.display()))?;
+        files.push((path.file_name().unwrap_or_default().to_string_lossy().into_owned(), bytes));
 
         if is_default {
             if let Some((other_id, _)) = &default_bundle {
@@ -278,7 +297,11 @@ pub fn load_project_settings_dir(
         }
     }
 
-    Ok((registry, default_bundle.map(|(_, b)| b)))
+    files.sort_unstable();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    files.hash(&mut hasher);
+
+    Ok((registry, default_bundle.map(|(_, b)| b), hasher.finish()))
 }
 
 pub fn build_state(server_settings: &Path, projects_dir: &Path) -> anyhow::Result<Shared> {
@@ -302,7 +325,7 @@ pub fn build_state(server_settings: &Path, projects_dir: &Path) -> anyhow::Resul
         }
     };
 
-    let (project_settings, default_settings) = load_project_settings_dir(projects_dir, store.as_ref())
+    let (project_settings, default_settings, files_digest) = load_project_settings_dir(projects_dir, store.as_ref())
         .with_context(|| format!("bad project settings directory: {}", projects_dir.display()))?;
 
     if project_settings.is_empty() && default_settings.is_none() {
@@ -313,7 +336,8 @@ pub fn build_state(server_settings: &Path, projects_dir: &Path) -> anyhow::Resul
     }
 
     let state: Shared = Arc::new(
-        AppState::new(store, project_settings, default_settings).with_projects_dir(projects_dir.to_path_buf()),
+        AppState::with_registry(store, SettingsRegistry::new(project_settings, default_settings, files_digest))
+            .with_projects_dir(projects_dir.to_path_buf()),
     );
 
     seed_if_test(&state, test_data.as_ref())?;
@@ -436,6 +460,72 @@ path = \"../drofus.csv\"
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The digest is over content, so an unchanged directory reloads to the
+    /// same value. A restart, or a save that rewrote a file identically, must
+    /// not throw away every client cached read -- which is the whole reason
+    /// this is a hash rather than a counter (see `SettingsRegistry::revision`).
+    #[test]
+    fn test_settings_digest_is_stable_for_unchanged_files() {
+        let dir = temp_projects_dir("digest-stable");
+        std::fs::write(dir.join("p1.toml"), "project_id = \"p1\"\nroom_label = [\"Number\"]\n").unwrap();
+
+        let (_registry, _default, first) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        let (_registry, _default, second) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+
+        assert_eq!(first, second, "same bytes, same digest");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// And it moves for any edit, including one no code here reads by name.
+    /// That is the argument for hashing bytes rather than listing the policy
+    /// fields that matter: the list is what stops being complete.
+    #[test]
+    fn test_settings_digest_moves_when_a_file_changes() {
+        let dir = temp_projects_dir("digest-moves");
+        let file = dir.join("p1.toml");
+        std::fs::write(&file, "project_id = \"p1\"\nroom_label = [\"Number\"]\n").unwrap();
+        let (_registry, _default, before) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+
+        std::fs::write(&file, "project_id = \"p1\"\nroom_label = [\"Number\", \"Name\"]\n").unwrap();
+        let (_registry, _default, after) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+
+        assert_ne!(before, after, "a changed settings file must change the digest");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A re-uploaded CSV changes what every joined column answers while no
+    /// settings file and no snapshot moves, so the registry hashes the
+    /// resolved reference data as well as the files. Same row count, one
+    /// changed value -- the case a cheaper digest (row counts, timestamps)
+    /// would miss, and the reason this one walks the records.
+    #[test]
+    fn test_registry_revision_moves_when_a_reference_upload_changes() {
+        let dir = temp_projects_dir("digest-upload");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n",
+        )
+        .unwrap();
+
+        let revision_for = |csv: &[u8]| {
+            let store = MemStore::new();
+            store.put_reference("p1", "drofus", "2026-01-01T10:00:00Z", csv).unwrap();
+            let (by_project, default, digest) = load_project_settings_dir(&dir, &store).unwrap();
+            SettingsRegistry::new(by_project, default, digest).revision
+        };
+
+        let before = revision_for(b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n");
+        let same = revision_for(b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n");
+        let after = revision_for(b"DrofusRoomId,NetArea\nNumber,Area\n1,31.0\n");
+
+        assert_eq!(before, same, "identical data must hash identically");
+        assert_ne!(before, after, "a changed reference value must move the revision");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A project with no `[sources]` at all registers with an empty
     /// `reference` map — the "nothing to reconcile" state
     /// `compute_project_validation` reports as an empty `sources` map.
@@ -444,7 +534,7 @@ path = \"../drofus.csv\"
         let dir = temp_projects_dir("no-sources");
         std::fs::write(dir.join("p1.toml"), "project_id = \"p1\"\n").unwrap();
 
-        let (registry, _default) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
         assert!(registry.get("p1").unwrap().reference.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
@@ -468,7 +558,7 @@ path = \"../drofus.csv\"
         )
         .unwrap();
 
-        let (registry, _default) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
         let bundle = registry.get("p1").unwrap();
         let drofus_source = &bundle.reference["drofus"];
         assert!(drofus_source.data.is_none());
@@ -513,7 +603,7 @@ path = \"../drofus.csv\"
             .put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
             .unwrap();
 
-        let (registry, _default) = load_project_settings_dir(&dir, &store).unwrap();
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &store).unwrap();
         let drofus = registry.get("p1").unwrap().reference["drofus"].data.as_ref().expect("hydrated");
         assert_eq!(drofus.link_property, "Number");
         assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
@@ -560,7 +650,7 @@ path = \"../drofus.csv\"
         )
         .unwrap();
 
-        let (registry, _default) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
         assert_eq!(registry.get("p1").unwrap().comparison_key.as_deref(), Some("drofus.RoomId"));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -637,7 +727,7 @@ path = \"../drofus.csv\"
             .put_reference("p1", "doors", "2026-01-01T10:00:00Z", b"DoorId,Mark\nMark,Mark\nD1,101A\n")
             .unwrap();
 
-        let (registry, _default) = load_project_settings_dir(&dir, &store).unwrap();
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &store).unwrap();
         let bundle = registry.get("p1").unwrap();
 
         assert_eq!(bundle.reference.len(), 2, "both sources registered, not just \"drofus\"");

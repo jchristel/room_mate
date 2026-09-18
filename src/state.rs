@@ -350,9 +350,101 @@ pub struct SettingsRegistry {
     /// on read and rejected on ingest rather than silently falling back to
     /// any bundle.
     pub default: Option<ProjectSettings>,
+
+    /// What this registry's *content* hashes to — mixed into every read's
+    /// ETag cursor (`service::scope_cursor`) so a settings change invalidates
+    /// a cached read the way a push does.
+    ///
+    /// **Without it a policy change is invisible to a polling client.** The
+    /// cursor hashes which snapshot each model would serve; flipping
+    /// `room_attribution` or a space key rewrites every row of `/doors`,
+    /// `/spaces` or a report while serving no new snapshot, so the tag stayed
+    /// byte-identical and the client was answered 304 over the old body until
+    /// the next push. A settings save hot-swaps the registry mid-session, so
+    /// that window is reachable in an ordinary afternoon, not only across a
+    /// restart.
+    ///
+    /// **A content hash, not a counter.** Identical settings must produce an
+    /// identical tag: a restart, or a save that changes nothing, would
+    /// otherwise throw away every client's cache, and a counter reset by a
+    /// restart would *match* a pre-change tag when the files were edited by
+    /// hand while the server was down — which is the one direction a cursor
+    /// may never be wrong in (see `scope_cursor`'s asymmetry).
+    ///
+    /// Built by [`SettingsRegistry::new`]; see there for what feeds it.
+    pub revision: u64,
 }
 
 impl SettingsRegistry {
+    /// Build a registry, hashing `files_digest` together with the reference
+    /// data the bundles resolved to.
+    ///
+    /// **Two inputs, because neither sees the other's changes.**
+    /// `files_digest` is over the settings files' bytes (see
+    /// `bootstrap::load_project_settings_dir`), which is complete by
+    /// construction — a field added to `Settings` needs nothing added here,
+    /// which a hand-listed digest of policy fields would (and would then
+    /// silently stop covering the day someone forgot). But an uploaded
+    /// reference CSV changes what every joined column answers *without*
+    /// touching a settings file, so the resolved `ReferenceData` is hashed
+    /// too: source name, link property and every record, since a re-upload
+    /// with the same row count and different values is exactly the case a
+    /// cheaper digest would miss.
+    ///
+    /// Deliberately NOT hashed: anything that cannot change a served row.
+    /// The bundles hold no client-only settings today (`colour_plans` never
+    /// reaches one), so this is a rule for the next field rather than a
+    /// current exclusion list — and the files digest covers those anyway.
+    pub fn new(
+        by_project: HashMap<String, ProjectSettings>,
+        default: Option<ProjectSettings>,
+        files_digest: u64,
+    ) -> Self {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        files_digest.hash(&mut hasher);
+
+        // Sorted, for the reason `scoped_revision` sorts: a HashMap's
+        // iteration order is an artefact, not content, and a revision that
+        // changed on rehash would invalidate every cache for nothing.
+        let mut projects: Vec<&String> = by_project.keys().collect();
+        projects.sort_unstable();
+        for id in projects {
+            id.hash(&mut hasher);
+            for (name, source) in &by_project[id].reference {
+                name.hash(&mut hasher);
+                match &source.data {
+                    // `BTreeMap` throughout, so iteration is key order and the
+                    // hash is stable across runs.
+                    Some(data) => {
+                        data.link_property.hash(&mut hasher);
+                        for (key, record) in &data.by_id {
+                            key.hash(&mut hasher);
+                            for (field, value) in &record.fields {
+                                field.hash(&mut hasher);
+                                value.hash(&mut hasher);
+                            }
+                        }
+                    }
+                    // "No upload yet" is a state a later upload moves off, so
+                    // it has to hash differently from any dataset.
+                    None => "<no data>".hash(&mut hasher),
+                }
+            }
+        }
+
+        Self { by_project, default, revision: hasher.finish() }
+    }
+
+    /// Build a registry from bundles alone — in-memory construction, where
+    /// there are no settings files to hash. The reference half of the digest
+    /// still applies. Production always goes through
+    /// `bootstrap::load_project_settings_dir`, which has the bytes.
+    pub fn from_bundles(by_project: HashMap<String, ProjectSettings>, default: Option<ProjectSettings>) -> Self {
+        Self::new(by_project, default, 0)
+    }
+
     /// Resolve the settings bundle for one project: its own registered
     /// settings if present, else the explicit default bundle if one is
     /// configured, else `None` (unregistered, no fallback).
@@ -404,12 +496,17 @@ impl AppState {
     ) -> Self {
         Self {
             store,
-            registry: RwLock::new(Arc::new(SettingsRegistry {
-                by_project: project_settings,
-                default: default_settings,
-            })),
+            registry: RwLock::new(Arc::new(SettingsRegistry::from_bundles(project_settings, default_settings))),
             projects_dir: None,
         }
+    }
+
+    /// Build state around an already-constructed registry — the file-backed
+    /// path, where `bootstrap` has the settings files' digest and `new`'s
+    /// bundles-only registry would carry a revision that never moved when a
+    /// policy changed.
+    pub fn with_registry(store: Box<dyn SnapshotStore>, registry: SettingsRegistry) -> Self {
+        Self { store, registry: RwLock::new(Arc::new(registry)), projects_dir: None }
     }
 
     /// Record which directory the registry came from — chained by `bootstrap`
