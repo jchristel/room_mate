@@ -60,6 +60,7 @@ and the fourth already has one in project settings:
 | Association | How the server already joins it | What a user could pick |
 |---|---|---|
 | Ceilings → rooms | Geometry only, area-weighted, many-to-many, model-scoped (`service::surface_attribution`, `MIN_OVERLAP_MEAN_WIDTH_FT`) | Nothing — a ceiling has no room parameter |
+| Floors → rooms | The same rule, the same code — a floor is a `Surface` too | Nothing, for the same reason |
 | FF&E → rooms | Authored room id, model-scoped, geometry fallback under `room_resolution` (`ItemResponse::owner_rooms_qualified`) | Nothing — it is an id, not a property |
 | Spaces → rooms | Property key, project-scoped (`[spaces] comparison_key` / `room_key` / `room_models`) | The key — already a setting, and `SpaceReport` reads it |
 | Doors, windows → rooms | `to_room` / `from_room` under `room_attribution` | The policy — already a setting |
@@ -81,9 +82,9 @@ it. The report never edits a join; the settings page does.
 ### Rejected: a node-based editor
 
 A node graph earns its cost when topology is arbitrary and multi-hop. This graph
-is a **star** — every association is an edge into rooms, and there are five of
+is a **star** — every association is an edge into rooms, and there are six of
 them. A node editor would be a dependency, a layout problem, a saved-graph
-format and a test surface, spent on choosing one of five options. And the one
+format and a test surface, spent on choosing one of six options. And the one
 thing a graph would make easy — wiring an arbitrary property on one side to an
 arbitrary property on the other — is exactly what the section above rules out.
 
@@ -97,9 +98,9 @@ are the nearest candidate, and even they are an edge set, not a join rule.
 the page is not built around any one of them. A report opens on a single
 **report type** dropdown, grouped (`<optgroup>`) by family:
 
-- **Schedules** — one entity, one row per element (room, ceiling, space, FF&E,
-  later doors and windows).
-- **By room** — the associations below.
+- **Schedules** — one entity, one row per element: room, door, window, ceiling,
+  floor, space, FF&E. All seven in v1.
+- **By room** — the associations below, all six of them in v1.
 - **Between milestones** — room changes, which is today's comparison page; door
   changes later.
 - **Checks** — rooms without a ceiling, unmatched spaces and rooms: the QA
@@ -107,6 +108,14 @@ the page is not built around any one of them. A report opens on a single
   rather than as a separate page.
 
 A type that is not built yet sits in the list disabled, marked "later".
+
+**Doors, windows and floors are all in v1** (decided 2026-09-19), and each
+costs a registry row rather than a design. Doors and windows are both
+`Opening`, both already carry `owner_rooms_qualified`, and `service::openings`
+answers the read. A floor is a `Surface`, so it arrives on the ceilings stack
+verbatim — same `service::surfaces`, same attribution, same tolerance — which
+is the entity split paying out exactly as `STRATEGY-ENTITIES.md` predicted.
+What each adds that no other association has is below.
 
 **Choosing a type redraws the form below it, and the form is assembled from a
 small vocabulary of sections, never hand-built per type.** Each type declares
@@ -258,13 +267,37 @@ produces a total that is wrong without looking wrong.
   summable measure in the grouped shape; `overlap_area` is**, and
   `fraction_of_room` answers "how much of this room is ceiled" — the finishes
   question the attribution rule must not answer for it.
+- **A room lies on SEVERAL floors, and that is correct data.** `OST_Floors` is
+  a room's whole build-up — joist zone, timber build-up, finish, insulation,
+  and outside the building lawn, paving, driveway, kerb — and `Structural` does
+  not separate them. House A also hosts its roof build-ups on LEVEL 01, so BED
+  01 01.06 lies on 7 floors, 3 of which are its roof. **Which one is "the
+  floor" is the report's question, not the join's**, so a floors report carries
+  `Type` and `height_offset` as columns by default and expects the filter to do
+  the rest. Anything that picked one floor per room here would be re-deriving
+  the storey rule the entity deliberately does not re-derive.
 - **Spaces are one room to several spaces.** One services file per discipline
   means a room legitimately matches a mechanical and an electrical space.
   `model_id` must be available as a column or a grouping, for the reason
   `SpaceResponse::model_id` gives: without it, two disciplines read as a
   duplicate.
-- **FF&E is zero-or-one**, the easy case, and **openings are zero-to-two** (or
-  two attributions under the `both` policy).
+- **FF&E is zero-or-one**, the easy case.
+- **An opening is zero-to-two, and which room it is under is a policy** —
+  `to_room_then_from_room` by default, and `both` attributes the same door
+  twice. So a doors report's row count moves when `[doors] room_attribution`
+  moves, with nothing pushed and nothing stored; the join rule line has to
+  state the live policy, and the `to`/`from` side belongs on the row as a
+  measure. **An external door or a facade-package window is homeless**, which
+  is the ordinary case rather than an edge one: RHH's facade model holds no
+  rooms at all, so every window in it reports no room and matches no
+  `?building=`. That is what "include openings with no room" is for, and why a
+  doors report defaults it on where a ceilings report does not.
+- **"Never pushed" is not "no rows".** `/windows?project=RHH` answers 200 with
+  an empty list because `windows_export_entry` has never run there, and a
+  report that renders that as an empty table tells the reader their filter is
+  wrong. The entity reads already distinguish the two — nothing ever pushed is
+  the service's `None`, a 204 — so the report says "no windows have been pushed
+  for this project" and never dresses it as a result.
 - **Unmatched rows are reported states, never gaps** — "signal, not error".
   Unattributed ceilings (17 on RHH), homeless items, unmatched spaces, rooms
   with none. Two explicit switches, in plain words rather than join vocabulary:
@@ -442,6 +475,3 @@ A sketch of one document:
   Still unmeasured, and worth measuring before building even the cap: the read
   projects to the requested columns, so those rows are a few MB rather than the
   273 MB `/ffe` taught everyone to fear.
-- **Doors and windows in v1.** Not asked for. They fit the same definition and
-  cost a row in the association list, so they are in the shape but out of the
-  first build.

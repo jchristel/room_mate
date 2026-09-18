@@ -277,29 +277,54 @@ const F = {
   e02: { Mark: "E-02", Family: "Planter Box", Type: "1200", Level: "LEVEL 00", Manufacturer: "—" },
 };
 
+const D = {
+  d1: { Mark: "D-01", Type: "SGL-820 TIMBER", Level: "LEVEL 00", Width: 2.69, "Fire Rating": "-" },
+  d2: { Mark: "D-02", Type: "SGL-720 TIMBER", Level: "LEVEL 00", Width: 2.36, "Fire Rating": "-" },
+  d3: { Mark: "D-03", Type: "SGL-920 GLAZED", Level: "LEVEL 00", Width: 3.02, "Fire Rating": "-" },
+  d4: { Mark: "D-04", Type: "EXT-1200 ENTRY", Level: "LEVEL 00", Width: 3.94, "Fire Rating": "-" },
+  d5: { Mark: "D-05", Type: "SGL-820 TIMBER", Level: "LEVEL 01", Width: 2.69, "Fire Rating": "-" },
+};
+const W = {
+  w1: { Mark: "W-01", Type: "AWN-600x900", Level: "LEVEL 00", "Head Height": 6.89, Width: 1.97 },
+  w2: { Mark: "W-02", Type: "SLD-1800x1200", Level: "LEVEL 00", "Head Height": 6.89, Width: 5.91 },
+  w3: { Mark: "W-03", Type: "AWN-600x900", Level: "LEVEL 01", "Head Height": 6.89, Width: 1.97 },
+  w4: { Mark: "W-04", Type: "FIX-2400x2400", Level: "LEVEL 00", "Head Height": 7.87, Width: 7.87 },
+};
+const FL = {
+  fl1: { Mark: "FL-01", Type: "FLR-TIMBER 19MM", Level: "LEVEL 00", "Height Offset From Level": 0.0, "Floor area": 402.5 },
+  fl2: { Mark: "FL-02", Type: "FLR-JOIST ZONE 200", Level: "LEVEL 00", "Height Offset From Level": -0.66, "Floor area": 402.5 },
+  fl3: { Mark: "FL-03", Type: "FLR-TILE 10MM", Level: "LEVEL 00", "Height Offset From Level": 0.0, "Floor area": 39.8 },
+  fl4: { Mark: "FL-04", Type: "SITE-PAVING", Level: "LEVEL 00", "Height Offset From Level": -0.33, "Floor area": 610.0 },
+  fl5: { Mark: "FL-05", Type: "RAFTERZONE_200MM", Level: "LEVEL 01", "Height Offset From Level": 11.32, "Floor area": 152.8 },
+  fl6: { Mark: "FL-06", Type: "FLR-CARPET 12MM", Level: "LEVEL 01", "Height Offset From Level": 0.0, "Floor area": 154.2 },
+};
+
 /* Entities a schedule can list, and the "by room" associations over them. */
 const ENTITY = {
   rooms:    { one: "room", many: "rooms", props: ROOM_PROPS, cols: ["Number", "Name", "Level", "Area"], rows: Object.values(ROOMS), numeric: { Area: true } },
   ceilings: { one: "ceiling", many: "ceilings", props: Object.keys(C.C1), cols: ["Mark", "Type", "Level", "Ceiling area"], rows: Object.values(C), numeric: { "Ceiling area": true, "Height Offset From Level": true } },
   spaces:   { one: "space", many: "spaces", props: Object.keys(S.m1), cols: ["Number", "Name", "Model"], rows: Object.values(S), numeric: {} },
   ffe:      { one: "item", many: "items", props: Object.keys(F.f12), cols: ["Mark", "Family", "Type", "Level"], rows: Object.values(F), numeric: {} },
+  doors:    { one: "door", many: "doors", props: Object.keys(D.d1), cols: ["Mark", "Type", "Level", "Width"], rows: Object.values(D), numeric: { Width: true } },
+  windows:  { one: "window", many: "windows", props: Object.keys(W.w1), cols: ["Mark", "Type", "Level", "Width"], rows: Object.values(W), numeric: { Width: true, "Head Height": true } },
+  floors:   { one: "floor", many: "floors", props: Object.keys(FL.fl1), cols: ["Mark", "Type", "Level", "Height Offset From Level", "Floor area"], rows: Object.values(FL), numeric: { "Floor area": true, "Height Offset From Level": true } },
 };
 
 const ASSOC = {
   ceilings: {
     entity: "ceilings",
-    rule: { v: "overlap area: at least 1 sqft and at least 0.5% of the ceiling", src: "Geometry, within each model", link: null,
+    rule: { v: "the ceiling lies over the room, by at least 10 mm of width", src: "Geometry, within each model", link: null,
       why: "A ceiling has no room parameter, so its footprint is the only link. One ceiling can cover several rooms, largest overlap first." },
     cols: ["Type", "Height Offset From Level", "Ceiling area"],
-    measures: ["overlap_area", "fraction_of_room", "fraction_of_ceiling"], defaultMeasures: ["overlap_area", "fraction_of_room"],
+    measures: ["overlap_area", "fraction_of_room", "fraction_of_element"], defaultMeasures: ["overlap_area", "fraction_of_room"],
     summable: { overlap_area: true },
     rows: [
-      ["G01", C.C1, { overlap_area: 64.2, fraction_of_room: 1.0, fraction_of_ceiling: 0.451 }],
-      ["G04", C.C1, { overlap_area: 38.0, fraction_of_room: 0.964, fraction_of_ceiling: 0.267 }],
-      ["G02", C.C2, { overlap_area: 168.9, fraction_of_room: 0.988, fraction_of_ceiling: 0.431 }],
-      ["G03", C.C2, { overlap_area: 214.5, fraction_of_room: 0.812, fraction_of_ceiling: 0.548 }],
-      ["G03", C.C3, { overlap_area: 48.6, fraction_of_room: 0.184, fraction_of_ceiling: 0.988 }],
-      ["L01", C.C5, { overlap_area: 152.8, fraction_of_room: 0.991, fraction_of_ceiling: 1.0 }],
+      ["G01", C.C1, { overlap_area: 64.2, fraction_of_room: 1.0, fraction_of_element: 0.451 }],
+      ["G04", C.C1, { overlap_area: 38.0, fraction_of_room: 0.964, fraction_of_element: 0.267 }],
+      ["G02", C.C2, { overlap_area: 168.9, fraction_of_room: 0.988, fraction_of_element: 0.431 }],
+      ["G03", C.C2, { overlap_area: 214.5, fraction_of_room: 0.812, fraction_of_element: 0.548 }],
+      ["G03", C.C3, { overlap_area: 48.6, fraction_of_room: 0.184, fraction_of_element: 0.988 }],
+      ["L01", C.C5, { overlap_area: 152.8, fraction_of_room: 0.991, fraction_of_element: 1.0 }],
       [null, C.C4, {}], ["G05", null, {}],
     ],
     perMatchNote: "Ceiling C1 appears under ENTRY and WC because it covers both. That is correct for one row per match. Don't add up ceiling area in this shape; use overlap area.",
@@ -322,8 +347,66 @@ const ASSOC = {
       ["G03", F.l04, { room_origin: "geometry" }], ["G03", F.f20, { room_origin: "stated" }], ["L01", F.f31, { room_origin: "stated" }],
       [null, F.e02, { room_origin: "unresolved" }], ["G01", null, {}], ["G04", null, {}], ["G05", null, {}]],
   },
+  floors: {
+    entity: "floors",
+    rule: { v: "the room lies on the floor, by at least 10 mm of width", src: "Geometry, within each model", link: null,
+      why: "Same rule and same code as ceilings. A room lies on its whole build-up (joist zone, structure, finish) and on House A even its roof, so expect several floors per room and filter by type or height." },
+    cols: ["Type", "Height Offset From Level", "Floor area"],
+    measures: ["overlap_area", "fraction_of_room", "fraction_of_element"], defaultMeasures: ["overlap_area", "fraction_of_room"],
+    summable: { overlap_area: true },
+    rows: [
+      ["G01", FL.fl1, { overlap_area: 64.2, fraction_of_room: 1.0, fraction_of_element: 0.16 }],
+      ["G01", FL.fl2, { overlap_area: 64.2, fraction_of_room: 1.0, fraction_of_element: 0.16 }],
+      ["G02", FL.fl1, { overlap_area: 171.0, fraction_of_room: 1.0, fraction_of_element: 0.425 }],
+      ["G02", FL.fl2, { overlap_area: 171.0, fraction_of_room: 1.0, fraction_of_element: 0.425 }],
+      ["G03", FL.fl1, { overlap_area: 264.1, fraction_of_room: 1.0, fraction_of_element: 0.656 }],
+      ["G04", FL.fl3, { overlap_area: 39.4, fraction_of_room: 1.0, fraction_of_element: 0.99 }],
+      ["L01", FL.fl6, { overlap_area: 154.2, fraction_of_room: 1.0, fraction_of_element: 1.0 }],
+      ["L01", FL.fl5, { overlap_area: 152.8, fraction_of_room: 0.991, fraction_of_element: 1.0 }],
+      [null, FL.fl4, {}],
+      ["G05", null, {}],
+    ],
+    perMatchNote: "BED 1 lies on two floors and one of them is its ROOF build-up, hosted on LEVEL 01. Correct data, not a fault: filter on type or height offset to pick the one you mean.",
+    perRoomNote: "Floor area is listed, not added up: one plate spans ENTRY, KITCHEN and LIVING. Overlap area is what adds up per room.",
+  },
+  doors: {
+    entity: "doors",
+    rule: { v: "the room the door opens into, else the room it opens from", src: "Within each model · policy: to_room_then_from_room", link: "Change in Settings → Doors",
+      why: "A door has up to two rooms and the policy picks one. Under the both policy the same door is listed under each side, so the row count moves with a setting while nothing is re-pushed." },
+    cols: ["Type", "Width", "Fire Rating"],
+    measures: ["side"], defaultMeasures: ["side"],
+    summable: {},
+    rows: [
+      ["G02", D.d1, { side: "to" }],
+      ["G04", D.d2, { side: "to" }],
+      ["G03", D.d3, { side: "to" }],
+      ["L01", D.d5, { side: "to" }],
+      [null, D.d4, {}],
+      ["G01", null, {}],
+      ["G05", null, {}],
+    ],
+    perMatchNote: "The entry door has no room on either side, so it is listed under no room. An external door is homeless by construction, not by mistake.",
+  },
+  windows: {
+    entity: "windows",
+    rule: { v: "the room the window opens into, else the room it opens from", src: "Within each model · policy: to_room_then_from_room", link: "Change in Settings → Windows",
+      why: "The rule doors use. A window in a facade package has no rooms in its own model to resolve against, so it is homeless and matches no building filter." },
+    cols: ["Type", "Width", "Head Height"],
+    measures: ["side"], defaultMeasures: ["side"],
+    summable: {},
+    rows: [
+      ["G03", W.w1, { side: "to" }],
+      ["G02", W.w2, { side: "to" }],
+      ["L01", W.w3, { side: "to" }],
+      [null, W.w4, {}],
+      ["G01", null, {}],
+      ["G04", null, {}],
+      ["G05", null, {}],
+    ],
+    perMatchNote: "W-04 sits in the facade model, which holds no rooms, so it resolves to none. On a project whose windows were never pushed the report says that instead of showing an empty table.",
+  },
 };
-const MEASURE_LABEL = { overlap_area: "overlap area", fraction_of_room: "% of room", fraction_of_ceiling: "% of ceiling", room_origin: "room from" };
+const MEASURE_LABEL = { overlap_area: "overlap area", fraction_of_room: "% of room", fraction_of_element: "% of the element", room_origin: "room from", side: "side" };
 
 /* ---------- the report-type registry ----------
    Each type names the form sections it needs. The page only knows how to draw
@@ -335,8 +418,9 @@ const KINDS = [
     desc: "One row per ceiling. To see which rooms each ceiling covers, use <strong>Ceilings by room</strong>." },
   { id: "sched_spaces", group: "Schedules", label: "Space schedule", form: "schedule", entity: "spaces", desc: "One row per space, across every services model." },
   { id: "sched_ffe", group: "Schedules", label: "FF&E schedule", form: "schedule", entity: "ffe", desc: "One row per item." },
-  { id: "sched_doors", group: "Schedules", label: "Door schedule", later: true },
-  { id: "sched_windows", group: "Schedules", label: "Window schedule", later: true },
+  { id: "sched_doors", group: "Schedules", label: "Door schedule", form: "schedule", entity: "doors", desc: "One row per door." },
+  { id: "sched_windows", group: "Schedules", label: "Window schedule", form: "schedule", entity: "windows", desc: "One row per window, including those in a facade model that holds no rooms." },
+  { id: "sched_floors", group: "Schedules", label: "Floor schedule", form: "schedule", entity: "floors", desc: "One row per floor. A room's whole build-up is here — joist zone, structure, finish, and outside the building paving and lawn." },
 
   { id: "by_room_ceilings", group: "By room", label: "Ceilings by room", form: "association", assoc: "ceilings",
     desc: "Each room with the ceilings over it, and how much of the room each one covers." },
@@ -344,8 +428,12 @@ const KINDS = [
     desc: "Each architectural room with the services spaces that match it." },
   { id: "by_room_ffe", group: "By room", label: "FF&E by room", form: "association", assoc: "ffe",
     desc: "Each room with the furniture, fittings and equipment in it." },
-  { id: "by_room_doors", group: "By room", label: "Doors by room", later: true },
-  { id: "by_room_windows", group: "By room", label: "Windows by room", later: true },
+  { id: "by_room_floors", group: "By room", label: "Floors by room", form: "association", assoc: "floors",
+    desc: "Each room with the floors it lies on, and how much of the room each one covers." },
+  { id: "by_room_doors", group: "By room", label: "Doors by room", form: "association", assoc: "doors",
+    desc: "Each room with the doors attributed to it under the current door policy." },
+  { id: "by_room_windows", group: "By room", label: "Windows by room", form: "association", assoc: "windows",
+    desc: "Each room with its windows. External windows are listed under no room." },
 
   { id: "cmp_rooms", group: "Between milestones", label: "Room changes", form: "comparison",
     desc: "Rooms added, removed or changed between a baseline milestone and the others. Replaces the old comparison page." },
@@ -365,6 +453,8 @@ const SAVED = [
   { name: "Level 00 room schedule", kind: "sched_rooms" },
   { name: "FF&E by room", kind: "by_room_ffe" },
   { name: "Mechanical spaces by room", kind: "by_room_spaces" },
+  { name: "Floor build-ups by room", kind: "by_room_floors" },
+  { name: "External doors", kind: "by_room_doors" },
   { name: "DD issue vs latest", kind: "cmp_rooms" },
 ];
 
