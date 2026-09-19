@@ -209,3 +209,17 @@ export interface ReportResponse {
   /** Rows where one side matched nothing. Reported, never filtered. */
   unmatched_rows: number;
 }
+
+export interface ColumnInfo {
+  name: string;
+  /** `property`, `intrinsic`, `reference` or `measure`. */
+  kind: string;
+  /** `text` or `number` — what the export said, not what the name looks like. */
+  value_type: string;
+}
+
+export interface ColumnCatalog {
+  entity: ColumnInfo[];
+  rooms: ColumnInfo[];
+  measures: ColumnInfo[];
+}

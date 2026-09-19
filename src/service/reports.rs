@@ -425,6 +425,178 @@ pub struct ReportResult {
 /// wrong when in fact nobody has run the exporter.
 pub type MaybeReport = Option<ReportResult>;
 
+/// One thing a column or a condition may name.
+#[derive(Debug, Clone, Serialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    /// `property` (from the model), `intrinsic` (a field of the record itself),
+    /// `reference` (a joined source's label) or `measure` (what the join
+    /// produced). A picker groups by this; a reader learns from it why a name
+    /// exists at all.
+    pub kind: &'static str,
+    /// `text` or `number`, which decides the operators a filter offers.
+    pub value_type: &'static str,
+}
+
+/// What a report over one entity may name, in this project.
+#[derive(Debug, Clone, Serialize)]
+pub struct ColumnCatalog {
+    pub entity: Vec<ColumnInfo>,
+    /// The room side, for a by-room report. Empty for an entity that cannot be
+    /// reported by room.
+    pub rooms: Vec<ColumnInfo>,
+    /// What the join measured, empty where it measured nothing.
+    pub measures: Vec<ColumnInfo>,
+}
+
+/// The intrinsics each entity answers — fields of the record rather than
+/// properties of the model.
+///
+/// **A code fact, so it is a list here rather than a read.** Each one is an arm
+/// in that entity's `FilterTarget::presence`, and the two must stay in step:
+/// a name here that no arm answers is a column that silently resolves to
+/// nothing.
+fn intrinsics(entity: Entity) -> Vec<ColumnInfo> {
+    let text = |name: &str| ColumnInfo { name: name.to_string(), kind: "intrinsic", value_type: "text" };
+    let number = |name: &str| ColumnInfo { name: name.to_string(), kind: "intrinsic", value_type: "number" };
+    match entity {
+        Entity::Rooms | Entity::Spaces => vec![text("$id"), text("$name"), text("$level_id")],
+        Entity::Doors | Entity::Windows => vec![
+            text("$id"),
+            text("$type_name"),
+            text("$type_id"),
+            text("$level_id"),
+            text("$from_room"),
+            text("$to_room"),
+        ],
+        Entity::Ceilings | Entity::Floors => vec![
+            text("$id"),
+            text("$type_name"),
+            text("$type_id"),
+            text("$level_id"),
+            number("$height_offset"),
+        ],
+        Entity::Ffe => vec![
+            text("$id"),
+            text("$category"),
+            text("$type_name"),
+            text("$type_id"),
+            text("$level_id"),
+            text("$room"),
+        ],
+    }
+}
+
+/// What the join produced, per entity. Serving it keeps the page from holding
+/// its own copy of a list only the server can be right about.
+fn measures(entity: Entity) -> Vec<ColumnInfo> {
+    let number = |name: &str| ColumnInfo { name: name.to_string(), kind: "measure", value_type: "number" };
+    match entity {
+        Entity::Ceilings | Entity::Floors => vec![
+            number("overlap_area"),
+            number("fraction_of_room"),
+            number("fraction_of_element"),
+            number("mean_width"),
+        ],
+        Entity::Ffe => vec![ColumnInfo { name: "room_origin".to_string(), kind: "measure", value_type: "text" }],
+        _ => Vec::new(),
+    }
+}
+
+/// Revit's storage type, as a filter cares about it. Anything that is not a
+/// number is text, including an `ElementId` — you compare it, you do not order
+/// it.
+fn value_type(storage_type: Option<&str>) -> &'static str {
+    match storage_type {
+        Some(t) if t.eq_ignore_ascii_case("Double") || t.eq_ignore_ascii_case("Integer") => "number",
+        _ => "text",
+    }
+}
+
+/// Every property name this project's snapshots of one kind carry.
+///
+/// **Read from each snapshot's last line, never by assembling the entity.**
+/// The dictionary is written last precisely so this costs a tail read; see
+/// `SnapshotStore::get_latest_trailer`. A snapshot stored before the property
+/// codec has no dictionary and contributes nothing — its properties are still
+/// filterable, they just cannot be *offered*, which is why the picker keeps
+/// taking free text.
+fn stored_properties(state: &AppState, project: Option<&str>, kind: SnapshotKind) -> Vec<ColumnInfo> {
+    let Ok(index) = state.model_index() else {
+        return Vec::new();
+    };
+    let mut seen: BTreeMap<String, &'static str> = BTreeMap::new();
+    for row in index.iter().filter(|r| project.is_none_or(|p| r.key.project_id == p)) {
+        let Ok(Some(trailer)) = state.store().get_latest_trailer(kind, &row.key) else {
+            continue;
+        };
+        let Ok(decoder) = crate::contract::property_codec::Decoder::from_trailer(&trailer) else {
+            continue;
+        };
+        for (name, storage_type) in decoder.vocabulary() {
+            seen.entry(name.to_string()).or_insert_with(|| value_type(storage_type));
+        }
+    }
+    seen.into_iter()
+        .map(|(name, value_type)| ColumnInfo { name, kind: "property", value_type })
+        .collect()
+}
+
+/// The labels a joined reference source contributes, for the sources scoped to
+/// this entity. Named `<source>.<label>`, which is the flat namespace a filter
+/// and a column already share.
+fn reference_labels(state: &AppState, project: Option<&str>, entity: Entity) -> Vec<ColumnInfo> {
+    let registry = state.settings();
+    let Some(bundle) = project.and_then(|p| registry.settings_for(p)) else {
+        return Vec::new();
+    };
+    let wanted = match entity {
+        Entity::Rooms => crate::settings::ReferenceEntity::Rooms,
+        Entity::Doors => crate::settings::ReferenceEntity::Doors,
+        Entity::Windows => crate::settings::ReferenceEntity::Windows,
+        Entity::Ffe => crate::settings::ReferenceEntity::Ffe,
+        Entity::Spaces => crate::settings::ReferenceEntity::Spaces,
+        // No source declares a surface today; the day one does, this is where
+        // it starts being offered.
+        Entity::Ceilings | Entity::Floors => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for (name, source) in &bundle.reference {
+        if source.entity != wanted {
+            continue;
+        }
+        let Some(data) = &source.data else { continue };
+        for label in &data.all_labels {
+            out.push(ColumnInfo {
+                name: format!("{name}.{label}"),
+                kind: "reference",
+                // A reference value is text unless its field config says
+                // otherwise, and the configs that say so are the QA ones.
+                value_type: "text",
+            });
+        }
+    }
+    out
+}
+
+/// What a report over this entity may name, in this project.
+pub fn column_catalog(state: &AppState, project: Option<&str>, entity: Entity) -> ColumnCatalog {
+    let mut columns = intrinsics(entity);
+    columns.extend(stored_properties(state, project, entity.kinds(false)[0]));
+    columns.extend(reference_labels(state, project, entity));
+
+    let rooms = if entity.joins_rooms() {
+        let mut rooms = intrinsics(Entity::Rooms);
+        rooms.extend(stored_properties(state, project, SnapshotKind::Rooms));
+        rooms.extend(reference_labels(state, project, Entity::Rooms));
+        rooms
+    } else {
+        Vec::new()
+    };
+
+    ColumnCatalog { entity: columns, rooms, measures: measures(entity) }
+}
+
 /// Build one report.
 pub fn build_report(
     state: &AppState,
@@ -1718,6 +1890,72 @@ mod tests {
             limit: def.limit,
             filter: None,
         }
+    }
+
+    // ---------- the column catalog ----------
+
+    /// The names a picker offers come from the stored dictionary, so a property
+    /// nobody has pushed is not offered and one that was is -- without
+    /// assembling the entity to find out.
+    #[test]
+    fn test_the_catalog_offers_what_the_snapshots_actually_carry() {
+        let state = state_with(
+            vec![room("r1", "ENTRY", &[("Number", "G01"), ("Department", "Circulation")])],
+            vec![door("d1", Some("r1"), &[("Mark", "D-01"), ("Fire Rating", "60")])],
+        );
+
+        let catalog = column_catalog(&state, Some("p1"), Entity::Doors);
+        let names: Vec<&str> = catalog.entity.iter().map(|c| c.name.as_str()).collect();
+
+        assert!(names.contains(&"Mark") && names.contains(&"Fire Rating"), "door properties: {names:?}");
+        assert!(!names.contains(&"Department"), "a ROOM property is not a door column: {names:?}");
+        // Intrinsics are code facts and ride along, so `$to_room` is offered
+        // even though no dictionary mentions it.
+        assert!(names.contains(&"$to_room"), "intrinsics too: {names:?}");
+    }
+
+    /// The room side is offered only for an entity that can be reported by
+    /// room, and it is the ROOMS vocabulary rather than the entity's.
+    #[test]
+    fn test_the_room_side_is_offered_only_where_it_means_something() {
+        let state = state_with(
+            vec![room("r1", "ENTRY", &[("Number", "G01")])],
+            vec![door("d1", Some("r1"), &[("Mark", "D-01")])],
+        );
+
+        let doors = column_catalog(&state, Some("p1"), Entity::Doors);
+        assert!(doors.rooms.iter().any(|c| c.name == "Number"));
+
+        let rooms = column_catalog(&state, Some("p1"), Entity::Rooms);
+        assert!(rooms.rooms.is_empty(), "a room schedule has no second side");
+    }
+
+    /// The measures are the join's, so they are served rather than left for the
+    /// page to remember -- and an entity whose join measures nothing offers
+    /// none rather than an empty-looking picker.
+    #[test]
+    fn test_measures_are_per_entity() {
+        let state = state_with(vec![room("r1", "ENTRY", &[])], vec![door("d1", Some("r1"), &[])]);
+
+        let ceilings = column_catalog(&state, Some("p1"), Entity::Ceilings);
+        assert!(ceilings.measures.iter().any(|m| m.name == "overlap_area"));
+
+        let doors = column_catalog(&state, Some("p1"), Entity::Doors);
+        assert!(doors.measures.is_empty(), "an opening's attribution measures nothing");
+    }
+
+    /// The value type decides which operators a filter offers, and it comes
+    /// from what the export stated rather than from the name.
+    #[test]
+    fn test_value_type_reads_revits_storage_type() {
+        assert_eq!(value_type(Some("Double")), "number");
+        assert_eq!(value_type(Some("Integer")), "number");
+        assert_eq!(value_type(Some("String")), "text");
+        // An ElementId is compared, never ordered.
+        assert_eq!(value_type(Some("ElementId")), "text");
+        // No stated type is text: the safe half, since every operator text
+        // offers works on a number written as one.
+        assert_eq!(value_type(None), "text");
     }
 
     /// CSV is written here so a download and an MCP host cannot differ. RFC

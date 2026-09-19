@@ -187,6 +187,22 @@ impl Decoder {
         }
     }
 
+    /// Every property name this snapshot's elements use, with the storage type
+    /// the export stated for it.
+    ///
+    /// **The vocabulary question, answered from the dictionary alone.** It is
+    /// what a column picker needs — "what can I put in a column" — and reading
+    /// it here rather than by assembling the entity is the difference between a
+    /// few hundred bytes and a whole snapshot. A key the dictionary carries is
+    /// one SOME element used; nothing here says every element has it, which is
+    /// the same honesty a blank cell gives.
+    pub fn vocabulary(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
+        self.keys
+            .iter()
+            .enumerate()
+            .map(|(i, key)| (key.as_ref(), self.storage_types.get(i).and_then(|t| t.as_deref())))
+    }
+
     /// Build the dictionary from a snapshot's trailer line
     /// (`,"property_codec":...}`).
     pub fn from_trailer(line: &[u8]) -> serde_json::Result<Self> {

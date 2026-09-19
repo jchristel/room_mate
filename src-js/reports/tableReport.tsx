@@ -14,11 +14,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiGet } from "./common.js";
 import { downloadCsv } from "./csv.js";
-import { entityById, ROOM_COLUMNS, ROOM_SUGGESTIONS } from "./reportTypes.js";
+import { entityById, ROOM_COLUMNS } from "./reportTypes.js";
 import { group, toWire, type FieldType, type Group } from "./filter.js";
 import { FilterBuilder, type FieldOption } from "./filterBuilder.js";
 import { summarise, toBody, type FormState } from "./reportRequest.js";
-import type { MilestonesResponse, ReportResponse } from "./types.js";
+import type { ColumnCatalog, MilestonesResponse, ReportResponse } from "./types.js";
 
 interface Props {
   projectId: string;
@@ -31,6 +31,7 @@ const CAP = 500;
 export function TableReport({ projectId, entityId, byRoom }: Props) {
   const entity = entityById(entityId);
   const [form, setForm] = useState<FormState>(() => initialForm(entityId, byRoom));
+  const [catalog, setCatalog] = useState<ColumnCatalog | null>(null);
   const [milestones, setMilestones] = useState<string[]>([]);
   const [milestone, setMilestone] = useState("");
   const [filter, setFilter] = useState<Group>(() => group("all"));
@@ -52,6 +53,23 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
     setState("idle");
   }, [entityId, byRoom]);
 
+  // What this project's snapshots actually carry, read from their property
+  // dictionaries rather than guessed from names. A project that has pushed
+  // nothing of this entity answers with the intrinsics alone, which is the
+  // honest list rather than an empty one.
+  useEffect(() => {
+    let live = true;
+    setCatalog(null);
+    apiGet<ColumnCatalog>(
+      `/projects/${encodeURIComponent(projectId)}/reports/columns?entity=${encodeURIComponent(entityId)}`,
+    )
+      .then((c) => live && setCatalog(c))
+      .catch(() => live && setCatalog(null));
+    return () => {
+      live = false;
+    };
+  }, [projectId, entityId]);
+
   useEffect(() => {
     apiGet<MilestonesResponse>(`/projects/${encodeURIComponent(projectId)}/milestones`)
       .then((d) => setMilestones((d.milestones ?? []).map((m) => m.name)))
@@ -65,27 +83,35 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
     [form, milestone, filter],
   );
 
-  // What a condition may name: the room's own properties on a by-room report,
-  // this entity's, and the measures the join produced.
+  // What a condition may name. The served catalog decides both the list and
+  // each field's type, which is what the filter needs to offer the right
+  // operators — a property called "Area Check" is not a number because of its
+  // name, and Revit already said which it is.
   const fields = useMemo<FieldOption[]>(() => {
-    const numeric = (name: string): FieldType =>
-      /area|width|height|offset|fraction|count|cost/i.test(name) ? "number" : "text";
+    if (!catalog) return [];
     const out: FieldOption[] = [];
-    if (byRoom) {
-      for (const name of [...new Set([...form.roomColumns, ...ROOM_SUGGESTIONS])]) {
-        out.push({ side: "room", name, type: numeric(name), sideLabel: "Room" });
+    const push = (side: "room" | "element" | "join", sideLabel: string, columns: typeof catalog.entity) => {
+      for (const c of columns) {
+        out.push({ side, name: c.name, type: c.value_type === "number" ? "number" : "text", sideLabel });
       }
-    }
-    for (const name of [...new Set([...form.columns, ...entity.suggestions])]) {
-      out.push({ side: "element", name, type: numeric(name), sideLabel: entity.label });
-    }
-    if (byRoom) {
-      for (const name of entity.measures) {
-        out.push({ side: "join", name, type: name === "room_origin" ? "text" : "number", sideLabel: "Join" });
-      }
-    }
+    };
+    if (byRoom) push("room", "Room", catalog.rooms);
+    push("element", entity.label, catalog.entity);
+    if (byRoom) push("join", "Join", catalog.measures);
     return out;
-  }, [byRoom, entity, form.columns, form.roomColumns]);
+  }, [catalog, byRoom, entity.label]);
+
+  // The pickers offer the same vocabulary, and still take free text: a name the
+  // dictionary does not carry may exist on an older snapshot, and refusing it
+  // would be a guess in the other direction.
+  const suggestions = useMemo(
+    () => ({
+      rooms: (catalog?.rooms ?? []).map((c) => c.name),
+      entity: (catalog?.entity ?? []).map((c) => c.name),
+      measures: (catalog?.measures ?? []).map((c) => c.name),
+    }),
+    [catalog],
+  );
 
   const run = useCallback(async () => {
     setState("loading");
@@ -138,7 +164,7 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
             title="Room columns"
             hint="Any room property, or a $intrinsic."
             chosen={form.roomColumns}
-            suggestions={ROOM_SUGGESTIONS}
+            suggestions={suggestions.rooms}
             onChange={(roomColumns) => setForm({ ...form, roomColumns })}
           />
         )}
@@ -146,15 +172,15 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
           title={`${entity.label} columns`}
           hint={`Properties of each ${entity.one}, instance tier then type.`}
           chosen={form.columns}
-          suggestions={entity.suggestions}
+          suggestions={suggestions.entity}
           onChange={(columns) => setForm({ ...form, columns })}
         />
-        {byRoom && entity.measures.length > 0 && (
+        {byRoom && suggestions.measures.length > 0 && (
           <ColumnPicker
             title="Measures from the join"
             hint="What linking them produced. Belongs to neither side."
             chosen={form.measures}
-            suggestions={entity.measures}
+            suggestions={suggestions.measures}
             onChange={(measures) => setForm({ ...form, measures })}
             accent
           />

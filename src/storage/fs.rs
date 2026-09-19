@@ -563,6 +563,30 @@ impl SnapshotStore for FsStore {
         }
     }
 
+    fn get_latest_trailer(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let Some(path) = Self::latest_snapshot_file(&self.kind_dir(kind, key))? else {
+            return Ok(None);
+        };
+        let mut file = fs::File::open(&path)?;
+        let len = file.metadata()?.len();
+        // A dictionary is one line and a snapshot can be hundreds of megabytes,
+        // so read a window from the end rather than the file. The window is
+        // generous: RHH's widest vocabulary is a few thousand keys, and a
+        // dictionary too long for it simply reads as no trailer rather than as
+        // half of one.
+        const WINDOW: u64 = 4 * 1024 * 1024;
+        let start = len.saturating_sub(WINDOW);
+        file.seek(SeekFrom::Start(start))?;
+        let mut tail = Vec::with_capacity((len - start) as usize);
+        file.read_to_end(&mut tail)?;
+
+        let body = tail.strip_suffix(b"\n").unwrap_or(&tail);
+        let line_start = body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        Ok(Some(body[line_start..].to_vec()))
+    }
+
     fn list_models(&self) -> Result<Vec<ModelKey>> {
         let mut out = Vec::new();
         if !self.root.exists() {
