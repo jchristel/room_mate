@@ -201,6 +201,8 @@ export interface ReportColumn {
 
 export interface ReportResponse {
   revision: string;
+  /** Why the answer looks the way it does, when the rows cannot say. */
+  note?: string;
   columns: ReportColumn[];
   /** Flat string cells, in `columns` order. */
   rows: string[][];

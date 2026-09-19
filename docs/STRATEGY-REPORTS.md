@@ -184,11 +184,11 @@ Left open:
 - **Three levels of nesting** is a cap the builder enforces and nothing tests at
   the server, which accepts any depth. It has not mattered; a form deeper than
   that stops being readable long before it stops parsing.
-- **A reference label's type is still assumed to be text.** The entity's own
-  properties carry Revit's storage type through the dictionary, but a joined
-  source's do not: `ReferenceFieldConfig` has a `FieldType` for the fields QA
-  compares, and nothing reads it here yet. A numeric dRofus column therefore
-  offers text operators.
+- **A reference label with no field config is text**, which is the safe half:
+  every text operator works on a number written as one, while offering `>` on a
+  name matches nothing. A `Date` is text too — ordering dates as strings is
+  right only for ISO-8601, and `ReferenceFieldConfig` carries a `format`
+  precisely because they are not all ISO.
 - **An `any` group holding a negative associated condition** has no single
   reading, so the builder does not offer one there. The server evaluates
   whatever it is sent, which is the looser contract of the two; if a caller ever
@@ -279,11 +279,12 @@ beside it. The module documents the three rules it keeps. What is left:
 - **A plain `GET` URL for a saved report's rows**, which a script could fetch
   without posting a definition: `GET /projects/{id}/reports/{report_id}/rows.csv`.
   The documents exist now, so this is a route over them rather than a design.
-- **Spaces by room.** A space matches a room on a key, project-wide, and that
-  match lives in `SpaceReport` rather than on the `/spaces` rows. Re-deriving it
-  in a report would give the report and the QA check two answers to one
-  question, so the by-room type is disabled until the match is exposed on the
-  read. The Unmatched spaces and rooms check answers the question meanwhile.
+- **The space match is not on `/spaces` rows.** `spaces::match_spaces` is
+  shared by the QA report and the by-room report, which is what the by-room
+  type needed, but the read itself still carries no matched room. Putting it
+  there would let the viewer's spaces overlay show which room a space matched —
+  at the cost of every `/spaces` read loading the rooms in scope and its ETag
+  cursor widening to cover them. Worth it when something asks.
 
 ## Saved reports: what shipped, and what did not
 

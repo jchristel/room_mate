@@ -101,11 +101,11 @@ export const ENTITIES: EntityDef[] = [
     one: "space",
     many: "spaces",
     columns: ["$id", "$name", "Number"],
-    measures: [],
-    defaultMeasures: [],
-    byRoom: false,
-    byRoomNote:
-      "A space matches a room on a key, project-wide, and that match lives in the QA report rather than on the rows. Use the Unmatched spaces and rooms check.",
+    // The key a space matched on, and whether that key named more than one
+    // room. Both are the JOIN's, which is why they are here and not columns.
+    measures: ["match_key", "ambiguous_key"],
+    defaultMeasures: ["match_key", "ambiguous_key"],
+    byRoom: true,
   },
 ];
 

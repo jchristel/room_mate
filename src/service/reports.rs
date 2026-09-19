@@ -109,19 +109,18 @@ impl Entity {
         }
     }
 
-    /// Which entities can be reported by room, and why the two that cannot are
-    /// not a gap:
+    /// Which entities can be reported by room. Rooms cannot: they are the
+    /// other side of the join.
     ///
-    /// - **Rooms** are the other side of the join.
-    /// - **Spaces** match a room on a *key*, project-wide, and that matching
-    ///   lives in `service::spaces`' report rather than on the `/spaces` rows —
-    ///   there is no per-space "the room it matched" field to read, so a
-    ///   by-room spaces report would have to re-implement the match. Doing that
-    ///   would give the report and `SpaceReport` two answers to one question,
-    ///   which is exactly the rule this module keeps. It waits for the match to
-    ///   be exposed, and the checks report covers the question meanwhile.
+    /// **Spaces join differently from everything else here**, and it is worth
+    /// knowing before reading `read_spaces`: every other entity names its room
+    /// (or overlaps it) within one model, while a space matches on a *key
+    /// value*, project-wide, because the space and the room live in different
+    /// Revit files by construction. The pairing comes from
+    /// `spaces::match_spaces`, which `SpaceReport` also uses — one question,
+    /// one answer.
     pub fn joins_rooms(self) -> bool {
-        !matches!(self, Entity::Rooms | Entity::Spaces)
+        !matches!(self, Entity::Rooms)
     }
 }
 
@@ -413,6 +412,11 @@ pub struct ReportResult {
     /// Rows before `limit` — what makes "first N of M" true rather than
     /// reassuring.
     pub total_rows: usize,
+    /// Why the answer looks the way it does, when that is not visible from the
+    /// rows — "no space key is configured, so nothing was matched". Absent
+    /// whenever the table speaks for itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     /// How many rows are findings of the "nothing matched" kind: an element
     /// with no room, or a room with no element. Reported rather than filtered,
     /// so a reader knows the total includes them.
@@ -499,6 +503,14 @@ fn measures(entity: Entity) -> Vec<ColumnInfo> {
             number("mean_width"),
         ],
         Entity::Ffe => vec![ColumnInfo { name: "room_origin".to_string(), kind: "measure", value_type: "text" }],
+        // The key a space matched on, and whether that key named more than one
+        // room. Both are text: the key is a Revit value and the flag is a
+        // sentence, because a reader scanning a sheet should not have to know
+        // what `true` meant.
+        Entity::Spaces => vec![
+            ColumnInfo { name: "match_key".to_string(), kind: "measure", value_type: "text" },
+            ColumnInfo { name: "ambiguous_key".to_string(), kind: "measure", value_type: "text" },
+        ],
         _ => Vec::new(),
     }
 }
@@ -570,13 +582,32 @@ fn reference_labels(state: &AppState, project: Option<&str>, entity: Entity) -> 
             out.push(ColumnInfo {
                 name: format!("{name}.{label}"),
                 kind: "reference",
-                // A reference value is text unless its field config says
-                // otherwise, and the configs that say so are the QA ones.
-                value_type: "text",
+                value_type: reference_value_type(&source.fields, label),
             });
         }
     }
     out
+}
+
+/// A reference label's type, from the field config that declares it.
+///
+/// **The declaration is the answer where there is one.** A CSV column is text
+/// on the wire whatever it holds, so nothing about the data says which
+/// operators a filter should offer — but `[[sources.reference.<name>.fields]]`
+/// already states `type` for the fields QA compares, and that is the same
+/// question asked for a different reason. A label with no config is text: the
+/// safe half, since every text operator works on a number written as one, while
+/// offering `>` on a name would silently match nothing.
+///
+/// A `Date` is text here rather than a third kind. Ordering dates as strings is
+/// right only for ISO-8601 and the config carries a `format` precisely because
+/// they are not all ISO, so `>` would be wrong often enough to be worse than
+/// absent.
+fn reference_value_type(fields: &[crate::settings::ReferenceFieldConfig], label: &str) -> &'static str {
+    match fields.iter().find(|f| f.label == label).map(|f| f.field_type) {
+        Some(crate::settings::FieldType::Numeric) => "number",
+        _ => "text",
+    }
 }
 
 /// What a report over this entity may name, in this project.
@@ -628,6 +659,9 @@ pub fn build_report(
         schedule_rows(def, &builtin, &elements)
     };
     result.revision = revision;
+    if def.entity == Entity::Spaces && def.by_room {
+        result.note = spaces_note(state, scope);
+    }
 
     result.total_rows = result.rows.len();
     if let Some(limit) = def.limit {
@@ -819,8 +853,20 @@ fn read_items(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<El
     }))
 }
 
-/// Spaces carry no per-row room match (see `Entity::joins_rooms`), so they
-/// report as a schedule and nothing else.
+/// Spaces, matched to rooms by key.
+///
+/// **The match is `spaces::match_spaces`, never a second one here**, which is
+/// what the by-room type waited for. Two things it reports rather than
+/// resolves, both carried as measures on the row:
+///
+/// - **An ambiguous key attributes to the FIRST candidate and says so.**
+///   Choosing between rooms would be a guess that looks like an answer;
+///   dropping the match would hide a real pairing behind a key problem.
+/// - **A space that matched nothing is unattributed**, which is the ordinary
+///   state for a project whose rooms have not been pushed at all — a services
+///   model audited against an empty room set. The report says which of "no
+///   rooms to match" and "no key configured" it is (see `spaces_note`), because
+///   an empty room column otherwise reads as a fault in the model.
 fn read_spaces(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<Element>>, ServiceError> {
     let space_scope = SpaceScope {
         project: scope.project,
@@ -829,13 +875,95 @@ fn read_spaces(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<E
         filter: None,
         storeys: None,
     };
-    Ok(spaces::assemble_spaces(state, &space_scope)?.map(|result| {
+    let Some(result) = spaces::assemble_spaces(state, &space_scope)? else {
+        return Ok(None);
+    };
+
+    let matches = space_matches(state, scope)?;
+    Ok(Some(
         result
             .spaces
             .into_iter()
-            .map(|space| Element { read: presence_reader(space), rooms: Vec::new() })
-            .collect()
-    }))
+            .map(|space| {
+                let id = (space.model_id.clone(), space.space.id.clone());
+                let rooms = match matches.as_ref().and_then(|m| m.get(&id)) {
+                    Some(spaces::SpaceMatch::Matched { key, room, ambiguous }) => vec![Attribution {
+                        model_id: room.model_id.clone(),
+                        room_id: room.room_id.clone(),
+                        measures: BTreeMap::from([
+                            ("match_key", key.clone()),
+                            (
+                                "ambiguous_key",
+                                if *ambiguous {
+                                    "yes, matched the first of several rooms".to_string()
+                                } else {
+                                    String::new()
+                                },
+                            ),
+                        ]),
+                    }],
+                    // Unmatched, no key, or no match attempted: all three are
+                    // reported states, and `spaces_note` says which.
+                    _ => Vec::new(),
+                };
+                Element { read: presence_reader(space), rooms }
+            })
+            .collect(),
+    ))
+}
+
+/// The space-to-room pairing for this scope, or `None` when the project
+/// configures no space key — in which case nothing was attempted, which is a
+/// different answer from nothing matching.
+fn space_matches(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<spaces::SpaceMatches>, ServiceError> {
+    let Some(project) = scope.project else { return Ok(None) };
+    let registry = state.settings();
+    let Some(bundle) = registry.settings_for(project) else {
+        return Ok(None);
+    };
+
+    let stored_rooms = state
+        .all_opening_snapshots::<crate::contract::RoomPayload>(SnapshotKind::Rooms, Some(project))
+        .map_err(ServiceError::Internal)?;
+    let stored_spaces = state
+        .all_opening_snapshots::<crate::contract::SpacePayload>(SnapshotKind::Spaces, Some(project))
+        .map_err(ServiceError::Internal)?;
+
+    Ok(spaces::match_spaces(
+        &stored_rooms,
+        &stored_spaces,
+        &bundle.spaces,
+        &bundle.builtin_properties,
+    ))
+}
+
+/// Why a spaces-by-room report has unattributed rows, when it does.
+///
+/// **Three states an empty room column can mean**, and a reader cannot tell
+/// them apart from the table: no key is configured so nothing was attempted,
+/// the project has no rooms to match against at all, or the keys simply did not
+/// line up. Only the last is a finding about the models.
+fn spaces_note(state: &AppState, scope: &ReportScope<'_>) -> Option<String> {
+    let project = scope.project?;
+    let registry = state.settings();
+    let bundle = registry.settings_for(project)?;
+    if bundle.spaces.comparison_key.is_none() {
+        return Some(
+            "No space key is configured for this project, so no space was matched to a room. \
+             Set [spaces] comparison_key in settings."
+                .to_string(),
+        );
+    }
+    let has_rooms = state
+        .model_index()
+        .ok()?
+        .iter()
+        .any(|row| row.key.project_id == project && row.latest.contains_key(&SnapshotKind::Rooms));
+    (!has_rooms).then(|| {
+        "This project has no rooms pushed, so every space is unattributed. That is the room set being \
+         empty, not the spaces being wrong."
+            .to_string()
+    })
 }
 
 /// A cell: the rendered value, or empty for absent and blank alike.
@@ -1013,6 +1141,7 @@ fn schedule_rows(def: &ReportDefinition, builtin: &[BuiltinPropertyDef], element
         rows,
         total_rows: 0,
         unmatched_rows: 0,
+        note: None,
     }
 }
 
@@ -1133,6 +1262,7 @@ fn by_room_rows(
         rows,
         total_rows: 0,
         unmatched_rows: unmatched,
+        note: None,
     })
 }
 
@@ -1344,17 +1474,22 @@ mod tests {
         assert_eq!(summed(&["1.00".to_string(), String::new()]), Some(1.0));
     }
 
-    /// Spaces and rooms are excluded from the by-room shape deliberately, and
-    /// the refusal is a message rather than an empty report -- an empty table
-    /// would read as "nothing matched".
+    /// Rooms are the one entity with no by-room shape -- they are the other
+    /// side of the join -- and the refusal is a message rather than an empty
+    /// report, since an empty table would read as "nothing matched".
+    ///
+    /// **Spaces joined this list on 2026-09-19**, once `spaces::match_spaces`
+    /// existed for both this and the QA report to read. Before that a by-room
+    /// spaces report would have had to match again, which is one question with
+    /// two answers.
     #[test]
     fn test_only_the_entities_that_carry_an_attribution_join_rooms() {
         assert!(Entity::Ceilings.joins_rooms());
         assert!(Entity::Floors.joins_rooms());
         assert!(Entity::Doors.joins_rooms());
         assert!(Entity::Ffe.joins_rooms());
+        assert!(Entity::Spaces.joins_rooms());
         assert!(!Entity::Rooms.joins_rooms());
-        assert!(!Entity::Spaces.joins_rooms());
     }
 
     /// The cursor has to move when the ROOMS move, not only when the entity
@@ -1892,6 +2027,22 @@ mod tests {
         }
     }
 
+    /// An empty room column on a spaces report means one of three things and
+    /// the table cannot say which, so the report says it. This is the state a
+    /// project hits first: spaces pushed, no key configured, nothing attempted.
+    #[test]
+    fn test_a_spaces_report_says_why_nothing_matched() {
+        // `bundle()` configures no space key, which is the default a project
+        // starts from.
+        let state = state_with(vec![room("r1", "ENTRY", &[("Number", "G01")])], vec![]);
+        let scope = scope();
+
+        let note = spaces_note(&state, &scope).expect("a note, because nothing was attempted");
+
+        assert!(note.contains("No space key is configured"), "{note}");
+        assert!(note.contains("comparison_key"), "and it names the setting to change: {note}");
+    }
+
     // ---------- the column catalog ----------
 
     /// The names a picker offers come from the stored dictionary, so a property
@@ -1958,12 +2109,41 @@ mod tests {
         assert_eq!(value_type(None), "text");
     }
 
+    /// A reference label's type comes from the field config that declares it,
+    /// which is the only place anything states it -- a CSV column is text on
+    /// the wire whatever it holds.
+    #[test]
+    fn test_a_reference_label_takes_its_type_from_its_field_config() {
+        use crate::settings::{FieldType, ReferenceFieldConfig};
+        let field = |label: &str, field_type: FieldType| ReferenceFieldConfig {
+            label: label.to_string(),
+            field_type,
+            format: None,
+            revit_format: None,
+            qa: None,
+        };
+        let fields = vec![
+            field("NetArea", FieldType::Numeric),
+            field("Department", FieldType::String),
+            field("Issued", FieldType::Date),
+        ];
+
+        assert_eq!(reference_value_type(&fields, "NetArea"), "number");
+        assert_eq!(reference_value_type(&fields, "Department"), "text");
+        // A date is text: ordering them as strings is right only for ISO-8601,
+        // and the config carries a `format` precisely because they are not.
+        assert_eq!(reference_value_type(&fields, "Issued"), "text");
+        // A label nobody configured is text -- the safe half.
+        assert_eq!(reference_value_type(&fields, "Unconfigured"), "text");
+    }
+
     /// CSV is written here so a download and an MCP host cannot differ. RFC
     /// 4180: CRLF records, doubled quotes, and a field quoted only when it
     /// carries a separator.
     #[test]
     fn test_csv_quotes_only_what_needs_it() {
         let result = ReportResult {
+            note: None,
             revision: String::new(),
             columns: vec![
                 Column { name: "Room".to_string(), side: "room" },

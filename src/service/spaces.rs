@@ -654,6 +654,87 @@ fn index_rooms_by_key(
     rooms_by_key
 }
 
+/// How one space resolved against the room set.
+///
+/// **The pairing, as a value.** It used to exist only inside `space_report`,
+/// which used it to compare properties and then dropped it — so a by-room
+/// spaces report had nothing to read and would have had to match again. Two
+/// implementations of one question is exactly what `service::reports` refuses
+/// to do, so the matcher hands the pair back instead.
+#[derive(Debug, Clone)]
+pub enum SpaceMatch {
+    /// The space carries no value for the configured key. A different state
+    /// from matching nothing: there is nothing to match with.
+    NoKey,
+    /// A key value no room carries.
+    Unmatched { key: String },
+    /// Matched. `room` is the FIRST candidate, and `ambiguous` says whether
+    /// there were others.
+    ///
+    /// **First, with the ambiguity reported rather than resolved**, which is
+    /// the rule the QA report already follows: choosing between candidates
+    /// would be a guess that looks like an answer, and dropping the match would
+    /// hide a real pairing behind a key problem. A consumer that must not guess
+    /// reads `ambiguous` and refuses; one that is listing rooms shows the first
+    /// and says so.
+    Matched {
+        key: String,
+        room: RoomKeyRef,
+        ambiguous: bool,
+    },
+}
+
+/// Every space's outcome, keyed by `(model id, space id)` — a space id is
+/// unique only within its model, and a services project holds several.
+pub type SpaceMatches = BTreeMap<(String, String), SpaceMatch>;
+
+/// Match one project's spaces to its rooms, the once.
+///
+/// `None` when the project configures no space key: **nothing was attempted**,
+/// which is a different answer from "nothing matched" and the caller has to be
+/// able to say so. A project with spaces and no rooms at all is not that case —
+/// there the match is attempted and every space is `Unmatched`, which is the
+/// honest reading: the services model was audited against a room set that is
+/// empty.
+pub fn match_spaces(
+    stored_rooms: &[(ModelKey, crate::contract::RoomPayload)],
+    stored_spaces: &[(ModelKey, crate::contract::SpacePayload)],
+    policy: &SpacePolicy,
+    builtin: &[BuiltinPropertyDef],
+) -> Option<SpaceMatches> {
+    let space_key = policy.comparison_key.as_deref()?;
+    let room_key = policy.room_key_name().unwrap_or(space_key);
+
+    let room_models: Vec<&(ModelKey, crate::contract::RoomPayload)> = stored_rooms
+        .iter()
+        .filter(|(key, _)| policy.room_models.is_empty() || policy.room_models.contains(&key.model_id))
+        .collect();
+    let rooms_by_key = index_rooms_by_key(&room_models, room_key, builtin);
+
+    let mut out = BTreeMap::new();
+    for (model_key, payload) in stored_spaces {
+        for space in &payload.spaces {
+            let id = (model_key.model_id.clone(), space.id.clone());
+            let value = value_of(space, space_key, &payload.model.source, builtin).filter(|v| !v.trim().is_empty());
+            let Some(value) = value else {
+                out.insert(id, SpaceMatch::NoKey);
+                continue;
+            };
+            match rooms_by_key.get(&value) {
+                None => {
+                    out.insert(id, SpaceMatch::Unmatched { key: value });
+                }
+                Some(rooms) => {
+                    let ambiguous = rooms.len() > 1;
+                    let room = rooms.first().expect("a key entry holds at least one room").clone();
+                    out.insert(id, SpaceMatch::Matched { key: value, room, ambiguous });
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
 /// Reconcile one project's spaces against its rooms.
 ///
 /// A pure function of the two snapshot sets and the policy -- it never touches
@@ -696,6 +777,11 @@ pub fn space_report(
         }
     }
 
+    // The pairing itself comes from `match_spaces`, which a by-room report also
+    // reads: this report and that one must not answer the same question twice.
+    // `Some` is certain here — the key was checked above.
+    let matches = match_spaces(stored_rooms, stored_spaces, policy, builtin).unwrap_or_default();
+
     let mut keys_seen_by_any_space: BTreeSet<String> = BTreeSet::new();
 
     // ---- one row per services model.
@@ -711,57 +797,54 @@ pub fn space_report(
         let mut within: BTreeMap<String, usize> = BTreeMap::new();
 
         for space in &payload.spaces {
-            let value = value_of(space, space_key, &payload.model.source, builtin).filter(|v| !v.trim().is_empty());
-            let Some(value) = value else {
-                row.without_key.push(SpaceRef {
-                    model_id: model_key.model_id.clone(),
-                    space_id: space.id.clone(),
-                    name: space.name.clone(),
-                    key: None,
-                });
-                continue;
+            let space_ref = |key: Option<String>| SpaceRef {
+                model_id: model_key.model_id.clone(),
+                space_id: space.id.clone(),
+                name: space.name.clone(),
+                key,
             };
-            *within.entry(value.clone()).or_default() += 1;
+            match matches.get(&(model_key.model_id.clone(), space.id.clone())) {
+                None | Some(SpaceMatch::NoKey) => {
+                    row.without_key.push(space_ref(None));
+                }
+                Some(SpaceMatch::Unmatched { key }) => {
+                    *within.entry(key.clone()).or_default() += 1;
+                    row.unmatched.push(space_ref(Some(key.clone())));
+                }
+                Some(SpaceMatch::Matched { key, room, .. }) => {
+                    *within.entry(key.clone()).or_default() += 1;
+                    row.matched += 1;
+                    keys_seen_by_any_space.insert(key.clone());
 
-            let Some(rooms) = rooms_by_key.get(&value) else {
-                row.unmatched.push(SpaceRef {
-                    model_id: model_key.model_id.clone(),
-                    space_id: space.id.clone(),
-                    name: space.name.clone(),
-                    key: Some(value),
-                });
-                continue;
-            };
-            row.matched += 1;
-            keys_seen_by_any_space.insert(value.clone());
+                    // An ambiguous key is compared against the first candidate
+                    // rather than skipped -- the reader already knows the
+                    // pairing is uncertain from `ambiguous_room_keys`, and
+                    // dropping the comparison would hide a real disagreement
+                    // behind a key problem.
+                    let Some(room_payload) =
+                        room_models.iter().find(|(k, _)| k.model_id == room.model_id).map(|(_, p)| p)
+                    else {
+                        continue;
+                    };
+                    let Some(room_record) = room_payload.rooms.iter().find(|r| r.id == room.room_id) else {
+                        continue;
+                    };
 
-            // An ambiguous room key is reported above and compared against the
-            // first candidate rather than skipped: the reader already knows the
-            // pairing is uncertain, and dropping the comparison would hide a
-            // real disagreement behind a key problem.
-            let Some((room, room_payload)) = rooms
-                .first()
-                .and_then(|r| room_models.iter().find(|(k, _)| k.model_id == r.model_id).map(|(_, p)| (r, p)))
-            else {
-                continue;
-            };
-            let Some(room_record) = room_payload.rooms.iter().find(|r| r.id == room.room_id) else {
-                continue;
-            };
-
-            compare_properties(
-                &mut report,
-                policy,
-                builtin,
-                &Pair {
-                    model_id: &model_key.model_id,
-                    key: &value,
-                    space,
-                    space_source: &payload.model.source,
-                    room: room_record,
-                    room_source: &room_payload.model.source,
-                },
-            );
+                    compare_properties(
+                        &mut report,
+                        policy,
+                        builtin,
+                        &Pair {
+                            model_id: &model_key.model_id,
+                            key,
+                            space,
+                            space_source: &payload.model.source,
+                            room: room_record,
+                            room_source: &room_payload.model.source,
+                        },
+                    );
+                }
+            }
         }
 
         for (value, count) in within {
@@ -1093,6 +1176,75 @@ mod tests {
         assert!(scoped.rooms_without_space.is_empty());
         assert_eq!(scoped.room_models, vec!["arch".to_string()]);
         assert_eq!(scoped.total_rooms, 1);
+    }
+
+    /// The pairing the by-room report reads, and the three states it has to be
+    /// able to tell apart.
+    #[test]
+    fn test_match_spaces_reports_matched_unmatched_and_keyless() {
+        let rooms = vec![rooms_of("arch", vec![keyed("r1", "G01", &[])])];
+        let no_key = Room { properties: BTreeMap::new(), ..keyed("s3", "unused", &[]) };
+        let spaces = vec![spaces_of(
+            "mech",
+            vec![keyed("s1", "G01", &[]), keyed("s2", "P01", &[]), no_key],
+        )];
+        let policy = SpacePolicy { comparison_key: Some("Number".into()), ..Default::default() };
+
+        let matches = match_spaces(&rooms, &spaces, &policy, &[]).expect("a key is configured");
+
+        assert!(matches!(
+            matches.get(&("mech".to_string(), "s1".to_string())),
+            Some(SpaceMatch::Matched { ambiguous: false, .. })
+        ));
+        assert!(matches!(
+            matches.get(&("mech".to_string(), "s2".to_string())),
+            Some(SpaceMatch::Unmatched { .. })
+        ));
+        assert!(matches!(matches.get(&("mech".to_string(), "s3".to_string())), Some(SpaceMatch::NoKey)));
+    }
+
+    /// No key configured is `None` -- nothing was ATTEMPTED, which a caller
+    /// must be able to say rather than reporting that nothing matched.
+    #[test]
+    fn test_match_spaces_answers_none_when_no_key_is_configured() {
+        let spaces = vec![spaces_of("mech", vec![keyed("s1", "G01", &[])])];
+        assert!(match_spaces(&[], &spaces, &SpacePolicy::default(), &[]).is_none());
+    }
+
+    /// **Spaces with no rooms at all is a match that was attempted and found
+    /// nothing**, not a failure: a services model audited against an empty room
+    /// set is an ordinary state, and the room side may simply not be pushed yet.
+    #[test]
+    fn test_spaces_with_no_rooms_are_unmatched_rather_than_unattempted() {
+        let spaces = vec![spaces_of("mech", vec![keyed("s1", "G01", &[])])];
+        let policy = SpacePolicy { comparison_key: Some("Number".into()), ..Default::default() };
+
+        let matches = match_spaces(&[], &spaces, &policy, &[]).expect("a key is configured");
+
+        assert!(matches!(
+            matches.get(&("mech".to_string(), "s1".to_string())),
+            Some(SpaceMatch::Unmatched { .. })
+        ));
+    }
+
+    /// An ambiguous key matches the FIRST candidate and says so. Choosing
+    /// between rooms would be a guess that looks like an answer; dropping the
+    /// match would hide a real pairing behind a key problem.
+    #[test]
+    fn test_an_ambiguous_key_matches_the_first_room_and_flags_it() {
+        let rooms = vec![rooms_of("arch", vec![keyed("r1", "G01", &[]), keyed("r2", "G01", &[])])];
+        let spaces = vec![spaces_of("mech", vec![keyed("s1", "G01", &[])])];
+        let policy = SpacePolicy { comparison_key: Some("Number".into()), ..Default::default() };
+
+        let matches = match_spaces(&rooms, &spaces, &policy, &[]).expect("a key is configured");
+
+        match matches.get(&("mech".to_string(), "s1".to_string())) {
+            Some(SpaceMatch::Matched { room, ambiguous, .. }) => {
+                assert_eq!(room.room_id, "r1", "the first candidate");
+                assert!(ambiguous, "and the caller is told there were others");
+            }
+            other => panic!("expected a match, got {other:?}"),
+        }
     }
 
     /// Both directions are full lists. An unmatched room is a finding of the
