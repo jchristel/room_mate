@@ -32,7 +32,7 @@ import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js
 import { buildDoorGlyph } from "./doorGlyph.js";
 import { buildWindowGlyph } from "./windowGlyph.js";
 import { buildItemGlyph } from "./itemGlyph.js";
-import { DoorIndex, RoomIndex, type PickableDoor } from "./spatial.js";
+import { DoorIndex, RoomIndex, pickStack, type PickableDoor } from "./spatial.js";
 import { fitViewToAspect, labelTransform } from "./viewport.js";
 
 /** Stroke widths, in CSS pixels — the same numbers the stylesheet uses, so the
@@ -534,32 +534,18 @@ export class GlPlanRenderer implements PlanRenderer {
   }
 
   pickAt(clientX: number, clientY: number): Pick | null {
-    const p = this.toWorld(clientX, clientY);
-    if (!p) return null;
-    // Doors first. A door glyph is drawn over the room it serves and is far
-    // smaller, so a click inside one is a click on the door — resolving to the
-    // room instead would make a door selectable only where it happens to poke
-    // outside its own wall.
-    const door = this.#doorIndex.doorAt(p.x, p.y);
-    if (door) return { kind: "door", door };
-    // Windows next, on the same argument and before rooms. Doors are tried
-    // first only because where the two could overlap -- they hardly ever do,
-    // an opening being one or the other -- a fixed order beats an ambiguous
-    // one, and doors were here first.
-    const window = this.#windowIndex.doorAt(p.x, p.y);
-    if (window) return { kind: "window", window };
+    return this.pickAllAt(clientX, clientY)[0] ?? null;
+  }
 
-    // FF&E last of the three element layers and before rooms. An item sits
-    // INSIDE a room rather than in its wall, so unlike an opening it competes
-    // with the room over the same floor -- and it is the smaller, more specific
-    // thing a reader aimed at, which is the rule the opening layers already
-    // follow. It loses to an opening only where the two overlap, which is a
-    // chair pushed against a door: the door is the fixed thing and the more
-    // likely target.
-    const item = this.#ffeIndex.doorAt(p.x, p.y) as Item | null;
-    if (item) return { kind: "item", item };
-    const room = this.#index.roomAt(p.x, p.y);
-    return room ? { kind: "room", room } : null;
+  pickAllAt(clientX: number, clientY: number): Pick[] {
+    const p = this.toWorld(clientX, clientY);
+    if (!p) return [];
+    // The order is `pickStack`'s, and is argued there.
+    return pickStack(
+      { doors: this.#doorIndex, windows: this.#windowIndex, ffe: this.#ffeIndex, rooms: this.#index },
+      p.x,
+      p.y,
+    );
   }
 
   dispose(): void {

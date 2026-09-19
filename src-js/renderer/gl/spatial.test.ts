@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { DoorIndex, RoomIndex } from "./spatial.js";
+import { DoorIndex, RoomIndex, pickStack } from "./spatial.js";
 import { buildDoorGlyph } from "./doorGlyph.js";
+import type { Pick } from "../seam.js";
 import type { Door, Room } from "../types.js";
 
 /** Payload coordinates are Y-UP; the index works in flipped (Y-down) space, so
@@ -78,6 +79,40 @@ describe("RoomIndex", () => {
     });
   });
 
+  describe("roomsAt", () => {
+    // Linked models' rooms can overlap: a room inside another model's site room.
+    const site = rect("site", 0, 0, 100, 100);
+    const office = rect("office", 10, 10, 30, 30);
+
+    it("lists every room containing the point, smallest first", () => {
+      // `site` is indexed LAST, so paint order alone would have put it first.
+      const i = new RoomIndex([office, site]);
+      expect(i.roomsAt(20, -20).map((r) => r.id)).toEqual(["office", "site"]);
+      expect(i.roomAt(20, -20)?.id).toBe("office");
+    });
+
+    it("orders by area, not by paint order, whichever way round they were indexed", () => {
+      const i = new RoomIndex([site, office]);
+      expect(i.roomsAt(20, -20).map((r) => r.id)).toEqual(["office", "site"]);
+    });
+
+    it("puts the later-painted room first on equal area", () => {
+      // Same area, same place: the one drawn on top is the one the eye sees.
+      const i = new RoomIndex([rect("under", 0, 0, 10, 10), rect("over", 0, 0, 10, 10)]);
+      expect(i.roomsAt(5, -5).map((r) => r.id)).toEqual(["over", "under"]);
+    });
+
+    it("leaves out a room whose void the point is in", () => {
+      const i = new RoomIndex([withHole, rect("well", 12, 12, 18, 18)]);
+      expect(i.roomsAt(15, -15).map((r) => r.id)).toEqual(["well"]);
+    });
+
+    it("is empty off the plan and on an empty level", () => {
+      expect(new RoomIndex([site]).roomsAt(500, -500)).toEqual([]);
+      expect(new RoomIndex([]).roomsAt(0, 0)).toEqual([]);
+    });
+  });
+
   describe("search", () => {
     it("returns bbox overlaps, not exact hits", () => {
       const i = new RoomIndex([rect("a", 0, 0, 10, 10), rect("b", 20, 0, 30, 10)]);
@@ -142,6 +177,77 @@ describe("RoomIndex", () => {
       const i = new DoorIndex([]);
       expect(i.size).toBe(0);
       expect(i.doorAt(0, 0)).toBeNull();
+      expect(i.doorsAt(0, 0)).toEqual([]);
+    });
+  });
+
+  describe("DoorIndex.doorsAt", () => {
+    /** A pickable straight from a flipped rectangle, the way an FF&E marker
+     *  arrives: this index does not care what the element is. */
+    const pickable = (id: string, x0: number, y0: number, x1: number, y1: number) => ({
+      door: { id } as Door,
+      ring: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }],
+      box: { minX: x0, minY: y0, maxX: x1, maxY: y1 },
+    });
+
+    /**
+     * THE CASE THIS WAS WRITTEN FOR: a large item drawn over a small one. Paint
+     * order put the large one first, so it caught every click inside it and the
+     * small one could not be reached at all.
+     */
+    it("lists a small item under a large one first", () => {
+      const i = new DoorIndex([pickable("small", 2, 2, 4, 4), pickable("large", 0, 0, 10, 10)]);
+      expect(i.doorsAt(3, 3).map((d) => d.id)).toEqual(["small", "large"]);
+      expect(i.doorAt(3, 3)?.id).toBe("small");
+    });
+
+    it("lists only what the point is inside", () => {
+      const i = new DoorIndex([pickable("small", 2, 2, 4, 4), pickable("large", 0, 0, 10, 10)]);
+      expect(i.doorsAt(8, 8).map((d) => d.id)).toEqual(["large"]);
+    });
+  });
+
+  describe("pickStack", () => {
+    const pickable = (id: string, x0: number, y0: number, x1: number, y1: number) => ({
+      door: { id } as Door,
+      ring: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }],
+      box: { minX: x0, minY: y0, maxX: x1, maxY: y1 },
+    });
+    // Everything overlaps the flipped point (5, -5).
+    const layers = {
+      doors: new DoorIndex([pickable("door", 4, -6, 6, -4)]),
+      windows: new DoorIndex([pickable("window", 4, -6, 6, -4)]),
+      ffe: new DoorIndex([pickable("table", 0, -10, 10, 0), pickable("cup", 4.5, -5.5, 5.5, -4.5)]),
+      rooms: new RoomIndex([rect("site", 0, 0, 100, 100), rect("kitchen", 0, 0, 20, 20)]),
+    };
+
+    it("orders layers door, window, FF&E, room, and smallest first within each", () => {
+      expect(pickStack(layers, 5, -5).map((p) => `${p.kind}:${idOf(p)}`)).toEqual([
+        "door:door",
+        "window:window",
+        "item:cup",
+        "item:table",
+        "room:kitchen",
+        "room:site",
+      ]);
+    });
+
+    it("is empty where nothing is", () => {
+      expect(pickStack(layers, 500, -500)).toEqual([]);
     });
   });
 });
+
+/** The id of whatever a pick found. */
+function idOf(p: Pick): string {
+  switch (p.kind) {
+    case "door":
+      return p.door.id;
+    case "window":
+      return p.window.id;
+    case "item":
+      return p.item.id;
+    case "room":
+      return p.room.id;
+  }
+}

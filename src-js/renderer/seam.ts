@@ -250,20 +250,28 @@ export interface PlanRenderer {
    */
   toWorld(clientX: number, clientY: number): { x: number; y: number } | null;
 
-  /** The room under a viewport point, or `null` for empty space. */
+  /** The room under a viewport point, or `null` for empty space. Where rooms
+   *  overlap, the smallest -- the room `pickAllAt` would list first. */
   roomAt(clientX: number, clientY: number): Room | null;
 
   /**
-   * The room OR door under a viewport point, or `null`.
+   * The one element a plain click selects: the first of `pickAllAt`, or `null`.
    *
-   * Doors win where both are under the cursor, which is most places a door is:
-   * a door glyph is drawn over the room it serves, it is much smaller, and
-   * clicking a thing you can see should select that thing. `roomAt` is kept
-   * beside this — unchanged, still room-only — because the two existing call
-   * sites want exactly that, and widening their return type would have made
-   * every one of them handle a case it has no use for.
+   * An element wins over the room it sits in, which is most places one is: a
+   * glyph is drawn over the room it serves, it is much smaller, and clicking a
+   * thing you can see should select that thing. `roomAt` is kept beside this,
+   * still room-only, because hover and the tooltip want exactly that, and
+   * widening their return type would make each handle a case it has no use for.
    */
   pickAt(clientX: number, clientY: number): Pick | null;
+
+  /**
+   * EVERYTHING under a viewport point, in pick order: element layers before the
+   * room, smallest first within a layer. `pickAt` is its first entry. The pick
+   * menu lists this, which is why it is a list and not a better single answer:
+   * where one thing covers another, no single answer reaches both.
+   */
+  pickAllAt(clientX: number, clientY: number): Pick[];
 
   /** Release everything held. For the GL renderer this frees a WebGL context,
    *  which browsers cap (commonly ~16) and silently kill the oldest of past the
