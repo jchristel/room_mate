@@ -34,6 +34,7 @@ use roommate::handlers::{
     ingest_ffe_stream, ingest_floors, ingest_floors_stream, ingest_rooms, ingest_rooms_stream, ingest_spaces,
     ingest_spaces_stream, ingest_windows, ingest_windows_stream,
 };
+use roommate::reports_api::{http_delete_report, http_get_report, http_list_reports, http_save_report};
 use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
     http_upload_reference,
@@ -370,6 +371,15 @@ fn build_router(state: roommate::state::Shared) -> Router {
         .route("/projects/{id}/comparison", post(compare_project_milestones))
         .route("/projects/{id}/reports", post(build_project_report))
         .route("/projects/{id}/reports/columns", get(get_report_columns))
+        // Saved reports are documents the reports page owns, so they sit under
+        // /api/ beside the settings API rather than under the project read
+        // routes -- what they are is config-shaped, even though what they SAY
+        // is a question rather than a policy.
+        .route("/api/reports/projects/{project}", get(http_list_reports))
+        .route(
+            "/api/reports/projects/{project}/{report}",
+            get(http_get_report).put(http_save_report).delete(http_delete_report),
+        )
         .route(
             "/projects/{project_id}/models/{model_id}/snapshots/latest",
             get(get_model_latest_snapshot),

@@ -27,5 +27,6 @@
 //! something else depends on it, is not.
 
 pub mod contract;
+pub mod reports;
 pub mod settings;
 pub mod settings_api;

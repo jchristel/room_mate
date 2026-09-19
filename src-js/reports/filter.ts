@@ -113,6 +113,57 @@ export function toWire(node: FilterNode): unknown {
 }
 
 /**
+ * A stored filter back into the editing model.
+ *
+ * **The two shapes are not the same object, and assuming they were crashed the
+ * page.** What is saved is `toWire`'s output — no `kind`, no ids, values
+ * omitted where an operator takes none — and the editor needs all three. So a
+ * load rebuilds rather than casts, and a field the document does not carry gets
+ * the same default a new condition would.
+ *
+ * Anything unreadable becomes an empty group: a filter nobody can edit is worse
+ * than none, and the report still runs.
+ */
+export function fromWire(value: unknown, fallbackSide: Side = "element"): Group {
+  const node = readNode(value, fallbackSide);
+  return node && node.kind === "group" ? node : group("all", node ? [node] : []);
+}
+
+function readNode(value: unknown, fallbackSide: Side): FilterNode | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+
+  if (typeof raw.mode === "string") {
+    const items = Array.isArray(raw.items) ? raw.items : [];
+    return group(
+      raw.mode === "any" ? "any" : "all",
+      items.map((item) => readNode(item, fallbackSide)).filter((item): item is FilterNode => item !== null),
+    );
+  }
+
+  if (typeof raw.field !== "string" || typeof raw.op !== "string") return null;
+  const side: Side = raw.side === "room" || raw.side === "join" ? raw.side : fallbackSide;
+  const type: FieldType = raw.value_type === "number" ? "number" : inferType(raw);
+  return {
+    ...condition(side, raw.field, type),
+    op: raw.op,
+    value: typeof raw.value === "string" ? raw.value : "",
+    value2: typeof raw.value2 === "string" ? raw.value2 : "",
+    caseSensitive: raw.case_sensitive === true,
+  };
+}
+
+/**
+ * A stored condition does not record whether its field was a number, so a
+ * numeric operator is the evidence. Getting this wrong only changes which
+ * operators the dropdown offers next — the condition itself is unchanged, and
+ * the server reads the operator either way.
+ */
+function inferType(raw: Record<string, unknown>): FieldType {
+  return ["lt", "le", "gt", "ge", "between"].includes(String(raw.op)) ? "number" : "text";
+}
+
+/**
  * The filter in words.
  *
  * **An associated-side condition reads set-wise** — "the room has no ceiling

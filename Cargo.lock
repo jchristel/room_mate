@@ -1366,6 +1366,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "serde",
+ "serde_json",
  "toml",
  "ts-rs",
 ]

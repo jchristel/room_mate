@@ -24,6 +24,9 @@ import { CheckReport } from "./checks.js";
 import { apiGet, persistSelection, seedProjectId } from "./common.js";
 import { CHECKS } from "./checkRows.js";
 import { ENTITIES } from "./reportTypes.js";
+import { typeIdFor } from "./savedReports.js";
+import type { SavedReport } from "./generated/SavedReport.js";
+import type { SavedReportSummary } from "./generated/SavedReportSummary.js";
 import { TableReport } from "./tableReport.js";
 import { ComparisonReport } from "./comparison.js";
 import type { ProjectRow } from "./types.js";
@@ -75,6 +78,8 @@ export function App() {
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [typeId, setTypeId] = useState("check.reference");
+  const [savedList, setSavedList] = useState<SavedReportSummary[]>([]);
+  const [saved, setSaved] = useState<SavedReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -96,7 +101,35 @@ export function App() {
   const pick = useCallback((id: string) => {
     setProjectId(id);
     persistSelection(id);
+    setSaved(null);
   }, []);
+
+  // The rail, re-read after every save or delete so it never shows a report
+  // that is no longer there.
+  const refreshSaved = useCallback(() => {
+    if (!projectId) return;
+    apiGet<SavedReportSummary[]>(`/api/reports/projects/${encodeURIComponent(projectId)}`)
+      .then(setSavedList)
+      .catch(() => setSavedList([]));
+  }, [projectId]);
+
+  useEffect(refreshSaved, [refreshSaved]);
+
+  /** Open a saved report: its own type, and its whole definition. */
+  const open = useCallback(
+    (summary: SavedReportSummary) => {
+      if (!projectId) return;
+      apiGet<SavedReport>(
+        `/api/reports/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(summary.id)}`,
+      )
+        .then((report) => {
+          setSaved(report);
+          setTypeId(typeIdFor(report));
+        })
+        .catch((e: unknown) => setError(String((e as Error).message ?? e)));
+    },
+    [projectId],
+  );
 
   const type = TYPES.find((t) => t.id === typeId) as ReportType;
 
@@ -127,7 +160,10 @@ export function App() {
               className="kind"
               id="type"
               value={typeId}
-              onChange={(e) => setTypeId(e.target.value)}
+              onChange={(e) => {
+                setTypeId(e.target.value);
+                setSaved(null);
+              }}
             >
               {GROUPS.map((g) => (
                 <optgroup label={g} key={g}>
@@ -143,6 +179,25 @@ export function App() {
             {type.desc && <p className="kind-desc">{type.desc}</p>}
           </section>
 
+          {savedList.length > 0 && (
+            <section className="group">
+              <h2>Saved reports</h2>
+              <div className="chips">
+                {savedList.map((row) => (
+                  <button
+                    className={`chip saved${saved?.id === row.id ? " on" : ""}`}
+                    type="button"
+                    key={row.id}
+                    onClick={() => open(row)}
+                  >
+                    {row.name}
+                    <span className="src">{row.by_room ? `${row.entity} by room` : row.entity}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
           {error && <p className="msg err">{error}</p>}
           {!projectId && !error && <p className="foot">No project has any stored data yet.</p>}
 
@@ -152,10 +207,15 @@ export function App() {
           {projectId && typeId === "cmp.rooms" && <ComparisonReport projectId={projectId} />}
           {projectId && (typeId.startsWith("sched.") || typeId.startsWith("by_room.")) && (
             <TableReport
-              key={typeId}
+              key={`${typeId}:${saved?.id ?? "new"}`}
               projectId={projectId}
               entityId={typeId.slice(typeId.indexOf(".") + 1)}
               byRoom={typeId.startsWith("by_room.")}
+              saved={saved && typeIdFor(saved) === typeId ? saved : null}
+              onSaved={() => {
+                setSaved(null);
+                refreshSaved();
+              }}
             />
           )}
         </div>

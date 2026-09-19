@@ -10,10 +10,10 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 **The page, its reports and the filter are built** (as of 2026-09-19).
 `/reports/` serves milestone comparison, three QA checks, a schedule of every
 entity, the by-room reports and the filter builder over `service::reports`.
-Those document themselves, and the pickers now read a served vocabulary rather
-than guessing. What is left here is saved report definitions, the debts under
-"What the server still owes a report", and the design of the parts nobody has
-built yet. When a piece ships, its section is deleted from here and
+Those document themselves, the pickers read a served vocabulary rather than
+guessing, and a report can be saved. What is left here is the debts under "What
+the server still owes a report" and the design of the parts nobody has built
+yet. When a piece ships, its section is deleted from here and
 the rationale moves to the module header — see "Code documents what is built"
 in [Coding Conventions](CODING-CONVENTIONS.md).
 
@@ -276,91 +276,37 @@ beside it. The module documents the three rules it keeps. What is left:
 - **Streaming the CSV.** It is built in memory today, which is fine for the
   projected rows a report asks for and is not the streamed export the row-volume
   entry below imagined. Measure before building it.
-- **Saved reports**, as designed below, and with them the plain `GET` URL a
-  script can fetch:
-  `GET /projects/{id}/reports/{report_id}/rows.csv`.
+- **A plain `GET` URL for a saved report's rows**, which a script could fetch
+  without posting a definition: `GET /projects/{id}/reports/{report_id}/rows.csv`.
+  The documents exist now, so this is a route over them rather than a design.
 - **Spaces by room.** A space matches a room on a key, project-wide, and that
   match lives in `SpaceReport` rather than on the `/spaces` rows. Re-deriving it
   in a report would give the report and the QA check two answers to one
   question, so the by-room type is disabled until the match is exposed on the
   read. The Unmatched spaces and rooms check answers the question meanwhile.
 
-## Saved reports are documents, not settings
+## Saved reports: what shipped, and what did not
 
-**Server-side**, which is [Browser](STRATEGY-BROWSER.md)'s standing answer to
-"users re-pick the same columns" rather than `localStorage`. **But one JSON
-document per report, beside the project settings — not a `[[reports]]` block
-inside them** (decided 2026-09-18).
+One JSON document per report under `<projects_dir>/reports/<project>/<id>.json`,
+served by `reports_api` and typed by `roommate_shared::reports::SavedReport`.
+The reasoning — why a document rather than a block in the settings — is in that
+type; the four costs it avoids are listed there, and the test for the next thing
+that wants a home is the one it states: **if removing it would change an answer
+somewhere else, it is a setting; if it only stops a question being asked twice,
+it is a document.**
 
-**The line is what a thing does to an answer.** A *setting* changes what every
-read means: `room_attribution` re-owns every door, the space key re-matches
-every space, the area policy re-measures every room. A saved report changes
-nothing — delete one and every other answer in the system is identical. That is
-the test for the next thing that wants a home: if removing it would change an
-answer somewhere else, it is a setting; if it only stops a question being asked
-twice, it is a document.
+Not built, and each is a deliberate stop rather than an oversight:
 
-Four consequences follow, and each is a cost the settings file would carry for
-no gain:
-
-- **Validation blast radius.** A settings file is validated through
-  `bootstrap::load_project_bundle` on save *and* on every boot, which is what
-  makes "a file this API accepts can never fail the next boot" true. Putting
-  report definitions in it means a malformed report can fail a project's
-  settings — so a saved question could stop rooms being served. As a separate
-  document, a broken report is one broken row on one page.
-- **Read-modify-write.** Every settings save rewrites the whole file and
-  hot-swaps the registry. That is the exact path that silently emptied every
-  milestone's pins, and `merge_over_stored` exists because of it. One file per
-  report means a report save touches one report, and two people saving
-  different reports cannot clobber each other.
-- **The settings page's exhaustiveness rule keeps its teeth.** A field on a
-  settings type with no control there is a type error *on purpose* — the page
-  cannot silently stop exposing a setting. Reports would be the first
-  deliberate exemption, and an exemption is how that rule starts eroding. The
-  reports page is their editor; the settings page never needs to know they
-  exist.
-- **TOML is the wrong shape for a filter tree.** Arbitrary nesting is where
-  array-of-tables syntax turns unreadable, and the TOML ordering footgun in
-  [Coding Conventions](CODING-CONVENTIONS.md) lives in exactly that shape. JSON
-  holds a tree natively and round-trips what the builder produced.
-
-**Where:** beside the project settings, in the settings directory — not in the
-snapshot store. The store's discipline is append-only history, and a report is
-edited in place; a mutable document in an immutable store is a rule waiting to
-be broken. Sketch: `<projects_dir>/reports/<project-id>/<report-id>.json`,
-written temp-then-rename, id checked with `is_path_safe_component` like every
-other path component from a request. Its CRUD is the reports page's own routes
-(list, read, save, delete), not `/api/settings`.
-
-**The definition type still lives in `roommate-shared` with ts-rs**, so the
-reports page's TypeScript is generated and the committed-copy CI gate covers
-it. What it does *not* do is join `Settings`.
-
-A sketch of one document:
-
-```json
-{
-  "name": "Ceilings by room",
-  "type": "by_room.ceilings",
-  "shape": "per_match",
-  "include_rooms_without": false,
-  "include_unattributed": true,
-  "room_columns": ["Number", "Name", "Level"],
-  "associated_columns": ["Type", "Height Offset From Level"],
-  "measures": ["overlap_area", "fraction_of_room"],
-  "filter": {
-    "mode": "all",
-    "items": [
-      { "side": "room", "field": "Level", "op": "eq", "value": "LEVEL 00" },
-      { "mode": "any", "items": [
-        { "side": "ceilings", "field": "Type", "op": "contains", "value": "plasterboard" },
-        { "side": "join", "field": "fraction_of_room", "op": "ge", "value": "0.9" }
-      ] }
-    ]
-  }
-}
-```
+- **Sharing a report between projects.** A saved report names properties, and a
+  property vocabulary is per project, so a copy would silently name fields the
+  other project does not have. Worth doing when someone asks, with the column
+  catalog to check against.
+- **A URL that opens one.** The page holds its selection in state, so a saved
+  report cannot be linked to. The id is stable for exactly this reason — it
+  survives a rename — so the missing half is the page reading and writing it in
+  the query string.
+- **Editing a report's name without opening it**, and ordering the rail by hand.
+  Both are rail affordances nobody has needed yet.
 
 ## Open questions
 

@@ -11,6 +11,8 @@ workspace = true
 # filesystem or a runtime. See the header of src/lib.rs before adding a line.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+# A saved report holds its filter tree as opaque JSON -- see `reports::SavedReport`.
+serde_json = "1"
 anyhow = "1"
 # Parsing only. Nothing here asks what time it is, so the default `clock`
 # feature — the part that reaches for the OS — stays off. The server keeps its
