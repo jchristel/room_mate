@@ -293,7 +293,30 @@
   .plan-marks .door-selected-mark.doors { stroke: var(--sel-doors, var(--accent)); }
   .plan-marks .door-selected-mark.windows { stroke: var(--sel-windows, var(--accent)); }
   .plan-marks .door-selected-mark.ffe { stroke: var(--sel-ffe, var(--accent)); }
-  /* No hover rule here on purpose. Hover is a FILL, and a fill in this overlay
+  /* A selected space, ceiling or floor. SOLID, where the room mark is dashed:
+     these layers already draw their own rings dashed (ceiling) and dotted
+     (floor), so a dashed selection over them would read as the layer itself,
+     thicker. Accent only -- no per-entity variable, since `[appearance]`
+     offers these three a line colour and no selection colour. Every ring the
+     layer draws is marked, holes and all, so a multi-piece ceiling is ringed
+     whole. */
+  .plan-marks .surface-selected-mark {
+    fill: none; stroke: var(--accent); stroke-width: 4;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
+  /* A hovered element that is not a room: the pick menu's preview of an entry.
+     A ring rather than a fill, because the element sits over a room and a fill
+     would hide the room it is in. Thinner and fainter than the selection ring
+     it is previewing, and in the same per-entity colour, so the two read as
+     "this one" and "this one, chosen". Room hover is a GL fill -- see below. */
+  .plan-marks .pick-hover-mark {
+    fill: none; stroke: var(--accent); stroke-width: 2; stroke-opacity: 0.6;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
+  .plan-marks .pick-hover-mark.doors { stroke: var(--sel-doors, var(--accent)); }
+  .plan-marks .pick-hover-mark.windows { stroke: var(--sel-windows, var(--accent)); }
+  .plan-marks .pick-hover-mark.ffe { stroke: var(--sel-ffe, var(--accent)); }
+  /* No ROOM hover rule here on purpose. Room hover is a FILL, and a fill in this overlay
      sits above the canvas -- and so above the labels the canvas draws, hiding
      the label of the room being pointed at. It is drawn in the GL layer beneath
      the labels instead (gl/renderer.ts, `#drawHover`), which is the ordering the
@@ -3455,14 +3478,12 @@ function applyHighlight(zone) {
 // OFF the other kind's nodes when the selection moves between kinds, and a
 // linear pass over a level's nodes is free at any rate a click can reach.
 function applySelection(zone) {
-  // Rooms are the renderer's: it holds the index and, once the plan is GL, will
-  // draw the selected outline into a thin SVG overlay instead of toggling a
-  // class. Footprints are NOT -- the areas overlay stays SVG and stays outside
-  // the seam, so the page keeps that half itself.
-  zone.renderer.setSelection(roomSelection() || null);
-  zone.renderer.setDoorSelection(doorSelection() || null);
-  zone.renderer.setWindowSelection(windowSelection() || null);
-  zone.renderer.setItemSelection(itemSelection() || null);
+  // Plan elements are the renderer's: it holds the index and draws the mark
+  // into a thin SVG overlay. Footprints are NOT -- the areas overlay stays SVG
+  // and stays outside the seam, so the page keeps that half itself, and an
+  // area selection hands the renderer nothing.
+  const onPlan = selection && selection.kind !== "area";
+  zone.renderer.setSelection(onPlan ? { kind: selection.kind, id: selection.id } : null);
 
   const areaId = selection && selection.kind === "area" ? selection.id : null;
   for (const p of zone.svg.querySelectorAll(".area-poly"))
@@ -4715,7 +4736,7 @@ function updateHover(zone, e) {
     const p = zone._hoverPoint;
     if (!p) return;
     const room = zone.renderer.roomAt(p.x, p.y);
-    zone.renderer.setHover(room ? room.id : null);
+    zone.renderer.setHover(room ? { kind: "room", id: room.id } : null);
     showTip(zone, room, p);
   });
 }

@@ -29,10 +29,10 @@
 //     untouched by the whole exercise.
 //
 // `setSelection` and `setHover` sit inside the seam even though each concerns
-// exactly ONE room, and that is deliberate: today they toggle a CSS class on a
-// node, and after P4 the GL renderer draws them into a thin SVG overlay
-// instead. Same call site, two implementations — which is the entire point of
-// having a seam.
+// exactly ONE element, and that is deliberate: they began as a CSS class on a
+// room node, and the GL renderer draws them into a thin SVG overlay instead.
+// Same call site, two implementations — which is the entire point of having a
+// seam.
 
 import type { Ceiling, Door, Floor, Item, Rect, Room, Space, WindowOpening } from "./types.js";
 
@@ -186,7 +186,25 @@ export type Pick =
   | { kind: "room"; room: Room }
   | { kind: "door"; door: Door }
   | { kind: "window"; window: WindowOpening }
-  | { kind: "item"; item: Item };
+  | { kind: "item"; item: Item }
+  | { kind: "space"; space: Space }
+  | { kind: "ceiling"; ceiling: Ceiling }
+  | { kind: "floor"; floor: Floor };
+
+/** A kind of thing the plan can mark: the `kind`s of `Pick`, by construction. */
+export type ElementKind = Pick["kind"];
+
+/**
+ * One element on the plan, named by kind and id.
+ *
+ * The kind is part of the name, not a hint, because ids are only unique within
+ * an entity: a door and a room may carry the same id, and a mark keyed on the
+ * id alone would ring both.
+ */
+export interface ElementRef {
+  kind: ElementKind;
+  id: string;
+}
 
 export interface PlanRenderer {
   /** Draw a level, framed to `fitted`. Replaces whatever was drawn before. */
@@ -198,21 +216,25 @@ export interface PlanRenderer {
   /** Search match/dim, as a state change over already-drawn rooms. */
   applyHighlight(state: HighlightState): void;
 
-  /** The one selected room, or `null`. Never drawn into an export. */
-  setSelection(roomId: string | null): void;
+  /**
+   * The one selected element, or `null`. Never drawn into an export.
+   *
+   * ONE setter for every kind. It used to be one per kind — room, door, window,
+   * item — each added beside the last so no existing call site had to change,
+   * and the page ended up clearing three of them to set the fourth. A tagged
+   * argument makes "one thing is selected" a property of the type rather than
+   * of every caller's discipline.
+   */
+  setSelection(ref: ElementRef | null): void;
 
-  /** The one selected door, or `null`. Kept separate from `setSelection`
-   *  rather than merged into a tagged argument, so the existing room call
-   *  sites in `static/index.html` are untouched by doors existing. */
-  setDoorSelection(doorId: string | null): void;
-
-  /** The one selected FF&E item, or `null`. A fourth selection setter rather
-   *  than a tagged argument, for the reason the third is separate: every
-   *  existing call site in `static/index.html` stays untouched. */
-  setItemSelection(itemId: string | null): void;
-
-  /** The one hovered room, or `null`. */
-  setHover(roomId: string | null): void;
+  /**
+   * The one hovered element, or `null`.
+   *
+   * Any kind, not only rooms, because the pick menu previews each entry it
+   * lists. A room keeps its hover FILL; every other kind is ringed, since it is
+   * drawn over a room and a fill would hide the room it sits in.
+   */
+  setHover(ref: ElementRef | null): void;
 
   /** Areas mode ghosts the rooms beneath the footprint overlay. A cross-layer
    *  rule: the overlay is SVG, the rooms may be GL, and it is easy to miss and
@@ -231,20 +253,31 @@ export interface PlanRenderer {
    */
   toWorld(clientX: number, clientY: number): { x: number; y: number } | null;
 
-  /** The room under a viewport point, or `null` for empty space. */
+  /** The room under a viewport point, or `null` for empty space. Where rooms
+   *  overlap, the smallest -- the room `pickAllAt` would list first. */
   roomAt(clientX: number, clientY: number): Room | null;
 
   /**
-   * The room OR door under a viewport point, or `null`.
+   * The one element a plain click selects: the first of `pickAllAt` that is a
+   * door, window, item or room, or `null`. Spaces, ceilings and floors are
+   * never a plain click's answer -- they are chosen from the pick menu -- so
+   * a click outside every room, on an external soffit, still selects nothing.
    *
-   * Doors win where both are under the cursor, which is most places a door is:
-   * a door glyph is drawn over the room it serves, it is much smaller, and
-   * clicking a thing you can see should select that thing. `roomAt` is kept
-   * beside this — unchanged, still room-only — because the two existing call
-   * sites want exactly that, and widening their return type would have made
-   * every one of them handle a case it has no use for.
+   * An element wins over the room it sits in, which is most places one is: a
+   * glyph is drawn over the room it serves, it is much smaller, and clicking a
+   * thing you can see should select that thing. `roomAt` is kept beside this,
+   * still room-only, because hover and the tooltip want exactly that, and
+   * widening their return type would make each handle a case it has no use for.
    */
   pickAt(clientX: number, clientY: number): Pick | null;
+
+  /**
+   * EVERYTHING under a viewport point, in pick order: element layers before the
+   * room, smallest first within a layer. `pickAt` is its first entry. The pick
+   * menu lists this, which is why it is a list and not a better single answer:
+   * where one thing covers another, no single answer reaches both.
+   */
+  pickAllAt(clientX: number, clientY: number): Pick[];
 
   /** Release everything held. For the GL renderer this frees a WebGL context,
    *  which browsers cap (commonly ~16) and silently kill the oldest of past the
