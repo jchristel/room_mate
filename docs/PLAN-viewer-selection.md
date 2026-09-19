@@ -95,7 +95,8 @@ React page — nothing in C is built in `static/index.html`.**
   none of that piece's holes) for ceilings and floors, and the same over a
   space's `loops`. Built from the lists the paint already filtered, so what is
   pickable is what is drawn. `Pick` gains `space`, `ceiling`, `floor`. Marks
-  draw as one SVG `<path fill-rule="evenodd">` per element. **`pickAt` excludes
+  draw as one SVG `<path>` per element with a subpath per ring (stroke only,
+  so no fill rule is needed). **`pickAt` excludes
   the three new kinds** — the old page's click handler would otherwise fall
   through to `selectRoom(hit.room.id)` on an external soffit and throw. Only
   `pickAllAt` returns them, and nothing in the old page calls it.

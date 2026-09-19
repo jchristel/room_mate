@@ -28,7 +28,7 @@
 import Flatbush from "flatbush";
 import { roomBBox } from "../geometry.js";
 import type { Pick } from "../seam.js";
-import type { Door, Extent, Item, Point2D, Room, WindowOpening } from "../types.js";
+import type { Ceiling, Door, Extent, Floor, Item, Loop, Point2D, Room, Space, WindowOpening } from "../types.js";
 
 /**
  * Winding-number-free even-odd test against one ring, in flipped space.
@@ -222,6 +222,88 @@ export class DoorIndex {
   }
 }
 
+/**
+ * One surface-like element to index: the element, and the rings that ARE its
+ * pickable area, as PIECES -- each an outer ring then its holes, in raw payload
+ * space (Y-up), exactly as the payload carries them.
+ *
+ * The caller decides the pieces, because they must be what the layer DRAWS: a
+ * ceiling or floor draws every piece and every hole, a space draws only its
+ * outer ring. Clicking inside a ring the plan never showed would select an
+ * outline the reader cannot see.
+ */
+export interface PickableSurface<T> {
+  element: T;
+  pieces: readonly (readonly Loop[])[];
+}
+
+/**
+ * The pick index for the three outline layers -- spaces, ceilings, floors.
+ *
+ * A third tree, not the room one reused, because these are not rooms: a
+ * ceiling is a LIST of disjoint pieces (RHH's multi-polygon ceilings lose up to
+ * 99% of their area if only one is kept), so one element has one box around all
+ * of them and a hit is "inside any piece's outer ring and none of that piece's
+ * holes". A hole is a light well or a void over an atrium, drawn as its own
+ * ring, and a click in it is a click on whatever is below -- the rule a room's
+ * void follows.
+ */
+export class SurfaceIndex<T> {
+  readonly #items: readonly PickableSurface<T>[];
+  readonly #areas: readonly number[];
+  readonly #tree: Flatbush | null;
+
+  constructor(items: readonly PickableSurface<T>[]) {
+    // Only elements with at least one real outer ring go in: a ceiling duHast
+    // could not measure draws nothing, so it must not be clickable either.
+    const drawable = items
+      .map((s) => ({ element: s.element, pieces: s.pieces.filter((p) => p[0]?.points.length) }))
+      .filter((s) => s.pieces.length);
+    this.#items = drawable;
+    // NET area, holes out: a ceiling with a large light well is a smaller thing
+    // to have aimed at than its outline suggests.
+    this.#areas = drawable.map((s) =>
+      s.pieces.reduce(
+        (sum, piece) => sum + ringArea(piece[0]!.points) - piece.slice(1).reduce((h, l) => h + ringArea(l.points), 0),
+        0,
+      ),
+    );
+    if (drawable.length === 0) {
+      this.#tree = null;
+    } else {
+      const tree = new Flatbush(drawable.length);
+      for (const s of drawable) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const piece of s.pieces)
+          for (const raw of piece[0]!.points) {
+            // Flipped, like every box in this file.
+            if (raw.x < minX) minX = raw.x;
+            if (raw.x > maxX) maxX = raw.x;
+            if (-raw.y < minY) minY = -raw.y;
+            if (-raw.y > maxY) maxY = -raw.y;
+          }
+        tree.add(minX, minY, maxX, maxY);
+      }
+      tree.finish();
+      this.#tree = tree;
+    }
+  }
+
+  get size(): number {
+    return this.#items.length;
+  }
+
+  /** Every element under a point in flipped world space, smallest net area first. */
+  at(x: number, y: number): T[] {
+    const hit = (i: number) =>
+      this.#items[i]!.pieces.some(
+        (piece) =>
+          pointInRing(x, y, piece[0]!.points) && !piece.slice(1).some((hole) => pointInRing(x, y, hole.points)),
+      );
+    return smallestFirst(this.#tree, this.#areas, x, y, hit).map((i) => this.#items[i]!.element);
+  }
+}
+
 /** The indexes a pick consults, one per selectable layer. */
 export interface PickLayers {
   doors: DoorIndex;
@@ -230,6 +312,9 @@ export interface PickLayers {
    *  what the element is -- so what comes back is an `Item` typed as a door. */
   ffe: DoorIndex;
   rooms: RoomIndex;
+  spaces: SurfaceIndex<Space>;
+  ceilings: SurfaceIndex<Ceiling>;
+  floors: SurfaceIndex<Floor>;
 }
 
 /**
@@ -240,9 +325,15 @@ export interface PickLayers {
  * on it. Doors lead windows only because a fixed order beats an ambiguous one
  * where the two could overlap, which they hardly ever do; FF&E follows both
  * because an item pushed against a door is the less likely target of the two.
- * Within a layer, smallest first -- see the header.
  *
- * Here rather than in the renderer so the order is tested without WebGL.
+ * Spaces, ceilings and floors come AFTER the room, in their paint order top
+ * first. They cover the same ground as the room under them, so ahead of it a
+ * room could not be clicked at all while one of their layers was on. Behind it
+ * they are never a plain click's answer and are reached through the pick menu,
+ * which lists this whole stack -- see `PICK_FIRST`.
+ *
+ * Within a layer, smallest first -- see the header. Here rather than in the
+ * renderer so the order is tested without WebGL.
  */
 export function pickStack(layers: PickLayers, x: number, y: number): Pick[] {
   return [
@@ -250,5 +341,20 @@ export function pickStack(layers: PickLayers, x: number, y: number): Pick[] {
     ...layers.windows.doorsAt(x, y).map((d): Pick => ({ kind: "window", window: d as WindowOpening })),
     ...layers.ffe.doorsAt(x, y).map((d): Pick => ({ kind: "item", item: d as unknown as Item })),
     ...layers.rooms.roomsAt(x, y).map((room): Pick => ({ kind: "room", room })),
+    ...layers.spaces.at(x, y).map((space): Pick => ({ kind: "space", space })),
+    ...layers.ceilings.at(x, y).map((ceiling): Pick => ({ kind: "ceiling", ceiling })),
+    ...layers.floors.at(x, y).map((floor): Pick => ({ kind: "floor", floor })),
   ];
 }
+
+/**
+ * The kinds a plain click may select -- `pickAt`'s answer is the first stack
+ * entry of one of these.
+ *
+ * The outline layers are left out, and not only because they sit behind the
+ * room: outside every room -- an external soffit, a landscaping floor -- they
+ * would be the FIRST entry, and a click there would select one. The pick menu
+ * is where those are chosen, and a plain click keeps meaning "the element or
+ * room I clicked on".
+ */
+export const PICK_FIRST: ReadonlySet<Pick["kind"]> = new Set(["door", "window", "item", "room"]);

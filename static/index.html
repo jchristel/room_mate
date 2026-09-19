@@ -293,6 +293,17 @@
   .plan-marks .door-selected-mark.doors { stroke: var(--sel-doors, var(--accent)); }
   .plan-marks .door-selected-mark.windows { stroke: var(--sel-windows, var(--accent)); }
   .plan-marks .door-selected-mark.ffe { stroke: var(--sel-ffe, var(--accent)); }
+  /* A selected space, ceiling or floor. SOLID, where the room mark is dashed:
+     these layers already draw their own rings dashed (ceiling) and dotted
+     (floor), so a dashed selection over them would read as the layer itself,
+     thicker. Accent only -- no per-entity variable, since `[appearance]`
+     offers these three a line colour and no selection colour. Every ring the
+     layer draws is marked, holes and all, so a multi-piece ceiling is ringed
+     whole. */
+  .plan-marks .surface-selected-mark {
+    fill: none; stroke: var(--accent); stroke-width: 4;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
   /* A hovered element that is not a room: the pick menu's preview of an entry.
      A ring rather than a fill, because the element sits over a room and a fill
      would hide the room it is in. Thinner and fainter than the selection ring

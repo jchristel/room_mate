@@ -186,7 +186,10 @@ export type Pick =
   | { kind: "room"; room: Room }
   | { kind: "door"; door: Door }
   | { kind: "window"; window: WindowOpening }
-  | { kind: "item"; item: Item };
+  | { kind: "item"; item: Item }
+  | { kind: "space"; space: Space }
+  | { kind: "ceiling"; ceiling: Ceiling }
+  | { kind: "floor"; floor: Floor };
 
 /** A kind of thing the plan can mark: the `kind`s of `Pick`, by construction. */
 export type ElementKind = Pick["kind"];
@@ -255,7 +258,10 @@ export interface PlanRenderer {
   roomAt(clientX: number, clientY: number): Room | null;
 
   /**
-   * The one element a plain click selects: the first of `pickAllAt`, or `null`.
+   * The one element a plain click selects: the first of `pickAllAt` that is a
+   * door, window, item or room, or `null`. Spaces, ceilings and floors are
+   * never a plain click's answer -- they are chosen from the pick menu -- so
+   * a click outside every room, on an external soffit, still selects nothing.
    *
    * An element wins over the room it sits in, which is most places one is: a
    * glyph is drawn over the room it serves, it is much smaller, and clicking a

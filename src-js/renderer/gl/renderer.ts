@@ -24,7 +24,7 @@ import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
 import { flip, pointsAttr } from "../geometry.js";
 import type { ElementRef, HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
-import type { Ceiling, Door, Floor, Item, Rect, Room, Space, WindowOpening } from "../types.js";
+import type { Ceiling, Door, Floor, Item, Loop, Rect, Room, Space, WindowOpening } from "../types.js";
 import { overrideOr, parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
 import { buildLabels, type RoomLabel } from "./labels.js";
@@ -32,7 +32,7 @@ import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js
 import { buildDoorGlyph } from "./doorGlyph.js";
 import { buildWindowGlyph } from "./windowGlyph.js";
 import { buildItemGlyph } from "./itemGlyph.js";
-import { DoorIndex, RoomIndex, pickStack, type PickableDoor } from "./spatial.js";
+import { DoorIndex, PICK_FIRST, RoomIndex, SurfaceIndex, pickStack, type PickableDoor } from "./spatial.js";
 import { fitViewToAspect, labelTransform } from "./viewport.js";
 
 /** Stroke widths, in CSS pixels — the same numbers the stylesheet uses, so the
@@ -158,6 +158,9 @@ export class GlPlanRenderer implements PlanRenderer {
   #windowEntries: WindowEntry[] = [];
   #ffeIndex = new DoorIndex([]);
   #ffeEntries: ItemEntry[] = [];
+  #spaceIndex = new SurfaceIndex<Space>([]);
+  #ceilingIndex = new SurfaceIndex<Ceiling>([]);
+  #floorIndex = new SurfaceIndex<Floor>([]);
   #palette: PlanPalette;
   #view: Rect = { x: 0, y: 0, w: 100, h: 100 };
   #selected: ElementRef | null = null;
@@ -394,6 +397,9 @@ export class GlPlanRenderer implements PlanRenderer {
       windowsIndexed: this.#windowIndex.size,
       ffe: this.#ffeEntries.length,
       ffeIndexed: this.#ffeIndex.size,
+      spacesIndexed: this.#spaceIndex.size,
+      ceilingsIndexed: this.#ceilingIndex.size,
+      floorsIndexed: this.#floorIndex.size,
       labels: this.#labels.length,
       layers: {
         grid: !!this.#grid,
@@ -534,7 +540,7 @@ export class GlPlanRenderer implements PlanRenderer {
   }
 
   pickAt(clientX: number, clientY: number): Pick | null {
-    return this.pickAllAt(clientX, clientY)[0] ?? null;
+    return this.pickAllAt(clientX, clientY).find((p) => PICK_FIRST.has(p.kind)) ?? null;
   }
 
   pickAllAt(clientX: number, clientY: number): Pick[] {
@@ -542,7 +548,15 @@ export class GlPlanRenderer implements PlanRenderer {
     if (!p) return [];
     // The order is `pickStack`'s, and is argued there.
     return pickStack(
-      { doors: this.#doorIndex, windows: this.#windowIndex, ffe: this.#ffeIndex, rooms: this.#index },
+      {
+        doors: this.#doorIndex,
+        windows: this.#windowIndex,
+        ffe: this.#ffeIndex,
+        rooms: this.#index,
+        spaces: this.#spaceIndex,
+        ceilings: this.#ceilingIndex,
+        floors: this.#floorIndex,
+      },
       p.x,
       p.y,
     );
@@ -559,6 +573,9 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#windowEntries = [];
     this.#ffeIndex = new DoorIndex([]);
     this.#ffeEntries = [];
+    this.#spaceIndex = new SurfaceIndex([]);
+    this.#ceilingIndex = new SurfaceIndex([]);
+    this.#floorIndex = new SurfaceIndex([]);
     this.#rooms = [];
     this.#selected = null;
     this.#hovered = null;
@@ -628,6 +645,9 @@ export class GlPlanRenderer implements PlanRenderer {
       this.#windowIndex = new DoorIndex([]);
       this.#ffeEntries = [];
       this.#ffeIndex = new DoorIndex([]);
+      this.#spaceIndex = new SurfaceIndex([]);
+      this.#ceilingIndex = new SurfaceIndex([]);
+      this.#floorIndex = new SurfaceIndex([]);
       this.#render();
       return;
     }
@@ -894,6 +914,21 @@ export class GlPlanRenderer implements PlanRenderer {
     }
     this.#floorLines = floorBatch.isEmpty ? null : floorBatch.build({ dash: FLOOR_DASH });
 
+    // The three outline layers' pick indexes, from the SAME filtered lists the
+    // rings above were drawn from, and from the same rings: every piece and
+    // hole of a ceiling or floor, only the outer ring of a space. What can be
+    // picked is therefore exactly what is on screen -- a layer switched off
+    // contributes nothing, because its list is empty.
+    this.#spaceIndex = new SurfaceIndex(
+      this.#activeSpaces().map((space) => ({ element: space, pieces: space.loops?.[0] ? [[space.loops[0]]] : [] })),
+    );
+    this.#ceilingIndex = new SurfaceIndex(
+      this.#activeCeilings().map((ceiling) => ({ element: ceiling, pieces: surfacePieces(ceiling) })),
+    );
+    this.#floorIndex = new SurfaceIndex(
+      this.#activeFloors().map((floor) => ({ element: floor, pieces: surfacePieces(floor) })),
+    );
+
     // Paint order is child order, and it mirrors the SVG document exactly:
     // grid behind, then fills, then the strokes that sit on them, then labels.
     if (this.#grid) { this.#grid.mesh.label = "grid"; this.#root.addChild(this.#grid.mesh); }
@@ -1020,7 +1055,7 @@ export class GlPlanRenderer implements PlanRenderer {
     // Selection is a STROKE with `fill: none`, so it rings the element without
     // covering what the GL layer painted underneath.
     //
-    // A room's mark and every element's mark are different classes because they
+    // Room, element and outline marks are different classes because they
     // encode what KIND of thing is selected: a room's dashed ring would resolve
     // to two or three dashes around a door glyph and read as an artefact. The
     // three element layers share one class -- "this is what you picked" is one
@@ -1029,7 +1064,7 @@ export class GlPlanRenderer implements PlanRenderer {
     // project that sets nothing sees one colour for one idea.
     const selected = this.#ring(doc, this.#selected);
     if (selected) {
-      const base = this.#selected?.kind === "room" ? "room-selected-mark" : "door-selected-mark";
+      const base = markClass(this.#selected!.kind);
       selected.el.setAttribute("class", `${base} ${selected.modifier}`);
       g.appendChild(selected.el);
     }
@@ -1054,12 +1089,30 @@ export class GlPlanRenderer implements PlanRenderer {
    * for those, which reads as "selecting that door does nothing". The pick
    * ring is already flipped, so it is written out rather than run through
    * `pointsAttr`, which flips as it formats and would mirror the mark.
+   *
+   * A space, ceiling or floor is marked by a `<path>` over every ring its layer
+   * draws -- every piece and hole of a ceiling or floor, the outer ring of a
+   * space -- so a multi-piece ceiling is marked whole, not by its first piece.
    */
-  #ring(doc: Document, ref: ElementRef | null): { el: SVGPolygonElement; modifier: string } | null {
+  #ring(doc: Document, ref: ElementRef | null): { el: SVGElement; modifier: string } | null {
     if (!ref) return null;
     let points: string | null = null;
     let modifier: string;
     switch (ref.kind) {
+      case "space": {
+        const outer = this.#activeSpaces().find((s) => s.id === ref.id)?.loops?.[0];
+        return outer ? { el: ringsPath(doc, [outer]), modifier: "spaces" } : null;
+      }
+      case "ceiling": {
+        const ceiling = this.#activeCeilings().find((c) => c.id === ref.id);
+        const rings = ceiling ? surfacePieces(ceiling).flat() : [];
+        return rings.length ? { el: ringsPath(doc, rings), modifier: "ceilings" } : null;
+      }
+      case "floor": {
+        const floor = this.#activeFloors().find((f) => f.id === ref.id);
+        const rings = floor ? surfacePieces(floor).flat() : [];
+        return rings.length ? { el: ringsPath(doc, rings), modifier: "floors" } : null;
+      }
       case "room": {
         const outer = this.#entries.find((e) => e.room.id === ref.id)?.room.loops?.[0];
         points = outer ? pointsAttr(outer) : null;
@@ -1205,4 +1258,35 @@ function sameRef(a: ElementRef | null, b: ElementRef | null): boolean {
 /** An already-flipped pick ring as a `points` attribute, or `null` for none. */
 function pickRingAttr(ring: readonly { x: number; y: number }[] | undefined): string | null {
   return ring ? ring.map((q) => `${q.x},${q.y}`).join(" ") : null;
+}
+
+/** The selection mark's base class for a kind: see `#drawMarks`. */
+function markClass(kind: ElementRef["kind"]): string {
+  switch (kind) {
+    case "room":
+      return "room-selected-mark";
+    case "door":
+    case "window":
+    case "item":
+      return "door-selected-mark";
+    case "space":
+    case "ceiling":
+    case "floor":
+      return "surface-selected-mark";
+  }
+}
+
+/** A ceiling's or floor's drawable pieces: each an outer ring then its holes,
+ *  empty rings dropped -- the rings its layer strokes. */
+function surfacePieces(surface: Ceiling): Loop[][] {
+  return (surface.polygons ?? [])
+    .map((piece) => (piece.loops ?? []).filter((l) => l.points?.length))
+    .filter((rings) => rings.length);
+}
+
+/** One `<path>` over several rings, flipped as `pointsAttr` flips. */
+function ringsPath(doc: Document, rings: readonly Loop[]): SVGPathElement {
+  const el = doc.createElementNS(SVG_NS, "path") as SVGPathElement;
+  el.setAttribute("d", rings.map((ring) => `M${pointsAttr(ring).replace(/ /g, "L")}Z`).join(""));
+  return el;
 }

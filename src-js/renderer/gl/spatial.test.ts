@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DoorIndex, RoomIndex, pickStack } from "./spatial.js";
+import { DoorIndex, PICK_FIRST, RoomIndex, SurfaceIndex, pickStack } from "./spatial.js";
 import { buildDoorGlyph } from "./doorGlyph.js";
 import type { Pick } from "../seam.js";
-import type { Door, Room } from "../types.js";
+import type { Ceiling, Door, Loop, Room, Space } from "../types.js";
 
 /** Payload coordinates are Y-UP; the index works in flipped (Y-down) space, so
  *  a room authored at y=0..10 is queried at y=-10..0. Getting this backwards is
@@ -207,6 +207,46 @@ describe("RoomIndex", () => {
     });
   });
 
+  describe("SurfaceIndex", () => {
+    /** A raw (Y-up) rectangular ring, the way the payload carries one. */
+    const ring = (x0: number, y0: number, x1: number, y1: number): Loop => ({
+      points: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }],
+    });
+    const surface = (id: string, ...pieces: Loop[][]) => ({ element: { id }, pieces });
+
+    /**
+     * RHH's multi-polygon ceilings are genuinely DISJOINT pieces, and taking
+     * the first one loses up to 99% of a ceiling. Both pieces must answer.
+     */
+    it("hits every piece of a multi-piece surface, and not the gap between", () => {
+      const i = new SurfaceIndex([surface("c", [ring(0, 0, 10, 10)], [ring(20, 0, 30, 10)])]);
+      expect(i.at(5, -5).map((s) => s.id)).toEqual(["c"]);
+      expect(i.at(25, -5).map((s) => s.id)).toEqual(["c"]);
+      expect(i.at(15, -5)).toEqual([]);
+    });
+
+    it("misses inside a hole -- a light well is not the ceiling around it", () => {
+      const i = new SurfaceIndex([surface("c", [ring(0, 0, 30, 30), ring(10, 10, 20, 20)])]);
+      expect(i.at(5, -5).map((s) => s.id)).toEqual(["c"]);
+      expect(i.at(15, -15)).toEqual([]);
+    });
+
+    it("orders by NET area, so a large ceiling with a large void can come first", () => {
+      // "donut" spans 900 but nets 900 - 784 = 116; "plain" is 400.
+      const i = new SurfaceIndex([
+        surface("plain", [ring(0, 0, 20, 20)]),
+        surface("donut", [ring(0, 0, 30, 30), ring(1, 1, 29, 29)]),
+      ]);
+      expect(i.at(0.5, -0.5).map((s) => s.id)).toEqual(["donut", "plain"]);
+    });
+
+    it("leaves out an element with no drawable ring, as the layer draws nothing for it", () => {
+      const i = new SurfaceIndex([surface("unmeasured"), surface("empty", [{ points: [] }])]);
+      expect(i.size).toBe(0);
+      expect(i.at(0, 0)).toEqual([]);
+    });
+  });
+
   describe("pickStack", () => {
     const pickable = (id: string, x0: number, y0: number, x1: number, y1: number) => ({
       door: { id } as Door,
@@ -219,9 +259,15 @@ describe("RoomIndex", () => {
       windows: new DoorIndex([pickable("window", 4, -6, 6, -4)]),
       ffe: new DoorIndex([pickable("table", 0, -10, 10, 0), pickable("cup", 4.5, -5.5, 5.5, -4.5)]),
       rooms: new RoomIndex([rect("site", 0, 0, 100, 100), rect("kitchen", 0, 0, 20, 20)]),
+      spaces: new SurfaceIndex([{ element: { id: "space" } as Space, pieces: [[rect("", 0, 0, 20, 20).loops![0]!]] }]),
+      ceilings: new SurfaceIndex([
+        { element: { id: "soffit" } as Ceiling, pieces: [[rect("", 0, 0, 200, 200).loops![0]!]] },
+        { element: { id: "bulkhead" } as Ceiling, pieces: [[rect("", 0, 0, 12, 12).loops![0]!]] },
+      ]),
+      floors: new SurfaceIndex([{ element: { id: "slab" } as Ceiling, pieces: [[rect("", 0, 0, 20, 20).loops![0]!]] }]),
     };
 
-    it("orders layers door, window, FF&E, room, and smallest first within each", () => {
+    it("orders door, window, FF&E, room, space, ceiling, floor, smallest first within each", () => {
       expect(pickStack(layers, 5, -5).map((p) => `${p.kind}:${idOf(p)}`)).toEqual([
         "door:door",
         "window:window",
@@ -229,7 +275,23 @@ describe("RoomIndex", () => {
         "item:table",
         "room:kitchen",
         "room:site",
+        "space:space",
+        "ceiling:bulkhead",
+        "ceiling:soffit",
+        "floor:slab",
       ]);
+    });
+
+    /**
+     * Outside every room an outline layer is the FIRST entry -- an external
+     * soffit -- and a plain click there must still select nothing: those are
+     * chosen from the pick menu. The old page would otherwise hand the soffit
+     * to `selectRoom(hit.room.id)` and throw.
+     */
+    it("never lets a plain click land on an outline layer", () => {
+      const outside = pickStack(layers, 150, -150);
+      expect(outside.map((p) => `${p.kind}:${idOf(p)}`)).toEqual(["ceiling:soffit"]);
+      expect(outside.find((p) => PICK_FIRST.has(p.kind))).toBeUndefined();
     });
 
     it("is empty where nothing is", () => {
@@ -249,5 +311,11 @@ function idOf(p: Pick): string {
       return p.item.id;
     case "room":
       return p.room.id;
+    case "space":
+      return p.space.id;
+    case "ceiling":
+      return p.ceiling.id;
+    case "floor":
+      return p.floor.id;
   }
 }
