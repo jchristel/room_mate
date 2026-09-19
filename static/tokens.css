@@ -5,7 +5,7 @@
    :root custom properties are shared. Served from static/ by axum's ServeDir
    (see main.rs), so it costs one <link>, no build step.
 
-   --ok is only used by settings.html / comparison.html; it lives here anyway so
+   --ok is only used by the settings and reports pages; it lives here anyway so
    there is one palette rather than a split one — an unused token costs
    index.html nothing. */
 :root {
