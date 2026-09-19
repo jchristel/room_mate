@@ -126,3 +126,40 @@ tbody tr.quiet td { opacity: 0.7; }
 .val { color: var(--accent); }
 .arrow { opacity: 0.5; padding: 0 0.25rem; }
 .miss { color: var(--accent); }
+
+/* ---------- the filter builder ----------
+   Nesting is shown by an accent rail rather than by indentation alone: the
+   tree is at most three deep, and a reader has to see which group a condition
+   belongs to at a glance to trust the sentence under it. */
+.fgroup { border: 1px solid var(--ink); background: var(--paper); padding: 0.6rem 0.7rem; display: grid; gap: 0.45rem; }
+.fgroup .fgroup { border: 1px solid var(--rule); border-left: 3px solid var(--accent); background: var(--fill); }
+.fgroup-head { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; font-size: 0.76rem; }
+.fgroup-head select { background: var(--paper); border: 1px solid var(--ink); padding: 0.15rem 0.3rem; font-weight: 600; }
+.fgroup-head .spacer { flex: 1; }
+.cond, .nest { display: grid; grid-template-columns: 3.4rem minmax(0, 1fr); gap: 0.45rem; align-items: start; }
+.cond-body { display: grid; grid-template-columns: minmax(12rem, 1.3fr) minmax(9rem, 0.8fr) minmax(10rem, 1fr) auto; gap: 0.4rem; align-items: center; }
+.conn { font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.6; text-align: right; padding-top: 0.35rem; }
+.conn.op { color: var(--accent); opacity: 1; font-weight: 600; }
+.cond select, .cond input { background: var(--paper); border: 1px solid var(--rule); padding: 0.26rem 0.35rem; width: 100%; min-width: 0; }
+.fieldcell { display: flex; gap: 0.3rem; align-items: center; min-width: 0; }
+.ftype { font-size: 0.58rem; border: 1px solid var(--rule); padding: 0 0.25rem; opacity: 0.6; white-space: nowrap; }
+.valcell { display: flex; gap: 0.3rem; align-items: center; min-width: 0; }
+.valcell .and { font-size: 0.66rem; opacity: 0.6; }
+.valcell .na { font-size: 0.68rem; opacity: 0.6; }
+.icon { background: none; border: 1px solid transparent; cursor: pointer; opacity: 0.6; padding: 0.1rem 0.4rem; font-size: 0.85rem; }
+.icon:hover { color: var(--accent); border-color: var(--rule); opacity: 1; }
+.icon.case { font-size: 0.66rem; border-color: var(--rule); line-height: 1.4; }
+.icon.case.on { background: var(--accent); color: var(--paper); border-color: var(--accent); opacity: 1; }
+.cond .warn { grid-column: 1 / -1; font-size: 0.66rem; opacity: 0.75; }
+.cond .warn button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 0.66rem; text-decoration: underline; }
+.cond.incomplete .conn { opacity: 0.35; }
+.fadd { display: flex; gap: 0.4rem; padding-left: 3.85rem; margin: 0; }
+.fadd button { background: none; border: 1px dashed var(--rule); padding: 0.2rem 0.55rem; cursor: pointer; font-size: 0.72rem; }
+.fadd button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* The sentence the tree reads as — how a reader checks their own logic. */
+.fsummary { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem; font-size: 0.74rem; align-items: baseline; }
+.fsummary .k { font-size: 0.6rem; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.6; }
+.fsummary code { font-family: var(--mono); overflow-wrap: anywhere; }
+
+@media (max-width: 900px) { .cond-body { grid-template-columns: 1fr; } .fadd { padding-left: 0; } }

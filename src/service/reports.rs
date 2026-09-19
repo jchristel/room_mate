@@ -40,7 +40,7 @@ use crate::storage::SnapshotKind;
 
 use super::items::{self, ItemScope};
 use super::openings::{self, OpeningKind, OpeningScope};
-use super::rooms::{self, FilterTarget, RoomResponse, RoomScope};
+use super::rooms::{self, holds_for, FilterTarget, Mode, Op, Predicate, RoomResponse, RoomScope};
 use super::spaces::{self, SpaceScope};
 use super::surfaces::{self, SurfaceScope};
 use super::ServiceError;
@@ -132,6 +132,234 @@ pub enum Shape {
     PerRoom,
 }
 
+/// Which side of the join a condition asks about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// The room: read from the room the element is attributed to.
+    Room,
+    /// The element: a door, a ceiling, an item.
+    Element,
+    /// What the join measured — `overlap_area` and friends.
+    Join,
+}
+
+/// One condition in a report filter: a predicate, plus the side it reads.
+#[derive(Debug)]
+pub struct Condition {
+    pub side: Side,
+    pub predicate: Predicate,
+}
+
+/// A report filter: the same tree shape `RoomFilter` carries, with a side on
+/// every leaf.
+#[derive(Debug)]
+pub enum ReportFilter {
+    Group { mode: Mode, items: Vec<ReportFilter> },
+    Condition(Condition),
+}
+
+impl ReportFilter {
+    fn is_empty(&self) -> bool {
+        match self {
+            ReportFilter::Group { items, .. } => items.iter().all(ReportFilter::is_empty),
+            ReportFilter::Condition(_) => false,
+        }
+    }
+
+    /// Does any leaf ask about the associated side? Positive and negative are
+    /// separated because they pull the unmatched rows in opposite directions —
+    /// see `room_survives`.
+    fn has(&self, side: Side, negative: bool) -> bool {
+        match self {
+            ReportFilter::Group { items, .. } => items.iter().any(|i| i.has(side, negative)),
+            ReportFilter::Condition(c) => {
+                (c.side == side || (side == Side::Element && c.side == Side::Join))
+                    && is_negative(&c.predicate) == negative
+            }
+        }
+    }
+
+    /// The associated-side conditions every ancestor group ANDs, which are the
+    /// ones that also narrow the ROWS under a kept room.
+    ///
+    /// A condition inside an `any` group decides whether the room appears and
+    /// is not applied per row: "this room has a plasterboard ceiling OR is a
+    /// wet area" says nothing about which of its ceilings to list.
+    fn row_filters<'a>(&'a self, conjunctive: bool, out: &mut Vec<&'a Condition>) {
+        match self {
+            ReportFilter::Group { mode, items } => {
+                let all = *mode == Mode::All;
+                for item in items {
+                    item.row_filters(conjunctive && all, out);
+                }
+            }
+            ReportFilter::Condition(c) => {
+                if conjunctive && c.side != Side::Room && !is_negative(&c.predicate) {
+                    out.push(c);
+                }
+            }
+        }
+    }
+}
+
+/// `is not` and `does not contain`, and the positive form each negates.
+///
+/// **On the associated side a negation is about the SET**, not about one row:
+/// "ceiling type is not X" asks for a room with NO ceiling of type X, which is
+/// not "a ceiling whose type is not X". Per-row negation answers a different
+/// question and differs exactly on the rooms the report is for — a room keeps
+/// appearing because of its *other* ceilings.
+fn is_negative(predicate: &Predicate) -> bool {
+    matches!(predicate.op, Op::Ne | Op::NotContains)
+}
+
+fn positive_form(predicate: &Predicate) -> Predicate {
+    let mut positive = predicate.clone();
+    positive.op = match predicate.op {
+        Op::Ne => Op::Eq,
+        Op::NotContains => Op::Contains,
+        other => other,
+    };
+    positive
+}
+
+/// The filter as it arrives, and the single place it becomes predicates.
+///
+/// **In the service rather than in each adapter**, because the HTTP handler and
+/// the MCP tool must not each write their own parse: two mappings of one shape
+/// is how an operator ends up meaning something slightly different depending on
+/// who asked.
+///
+/// A group is `{"mode": "all"|"any", "items": [...]}`; a condition is
+/// `{"side", "field", "op", "value"}`. The side is a field rather than a prefix
+/// on the name (`room.Level`) because `<source>.<label>` already owns the dot,
+/// and a reference source named `room` would make the two unreadable.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(untagged)]
+pub enum FilterWire {
+    Group {
+        mode: String,
+        #[serde(default)]
+        items: Vec<FilterWire>,
+    },
+    Condition {
+        /// `room`, `element` or `join`. Defaults to `element`, which is the
+        /// only side a schedule has.
+        #[serde(default)]
+        side: Option<String>,
+        field: String,
+        op: String,
+        #[serde(default)]
+        value: Option<String>,
+        /// The upper bound of a `between`.
+        #[serde(default)]
+        value2: Option<String>,
+        #[serde(default)]
+        case_sensitive: bool,
+    },
+}
+
+impl FilterWire {
+    /// Turn the wire shape into a filter, naming the offending piece on
+    /// failure. `known` is the recognised reference-source vocabulary, so
+    /// `drofus.NetArea` binds as a joined field exactly as it does in
+    /// `?filter=`.
+    pub fn parse(&self, known: &std::collections::BTreeSet<String>) -> Result<ReportFilter, String> {
+        match self {
+            FilterWire::Group { mode, items } => {
+                let mode = match mode.as_str() {
+                    "all" => Mode::All,
+                    "any" => Mode::Any,
+                    other => return Err(format!("unknown filter mode {other:?} — expected all or any")),
+                };
+                let items = items.iter().map(|i| i.parse(known)).collect::<Result<Vec<_>, _>>()?;
+                Ok(ReportFilter::Group { mode, items })
+            }
+            FilterWire::Condition { side, field, op, value, value2, case_sensitive } => {
+                let side = match side.as_deref() {
+                    None | Some("element") => Side::Element,
+                    Some("room") => Side::Room,
+                    Some("join") => Side::Join,
+                    Some(other) => {
+                        return Err(format!("unknown filter side {other:?} — expected room, element or join"))
+                    }
+                };
+                let op = parse_op(op)?;
+                // A value is required by every operator except the two that ask
+                // about absence — where a value could only ever contradict the
+                // question.
+                let needs_value = !matches!(op, Op::Blank | Op::HasValue);
+                let value = value.clone().unwrap_or_default();
+                if needs_value && value.trim().is_empty() {
+                    return Err(format!("filter on {field:?}: {op:?} needs a value"));
+                }
+                if op == Op::Between && value2.as_deref().unwrap_or("").trim().is_empty() {
+                    return Err(format!("filter on {field:?}: between needs both ends"));
+                }
+                // The join's measures are its own vocabulary, not the entity's,
+                // so they never split on a source namespace.
+                let predicate = if side == Side::Join {
+                    Predicate {
+                        source: None,
+                        property: field.clone(),
+                        op,
+                        value,
+                        value2: value2.clone(),
+                        case_sensitive: *case_sensitive,
+                    }
+                } else {
+                    let (source, property) = match rooms::split_namespace(field, known) {
+                        rooms::NamespaceSplit::Joined { source, property } => (Some(source), property.to_string()),
+                        rooms::NamespaceSplit::Unqualified(name) => (None, name.to_string()),
+                        rooms::NamespaceSplit::UnknownSource(name) => {
+                            return Err(format!(
+                                "filter field {field:?}: {name:?} is not a known data source — known: {}",
+                                known.iter().cloned().collect::<Vec<_>>().join(", ")
+                            ))
+                        }
+                    };
+                    Predicate {
+                        source,
+                        property,
+                        op,
+                        value,
+                        value2: value2.clone(),
+                        case_sensitive: *case_sensitive,
+                    }
+                };
+                Ok(ReportFilter::Condition(Condition { side, predicate }))
+            }
+        }
+    }
+}
+
+/// The operator names the builder sends. Spelled out rather than derived from
+/// the enum so the wire vocabulary is a decision rather than a rename away from
+/// breaking every saved report.
+fn parse_op(name: &str) -> Result<Op, String> {
+    Ok(match name {
+        "eq" => Op::Eq,
+        "ne" => Op::Ne,
+        "gt" => Op::Gt,
+        "ge" => Op::Ge,
+        "lt" => Op::Lt,
+        "le" => Op::Le,
+        "contains" => Op::Contains,
+        "not_contains" => Op::NotContains,
+        "starts_with" => Op::StartsWith,
+        "ends_with" => Op::EndsWith,
+        "between" => Op::Between,
+        "blank" => Op::Blank,
+        "has_value" => Op::HasValue,
+        other => {
+            return Err(format!(
+                "unknown filter operator {other:?} — expected one of eq, ne, gt, ge, lt, le, contains, \
+                 not_contains, starts_with, ends_with, between, blank, has_value"
+            ))
+        }
+    })
+}
+
 /// What to report, as the caller asked for it.
 pub struct ReportDefinition {
     pub entity: Entity,
@@ -152,6 +380,8 @@ pub struct ReportDefinition {
     /// Cap the rows returned; `total_rows` still counts them all, so a caller
     /// can say "first 500 of 39,412" honestly.
     pub limit: Option<usize>,
+    /// The filter, or `None` for every row.
+    pub filter: Option<ReportFilter>,
 }
 
 /// What a report read is scoped to. The same three dimensions every entity read
@@ -487,10 +717,122 @@ fn room_cell(room: &RoomResponse, name: &str, builtin: &[BuiltinPropertyDef], kn
     }
 }
 
+/// Evaluate a report filter tree, deciding each leaf with `decide`.
+///
+/// The group rule is `rooms::matches_node`'s, restated for this tree rather
+/// than shared through a trait: an empty group is true, `all` is every child,
+/// `any` is one. What differs between the two callers is only the leaf.
+fn evaluate(filter: &ReportFilter, decide: &impl Fn(&Condition) -> bool) -> bool {
+    match filter {
+        ReportFilter::Condition(c) => decide(c),
+        ReportFilter::Group { mode, items } => match mode {
+            Mode::All => items.iter().all(|item| evaluate(item, decide)),
+            Mode::Any => items.is_empty() || items.iter().any(|item| evaluate(item, decide)),
+        },
+    }
+}
+
+/// One condition against one element and one attribution.
+///
+/// A `Join` condition reads the measures the attribution carries, which are
+/// strings already rendered — so `fraction_of_room > 0.9` compares the same
+/// text the row shows, and a reader who filters on what they can see gets what
+/// they expect.
+fn condition_holds(
+    condition: &Condition,
+    element: &Element,
+    attribution: Option<&Attribution>,
+    builtin: &[BuiltinPropertyDef],
+) -> bool {
+    match condition.side {
+        Side::Element => holds_for(&condition.predicate, &ElementTarget(element), builtin),
+        Side::Join => {
+            let value = attribution.and_then(|a| a.measures.get(condition.predicate.property.as_str()));
+            match value {
+                Some(v) => holds_for(&condition.predicate, &MeasureTarget(v.clone()), builtin),
+                // A measure this entity does not carry is absent, and absent
+                // matches only `is blank` -- the rule every other field follows.
+                None => holds_for(&condition.predicate, &MeasureTarget(String::new()), builtin),
+            }
+        }
+        // Decided by the caller, which is holding the room.
+        Side::Room => true,
+    }
+}
+
+/// An `Element` as a `FilterTarget`, so a condition on the element side reads
+/// through the same vocabulary a column does.
+struct ElementTarget<'a>(&'a Element);
+
+impl FilterTarget for ElementTarget<'_> {
+    fn presence(&self, source: Option<&str>, property: &str, builtin_defs: &[BuiltinPropertyDef]) -> PropertyPresence {
+        (self.0.read)(source, property, builtin_defs)
+    }
+}
+
+/// One measure value as a `FilterTarget`. The measure is named by the
+/// predicate, so the target is the value itself; an empty string is the absent
+/// state, which is what makes "a measure this entity does not carry matches
+/// only `is blank`" fall out rather than being special-cased.
+struct MeasureTarget(String);
+
+impl FilterTarget for MeasureTarget {
+    fn presence(&self, _source: Option<&str>, _property: &str, _defs: &[BuiltinPropertyDef]) -> PropertyPresence {
+        if self.0.is_empty() {
+            PropertyPresence::Empty
+        } else {
+            PropertyPresence::Present(self.0.clone())
+        }
+    }
+}
+
+/// Does this room survive the filter?
+///
+/// Room conditions read the room. **Associated-side conditions ask about the
+/// room's whole set of matches**: a positive one is `EXISTS`, a negative one is
+/// `NOT EXISTS` over its positive form. So "ceiling type is X" drops a room
+/// with no ceilings — it cannot have one — while "ceiling type is not X" keeps
+/// it, because nothing it has is X. That is the difference a per-row filter
+/// cannot express, and it falls exactly on the rooms a report like this is
+/// written for.
+fn room_survives(
+    filter: &ReportFilter,
+    room: Option<&RoomResponse>,
+    matches: &[(&Element, &Attribution)],
+    builtin: &[BuiltinPropertyDef],
+) -> bool {
+    evaluate(filter, &|condition| match condition.side {
+        Side::Room => match room {
+            Some(room) => holds_for(&condition.predicate, room, builtin),
+            // No room at all: every operator fails but `is blank`, the rule a
+            // missing value follows everywhere else.
+            None => holds_for(&condition.predicate, &MeasureTarget(String::new()), builtin),
+        },
+        _ => {
+            let negative = is_negative(&condition.predicate);
+            let probe = Condition { side: condition.side, predicate: positive_form(&condition.predicate) };
+            let found = matches
+                .iter()
+                .any(|(element, attribution)| condition_holds(&probe, element, Some(attribution), builtin));
+            if negative {
+                !found
+            } else {
+                found
+            }
+        }
+    })
+}
+
+/// A schedule filters per row, which is right here: a row IS the thing the
+/// question is about, and there is no set for a condition to quantify over.
 fn schedule_rows(def: &ReportDefinition, builtin: &[BuiltinPropertyDef], elements: &[Element]) -> ReportResult {
     let known: Vec<String> = Vec::new();
     let rows = elements
         .iter()
+        .filter(|element| match &def.filter {
+            None => true,
+            Some(filter) => evaluate(filter, &|c| condition_holds(c, element, None, builtin)),
+        })
         .map(|element| def.columns.iter().map(|c| element_cell(element, c, builtin, &known)).collect())
         .collect();
     ReportResult {
@@ -502,6 +844,14 @@ fn schedule_rows(def: &ReportDefinition, builtin: &[BuiltinPropertyDef], element
     }
 }
 
+/// Rows for a by-room report.
+///
+/// **Grouped before it is filtered**, which is the whole shape of this
+/// function: a condition on the associated side asks about a room's whole set
+/// of matches (see `room_survives`), so nothing can be decided element by
+/// element. What is emitted afterwards still walks the elements in their own
+/// order, because a reader scanning a schedule and a by-room report of the same
+/// entity should see them in the same order.
 fn by_room_rows(
     state: &AppState,
     scope: &ReportScope<'_>,
@@ -523,54 +873,86 @@ fn by_room_rows(
         rooms.iter().map(|room| ((room.model_id.as_str(), room.room.id.as_str()), room)).collect();
     let known: Vec<String> = Vec::new();
 
+    let mut per_room: BTreeMap<(String, String), Vec<(&Element, &Attribution)>> = BTreeMap::new();
+    for element in &elements {
+        for attribution in &element.rooms {
+            per_room
+                .entry((attribution.model_id.clone(), attribution.room_id.clone()))
+                .or_default()
+                .push((element, attribution));
+        }
+    }
+
+    // Which rooms survive, decided once per room over its whole set.
+    let empty_filter = ReportFilter::Group { mode: Mode::All, items: Vec::new() };
+    let filter = def.filter.as_ref().unwrap_or(&empty_filter);
+    let filtering = !filter.is_empty();
+    let survived: std::collections::BTreeSet<&(String, String)> = per_room
+        .iter()
+        .filter(|(key, members)| {
+            !filtering || room_survives(filter, index.get(&(key.0.as_str(), key.1.as_str())).copied(), members, builtin)
+        })
+        .map(|(key, _)| key)
+        .collect();
+
+    // The conditions that also narrow which of a kept room's matches are
+    // listed — the positives every ancestor group ANDs.
+    let mut row_conditions: Vec<&Condition> = Vec::new();
+    filter.row_filters(true, &mut row_conditions);
+    let listed = |element: &Element, attribution: &Attribution| {
+        row_conditions.iter().all(|c| condition_holds(c, element, Some(attribution), builtin))
+    };
+
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut unmatched = 0usize;
-    // Which rooms an element reached, so "rooms with none" can be answered
-    // without asking the entity again.
-    let mut matched_rooms: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
-    // Per-room groups, for the aggregated shape.
-    let mut per_room: BTreeMap<(String, String), Vec<(&Element, &Attribution)>> = BTreeMap::new();
 
-    for element in &elements {
-        if element.rooms.is_empty() {
-            if def.include_unattributed {
+    if def.shape == Shape::PerMatch {
+        for element in &elements {
+            if element.rooms.is_empty() {
+                // An element with no room is its own group: nothing to
+                // quantify over but itself, and the room columns stay empty.
+                if !def.include_unattributed {
+                    continue;
+                }
+                if filtering && !room_survives(filter, None, &[(element, &NO_ATTRIBUTION)], builtin) {
+                    continue;
+                }
                 unmatched += 1;
-                if def.shape == Shape::PerMatch {
-                    rows.push(unattributed_row(def, element, builtin, &known));
-                }
-            }
-            continue;
-        }
-        for attribution in &element.rooms {
-            let key = (attribution.model_id.clone(), attribution.room_id.clone());
-            matched_rooms.insert(key.clone());
-            match def.shape {
-                Shape::PerMatch => {
-                    let room = index.get(&(attribution.model_id.as_str(), attribution.room_id.as_str()));
-                    rows.push(match_row(def, element, attribution, room.copied(), builtin, &known));
-                }
-                Shape::PerRoom => per_room.entry(key).or_default().push((element, attribution)),
-            }
-        }
-    }
-
-    if def.shape == Shape::PerRoom {
-        let mut grouped: Vec<Vec<String>> = Vec::new();
-        for (key, members) in &per_room {
-            let room = index.get(&(key.0.as_str(), key.1.as_str())).copied();
-            grouped.push(grouped_row(def, room, members, builtin, &known));
-        }
-        rows = grouped;
-    }
-
-    if def.include_rooms_without {
-        for room in &rooms {
-            if matched_rooms.contains(&(room.model_id.clone(), room.room.id.clone())) {
+                rows.push(unattributed_row(def, element, builtin, &known));
                 continue;
             }
-            unmatched += 1;
-            rows.push(room_only_row(def, room, builtin, &known));
+            for attribution in &element.rooms {
+                let key = (attribution.model_id.clone(), attribution.room_id.clone());
+                if !survived.contains(&key) || !listed(element, attribution) {
+                    continue;
+                }
+                let room = index.get(&(attribution.model_id.as_str(), attribution.room_id.as_str())).copied();
+                rows.push(match_row(def, element, attribution, room, builtin, &known));
+            }
         }
+    } else {
+        for (key, members) in &per_room {
+            if !survived.contains(key) {
+                continue;
+            }
+            let shown: Vec<(&Element, &Attribution)> = members.iter().copied().filter(|(e, a)| listed(e, a)).collect();
+            let room = index.get(&(key.0.as_str(), key.1.as_str())).copied();
+            rows.push(grouped_row(def, room, &shown, builtin, &known));
+        }
+        if def.include_unattributed {
+            for element in elements.iter().filter(|e| e.rooms.is_empty()) {
+                if filtering && !room_survives(filter, None, &[(element, &NO_ATTRIBUTION)], builtin) {
+                    continue;
+                }
+                unmatched += 1;
+                rows.push(grouped_row(def, None, &[(element, &NO_ATTRIBUTION)], builtin, &known));
+            }
+        }
+    }
+
+    for room in rooms_with_nothing(def, filter, filtering, &rooms, &per_room, builtin) {
+        unmatched += 1;
+        rows.push(room_only_row(def, room, builtin, &known));
     }
 
     Ok(ReportResult {
@@ -581,6 +963,47 @@ fn by_room_rows(
         unmatched_rows: unmatched,
     })
 }
+
+/// The rooms nothing matched, and whether they are listed at all.
+///
+/// **The filter outranks the switch when it says anything about this entity.**
+/// "Has no ceiling of type X" asks for exactly these rooms, so they appear
+/// whatever the switch says; "has a ceiling of type X" excludes them for the
+/// same reason, since a room with none cannot have one. The switch decides only
+/// when the filter is silent about the associated side — a default is what you
+/// fall back to, not what you argue with.
+fn rooms_with_nothing<'a>(
+    def: &ReportDefinition,
+    filter: &ReportFilter,
+    filtering: bool,
+    rooms: &'a [RoomResponse],
+    per_room: &BTreeMap<(String, String), Vec<(&Element, &Attribution)>>,
+    builtin: &[BuiltinPropertyDef],
+) -> Vec<&'a RoomResponse> {
+    let asks_for_them = filtering && filter.has(Side::Element, true);
+    let asks_against_them = filtering && filter.has(Side::Element, false);
+    if !def.include_rooms_without && !asks_for_them {
+        return Vec::new();
+    }
+    if asks_against_them && !asks_for_them {
+        // A positive condition is present and these rooms cannot satisfy it.
+        return Vec::new();
+    }
+    rooms
+        .iter()
+        .filter(|room| !per_room.contains_key(&(room.model_id.clone(), room.room.id.clone())))
+        .filter(|room| !filtering || room_survives(filter, Some(room), &[], builtin))
+        .collect()
+}
+
+/// The attribution an unattributed element is evaluated against: no room, no
+/// measures. A `Join` condition therefore reads empty, which matches only
+/// `is blank` — the rule every absent value follows.
+static NO_ATTRIBUTION: std::sync::LazyLock<Attribution> = std::sync::LazyLock::new(|| Attribution {
+    model_id: String::new(),
+    room_id: String::new(),
+    measures: BTreeMap::new(),
+});
 
 fn match_row(
     def: &ReportDefinition,
@@ -882,6 +1305,7 @@ mod tests {
             include_rooms_without: false,
             include_unattributed: true,
             limit: None,
+            filter: None,
         }
     }
 
@@ -1081,6 +1505,219 @@ mod tests {
         let def = definition(Entity::Rooms, true);
         let err = build_report(&state, &scope(), &def).expect_err("rooms cannot be reported by room");
         assert!(format!("{err:?}").contains("cannot be reported by room"));
+    }
+
+    // ---------- filters ----------
+
+    fn wire(json: &str) -> ReportFilter {
+        let parsed: FilterWire = serde_json::from_str(json).expect("wire shape parses");
+        parsed.parse(&std::collections::BTreeSet::new()).expect("filter parses")
+    }
+
+    fn filtered(state: &AppState, mut def: ReportDefinition, json: &str) -> Vec<Vec<String>> {
+        def.filter = Some(wire(json));
+        run(state, &def).rows
+    }
+
+    /// Two doors in one room, one in another: enough for every set rule below.
+    fn two_rooms() -> AppState {
+        state_with(
+            vec![
+                room("r1", "ENTRY", &[("Number", "G01"), ("Department", "Circulation")]),
+                room("r2", "KITCHEN", &[("Number", "G02"), ("Department", "Living")]),
+                room("r3", "POOL EX", &[("Number", "G05"), ("Department", "External")]),
+            ],
+            vec![
+                door("d1", Some("r1"), &[("Mark", "D-01"), ("Type", "SGL")]),
+                door("d2", Some("r1"), &[("Mark", "D-02"), ("Type", "EXT")]),
+                door("d3", Some("r2"), &[("Mark", "D-03"), ("Type", "SGL")]),
+            ],
+        )
+    }
+
+    /// A schedule filters per row, which is what a row means there.
+    #[test]
+    fn test_a_schedule_filters_row_by_row() {
+        let state = two_rooms();
+        let mut def = definition(Entity::Doors, false);
+        def.columns = vec!["Mark".to_string()];
+
+        let rows = filtered(&state, def, r#"{"mode":"all","items":[{"field":"Type","op":"eq","value":"SGL"}]}"#);
+
+        assert_eq!(rows, vec![vec!["D-01".to_string()], vec!["D-03".to_string()]]);
+    }
+
+    /// Text folds case unless asked otherwise. A modeller's capitalisation is
+    /// not data, and the miss it causes is the kind nobody notices.
+    #[test]
+    fn test_text_ignores_case_by_default_and_respects_it_when_asked() {
+        let state = two_rooms();
+        let mut def = definition(Entity::Doors, false);
+        def.columns = vec!["Mark".to_string()];
+
+        let folded = filtered(
+            &state,
+            def_clone(&def),
+            r#"{"mode":"all","items":[{"field":"Type","op":"eq","value":"sgl"}]}"#,
+        );
+        assert_eq!(folded.len(), 2, "sgl finds SGL");
+
+        let exact = filtered(
+            &state,
+            def,
+            r#"{"mode":"all","items":[{"field":"Type","op":"eq","value":"sgl","case_sensitive":true}]}"#,
+        );
+        assert!(exact.is_empty(), "with Match case on, sgl is not SGL");
+    }
+
+    /// A positive condition on the associated side asks whether the room HAS
+    /// one, so it keeps every row of a room that does -- including the doors
+    /// that do not match it themselves? No: the conjunctive positives also
+    /// narrow the rows, so only the matching doors are listed.
+    #[test]
+    fn test_a_positive_condition_keeps_the_room_and_narrows_its_rows() {
+        let state = two_rooms();
+        let mut def = definition(Entity::Doors, true);
+        def.columns = vec!["Mark".to_string()];
+        def.room_columns = vec!["Number".to_string()];
+
+        let rows = filtered(&state, def, r#"{"mode":"all","items":[{"field":"Type","op":"eq","value":"EXT"}]}"#);
+
+        assert_eq!(rows, vec![vec!["G01".to_string(), "D-02".to_string()]]);
+    }
+
+    /// **The rule the whole builder turns on.** "Type is not EXT" asks for
+    /// rooms with NO door of that type -- so ENTRY is dropped whole, because
+    /// one of its doors IS EXT, and KITCHEN keeps both. Per-row negation would
+    /// have kept ENTRY for its other door, answering a different question.
+    #[test]
+    fn test_a_negative_condition_asks_about_the_whole_set() {
+        let state = two_rooms();
+        let mut def = definition(Entity::Doors, true);
+        def.columns = vec!["Mark".to_string()];
+        def.room_columns = vec!["Number".to_string()];
+
+        let rows = filtered(&state, def, r#"{"mode":"all","items":[{"field":"Type","op":"ne","value":"EXT"}]}"#);
+
+        let numbers: Vec<&String> = rows.iter().map(|r| &r[0]).collect();
+        assert!(!numbers.contains(&&"G01".to_string()), "ENTRY is dropped whole for having one: {rows:?}");
+        assert!(
+            rows.contains(&vec!["G02".to_string(), "D-03".to_string()]),
+            "KITCHEN keeps its door: {rows:?}"
+        );
+    }
+
+    /// ...and a room with none at all satisfies a negative condition, whatever
+    /// the switch says: nothing it has is EXT. The switch decides only when the
+    /// filter says nothing about this entity.
+    #[test]
+    fn test_a_negative_condition_pulls_in_rooms_with_no_elements() {
+        let state = two_rooms();
+        let mut def = definition(Entity::Doors, true);
+        def.columns = vec!["Mark".to_string()];
+        def.room_columns = vec!["Number".to_string()];
+        def.include_rooms_without = false;
+
+        let rows = filtered(&state, def, r#"{"mode":"all","items":[{"field":"Type","op":"ne","value":"EXT"}]}"#);
+
+        assert!(
+            rows.contains(&vec!["G05".to_string(), String::new()]),
+            "POOL EX has no door of any type: {rows:?}"
+        );
+    }
+
+    /// The other direction: a positive condition excludes a room with none even
+    /// when the switch asks for them. An explicit condition beats a default.
+    #[test]
+    fn test_a_positive_condition_excludes_rooms_with_none_despite_the_switch() {
+        let state = two_rooms();
+        let mut def = definition(Entity::Doors, true);
+        def.columns = vec!["Mark".to_string()];
+        def.room_columns = vec!["Number".to_string()];
+        def.include_rooms_without = true;
+
+        let rows = filtered(&state, def, r#"{"mode":"all","items":[{"field":"Type","op":"eq","value":"SGL"}]}"#);
+
+        assert!(
+            !rows.iter().any(|r| r[0] == "G05"),
+            "a room with no doors cannot have an SGL one: {rows:?}"
+        );
+    }
+
+    /// A room-side condition reads the room, and an `any` group is an OR.
+    #[test]
+    fn test_room_conditions_and_or_groups() {
+        let state = two_rooms();
+        let mut def = definition(Entity::Doors, true);
+        def.columns = vec!["Mark".to_string()];
+        def.room_columns = vec!["Number".to_string()];
+
+        let rows = filtered(
+            &state,
+            def,
+            r#"{"mode":"any","items":[
+                 {"side":"room","field":"Department","op":"eq","value":"Living"},
+                 {"side":"room","field":"Number","op":"eq","value":"G01"}]}"#,
+        );
+
+        let numbers: Vec<&String> = rows.iter().map(|r| &r[0]).collect();
+        assert!(numbers.contains(&&"G01".to_string()) && numbers.contains(&&"G02".to_string()));
+        assert!(!numbers.contains(&&"G05".to_string()));
+    }
+
+    /// `is blank` is the only way to ask about a missing value, and the only
+    /// operator a missing value satisfies.
+    #[test]
+    fn test_blank_is_the_only_operator_an_absent_value_matches() {
+        let state = state_with(
+            vec![room("r1", "ENTRY", &[("Number", "G01")])],
+            vec![door("d1", Some("r1"), &[("Mark", "D-01")]), door("d2", Some("r1"), &[])],
+        );
+        let mut def = definition(Entity::Doors, false);
+        def.columns = vec!["$id".to_string()];
+
+        let blank = filtered(&state, def_clone(&def), r#"{"mode":"all","items":[{"field":"Mark","op":"blank"}]}"#);
+        assert_eq!(blank, vec![vec!["d2".to_string()]]);
+
+        let present =
+            filtered(&state, def_clone(&def), r#"{"mode":"all","items":[{"field":"Mark","op":"has_value"}]}"#);
+        assert_eq!(present, vec![vec!["d1".to_string()]]);
+
+        // The door with no Mark does not match "is not D-01" either: no value
+        // is not evidence of a different value.
+        let negative = filtered(&state, def, r#"{"mode":"all","items":[{"field":"Mark","op":"ne","value":"D-01"}]}"#);
+        assert!(negative.is_empty(), "absent matches nothing but blank: {negative:?}");
+    }
+
+    /// A malformed filter is named, not ignored: a condition nobody can see is
+    /// worse than an error nobody wanted.
+    #[test]
+    fn test_a_bad_filter_says_what_is_wrong() {
+        let parsed: FilterWire =
+            serde_json::from_str(r#"{"mode":"all","items":[{"field":"Mark","op":"sounds_like","value":"D"}]}"#)
+                .unwrap();
+        let err = parsed.parse(&std::collections::BTreeSet::new()).expect_err("unknown operator");
+        assert!(err.contains("sounds_like"), "{err}");
+
+        let missing: FilterWire =
+            serde_json::from_str(r#"{"mode":"all","items":[{"field":"Mark","op":"eq"}]}"#).unwrap();
+        let err = missing.parse(&std::collections::BTreeSet::new()).expect_err("a value is required");
+        assert!(err.contains("needs a value"), "{err}");
+    }
+
+    fn def_clone(def: &ReportDefinition) -> ReportDefinition {
+        ReportDefinition {
+            entity: def.entity,
+            by_room: def.by_room,
+            columns: def.columns.clone(),
+            room_columns: def.room_columns.clone(),
+            measures: def.measures.clone(),
+            shape: def.shape,
+            include_rooms_without: def.include_rooms_without,
+            include_unattributed: def.include_unattributed,
+            limit: def.limit,
+            filter: None,
+        }
     }
 
     /// CSV is written here so a download and an MCP host cannot differ. RFC

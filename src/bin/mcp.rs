@@ -160,6 +160,19 @@ struct BuildReportParams {
     /// Cap the rows returned. `total_rows` still counts them all.
     #[serde(default)]
     limit: Option<usize>,
+    /// The filter tree, as JSON: a group is `{"mode": "all"|"any", "items":
+    /// [...]}` and a condition is `{"side": "room"|"element"|"join", "field",
+    /// "op", "value"}`. Operators: eq, ne, gt, ge, lt, le, contains,
+    /// not_contains, starts_with, ends_with, between (with `value2`), blank,
+    /// has_value. Text folds case unless `case_sensitive` is set. ON THE
+    /// ASSOCIATED SIDE A CONDITION ASKS ABOUT THE ROOM'S WHOLE SET: `ne` and
+    /// `not_contains` mean the room has NONE that match, so a room with no
+    /// elements at all satisfies them and fails every positive condition.
+    /// Untyped here because the shape is a tree; the server names anything it
+    /// cannot read.
+    #[serde(default)]
+    #[schemars(with = "Option<serde_json::Value>")]
+    filter: Option<reports::FilterWire>,
 }
 
 fn mcp_default_true() -> bool {
@@ -652,6 +665,13 @@ impl RoommateMcp {
                 ))
             }
         };
+        let filter = match &p.filter {
+            None => None,
+            Some(wire) => {
+                let known = self.state.settings().known_reference_sources();
+                Some(wire.parse(&known).map_err(|msg| McpError::invalid_params(msg, None))?)
+            }
+        };
         let definition = reports::ReportDefinition {
             entity,
             by_room: p.by_room,
@@ -662,6 +682,7 @@ impl RoommateMcp {
             include_rooms_without: p.include_rooms_without,
             include_unattributed: p.include_unattributed,
             limit: p.limit,
+            filter,
         };
         let scope = reports::ReportScope {
             project: Some(&p.project),
