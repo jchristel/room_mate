@@ -10,9 +10,10 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 **The page, its reports and the filter are built** (as of 2026-09-19).
 `/reports/` serves milestone comparison, three QA checks, a schedule of every
 entity, the by-room reports and the filter builder over `service::reports`.
-Those document themselves. What is left here is saved report definitions, the
-debts under "What the server still owes a report", and the design of the parts
-nobody has built yet. When a piece ships, its section is deleted from here and
+Those document themselves, and the pickers now read a served vocabulary rather
+than guessing. What is left here is saved report definitions, the debts under
+"What the server still owes a report", and the design of the parts nobody has
+built yet. When a piece ships, its section is deleted from here and
 the rationale moves to the module header — see "Code documents what is built"
 in [Coding Conventions](CODING-CONVENTIONS.md).
 
@@ -183,10 +184,11 @@ Left open:
 - **Three levels of nesting** is a cap the builder enforces and nothing tests at
   the server, which accepts any depth. It has not mattered; a form deeper than
   that stops being readable long before it stops parsing.
-- **A field's type is guessed from its name** in the page (`/area|width|…/`),
-  because a project's property vocabulary is not served anywhere — the same gap
-  the column pickers have. A `FieldType` already exists in settings for
-  reference fields; the missing half is the entity's own properties.
+- **A reference label's type is still assumed to be text.** The entity's own
+  properties carry Revit's storage type through the dictionary, but a joined
+  source's do not: `ReferenceFieldConfig` has a `FieldType` for the fields QA
+  compares, and nothing reads it here yet. A numeric dRofus column therefore
+  offers text operators.
 - **An `any` group holding a negative associated condition** has no single
   reading, so the builder does not offer one there. The server evaluates
   whatever it is sent, which is the looser contract of the two; if a caller ever
@@ -282,12 +284,6 @@ beside it. The module documents the three rules it keeps. What is left:
   in a report would give the report and the QA check two answers to one
   question, so the by-room type is disabled until the match is exposed on the
   read. The Unmatched spaces and rooms check answers the question meanwhile.
-- **Column discovery.** The pickers offer the intrinsics and the names every
-  model measured so far carries, and take free text for everything else, because
-  nothing serves a project's actual property vocabulary. The cheap version is a
-  route over the stored property dictionary (`contract::property_codec` already
-  keeps one per snapshot), which would make this a closed list rather than a
-  guess.
 
 ## Saved reports are documents, not settings
 

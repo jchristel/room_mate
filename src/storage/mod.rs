@@ -497,6 +497,24 @@ pub trait SnapshotStore: Send + Sync {
     /// snapshot key.)
     fn get_latest_raw(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>>;
 
+    /// The **last line** of the latest snapshot of one kind, and nothing else.
+    ///
+    /// **This is what writing the dictionary last was for.** A stored snapshot
+    /// ends on its property dictionary (`contract::property_codec`), so the
+    /// vocabulary of an entity — every property name any element carries, with
+    /// its Revit storage type — is one short read rather than a parse of the
+    /// whole file. On RHH's FF&E that is the difference between a few hundred
+    /// bytes and tens of megabytes, per model, to answer "what can I put in a
+    /// column".
+    ///
+    /// `None` when there is no snapshot. A snapshot written before the codec
+    /// ends on `]}` instead, which is not a trailer and is simply not a
+    /// vocabulary — the caller sees no keys rather than wrong ones.
+    ///
+    /// Bytes rather than a parsed dictionary, for the reason every other method
+    /// here takes bytes: the store does not know what a snapshot means.
+    fn get_latest_trailer(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>>;
+
     /// Every model key the store knows about, **whatever kinds of snapshot it
     /// holds** — the index question. For `FsStore` this is answered by the
     /// `project.toml` manifests (the manifest is the index, snapshots are the

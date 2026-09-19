@@ -1,14 +1,15 @@
 // The schedule and by-room report types, and what each one opens with.
 //
 // **Defaults matter more than they look.** A report that opens empty asks the
-// reader to know the property vocabulary before it will show them anything, so
-// each entity opens on columns that exist in every model measured so far —
-// intrinsics (`$id`, `$type_name`) and the handful of Revit names that are not
-// project conventions. Everything else is typed in; see the open question on
-// column discovery in docs/STRATEGY-REPORTS.md.
+// reader to know the vocabulary before it shows them anything, so each entity
+// opens on columns every model measured so far carries — intrinsics (`$id`,
+// `$type_name`) and the handful of Revit names that are not project
+// conventions.
 //
-// The measures are not preferences: they are the fields the JOIN produced, and
-// they only exist for the entities whose attribution measures anything.
+// What a picker OFFERS is no longer here: `/projects/{id}/reports/columns`
+// serves this project's actual property names, with the value type Revit
+// stated for each. This file keeps only what the server cannot decide — where
+// a report starts.
 
 export interface EntityDef {
   /** Wire spelling, as `service::reports::Entity::parse` reads it. */
@@ -18,8 +19,6 @@ export interface EntityDef {
   one: string;
   many: string;
   columns: string[];
-  /** Offered in the picker beside whatever the reader types. */
-  suggestions: string[];
   /** What the join measured, empty where it measured nothing. */
   measures: string[];
   defaultMeasures: string[];
@@ -38,7 +37,6 @@ export const ENTITIES: EntityDef[] = [
     one: "room",
     many: "rooms",
     columns: ["$id", "$name", "Number"],
-    suggestions: ["$id", "$name", "$level_id", "Number", "Name", "Department", "Area"],
     measures: [],
     defaultMeasures: [],
     byRoom: false,
@@ -50,7 +48,6 @@ export const ENTITIES: EntityDef[] = [
     one: "door",
     many: "doors",
     columns: ["$id", "$type_name", "Mark"],
-    suggestions: ["$id", "$type_name", "$type_id", "$level_id", "$from_room", "$to_room", "Mark", "Comments"],
     measures: [],
     defaultMeasures: [],
     byRoom: true,
@@ -61,7 +58,6 @@ export const ENTITIES: EntityDef[] = [
     one: "window",
     many: "windows",
     columns: ["$id", "$type_name", "Mark"],
-    suggestions: ["$id", "$type_name", "$type_id", "$level_id", "$from_room", "$to_room", "Mark", "Comments"],
     measures: [],
     defaultMeasures: [],
     byRoom: true,
@@ -72,7 +68,6 @@ export const ENTITIES: EntityDef[] = [
     one: "ceiling",
     many: "ceilings",
     columns: ["$id", "$type_name", "$height_offset"],
-    suggestions: ["$id", "$type_name", "$type_id", "$level_id", "$height_offset", "Mark", "Comments"],
     measures: SURFACE_MEASURES,
     defaultMeasures: ["overlap_area", "fraction_of_room"],
     byRoom: true,
@@ -86,7 +81,6 @@ export const ENTITIES: EntityDef[] = [
     // roof build-up hosted on the same level, which is the first question
     // House A's data raises.
     columns: ["$id", "$type_name", "$height_offset"],
-    suggestions: ["$id", "$type_name", "$type_id", "$level_id", "$height_offset", "Mark", "Comments"],
     measures: SURFACE_MEASURES,
     defaultMeasures: ["overlap_area", "fraction_of_room"],
     byRoom: true,
@@ -97,7 +91,6 @@ export const ENTITIES: EntityDef[] = [
     one: "item",
     many: "items",
     columns: ["$id", "$category", "$type_name"],
-    suggestions: ["$id", "$category", "$type_name", "$type_id", "$level_id", "$room", "Mark", "Manufacturer"],
     measures: ["room_origin"],
     defaultMeasures: ["room_origin"],
     byRoom: true,
@@ -108,7 +101,6 @@ export const ENTITIES: EntityDef[] = [
     one: "space",
     many: "spaces",
     columns: ["$id", "$name", "Number"],
-    suggestions: ["$id", "$name", "$level_id", "Number", "Name", "Space Type"],
     measures: [],
     defaultMeasures: [],
     byRoom: false,

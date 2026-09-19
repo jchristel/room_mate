@@ -3111,6 +3111,30 @@ pub async fn build_project_report(
     Ok(Json(result).into_response())
 }
 
+/// `?entity=` for the column catalog.
+#[derive(Deserialize)]
+pub struct ColumnsQuery {
+    pub entity: String,
+}
+
+/// What a report over one entity may name — `GET /projects/{id}/reports/columns`.
+///
+/// **A read that exists so a picker stops guessing.** The page used to offer a
+/// hand-written list of intrinsics and match property names against a regex to
+/// decide whether a filter should compare them as numbers. This answers both
+/// from the stored dictionaries, which carry the export's own storage type, and
+/// from the project's reference sources.
+pub async fn get_report_columns(
+    State(state): State<Shared>,
+    Path(project_id): Path<String>,
+    Query(query): Query<ColumnsQuery>,
+) -> Result<Json<reports::ColumnCatalog>, (StatusCode, String)> {
+    let Some(entity) = reports::Entity::parse(&query.entity) else {
+        return Err((StatusCode::BAD_REQUEST, format!("unknown entity {:?} for a report", query.entity)));
+    };
+    Ok(Json(reports::column_catalog(&state, Some(&project_id), entity)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

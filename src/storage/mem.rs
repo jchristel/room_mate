@@ -165,6 +165,16 @@ impl SnapshotStore for MemStore {
         Ok(self.latest.lock().unwrap().get(&(kind, key.clone())).map(|(_, bytes)| bytes.clone()))
     }
 
+    fn get_latest_trailer(&self, kind: SnapshotKind, key: &ModelKey) -> Result<Option<Vec<u8>>> {
+        // No seek to save here; the point is to answer the same question the
+        // filesystem store does, so a test and a deployment agree.
+        Ok(self.get_latest_raw(kind, key)?.map(|bytes| {
+            let body = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+            let start = body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+            body[start..].to_vec()
+        }))
+    }
+
     fn list_models(&self) -> Result<Vec<ModelKey>> {
         // Every model holding a snapshot of ANY kind, deduped — a model with
         // both rooms and doors has two entries in `latest` and is one model.

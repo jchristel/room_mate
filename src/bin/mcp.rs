@@ -4,10 +4,10 @@
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
-//! `get_ceilings`, `get_floors`, `build_report` --
+//! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Twenty-four in
+//! and the one forwarded mutation (`upload_reference`, below). Twenty-five in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -112,6 +112,15 @@ struct GetSurfacesParams {
     /// milestone read answers one consistent question.
     #[serde(default)]
     milestone: Option<String>,
+}
+
+/// `list_report_columns` parameters.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ReportColumnsParams {
+    /// Project id to ask about.
+    project: String,
+    /// Which entity: rooms, doors, windows, ceilings, floors, spaces or ffe.
+    entity: String,
 }
 
 /// `build_report` parameters -- the report definition, in the shape
@@ -696,6 +705,18 @@ impl RoommateMcp {
             ))])),
             Some(result) => json_result(&result),
         }
+    }
+
+    /// What a report over one entity may name -- see
+    /// `service::reports::column_catalog`.
+    #[tool(
+        description = "List what a report over one entity can put in a column or a filter, for one project: the entity's own property names with the value type Revit stated for each, its `$intrinsics`, any joined reference labels as `source.label`, the room side for a by-room report, and the measures the join produces. READ FROM EACH SNAPSHOT'S PROPERTY DICTIONARY, not by assembling the entity, so it costs a tail read rather than a parse. A name it offers is one SOME element carries -- it does not promise every element has it, which is why a cell can still come back empty. A snapshot stored before the property codec has no dictionary and contributes no names; its properties are still filterable by name."
+    )]
+    fn list_report_columns(&self, Parameters(p): Parameters<ReportColumnsParams>) -> Result<CallToolResult, McpError> {
+        let Some(entity) = reports::Entity::parse(&p.entity) else {
+            return Err(McpError::invalid_params(format!("unknown entity {:?} for a report", p.entity), None));
+        };
+        json_result(&reports::column_catalog(&self.state, Some(&p.project), entity))
     }
 
     /// Serves one project's ceilings with the rooms each lies over -- see
