@@ -1,12 +1,12 @@
 # RoomMate
 
-Revit model data → a Rust server → a browser floor-plan viewer. **Five
-entities** — rooms, doors, windows, FF&E and spaces — are extracted from Revit,
-pushed as a versioned JSON contract, joined against external reference data
-(dRofus is the common one; the pipeline is keyed on N sources), classified into
-a project's own hierarchy, and served to a viewer that draws plans, aggregates
-areas, reconciles each entity against the model and graphs which rooms share a
-wall.
+Revit model data → a Rust server → a browser floor-plan viewer. **Seven
+entities** — rooms, doors, windows, ceilings, floors, FF&E and spaces — are
+extracted from Revit, pushed as a versioned JSON contract, joined against
+external reference data (dRofus is the common one; the pipeline is keyed on N
+sources), classified into a project's own hierarchy, and served to a viewer that
+draws plans, aggregates areas, reconciles each entity against the model and
+graphs which rooms share a wall — plus a reports page that tabulates any of it.
 
 ![Screen Shot](images/Room_Mate_Splash.PNG)
 
@@ -23,8 +23,8 @@ it belongs to:
 |---|---|
 | [`extractor/`](extractor) | The **producer**. `pyRevit/` holds the IronPython that runs inside Revit and pushes to the server. |
 | [`src/`](src) | The **Rust server** — ingest, storage, the reference join, classification, and the geometry services (`areas`, `adjacency`, `room_locator`). Two binaries: the axum HTTP server and an MCP server over the same read logic. |
-| [`static/`](static) | The **browser viewer** — HTML/CSS/JS served as-is, plus `vendor/renderer.bundle.js`, which is **generated and committed** so a fresh clone runs with no node installed. |
-| [`src-js/`](src-js) | The viewer's **WebGL plan renderer** — TypeScript, built by Vite into `static/vendor/`. Where new frontend code lands; see [Coding Conventions](docs/CODING-CONVENTIONS.md). |
+| [`static/`](static) | What the server serves: the **viewer** (`index.html`, HTML/CSS/JS as-is) plus three **generated and committed** builds — `vendor/renderer.bundle.js`, `settings/` and `reports/` — so a fresh clone runs with no node installed. |
+| [`src-js/`](src-js) | The frontend source, built by Vite: the viewer's **WebGL plan renderer** (`renderer/`), the **settings page** (`settings/`) and the **reports page** (`reports/`), all React where they are not the renderer. Where new frontend code lands; see [Coding Conventions](docs/CODING-CONVENTIONS.md). |
 | [`settings/`](settings) | Server config, and one TOML per project (classification tiers, sources, area policy). |
 | [`scripts/`](scripts) | Dev tooling run *against* this repo: fixture generators, `fixtures/` (sample data to push or upload), `check_areas.py` (the areas diagnostic), `weekly_review.py` (the docs-vs-code drift check), `module_stats.py` (measures the module plan's cells; `--check` reports drift), and the `probe_*`/`analyse_*` pairs that settle an entity's open questions before it is built. Not shipped. |
 | [`docs/`](docs) | Strategy docs, coding conventions, and handovers (landed ones in `docs/Superseded/`). |
@@ -37,7 +37,8 @@ stated there: **update the extractor and the server together — there is no
 transition window.** A producer on the wrong version is rejected loudly rather
 than silently misparsed. Each entity carries its own version, all under
 [`src/contract/`](src/contract): rooms are at `SUPPORTED_SCHEMA` (v7), and doors,
-windows, FF&E and spaces each have their own constant beside it.
+windows, ceilings, floors, FF&E and spaces each have their own constant beside
+it.
 
 That is the reason the extractor lives in this repo rather than beside the other
 Revit tooling: a contract change becomes one commit instead of two repos
@@ -66,10 +67,42 @@ Two constraints follow from where the extractor runs:
 cargo run -- --server-settings settings/server.toml --project-settings settings/projects
 ```
 
-Serves the viewer and the API on `http://127.0.0.1:5151` (`--port`, or `$PORT`,
-moves it; the host is loopback-only by design — see `DEFAULT_HTTP_HOST`).
-[Server](docs/STRATEGY-SERVER.md) covers the endpoints,
+Serves the three pages and the API on `http://127.0.0.1:5151` (`--port`, or
+`$PORT`, moves it; the host is loopback-only by design — see
+`DEFAULT_HTTP_HOST`). [Server](docs/STRATEGY-SERVER.md) covers the endpoints,
 [Browser](docs/STRATEGY-BROWSER.md) the viewer.
+
+## The three pages
+
+| | |
+|---|---|
+| **`/`** — the viewer | The plan: rooms drawn per storey with the door, window, FF&E, space and ceiling/floor layers over them, the hierarchy-area rollups, the adjacency graph, and the QA band that says whether the project reconciles. |
+| **`/settings/`** — settings | Every project setting, including the ones that only ever existed in TOML: the coordinate anchor, the area policy, the door/window/FF&E/space policies, the hierarchy exclusions. It holds the settings object as it read it and sends it back, so it cannot silently drop what it does not show — the bug its hand-written predecessor shipped. |
+| **`/reports/`** — reports | Tabular reports: a **schedule** of any entity, any entity **by room**, the **QA checks** (reference data, unresolved openings, unmatched spaces and rooms), and **milestone comparison**, which used to be its own page. Rows and CSV are rendered by the server, so a download and an MCP host get the same bytes. |
+
+## The API, in one screen
+
+Reads, all GET unless noted:
+
+| | |
+|---|---|
+| `/rooms` | Every model's rooms merged, with their joined reference data and classification. The viewer's main read. |
+| `/doors`, `/windows` | Openings, each with the room the project's attribution policy gives it. |
+| `/ceilings`, `/floors` | Surfaces, each with the rooms it lies over — geometric, derived per read, stored nowhere. |
+| `/ffe` | Items, each with the room it sits in. |
+| `/spaces` | Services spaces, per model. |
+| `/projects`, `/projects/{id}/buildings`, `/projects/{id}/snapshots`, `/projects/{id}/milestones` | What exists. |
+| `/projects/{id}/validation` | The QA reconciliation: rooms against reference data, openings and items against rooms, spaces against rooms, and whether the models agree on a phase. |
+| `/projects/{id}/areas`, `/projects/{id}/adjacency` | Hierarchy-area rollups, and which rooms share a wall. |
+| `/projects/{id}/reports` (**POST**) | Build one report — a schedule or a by-room table — projected to the columns asked for. `?format=csv` renders the same rows as CSV. A POST that reads, because the definition does not fit a query string. |
+| `/projects/{id}/comparison` (**POST**) | Diff a baseline milestone against others. Same shape, same reason. |
+| `/api/settings/projects[/{id}]` | Read and save project settings (PUT), which hot-swaps the running registry. |
+
+Writes are the ingest routes the extractor pushes to (`/rooms`, `/doors`,
+`/windows`, `/ceilings`, `/floors`, `/ffe`, `/spaces`, each with a `/stream`
+sibling) and `/projects/{id}/reference/{source}` for a reference CSV. Every read
+route above has a matching **MCP tool** in the second binary — see
+[MCP](docs/STRATEGY-MCP.md) and [docs/mcp-host-setup.md](docs/mcp-host-setup.md).
 
 `static/` is found **beside the executable**, falling back to the working
 directory — which is what the line above relies on. See `main.rs`'s

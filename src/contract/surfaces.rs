@@ -32,7 +32,7 @@ use std::sync::Arc;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use super::{Level, Loop, Model, ModelToShared, Project, PropertyMap, Snapshot};
+use super::{Level, Loop, Model, ModelToShared, Project, PropertyMap, PropertyTiers, Snapshot};
 
 /// One ceiling or one floor, as stored and as served.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,4 +215,13 @@ pub trait SurfaceEnvelope: super::SnapshotEnvelope + Serialize + DeserializeOwne
         phase: Option<String>,
         envelope: SurfaceModelEnvelope,
     ) -> Self;
+}
+
+/// A surface tiers exactly as an opening does: instance first, then type, and
+/// a tier wins only when it is `Present` -- so a blank instance parameter does
+/// not shadow a real type value.
+impl PropertyTiers for Surface {
+    fn tiers(&self) -> Vec<&PropertyMap> {
+        vec![&self.properties, &*self.type_properties]
+    }
 }

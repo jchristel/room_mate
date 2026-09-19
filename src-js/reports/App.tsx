@@ -6,11 +6,13 @@
 // same time, for the reason STRATEGY-REPORTS.md gives: the same findings
 // rendered by two pieces of code drift the first time either is fixed).
 //
-// Schedules and the by-room association reports are the next slice, along with
-// the filter builder; the design for all of it, and the mockup it was reviewed
-// against, are in docs/STRATEGY-REPORTS.md. A report type not built yet sits in
-// the dropdown disabled and says so, rather than being absent — an empty
-// category is a question a reader cannot answer.
+// Schedules and the by-room reports read `POST /projects/{id}/reports`, which
+// projects to the columns asked for: `/ffe` is 133 MB for one RHH storey and a
+// report of it is a few, so this page never fetches an entity payload to
+// project it locally. The filter builder is the next slice; its design, and the
+// mockup it was reviewed against, are in docs/STRATEGY-REPORTS.md. A report
+// type not built yet sits in the dropdown disabled and says so, rather than
+// being absent — an empty category is a question a reader cannot answer.
 //
 // The report *type* decides which form appears below it. That is the structure
 // the design turns on: adding a type should cost a registry row and, at most,
@@ -21,6 +23,8 @@ import { useCallback, useEffect, useState } from "react";
 import { CheckReport } from "./checks.js";
 import { apiGet, persistSelection, seedProjectId } from "./common.js";
 import { CHECKS } from "./checkRows.js";
+import { ENTITIES } from "./reportTypes.js";
+import { TableReport } from "./tableReport.js";
 import { ComparisonReport } from "./comparison.js";
 import type { ProjectRow } from "./types.js";
 
@@ -48,12 +52,21 @@ const TYPES: ReportType[] = [
     label: "Room changes",
     desc: "Rooms added, removed or changed between a baseline milestone and the others.",
   },
-  { id: "sched.rooms", group: "Schedules", label: "Room schedule", desc: "", later: true },
-  { id: "sched.doors", group: "Schedules", label: "Door schedule", desc: "", later: true },
-  { id: "sched.ceilings", group: "Schedules", label: "Ceiling schedule", desc: "", later: true },
-  { id: "by_room.ceilings", group: "By room", label: "Ceilings by room", desc: "", later: true },
-  { id: "by_room.floors", group: "By room", label: "Floors by room", desc: "", later: true },
-  { id: "by_room.ffe", group: "By room", label: "FF&E by room", desc: "", later: true },
+  ...ENTITIES.map((e) => ({
+    id: `sched.${e.id}`,
+    group: "Schedules",
+    label: `${e.label} schedule`,
+    desc: `One row per ${e.one}, with the columns you pick. Only those columns are read.`,
+  })),
+  ...ENTITIES.map((e) => ({
+    id: `by_room.${e.id}`,
+    group: "By room",
+    label: `${e.label} by room`,
+    desc: e.byRoom
+      ? `Each ${e.many.slice(0, -1) === e.one ? e.one : e.one} with the room it is attributed to — the attribution the ${e.label.toLowerCase()} read already made, never recomputed here.`
+      : (e.byRoomNote as string),
+    later: !e.byRoom,
+  })),
 ];
 
 const GROUPS = ["Checks", "Between milestones", "Schedules", "By room"];
@@ -137,6 +150,14 @@ export function App() {
             <CheckReport projectId={projectId} checkId={typeId.slice("check.".length)} />
           )}
           {projectId && typeId === "cmp.rooms" && <ComparisonReport projectId={projectId} />}
+          {projectId && (typeId.startsWith("sched.") || typeId.startsWith("by_room.")) && (
+            <TableReport
+              key={typeId}
+              projectId={projectId}
+              entityId={typeId.slice(typeId.indexOf(".") + 1)}
+              byRoom={typeId.startsWith("by_room.")}
+            />
+          )}
         </div>
       </main>
     </>

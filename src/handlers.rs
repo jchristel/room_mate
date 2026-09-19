@@ -38,7 +38,8 @@ use crate::service::spaces;
 use crate::service::surfaces::{SurfaceKind, SurfacePayloadKind};
 use crate::service::validation::ValidationResponse;
 use crate::service::{
-    milestones, openings, projects, reference, rooms, scope_cursor, snapshots, surfaces, validation, ServiceError,
+    milestones, openings, projects, reference, reports, rooms, scope_cursor, snapshots, surfaces, validation,
+    ServiceError,
 };
 use crate::state::{ModelKey, Shared, StreamingSnapshot};
 use crate::storage::SnapshotKind;
@@ -2981,6 +2982,121 @@ pub async fn compare_project_milestones(
     let result =
         comparison::compare_milestones(&state, &project_id, &req.baseline, &req.others).map_err(map_service_error)?;
     Ok(Json(result))
+}
+
+/// What to report, over the wire. A POST body rather than query params for the
+/// reason `ComparisonRequest` is one: the column lists are lists, and a Revit
+/// property name may contain any character at all.
+#[derive(Deserialize)]
+pub struct ReportRequest {
+    /// `rooms` | `doors` | `windows` | `ceilings` | `floors` | `spaces` | `ffe`.
+    pub entity: String,
+    /// Report the entity by room rather than as a flat schedule.
+    #[serde(default)]
+    pub by_room: bool,
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub room_columns: Vec<String>,
+    #[serde(default)]
+    pub measures: Vec<String>,
+    /// `per_match` (default) or `per_room`.
+    #[serde(default)]
+    pub shape: Option<String>,
+    #[serde(default)]
+    pub include_rooms_without: bool,
+    /// Defaults to **true**: an element no room matched is part of the answer,
+    /// and a report that dropped it silently would not add up.
+    #[serde(default = "default_true")]
+    pub include_unattributed: bool,
+    #[serde(default)]
+    pub building: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<String>,
+    /// Cap the rows returned. `total_rows` still counts them all, so a caller
+    /// can say "first 500 of 39,412" and mean it.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// `?format=csv` renders the same rows as text/csv.
+#[derive(Deserialize)]
+pub struct ReportQuery {
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
+/// Build one report — `POST /projects/{id}/reports`.
+///
+/// **A POST that reads**, exactly as `/comparison` is, and for the same reason:
+/// the definition does not fit a query string. It sits behind the same
+/// CORS/Host guards every mutating route does, which costs nothing and keeps
+/// one rule.
+///
+/// `format=csv` renders here rather than in the page, so a download and an MCP
+/// host get the same bytes from the same code. 204 when the entity has never
+/// been pushed — "no windows have ever been exported" is a different answer
+/// from "no windows matched", and a table cannot tell them apart on its own.
+pub async fn build_project_report(
+    State(state): State<Shared>,
+    Path(project_id): Path<String>,
+    Query(query): Query<ReportQuery>,
+    Json(req): Json<ReportRequest>,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(entity) = reports::Entity::parse(&req.entity) else {
+        return Err((StatusCode::BAD_REQUEST, format!("unknown entity {:?} for a report", req.entity)));
+    };
+    let shape = match req.shape.as_deref() {
+        None | Some("per_match") => reports::Shape::PerMatch,
+        Some("per_room") => reports::Shape::PerRoom,
+        Some(other) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unknown shape {other:?} — expected per_match or per_room"),
+            ))
+        }
+    };
+
+    let definition = reports::ReportDefinition {
+        entity,
+        by_room: req.by_room,
+        columns: req.columns,
+        room_columns: req.room_columns,
+        measures: req.measures,
+        shape,
+        include_rooms_without: req.include_rooms_without,
+        include_unattributed: req.include_unattributed,
+        limit: req.limit,
+    };
+    let scope = reports::ReportScope {
+        project: Some(&project_id),
+        building: req.building.as_deref(),
+        milestone: req.milestone.as_deref(),
+    };
+
+    let Some(result) = reports::build_report(&state, &scope, &definition).map_err(map_service_error)? else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+
+    if query.format.as_deref() == Some("csv") {
+        let csv = reports::to_csv(&result);
+        return Ok((
+            [
+                (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}-{}.csv\"", req.entity, project_id),
+                ),
+            ],
+            csv,
+        )
+            .into_response());
+    }
+    Ok(Json(result).into_response())
 }
 
 #[cfg(test)]

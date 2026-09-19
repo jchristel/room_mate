@@ -26,10 +26,10 @@ use tower_http::{
 
 use roommate::bootstrap::build_state;
 use roommate::handlers::{
-    activate_model_pending_snapshot, compare_project_milestones, get_ceilings, get_doors, get_ffe, get_floors,
-    get_model_latest_snapshot, get_model_pending_snapshot, get_project_adjacency, get_project_areas,
-    get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation, get_projects,
-    get_reference_latest, get_reference_snapshots, get_rooms, get_spaces, get_windows, ingest_ceilings,
+    activate_model_pending_snapshot, build_project_report, compare_project_milestones, get_ceilings, get_doors,
+    get_ffe, get_floors, get_model_latest_snapshot, get_model_pending_snapshot, get_project_adjacency,
+    get_project_areas, get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation,
+    get_projects, get_reference_latest, get_reference_snapshots, get_rooms, get_spaces, get_windows, ingest_ceilings,
     ingest_ceilings_stream, ingest_doors, ingest_doors_stream, ingest_ffe, ingest_ffe_stream, ingest_floors,
     ingest_floors_stream, ingest_rooms, ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows,
     ingest_windows_stream,
@@ -368,6 +368,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // user-defined property set. POST (not GET) for its list body — see
         // `handlers::compare_project_milestones`.
         .route("/projects/{id}/comparison", post(compare_project_milestones))
+        .route("/projects/{id}/reports", post(build_project_report))
         .route(
             "/projects/{project_id}/models/{model_id}/snapshots/latest",
             get(get_model_latest_snapshot),

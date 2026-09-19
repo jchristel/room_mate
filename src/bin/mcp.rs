@@ -4,10 +4,10 @@
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
-//! `get_ceilings`, `get_floors` --
+//! `get_ceilings`, `get_floors`, `build_report` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Twenty-three in
+//! and the one forwarded mutation (`upload_reference`, below). Twenty-four in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -50,8 +50,8 @@ use roommate::bootstrap::build_state;
 use roommate::contract::{CeilingPayload, FloorPayload};
 use roommate::default_http_addr;
 use roommate::service::{
-    adjacency, areas, comparison, items, milestones, openings, projects, reference, rooms, snapshots, spaces, surfaces,
-    validation, ServiceError,
+    adjacency, areas, comparison, items, milestones, openings, projects, reference, reports, rooms, snapshots, spaces,
+    surfaces, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -112,6 +112,58 @@ struct GetSurfacesParams {
     /// milestone read answers one consistent question.
     #[serde(default)]
     milestone: Option<String>,
+}
+
+/// `build_report` parameters -- the report definition, in the shape
+/// `service::reports::ReportDefinition` takes. One tool rather than one per
+/// report type: the type IS the parameters, and a tool per type would be
+/// fourteen tools that differ by two fields.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct BuildReportParams {
+    /// Project id to report on.
+    project: String,
+    /// Which entity: rooms, doors, windows, ceilings, floors, spaces or ffe.
+    entity: String,
+    /// Report the entity BY ROOM rather than as a flat schedule. Not available
+    /// for rooms (they are the other side of the join) or spaces (their match
+    /// is a key match that lives in the QA report, not on the rows).
+    #[serde(default)]
+    by_room: bool,
+    /// Columns over the entity, in the same vocabulary `filter` parses: a
+    /// property name, a `$intrinsic`, or `source.label` for a joined field.
+    #[serde(default)]
+    columns: Vec<String>,
+    /// Columns over the room, for a by-room report.
+    #[serde(default)]
+    room_columns: Vec<String>,
+    /// What the join measured. Ceilings and floors carry `overlap_area`,
+    /// `fraction_of_element`, `fraction_of_room` and `mean_width`; FF&E carries
+    /// `room_origin`.
+    #[serde(default)]
+    measures: Vec<String>,
+    /// `per_match` (default) or `per_room`, which groups and aggregates.
+    #[serde(default)]
+    shape: Option<String>,
+    /// List rooms nothing matched. Off by default.
+    #[serde(default)]
+    include_rooms_without: bool,
+    /// List elements no room matched. ON by default -- an unattributed element
+    /// is part of the answer, and dropping it silently makes the totals lie.
+    #[serde(default = "mcp_default_true")]
+    include_unattributed: bool,
+    /// Scope to one building, through the room each element is attributed to.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`; omit for each model's latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Cap the rows returned. `total_rows` still counts them all.
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+fn mcp_default_true() -> bool {
+    true
 }
 
 /// `get_spaces` parameters. Its own type rather than `GetDoorsParams`: there is
@@ -578,6 +630,49 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no spaces have been pushed to this server yet",
             )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Builds one tabular report -- see `service::reports::build_report`.
+    #[tool(
+        description = "Build a tabular report over one entity: a flat schedule, or that entity BY ROOM. Returns `columns` (each with the side it came from -- room, element or join) and `rows` of flat string cells, plus `total_rows` before any `limit` so 'first N of M' is honest. ONLY THE COLUMNS ASKED FOR ARE READ, which is the point of this tool over the entity endpoints: /ffe is 133 MB per storey on RHH and a report of it is a few. A BY-ROOM REPORT NEVER RECOMPUTES THE ATTRIBUTION -- which room a ceiling lies over, which room owns a door, which room an item sits in are read off the entity's own answer, where the policy, the tolerance and the model scope already applied. An element attributed to several rooms appears once per room (a ceiling over three rooms is three rows), so element columns must not be summed across rows; only the join's own numeric measures add up, and `overlap_area` is the one that means anything added up. AN UNMATCHED ROW IS A REPORTED STATE: `include_unattributed` (on by default) lists elements no room matched -- every external door, every facade-package window -- with the room columns empty, and `include_rooms_without` lists rooms nothing matched. A 204 means nothing of that entity has ever been pushed, which is a different answer from a report with no rows."
+    )]
+    fn build_report(&self, Parameters(p): Parameters<BuildReportParams>) -> Result<CallToolResult, McpError> {
+        let Some(entity) = reports::Entity::parse(&p.entity) else {
+            return Err(McpError::invalid_params(format!("unknown entity {:?} for a report", p.entity), None));
+        };
+        let shape = match p.shape.as_deref() {
+            None | Some("per_match") => reports::Shape::PerMatch,
+            Some("per_room") => reports::Shape::PerRoom,
+            Some(other) => {
+                return Err(McpError::invalid_params(
+                    format!("unknown shape {other:?} -- expected per_match or per_room"),
+                    None,
+                ))
+            }
+        };
+        let definition = reports::ReportDefinition {
+            entity,
+            by_room: p.by_room,
+            columns: p.columns,
+            room_columns: p.room_columns,
+            measures: p.measures,
+            shape,
+            include_rooms_without: p.include_rooms_without,
+            include_unattributed: p.include_unattributed,
+            limit: p.limit,
+        };
+        let scope = reports::ReportScope {
+            project: Some(&p.project),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+        };
+        match reports::build_report(&self.state, &scope, &definition).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "no {} have been pushed to this server yet",
+                p.entity
+            ))])),
             Some(result) => json_result(&result),
         }
     }
