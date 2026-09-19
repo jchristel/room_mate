@@ -344,6 +344,9 @@ export function TableReport({ projectId, entityId, byRoom, saved, onSaved }: Pro
             exporter.
           </div>
         )}
+        {/* The server explaining its own answer — "no space key is configured",
+            "this project has no rooms" — which the rows cannot say. */}
+        {report?.note && <div className="note">{report.note}</div>}
         {summary?.unmatched && <div className="note">{summary.unmatched}</div>}
         {report && report.rows.length === 0 && state === "idle" && <p className="foot">No rows.</p>}
 
