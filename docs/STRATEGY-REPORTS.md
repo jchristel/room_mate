@@ -13,11 +13,13 @@ and the rationale moves to the module header — see "Code documents what is
 built" in [Coding Conventions](CODING-CONVENTIONS.md).
 
 **[reports-mockup.html](reports-mockup.html)** is a clickable mockup of the
-page described below: the report type dropdown, the three forms, the filter
+page described below: the report type dropdown, the four forms, the filter
 builder and the preview, over invented sample rows. Open the file in a browser.
-It is a picture of the design, not a prototype. It reads nothing, saves
-nothing, and none of its code is meant to be reused. Delete it when the page
-ships.
+It is a picture of the design, not a prototype: it reads nothing, saves
+nothing, and none of its code is meant to be reused. It does follow the decided
+filter semantics -- set-wise conditions on the associated side, and text that
+ignores case unless a condition says otherwise -- because a mockup that
+contradicts the rules is worse than none. Delete it when the page ships.
 
 The ask is a page where a user builds tabular reports over the entities — and,
 above all, **reports through an association**: ceilings by room, spaces by
@@ -103,9 +105,9 @@ the page is not built around any one of them. A report opens on a single
 - **By room** — the associations below, all six of them in v1.
 - **Between milestones** — room changes, which is today's comparison page; door
   changes later.
-- **Checks** — rooms without a ceiling, unmatched spaces and rooms: the QA
-  findings that `STRATEGY-ENTITIES.md` still lists as unbuilt, served as reports
-  rather than as a separate page.
+- **Checks** — QA findings served as reports, all in v1: the reference-data
+  check, rooms without a ceiling, unmatched spaces and rooms, and openings whose
+  room reference does not resolve.
 
 A type that is not built yet sits in the list disabled, marked "later".
 
@@ -126,6 +128,7 @@ which sections it needs:
 | Schedule | Columns · Filter · Scope · Preview |
 | Association | Join rule · Columns and measures · Filter · Scope · Rows · Unmatched · Preview |
 | Comparison | Comparison key · Compared properties · Milestones · Preview |
+| Check | What counts as a finding · Scope · Preview |
 
 Adding a report type is then a registry entry plus, at most, one new section.
 A type needing a screen of its own is the signal that the section vocabulary is
@@ -136,6 +139,41 @@ It is resolved per project because a type's join rule text depends on project
 settings (the space key, `room_attribution`, `room_resolution`). The page
 renders what it is sent, so the rule is stated in one place, the same place it
 is enforced. That route is a read, so it gets its MCP tool too.
+
+## The QA CSV moves here, and the viewer keeps a link
+
+**The viewer's QA band builds its CSV in the browser** (`buildValidationCsv`
+in `static/index.html`, behind the `qaDownload` button). That is precisely the
+second formatter the CSV decision above rules out: the same findings, rendered
+by different code from the report that will serve them, drifting the first time
+either is fixed.
+
+So the **Checks** family carries it, and `qaDownload`, `downloadValidationCsv`
+and `buildValidationCsv` are **deleted in the same change that ships the checks
+reports** — the `settings.html` precedent again, and the reason to do it in one
+change rather than two: a viewer that has lost the download before the reports
+page can serve it is a regression, however short-lived.
+
+**The band itself stays.** It answers "is this project clean right now" at a
+glance, next to the plan, which is not what a report is for. What it loses is
+the export, and what it gains is a line under it linking to the reports page —
+the same "a fallback nobody can see" instinct the layer toggles follow.
+
+**Four checks, and each already has its finding logic server-side** except the
+ceilings one, which is the report `STRATEGY-ENTITIES.md` has been holding open:
+
+| Check | Where the findings come from |
+|---|---|
+| Reference data | `service::validation`, what the QA band shows today |
+| Openings with unresolved rooms | `door_report`, keeping **pending** distinct from **dangling** |
+| Unmatched spaces and rooms | `SpaceReport`, both directions plus ambiguous keys |
+| Rooms without a ceiling | Unbuilt. The probe already said what it must not say: 12 of House A's 32 rooms have no ceiling and nearly all are POOL, DECK or DRIVEWAY, so a classification filter is what makes it readable, and unattributed ceilings cluster by type rather than scattering |
+
+**A check's options are what it refuses to call a finding**, and they are the
+report's own, not project settings: "ignore rooms classified External",
+"include pending references", "ignore ceilings under 5 sqft". A check with no
+options would either bury its signal in the expected (the ceilings case) or
+report a legitimate state as a fault (the pending case).
 
 ## The association form
 
