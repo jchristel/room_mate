@@ -7,11 +7,11 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Authored](STRATEGY-AUTHORED.md) · [Entities](STRATEGY-ENTITIES.md) ·
 [Security](STRATEGY-SECURITY.md)
 
-**The page is built; the reports on it mostly are not** (as of 2026-09-19).
-`/reports/` serves milestone comparison and three QA checks, and `src-js/reports/`
-documents those. What is left here is everything else: the schedules, the
-by-room association reports, the filter builder, saved report definitions and
-server-side rendering. When a piece ships, its section is deleted from here and
+**The page and its reports are built; the filter is not** (as of 2026-09-19).
+`/reports/` serves milestone comparison, three QA checks, a schedule of every
+entity and the by-room reports, over `service::reports`. Those document
+themselves. What is left here is the filter builder, saved report definitions,
+and the smaller debts listed under "What the server still owes a report". When a piece ships, its section is deleted from here and
 the rationale moves to the module header — see "Code documents what is built"
 in [Coding Conventions](CODING-CONVENTIONS.md).
 
@@ -334,54 +334,31 @@ one section per association. Deferred until single-association reports are in
 use; it is also where a tree-shaped view would earn its cost, which a node
 editor would not.
 
-## The join runs on the server
+## What the server still owes a report
 
-A client-side join over `/rooms` + `/ffe` + `/ceilings` is not viable at RHH
-scale: `/ffe` is 273 MB / 94 s and `/ceilings` 33 s (see `CLAUDE.md`, "Open").
+`service::reports` builds the rows and `POST /projects/{id}/reports` serves
+them, with `format=csv` rendering the same rows and a `build_report` MCP tool
+beside it. The module documents the three rules it keeps. What is left:
 
-- **`service::reports`**, transport-agnostic like the rest of `service/`, takes
-  a report definition and returns rows carrying **only the requested columns**.
-  Dropping the full per-item property maps is also a partial answer to the
-  `/ffe` payload problem, for the one consumer that never needed them.
-- It reuses, never re-derives: `entity_scope` for scoping and milestone pins,
-  `service::surfaces` for attribution, the items and openings reads for owners,
-  and the spaces match for spaces. A report that computed its own attribution
-  would be the extractor-footprint lesson in a new place.
-- **`POST /projects/{id}/reports`**, body the definition. A POST read has
-  precedent in `/comparison`, and a definition does not fit a query string.
-- **An MCP tool beside it**, per the one-tool-per-read-route rule — which also
-  lets a host ask "ceilings by room" directly. Update the tool count in
-  `bin/mcp.rs`.
-- **Its ETag cursor covers rooms and the associated entity**, for the reason
-  `/ceilings`' already covers rooms: attribution derives from the rooms in
-  scope, so a rooms push alone changes the answer.
-
-### CSV is rendered here too (decided 2026-09-19)
-
-**A `format` parameter on the report read, not a second route and not a
-client-side writer.** `format=csv` renders the same rows the JSON form
-returns.
-
-- **One formatter, one answer.** A CSV built in the browser is a second
-  implementation of quoting, number formatting, column order and how "no room"
-  is spelled, and the two drift the first time one is fixed. The MCP host and
-  the download would then disagree about the same report.
-- **MCP gets it by being one route.** The one-tool-per-read-route rule means a
-  second CSV route would mean a second tool; a `format` argument on the report
-  tool keeps it at one, and a host can ask for CSV directly. The MCP process
-  reads the store itself, so this works with no HTTP server running — and it
-  returns the CSV as text, since that process writes nothing.
-- **It can stream**, which the browser cannot do while building a string in
-  memory. That is what takes 39,000 FF&E rows off the volume question below.
-- **A saved report has an id, so its CSV has a plain URL** —
-  `GET /projects/{id}/reports/{report_id}/rows.csv` — bookmarkable, and
-  fetchable by a script that never opens the page. An unsaved definition still
-  goes through the POST, and the page turns that response into a download.
-- **What has to be decided once, in one place:** quoting and escaping, the
-  header row's names, how a blank and an unattributed row differ, and how many
-  decimals an area carries. Those are the choices that make two formatters
-  drift, which is the argument above, so write them down where the formatter
-  lives.
+- **A filter.** The request takes none yet, so the filter tree below is
+  unbuilt on both sides. It is the next slice.
+- **Streaming the CSV.** It is built in memory today, which is fine for the
+  projected rows a report asks for and is not the streamed export the row-volume
+  entry below imagined. Measure before building it.
+- **Saved reports**, as designed below, and with them the plain `GET` URL a
+  script can fetch:
+  `GET /projects/{id}/reports/{report_id}/rows.csv`.
+- **Spaces by room.** A space matches a room on a key, project-wide, and that
+  match lives in `SpaceReport` rather than on the `/spaces` rows. Re-deriving it
+  in a report would give the report and the QA check two answers to one
+  question, so the by-room type is disabled until the match is exposed on the
+  read. The Unmatched spaces and rooms check answers the question meanwhile.
+- **Column discovery.** The pickers offer the intrinsics and the names every
+  model measured so far carries, and take free text for everything else, because
+  nothing serves a project's actual property vocabulary. The cheap version is a
+  route over the stored property dictionary (`contract::property_codec` already
+  keeps one per snapshot), which would make this a closed list rather than a
+  guess.
 
 ## Saved reports are documents, not settings
 

@@ -26,12 +26,14 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::contract::PropertyPresence;
 use crate::contract::{CeilingPayload, FloorPayload, Level, PropertyMap, Surface, SurfaceEnvelope};
-use crate::settings::RoomResolution;
+use crate::settings::{BuiltinPropertyDef, RoomResolution};
 use crate::state::{AppState, ModelKey};
 use crate::storage::SnapshotKind;
 
 use super::room_locator::RoomRef;
+use super::rooms::FilterTarget;
 use super::surface_attribution::{attribute, SurfaceRoom};
 use super::{entity_scope, ServiceError};
 
@@ -115,6 +117,46 @@ pub struct SurfaceResponse {
     /// ceilings, 17 of RHH's 1,833. Never an error, and not on its own a
     /// finding.
     pub rooms: Vec<SurfaceRoom>,
+}
+
+/// A surface resolves its own two property tiers plus a small set of
+/// intrinsics — the same vocabulary a door or an item answers, so a column
+/// name that projects on one entity projects on every other.
+///
+/// **Reference sources are absent rather than unsupported**: no source declares
+/// `entity = "ceilings"` today, and answering `Absent` is what a room gives for
+/// a source it did not match, so the day one is declared the same name starts
+/// resolving instead of changing meaning.
+impl FilterTarget for SurfaceResponse {
+    fn presence(&self, source: Option<&str>, property: &str, builtin_defs: &[BuiltinPropertyDef]) -> PropertyPresence {
+        /// A surface's own struct fields always exist, so blank collapses to
+        /// `Empty`, never `Absent`.
+        fn intrinsic(value: Option<&str>) -> PropertyPresence {
+            match value {
+                None => PropertyPresence::Absent,
+                Some("") => PropertyPresence::Empty,
+                Some(v) => PropertyPresence::Present(v.to_string()),
+            }
+        }
+
+        match source {
+            Some(_) => PropertyPresence::Absent,
+            None => match property {
+                "$id" => intrinsic(Some(&self.surface.id)),
+                "$type_name" => intrinsic(self.surface.type_name.as_deref()),
+                "$type_id" => intrinsic(self.surface.type_id.as_deref()),
+                "$level_id" => intrinsic(Some(&self.surface.level_id)),
+                "$model_id" => intrinsic(Some(&self.model_id)),
+                // Read from Revit, never re-derived, and the field a floors
+                // report filters on to tell a finish from a roof build-up.
+                "$height_offset" => match self.surface.height_offset {
+                    Some(v) => PropertyPresence::Present(format!("{v:.3}")),
+                    None => PropertyPresence::Absent,
+                },
+                canonical => crate::contract::property_presence(&self.surface, canonical, &self.source, builtin_defs),
+            },
+        }
+    }
 }
 
 /// What a surface read is scoped to.

@@ -18,6 +18,7 @@ pub mod openings;
 pub mod placement;
 pub mod projects;
 pub mod reference;
+pub mod reports;
 pub mod room_locator;
 pub mod rooms;
 pub mod snapshots;

@@ -190,3 +190,22 @@ export interface ValidationResponse {
   openings: Record<string, OpeningReport>;
   spaces?: SpaceReport;
 }
+
+// ---------- reports ----------
+
+export interface ReportColumn {
+  name: string;
+  /** "room", "element" or "join" — which side of the join it came from. */
+  side: string;
+}
+
+export interface ReportResponse {
+  revision: string;
+  columns: ReportColumn[];
+  /** Flat string cells, in `columns` order. */
+  rows: string[][];
+  /** Rows before the cap, so "first N of M" is true rather than reassuring. */
+  total_rows: number;
+  /** Rows where one side matched nothing. Reported, never filtered. */
+  unmatched_rows: number;
+}
