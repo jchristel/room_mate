@@ -15,6 +15,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet } from "./common.js";
 import { downloadCsv } from "./csv.js";
 import { entityById, ROOM_COLUMNS, ROOM_SUGGESTIONS } from "./reportTypes.js";
+import { group, toWire, type FieldType, type Group } from "./filter.js";
+import { FilterBuilder, type FieldOption } from "./filterBuilder.js";
 import { summarise, toBody, type FormState } from "./reportRequest.js";
 import type { MilestonesResponse, ReportResponse } from "./types.js";
 
@@ -31,6 +33,7 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
   const [form, setForm] = useState<FormState>(() => initialForm(entityId, byRoom));
   const [milestones, setMilestones] = useState<string[]>([]);
   const [milestone, setMilestone] = useState("");
+  const [filter, setFilter] = useState<Group>(() => group("all"));
   const [report, setReport] = useState<ReportResponse | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "empty">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +43,10 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
   // ask the server for properties this entity has never heard of.
   useEffect(() => {
     setForm(initialForm(entityId, byRoom));
+    // The filter names fields of this entity, so it cannot survive a switch to
+    // another one: the server would be asked for properties this entity has
+    // never heard of.
+    setFilter(group("all"));
     setReport(null);
     setError(null);
     setState("idle");
@@ -53,7 +60,32 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
     setReport(null);
   }, [projectId]);
 
-  const body = useMemo(() => ({ ...toBody(form), milestone: milestone || undefined }), [form, milestone]);
+  const body = useMemo(
+    () => ({ ...toBody(form), milestone: milestone || undefined, filter: toWire(filter) }),
+    [form, milestone, filter],
+  );
+
+  // What a condition may name: the room's own properties on a by-room report,
+  // this entity's, and the measures the join produced.
+  const fields = useMemo<FieldOption[]>(() => {
+    const numeric = (name: string): FieldType =>
+      /area|width|height|offset|fraction|count|cost/i.test(name) ? "number" : "text";
+    const out: FieldOption[] = [];
+    if (byRoom) {
+      for (const name of [...new Set([...form.roomColumns, ...ROOM_SUGGESTIONS])]) {
+        out.push({ side: "room", name, type: numeric(name), sideLabel: "Room" });
+      }
+    }
+    for (const name of [...new Set([...form.columns, ...entity.suggestions])]) {
+      out.push({ side: "element", name, type: numeric(name), sideLabel: entity.label });
+    }
+    if (byRoom) {
+      for (const name of entity.measures) {
+        out.push({ side: "join", name, type: name === "room_origin" ? "text" : "number", sideLabel: "Join" });
+      }
+    }
+    return out;
+  }, [byRoom, entity, form.columns, form.roomColumns]);
 
   const run = useCallback(async () => {
     setState("loading");
@@ -128,6 +160,8 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
           />
         )}
       </section>
+
+      <FilterBuilder root={filter} fields={fields} entityOne={entity.one} onChange={setFilter} />
 
       <section className="controls">
         <div className="group">

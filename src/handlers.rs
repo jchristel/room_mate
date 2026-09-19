@@ -3017,6 +3017,10 @@ pub struct ReportRequest {
     /// can say "first 500 of 39,412" and mean it.
     #[serde(default)]
     pub limit: Option<usize>,
+    /// The filter tree — see `service::reports::FilterWire`. Absent is every
+    /// row, which is also what an empty group means.
+    #[serde(default)]
+    pub filter: Option<reports::FilterWire>,
 }
 
 fn default_true() -> bool {
@@ -3061,6 +3065,13 @@ pub async fn build_project_report(
         }
     };
 
+    let filter = match &req.filter {
+        None => None,
+        Some(wire) => {
+            let known = state.settings().known_reference_sources();
+            Some(wire.parse(&known).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?)
+        }
+    };
     let definition = reports::ReportDefinition {
         entity,
         by_room: req.by_room,
@@ -3071,6 +3082,7 @@ pub async fn build_project_report(
         include_rooms_without: req.include_rooms_without,
         include_unattributed: req.include_unattributed,
         limit: req.limit,
+        filter,
     };
     let scope = reports::ReportScope {
         project: Some(&project_id),

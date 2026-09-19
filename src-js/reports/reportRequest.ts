@@ -18,6 +18,8 @@ export interface ReportBody {
   building?: string;
   milestone?: string;
   limit?: number;
+  /** The filter tree, as `service::reports::FilterWire` reads it. */
+  filter?: unknown;
 }
 
 export interface FormState {

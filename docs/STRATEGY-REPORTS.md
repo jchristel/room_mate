@@ -7,11 +7,12 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Authored](STRATEGY-AUTHORED.md) · [Entities](STRATEGY-ENTITIES.md) ·
 [Security](STRATEGY-SECURITY.md)
 
-**The page and its reports are built; the filter is not** (as of 2026-09-19).
+**The page, its reports and the filter are built** (as of 2026-09-19).
 `/reports/` serves milestone comparison, three QA checks, a schedule of every
-entity and the by-room reports, over `service::reports`. Those document
-themselves. What is left here is the filter builder, saved report definitions,
-and the smaller debts listed under "What the server still owes a report". When a piece ships, its section is deleted from here and
+entity, the by-room reports and the filter builder over `service::reports`.
+Those document themselves. What is left here is saved report definitions, the
+debts under "What the server still owes a report", and the design of the parts
+nobody has built yet. When a piece ships, its section is deleted from here and
 the rationale moves to the module header — see "Code documents what is built"
 in [Coding Conventions](CODING-CONVENTIONS.md).
 
@@ -162,104 +163,34 @@ Three parts, left to right, under the report type:
 Then the filter below, scope (building, level, latest or a milestone), row
 shape, and the two unmatched-row switches.
 
-## Filters: a tree, not the query string
+## What the filter cost, and what it left open
 
-The filter is a builder: **conditions** (field, operator, value) inside
-**groups** that each match **all** or **any** of their children. Groups nest,
-capped at three levels because deeper logic stops being readable in a form. A
-plain-language line under the builder reads the whole tree back, e.g.
-`Room.Level is "LEVEL 00" AND (Ceiling.Type contains "plasterboard" OR
-Join.% of room ≥ 90%)`. That line is how a user checks the logic they built,
-and a nested form alone does not let them.
+The builder ships: `rooms::FilterNode` is the tree every entity read now
+matches against, `reports::FilterWire` is how it arrives, and
+`src-js/reports/filter.ts` is the editing model. The rules it enforces —
+set-wise conditions on the associated side, case folding unless a condition
+says otherwise, `is blank` as the only way to ask about a missing value — are
+documented where they are enforced.
 
-**Operators depend on the field's type:**
+**One behaviour changed outside reports, and it is the only migration in it:**
+`=` in `?filter=` folds case now, matching the `~` beside it. Two equalities
+that differ invisibly was the alternative. The query string still has no way to
+*ask* for an exact comparison; `==` is the obvious spelling if anything ever
+needs one, and nothing does yet.
 
-- **Text:** is, is not, contains, does not contain, starts with, ends with, is
-  blank, has a value.
-- **Number:** =, ≠, <, ≤, >, ≥, between, is blank, has a value.
+Left open:
 
-A field's type comes from its declared `FieldType` where it has one, and
-otherwise from its values. An incomplete condition (no value yet) is left out
-of evaluation rather than failing, so a half-built filter never empties the
-preview.
-
-**Text comparison ignores case unless the condition says otherwise** (decided
-2026-09-18). Every text operator — is, is not, contains, starts with, ends
-with — is case-insensitive by default, with a **Match case** toggle on the
-condition for the rare time someone means `CLG` and not `clg`. Stored as a
-`case_sensitive` flag on the predicate, defaulting false, so the default is
-also what an unset field means. A modeller's capitalisation is not data, and a
-report that silently misses `Plasterboard` because the user typed
-`plasterboard` is wrong in the way that never gets noticed.
-
-That is one rule everywhere, so **`=` in `?filter=` becomes case-insensitive
-too**, matching the `~` beside it. It is a behaviour change for programmatic
-callers, and the honest one: the alternative is two spellings of equality that
-differ invisibly. The query string has no way to *ask* for case sensitivity;
-`==` is the obvious spelling if anything ever needs one, and nothing does yet.
-
-**In an association report, every field names its side**: room, the associated
-entity, or the join (`overlap_area`, `% of room`). The side is a separate
-field in the stored definition, never a prefix in the field name. The
-`<source>.<label>` dot is already taken by joined reference fields, and a
-`room.` prefix would collide with any reference source that happened to be
-named `room`.
-
-### What the existing grammar gives, and what it lacks
-
-`service::rooms::RoomFilter` is the matcher every entity read shares, through
-`FilterTarget`. It is **a flat AND**: comma-separated predicates, operators
-`= != > >= < <= ~`. The builder needs three things it lacks:
-
-1. **OR, and nesting.** `RoomFilter` becomes a tree (all / any / predicate). The
-   comma form parses to a single all-group, so `?filter=` on every existing
-   read, and the MCP array form, keep their meaning without a migration.
-2. **Operators:** does not contain, starts with, ends with, between, is blank,
-   has a value. "Between" is stored as its own operator, so the form can load a
-   saved report back exactly as it was built.
-3. **Explicit blank tests.** Today an empty value is a parse error, and an
-   absent or blank property matches no operator at all.
-
-**That last rule stays for a ROOM property, and the form has to show it**,
-because a user will not expect it: **`Department is not Living` also drops
-every room with no Department.** It is the right rule, since a missing value is
-not evidence of anything. But a "does not" condition in the builder carries a
-one-line note and a **Keep blanks too** action. The action rewrites the
-condition into `any(is not Living, is blank)`; the rule itself does not change.
-
-### A condition on the associated side asks about the SET, not the row
-
-Decided 2026-09-18, and it is the rule the missing-value rule cannot give:
-
-> "Ceiling type is X" and "ceiling type is not X" are not each other's
-> complement over one row. They are `EXISTS` and `NOT EXISTS` over the
-> **room's matched ceilings**.
-
-- **`Ceiling.Type is X`** keeps a room when at least one of its ceilings is X,
-  and keeps that ceiling's rows. **A room with no ceilings is not a match** —
-  it cannot have one of type X. This holds even with "include rooms with no
-  ceilings" ticked: an explicit condition outranks a default.
-- **`Ceiling.Type is not X`** keeps a room when **none** of its ceilings is X,
-  and **a room with no ceilings is a match**: nothing it has is X. So the room
-  is dropped whole if *any* of its ceilings is X — the negation quantifies over
-  the set, and per-row negation would answer a different question, keeping the
-  room because of its other ceilings.
-
-**Per-row evaluation is the trap here.** "Rooms without a type X ceiling" is
-the question people actually ask of this data, and a per-row filter answers
-"ceilings that are not X", which lists almost every room. The two differ only
-on the rooms the user cares about.
-
-So the two unmatched-row switches state the **default**, and a condition on the
-associated side overrides it for the rooms it speaks about: a positive
-condition excludes rooms with none, a negative one includes them. The preview
-says which is in force, for the reason every fallback in this codebase
-announces itself.
-
-An **any** group mixing a room condition with a negative associated one is the
-one shape whose reading is genuinely ambiguous. The builder keeps negative
-associated conditions in **all** groups and says so, rather than picking a
-quantifier the user cannot see.
+- **Three levels of nesting** is a cap the builder enforces and nothing tests at
+  the server, which accepts any depth. It has not mattered; a form deeper than
+  that stops being readable long before it stops parsing.
+- **A field's type is guessed from its name** in the page (`/area|width|…/`),
+  because a project's property vocabulary is not served anywhere — the same gap
+  the column pickers have. A `FieldType` already exists in settings for
+  reference fields; the missing half is the entity's own properties.
+- **An `any` group holding a negative associated condition** has no single
+  reading, so the builder does not offer one there. The server evaluates
+  whatever it is sent, which is the looser contract of the two; if a caller ever
+  sends one, it means NOT EXISTS.
 
 ## Cardinality is the design problem, not the picker
 
@@ -340,8 +271,6 @@ editor would not.
 them, with `format=csv` rendering the same rows and a `build_report` MCP tool
 beside it. The module documents the three rules it keeps. What is left:
 
-- **A filter.** The request takes none yet, so the filter tree below is
-  unbuilt on both sides. It is the next slice.
 - **Streaming the CSV.** It is built in memory today, which is fine for the
   projected rows a report asks for and is not the streamed export the row-volume
   entry below imagined. Measure before building it.

@@ -319,6 +319,22 @@ pub enum Op {
     Lt,
     Le,
     Contains,
+    /// The four the query grammar has no spelling for. They exist for the
+    /// report filter builder, which sends a tree rather than a string, and are
+    /// listed here rather than in a second enum so one `holds` decides what
+    /// every operator means.
+    NotContains,
+    StartsWith,
+    EndsWith,
+    /// Inclusive on both ends, and its own operator rather than sugar for two
+    /// predicates so a saved report loads back as the condition it was built
+    /// from.
+    Between,
+    /// Absent or empty. **The only way to ask about a missing value**, which is
+    /// why it is an operator and not a value: an empty value on any other
+    /// operator is a parse error, because a blank could never match one.
+    Blank,
+    HasValue,
 }
 
 /// The operator spellings paired with their `Op`. Order matters *within one
@@ -365,6 +381,15 @@ pub struct Predicate {
     pub property: String,
     pub op: Op,
     pub value: String,
+    /// The upper bound of a `Between`; unused by every other operator.
+    pub value2: Option<String>,
+    /// Compare text exactly. **Off by default, which is the decision, not a
+    /// convenience**: a modeller's capitalisation is not data, and a report
+    /// that missed `Plasterboard` because someone typed `plasterboard` is
+    /// wrong in the way nobody notices. The query grammar has no spelling for
+    /// it, so `?filter=` is always case-insensitive — one rule rather than two
+    /// equalities that differ invisibly.
+    pub case_sensitive: bool,
 }
 
 impl Predicate {
@@ -416,24 +441,56 @@ impl Predicate {
             return Err(format!("filter {expr:?}: the field name is empty"));
         }
 
-        Ok(Predicate { source, property: property.to_string(), op, value: value.to_string() })
+        Ok(Predicate {
+            source,
+            property: property.to_string(),
+            op,
+            value: value.to_string(),
+            value2: None,
+            case_sensitive: false,
+        })
     }
 
     /// Does a resolved value satisfy this predicate?
     ///
     /// `=`/`!=` use `numeric_match` when both sides parse as numbers (so
     /// `"25.50"` equals `"25.5"` — the same stated-precision tolerance dRofus
-    /// validation applies), exact string comparison otherwise. The ordering
-    /// operators are numeric only: a value that doesn't parse as a number
-    /// simply doesn't match, it is not an error (signal, not error). `~` is a
-    /// case-insensitive substring test — the one fuzzy operator, so a caller
-    /// that doesn't know a value's exact spelling still has a way in.
+    /// validation applies), and **text comparison folds case** unless
+    /// `case_sensitive` says otherwise. The ordering operators are numeric
+    /// only: a value that doesn't parse as a number simply doesn't match, it is
+    /// not an error (signal, not error).
+    ///
+    /// `Blank`/`HasValue` never reach here — a blank resolves to `None` before
+    /// this is called, and `RoomFilter::holds_for` answers those two there.
+    /// Every other operator is therefore free to assume a real value, which is
+    /// what keeps "a missing value matches nothing" true for negative operators
+    /// without a special case in each one.
     fn holds(&self, actual: &str) -> bool {
-        let equal = || numeric_match(actual, &self.value).unwrap_or_else(|| actual == self.value);
+        let fold = |text: &str| if self.case_sensitive { text.to_string() } else { text.to_lowercase() };
+        let equal = || numeric_match(actual, &self.value).unwrap_or_else(|| fold(actual) == fold(&self.value));
+        let (haystack, needle) = (fold(actual), fold(self.value.trim()));
         match self.op {
             Op::Eq => equal(),
             Op::Ne => !equal(),
-            Op::Contains => actual.to_lowercase().contains(&self.value.to_lowercase()),
+            Op::Contains => haystack.contains(&needle),
+            Op::NotContains => !haystack.contains(&needle),
+            Op::StartsWith => haystack.starts_with(&needle),
+            Op::EndsWith => haystack.ends_with(&needle),
+            // Answered before resolution; see the doc comment.
+            Op::Blank => false,
+            Op::HasValue => true,
+            Op::Between => {
+                let (Ok(a), Ok(low), Ok(high)) = (
+                    actual.trim().parse::<f64>(),
+                    self.value.trim().parse::<f64>(),
+                    self.value2.as_deref().unwrap_or_default().trim().parse::<f64>(),
+                ) else {
+                    return false;
+                };
+                // Written either way round, because a form with two boxes is
+                // filled either way round.
+                a >= low.min(high) && a <= low.max(high)
+            }
             Op::Gt | Op::Ge | Op::Lt | Op::Le => {
                 let (Ok(a), Ok(b)) = (actual.trim().parse::<f64>(), self.value.trim().parse::<f64>()) else {
                     return false;
@@ -625,16 +682,44 @@ pub fn validate_room_only_field(field: &str, known: &std::collections::BTreeSet<
     }
 }
 
-/// A set of predicates, ALL of which must hold (AND). No OR and no grouping:
-/// that is where a filter turns into a query engine, and a caller who needs a
-/// union can make two calls.
+/// How a group combines its children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    All,
+    Any,
+}
+
+/// A filter is a tree: predicates inside groups that match **all** or **any**
+/// of their children, nested.
+///
+/// **It used to be a flat AND**, and the comma form still parses to exactly
+/// that — one `All` group of predicates — so `?filter=` and the MCP array form
+/// mean what they always did. What the tree adds is OR, which the reports
+/// filter builder needs and a query string has no readable spelling for.
+///
+/// An empty group is **true**, not false: a half-built filter in a form should
+/// show everything rather than nothing, and "no filter" is the same statement
+/// as "a filter with nothing in it".
+#[derive(Debug, Clone)]
+pub enum FilterNode {
+    Group { mode: Mode, items: Vec<FilterNode> },
+    Predicate(Predicate),
+}
+
+/// A filter over an assembled entity.
 ///
 /// Parsing is the only fallible step — matching never fails, it just doesn't
 /// match. Applied to an *assembled* `RoomResponse` rather than a raw `Room`, so
 /// predicates can reach the joined data sources (see `resolve_field`).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RoomFilter {
-    predicates: Vec<Predicate>,
+    root: FilterNode,
+}
+
+impl Default for RoomFilter {
+    fn default() -> Self {
+        RoomFilter { root: FilterNode::Group { mode: Mode::All, items: Vec::new() } }
+    }
 }
 
 impl RoomFilter {
@@ -644,12 +729,12 @@ impl RoomFilter {
     /// `known` is the recognised source-name vocabulary — see
     /// `split_namespace`.
     pub fn parse(exprs: &[String], known: &std::collections::BTreeSet<String>) -> Result<Self, String> {
-        let predicates = exprs
+        let items = exprs
             .iter()
             .filter(|e| !e.trim().is_empty())
-            .map(|e| Predicate::parse(e.trim(), known))
+            .map(|e| Predicate::parse(e.trim(), known).map(FilterNode::Predicate))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(RoomFilter { predicates })
+        Ok(RoomFilter { root: FilterNode::Group { mode: Mode::All, items } })
     }
 
     /// Parse the HTTP `?filter=` form: comma-separated predicates. A value
@@ -678,7 +763,24 @@ impl RoomFilter {
     /// downstream (it also governs level suppression, see
     /// `assemble_scoped_rooms`).
     pub fn is_empty(&self) -> bool {
-        self.predicates.is_empty()
+        match &self.root {
+            FilterNode::Group { items, .. } => items.is_empty(),
+            FilterNode::Predicate(_) => false,
+        }
+    }
+
+    /// Build one from a tree the caller assembled — the reports filter
+    /// builder's path, where the structure arrives as JSON rather than as a
+    /// string to parse.
+    pub fn from_node(root: FilterNode) -> Self {
+        RoomFilter { root }
+    }
+
+    /// The root, for a caller that walks the tree itself. `service::reports`
+    /// does: a condition on the associated side asks about a room's whole set
+    /// of matches, which is a question this matcher cannot ask on its own.
+    pub fn root(&self) -> &FilterNode {
+        &self.root
     }
 
     /// Does this assembled entity satisfy every predicate? A field that resolves
@@ -690,9 +792,47 @@ impl RoomFilter {
     /// Generic over `FilterTarget` so rooms and doors share one matcher — the
     /// rule above is the subtle part, and it must not exist twice.
     pub(crate) fn matches<T: FilterTarget>(&self, target: &T, builtin_defs: &[BuiltinPropertyDef]) -> bool {
-        self.predicates
-            .iter()
-            .all(|p| resolve_field(target, p, builtin_defs).is_some_and(|actual| p.holds(&actual)))
+        matches_node(&self.root, &|p| holds_for(p, target, builtin_defs))
+    }
+}
+
+/// Walk a tree, deciding each leaf with `decide`.
+///
+/// Public to the crate because `service::reports` walks the same tree with a
+/// *different* leaf rule — its associated-side conditions ask about a set — and
+/// the two must agree about what a group means even when they disagree about
+/// what a leaf means.
+pub(crate) fn matches_node(node: &FilterNode, decide: &impl Fn(&Predicate) -> bool) -> bool {
+    match node {
+        FilterNode::Predicate(p) => decide(p),
+        FilterNode::Group { mode, items } => match mode {
+            Mode::All => items.iter().all(|item| matches_node(item, decide)),
+            Mode::Any => items.is_empty() || items.iter().any(|item| matches_node(item, decide)),
+        },
+    }
+}
+
+/// One predicate against one entity, including the two operators that ask
+/// about the absence of a value.
+///
+/// **This is where "a missing value matches nothing" lives.** A field that
+/// resolves to nothing fails every operator, negative ones included: "this room
+/// has no Department" is not evidence that its Department differs from
+/// Cardiology, and for a joined source an unmatched link key is a signal, not a
+/// value. `Blank` and `HasValue` are the two ways to ask about that state
+/// directly, which is why they are answered here rather than in `holds`.
+pub(crate) fn holds_for<T: FilterTarget>(
+    predicate: &Predicate,
+    target: &T,
+    builtin_defs: &[BuiltinPropertyDef],
+) -> bool {
+    match resolve_field(target, predicate, builtin_defs) {
+        Some(actual) => match predicate.op {
+            Op::Blank => false,
+            Op::HasValue => true,
+            _ => predicate.holds(&actual),
+        },
+        None => matches!(predicate.op, Op::Blank),
     }
 }
 
@@ -2376,9 +2516,18 @@ mod tests {
     #[test]
     fn test_filter_parse_query_splits_on_unquoted_commas_only() {
         let f = RoomFilter::parse_query("Department=\"Cardiology, North\",Area>20", &known()).expect("must parse");
-        assert_eq!(f.predicates.len(), 2);
-        assert_eq!(f.predicates[0].value, "Cardiology, North");
-        assert_eq!(f.predicates[1].op, Op::Gt);
+        // The comma form is one ALL group of predicates, which is what keeps
+        // `?filter=` meaning exactly what it did before the tree.
+        let FilterNode::Group { mode, items } = f.root() else {
+            panic!("the root is a group")
+        };
+        assert_eq!(*mode, Mode::All);
+        assert_eq!(items.len(), 2);
+        let (FilterNode::Predicate(first), FilterNode::Predicate(second)) = (&items[0], &items[1]) else {
+            panic!("both children are predicates")
+        };
+        assert_eq!(first.value, "Cardiology, North");
+        assert_eq!(second.op, Op::Gt);
     }
 
     /// Canonical names resolve through the project's `by_source` mapping, the
@@ -2397,12 +2546,19 @@ mod tests {
 
     /// `$name`/`$id` reach the room's own fields, which `lookup_property`
     /// cannot see.
+    ///
+    /// **`=` folds case, and that changed on 2026-09-19.** It used to compare
+    /// exactly while `~` folded, which meant two equalities that differed
+    /// invisibly -- a filter for `ward 3` missing `Ward 3` is the kind of miss
+    /// nobody notices. One rule everywhere now; the report filter builder can
+    /// still ask for an exact comparison per condition, which the query string
+    /// has no spelling for.
     #[test]
     fn test_filter_matches_intrinsic_tokens() {
         let room = response(make_room("324772", "Ward 3", &[]), None);
         assert!(filter(&["$id=324772"]).matches(&room, &[]));
         assert!(filter(&["$name~ward"]).matches(&room, &[]), "~ is case-insensitive");
-        assert!(!filter(&["$name=ward 3"]).matches(&room, &[]), "= is not");
+        assert!(filter(&["$name=ward 3"]).matches(&room, &[]), "and so is =, since 2026-09-19");
     }
 
     /// `=` inherits the stated-precision tolerance dRofus comparison uses, so
