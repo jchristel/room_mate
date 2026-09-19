@@ -163,6 +163,10 @@ tr.unattributed td.lead { font-style: italic; }
 .pill.stated, .pill.added { color: var(--ok); }
 .pill.geometry, .pill.changed { color: var(--accent); }
 .pill.removed, .pill.unresolved { color: var(--muted); }
+.pill.finding { color: var(--accent); }
+.pill.warning { color: var(--ink); }
+.pill.expected, .pill.clean { color: var(--muted); }
+tbody tr.quiet td { color: var(--muted); }
 .foot { font-size: 0.68rem; color: var(--muted); margin: 0; }
 
 /* filter builder */
@@ -184,6 +188,8 @@ tr.unattributed td.lead { font-style: italic; }
 .valcell .na { font-size: 0.68rem; color: var(--muted); }
 .icon { background: none; border: 1px solid transparent; cursor: pointer; color: var(--muted); padding: 0.1rem 0.4rem; font-size: 0.85rem; }
 .icon:hover { color: var(--accent); border-color: var(--rule); }
+.icon.case { font-size: 0.66rem; border-color: var(--rule); line-height: 1.4; }
+.icon.case.on { background: var(--accent); color: var(--paper); border-color: var(--accent); }
 .cond .warn { grid-column: 1 / -1; font-size: 0.66rem; color: var(--muted); }
 .cond .warn button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 0.66rem; text-decoration: underline; }
 .cond.incomplete .conn { opacity: 0.5; }
@@ -198,8 +204,7 @@ tr.unattributed td.lead { font-style: italic; }
 </style>
 
 <div class="mock-banner"><strong>Mockup.</strong> Sample rows shaped like House A. Nothing here reads the server or saves anything.
-  It predates two decisions in STRATEGY-REPORTS.md and does not show them: a condition on the ceiling/space/item side asks about the room's
-  whole set (so "type is not X" keeps rooms with none), and text conditions get a <em>Match case</em> toggle. This page still filters row by row.</div>
+  Filter semantics follow STRATEGY-REPORTS.md: a condition on the ceiling/space/item side asks about the room&rsquo;s whole set, and text ignores case unless <em>Aa</em> is on.</div>
 
 <header>
   <h1>Reports</h1>
@@ -408,6 +413,65 @@ const ASSOC = {
 };
 const MEASURE_LABEL = { overlap_area: "overlap area", fraction_of_room: "% of room", fraction_of_element: "% of the element", room_origin: "room from", side: "side" };
 
+/* The Checks family: QA findings served as reports. `severity` drives the pill,
+   and each check states what it deliberately does NOT call a finding. */
+const CHECKS = {
+  reference: {
+    cols: ["Source", "Room", "Link value", "Finding"],
+    options: [
+      { id: "cleanRows", label: "Also list rooms that match cleanly", on: false },
+      { id: "phase", label: "Include the phase disagreement", on: true },
+    ],
+    rows: [
+      { Source: "dRofus", Room: "G02 KITCHEN", "Link value": "", Finding: "missing link value", severity: "finding" },
+      { Source: "dRofus", Room: "G03 LIVING", "Link value": "1042", Finding: "duplicate link value, shared with L01 BED 1", severity: "finding" },
+      { Source: "dRofus", Room: "L01 BED 1", "Link value": "1042", Finding: "duplicate link value, shared with G03 LIVING", severity: "finding" },
+      { Source: "dRofus", Room: "G04 WC", "Link value": "1088", Finding: "room in the model with no match in dRofus", severity: "finding" },
+      { Source: "dRofus", Room: "(no room)", "Link value": "1099", Finding: "dRofus record no room reached", severity: "finding" },
+      { Source: "Phase", Room: "", "Link value": "", Finding: "Building_BF_Framing is on New Construction; this project's models disagree, so the merged plan spans more than one phase", severity: "warning", opt: "phase" },
+      { Source: "dRofus", Room: "G01 ENTRY", "Link value": "1001", Finding: "matches", severity: "clean", opt: "cleanRows" },
+    ],
+    foot: "What today's QA band downloads, rendered by the server instead of the browser.",
+  },
+  ceilings: {
+    cols: ["Room", "Level", "Department", "Finding"],
+    options: [
+      { id: "external", label: "Ignore rooms classified External", on: true },
+      { id: "tiny", label: "Ignore ceilings under 5 sqft", on: true },
+    ],
+    rows: [
+      { Room: "G04 WC", Level: "LEVEL 00", Department: "Wet areas", Finding: "no ceiling lies over this room", severity: "finding" },
+      { Room: "G05 POOL EX", Level: "LEVEL 00", Department: "External", Finding: "no ceiling lies over this room", severity: "expected", opt: "external" },
+      { Room: "G06 DECK EX", Level: "LEVEL 00", Department: "External", Finding: "no ceiling lies over this room", severity: "expected", opt: "external" },
+      { Room: "G07 DRIVEWAY EX", Level: "LEVEL 00", Department: "External", Finding: "no ceiling lies over this room", severity: "expected", opt: "external" },
+      { Room: "(no room)", Level: "LEVEL 00", Department: "", Finding: "6 CLFS-550 ceilings lie over no room, 4 of them on a level that carries none", severity: "finding" },
+      { Room: "(no room)", Level: "LEVEL 00", Department: "", Finding: "2 ceilings exported a footprint under 5 sqft and match only by slivers", severity: "finding", opt: "tiny" },
+    ],
+    foot: "External rooms are most of the raw count -- 12 of House A's 32 rooms have no ceiling and nearly all are POOL, DECK or DRIVEWAY -- so the classification filter is what makes this readable.",
+  },
+  spaces: {
+    cols: ["Direction", "Key", "Name", "Model", "Finding"],
+    options: [{ id: "rooms", label: "Also list rooms with no space", on: true }],
+    rows: [
+      { Direction: "space", Key: "P01", Name: "PLANT 01", Model: "HouseA-MECH", Finding: "no room carries this number", severity: "finding" },
+      { Direction: "room", Key: "G04", Name: "WC", Model: "HouseA-ARCH", Finding: "no space matches this room", severity: "finding", opt: "rooms" },
+      { Direction: "room", Key: "G05", Name: "POOL EX", Model: "HouseA-ARCH", Finding: "no space matches this room", severity: "finding", opt: "rooms" },
+      { Direction: "key", Key: "G02", Name: "KITCHEN", Model: "HouseA-MECH, HouseA-ELEC", Finding: "two spaces share one key in one model -- the match cannot be made", severity: "warning" },
+    ],
+    foot: "Both directions are findings of the same standing: an unmatched room is as much a signal as an unmatched space.",
+  },
+  openings: {
+    cols: ["Element", "Model", "Names room", "Finding"],
+    options: [{ id: "pending", label: "Include pending references (rooms not pushed yet)", on: false }],
+    rows: [
+      { Element: "D-07 SGL-820", Model: "HouseA-ARCH", "Names room": "r-2618110", Finding: "dangling: this model has no room with that id", severity: "finding" },
+      { Element: "W-09 AWN-600x900", Model: "HouseA-FACADE", "Names room": "r-91002", Finding: "dangling: this model has no room with that id", severity: "finding" },
+      { Element: "D-11 EXT-1200", Model: "HouseA-SITE", "Names room": "r-40021", Finding: "pending: no rooms pushed for this model yet", severity: "expected", opt: "pending" },
+    ],
+    foot: "Pending is not a fault: doors may be pushed before their rooms, and the reference resolves the moment the rooms land.",
+  },
+};
+
 /* ---------- the report-type registry ----------
    Each type names the form sections it needs. The page only knows how to draw
    sections; adding a type is a registry entry, not a new screen. */
@@ -439,13 +503,20 @@ const KINDS = [
     desc: "Rooms added, removed or changed between a baseline milestone and the others. Replaces the old comparison page." },
   { id: "cmp_doors", group: "Between milestones", label: "Door changes", later: true },
 
-  { id: "qa_ceilings", group: "Checks", label: "Rooms without a ceiling", later: true },
-  { id: "qa_spaces", group: "Checks", label: "Unmatched spaces and rooms", later: true },
+  { id: "qa_reference", group: "Checks", label: "Reference data check", form: "check", check: "reference",
+    desc: "Rooms and reference records that do not line up: missing keys, duplicates, and each side's unmatched rows. <strong>This replaces the viewer's QA Download CSV.</strong>" },
+  { id: "qa_ceilings", group: "Checks", label: "Rooms without a ceiling", form: "check", check: "ceilings",
+    desc: "Rooms no ceiling lies over, and ceilings over no room." },
+  { id: "qa_spaces", group: "Checks", label: "Unmatched spaces and rooms", form: "check", check: "spaces",
+    desc: "Spaces whose key matches no room, rooms no space matches, and keys that are ambiguous." },
+  { id: "qa_openings", group: "Checks", label: "Doors and windows with unresolved rooms", form: "check", check: "openings",
+    desc: "Openings naming a room their model does not hold. Pending references are separated from dangling ones." },
 ];
 const FORMS = {
   schedule:    ["Columns", "Filter", "Scope", "Preview"],
   association: ["Join rule", "Columns and measures", "Filter", "Scope", "Rows", "Unmatched", "Preview"],
   comparison:  ["Comparison key", "Compared properties", "Milestones", "Preview"],
+  check:       ["What counts as a finding", "Scope", "Preview"],
 };
 
 const SAVED = [
@@ -456,6 +527,7 @@ const SAVED = [
   { name: "Floor build-ups by room", kind: "by_room_floors" },
   { name: "External doors", kind: "by_room_doors" },
   { name: "DD issue vs latest", kind: "cmp_rooms" },
+  { name: "Reference data check", kind: "qa_reference" },
 ];
 
 /* ---------- state ---------- */
@@ -467,6 +539,7 @@ const state = {
   measures: Object.fromEntries(Object.entries(ASSOC).map(([k, a]) => [k, [...a.defaultMeasures]])),
   shape: "per_match", incRooms: false, incOrphans: true,
   cmpKey: "Number", cmpProps: ["Name", "Department", "Area"], baseline: "dd", others: ["latest"],
+  checkOpts: Object.fromEntries(Object.entries(CHECKS).map(([id, c]) => [id, Object.fromEntries(c.options.map((o) => [o.id, o.on]))])),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -589,7 +662,7 @@ function schedulePreview(k) {
    A tree: groups hold conditions and other groups, each group matching ALL or
    ANY of its children. Incomplete conditions are ignored rather than failing. */
 let nid = 0;
-const cond = (field, op, value = "", value2 = "") => ({ id: ++nid, t: "cond", field, op, value, value2 });
+const cond = (field, op, value = "", value2 = "") => ({ id: ++nid, t: "cond", field, op, value, value2, cs: false });
 const grp = (mode, items = []) => ({ id: ++nid, t: "group", mode, items });
 
 const OPS = {
@@ -599,7 +672,6 @@ const OPS = {
     ["between", "between"], ["blank", "is blank"], ["has", "has a value"]],
 };
 const NO_VALUE = ["blank", "has"];
-const NEGATIVE = ["ne", "not_contains"];
 const opLabel = (type, op) => (OPS[type].find((o) => o[0] === op) || ["", op])[1];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
@@ -650,6 +722,42 @@ function complete(n) {
 }
 const isActive = (root) => complete(root);
 
+/* One condition against one value. `cs` is the per-condition Match case flag:
+   text comparison ignores case unless the condition says otherwise. */
+function holds(c, f, v) {
+  const blank = v == null || v === "" || v === "—";
+  if (c.op === "blank") return blank;
+  if (c.op === "has") return !blank;
+  if (blank) return false; // a missing value never matches, not even "is not"
+  if (f.type === "number") {
+    const a = Number(v), b = parseFloat(c.value), d = parseFloat(c.value2);
+    if (isNaN(a) || isNaN(b)) return false;
+    switch (c.op) {
+      case "eq": return Math.abs(a - b) < 1e-9;
+      case "ne": return Math.abs(a - b) >= 1e-9;
+      case "lt": return a < b;
+      case "le": return a <= b;
+      case "gt": return a > b;
+      case "ge": return a >= b;
+      case "between": return !isNaN(d) && a >= Math.min(b, d) && a <= Math.max(b, d);
+    }
+    return false;
+  }
+  const fold = (x) => (c.cs ? String(x) : String(x).toLowerCase());
+  const a = fold(v), q = fold(c.value.trim());
+  switch (c.op) {
+    case "eq": return a === q;
+    case "ne": return a !== q;
+    case "contains": return a.includes(q);
+    case "not_contains": return !a.includes(q);
+    case "starts": return a.startsWith(q);
+    case "ends": return a.endsWith(q);
+  }
+  return false;
+}
+
+/* Per-row evaluation. Right for a schedule, where a row IS the thing asked
+   about. An association report uses the set rules below instead. */
 function test(n, get, fields) {
   if (n.t === "group") {
     const live = n.items.filter(complete);
@@ -658,35 +766,67 @@ function test(n, get, fields) {
     return n.mode === "all" ? r.every(Boolean) : r.some(Boolean);
   }
   const f = fields.find((x) => x.key === n.field);
-  const v = get(f);
-  const blank = v == null || v === "" || v === "—";
-  if (n.op === "blank") return blank;
-  if (n.op === "has") return !blank;
-  if (blank) return false; // a missing value never matches, not even "is not"
-  if (f.type === "number") {
-    const a = Number(v), b = parseFloat(n.value), c = parseFloat(n.value2);
-    if (isNaN(a) || isNaN(b)) return false;
-    switch (n.op) {
-      case "eq": return Math.abs(a - b) < 1e-9;
-      case "ne": return Math.abs(a - b) >= 1e-9;
-      case "lt": return a < b;
-      case "le": return a <= b;
-      case "gt": return a > b;
-      case "ge": return a >= b;
-      case "between": return !isNaN(c) && a >= Math.min(b, c) && a <= Math.max(b, c);
-    }
-    return false;
+  return holds(n, f, get(f));
+}
+
+/* --- association filters: a condition on the associated side asks about the
+   room's whole matched SET, not one row.
+
+   "Ceiling type is X"     -> the room HAS one    (a room with none fails)
+   "Ceiling type is not X" -> the room has NONE   (a room with none passes)
+
+   Per-row negation would answer "ceilings that are not X", which keeps a room
+   because of its other ceilings -- a different question, and it differs
+   exactly on the rooms the report is for. */
+const isAssocField = (f) => !f.key.startsWith("room:");
+const POSITIVE_OF = { ne: "eq", not_contains: "contains" };
+const isNegative = (c) => c.op in POSITIVE_OF;
+
+function matchValue(f, entry) {
+  const [rid, element, measures] = entry;
+  const name = f.key.slice(f.key.indexOf(":") + 1);
+  if (f.key.startsWith("el:")) return element ? element[name] : undefined;
+  const v = measures ? measures[name] : undefined;
+  return v != null && f.pct ? v * 100 : v;
+}
+function roomValue(f, room) {
+  return room ? room[f.key.slice(f.key.indexOf(":") + 1)] : undefined;
+}
+
+/* Does this room survive the filter? Associated conditions become EXISTS /
+   NOT EXISTS over its matches; room conditions read the room itself. */
+function roomKept(n, room, matches, fields) {
+  if (n.t === "group") {
+    const live = n.items.filter(complete);
+    if (!live.length) return true;
+    const r = live.map((x) => roomKept(x, room, matches, fields));
+    return n.mode === "all" ? r.every(Boolean) : r.some(Boolean);
   }
-  const s = String(v).toLowerCase(), q = n.value.trim().toLowerCase();
-  switch (n.op) {
-    case "eq": return s === q;
-    case "ne": return s !== q;
-    case "contains": return s.includes(q);
-    case "not_contains": return !s.includes(q);
-    case "starts": return s.startsWith(q);
-    case "ends": return s.endsWith(q);
+  const f = fields.find((x) => x.key === n.field);
+  if (!isAssocField(f)) return holds(n, f, roomValue(f, room));
+  const positive = isNegative(n) ? { ...n, op: POSITIVE_OF[n.op] } : n;
+  const found = matches.some((entry) => holds(positive, f, matchValue(f, entry)));
+  return isNegative(n) ? !found : found;
+}
+
+/* Which conditions also narrow the ROWS under a kept room: the positive
+   associated ones every ancestor group ANDs. One inside an "any" group decides
+   whether the room appears and is not applied per row, which is the ambiguity
+   the builder keeps negatives out of "any" groups to avoid. */
+function rowFilters(n, fields, conjunctive = true, out = []) {
+  if (n.t === "group") {
+    const all = n.mode === "all";
+    n.items.filter(complete).forEach((x) => rowFilters(x, fields, conjunctive && all, out));
+    return out;
   }
-  return false;
+  const f = fields.find((x) => x.key === n.field);
+  if (conjunctive && isAssocField(f) && !isNegative(n)) out.push([n, f]);
+  return out;
+}
+
+function anyCondition(n, pick, fields) {
+  if (n.t === "group") return n.items.filter(complete).some((x) => anyCondition(x, pick, fields));
+  return pick(fields.find((x) => x.key === n.field), n);
 }
 
 function summaryHtml(n, fields, top = true) {
@@ -700,8 +840,15 @@ function summaryHtml(n, fields, top = true) {
   const unit = f.pct ? "%" : "";
   const val = NO_VALUE.includes(n.op) ? ""
     : n.op === "between" ? ` ${esc(n.value)}${unit} and ${esc(n.value2)}${unit}`
-    : f.type === "number" ? ` ${esc(n.value)}${unit}` : ` "${esc(n.value)}"`;
-  return `${esc(f.side)}.${esc(f.name)} ${esc(opLabel(f.type, n.op))}${val}`;
+    : f.type === "number" ? ` ${esc(n.value)}${unit}` : ` "${esc(n.value)}"${n.cs ? " (match case)" : ""}`;
+  const assoc = isAssocField(f) && kindOf().form === "association";
+  if (!assoc) return `${esc(f.side)}.${esc(f.name)} ${esc(opLabel(f.type, n.op))}${val}`;
+  // Read set-wise, which is the whole point: "has none whose type is X" is not
+  // "has one whose type is not X".
+  const one = ENTITY[ASSOC[kindOf().assoc].entity].one;
+  const positive = isNegative(n) ? { ...n, op: POSITIVE_OF[n.op] } : n;
+  const label = esc(opLabel(f.type, positive.op));
+  return `the room has ${isNegative(n) ? "<b>no</b>" : "a"} ${esc(one)} whose ${esc(f.name)} ${label}${val}`;
 }
 
 function el(tag, attrs = {}, ...kids) {
@@ -718,7 +865,7 @@ function el(tag, attrs = {}, ...kids) {
 function refreshPreview() {
   const k = kindOf();
   const p = $("preview");
-  if (p) p.replaceWith(k.form === "schedule" ? schedulePreview(k) : associationPreview(k));
+  if (p) p.replaceWith(k.form === "schedule" ? schedulePreview(k) : k.form === "check" ? checkPreview(k) : associationPreview(k));
   const s = $("fsummary");
   if (s) s.querySelector("code").innerHTML = summaryHtml(filterOf(k), fieldsFor(k));
 }
@@ -769,8 +916,15 @@ function condEl(c, conn, isOp, parent, fields) {
     c.field = nf.key; renderSections();
   } }, ...sides.map((s) => el("optgroup", { label: s }, ...fields.filter((x) => x.side === s).map((x) =>
     el("option", { value: x.key, selected: x.key === f.key }, x.name)))));
+  // A negative condition on the associated side reads as "the room has NONE",
+  // which has no single reading inside an "any" group -- so it is offered only
+  // in "all" groups rather than silently picking a quantifier.
+  const assocSide = isAssocField(f) && kindOf().form === "association";
+  const negBlocked = assocSide && parent.mode === "any";
   const opSel = el("select", { "aria-label": "Operator", onchange: (e) => { c.op = e.target.value; renderSections(); } },
-    ...OPS[f.type].map(([v, l]) => el("option", { value: v, selected: v === c.op }, l)));
+    ...OPS[f.type]
+      .filter(([v]) => !(negBlocked && v in POSITIVE_OF && v !== c.op))
+      .map(([v, l]) => el("option", { value: v, selected: v === c.op }, l)));
 
   const input = (key, label) => el("input", {
     type: "text", value: c[key], "aria-label": label, inputmode: f.type === "number" ? "decimal" : null,
@@ -782,22 +936,39 @@ function condEl(c, conn, isOp, parent, fields) {
     },
   });
   const unit = f.pct ? el("span", { class: "unit" }, "%") : null;
+  // Text ignores case unless this says otherwise.
+  const matchCase = f.type === "text" && !NO_VALUE.includes(c.op)
+    ? el("button", {
+        class: `icon case${c.cs ? " on" : ""}`, type: "button", "aria-pressed": c.cs ? "true" : "false",
+        title: c.cs ? "Match case: on" : "Match case: off (Aa = aa)",
+        onclick: () => { c.cs = !c.cs; renderSections(); },
+      }, "Aa")
+    : null;
   const val = NO_VALUE.includes(c.op) ? el("div", { class: "valcell" }, el("span", { class: "na" }, "no value needed"))
     : c.op === "between" ? el("div", { class: "valcell" }, input("value", "From"), el("span", { class: "and" }, "and"), input("value2", "To"), unit)
-    : el("div", { class: "valcell" }, input("value", "Value"), unit);
+    : el("div", { class: "valcell" }, input("value", "Value"), unit, matchCase);
 
   const body = el("div", { class: "cond-body" },
     el("div", { class: "fieldcell" }, fieldSel, el("span", { class: "ftype", title: f.type === "number" ? "Number" : "Text" }, f.type === "number" ? "123" : "abc")),
     opSel, val,
     el("button", { class: "icon", type: "button", "aria-label": "Remove condition", title: "Remove condition",
       onclick: () => { parent.items.splice(parent.items.indexOf(c), 1); renderSections(); } }, "×"));
-  if (NEGATIVE.includes(c.op)) {
-    body.append(el("div", { class: "warn" }, `Rows where ${f.name} is blank don't match this either. `,
+  if (isNegative(c) && !assocSide) {
+    // Room side: a missing value matches nothing, so "is not X" drops a room
+    // that never stated a value. Surprising, and correct, so it is offered
+    // rather than hidden.
+    body.append(el("div", { class: "warn" }, `Rooms where ${f.name} is blank don't match this either. `,
       el("button", { type: "button", onclick: () => {
         const i = parent.items.indexOf(c);
         parent.items.splice(i, 1, grp("any", [c, cond(c.field, "blank")]));
         renderSections();
       } }, "Keep blanks too")));
+  }
+  if (isNegative(c) && assocSide) {
+    const one = ENTITY[ASSOC[kindOf().assoc].entity].one;
+    body.append(el("div", { class: "warn" },
+      `Asks for rooms that have NO matching ${one}, so a room with none is a match.`
+      + (parent.mode === "any" ? " Move it into an “all” group: inside “any” it has no single reading." : "")));
   }
   const row = el("div", { class: `cond${complete(c) ? "" : " incomplete"}` }, el("span", { class: `conn${isOp ? " op" : ""}` }, conn), body);
   return row;
@@ -855,10 +1026,53 @@ function associationPreview(k) {
   const Side = e.one[0].toUpperCase() + e.one.slice(1);
   const fields = fieldsFor(k);
   const root = filterOf(k);
-  const base = a.rows.filter(([room, el]) => (el || state.incRooms) && (room || state.incOrphans));
-  const rows = base.filter((r) => test(root, (f) => valueOf(f, r, k), fields));
+  const active = isActive(root);
   const notes = [];
-  if (isActive(root)) notes.push(`Filter keeps ${rows.length} of ${base.length} matches.`);
+
+  // Every room the data knows about, with the matches it has. Grouped FIRST,
+  // because an associated condition asks about the whole set (see roomKept).
+  const byRoom = new Map();
+  const orphans = [];
+  for (const entry of a.rows) {
+    if (entry[0] == null) { orphans.push(entry); continue; }
+    if (!byRoom.has(entry[0])) byRoom.set(entry[0], []);
+    if (entry[1]) byRoom.get(entry[0]).push(entry);
+  }
+
+  const assocPositive = active && anyCondition(root, (f, c) => isAssocField(f) && !isNegative(c), fields);
+  const assocNegative = active && anyCondition(root, (f, c) => isAssocField(f) && isNegative(c), fields);
+  const rowConds = active ? rowFilters(root, fields) : [];
+
+  // Rooms, then the rows under each.
+  const groups = [];
+  for (const [rid, matches] of byRoom) {
+    const room = ROOMS[rid];
+    if (active && !roomKept(root, room, matches, fields)) continue;
+    const shown = matches.filter((entry) => rowConds.every(([c, f]) => holds(c, f, matchValue(f, entry))));
+    // A positive condition ("has a ceiling of type X") excludes a room with
+    // none on its own; a negative one ("has no ceiling of type X") includes
+    // it. The switch only decides when the filter says nothing either way.
+    const filterDecides = assocPositive || assocNegative;
+    if (!shown.length && assocPositive) continue;
+    if (!shown.length && !filterDecides && !state.incRooms) continue;
+    groups.push([room, shown]);
+  }
+  for (const entry of orphans) {
+    if (!state.incOrphans) continue;
+    if (active && !roomKept(root, null, [entry], fields)) continue;
+    groups.push([null, [entry]]);
+  }
+
+  if (active) {
+    const kept = groups.reduce((t, [, shown]) => t + Math.max(shown.length, 1), 0);
+    notes.push(`Filter keeps ${kept} row${kept === 1 ? "" : "s"} over ${groups.length} room${groups.length === 1 ? "" : "s"}.`);
+    if (assocNegative) {
+      notes.push(`This filter asks for rooms that have NO matching ${e.one}, so rooms with no ${e.many} at all are part of the answer and are listed whatever the switch says.`);
+    } else if (assocPositive) {
+      notes.push(`This filter asks for rooms that HAVE a matching ${e.one}, so rooms with none cannot match it — the switch does not override an explicit condition.`);
+    }
+  }
+
   let head, body, n;
   const sideRow = (cnt) => `<tr class="side"><th colspan="${rc.length}">Room</th><th class="edge" colspan="${cnt}">${esc(Side)}${ms.length ? " and join" : ""}</th></tr>`;
   const roomCells = (room) => room ? rc.map((c) => cell(c, room[c] ?? "")).join("")
@@ -866,33 +1080,36 @@ function associationPreview(k) {
 
   if (state.shape === "per_match") {
     head = sideRow(ac.length + ms.length) + `<tr>${rc.map((c) => `<th>${esc(c)}</th>`).join("")}${ac.map((c, i) => `<th class="${i === 0 ? "edge" : ""}${e.numeric[c] ? " num" : ""}">${esc(c)}</th>`).join("")}${ms.map((m) => `<th class="${a.summable[m] || m.startsWith("fraction") ? "num" : ""}">${esc(MEASURE_LABEL[m])}</th>`).join("")}</tr>`;
-    body = rows.map(([rid, el, m]) => {
-      const room = rid ? ROOMS[rid] : null;
-      const aCells = el ? ac.map((c, i) => cell(c, el[c] ?? "", i === 0 ? "edge" : "")).join("")
-        : ac.map((c, i) => `<td class="none${i === 0 ? " edge" : ""}">${i === 0 ? `no ${e.one}` : ""}</td>`).join("");
-      return `<tr class="${room ? "" : "unattributed"}">${roomCells(room)}${aCells}${ms.map((x) => cell(x, m[x] ?? "")).join("")}</tr>`;
-    }).join("");
-    n = rows.length;
+    const lines = [];
+    for (const [room, shown] of groups) {
+      if (!shown.length) {
+        lines.push(`<tr>${roomCells(room)}${ac.map((c, i) => `<td class="none${i === 0 ? " edge" : ""}">${i === 0 ? `no ${e.one}` : ""}</td>`).join("")}${ms.map(() => "<td></td>").join("")}</tr>`);
+        continue;
+      }
+      for (const [, element, measures] of shown) {
+        const aCells = ac.map((c, i) => cell(c, element[c] ?? "", i === 0 ? "edge" : "")).join("");
+        lines.push(`<tr class="${room ? "" : "unattributed"}">${roomCells(room)}${aCells}${ms.map((x) => cell(x, measures[x] ?? "")).join("")}</tr>`);
+      }
+    }
+    body = lines.join("");
+    n = lines.length;
     if (a.perMatchNote) notes.push(a.perMatchNote);
   } else {
-    const groups = new Map();
-    for (const row of rows) { const key = row[0] ?? "__none"; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }
     head = sideRow(1 + ac.length + ms.length) + `<tr>${rc.map((c) => `<th>${esc(c)}</th>`).join("")}<th class="edge num">${esc(e.many)} <span class="agg">count</span></th>${ac.map((c) => `<th>${esc(c)} <span class="agg">${e.numeric[c] ? "values, not summed" : "values"}</span></th>`).join("")}${ms.map((m) => `<th class="${a.summable[m] ? "num" : ""}">${esc(MEASURE_LABEL[m])} <span class="agg">${a.summable[m] ? "sum" : "values"}</span></th>`).join("")}</tr>`;
     const distinct = (vals) => [...new Set(vals.filter((v) => v !== "" && v != null).map((v) => fmt("", v)))].join(", ");
-    body = [...groups.entries()].map(([rid, rs]) => {
-      const room = rid === "__none" ? null : ROOMS[rid];
-      const els = rs.filter((x) => x[1]);
+    body = groups.map(([room, shown]) => {
       const mCells = ms.map((m) => {
-        if (a.summable[m]) return `<td class="num">${els.length ? els.reduce((t, x) => t + (x[2][m] || 0), 0).toFixed(1) : ""}</td>`;
-        if (m.startsWith("fraction")) return `<td>${esc(els.map((x) => fmt(m, x[2][m])).join(", "))}</td>`;
-        return `<td>${esc(distinct(els.map((x) => x[2][m])))}</td>`;
+        if (a.summable[m]) return `<td class="num">${shown.length ? shown.reduce((t, x) => t + (x[2][m] || 0), 0).toFixed(1) : ""}</td>`;
+        if (m.startsWith("fraction")) return `<td>${esc(shown.map((x) => fmt(m, x[2][m])).join(", "))}</td>`;
+        return `<td>${esc(distinct(shown.map((x) => x[2][m])))}</td>`;
       }).join("");
-      return `<tr class="${room ? "" : "unattributed"}">${roomCells(room)}<td class="edge num">${els.length}</td>${ac.map((c) => `<td>${esc(distinct(els.map((x) => x[1][c])))}</td>`).join("")}${mCells}</tr>`;
+      return `<tr class="${room ? "" : "unattributed"}">${roomCells(room)}<td class="edge num">${shown.length}</td>${ac.map((c) => `<td>${esc(distinct(shown.map((x) => x[1][c])))}</td>`).join("")}${mCells}</tr>`;
     }).join("");
-    n = groups.size;
+    n = groups.length;
     if (a.perRoomNote) notes.push(a.perRoomNote);
   }
-  if (!state.incRooms) {
+
+  if (!active && !state.incRooms) {
     const h = a.rows.filter(([, el]) => !el).length;
     if (h) notes.push(`${h} room${h > 1 ? "s" : ""} with no ${e.many} hidden. Tick “Include rooms with no ${e.many}” to list them. Most are usually external spaces, so add a room filter first.`);
   }
@@ -900,6 +1117,8 @@ function associationPreview(k) {
     const h = a.rows.filter(([room]) => !room).length;
     if (h) notes.push(`${h} ${h > 1 ? e.many : e.one} with no room hidden, so totals won't cover the whole model.`);
   }
+  if (!body) body = `<tr><td class="none" colspan="${rc.length + ac.length + ms.length + 1}">Nothing matches this filter.</td></tr>`;
+
   const sec = previewSection(`${n} row${n === 1 ? "" : "s"} · sample`, notes, head, body,
     "Areas in square feet, as stored. Unmatched rows are shown on purpose: they are part of the answer, not errors.");
   sec.id = "preview";
@@ -957,11 +1176,46 @@ function comparison() {
   return out;
 }
 
+function check(k) {
+  const c = CHECKS[k.check];
+  const opts = state.checkOpts[k.check];
+  const out = [];
+
+  const optSec = section("What counts as a finding", `<div class="group">
+    ${c.options.map((o) => `<label class="check"><input type="checkbox" data-o="${o.id}" ${opts[o.id] ? "checked" : ""} /> ${esc(o.label)}</label>`).join("")}
+    <p class="foot">${esc(c.foot)}</p></div>`);
+  optSec.querySelectorAll("input[data-o]").forEach((i) => i.onchange = () => { opts[i.dataset.o] = i.checked; renderSections(); });
+  out.push(optSec);
+  out.push(scopeSection(""));
+  out.push(checkPreview(k));
+  return out;
+}
+
+function checkPreview(k) {
+  const c = CHECKS[k.check];
+  const opts = state.checkOpts[k.check];
+  // A row tied to an option appears only while that option is on. Everything
+  // else is a finding whatever the settings say.
+  const rows = c.rows.filter((r) => !r.opt || opts[r.opt]);
+  const findings = rows.filter((r) => r.severity === "finding").length;
+  const head = `<tr>${c.cols.map((col) => `<th>${esc(col)}</th>`).join("")}<th>Severity</th></tr>`;
+  const body = rows.map((r) =>
+    `<tr class="${r.severity === "finding" ? "" : "quiet"}">${c.cols.map((col) => `<td>${esc(r[col] ?? "")}</td>`).join("")}` +
+    `<td><span class="pill ${esc(r.severity)}">${esc(r.severity)}</span></td></tr>`).join("")
+    || `<tr><td class="none" colspan="${c.cols.length + 1}">Nothing to report.</td></tr>`;
+  const notes = [`${findings} finding${findings === 1 ? "" : "s"}, ${rows.length - findings} row${rows.length - findings === 1 ? "" : "s"} listed as expected or informational.`];
+  const sec = previewSection(`${rows.length} row${rows.length === 1 ? "" : "s"} · sample`, notes, head, body,
+    "Export CSV renders this on the server, so the download and an MCP host get the same bytes.");
+  sec.id = "preview";
+  return sec;
+}
+
 function renderSections() {
   const k = kindOf();
   const host = $("sections");
   host.innerHTML = "";
-  const parts = k.form === "schedule" ? schedule(k) : k.form === "association" ? association(k) : comparison(k);
+  const FORM = { schedule, association, comparison, check };
+  const parts = FORM[k.form](k);
   host.append(...parts);
 }
 
