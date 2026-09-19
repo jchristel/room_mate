@@ -685,7 +685,7 @@
       <div id="fieldsPanel" class="fields-panel hidden"></div>
     </div>
     <div class="links">
-      <a href="/comparison.html">compare</a>
+      <a href="/reports/">reports</a>
       <a href="/settings/">settings</a>
     </div>
   </header>
@@ -709,7 +709,11 @@
       <button class="band-head" id="qaHead">▸ QA</button>
       <div class="band-body hidden" id="qaBody">
         <button class="refresh" id="qaRefresh">Refresh</button>
-        <button class="refresh" id="qaDownload">Download CSV</button>
+        <!-- The export moved to /reports/ (Checks family). Two renderings of
+             one set of findings drift the first time either is fixed, and this
+             band builds none of its own any more -- it shows them on screen,
+             next to the plan, which is what it is for. -->
+        <a class="refresh" href="/reports/" id="qaReports">Export in Reports</a>
         <div id="qaContent"></div>
       </div>
     </div>
@@ -829,7 +833,7 @@
   </template>
 
 <!-- Shared selection-persistence helpers (seedProjectId / persistSelection),
-     the same file the settings page and comparison.html load. -->
+     the same file the settings and reports pages load. -->
 <script src="common.js"></script>
 <!-- The adjacency graph's canvas renderer. Its own file, not another few
      hundred lines of index.html: it is the page's second renderer (canvas, not
@@ -2261,59 +2265,6 @@ function csvEscape(value) {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-// One CSV covering every source. `source` is a real column rather than one
-// file per source: a room that is clean in dRofus and broken in FFE should
-// appear once per finding in one sheet, sortable by either dimension.
-//
-// The link-value column can no longer be headed by THE link property, since
-// each source has its own — so the header is generic and the source column
-// tells you which property the value came from. room_number / room_name /
-// link_value come from that source's per-room detail (error_rooms).
-function buildValidationCsv(data) {
-  const rows = [["source", "room_id", "room_number", "room_name", "link_property", "link_value", "error"]];
-  // The phase disagreement first, and under a "phase" source label rather than
-  // a column of its own: it is per MODEL, not per room, so it fills none of the
-  // room columns — but splitting it into a second file would hide it from
-  // anyone who opens the sheet expecting every finding in one place.
-  if (data.phases?.disagree) {
-    for (const [model, phase] of Object.entries(data.phases.by_model || {})) {
-      rows.push(["phase", "", "", "", "", "",
-        `model ${model} is on phase ${phase ?? "(none — rooms were never filtered)"}; `
-        + `this project's models disagree, so the merged plan spans more than one phase`]);
-    }
-  }
-  for (const [name, report] of Object.entries(data.sources || {})) {
-    const info = report.error_rooms || {};
-    const label = sourceDisplayName(name);
-    const push = (id, error) => {
-      const r = info[id] || {};
-      rows.push([label, id, r.number || "", r.name || "", report.link_property || "", r.link_value || "", error]);
-    };
-    for (const id of report.rooms_missing_link_value) push(id, "missing link value");
-    for (const dup of report.duplicate_link_values)
-      for (const id of dup.room_ids) push(id, `duplicate link value: ${dup.value}`);
-    // Same two directions as the on-screen headings, and worded to match them:
-    // whoever exports this CSV is doing it to find out which side is short.
-    for (const id of report.rooms_unmatched) push(id, `room in the model with no match in ${label}`);
-    // No room id, number or name — the whole point is that no room reached
-    // this record — so only the link value is filled, under its own column.
-    for (const value of report.reference_unmatched || [])
-      rows.push([label, "", "", "", report.link_property || "", value,
-        `row in ${label} with no match in the model`]);
-    for (const value of report.reference_duplicate_ids || [])
-      rows.push([label, "", "", "", report.link_property || "", value,
-        `${label} id used by more than one row (only the last kept)`]);
-    if (report.reference_blank_id_rows)
-      rows.push([label, "", "", "", report.link_property || "", "",
-        `${label} has ${report.reference_blank_id_rows} row(s) with no id (skipped at load)`]);
-    for (const m of report.property_mismatches)
-      push(m.room_id, `property mismatch: ${m.field} (room="${m.room_value}" vs ${label}="${m.reference_value}")`);
-    for (const m of report.fields_absent_in_revit) push(m.room_id, `field absent in Revit: ${m.field}`);
-    for (const m of report.fields_empty_in_revit) push(m.room_id, `field empty in Revit: ${m.field}`);
-  }
-  return rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
-}
-
 // Shared by both panels' Download-CSV buttons: turn CSV text into a download.
 function downloadCsv(filename, csvText) {
   const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
@@ -2323,18 +2274,6 @@ function downloadCsv(filename, csvText) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-}
-
-function downloadValidationCsv() {
-  if (!currentValidation) return;
-  // A phase disagreement is downloadable on its own: the band is visible with
-  // no reference source configured in exactly that case, and a Download button
-  // that silently does nothing while findings are on screen is worse than no
-  // button.
-  const hasFindings =
-    Object.keys(currentValidation.sources || {}).length > 0 || currentValidation.phases?.disagree;
-  if (!hasFindings) return;
-  downloadCsv(`validation-${projectId || "project"}.csv`, buildValidationCsv(currentValidation));
 }
 
 // ============================ SVG export ============================
@@ -5404,7 +5343,6 @@ document.getElementById("qaContent").addEventListener("click", (e) => {
 });
 
 document.getElementById("qaRefresh").addEventListener("click", () => loadValidation(projectId));
-document.getElementById("qaDownload").addEventListener("click", () => downloadValidationCsv());
 
 document.getElementById("areasHead").addEventListener("click", () => {
   toggleBand("areasBody", "areasHead", () => "Hierarchy areas");

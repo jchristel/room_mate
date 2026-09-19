@@ -157,7 +157,7 @@ MODULES = {
     + sorted(glob.glob("src-js/settings/sections/*.tsx")),
     "p_generated": sorted(glob.glob("src-js/settings/generated/*.ts")),
     "p_index": ["static/index.html"],
-    "p_comparison": ["static/comparison.html"],
+    "p_reports": sorted(glob.glob("src-js/reports/*.ts")) + sorted(glob.glob("src-js/reports/*.tsx")),
     "p_graph": ["static/graph.js"],
     "p_common": ["static/common.js"],
     "p_tokens": ["static/tokens.css"],

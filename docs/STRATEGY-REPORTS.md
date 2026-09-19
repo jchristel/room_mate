@@ -7,10 +7,13 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Authored](STRATEGY-AUTHORED.md) · [Entities](STRATEGY-ENTITIES.md) ·
 [Security](STRATEGY-SECURITY.md)
 
-**Nothing here is built** (as of 2026-09-13). The design is settled; read this
-before building any of it. When a piece ships, its section is deleted from here
-and the rationale moves to the module header — see "Code documents what is
-built" in [Coding Conventions](CODING-CONVENTIONS.md).
+**The page is built; the reports on it mostly are not** (as of 2026-09-19).
+`/reports/` serves milestone comparison and three QA checks, and `src-js/reports/`
+documents those. What is left here is everything else: the schedules, the
+by-room association reports, the filter builder, saved report definitions and
+server-side rendering. When a piece ships, its section is deleted from here and
+the rationale moves to the module header — see "Code documents what is built"
+in [Coding Conventions](CODING-CONVENTIONS.md).
 
 **[reports-mockup.html](reports-mockup.html)** is a clickable mockup of the
 page described below: the report type dropdown, the four forms, the filter
@@ -26,31 +29,33 @@ above all, **reports through an association**: ceilings by room, spaces by
 room, FF&E by room. The rest of this document is mostly about why the obvious
 way to let a user express that is the wrong one.
 
-## The page
+## The page, and what slice 1 left behind
 
-**A new React page at `/reports/`, which absorbs milestone comparison and then
-replaces `comparison.html`.** Comparison *is* a report — rooms across milestones
-— so it belongs under the same roof, but it is 492 lines of vanilla JS over its
-own diff endpoint, and porting it first would put the feature that was asked for
-behind a migration nobody asked for. So the order is:
+`/reports/` is a React app (`src-js/reports/`, `vite.reports.config.ts`) beside
+the renderer and the settings page, built by the same `npm run build` and
+covered by the same committed-bundle gate. It replaced `comparison.html`, which
+is deleted, and took the QA CSV export off the viewer's band.
 
-1. `/reports/` as a third Vite build beside the renderer and the settings page —
-   an app build with its own `index.html`, so a `vite.reports.config.ts` on the
-   `vite.settings.config.ts` pattern, emitting into `static/reports/`, committed,
-   and covered by the same frontend CI gate.
-2. The association reports below.
-3. Comparison ported as a report kind; `comparison.html` **deleted in the same
-   change**, the way `settings.html` was. Two live comparison pages is the state
-   to never be in.
+**Slice 1 renders in the browser, and that is staging rather than the design.**
+Comparison and the checks each read one already-computed endpoint
+(`/projects/{id}/comparison`, `/projects/{id}/validation`), so nothing is joined
+client-side and nothing waits on `service::reports`. The schedules and the
+by-room reports are different: those read whole entity payloads, which is where
+the server-side section below stops being optional — `/ffe` is 133 MB for every
+storey on RHH. **Take that as the trigger, not the date**: the first report type
+that needs an entity payload is the one that needs the endpoint.
 
-A separate page rather than a mode on the viewer, for the reason
-[Browser](STRATEGY-BROWSER.md) gives for a multi-project comparator.
+**What is still owed to the checks**: the ceilings check (no server-side report
+exists — see [Entities](STRATEGY-ENTITIES.md)), and CSV rendered server-side so
+an MCP host and a download cannot differ. The client-side `csv.ts` that shipped
+is one renderer where there were two, which is the improvement; it is not the
+end state.
 
-**The save trap carries over.** `comparison.html` PUTs back the *whole* settings
-JSON it loaded, verbatim except its own fields. Rebuilding that JSON field by
-field is the bug that silently emptied every milestone's pins. Anything this
-page saves either keeps the whole-object round-trip or goes through
-`settings_api::merge_over_stored`.
+**The save trap did carry over, and is handled.** `comparison.html` PUT back the
+*whole* settings JSON it had read, changing only its own two fields, because
+rebuilding that JSON field by field is what silently emptied every milestone's
+pins. `comparison.tsx` does the same. Anything else this page saves either keeps
+the whole-object round-trip or goes through `settings_api::merge_over_stored`.
 
 ## The association is chosen, never defined
 
@@ -139,41 +144,6 @@ It is resolved per project because a type's join rule text depends on project
 settings (the space key, `room_attribution`, `room_resolution`). The page
 renders what it is sent, so the rule is stated in one place, the same place it
 is enforced. That route is a read, so it gets its MCP tool too.
-
-## The QA CSV moves here, and the viewer keeps a link
-
-**The viewer's QA band builds its CSV in the browser** (`buildValidationCsv`
-in `static/index.html`, behind the `qaDownload` button). That is precisely the
-second formatter the CSV decision above rules out: the same findings, rendered
-by different code from the report that will serve them, drifting the first time
-either is fixed.
-
-So the **Checks** family carries it, and `qaDownload`, `downloadValidationCsv`
-and `buildValidationCsv` are **deleted in the same change that ships the checks
-reports** — the `settings.html` precedent again, and the reason to do it in one
-change rather than two: a viewer that has lost the download before the reports
-page can serve it is a regression, however short-lived.
-
-**The band itself stays.** It answers "is this project clean right now" at a
-glance, next to the plan, which is not what a report is for. What it loses is
-the export, and what it gains is a line under it linking to the reports page —
-the same "a fallback nobody can see" instinct the layer toggles follow.
-
-**Four checks, and each already has its finding logic server-side** except the
-ceilings one, which is the report `STRATEGY-ENTITIES.md` has been holding open:
-
-| Check | Where the findings come from |
-|---|---|
-| Reference data | `service::validation`, what the QA band shows today |
-| Openings with unresolved rooms | `door_report`, keeping **pending** distinct from **dangling** |
-| Unmatched spaces and rooms | `SpaceReport`, both directions plus ambiguous keys |
-| Rooms without a ceiling | Unbuilt. The probe already said what it must not say: 12 of House A's 32 rooms have no ceiling and nearly all are POOL, DECK or DRIVEWAY, so a classification filter is what makes it readable, and unattributed ceilings cluster by type rather than scattering |
-
-**A check's options are what it refuses to call a finding**, and they are the
-report's own, not project settings: "ignore rooms classified External",
-"include pending references", "ignore ceilings under 5 sqft". A check with no
-options would either bury its signal in the expected (the ceilings case) or
-report a legitimate state as a fault (the pending case).
 
 ## The association form
 

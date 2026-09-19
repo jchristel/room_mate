@@ -133,7 +133,7 @@ pub fn get_project_file(projects_dir: &Path, project_id: &str) -> Result<(String
 /// The viewer resolves colour plans by the *payload* project id (e.g.
 /// `"130486"`), which is not a settings `project_id` (e.g. `"Riverside ..."`),
 /// so the exact match 404s and it needs this fallback. The editors
-/// (the settings page, `comparison.html`) must NOT get the fallback — they GET and
+/// (the settings page, the reports page) must NOT get the fallback — they GET and
 /// PUT the same path by the real `project_id`, and a silent default-fallback
 /// could load or overwrite the wrong file — which is why this is a separate
 /// function feeding a separate route rather than a change to `get_project_file`.
