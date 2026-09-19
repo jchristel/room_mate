@@ -23,7 +23,7 @@
 import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
 import { flip, pointsAttr } from "../geometry.js";
-import type { HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
+import type { ElementRef, HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
 import type { Ceiling, Door, Floor, Item, Rect, Room, Space, WindowOpening } from "../types.js";
 import { overrideOr, parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
@@ -160,11 +160,8 @@ export class GlPlanRenderer implements PlanRenderer {
   #ffeEntries: ItemEntry[] = [];
   #palette: PlanPalette;
   #view: Rect = { x: 0, y: 0, w: 100, h: 100 };
-  #selected: string | null = null;
-  #selectedDoor: string | null = null;
-  #selectedWindow: string | null = null;
-  #selectedItem: string | null = null;
-  #hovered: string | null = null;
+  #selected: ElementRef | null = null;
+  #hovered: ElementRef | null = null;
   #areasActive = false;
   /** Retained so a repaint can reproduce exactly what is on screen. */
   #rooms: readonly Room[] = [];
@@ -356,13 +353,13 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#render();
   }
 
-  setSelection(roomId: string | null): void {
-    if (this.#selected === roomId) return;
-    this.#selected = roomId;
+  setSelection(ref: ElementRef | null): void {
+    if (sameRef(this.#selected, ref)) return;
+    this.#selected = ref;
     this.#drawMarks();
   }
 
-  get selection(): string | null {
+  get selection(): ElementRef | null {
     return this.#selected;
   }
 
@@ -419,10 +416,17 @@ export class GlPlanRenderer implements PlanRenderer {
     };
   }
 
-  setHover(roomId: string | null): void {
-    if (this.#hovered === roomId) return;
-    this.#hovered = roomId;
-    this.#drawHover();
+  setHover(ref: ElementRef | null): void {
+    if (sameRef(this.#hovered, ref)) return;
+    const before = this.#hovered;
+    this.#hovered = ref;
+    // A room's hover is a GL fill; every other kind's is a ring in the overlay.
+    // Each is redrawn only when it can have changed, so pointer moves over
+    // rooms -- the hot path -- never rebuild the overlay.
+    const isRoom = (r: ElementRef | null) => r?.kind === "room";
+    const isRing = (r: ElementRef | null) => !!r && r.kind !== "room";
+    if (isRoom(before) || isRoom(ref)) this.#drawHover();
+    if (isRing(before) || isRing(ref)) this.#drawMarks();
   }
 
   /**
@@ -445,7 +449,8 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#hoverMesh?.destroy();
     this.#hoverMesh = null;
 
-    const entry = this.#hovered ? this.#entries.find((e) => e.room.id === this.#hovered) : undefined;
+    const hovered = this.#hovered?.kind === "room" ? this.#hovered.id : null;
+    const entry = hovered ? this.#entries.find((e) => e.room.id === hovered) : undefined;
     // A room with a colour plan does NOT change on hover, and that is a
     // precedence being reproduced rather than an omission: in SVG the plan's
     // inline fill beat the `:hover` rule, so those rooms never highlighted.
@@ -557,36 +562,6 @@ export class GlPlanRenderer implements PlanRenderer {
     return room ? { kind: "room", room } : null;
   }
 
-  setDoorSelection(doorId: string | null): void {
-    if (this.#selectedDoor === doorId) return;
-    this.#selectedDoor = doorId;
-    this.#drawMarks();
-  }
-
-  get doorSelection(): string | null {
-    return this.#selectedDoor;
-  }
-
-  setItemSelection(itemId: string | null): void {
-    if (this.#selectedItem === itemId) return;
-    this.#selectedItem = itemId;
-    this.#drawMarks();
-  }
-
-  get itemSelection(): string | null {
-    return this.#selectedItem;
-  }
-
-  setWindowSelection(windowId: string | null): void {
-    if (this.#selectedWindow === windowId) return;
-    this.#selectedWindow = windowId;
-    this.#drawMarks();
-  }
-
-  get windowSelection(): string | null {
-    return this.#selectedWindow;
-  }
-
   dispose(): void {
     this.#destroyLayers();
     this.#entries = [];
@@ -600,9 +575,6 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#ffeEntries = [];
     this.#rooms = [];
     this.#selected = null;
-    this.#selectedDoor = null;
-    this.#selectedWindow = null;
-    this.#selectedItem = null;
     this.#hovered = null;
     // The marks live in the SVG overlay, which this renderer does NOT own — so
     // clearing the canvas would leave a selection outline floating over an empty
@@ -1020,8 +992,8 @@ export class GlPlanRenderer implements PlanRenderer {
   /**
    * Redraw the selection and hover marks into the SVG overlay.
    *
-   * ONE `<g>`, rebuilt whole. There are at most two polygons in it, so nothing
-   * is gained by diffing — and a rebuilt group cannot get out of step with the
+   * ONE `<g>`, rebuilt whole. There are at most two polygons in it -- the
+   * hovered element and the selected one -- so nothing is gained by diffing — and a rebuilt group cannot get out of step with the
    * state that produced it, which a diffed one can.
    *
    * The marks are appended BEFORE the areas overlay if that exists, so
@@ -1045,96 +1017,35 @@ export class GlPlanRenderer implements PlanRenderer {
     }
     g.replaceChildren();
 
-    const byId = (id: string | null) => (id ? this.#entries.find((e) => e.room.id === id) : undefined);
+    // Hover first, selection second: the selection stroke must win where one
+    // element is both, which is routine (you click what you are pointing at).
+    //
+    // A hovered ROOM is not drawn here. Its hover is a FILL, and a fill drawn
+    // into this overlay sits above the canvas -- and therefore above the labels,
+    // which the canvas draws. It would hide the very label the user is pointing
+    // at, so it lives in the GL layer beneath the labels (`#drawHover`). Every
+    // other kind's hover is a ring, which covers nothing, so it belongs here.
+    const hovered = this.#hovered?.kind === "room" ? null : this.#ring(doc, this.#hovered);
+    if (hovered) {
+      hovered.el.setAttribute("class", `pick-hover-mark ${hovered.modifier}`);
+      g.appendChild(hovered.el);
+    }
 
-    // Hover first, selection second: the selection stroke must win where a room
-    // is both, which is routine (you click what you are pointing at).
-    // NOTE: hover is NOT drawn here. It is a FILL, and a fill drawn into this
-    // overlay sits above the canvas — and therefore above the labels, which the
-    // canvas draws. It would hide the very label the user is pointing at.
+    // Selection is a STROKE with `fill: none`, so it rings the element without
+    // covering what the GL layer painted underneath.
     //
-    // The old SVG renderer had no such problem: hover recoloured the room
-    // polygon itself, and labels were appended after every polygon, so they
-    // stayed on top. Reproducing that ordering means the hover fill belongs in
-    // the GL layer, underneath the label container — see `#drawHover`.
-    //
-    // Selection is different and does belong here: it is a STROKE with
-    // `fill: none`, so it rings the room without covering anything.
-    const selected = byId(this.#selected);
+    // A room's mark and every element's mark are different classes because they
+    // encode what KIND of thing is selected: a room's dashed ring would resolve
+    // to two or three dashes around a door glyph and read as an artefact. The
+    // three element layers share one class -- "this is what you picked" is one
+    // idea -- and the `doors`/`windows`/`ffe` modifier only selects which custom
+    // property the stroke reads. All of them fall back to the accent, so a
+    // project that sets nothing sees one colour for one idea.
+    const selected = this.#ring(doc, this.#selected);
     if (selected) {
-      const p = this.#markPolygon(doc, selected.room);
-      if (p) {
-        // Stroke only — `fill: none` in the stylesheet — so whatever the GL
-        // layer painted underneath still shows. In SVG the selection class went
-        // onto the room polygon itself and the fill came from the same element;
-        // here the fill is a different technology, so the mark must not cover it.
-        p.setAttribute("class", "room-selected-mark rooms");
-        g.appendChild(p);
-      }
-    }
-
-    // A selected DOOR gets the same treatment, from the same group. Drawn after
-    // the room mark so it wins where a door is selected inside a selected room,
-    // which is the normal case — you select a door by clicking into a room.
-    //
-    // Its ring is the glyph's PICK ring, not the raw footprint: for a door with
-    // no geometry that is the square the arrow was drawn in, so the mark lands
-    // on the thing the user actually clicked. A mark derived from `loops` would
-    // simply not appear for those doors, which reads as "selecting that door
-    // does nothing".
-    const door = this.#selectedDoor
-      ? this.#doorEntries.find((e) => e.door.id === this.#selectedDoor)
-      : undefined;
-    if (door) {
-      const glyph = buildDoorGlyph(door.door);
-      if (glyph) {
-        const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
-        // Already flipped, and the mark layer is in flipped space — so this is
-        // written out rather than run through `pointsAttr`, which flips as it
-        // formats and would put the mark at the mirror image of the door.
-        p.setAttribute("points", glyph.pickRing.map((q) => `${q.x},${q.y}`).join(" "));
-        p.setAttribute("class", "door-selected-mark doors");
-        g.appendChild(p);
-      }
-    }
-
-    // The same mark for a selected window, and deliberately the same CSS class:
-    // it means "this is what you picked", which is one idea. A second style
-    // would imply a second meaning.
-    //
-    // The `doors`/`windows`/`ffe` MODIFIER beside it does not undo that. It
-    // selects which custom property the stroke reads, and all four properties
-    // fall back to the accent -- so the default is still one colour for one
-    // idea, and a project that wants to tell two selections apart has to say
-    // so. Shape stays with the base class either way.
-    const window = this.#selectedWindow
-      ? this.#windowEntries.find((e) => e.window.id === this.#selectedWindow)
-      : undefined;
-    if (window) {
-      const glyph = buildWindowGlyph(window.window);
-      if (glyph) {
-        const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
-        p.setAttribute("points", glyph.pickRing.map((q) => `${q.x},${q.y}`).join(" "));
-        p.setAttribute("class", "door-selected-mark windows");
-        g.appendChild(p);
-      }
-    }
-
-    // And for a selected item, same class again -- three element layers, one
-    // idea. Its ring is the marker's, which for an item with no footprint (all
-    // of them today) is the square the marker was drawn in, so the mark lands
-    // exactly on what was clicked.
-    const item = this.#selectedItem
-      ? this.#ffeEntries.find((e) => e.item.id === this.#selectedItem)
-      : undefined;
-    if (item) {
-      const glyph = buildItemGlyph(item.item);
-      if (glyph) {
-        const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
-        p.setAttribute("points", glyph.pickRing.map((q) => `${q.x},${q.y}`).join(" "));
-        p.setAttribute("class", "door-selected-mark ffe");
-        g.appendChild(p);
-      }
+      const base = this.#selected?.kind === "room" ? "room-selected-mark" : "door-selected-mark";
+      selected.el.setAttribute("class", `${base} ${selected.modifier}`);
+      g.appendChild(selected.el);
     }
 
     if (g.childNodes.length === 0) {
@@ -1146,12 +1057,52 @@ export class GlPlanRenderer implements PlanRenderer {
     if (overlay.firstChild !== g) overlay.insertBefore(g, overlay.firstChild);
   }
 
-  #markPolygon(doc: Document, room: Room): SVGPolygonElement | null {
-    const outer = room.loops?.[0];
-    if (!outer) return null;
-    const p = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
-    p.setAttribute("points", pointsAttr(outer));
-    return p;
+  /**
+   * The ring that marks one element, and the modifier class naming its layer,
+   * or `null` when that element is not drawn on this level.
+   *
+   * A room is ringed by its outer loop. An opening or item is ringed by its
+   * glyph's PICK ring, not its raw footprint: for a door with no geometry that
+   * is the square the arrow was drawn in, so the mark lands on the thing the
+   * user actually clicked. A mark derived from `loops` would simply not appear
+   * for those, which reads as "selecting that door does nothing". The pick
+   * ring is already flipped, so it is written out rather than run through
+   * `pointsAttr`, which flips as it formats and would mirror the mark.
+   */
+  #ring(doc: Document, ref: ElementRef | null): { el: SVGPolygonElement; modifier: string } | null {
+    if (!ref) return null;
+    let points: string | null = null;
+    let modifier: string;
+    switch (ref.kind) {
+      case "room": {
+        const outer = this.#entries.find((e) => e.room.id === ref.id)?.room.loops?.[0];
+        points = outer ? pointsAttr(outer) : null;
+        modifier = "rooms";
+        break;
+      }
+      case "door": {
+        const door = this.#doorEntries.find((e) => e.door.id === ref.id)?.door;
+        points = door ? pickRingAttr(buildDoorGlyph(door)?.pickRing) : null;
+        modifier = "doors";
+        break;
+      }
+      case "window": {
+        const window = this.#windowEntries.find((e) => e.window.id === ref.id)?.window;
+        points = window ? pickRingAttr(buildWindowGlyph(window)?.pickRing) : null;
+        modifier = "windows";
+        break;
+      }
+      case "item": {
+        const item = this.#ffeEntries.find((e) => e.item.id === ref.id)?.item;
+        points = item ? pickRingAttr(buildItemGlyph(item)?.pickRing) : null;
+        modifier = "ffe";
+        break;
+      }
+    }
+    if (!points) return null;
+    const el = doc.createElementNS(SVG_NS, "polygon") as SVGPolygonElement;
+    el.setAttribute("points", points);
+    return { el, modifier };
   }
 
   /**
@@ -1258,4 +1209,14 @@ export class GlPlanRenderer implements PlanRenderer {
   #render(): void {
     this.#app?.render();
   }
+}
+
+/** Whether two refs name the same element. `null` equals only `null`. */
+function sameRef(a: ElementRef | null, b: ElementRef | null): boolean {
+  return a === b || (!!a && !!b && a.kind === b.kind && a.id === b.id);
+}
+
+/** An already-flipped pick ring as a `points` attribute, or `null` for none. */
+function pickRingAttr(ring: readonly { x: number; y: number }[] | undefined): string | null {
+  return ring ? ring.map((q) => `${q.x},${q.y}`).join(" ") : null;
 }

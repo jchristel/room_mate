@@ -45,7 +45,7 @@ export type { DoorGlyph } from "./gl/doorGlyph.js";
 export type { WindowGlyph } from "./gl/windowGlyph.js";
 export type { ItemGlyph } from "./gl/itemGlyph.js";
 export type { PickableDoor } from "./gl/spatial.js";
-export type { HighlightState, PaintRequest, Pick, PlanRenderer } from "./seam.js";
+export type { ElementKind, ElementRef, HighlightState, PaintRequest, Pick, PlanRenderer } from "./seam.js";
 export type { EntityPollOptions, FetchState, PollFetch, PollOutcome, PollResponse } from "../viewer/entityPoll.js";
 export type {
   AppearanceContext,
