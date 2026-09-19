@@ -4,10 +4,11 @@
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
-//! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns` --
+//! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
+//! `list_saved_reports`, `get_saved_report` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Twenty-five in
+//! and the one forwarded mutation (`upload_reference`, below). Twenty-seven in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -49,6 +50,7 @@ use rmcp::{
 use roommate::bootstrap::build_state;
 use roommate::contract::{CeilingPayload, FloorPayload};
 use roommate::default_http_addr;
+use roommate::reports_api;
 use roommate::service::{
     adjacency, areas, comparison, items, milestones, openings, projects, reference, reports, rooms, snapshots, spaces,
     surfaces, validation, ServiceError,
@@ -112,6 +114,21 @@ struct GetSurfacesParams {
     /// milestone read answers one consistent question.
     #[serde(default)]
     milestone: Option<String>,
+}
+
+/// `list_saved_reports` parameters.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SavedReportsParams {
+    /// Project id whose saved reports to list.
+    project: String,
+}
+
+/// `get_saved_report` parameters.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SavedReportParams {
+    project: String,
+    /// Report id, from `list_saved_reports`.
+    report: String,
 }
 
 /// `list_report_columns` parameters.
@@ -283,6 +300,24 @@ struct AreasParams {
 /// Serialize any service response into a single text content block -- the
 /// same `Serialize` types the HTTP handlers already return as JSON, just
 /// wrapped for MCP instead of `axum::Json`.
+/// `ReportsError` -> `McpError`, the same split `settings_to_mcp_error` makes:
+/// a caller fault carries its message, an internal one is logged and not
+/// echoed.
+fn reports_to_mcp_error(err: roommate::reports_api::ReportsError) -> McpError {
+    use roommate::reports_api::ReportsError;
+    match err {
+        ReportsError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no saved reports to read".to_string(),
+            None,
+        ),
+        ReportsError::NotFound(msg) | ReportsError::Invalid(msg) => McpError::invalid_params(msg, None),
+        ReportsError::Internal(e) => {
+            tracing::error!("saved reports error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
 fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
     let json = serde_json::to_string(value)
         .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
@@ -705,6 +740,26 @@ impl RoommateMcp {
             ))])),
             Some(result) => json_result(&result),
         }
+    }
+
+    /// One project's saved reports -- see `reports_api::list_reports`.
+    #[tool(
+        description = "List the reports somebody saved for one project: id, name, entity, and whether it is a by-room report. A saved report is a request kept rather than a setting -- deleting one changes no other answer in this system -- so these live as JSON documents beside the project settings. Pair with get_saved_report and build_report to run one."
+    )]
+    fn list_saved_reports(&self, Parameters(p): Parameters<SavedReportsParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let listed = reports_api::list_reports(&dir, &p.project).map_err(reports_to_mcp_error)?;
+        json_result(&listed)
+    }
+
+    /// One saved report, whole -- see `reports_api::get_report`.
+    #[tool(
+        description = "Read one saved report by id: the whole definition, which is exactly the request build_report takes (entity, by_room, columns, room_columns, measures, shape, the unmatched switches, the filter). Running a saved report is reading it here and passing its fields to build_report; there is no second shape in between."
+    )]
+    fn get_saved_report(&self, Parameters(p): Parameters<SavedReportParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let report = reports_api::get_report(&dir, &p.project, &p.report).map_err(reports_to_mcp_error)?;
+        json_result(&report)
     }
 
     /// What a report over one entity may name -- see

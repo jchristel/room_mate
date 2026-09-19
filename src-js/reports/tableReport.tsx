@@ -12,10 +12,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiGet } from "./common.js";
+import { apiGet, apiSend } from "./common.js";
 import { downloadCsv } from "./csv.js";
 import { entityById, ROOM_COLUMNS } from "./reportTypes.js";
-import { group, toWire, type FieldType, type Group } from "./filter.js";
+import { fromWire, group, toWire, type Group } from "./filter.js";
+import { idFor, toForm, toSaved } from "./savedReports.js";
+import type { SavedReport } from "./generated/SavedReport.js";
 import { FilterBuilder, type FieldOption } from "./filterBuilder.js";
 import { summarise, toBody, type FormState } from "./reportRequest.js";
 import type { ColumnCatalog, MilestonesResponse, ReportResponse } from "./types.js";
@@ -24,13 +26,20 @@ interface Props {
   projectId: string;
   entityId: string;
   byRoom: boolean;
+  /** A saved report to open, when the reader picked one from the rail. */
+  saved?: SavedReport | null;
+  /** Told after a save or a delete, so the rail can re-read itself. */
+  onSaved?: (id: string) => void;
 }
 
 const CAP = 500;
 
-export function TableReport({ projectId, entityId, byRoom }: Props) {
+export function TableReport({ projectId, entityId, byRoom, saved, onSaved }: Props) {
   const entity = entityById(entityId);
-  const [form, setForm] = useState<FormState>(() => initialForm(entityId, byRoom));
+  const [form, setForm] = useState<FormState>(() => (saved ? toForm(saved) : initialForm(entityId, byRoom)));
+  const [name, setName] = useState(saved?.name ?? "");
+  const [savedId, setSavedId] = useState<string | null>(saved?.id ?? null);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ColumnCatalog | null>(null);
   const [milestones, setMilestones] = useState<string[]>([]);
   const [milestone, setMilestone] = useState("");
@@ -43,15 +52,19 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
   // entity's defaults rather than carrying the last one's columns, which would
   // ask the server for properties this entity has never heard of.
   useEffect(() => {
-    setForm(initialForm(entityId, byRoom));
-    // The filter names fields of this entity, so it cannot survive a switch to
-    // another one: the server would be asked for properties this entity has
-    // never heard of.
-    setFilter(group("all"));
+    // Opening a saved report replaces the whole form; switching report type
+    // starts from that entity's defaults. Either way the filter goes, because
+    // it names fields of one entity and the server would otherwise be asked for
+    // properties this entity has never heard of.
+    setForm(saved ? toForm(saved) : initialForm(entityId, byRoom));
+    setFilter(saved?.filter ? fromWire(saved.filter) : group("all"));
+    setName(saved?.name ?? "");
+    setSavedId(saved?.id ?? null);
+    setSaveMsg(null);
     setReport(null);
     setError(null);
     setState("idle");
-  }, [entityId, byRoom]);
+  }, [entityId, byRoom, saved]);
 
   // What this project's snapshots actually carry, read from their property
   // dictionaries rather than guessed from names. A project that has pushed
@@ -139,6 +152,46 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
     setState("idle");
   }, [projectId, body]);
 
+  const save = useCallback(async () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setSaveMsg("a saved report needs a name");
+      return;
+    }
+    // The id is derived once and then kept: renaming a report must not orphan
+    // the document, or a link to it breaks.
+    const id = savedId ?? idFor(trimmed);
+    const document = toSaved(id, trimmed, form, milestone, toWire(filter));
+    const result = await apiSend(
+      "PUT",
+      `/api/reports/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(id)}`,
+      document,
+    );
+    if (!result.ok) {
+      setSaveMsg(result.text);
+      return;
+    }
+    setSavedId(id);
+    setSaveMsg("saved");
+    onSaved?.(id);
+  }, [name, savedId, form, milestone, filter, projectId, onSaved]);
+
+  const remove = useCallback(async () => {
+    if (!savedId) return;
+    const result = await apiSend(
+      "DELETE",
+      `/api/reports/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(savedId)}`,
+      null,
+    );
+    if (!result.ok) {
+      setSaveMsg(result.text);
+      return;
+    }
+    setSavedId(null);
+    setSaveMsg("deleted");
+    onSaved?.("");
+  }, [savedId, projectId, onSaved]);
+
   const exportCsv = useCallback(async () => {
     const response = await fetch(`/projects/${encodeURIComponent(projectId)}/reports?format=csv`, {
       method: "POST",
@@ -158,6 +211,27 @@ export function TableReport({ projectId, entityId, byRoom }: Props) {
 
   return (
     <>
+      <section className="group">
+        <div className="add-row">
+          <input
+            type="text"
+            value={name}
+            placeholder="name this report"
+            aria-label="Report name"
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button className="action" type="button" onClick={() => void save()}>
+            {savedId ? "Save" : "Save report"}
+          </button>
+          {savedId && (
+            <button className="action" type="button" onClick={() => void remove()}>
+              Delete
+            </button>
+          )}
+          {saveMsg && <span className={`msg ${saveMsg === "saved" || saveMsg === "deleted" ? "ok" : "err"}`}>{saveMsg}</span>}
+        </div>
+      </section>
+
       <section className="pickers">
         {byRoom && (
           <ColumnPicker

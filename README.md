@@ -97,6 +97,7 @@ Reads, all GET unless noted:
 | `/projects/{id}/reports/columns` | What a report over one entity may name: the property names this project's snapshots carry with Revit's own value type, the record's `$intrinsics`, joined reference labels, and the join's measures. Read from each snapshot's property dictionary — a tail read, not a parse. |
 | `/projects/{id}/reports` (**POST**) | Build one report — a schedule or a by-room table — projected to the columns asked for. `?format=csv` renders the same rows as CSV. A POST that reads, because the definition does not fit a query string. |
 | `/projects/{id}/comparison` (**POST**) | Diff a baseline milestone against others. Same shape, same reason. |
+| `/api/reports/projects/{project}[/{report}]` | Saved reports: list, read, save (PUT) and delete. One JSON document per report beside the project settings — a saved report is a question somebody kept, not a policy, so it is kept apart from the settings a policy lives in. |
 | `/api/settings/projects[/{id}]` | Read and save project settings (PUT), which hot-swaps the running registry. |
 
 Writes are the ingest routes the extractor pushes to (`/rooms`, `/doors`,

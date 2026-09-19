@@ -1,6 +1,17 @@
 import { describe as suite, expect, it } from "vitest";
 
-import { addTo, complete, condition, describe, group, keepBlanksToo, replaceNode, setMode, toWire } from "./filter.js";
+import {
+  addTo,
+  complete,
+  condition,
+  describe,
+  fromWire,
+  group,
+  keepBlanksToo,
+  replaceNode,
+  setMode,
+  toWire,
+} from "./filter.js";
 import type { Condition, Group } from "./filter.js";
 
 const cond = (over: Partial<Condition>): Condition => ({ ...condition("element", "Type"), ...over });
@@ -114,5 +125,51 @@ suite("tree edits", () => {
     expect(wrapped.kind).toBe("group");
     expect(wrapped.mode).toBe("any");
     expect((wrapped.items[1] as Condition).op).toBe("blank");
+  });
+});
+
+suite("fromWire", () => {
+  // The saved shape and the editing shape are not the same object. Loading one
+  // as the other crashed the page, which is why this round trip is pinned.
+  it("rebuilds the editing model from what was saved", () => {
+    const built = group("all", [
+      cond({ side: "room", field: "Level", value: "LEVEL 00" }),
+      group("any", [cond({ field: "Type", op: "not_contains", value: "EXT", caseSensitive: true })]),
+    ]);
+
+    const loaded = fromWire(toWire(built));
+
+    expect(loaded.kind).toBe("group");
+    expect(loaded.mode).toBe("all");
+    expect(loaded.items).toHaveLength(2);
+    const first = loaded.items[0] as Condition;
+    expect(first.kind).toBe("condition");
+    expect(first.side).toBe("room");
+    expect(first.value).toBe("LEVEL 00");
+    const nested = loaded.items[1] as Group;
+    expect(nested.mode).toBe("any");
+    expect((nested.items[0] as Condition).caseSensitive).toBe(true);
+    expect(describe(loaded, "door")).toBe(describe(built, "door"));
+  });
+
+  // An operator that takes no value saves none, so the load has to supply one
+  // rather than leaving it undefined — the exact crash this fixed.
+  it("gives a value-less operator an empty value rather than undefined", () => {
+    const loaded = fromWire(toWire(group("all", [cond({ op: "blank" })])));
+    expect((loaded.items[0] as Condition).value).toBe("");
+    expect(complete(loaded)).toBe(true);
+  });
+
+  // A numeric operator is the only evidence of a numeric field a saved
+  // document carries.
+  it("infers a number field from a numeric operator", () => {
+    const loaded = fromWire({ mode: "all", items: [{ side: "join", field: "overlap_area", op: "ge", value: "10" }] });
+    expect((loaded.items[0] as Condition).type).toBe("number");
+  });
+
+  it("turns anything unreadable into an empty filter rather than crashing", () => {
+    expect(fromWire(null).items).toHaveLength(0);
+    expect(fromWire("nonsense").items).toHaveLength(0);
+    expect(complete(fromWire({ mode: "all", items: [{ nope: true }] }))).toBe(false);
   });
 });

@@ -163,3 +163,11 @@ tbody tr.quiet td { opacity: 0.7; }
 .fsummary code { font-family: var(--mono); overflow-wrap: anywhere; }
 
 @media (max-width: 900px) { .cond-body { grid-template-columns: 1fr; } .fadd { padding-left: 0; } }
+
+/* A saved report is a chip you press, so it says so rather than looking like
+   the value chips beside it. */
+.chip.saved { cursor: pointer; gap: 0.45rem; padding: 0.15rem 0.5rem; font-family: var(--mono); }
+.chip.saved:hover { border-color: var(--accent); color: var(--accent); }
+.chip.saved.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.chip .src { font-size: 0.62rem; opacity: 0.6; }
+.chip.saved.on .src { opacity: 0.75; }

@@ -103,6 +103,7 @@ MODULES = {
     "svc_mile": ["src/service/milestones.rs"],
     "svc_ref": ["src/service/reference.rs"],
     "svc_reports": ["src/service/reports.rs"],
+    "reports_api": ["src/reports_api.rs"],
     "contract": ["src/contract/mod.rs"],
     "contract_openings": ["src/contract/openings.rs"],
     "contract_doors": ["src/contract/doors.rs"],

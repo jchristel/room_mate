@@ -57,8 +57,16 @@ pub fn default_http_addr() -> String {
 pub mod bootstrap;
 pub mod classify;
 pub mod contract;
+
+/// A saved report definition — see `roommate_shared::reports`. Re-exported so
+/// the server names it by the path its own modules use, exactly as `contract`
+/// and `settings_api` are.
+pub mod reports {
+    pub use roommate_shared::reports::*;
+}
 pub mod handlers;
 pub mod reference;
+pub mod reports_api;
 pub mod service;
 pub mod settings;
 pub mod settings_api;
