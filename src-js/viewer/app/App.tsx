@@ -13,6 +13,7 @@
 
 import { useEffect } from "react";
 
+import { Grid } from "./Grid.js";
 import { Header } from "./Header.js";
 import { Inspector } from "./inspector/Inspector.js";
 import { startPolling } from "./poll.js";
@@ -41,6 +42,13 @@ export function App() {
         </main>
         <Inspector />
       </div>
+      {/* The bottom region, band 2. One instance per page, never per zone: it
+          is scope-derived, and a region that multiplied with zone count would
+          stop being a stable place a reader can point at. Band 1 -- QA, areas
+          and adjacency -- lands in B8. */}
+      <footer id="bottomRegion">
+        <Grid />
+      </footer>
     </>
   );
 }
