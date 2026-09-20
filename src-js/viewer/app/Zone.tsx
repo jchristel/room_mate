@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { levelLabel, levelsForPayload, pickerOrder, resolveLevel, roomsOnLevel } from "../levels.js";
 import { buildColourContext, colourForRoom } from "../colour.js";
+import { errorRoomIds } from "../validation.js";
 import { elementsOnStorey, type ElementOf } from "./layers.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
@@ -36,7 +37,7 @@ import type { Room } from "../../renderer/types.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection, search } =
+  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection, search, validation, showErrors } =
     useViewer();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -93,6 +94,9 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   const rooms = useMemo(() => (payload ? roomsOnLevel(payload, levelId) : []), [payload, levelId]);
   const levelName = levels.find((l) => l.id === levelId)?.name ?? levelId ?? "";
   const plan = colourPlans.find((p) => p.name === zone.colourPlan) ?? null;
+  // The union across sources: a room is flagged on the plan if ANY source has
+  // something to say about it. Which source said it belongs in the band.
+  const errorRooms = useMemo(() => errorRoomIds(validation), [validation]);
 
   // Paint. The dependency list is what decides a repaint, and `payload` changes
   // identity only when the poll saw a new revision — so a quiet system never
@@ -138,6 +142,8 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           showLabels,
           showRooms,
           appearance,
+          errorRoomIds: errorRooms,
+          showErrors,
           ...(plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, plan, ctx) } : {}),
           doors: on("doors"),
           showDoors: layers.doors,
@@ -177,7 +183,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, plan]);
+  }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, plan, errorRooms, showErrors]);
 
   // Search is applied to what is ALREADY drawn -- never by re-rendering. A
   // search can match thousands of rooms, and a keystroke must not re-upload a

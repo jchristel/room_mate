@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { buildColumns, buildCsv, columnGroups, computeRows, visibleColumns, type SortState } from "../grid.js";
 import { detectReferenceSources, sourceDisplayName } from "../properties.js";
+import { gridErrors } from "../validation.js";
 import { useViewer } from "./useViewer.js";
 
 /** Row height in CSS pixels, and the old page's own number. The window
@@ -25,7 +26,7 @@ const ROW_H = 20;
 const OVERSCAN = 8;
 
 export function Grid() {
-  const { payload, scope } = useViewer();
+  const { payload, scope, validation } = useViewer();
   const [showModel, setShowModel] = useState(true);
   const [enabled, setEnabled] = useState<ReadonlySet<string>>(new Set());
   const [filters, setFilters] = useState<ReadonlyMap<string, string>>(new Map());
@@ -37,6 +38,11 @@ export function Grid() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const sources = useMemo(() => detectReferenceSources(payload), [payload]);
+  // QA marks at the finest address the report supports: a field-level finding
+  // is a (row, column) here, so a mismatch is marked ON the disagreeing cell
+  // rather than only listed in band 1. Room-level findings have no column and
+  // mark the Id cell instead.
+  const errors = useMemo(() => gridErrors(validation), [validation]);
   // A newly discovered source defaults to SHOWN, the same "new field → on" rule
   // the search field picker follows: a source that arrives and is invisible
   // looks like a join that failed.
@@ -182,10 +188,11 @@ export function Grid() {
                 <tr key={room.id} data-room={room.id} style={{ height: ROW_H }}>
                   {cols.map((c) => {
                     const v = c.get(room);
+                    const bad = errors.cells.has(`${room.id} ${c.key}`) || (c.key === "$id" && errors.rooms.has(room.id));
                     return (
                       <td
                         key={c.key}
-                        className={`src-${cssIdent(c.source)}${c.source === "model" ? "" : " src-reference"}`}
+                        className={`src-${cssIdent(c.source)}${c.source === "model" ? "" : " src-reference"}${bad ? " err" : ""}`}
                         title={v}
                       >
                         {v}

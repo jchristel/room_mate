@@ -14,6 +14,7 @@
 import { useEffect } from "react";
 
 import { Grid } from "./Grid.js";
+import { QaBand } from "./QaBand.js";
 import { Header } from "./Header.js";
 import { Inspector } from "./inspector/Inspector.js";
 import { startPolling } from "./poll.js";
@@ -47,6 +48,12 @@ export function App() {
           stop being a stable place a reader can point at. Band 1 -- QA, areas
           and adjacency -- lands in B8. */}
       <footer id="bottomRegion">
+        {/* Band 1: page-level RESULTS, derived from the scope rather than from
+            any one zone — which is why there is one of each, never one per
+            zone. Areas and adjacency join QA here in the rest of B8. */}
+        <div id="band1">
+          <QaBand />
+        </div>
         <Grid />
       </footer>
     </>
