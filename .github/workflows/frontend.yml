@@ -55,13 +55,14 @@ jobs:
     # The message names the fix because whoever trips this is usually someone
     # who edited src-js/ and never ran the build, not someone debugging CI.
     #
-    # static/settings/, static/reports/ and static/viewer/ are the React
-    # settings, reports and (being ported) viewer pages, built by the same
-    # `npm run build`. `git status --porcelain` rather than `git diff` so a
-    # rebuild that ADDS a file the commit lacks is caught too.
+    # static/settings/ and static/reports/ are the React settings and reports
+    # pages; static/index.html, static/viewer.js and static/viewer.css are the
+    # viewer itself, which is a React app since the port. All four builds come
+    # from the same `npm run build`. `git status --porcelain` rather than `git
+    # diff` so a rebuild that ADDS a file the commit lacks is caught too.
     - name: Committed bundle is current
       run: |
-        changes="$(git status --porcelain -- static/vendor/ static/settings/ static/reports/ static/viewer/)"
+        changes="$(git status --porcelain -- static/vendor/ static/settings/ static/reports/ static/index.html static/viewer.js static/viewer.css)"
         if [ -n "$changes" ]; then
           echo "$changes"
           echo "::error::A committed frontend build is stale. Run 'npm run build' and commit the result."

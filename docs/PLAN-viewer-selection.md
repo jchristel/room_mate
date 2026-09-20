@@ -115,12 +115,18 @@ React page — nothing in C is built in `static/index.html`.**
   through to `selectRoom(hit.room.id)` on an external soffit and throw. Only
   `pickAllAt` returns them, and nothing in the old page calls it.
 
-### B — viewer to React (prerequisite, own plan, as soon as possible)
+### B — viewer to React (**done 2026-09-20**, `docs/Superseded/PLAN-viewer-react.md`)
 
-Parity port, no new behaviour. What this plan needs of it: selection stays one
-`{ kind, id, zoneId }` value; inspectors stay a kind → component table. The
-port also retires the "trigger for adopting React on a live page is still
-unmet" line in `STRATEGY-BROWSER.md`, which the decision made stale.
+Parity port, no new behaviour. What this plan needed of it held: selection is
+one `{ kind, id, zoneId }` value in `src-js/viewer/app/store.ts`, and the
+inspectors are a kind → component table (`app/inspector/Inspector.tsx`), so C1
+and C2 add entries rather than branches. Two notes for phase C:
+
+- **Spaces, ceilings and floors are already pickable** (phase A) and the panel
+  says their inspector is still to come — that placeholder is what C2 replaces.
+- **A grid row does NOT select its room.** The port left it out on purpose,
+  because adding behaviour inside a parity slice would have made the comparison
+  against the old page meaningless. C3 adds it.
 
 ### C — the features (React viewer), one PR each
 

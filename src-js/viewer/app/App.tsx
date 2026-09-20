@@ -1,21 +1,20 @@
 // The React viewer, served at /viewer/ while it is being ported.
 //
-// **Parity port, slice by slice** (docs/PLAN-viewer-react.md). This file grows
-// one area at a time — scope and data, zones, layers, selection, the grid, the
-// bands, export — and each slice is checked against `static/index.html`, still
-// running at `/`, on the same project in two windows.
+// Ported slice by slice from the hand-written page it replaced
+// (docs/Superseded/PLAN-viewer-react.md), each slice checked against that page
+// running beside it until the cutover deleted it.
 //
 // The elements keep the OLD PAGE'S IDS (`mainRow`, `zones`, `inspector`,
 // `bottomRegion`) because `viewer.css` was moved whole and still selects on
-// them. A React page written from scratch would use class names; this one is
-// not written from scratch, and a stylesheet rewritten alongside the markup
-// would make a visual difference impossible to attribute.
+// them. A page written from scratch would use class names; this one was not,
+// and a stylesheet rewritten alongside the markup would have made a visual
+// difference impossible to attribute during the port.
 
 import { useEffect, useState } from "react";
 
 import { Grid } from "./Grid.js";
 import { AdjacencyBand } from "./AdjacencyBand.js";
-import { BandDivide, RegionDrag } from "./DragHandles.js";
+import { BandDivide, BandSplit, RegionDrag } from "./DragHandles.js";
 import { AreasBand } from "./AreasBand.js";
 import { QaBand } from "./QaBand.js";
 import { Header } from "./Header.js";
@@ -60,7 +59,17 @@ export function App() {
             zone. Areas and adjacency join QA here in the rest of B8. */}
         <div id="band1">
           <QaBand open={qaOpen} onToggle={() => setQaOpen(!qaOpen)} />
+          <BandSplit
+            visible={qaOpen && areasOpen}
+            aboveId="qaBand"
+            title="Drag to split space between QA and Hierarchy areas"
+          />
           <AreasBand open={areasOpen} onToggle={() => setAreasOpen(!areasOpen)} />
+          <BandSplit
+            visible={areasOpen && adjOpen}
+            aboveId="areasBand"
+            title="Drag to split space between Hierarchy areas and Adjacency"
+          />
           <AdjacencyBand open={adjOpen} onToggle={() => setAdjOpen(!adjOpen)} />
         </div>
         <BandDivide visible={areasOpen || adjOpen || qaOpen} />

@@ -83,14 +83,17 @@ cannot see this, because every symbol in the sentence still exists.
 Ask it of anything that shipped this week: **which document explains why this
 thing is absent, partial, or deferred?**
 
-### 2. Did a frontend change add a mutable global to `static/index.html`?
+### 2. Did a frontend change add state outside the viewer's store?
 
 `CODING-CONVENTIONS.md`'s standing rule is that each frontend change moves the
-module it touches into `src-js/`. It is being half-honoured: the door glyph work
-put real geometry into `src-js/renderer/gl/doorGlyph.ts` with tests, and *also*
-added `doorsPayload`, `lastDoorsRevision` and `showDoors` to the ~44 mutable
-globals in the page. The computation migrates; the state does not. Note it when
-it happens rather than re-discovering the pile later.
+module it touches into `src-js/`. The viewer is React since 2026-09-20 and the
+pile of ~44 mutable globals went with the page, so the question changed shape
+rather than going away: the state belongs in `src-js/viewer/app/store.ts`, and
+what sits outside it is deliberate and documented — a zone's view rect and its
+renderer (`zoneRegistry.ts`), which change per pointer move, and the element
+payloads, which are large and only the paint reads. A new module-scope `let`
+anywhere else in `src-js/viewer/` is the thing to notice: it is the same drift,
+one layer up.
 
 That pile was paid down once, and the way it had gone wrong is the reason to
 keep asking. By 2026-09-11 there were four copies of the doors poll's state and

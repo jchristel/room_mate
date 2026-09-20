@@ -469,9 +469,14 @@ npm run typecheck && npm test && npm run build
 with no node installed), and `.github/workflows/frontend.yml` rebuilds it and
 fails if the committed copy disagrees. Forgetting it means a red PR, or worse a
 green one serving a stale renderer. The same build, and the same gate, cover
-`static/settings/` — the React settings page, served at `/settings/`, and since
-2026-09-12 the only one: the hand-written `static/settings.html` it replaced is
-deleted. Two things that page did are worth remembering, because they are what
+`static/settings/`, `static/reports/` and — since the viewer moved to React on
+2026-09-20 — `static/index.html` with `static/viewer.js` and `static/viewer.css`.
+**Every page is generated now**: `static/` holds no hand-written HTML, and the
+only hand-written files left in it are `common.js`, `graph.js` and `tokens.css`.
+The viewer's own Vite config writes into `static/` itself, which is why its
+`emptyOutDir` is false and must stay false — emptying that directory would
+delete the other three pages and the shared scripts. The settings page was the
+first of these, on 2026-09-12. Two things that page did are worth remembering, because they are what
 the replacement is shaped to prevent — it rebuilt the settings JSON field by
 field on save (so it silently emptied every milestone's door, window, FF&E,
 space and ceiling pins), and it had no controls for seven settings, which is why

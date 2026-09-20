@@ -74,3 +74,45 @@ export function BandDivide({ visible }: { visible: boolean }) {
     />
   );
 }
+
+/**
+ * The split between two adjacent band-1 blocks.
+ *
+ * `#bandDivide`'s role — band 1 against band 2 — generalised to a pair sharing
+ * band 1's own height. Shown only when BOTH neighbours are open: a collapsed
+ * block is a fixed strip, with nothing to trade height with.
+ *
+ * Dragging gives the block ABOVE an explicit height (`.sized`, `--band-h`)
+ * rather than an equal automatic share. `flex: 1 1` keeps it yielding under
+ * real space pressure — the region shrunk, a third block opened — so the
+ * squeeze shows up as internal scrolling rather than the pair spilling out of
+ * band 1.
+ */
+export function BandSplit({ visible, aboveId, title }: { visible: boolean; aboveId: string; title: string }) {
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const handle = e.currentTarget;
+      const above = document.getElementById(aboveId);
+      if (!above) return;
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add("dragging");
+      const top = above.getBoundingClientRect().top;
+      const move = (ev: PointerEvent) => {
+        above.classList.add("sized");
+        above.style.setProperty("--band-h", `${Math.max(ev.clientY - top, 40)}px`);
+      };
+      const up = () => {
+        handle.classList.remove("dragging");
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+    },
+    [aboveId],
+  );
+
+  return (
+    <div className={`band-split${visible ? "" : " hidden"}`} title={title} onPointerDown={onPointerDown} />
+  );
+}
