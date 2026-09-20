@@ -13,8 +13,11 @@
 // same rect to every zone, which is a cross-component write with no common
 // parent — a context would have to re-render the whole tree to do it.
 
-import { closePickList } from "./store.js";
-import type { Rect } from "../../renderer/types.js";
+import { closePickList, getState } from "./store.js";
+import { fittedBounds } from "./planRenderer.js";
+import { UNKNOWN_LEVEL } from "../levels.js";
+import { viewCentredOn } from "../panTo.js";
+import type { Rect, Room } from "../../renderer/types.js";
 import type { PlanRendererInstance } from "./planRenderer.js";
 
 export interface ZoneHandle {
@@ -67,5 +70,46 @@ export function commitView(originId: string, view: Rect, linked: boolean): void 
   for (const zone of handles.values()) {
     zone.view = { ...view };
     zone.renderer.setView(zone.view);
+  }
+}
+
+/**
+ * Bring a room into view in every zone that draws it (G3).
+ *
+ * **Per zone, each deciding on its own**, because two zones may be showing
+ * different storeys at different scales and a room that is already on screen in
+ * one of them must not be dragged around to satisfy the other. A zone showing
+ * another storey is not moved at all: there is nothing there to centre.
+ *
+ * **Linked views are the exception, and they have to be.** "Link views" means
+ * one rect for every zone, so deciding per zone would immediately break the
+ * invariant the reader switched on — the first commit broadcasts and the next
+ * zone's answer fights it. Linked, the decision is taken once, from the first
+ * zone that shows the room, and every zone follows it.
+ *
+ * Nothing here zooms: `viewCentredOn` keeps the view's size, and a zone where
+ * the room is already wholly visible gets no commit at all.
+ */
+export function panToRoom(room: Room): void {
+  const { zones, linkViews } = getState();
+  // The room's own extent, with `fittedBounds`' 4% margin — which is wanted
+  // here: a room flush against the frame edge reads as clipped, so the margin
+  // is what "wholly inside" should mean rather than an artefact of reusing it.
+  const target = fittedBounds([room]);
+  if (!target) return; // a room with no loops: selectable, not locatable
+  const storey = room.level_id || UNKNOWN_LEVEL;
+  for (const zone of zones) {
+    if (zone.levelId !== storey) continue;
+    const handle = handles.get(zone.id);
+    if (!handle) continue;
+    const next = viewCentredOn(handle.view, target);
+    if (!next) {
+      // Already visible here. Under linked views that settles it for every
+      // zone, since they all show the same rect.
+      if (linkViews) return;
+      continue;
+    }
+    commitView(zone.id, next, linkViews);
+    if (linkViews) return;
   }
 }

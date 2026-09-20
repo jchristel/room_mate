@@ -683,8 +683,16 @@
   #gridTable thead th.unmapped { font-style: italic; opacity: 0.75; }
   #gridTable thead th.sorted::after { content: " ▾"; color: var(--accent); }
   #gridTable thead th.sorted.asc::after { content: " ▴"; }
+  #gridTable tbody tr { cursor: pointer; }
   #gridTable tbody tr:hover td { background: var(--fill); }
-  #gridTable tbody tr.target td { outline: 1px solid var(--accent); }
+  /* The selected room's row, however it was selected -- a row click or a click
+     on the plan. A tint AND a rule, because the tint alone is lost under the
+     hover state and the rule alone is lost among 40 columns of hairlines. The
+     error cell keeps its own background: a flagged cell in a selected row is
+     still the thing worth looking at. */
+  #gridTable tbody tr.selected td { background: color-mix(in srgb, var(--accent) 16%, var(--paper)); }
+  #gridTable tbody tr.selected td.err { background: color-mix(in srgb, var(--error) 45%, transparent); }
+  #gridTable tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
   /* A cell the QA report disagrees on, marked in place — the (room, field)
      address compute_validation already produces IS a (row, column) here. */
   #gridTable td.err { color: var(--accent); font-weight: 600; background: color-mix(in srgb, var(--error) 45%, transparent); }

@@ -15,7 +15,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { buildColumns, buildCsv, columnGroups, computeRows, visibleColumns, type SortState } from "../grid.js";
 import { detectReferenceSources, sourceDisplayName } from "../properties.js";
 import { gridErrors } from "../validation.js";
+import { select } from "./store.js";
 import { useViewer } from "./useViewer.js";
+import { panToRoom } from "./zoneRegistry.js";
 
 /** Row height in CSS pixels, and the old page's own number. The window
  *  arithmetic is wrong the moment these disagree, which is why it is stated
@@ -24,14 +26,33 @@ const ROW_H = 20;
 /** Rows rendered beyond the viewport at each end, so a fast scroll does not
  *  show a band of empty table before the next frame lands. */
 const OVERSCAN = 8;
+/** How far the pointer may travel between press and release and still count as
+ *  a click rather than a drag, in CSS pixels.
+ *
+ *  **This is how copying out of the grid keeps working.** A drag across a cell
+ *  selects its text and ends in a `click`, which would otherwise select the
+ *  room and yank the plan out from under the reader. Asking
+ *  `window.getSelection()` at click time looks like the direct test and is
+ *  not: the press that starts the NEXT click has already collapsed the
+ *  selection in the DOM but not always by the time the handler runs, so the
+ *  first click after a copy was swallowed — measured, on House A. Where the
+ *  pointer went is a fact about this gesture alone. */
+const DRAG_SLOP = 4;
 
 export function Grid() {
-  const { payload, scope, validation } = useViewer();
+  const { payload, scope, validation, selection } = useViewer();
   const [showModel, setShowModel] = useState(true);
+  /** Whether a row click also brings the room into view. Checked by default —
+   *  "where is this room" is what a reader clicking a row is asking — and
+   *  deliberately NOT remembered across reloads, like every other view
+   *  preference here. */
+  const [panTo, setPanTo] = useState(true);
   const [enabled, setEnabled] = useState<ReadonlySet<string>>(new Set());
   const [filters, setFilters] = useState<ReadonlyMap<string, string>>(new Map());
   const [sort, setSort] = useState<SortState>({ key: null, asc: true });
   const [scrollTop, setScrollTop] = useState(0);
+  /** Where the press that may become a row click started. See `DRAG_SLOP`. */
+  const downAt = useRef<{ x: number; y: number } | null>(null);
   const [viewH, setViewH] = useState(200);
   /** Folded to its bar, so the plans reclaim the height. */
   const [collapsed, setCollapsed] = useState(false);
@@ -94,6 +115,9 @@ export function Grid() {
         </button>
         <label>
           <input type="checkbox" checked={showModel} onChange={(e) => setShowModel(e.target.checked)} /> Model
+        </label>
+        <label title="A row click also centres the room in every zone showing its storey">
+          <input type="checkbox" checked={panTo} onChange={(e) => setPanTo(e.target.checked)} /> Pan to room
         </label>
         <span id="srcToggles">
           {sources.map((name) => (
@@ -180,12 +204,33 @@ export function Grid() {
                   <td colSpan={cols.length} style={{ height: before }} />
                 </tr>
               ) : null}
-              {/* No click handler and no selected class on these rows: a row
-                  selecting its room is the selection plan's G3, not the
-                  port's. A parity slice that quietly added behaviour would
-                  make the comparison against the old page meaningless. */}
+              {/* The selected class is DERIVED as the rows render, never
+                  written onto a node: the table is windowed, so a row that
+                  scrolls out and back is a different element and a mark
+                  applied by hand would not survive the trip. It also means a
+                  room selected on the plan marks its row for free. */}
               {rows.slice(first, last).map((room) => (
-                <tr key={room.id} data-room={room.id} style={{ height: ROW_H }}>
+                <tr
+                  key={room.id}
+                  data-room={room.id}
+                  className={selection?.kind === "room" && selection.id === room.id ? "selected" : ""}
+                  style={{ height: ROW_H }}
+                  onMouseDown={(e) => {
+                    downAt.current = { x: e.clientX, y: e.clientY };
+                  }}
+                  // Selected with NO zone: this did not come from a plan, and
+                  // the panel's "from zone-N" line would be a lie. A room whose
+                  // storey no zone shows is still selected and the panel says
+                  // so, which is why the pan is a separate step rather than a
+                  // condition on the selection.
+                  onClick={(e) => {
+                    const from = downAt.current;
+                    downAt.current = null;
+                    if (from && Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_SLOP) return;
+                    select("room", room.id);
+                    if (panTo) panToRoom(room);
+                  }}
+                >
                   {cols.map((c) => {
                     const v = c.get(room);
                     const bad = errors.cells.has(`${room.id} ${c.key}`) || (c.key === "$id" && errors.rooms.has(room.id));
