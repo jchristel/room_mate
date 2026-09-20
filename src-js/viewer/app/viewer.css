@@ -179,9 +179,17 @@
     padding-right: 0.7rem;
   }
   #inspector .insp-section-head .layer-menu { flex: none; }
-  /* The drop-down panel would otherwise open past the inspector's right edge
-     and be clipped by its scroll container: anchor it to the RIGHT instead. */
-  #inspector .insp-section-head .fields-panel { left: auto; right: 0; }
+  /* Every drop-down in the inspector anchors to the RIGHT. The panel is a
+     22rem column pinned to the window's edge, so a menu opening leftwards from
+     a button near that edge runs off the screen -- which is how the property
+     chooser first shipped its list half-visible. Applies to the contents
+     chooser and the property chooser alike, so the next one cannot get it
+     wrong by being added somewhere new. */
+  #inspector .fields-panel { left: auto; right: 0; }
+  /* And it must not be wider than the column it hangs off: property names run
+     to `VisionPanel_FullyGlazed_Height`, and the labels do not wrap. The
+     panel's own scroll takes it from here. */
+  #inspector .fields-panel { max-width: 21rem; }
 
   .zone {
     position: relative;
@@ -777,6 +785,19 @@
   /* An option that cannot be chosen, and the menu says why rather than hiding
      it: the room panel's Spaces entry. */
   .fields-panel label.menu-off { opacity: 0.5; cursor: default; }
+  /* A run of entries under one heading -- the grid's columns, grouped by the
+     source they came from, because two sources' columns share a name far more
+     often than not. */
+  .fields-panel .menu-group {
+    margin: 0.45rem 0 0.15rem; font-size: 0.6rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent);
+    border-bottom: 1px solid var(--rule);
+  }
+  .fields-panel > div:first-child .menu-group { margin-top: 0; }
+  /* The property chooser is taller than the layer menus -- a room offers 45
+     names and RHH's grid offers more -- so it gets the height the panel's own
+     scroll then works within. */
+  .layer-menu .fields-panel { max-height: 50vh; }
   /* The services-model picker sits under its own Spaces entry, indented so it
      reads as belonging to that layer rather than as a ninth one. */
   .layer-menu select.ctl { margin: 0.15rem 0 0.35rem 1.2rem; max-width: 12rem; }

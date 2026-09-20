@@ -4,6 +4,7 @@ import {
   applyFilters,
   detectReferenceSources,
   isEmptyPropValue,
+  keepChosen,
   propertyRows,
   referenceRows,
   sourceDisplayName,
@@ -110,5 +111,37 @@ describe("referenceRows", () => {
       ["A", "1"],
       ["B", "2"],
     ]);
+  });
+});
+
+describe("keepChosen", () => {
+  const rows = [
+    ["Area", "12"],
+    ["Name", "BED"],
+    ["Workset", "1"],
+  ] as const;
+
+  it("shows everything when nothing was turned off", () => {
+    expect(keepChosen(rows, undefined)).toEqual(rows);
+    expect(keepChosen(rows, new Set())).toEqual(rows);
+  });
+
+  it("drops the names that were turned off", () => {
+    expect(keepChosen(rows, new Set(["Workset"]))).toEqual([
+      ["Area", "12"],
+      ["Name", "BED"],
+    ]);
+  });
+
+  /** The reason it records what is HIDDEN rather than what is chosen: the next
+   *  element of the same kind may carry a property the last one did not, and a
+   *  snapshot of chosen names would leave it silently absent. */
+  it("leaves a newly arrived property on", () => {
+    const later = [...rows, ["Fire Rating", "60"]] as const;
+    expect(keepChosen(later, new Set(["Workset"])).map(([k]) => k)).toEqual(["Area", "Name", "Fire Rating"]);
+  });
+
+  it("never hands back the caller's array", () => {
+    expect(keepChosen(rows, undefined)).not.toBe(rows);
   });
 });

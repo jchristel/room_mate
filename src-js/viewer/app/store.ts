@@ -105,6 +105,17 @@ export type SelectionKind = ElementKind | "area";
  *  saying why — silence would read as an oversight. */
 export type ContentsEntity = Exclude<ElementEntity, "spaces">;
 
+/** What one property chooser governs (G7): one panel KIND, or the grid's
+ *  columns.
+ *
+ *  **Per kind, never per element.** A reader clicking door after door is
+ *  comparing the same six fields, and a choice that reset on every click would
+ *  be a choice they had to make again on every click. A ceiling and a floor
+ *  are kept apart even though one component draws both, because they are
+ *  different records carrying different properties — the panel is shared, the
+ *  question is not. */
+export type PropertyScope = SelectionKind | "grid";
+
 export interface Selection {
   kind: SelectionKind;
   id: string;
@@ -202,6 +213,21 @@ export interface ViewerState {
   /** The project's colour plans, fetched with its appearance from the one
    *  settings read. */
   colourPlans: readonly ColourPlan[];
+  /**
+   * Which properties each panel and the grid have been told NOT to show (G7).
+   *
+   * **The names turned OFF, not the ones chosen**, and an absent or empty set
+   * means "show everything" — so an untouched panel reads exactly as it did
+   * before the chooser existed, and a property that arrives later (the next
+   * door carries one the last did not) is on rather than silently missing.
+   * The reasoning is written out on `keepChosen`.
+   *
+   * Not persisted across reloads, like every other view preference here. The
+   * durable version of "which properties matter for this project" is project
+   * settings — `room_label` already is one — and a chooser that pretended to
+   * be that would be infuriating when it vanished.
+   */
+  hiddenProperties: Readonly<Partial<Record<PropertyScope, ReadonlySet<string>>>>;
 }
 
 const initial: ViewerState = {
@@ -227,6 +253,7 @@ const initial: ViewerState = {
   layersRevision: 0,
   appearance: {},
   colourPlans: [],
+  hiddenProperties: {},
 };
 
 let state: ViewerState = initial;
@@ -394,6 +421,13 @@ export function clearSelection(): void {
 
 export function setInspectorFilter(patch: Partial<FilterState>): void {
   setState({ inspector: { ...state.inspector, ...patch } });
+}
+
+/** Replace one scope's hidden set. An empty set is kept rather than deleted:
+ *  "None chosen, then everything turned back on" and "never touched" are the
+ *  same state to every reader, so there is nothing to tell apart. */
+export function setHiddenProperties(scope: PropertyScope, hidden: ReadonlySet<string>): void {
+  setState({ hiddenProperties: { ...state.hiddenProperties, [scope]: hidden } });
 }
 
 /** Update the search, from a function of what it was — the field picker reads

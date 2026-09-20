@@ -12,7 +12,15 @@
 // them, so "which discipline is this" is the first question about a space and
 // the last about a room.
 
-import { applyFilters, detectReferenceSources, propertyRows, referenceRows, sourceDisplayName } from "../../properties.js";
+import {
+  applyFilters,
+  detectReferenceSources,
+  keepChosen,
+  propertyRows,
+  referenceRows,
+  sourceDisplayName,
+} from "../../properties.js";
+import { nameItems } from "../PropertyChooser.js";
 import { findElement } from "../layers.js";
 import { useViewer } from "../useViewer.js";
 import { Filters } from "./Filters.js";
@@ -32,7 +40,7 @@ const ENCLOSURE: Record<string, string> = {
 };
 
 export function SpaceInspector({ selection }: { selection: Selection }) {
-  const { payload, inspector } = useViewer();
+  const { payload, inspector, hiddenProperties } = useViewer();
   const found = findElement("spaces", selection.id);
   if (!found) return <Note>That space is not in the current scope.</Note>;
 
@@ -48,10 +56,14 @@ export function SpaceInspector({ selection }: { selection: Selection }) {
   const sources = detectReferenceSources({ rooms: [space as unknown as Room] });
   const drawn = !!space.loops?.[0]?.points?.length;
 
+  const propsAll = propertyRows(space.properties);
+  const referenceLists = sources.map((name) => referenceRows(space as unknown as Room, name));
+  const hide = hiddenProperties["space"];
+
   return (
     <>
       <Head kind="space" title={space.name || space.id} sub={`${space.id} · ${levelName}`} zoneId={selection.zoneId}>
-        <Filters />
+        <Filters scope="space" items={nameItems(propsAll, ...referenceLists.map((r) => r ?? []))} />
       </Head>
       <Section
         title="Placement"
@@ -68,12 +80,12 @@ export function SpaceInspector({ selection }: { selection: Selection }) {
           ["Drawn", drawn ? "yes" : "no — this space has no polygon"],
         ]}
       />
-      <Section title="Properties" rows={applyFilters(propertyRows(space.properties), inspector)} source="model" />
-      {sources.map((name) => {
-        const rows = referenceRows(space as unknown as Room, name);
+      <Section title="Properties" rows={applyFilters(keepChosen(propsAll, hide), inspector)} source="model" />
+      {sources.map((name, i) => {
+        const rows = referenceLists[i];
         const display = sourceDisplayName(name);
-        if (rows === null) return null;
-        return <Section key={name} title={display} rows={applyFilters(rows, inspector)} source={name} />;
+        if (rows == null) return null;
+        return <Section key={name} title={display} rows={applyFilters(keepChosen(rows, hide), inspector)} source={name} />;
       })}
       <Note>
         A space is not attributed to a room — it carries no room reference at all — so nothing here names one. The QA

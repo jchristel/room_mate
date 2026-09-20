@@ -5,7 +5,15 @@
 // rows because it is a first-order question about the room, and those rows are
 // what a reader scrolls past to reach anything else.
 
-import { applyFilters, detectReferenceSources, propertyRows, referenceRows, sourceDisplayName } from "../../properties.js";
+import {
+  applyFilters,
+  detectReferenceSources,
+  keepChosen,
+  propertyRows,
+  referenceRows,
+  sourceDisplayName,
+} from "../../properties.js";
+import { nameItems } from "../PropertyChooser.js";
 import { useViewer } from "../useViewer.js";
 import { Filters } from "./Filters.js";
 import { Head, Note, Section } from "./parts.js";
@@ -13,7 +21,7 @@ import { RoomContents } from "./RoomContents.js";
 import type { Selection } from "../store.js";
 
 export function RoomInspector({ selection }: { selection: Selection }) {
-  const { payload, inspector, zones } = useViewer();
+  const { payload, inspector, zones, hiddenProperties } = useViewer();
   const room = payload?.rooms?.find((r) => r.id === selection.id);
   if (!room) return <Note>Room {selection.id} is not in the current scope.</Note>;
 
@@ -31,13 +39,23 @@ export function RoomInspector({ selection }: { selection: Selection }) {
     (t) => [t.tier, t.undefined ? "(undefined)" : t.name || t.code || ""] as const,
   );
   const all = propertyRows(room.properties);
-  const shown = applyFilters(all, inspector);
   const sources = detectReferenceSources(payload);
+  // The chooser covers every PROPERTY the panel lists -- the model block and
+  // each joined source -- but not the classification tiers, which are a
+  // resolved path rather than properties and are exempt from hide-empty for
+  // the same reason.
+  const referenceLists = sources.map((name) => referenceRows(room, name) ?? []);
+  const chooser = nameItems(all, ...referenceLists);
+  const hide = hiddenProperties["room"];
+  // Chooser first, filters second, and the count below reads `all` -- so
+  // "12 of 45" always measures against what the ROOM carries. Counting
+  // against the chosen subset would make a narrowed panel look complete.
+  const shown = applyFilters(keepChosen(all, hide), inspector);
 
   return (
     <>
       <Head kind="room" title={room.name || room.id} sub={`${room.id} · ${levelName}`} zoneId={selection.zoneId}>
-        <Filters />
+        <Filters scope="room" items={chooser} />
       </Head>
       <Section title="Classification" rows={applyFilters(classification, inspector, { hideEmpty: false })} />
       {/* Deliberately NOT run through the property filters: they exist for
@@ -45,7 +63,7 @@ export function RoomInspector({ selection }: { selection: Selection }) {
           look empty because someone was searching for a property. */}
       <RoomContents room={room} storeyShown={storeyShown} />
       <Section title="Model" rows={shown} source="model" />
-      {sources.map((name) => {
+      {sources.map((name, i) => {
         const rows = referenceRows(room, name);
         const display = sourceDisplayName(name);
         // Absent is a real, common state — an unmatched room, or a source with
@@ -59,7 +77,9 @@ export function RoomInspector({ selection }: { selection: Selection }) {
             </div>
           );
         }
-        return <Section key={name} title={display} rows={applyFilters(rows, inspector)} source={name} />;
+        return (
+          <Section key={name} title={display} rows={applyFilters(keepChosen(referenceLists[i]!, hide), inspector)} source={name} />
+        );
       })}
       <div className="insp-note insp-count">
         {shown.length} of {all.length} model properties shown

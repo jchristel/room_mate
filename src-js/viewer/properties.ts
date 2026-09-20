@@ -40,6 +40,31 @@ export function applyFilters(
   return entries.filter(([k, v]) => (!q || k.toLowerCase().includes(q)) && (!hideEmpty || !isEmptyPropValue(v)));
 }
 
+/**
+ * Drop the rows a reader has switched off in the property chooser (G7).
+ *
+ * **Hidden names, not chosen ones**, and the difference is what makes the
+ * chooser survive the data moving under it: a set of CHOSEN names is a
+ * snapshot, so the next element of the same kind carrying one extra property
+ * would have it silently absent. Recording what was deliberately turned off
+ * leaves anything new on, which is the same rule the search field picker
+ * follows for a field arriving with a new project.
+ *
+ * Empty or absent is therefore the default and means "show everything" — an
+ * untouched panel reads exactly as it did before the chooser existed.
+ *
+ * Applied BEFORE `applyFilters`, so the "N of M shown" line can count the
+ * survivors against the property list the ELEMENT has rather than against the
+ * chosen subset. That line is what stops the chooser and the name filter
+ * contradicting each other in silence.
+ */
+export function keepChosen(
+  entries: readonly (readonly [string, string])[],
+  hidden: ReadonlySet<string> | undefined,
+): (readonly [string, string])[] {
+  return hidden?.size ? entries.filter(([k]) => !hidden.has(k)) : entries.slice();
+}
+
 /** A property map as sorted `[key, value]` rows. */
 export function propertyRows(properties: Room["properties"] | undefined): (readonly [string, string])[] {
   return Object.entries(properties ?? {})

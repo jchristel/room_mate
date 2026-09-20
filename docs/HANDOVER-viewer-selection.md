@@ -19,8 +19,8 @@ C is eight steps, each its own PR, merged before the next starts.
 | C4 | Room panel's contents chooser (G6) | merged, #171 |
 | C5 | Grid row → plan, with pan (G3) | merged, #172 |
 | C6 | Selection colour for the outline layers (G4) | merged, #173 |
-| C7 | Property chooser on every panel and the grid (G7) | **next** |
-| C8 | Hover property per entity, from settings (G8) | not started |
+| C7 | Property chooser on every panel and the grid (G7) | merged, #174 |
+| C8 | Hover property per entity, from settings (G8) | **next** |
 
 ## How this work is run
 
@@ -167,11 +167,42 @@ and ~20 s after switching an overlay layer on).
   `rgb(0,192,96)`, space `rgb(255,0,192)`, hover preview matching. Reset back
   to "theme" and the mark returned to `rgb(180,84,31)`, the accent.
 
-## What C7 needs, specifically
+## What C7 left behind
 
-One chooser component over a list of property NAMES with All / None, reused by
-every inspector and by the grid's columns. The chosen set lives per KIND in the
-store beside `inspector`, defaults to everything, and is not persisted. The
-"N of M shown" line counts against the property list the ELEMENT has, not
-against the chosen subset — critique 15 is what keeps the chooser and the name
-filter from contradicting each other silently. `DropMenu` (C4) is the shell.
+- **The store records what is turned OFF, not what is chosen**, per scope. A
+  set of chosen names is a snapshot: the next door of the same kind carrying
+  one extra property would have it silently absent. `keepChosen` holds the
+  reasoning and the test; "All" writes an EMPTY set rather than every name, and
+  that is what keeps a later arrival on.
+- **A panel's chooser works on property NAMES; the grid's works on COLUMNS.**
+  On a panel a name carried by both the model and a joined source is one entry,
+  which is exactly the granularity of the name filter beside it. In the grid
+  two sources' columns are two columns, so entries are keyed by column key and
+  grouped under a source heading.
+- **`Filters` is on every panel now.** It was room-and-space only, on the
+  grounds that "an opening's two short tiers have nothing to filter" — stale
+  since the element panels grew full instance and type sections, which had
+  been applying hide-empty invisibly ever since. A door offers 162 names.
+- **Every inspector drop-down anchors RIGHT**, and the rule is now on
+  `#inspector .fields-panel` rather than on C4's one menu — the chooser first
+  shipped with half its list off the edge of the window, because the panel is a
+  22rem column pinned to that edge. It is also capped at 21rem wide:
+  `VisionPanel_FullyGlazed_Height` does not wrap.
+- Driven on House A (grid columns, room panel, door panel) and RHH LEVEL 6
+  (ceiling 64 names, space 67). Checked: the room's hidden set does not reach
+  the door's; unticking `Workset` on a door drops it from BOTH tiers, where it
+  appears once in the menu; the "N of M shown" line moved 22 → 18 of **45**
+  when four were hidden, so it still counts against what the room carries;
+  a name filter of "fire" and an unticked `Fire Rating` compose rather than
+  fight.
+
+## What C8 needs, specifically
+
+A settings block per entity naming **which property a hover shows** — rooms,
+doors, windows, FF&E, spaces, ceilings, floors — a control on the settings
+page, and the tooltip reading it out of the same `[appearance]`-era settings
+fetch. **Unset is the CURRENT behaviour**, not an empty tooltip: name, else id,
+and a property the element does not carry falls back the same way, because a
+blank tooltip reads as a broken hover rather than as an absent value. It is the
+same Rust-plus-generated-types shape as C6, so re-read that section's notes on
+running your own server.

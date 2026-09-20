@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { buildColumns, buildCsv, columnGroups, computeRows, visibleColumns, type SortState } from "../grid.js";
 import { detectReferenceSources, sourceDisplayName } from "../properties.js";
+import { PropertyChooser } from "./PropertyChooser.js";
 import { gridErrors } from "../validation.js";
 import { select } from "./store.js";
 import { useViewer } from "./useViewer.js";
@@ -40,7 +41,7 @@ const OVERSCAN = 8;
 const DRAG_SLOP = 4;
 
 export function Grid() {
-  const { payload, scope, validation, selection } = useViewer();
+  const { payload, scope, validation, selection, hiddenProperties } = useViewer();
   const [showModel, setShowModel] = useState(true);
   /** Whether a row click also brings the room into view. Checked by default —
    *  "where is this room" is what a reader clicking a row is asking — and
@@ -76,7 +77,25 @@ export function Grid() {
   }, [sources]);
 
   const columns = useMemo(() => buildColumns(payload, scope.projectId, sources), [payload, scope.projectId, sources]);
-  const cols = useMemo(() => visibleColumns(columns, showModel, enabled), [columns, showModel, enabled]);
+  // TWO steps, and they answer different questions. The source toggles switch
+  // a whole source on and off; the chooser picks WITHIN what is left, which is
+  // why it lists the survivors of the toggles rather than every column the
+  // payload offers. The menu is what a reader sees, so offering a column its
+  // source has switched off would be offering a control with no effect.
+  const offered = useMemo(() => visibleColumns(columns, showModel, enabled), [columns, showModel, enabled]);
+  const hiddenCols = hiddenProperties["grid"];
+  const cols = useMemo(
+    () => (hiddenCols?.size ? offered.filter((c) => !hiddenCols.has(c.key)) : offered),
+    [offered, hiddenCols],
+  );
+  // Grouped by source, because two sources' columns are two COLUMNS here even
+  // when they share a name -- the model's Area and dRofus's Area are the
+  // comparison band 2 exists for -- so the entries are keyed by column key and
+  // the group heading is what tells the two apart in the menu.
+  const choices = useMemo(
+    () => offered.map((c) => ({ id: c.key, label: c.label, group: sourceDisplayName(c.source) })),
+    [offered],
+  );
   const rows = useMemo(() => computeRows(payload?.rooms ?? [], cols, filters, sort), [payload, cols, filters, sort]);
 
   // Measured, and RE-measured on resize: the window arithmetic needs the real
@@ -136,6 +155,7 @@ export function Grid() {
             </label>
           ))}
         </span>
+        <PropertyChooser scope="grid" items={choices} />
         <button title="Clear all column filters" onClick={() => setFilters(new Map())}>
           Clear filters
         </button>
@@ -145,7 +165,7 @@ export function Grid() {
         <span className="count" id="gridCount">{rows.length === total ? `${total} rooms` : `${rows.length} of ${total} rooms`}</span>
       </div>
       {cols.length === 0 ? (
-        <div id="gridEmpty">No columns shown — enable Model or a reference source above.</div>
+        <div id="gridEmpty">No columns shown — enable Model or a reference source above, or tick some in Customize.</div>
       ) : (
         <div id="gridScroll" ref={scrollRef} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
           <table id="gridTable">

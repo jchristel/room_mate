@@ -16,9 +16,11 @@
 // joins against the second — flattening them would throw away the distinction
 // the contract goes out of its way to keep.
 
-import { applyFilters, propertyRows } from "../../properties.js";
+import { applyFilters, keepChosen, propertyRows } from "../../properties.js";
 import { findElement, typePropertiesOf } from "../layers.js";
+import { nameItems } from "../PropertyChooser.js";
 import { useViewer } from "../useViewer.js";
+import { Filters } from "./Filters.js";
 import { Head, Note, Section } from "./parts.js";
 import type { Door, Item, Room, WindowOpening } from "../../../renderer/types.js";
 import type { Selection } from "../store.js";
@@ -35,7 +37,7 @@ function roomNamer(rooms: readonly Room[]) {
 }
 
 export function ElementInspector({ selection }: { selection: Selection }) {
-  const { payload, inspector } = useViewer();
+  const { payload, inspector, hiddenProperties } = useViewer();
   const entity = selection.kind === "door" ? "doors" : selection.kind === "window" ? "windows" : "ffe";
   const found = findElement(entity, selection.id);
   if (!found) return <Note>{label(selection.kind)} {selection.id} is not in the current scope.</Note>;
@@ -50,13 +52,16 @@ export function ElementInspector({ selection }: { selection: Selection }) {
         "unhosted (no level)"
       : (payload?.levels ?? []).find((l) => l.id === element.level_id)?.name ?? element.level_id ?? "";
 
-  const instance = applyFilters(propertyRows(element.properties), inspector);
-  const type = applyFilters(
-    Object.entries(typePropertiesOf(found.payload, element))
-      .map(([k, v]) => [k, v?.value ?? ""] as const)
-      .sort((a, b) => a[0].localeCompare(b[0])),
-    inspector,
-  );
+  // Both tiers feed ONE chooser, and a name carried by both is one entry:
+  // `Workset` and `Edited by` collide on every door measured, and offering
+  // them twice would ask the reader to answer the same question twice.
+  const instanceAll = propertyRows(element.properties);
+  const typeAll = Object.entries(typePropertiesOf(found.payload, element))
+    .map(([k, v]) => [k, v?.value ?? ""] as const)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  const hide = hiddenProperties[selection.kind];
+  const instance = applyFilters(keepChosen(instanceAll, hide), inspector);
+  const type = applyFilters(keepChosen(typeAll, hide), inspector);
   const hasBox = !!element.loops?.[0]?.points?.length;
 
   return (
@@ -66,7 +71,9 @@ export function ElementInspector({ selection }: { selection: Selection }) {
         title={element.type_name || element.id}
         sub={`${element.id} · ${levelName}`}
         zoneId={selection.zoneId}
-      />
+      >
+        <Filters scope={selection.kind} items={nameItems(instanceAll, typeAll)} />
+      </Head>
       {selection.kind === "item" ? (
         <Section
           title="Placement"
