@@ -11,19 +11,21 @@
 // not written from scratch, and a stylesheet rewritten alongside the markup
 // would make a visual difference impossible to attribute.
 
+import { useEffect } from "react";
+
+import { Header } from "./Header.js";
 import { PortNotice } from "./PortNotice.js";
+import { startPolling } from "./poll.js";
 
 export function App() {
+  // One loop for the page, started once and stopped on unmount — StrictMode
+  // runs an effect twice in development, and a loop with no cleanup would
+  // double the request rate against a server this page polls every 2s.
+  useEffect(() => startPolling(), []);
+
   return (
     <>
-      <header>
-        <h1>Room Plan</h1>
-        <div className="links">
-          <a href="/">the current viewer</a>
-          <a href="/reports/">reports</a>
-          <a href="/settings/">settings</a>
-        </div>
-      </header>
+      <Header />
       <div id="mainRow">
         <main id="zones">
           <PortNotice />
