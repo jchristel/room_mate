@@ -70,14 +70,16 @@ export function visibleStoreys(
   return [...shown.values()];
 }
 
-/** How a layer's toggle reads, including a storey match that was a GUESS.
+/**
+ * What a layer's menu entry appends when its storey match was a GUESS.
  *
- *  The suffixes are the point: a fallback nobody can see is the failure mode
- *  this area keeps producing — a reader switches a layer on, sees the wrong
- *  thing, and cannot tell the layer from the data. */
-export function toggleLabel(name: string, on: boolean, match: "exact" | "elevation" | "all" | "none"): string {
-  if (!on) return `${name}: off`;
-  if (match === "all") return `${name}: on (all levels)`;
-  if (match === "elevation") return `${name}: on (by elevation)`;
-  return `${name}: on`;
+ * The suffix is the point: a fallback nobody can see is the failure mode this
+ * area keeps producing — a reader switches a layer on, sees the wrong thing,
+ * and cannot tell the layer from the data. An exact match says nothing, which
+ * is what keeps the suffix meaningful when it does appear.
+ */
+export function matchSuffix(match: "exact" | "elevation" | "all" | "none"): string {
+  if (match === "all") return " (all levels)";
+  if (match === "elevation") return " (by elevation)";
+  return "";
 }

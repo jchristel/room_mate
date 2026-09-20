@@ -47,6 +47,25 @@ export interface ZoneRow {
    *  plans is the comparison the picker exists for. The plans themselves are
    *  page state below — they are a property of the project. */
   colourPlan: string | null;
+  /** Which element layers THIS zone draws. Per zone since C1, where the page
+   *  had one set for all of them: two zones on one storey, one showing
+   *  ceilings and one not, is the comparison that makes possible. The READS
+   *  stay scope-wide — a layer is fetched while any zone shows it — so this is
+   *  a drawing decision, never a cost control. */
+  layers: Readonly<Record<ElementEntity, boolean>>;
+  /** The rooms themselves, and their labels. Rooms default ON, and that is the
+   *  only toggle that hides the layer every other one is drawn over: the
+   *  overlays are read AGAINST the rooms, and sometimes the rooms are what is
+   *  in the way. */
+  showRooms: boolean;
+  showLabels: boolean;
+  /** Which services model's spaces this zone draws; `""` is all of them.
+   *
+   *  **Presentation, not a scope.** The read is unscoped and the filtering
+   *  happens at paint, because two zones may choose differently and one
+   *  request cannot serve both. The default was already unscoped, so nothing
+   *  fetches more than it did. */
+  spacesModel: string;
 }
 
 /**
@@ -95,20 +114,6 @@ export interface ViewerState {
   /** Pan and zoom one zone, move them all. Page state, not per zone: it is a
    *  property of the strip rather than of any one panel. */
   linkViews: boolean;
-  /** Which element layers are drawn. Page state like the toggles above: the
-   *  question "are doors shown" has one answer for the page, and two zones
-   *  disagreeing about it would make a comparison between them meaningless. */
-  layers: Readonly<Record<ElementEntity, boolean>>;
-  /** The rooms themselves, and their labels. Rooms default ON, and this is the
-   *  only toggle that hides the layer every other one is drawn over: the
-   *  overlays are read AGAINST the rooms, and sometimes that is the problem —
-   *  a ceiling ring sits inches inside the room outline beneath it. */
-  showRooms: boolean;
-  showLabels: boolean;
-  /** Which services model's spaces to draw; "" is all of them. RHH keeps one
-   *  services file per service, so "all" stacks four near-identical outlines on
-   *  every room in one colour — which is why the picker exists. */
-  spacesModel: string;
   /** Every model that has spaces, learned from an unscoped payload. */
   spacesModels: readonly string[];
   /** The room search: one query, one field set, one match set for the page.
@@ -168,17 +173,13 @@ const initial: ViewerState = {
   payload: null,
   status: "starting",
   updatedAt: null,
-  zones: [{ id: "zone-0", levelId: null, colourPlan: null, areasMode: false, areasTier: 0 }],
+  zones: [newZone("zone-0")],
   linkViews: false,
-  layers: { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
-  showRooms: true,
-  showLabels: true,
   search: { query: "", fields: new Set(), seen: new Set(), matches: null, active: false },
   areas: null,
   areasBandTier: 0,
   validation: null,
   showErrors: false,
-  spacesModel: "",
   spacesModels: [],
   layersRevision: 0,
   appearance: {},
@@ -223,25 +224,37 @@ export const MAX_ZONES = 8;
 
 let zoneSeq = 1;
 
+/** A zone's starting presentation, or a COPY of another zone's.
+ *
+ *  The three overlay layers start off, for the reason they are not polled while
+ *  off: each covers the rooms it sits on, so a reader switches one on to ask a
+ *  specific question. */
+function newZone(id: string, from?: ZoneRow): ZoneRow {
+  return {
+    id,
+    levelId: from?.levelId ?? null,
+    colourPlan: from?.colourPlan ?? null,
+    areasMode: from?.areasMode ?? false,
+    areasTier: from?.areasTier ?? 0,
+    layers: from
+      ? { ...from.layers }
+      : { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
+    showRooms: from?.showRooms ?? true,
+    showLabels: from?.showLabels ?? true,
+    spacesModel: from?.spacesModel ?? "",
+  };
+}
+
 export function addZone(): void {
   const { zones } = state;
   if (zones.length >= MAX_ZONES) return;
   // The new zone starts on the level the LAST one shows, so "+ zone" opens a
   // copy of what is on screen and the reader changes one of them -- rather than
   // jumping to the lowest level and making them find their way back.
-  const last = zones[zones.length - 1];
-  setState({
-    zones: [
-      ...zones,
-      {
-        id: `zone-${zoneSeq++}`,
-        levelId: last?.levelId ?? null,
-        colourPlan: last?.colourPlan ?? null,
-        areasMode: last?.areasMode ?? false,
-        areasTier: last?.areasTier ?? 0,
-      },
-    ],
-  });
+  // A new zone opens as a COPY of the last one -- same level, same layers --
+  // so "+ zone" gives a reader something to change rather than a blank panel
+  // they have to configure back to what they were looking at.
+  setState({ zones: [...zones, newZone(`zone-${zoneSeq++}`, zones[zones.length - 1])] });
 }
 
 export function removeZone(): void {
@@ -258,22 +271,36 @@ export function setLinkViews(on: boolean): void {
   setState({ linkViews: on });
 }
 
-// ---- layers -----------------------------------------------------------------
+// ---- layers, per zone -------------------------------------------------------
 
-export function setLayer(entity: ElementEntity, on: boolean): void {
-  setState({ layers: { ...state.layers, [entity]: on } });
+/** Change one zone's visibility. `layers` is merged, so a caller names only the
+ *  entity it is toggling. */
+export function setZoneLayer(
+  id: string,
+  patch: { layers?: Partial<Record<ElementEntity, boolean>>; showRooms?: boolean; showLabels?: boolean },
+): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id
+        ? {
+            ...z,
+            ...(patch.showRooms === undefined ? {} : { showRooms: patch.showRooms }),
+            ...(patch.showLabels === undefined ? {} : { showLabels: patch.showLabels }),
+            ...(patch.layers ? { layers: { ...z.layers, ...patch.layers } } : {}),
+          }
+        : z,
+    ),
+  });
 }
 
-export function setShowRooms(on: boolean): void {
-  setState({ showRooms: on });
+export function setZoneSpacesModel(id: string, model: string): void {
+  setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, spacesModel: model } : z)) });
 }
 
-export function setShowLabels(on: boolean): void {
-  setState({ showLabels: on });
-}
-
-export function setSpacesModel(model: string): void {
-  setState({ spacesModel: model });
+/** Whether ANY zone draws this layer — what decides whether it is fetched. The
+ *  read is scope-wide, so it cannot be per zone. */
+export function layerWanted(entity: ElementEntity): boolean {
+  return state.zones.some((z) => z.layers[entity]);
 }
 
 /** Tell the page a layer's data moved. See `layersRevision`. */

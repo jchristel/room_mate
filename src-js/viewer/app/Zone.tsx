@@ -18,6 +18,7 @@ import { levelLabel, levelsForPayload, pickerOrder, resolveLevel, roomsOnLevel }
 import { buildColourContext, colourForRoom } from "../colour.js";
 import { errorRoomIds } from "../validation.js";
 import { AreasOverlay } from "./AreasOverlay.js";
+import { LayerMenu } from "./LayerMenu.js";
 import { exportLevels } from "./svgExport.js";
 import { loadAreas } from "./areasData.js";
 import { tierNames } from "../areas.js";
@@ -41,8 +42,10 @@ import type { Room } from "../../renderer/types.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection, search, validation, showErrors, areas, scope } =
+  const { payload, status, appearance, layersRevision, colourPlans, selection, search, validation, showErrors, areas, scope } =
     useViewer();
+  // This zone's own visibility, since C1 — see `ZoneRow.layers`.
+  const { layers, showRooms, showLabels, spacesModel } = zone;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const handleRef = useRef<ZoneHandle | null>(null);
@@ -134,6 +137,12 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       // drew last time.
       const on = <E extends keyof ElementOf>(entity: E): readonly ElementOf[E][] =>
         layers[entity] ? elementsOnStorey(entity, levelId).kept : [];
+      // The services-model filter is applied HERE, not in the request: the read
+      // is unscoped since C1, because two zones may choose different models and
+      // one request cannot serve both. `""` is every model.
+      const spaces = spacesModel
+        ? on("spaces").filter((s) => s.model_id === spacesModel)
+        : on("spaces");
       // The plan resolves to a `colourFor` callback here rather than being
       // handed to the renderer: the palette lives in `common.js`, which the
       // renderer bundle cannot import, so the precedence rule stays in the
@@ -155,7 +164,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           showWindows: layers.windows,
           ffe: on("ffe"),
           showFfe: layers.ffe,
-          spaces: on("spaces"),
+          spaces,
           showSpaces: layers.spaces,
           ceilings: on("ceilings"),
           showCeilings: layers.ceilings,
@@ -230,6 +239,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   return (
     <div className="zone">
       <div className="zone-toolbar">
+        <LayerMenu zone={zone} />
         {/* Per zone, because it is presentation: two zones on one level under
             two plans is the comparison this picker exists for. Hidden when the
             project declares none, which is the ordinary case. */}

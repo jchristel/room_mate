@@ -727,3 +727,13 @@
      old page had the picker as a sibling <select> the toggle handler showed
      and hid; grouping them keeps the pair together when the header wraps. */
   .layer-toggle { display: contents; }
+
+  /* The per-zone visibility menu (C1). It reuses `.fields-panel` — the search
+     field picker's drop-down — because they are the same control: a list of
+     checkboxes behind one button. Only the anchoring belongs here, so the two
+     cannot drift apart in padding or scroll behaviour. */
+  .layer-menu { position: relative; display: inline-block; }
+  .layer-menu .fields-panel { min-width: 14rem; }
+  /* The services-model picker sits under its own Spaces entry, indented so it
+     reads as belonging to that layer rather than as a ninth one. */
+  .layer-menu select.ctl { margin: 0.15rem 0 0.35rem 1.2rem; max-width: 12rem; }

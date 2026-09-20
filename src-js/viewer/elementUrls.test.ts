@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { elementUrl, toggleLabel, visibleStoreys } from "./elementUrls.js";
+import { elementUrl, matchSuffix, visibleStoreys } from "./elementUrls.js";
 import type { Level } from "../renderer/types.js";
 
 const level = (id: string, name: string, elevation: number): Level => ({ id, name, elevation });
@@ -55,14 +55,16 @@ describe("visibleStoreys", () => {
   });
 });
 
-describe("toggleLabel", () => {
-  it("says off, and says nothing else", () => {
-    expect(toggleLabel("Doors", false, "exact")).toBe("Doors: off");
+describe("matchSuffix", () => {
+  /** Silence on an exact match is what keeps the suffix meaningful when it
+   *  does appear. */
+  it("says nothing when the storey resolved exactly", () => {
+    expect(matchSuffix("exact")).toBe("");
+    expect(matchSuffix("none")).toBe("");
   });
 
   it("names a fallback, because an invisible one is the failure mode here", () => {
-    expect(toggleLabel("Doors", true, "exact")).toBe("Doors: on");
-    expect(toggleLabel("Doors", true, "elevation")).toBe("Doors: on (by elevation)");
-    expect(toggleLabel("Doors", true, "all")).toBe("Doors: on (all levels)");
+    expect(matchSuffix("elevation")).toBe(" (by elevation)");
+    expect(matchSuffix("all")).toBe(" (all levels)");
   });
 });
