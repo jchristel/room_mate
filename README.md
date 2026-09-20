@@ -23,8 +23,8 @@ it belongs to:
 |---|---|
 | [`extractor/`](extractor) | The **producer**. `pyRevit/` holds the IronPython that runs inside Revit and pushes to the server. |
 | [`src/`](src) | The **Rust server** — ingest, storage, the reference join, classification, and the geometry services (`areas`, `adjacency`, `room_locator`). Two binaries: the axum HTTP server and an MCP server over the same read logic. |
-| [`static/`](static) | What the server serves: the **viewer** (`index.html`, HTML/CSS/JS as-is) plus three **generated and committed** builds — `vendor/renderer.bundle.js`, `settings/` and `reports/` — so a fresh clone runs with no node installed. |
-| [`src-js/`](src-js) | The frontend source, built by Vite: the viewer's **WebGL plan renderer** (`renderer/`), the **settings page** (`settings/`) and the **reports page** (`reports/`), all React where they are not the renderer. Where new frontend code lands; see [Coding Conventions](docs/CODING-CONVENTIONS.md). |
+| [`static/`](static) | What the server serves: four **generated and committed** builds — the viewer (`index.html`, `viewer.js`, `viewer.css`), `vendor/renderer.bundle.js`, `settings/` and `reports/` — so a fresh clone runs with no node installed. Nothing here is hand-written any more except `common.js`, `graph.js` and `tokens.css`; edit `src-js/` and rebuild. |
+| [`src-js/`](src-js) | The frontend source, built by Vite: the **viewer** (`viewer/`), its **WebGL plan renderer** (`renderer/`), the **settings page** (`settings/`) and the **reports page** (`reports/`), all React where they are not the renderer. Where new frontend code lands; see [Coding Conventions](docs/CODING-CONVENTIONS.md). |
 | [`settings/`](settings) | Server config, and one TOML per project (classification tiers, sources, area policy). |
 | [`scripts/`](scripts) | Dev tooling run *against* this repo: fixture generators, `fixtures/` (sample data to push or upload), `check_areas.py` (the areas diagnostic), `weekly_review.py` (the docs-vs-code drift check), `module_stats.py` (measures the module plan's cells; `--check` reports drift), and the `probe_*`/`analyse_*` pairs that settle an entity's open questions before it is built. Not shipped. |
 | [`docs/`](docs) | Strategy docs, coding conventions, and handovers (landed ones in `docs/Superseded/`). |
@@ -76,7 +76,7 @@ Serves the three pages and the API on `http://127.0.0.1:5151` (`--port`, or
 
 | | |
 |---|---|
-| **`/`** — the viewer | The plan: rooms drawn per storey with the door, window, FF&E, space and ceiling/floor layers over them, the hierarchy-area rollups, the adjacency graph, and the QA band that says whether the project reconciles. |
+| **`/`** — the viewer | The plan: rooms drawn per storey with the door, window, FF&E, space and ceiling/floor layers over them, the hierarchy-area rollups, the adjacency graph, and the QA band that says whether the project reconciles. Each zone chooses what it draws and what a click can reach; a click on stacked elements lists them rather than guessing; every one of the seven kinds has a panel, and a grid row selects its room and brings it into view. |
 | **`/settings/`** — settings | Every project setting, including the ones that only ever existed in TOML: the coordinate anchor, the area policy, the door/window/FF&E/space policies, the hierarchy exclusions. It holds the settings object as it read it and sends it back, so it cannot silently drop what it does not show — the bug its hand-written predecessor shipped. |
 | **`/reports/`** — reports | Tabular reports: a **schedule** of any entity, any entity **by room**, the **QA checks** (reference data, unresolved openings, unmatched spaces and rooms), and **milestone comparison**, which used to be its own page. Rows and CSV are rendered by the server, so a download and an MCP host get the same bytes. |
 

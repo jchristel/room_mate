@@ -11,8 +11,10 @@ is out of it.
 
 **Landed and archived 2026-09-20**: phase C's eight steps are merged (#167,
 #168, #169, #171, #172, #173, #174, #175). Nothing here is live — what shipped
-is documented by the code. `HANDOVER-viewer-selection.md`, beside this file,
-records what each step cost to learn.
+is documented by the code, and the mid-flight handover that sequenced the work
+was deleted once it had none of its own. Its one surviving open item, the
+durable per-project version of these view preferences, is in
+[Browser](../STRATEGY-BROWSER.md).
 
 **Phase A (the plan-side groundwork) and phase B (the viewer's move to React)
 are both done.** What is left is phase C, below.
