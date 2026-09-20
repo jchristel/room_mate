@@ -36,12 +36,13 @@ import type { Room } from "../../renderer/types.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans } =
+  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection } =
     useViewer();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const handleRef = useRef<ZoneHandle | null>(null);
   const busyRef = useRef<HTMLDivElement | null>(null);
+  const tipRef = useRef<HTMLDivElement | null>(null);
   /** The level this zone last PAINTED, so a repaint can tell a level switch
    *  (which refits) from a new payload on the same level (which must keep the
    *  reader's pan and zoom). */
@@ -63,7 +64,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     };
     handleRef.current = handle;
     register(handle);
-    const unwire = wirePlanGestures(svg, zone.id);
+    const unwire = wirePlanGestures(svg, zone.id, tipRef);
     return () => {
       unwire();
       unregister(zone.id);
@@ -178,6 +179,16 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     void renderer.ready.then(draw);
   }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, plan]);
 
+  // The mark follows the PAGE selection, in every zone that draws the element:
+  // one room can appear in two zones showing the same level, and a selection
+  // visible in only one of them reads as a broken click in the other. Its own
+  // effect, not part of the paint: a selection change must not rebuild a level.
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    handle.renderer.setSelection(selection ? { kind: selection.kind, id: selection.id } : null);
+  }, [selection, payload, levelId, layersRevision]);
+
   // The element reads only hold the storeys that WERE on screen, so a level
   // switch (or this zone appearing at all) has to ask again. A no-op when the
   // storeys did not actually move -- see `onStoreysChanged`.
@@ -225,6 +236,10 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       <div className="zone-canvas">
         <canvas className="plan-gl" ref={canvasRef} />
         <svg className="plan" ref={svgRef} xmlns="http://www.w3.org/2000/svg" />
+        {/* The per-room tooltip the browser used to draw for free from an SVG
+            `<title>`. WebGL has no elements, so it is a DOM node the hover
+            code positions. */}
+        <div className="plan-tip hidden" ref={tipRef} />
         <ZoneEmpty payload={!!payload} rooms={rooms.length} levels={levels.length} levelName={levelName} />
         <div className="plan-busy hidden" ref={busyRef}>
           <span>Drawing plan…</span>
