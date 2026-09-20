@@ -10,6 +10,7 @@
 // full-width until a reader asks a question of it.
 
 import { useViewer } from "../useViewer.js";
+import { AreaInspector } from "./AreaInspector.js";
 import { ElementInspector } from "./ElementInspector.js";
 import { Note } from "./parts.js";
 import { RoomInspector } from "./RoomInspector.js";
@@ -20,7 +21,9 @@ export function Inspector() {
 
   return (
     <aside id="inspector" aria-label="Selected element">
-      {selection.kind === "room" ? (
+      {selection.kind === "area" ? (
+        <AreaInspector selection={selection} />
+      ) : selection.kind === "room" ? (
         <RoomInspector selection={selection} />
       ) : selection.kind === "door" || selection.kind === "window" || selection.kind === "item" ? (
         <ElementInspector selection={selection} />

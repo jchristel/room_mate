@@ -17,10 +17,13 @@ import { useEffect, useMemo, useRef } from "react";
 import { levelLabel, levelsForPayload, pickerOrder, resolveLevel, roomsOnLevel } from "../levels.js";
 import { buildColourContext, colourForRoom } from "../colour.js";
 import { errorRoomIds } from "../validation.js";
+import { AreasOverlay } from "./AreasOverlay.js";
+import { loadAreas } from "./areasData.js";
+import { tierNames } from "../areas.js";
 import { elementsOnStorey, type ElementOf } from "./layers.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
-import { setZoneColourPlan, setZoneLevel, type ZoneRow } from "./store.js";
+import { setZoneAreas, setZoneColourPlan, setZoneLevel, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
@@ -37,7 +40,7 @@ import type { Room } from "../../renderer/types.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection, search, validation, showErrors } =
+  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection, search, validation, showErrors, areas } =
     useViewer();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -202,8 +205,19 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   useEffect(() => {
     const handle = handleRef.current;
     if (!handle) return;
-    handle.renderer.setSelection(selection ? { kind: selection.kind, id: selection.id } : null);
+    // `area` is page geometry in the SVG overlay, not something the renderer
+    // can mark — it draws its own selected class. Everything else is the
+    // plan's.
+    const ref = selection && selection.kind !== "area" ? { kind: selection.kind, id: selection.id } : null;
+    handle.renderer.setSelection(ref);
   }, [selection, payload, levelId, layersRevision]);
+
+  // Fetched on the trigger that needs it -- a zone switching its overlay on --
+  // rather than with the rooms: the dissolve is server work nobody asked for
+  // until someone looks at footprints.
+  useEffect(() => {
+    if (zone.areasMode) void loadAreas();
+  }, [zone.areasMode, payload]);
 
   // The element reads only hold the storeys that WERE on screen, so a level
   // switch (or this zone appearing at all) has to ask again. A no-op when the
@@ -243,6 +257,27 @@ export function Zone({ zone }: { zone: ZoneRow }) {
               ))
             : null}
         </select>
+        <button
+          className={`areas-toggle${zone.areasMode ? " on" : ""}`}
+          title="Show hierarchy footprints on this zone's plan"
+          onClick={() => setZoneAreas(zone.id, { areasMode: !zone.areasMode })}
+        >
+          Areas
+        </button>
+        {zone.areasMode && areas ? (
+          <select
+            className="picker areasTier"
+            title="Footprint tier (this zone's overlay)"
+            value={zone.areasTier}
+            onChange={(e) => setZoneAreas(zone.id, { areasTier: Number(e.target.value) })}
+          >
+            {tierNames(areas).map((name, depth) => (
+              <option key={name} value={depth}>
+                {name}
+              </option>
+            ))}
+          </select>
+        ) : null}
         <span className="meta">
           {payload
             ? `${levelName || "—"} · ${rooms.length} room${rooms.length === 1 ? "" : "s"} · v${payload.schema_version}${
@@ -258,7 +293,19 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       </div>
       <div className="zone-canvas">
         <canvas className="plan-gl" ref={canvasRef} />
-        <svg className="plan" ref={svgRef} xmlns="http://www.w3.org/2000/svg" />
+        <svg className={`plan${zone.areasMode ? " areas-active" : ""}`} ref={svgRef} xmlns="http://www.w3.org/2000/svg">
+          {/* The footprints are SVG and stay OUTSIDE the renderer seam: there
+              are dozens of them against thousands of rooms, which is the split
+              the hybrid was designed around. */}
+          <AreasOverlay
+            zoneId={zone.id}
+            data={areas}
+            levelId={levelId}
+            depth={zone.areasTier}
+            active={zone.areasMode}
+            selectedKey={selection?.kind === "area" ? selection.id : null}
+          />
+        </svg>
         {/* The per-room tooltip the browser used to draw for free from an SVG
             `<title>`. WebGL has no elements, so it is a DOM node the hover
             code positions. */}

@@ -17,6 +17,7 @@ import type { ElementEntity } from "../elementUrls.js";
 import type { ColourPlan } from "../colour.js";
 import type { ElementKind } from "../../renderer/seam.js";
 import type { FilterState } from "../properties.js";
+import type { AreasData } from "../areas.js";
 import type { ValidationReport } from "../validation.js";
 import type { ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
@@ -33,6 +34,11 @@ export type Status = "starting" | "ready" | "waiting for data" | "connection los
  *  the renderer reads. */
 export interface ZoneRow {
   id: string;
+  /** This zone's footprint overlay: on/off and which tier. Per zone because
+   *  both are presentation — two zones showing one level at two tiers is a
+   *  comparison the overlay exists to make. */
+  areasMode: boolean;
+  areasTier: number;
   /** The level this zone shows. `null` until a payload says what there is. */
   levelId: string | null;
   /** The colour plan applied to THIS zone, by name, or null for none.
@@ -56,8 +62,13 @@ export interface ZoneRow {
  * `kind` is what makes this more than an id: ids are unique only within an
  * entity, so a door and a room may share one.
  */
+/** What can be selected: every kind the plan can pick, plus `area` — a
+ *  hierarchy FOOTPRINT, which is page geometry drawn over the plan rather than
+ *  an element the renderer knows about. */
+export type SelectionKind = ElementKind | "area";
+
 export interface Selection {
-  kind: ElementKind;
+  kind: SelectionKind;
   id: string;
   zoneId: string | null;
 }
@@ -114,6 +125,15 @@ export interface ViewerState {
     matches: ReadonlySet<string> | null;
     active: boolean;
   };
+  /** The dissolved footprints for the scope, fetched when some zone first
+   *  switches its overlay on. One dataset serves every zone's overlay AND the
+   *  band's figures: it is scope-derived, so a second copy per zone could only
+   *  disagree with itself. */
+  areas: AreasData | null;
+  /** The tier the BAND's figures are at. Separate from a zone's overlay tier
+   *  on purpose: the overlay answers "what does this floor look like by
+   *  department", the figures "what do the departments total across the job". */
+  areasBandTier: number;
   /** The QA report for the scope, or null before one has been read. */
   validation: ValidationReport | null;
   /** Whether flagged rooms are marked on the plan. Follows the QA block's
@@ -148,12 +168,14 @@ const initial: ViewerState = {
   payload: null,
   status: "starting",
   updatedAt: null,
-  zones: [{ id: "zone-0", levelId: null, colourPlan: null }],
+  zones: [{ id: "zone-0", levelId: null, colourPlan: null, areasMode: false, areasTier: 0 }],
   linkViews: false,
   layers: { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
   showRooms: true,
   showLabels: true,
   search: { query: "", fields: new Set(), seen: new Set(), matches: null, active: false },
+  areas: null,
+  areasBandTier: 0,
   validation: null,
   showErrors: false,
   spacesModel: "",
@@ -209,7 +231,16 @@ export function addZone(): void {
   // jumping to the lowest level and making them find their way back.
   const last = zones[zones.length - 1];
   setState({
-    zones: [...zones, { id: `zone-${zoneSeq++}`, levelId: last?.levelId ?? null, colourPlan: last?.colourPlan ?? null }],
+    zones: [
+      ...zones,
+      {
+        id: `zone-${zoneSeq++}`,
+        levelId: last?.levelId ?? null,
+        colourPlan: last?.colourPlan ?? null,
+        areasMode: last?.areasMode ?? false,
+        areasTier: last?.areasTier ?? 0,
+      },
+    ],
   });
 }
 
@@ -259,7 +290,7 @@ export function setZoneColourPlan(id: string, plan: string | null): void {
 
 /** Select one element, or nothing. `zoneId` is where the click came from, and
  *  is null for a selection made anywhere else (the grid, a search result). */
-export function select(kind: ElementKind, id: string, zoneId: string | null = null): void {
+export function select(kind: SelectionKind, id: string, zoneId: string | null = null): void {
   setState({ selection: { kind, id, zoneId } });
 }
 
@@ -284,4 +315,16 @@ export function setValidation(report: ValidationReport | null): void {
 
 export function setShowErrors(on: boolean): void {
   setState({ showErrors: on });
+}
+
+export function setAreas(data: AreasData | null): void {
+  setState({ areas: data });
+}
+
+export function setAreasBandTier(depth: number): void {
+  setState({ areasBandTier: depth });
+}
+
+export function setZoneAreas(id: string, patch: { areasMode?: boolean; areasTier?: number }): void {
+  setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, ...patch } : z)) });
 }
