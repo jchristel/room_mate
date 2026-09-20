@@ -14,6 +14,7 @@
 
 import type { BuildingRow, MilestoneRow, ProjectRow, RoomsPayload } from "./api.js";
 import type { ElementEntity } from "../elementUrls.js";
+import type { ColourPlan } from "../colour.js";
 import type { ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
 
@@ -31,6 +32,12 @@ export interface ZoneRow {
   id: string;
   /** The level this zone shows. `null` until a payload says what there is. */
   levelId: string | null;
+  /** The colour plan applied to THIS zone, by name, or null for none.
+   *
+   *  Per zone because it is presentation: two zones showing one level under two
+   *  plans is the comparison the picker exists for. The plans themselves are
+   *  page state below — they are a property of the project. */
+  colourPlan: string | null;
 }
 
 export interface ViewerState {
@@ -77,6 +84,9 @@ export interface ViewerState {
   /** The project's `[appearance]` block, or `{}` — which is the ordinary state
    *  and means "every layer follows the theme". */
   appearance: ViewerAppearance;
+  /** The project's colour plans, fetched with its appearance from the one
+   *  settings read. */
+  colourPlans: readonly ColourPlan[];
 }
 
 const initial: ViewerState = {
@@ -87,7 +97,7 @@ const initial: ViewerState = {
   payload: null,
   status: "starting",
   updatedAt: null,
-  zones: [{ id: "zone-0", levelId: null }],
+  zones: [{ id: "zone-0", levelId: null, colourPlan: null }],
   linkViews: false,
   layers: { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
   showRooms: true,
@@ -96,6 +106,7 @@ const initial: ViewerState = {
   spacesModels: [],
   layersRevision: 0,
   appearance: {},
+  colourPlans: [],
 };
 
 let state: ViewerState = initial;
@@ -142,8 +153,10 @@ export function addZone(): void {
   // The new zone starts on the level the LAST one shows, so "+ zone" opens a
   // copy of what is on screen and the reader changes one of them -- rather than
   // jumping to the lowest level and making them find their way back.
-  const levelId = zones.length ? zones[zones.length - 1]!.levelId : null;
-  setState({ zones: [...zones, { id: `zone-${zoneSeq++}`, levelId }] });
+  const last = zones[zones.length - 1];
+  setState({
+    zones: [...zones, { id: `zone-${zoneSeq++}`, levelId: last?.levelId ?? null, colourPlan: last?.colourPlan ?? null }],
+  });
 }
 
 export function removeZone(): void {
@@ -181,4 +194,9 @@ export function setSpacesModel(model: string): void {
 /** Tell the page a layer's data moved. See `layersRevision`. */
 export function bumpLayers(): void {
   setState({ layersRevision: state.layersRevision + 1 });
+}
+
+/** Apply a colour plan to one zone, by name. `null` is no colour. */
+export function setZoneColourPlan(id: string, plan: string | null): void {
+  setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, colourPlan: plan } : z)) });
 }
