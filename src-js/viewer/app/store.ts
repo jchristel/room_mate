@@ -21,6 +21,16 @@ import type { Scope } from "../scope.js";
  *  and both are ordinary rather than errors. */
 export type Status = "starting" | "ready" | "waiting for data" | "connection lost";
 
+/** One zone, as far as RENDERING it goes. The view rect is deliberately not
+ *  here — see `zoneRegistry.ts`: it changes on every pointer move, and holding
+ *  it in the store would re-render the page per frame to update a number only
+ *  the renderer reads. */
+export interface ZoneRow {
+  id: string;
+  /** The level this zone shows. `null` until a payload says what there is. */
+  levelId: string | null;
+}
+
 export interface ViewerState {
   scope: Scope;
   projects: readonly ProjectRow[];
@@ -31,6 +41,12 @@ export interface ViewerState {
   status: Status;
   /** When the last changed payload landed, for the meta line. */
   updatedAt: Date | null;
+  /** The zones on screen, left to right. Never empty: the page always has one,
+   *  which is why `removeZone` stops at one rather than at zero. */
+  zones: readonly ZoneRow[];
+  /** Pan and zoom one zone, move them all. Page state, not per zone: it is a
+   *  property of the strip rather than of any one panel. */
+  linkViews: boolean;
 }
 
 const initial: ViewerState = {
@@ -41,6 +57,8 @@ const initial: ViewerState = {
   payload: null,
   status: "starting",
   updatedAt: null,
+  zones: [{ id: "zone-0", levelId: null }],
+  linkViews: false,
 };
 
 let state: ViewerState = initial;
@@ -68,4 +86,39 @@ export function subscribe(listener: () => void): () => void {
 export function resetState(): void {
   state = initial;
   for (const listener of listeners) listener();
+}
+
+// ---- zones ------------------------------------------------------------------
+//
+// A hard ceiling on open zones, and it exists for WebGL specifically: browsers
+// cap live contexts (commonly ~16) and silently kill the OLDEST past the limit,
+// so an unbounded "+ zone" would blank an earlier zone with no error and
+// nothing a reader could act on. 8 leaves headroom for the adjacency canvas and
+// for other tabs on the same GPU.
+export const MAX_ZONES = 8;
+
+let zoneSeq = 1;
+
+export function addZone(): void {
+  const { zones } = state;
+  if (zones.length >= MAX_ZONES) return;
+  // The new zone starts on the level the LAST one shows, so "+ zone" opens a
+  // copy of what is on screen and the reader changes one of them -- rather than
+  // jumping to the lowest level and making them find their way back.
+  const levelId = zones.length ? zones[zones.length - 1]!.levelId : null;
+  setState({ zones: [...zones, { id: `zone-${zoneSeq++}`, levelId }] });
+}
+
+export function removeZone(): void {
+  const { zones } = state;
+  if (zones.length <= 1) return;
+  setState({ zones: zones.slice(0, -1) });
+}
+
+export function setZoneLevel(id: string, levelId: string | null): void {
+  setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, levelId } : z)) });
+}
+
+export function setLinkViews(on: boolean): void {
+  setState({ linkViews: on });
 }

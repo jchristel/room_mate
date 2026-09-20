@@ -5,6 +5,8 @@
 // cover the data API. The rule for widening it is the settings page's — when a
 // component needs MOST of a response, generate it.
 
+import type { Level, Room } from "../../renderer/types.js";
+
 /** GET JSON, no-store, throwing the URL and status on a non-2xx.
  *
  *  The viewer's own variant rather than `common.js`'s `apiGet`: this page shows
@@ -43,14 +45,15 @@ export interface MilestonesResponse {
   milestones: MilestoneRow[];
 }
 
-/** The `/rooms` payload, as far as this slice reads it. Rooms and levels are
- *  the renderer's types and arrive with the zones slice (B3). */
+/** The `/rooms` payload, as far as the page reads it. `Room` and `Level` are
+ *  the renderer's own types — the plan is drawn from these objects, so a second
+ *  description of them here would be a copy that can disagree with what draws. */
 export interface RoomsPayload {
   /** The server's one-value content revision — what the poll compares instead
    *  of re-stringifying the payload every two seconds. */
   revision?: string;
-  rooms?: unknown[];
-  levels?: unknown[];
+  rooms?: Room[];
+  levels?: Level[];
   taken_at?: string;
   schema_version?: number;
 }
