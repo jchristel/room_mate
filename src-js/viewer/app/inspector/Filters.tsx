@@ -1,14 +1,24 @@
-// The property filter and the hide-empty box.
+// The property filter, the hide-empty box and the property chooser.
 //
-// ROOM-ONLY in the old page and kept that way: they exist for the 45 model
-// properties a room carries, and an opening's two short tiers have nothing to
-// filter. The state lives in the store, so it survives a selection change —
-// the common use is comparing one field across rooms by clicking each in turn.
+// **Three controls over one list, and they narrow it in different ways.** The
+// filter matches a name a reader is hunting for, hide-empty drops the rows
+// Revit left unset, and the chooser (G7) picks the handful of properties this
+// KIND is being read for. The first two were room-only on the old page,
+// because "an opening's two short tiers have nothing to filter" — that stopped
+// being true when the element panels grew full instance and type property
+// sections, and they have been applying the filters invisibly ever since. So
+// every panel shows all three now: a control that is in effect and not on
+// screen is how a panel comes to look broken.
+//
+// The filter state lives in the store and is deliberately kept ACROSS
+// selection changes — the common use is comparing one field over several rooms
+// by clicking each in turn — and so does the chooser's, per kind.
 
-import { setInspectorFilter } from "../store.js";
+import { PropertyChooser, type ChoiceItem } from "../PropertyChooser.js";
+import { setInspectorFilter, type PropertyScope } from "../store.js";
 import { useViewer } from "../useViewer.js";
 
-export function Filters() {
+export function Filters({ scope, items }: { scope: PropertyScope; items: readonly ChoiceItem[] }) {
   const { inspector } = useViewer();
   return (
     <div className="insp-controls">
@@ -26,6 +36,7 @@ export function Filters() {
         />
         Hide empty
       </label>
+      <PropertyChooser scope={scope} items={items} />
     </div>
   );
 }

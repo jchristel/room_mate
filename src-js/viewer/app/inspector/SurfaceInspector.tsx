@@ -14,9 +14,11 @@
 // wants. Neither is a filter: which overlaps matter is the reader's policy, and
 // the server deliberately stopped drawing that line.
 
-import { applyFilters, propertyRows } from "../../properties.js";
+import { applyFilters, keepChosen, propertyRows } from "../../properties.js";
 import { findElement, typePropertiesOf } from "../layers.js";
+import { nameItems } from "../PropertyChooser.js";
 import { useViewer } from "../useViewer.js";
+import { Filters } from "./Filters.js";
 import { Head, Note, Section } from "./parts.js";
 import type { Selection } from "../store.js";
 import type { Ceiling, Room } from "../../../renderer/types.js";
@@ -33,7 +35,7 @@ interface SurfaceRoom {
 }
 
 export function SurfaceInspector({ selection }: { selection: Selection }) {
-  const { payload, inspector } = useViewer();
+  const { payload, inspector, hiddenProperties } = useViewer();
   const entity = selection.kind === "ceiling" ? "ceilings" : "floors";
   const found = findElement(entity, selection.id);
   if (!found) {
@@ -58,6 +60,16 @@ export function SurfaceInspector({ selection }: { selection: Selection }) {
   };
   const pct = (f: number) => `${(f * 100).toFixed(f >= 0.1 ? 0 : 1)}%`;
 
+  // A ceiling and a floor keep SEPARATE chooser state although one component
+  // draws both: they are different records with different properties, and the
+  // shared panel is an economy in the code rather than a claim about the
+  // question a reader is asking.
+  const instanceAll = propertyRows(surface.properties);
+  const typeAll = Object.entries(typePropertiesOf(found.payload, surface as { type_properties_ref?: number | null }))
+    .map(([k, v]) => [k, v?.value ?? ""] as const)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  const hide = hiddenProperties[selection.kind];
+
   const covered = surface.rooms ?? [];
   const pieces = (surface.polygons ?? []).filter((p) => p.loops?.[0]?.points?.length).length;
   const holes = (surface.polygons ?? []).reduce((n, p) => n + Math.max(0, (p.loops?.length ?? 0) - 1), 0);
@@ -69,7 +81,9 @@ export function SurfaceInspector({ selection }: { selection: Selection }) {
         title={surface.type_name || surface.id}
         sub={`${surface.id} · ${levelName}`}
         zoneId={selection.zoneId}
-      />
+      >
+        <Filters scope={selection.kind} items={nameItems(instanceAll, typeAll)} />
+      </Head>
       <Section
         title="Placement"
         rows={[
@@ -118,16 +132,8 @@ export function SurfaceInspector({ selection }: { selection: Selection }) {
           ["Holes", String(holes)],
         ]}
       />
-      <Section title="Instance properties" rows={applyFilters(propertyRows(surface.properties), inspector)} />
-      <Section
-        title="Type properties"
-        rows={applyFilters(
-          Object.entries(typePropertiesOf(found.payload, surface as { type_properties_ref?: number | null }))
-            .map(([k, v]) => [k, v?.value ?? ""] as const)
-            .sort((a, b) => a[0].localeCompare(b[0])),
-          inspector,
-        )}
-      />
+      <Section title="Instance properties" rows={applyFilters(keepChosen(instanceAll, hide), inspector)} />
+      <Section title="Type properties" rows={applyFilters(keepChosen(typeAll, hide), inspector)} />
     </>
   );
 }
