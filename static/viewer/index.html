@@ -13,6 +13,10 @@
      static/vendor/. A classic script rather than an import, because that
      bundle is an IIFE that assigns a global — the same file, and the same
      tag, the old page loads. -->
+<!-- Shared selection-persistence helpers (seedProjectId / persistSelection /
+     urlParam), the classic script the other three pages also load, so the
+     project a reader picks here is the one the settings page opens with. -->
+<script src="/common.js"></script>
 <script src="/vendor/renderer.bundle.js"></script>
   <script type="module" crossorigin src="/viewer/viewer.js"></script>
   <link rel="stylesheet" crossorigin href="/viewer/index.css">
