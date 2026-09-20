@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Room Plan</title>
+<!-- Shared palette tokens (:root custom properties), served from static/ and
+     linked absolutely so the four pages cannot drift. Vite leaves an absolute
+     URL alone, which is why this is not an import. -->
+<link rel="stylesheet" href="/tokens.css" />
+<!-- The plan renderer, published as the global `PlanRenderer`: TypeScript in
+     src-js/renderer/, bundled by its own Vite config and committed at
+     static/vendor/. A classic script rather than an import, because that
+     bundle is an IIFE that assigns a global — the same file, and the same
+     tag, the old page loads. -->
+<script src="/vendor/renderer.bundle.js"></script>
+  <script type="module" crossorigin src="/viewer/viewer.js"></script>
+  <link rel="stylesheet" crossorigin href="/viewer/index.css">
+</head>
+<body>
+<div id="root"></div>
+</body>
+</html>
