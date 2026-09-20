@@ -685,6 +685,21 @@
   }
   #gridEmpty { padding: 0.6rem 1.25rem; font-size: 0.7rem; opacity: 0.6; }
 
+  /* React mounts into `#root`, so the PAGE GRID has to live there: <body> now
+     has exactly one child, and the header / zones / bottom-region rows above
+     were written for a body that held all three. Without this `#mainRow` is
+     unconstrained, the zone grows to its content instead of filling the
+     viewport, and the plan is drawn at several times the panel's height with
+     the page scrolling under it. Same rows, same `minmax(0, 1fr)` column, for
+     the same reasons stated on `body`. */
+  #root {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+  }
+
   /* The only rule in this file that is NOT the old page's: the port notice
      shown while `/viewer/` has nothing on it. It goes with `PortNotice.tsx`
      at the cutover (B10). Everything above this comment is moved, not

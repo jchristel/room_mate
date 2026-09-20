@@ -9,10 +9,11 @@
 
 import { buildingLabel, type Scope } from "../scope.js";
 import { setScope } from "./poll.js";
+import { addZone, MAX_ZONES, removeZone, setLinkViews } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
 export function Header() {
-  const { scope, projects, buildings, milestones } = useViewer();
+  const { scope, projects, buildings, milestones, zones, linkViews } = useViewer();
 
   const change = (patch: Partial<Scope>) => {
     const next: Scope = { ...scope, ...patch };
@@ -74,6 +75,19 @@ export function Header() {
           </option>
         ))}
       </select>
+      <button className="ctl" title="Add a zone" disabled={zones.length >= MAX_ZONES} onClick={addZone}>
+        + zone
+      </button>
+      <button className="ctl" title="Remove the last zone" disabled={zones.length <= 1} onClick={removeZone}>
+        &minus; zone
+      </button>
+      <button
+        className={`ctl${linkViews ? " on" : ""}`}
+        title="Sync zoom/pan across all zones"
+        onClick={() => setLinkViews(!linkViews)}
+      >
+        Link views: {linkViews ? "on" : "off"}
+      </button>
       <div className="links">
         <a href="/">the current viewer</a>
         <a href="/reports/">reports</a>

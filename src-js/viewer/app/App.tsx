@@ -14,8 +14,9 @@
 import { useEffect } from "react";
 
 import { Header } from "./Header.js";
-import { PortNotice } from "./PortNotice.js";
 import { startPolling } from "./poll.js";
+import { useViewer } from "./useViewer.js";
+import { Zone } from "./Zone.js";
 
 export function App() {
   // One loop for the page, started once and stopped on unmount — StrictMode
@@ -23,12 +24,19 @@ export function App() {
   // double the request rate against a server this page polls every 2s.
   useEffect(() => startPolling(), []);
 
+  const { zones } = useViewer();
+
   return (
     <>
       <Header />
       <div id="mainRow">
-        <main id="zones">
-          <PortNotice />
+        {/* The column count follows the zone count, capped at 3 — beyond that
+            the zones wrap into rows rather than becoming slivers. The old page
+            wrote this same rule onto the element from JS. */}
+        <main id="zones" style={{ gridTemplateColumns: `repeat(${Math.min(zones.length, 3)}, 1fr)` }}>
+          {zones.map((zone) => (
+            <Zone key={zone.id} zone={zone} />
+          ))}
         </main>
       </div>
     </>
