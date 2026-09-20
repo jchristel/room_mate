@@ -307,12 +307,19 @@ fn default_room_label() -> Vec<String> {
 /// additive: a project that sets nothing renders exactly as it did.
 ///
 /// **Three shapes rather than one, because the entities genuinely differ.** A
-/// single struct with four optional colours for all six would offer a ceiling a
-/// hover colour and a space a selection colour -- neither is drawn, neither is
-/// pickable, and the setting would do nothing. The settings page is generated
-/// from these types, so a field here becomes a control there; giving each
-/// entity exactly the fields it can express is what keeps a dead control
-/// impossible to build rather than merely discouraged.
+/// single struct with four optional colours for all six would offer a ceiling
+/// a hover FILL and a space a fill -- neither is drawn, and the setting would
+/// do nothing. The settings page is generated from these types, so a field
+/// here becomes a control there; giving each entity exactly the fields it can
+/// express is what keeps a dead control impossible to build rather than merely
+/// discouraged.
+///
+/// **What an entity can express changes as the viewer grows, and this type is
+/// where that is recorded.** `OutlineAppearance` carried only `line` because
+/// spaces, ceilings and floors had no pick index when it was written; the
+/// selection filter gave them one, so `selection` is real now and the field
+/// exists. The direction of the dependency is the point: a control is added
+/// because something draws it, never the other way round.
 ///
 /// Values are CSS colour strings, stored VERBATIM and never parsed here -- the
 /// same treatment `Band::colour` gets, and for the same reason: the server
@@ -339,8 +346,7 @@ pub struct Appearance {
     #[serde(default, skip_serializing_if = "ElementAppearance::is_default")]
     pub ffe: ElementAppearance,
 
-    /// Spaces: an outline over the rooms, with no fill and no pick index, so
-    /// `line` is the whole of what it can express.
+    /// Spaces: an outline over the rooms, with no fill.
     #[serde(default, skip_serializing_if = "OutlineAppearance::is_default")]
     pub spaces: OutlineAppearance,
 
@@ -431,7 +437,14 @@ impl ElementAppearance {
     }
 }
 
-/// An overlay drawn as an outline only, and neither filled nor pickable.
+/// An overlay drawn as an outline only: never filled, but selectable since the
+/// per-zone selection filter gave these three a pick index.
+///
+/// No `fill`, and that one is structural rather than pending: a space, a
+/// ceiling and the room beneath them occupy the same ground, so a second
+/// filled polygon would either hide the room or be hidden by it. The layer is
+/// an outline BECAUSE the comparison with the room is the question it exists
+/// to answer.
 #[derive(Debug, Default, Deserialize, Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../src-js/settings/generated/")]
 pub struct OutlineAppearance {
@@ -440,11 +453,21 @@ pub struct OutlineAppearance {
     /// other is a way to lose it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
+    /// Selection ring, and the pick list's hover preview of it. Theme default:
+    /// `--accent`.
+    ///
+    /// **Worth setting precisely because the ring is thicker than the layer's
+    /// own line.** A ceiling draws dashed in the room ink, so its selection
+    /// ring -- solid, 4px, accent -- is what separates "this ceiling" from the
+    /// ceiling line itself; a project that has already moved `line` off the
+    /// ink will usually want to move this with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<String>,
 }
 
 impl OutlineAppearance {
     pub fn is_default(&self) -> bool {
-        self.line.is_none()
+        self.line.is_none() && self.selection.is_none()
     }
 }
 

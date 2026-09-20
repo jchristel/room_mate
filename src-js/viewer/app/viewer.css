@@ -309,14 +309,22 @@
   /* A selected space, ceiling or floor. SOLID, where the room mark is dashed:
      these layers already draw their own rings dashed (ceiling) and dotted
      (floor), so a dashed selection over them would read as the layer itself,
-     thicker. Accent only -- no per-entity variable, since `[appearance]`
-     offers these three a line colour and no selection colour. Every ring the
-     layer draws is marked, holes and all, so a multi-piece ceiling is ringed
-     whole. */
+     thicker. Every ring the layer draws is marked, holes and all, so a
+     multi-piece ceiling is ringed whole. */
   .plan-marks .surface-selected-mark {
     fill: none; stroke: var(--accent); stroke-width: 4;
     stroke-linejoin: round; vector-effect: non-scaling-stroke;
   }
+  /* Per entity since C6, which is when `[appearance]` grew a selection colour
+     for these three -- it had offered them a line colour and nothing else,
+     because they had no pick index when that block was written. Three
+     variables rather than one for the class they share: a ceiling and the
+     floor under it are routinely selected in turn, and one colour for both
+     would make the marks indistinguishable at exactly the moment a reader is
+     comparing them. */
+  .plan-marks .surface-selected-mark.spaces { stroke: var(--sel-spaces, var(--accent)); }
+  .plan-marks .surface-selected-mark.ceilings { stroke: var(--sel-ceilings, var(--accent)); }
+  .plan-marks .surface-selected-mark.floors { stroke: var(--sel-floors, var(--accent)); }
   /* A hovered element that is not a room: the pick menu's preview of an entry.
      A ring rather than a fill, because the element sits over a room and a fill
      would hide the room it is in. Thinner and fainter than the selection ring
@@ -329,6 +337,9 @@
   .plan-marks .pick-hover-mark.doors { stroke: var(--sel-doors, var(--accent)); }
   .plan-marks .pick-hover-mark.windows { stroke: var(--sel-windows, var(--accent)); }
   .plan-marks .pick-hover-mark.ffe { stroke: var(--sel-ffe, var(--accent)); }
+  .plan-marks .pick-hover-mark.spaces { stroke: var(--sel-spaces, var(--accent)); }
+  .plan-marks .pick-hover-mark.ceilings { stroke: var(--sel-ceilings, var(--accent)); }
+  .plan-marks .pick-hover-mark.floors { stroke: var(--sel-floors, var(--accent)); }
   /* No ROOM hover rule here on purpose. Room hover is a FILL, and a fill in this overlay
      sits above the canvas -- and so above the labels the canvas draws, hiding
      the label of the room being pointed at. It is drawn in the GL layer beneath
