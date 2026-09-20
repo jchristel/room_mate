@@ -65,6 +65,31 @@ export function keepChosen(
   return hidden?.size ? entries.filter(([k]) => !hidden.has(k)) : entries.slice();
 }
 
+/**
+ * One property's value across the instance and type tiers, or `null`.
+ *
+ * **A tier only wins when it holds something**, which is the contract's own
+ * `lookup_property` rule restated for the page. A BLANK instance parameter
+ * does not shadow a real type value — `Door Leaf Thickness` is blank on 22 of
+ * 26 sample doors while the type says `40.0` — and an emptiness test that only
+ * checked for `""` would read Revit's literal `"None"` as a real answer, so
+ * this shares `isEmptyPropValue` with hide-empty rather than writing its own.
+ *
+ * `null` for "neither tier has it", so a caller can tell that apart from a
+ * value and fall back in its own words.
+ */
+export function tieredValue(
+  name: string,
+  instance: Record<string, { value?: string } | undefined> | undefined,
+  type: Record<string, { value?: string } | undefined> | undefined,
+): string | null {
+  const first = instance?.[name]?.value;
+  if (!isEmptyPropValue(first)) return first as string;
+  const second = type?.[name]?.value;
+  if (!isEmptyPropValue(second)) return second as string;
+  return null;
+}
+
 /** A property map as sorted `[key, value]` rows. */
 export function propertyRows(properties: Room["properties"] | undefined): (readonly [string, string])[] {
   return Object.entries(properties ?? {})

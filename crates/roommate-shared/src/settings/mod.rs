@@ -290,6 +290,12 @@ pub struct Settings {
     /// documents.
     #[serde(default, skip_serializing_if = "Appearance::is_default")]
     pub appearance: Appearance,
+
+    /// What a hover over the plan shows, per entity (see `HoverProperties`).
+    /// A table, so it is declared after every scalar for the TOML ordering
+    /// reason `comparison_key` documents.
+    #[serde(default, skip_serializing_if = "HoverProperties::is_default")]
+    pub hover: HoverProperties,
 }
 
 fn default_room_label() -> Vec<String> {
@@ -468,6 +474,62 @@ pub struct OutlineAppearance {
 impl OutlineAppearance {
     pub fn is_default(&self) -> bool {
         self.line.is_none() && self.selection.is_none()
+    }
+}
+
+/// Which property a hover over the plan reads out, per entity.
+///
+/// **One flat struct where `Appearance` needed three**, and the difference is
+/// real rather than a style choice: appearance is shaped by what each entity
+/// DRAWS, which genuinely differs — a space has no fill, a ceiling has no
+/// hover state. Every entity here carries properties, so every entity can
+/// answer the same question, and splitting this would be shape for its own
+/// sake.
+///
+/// **Absent is the viewer's existing behaviour, not an empty tooltip**: the
+/// hover falls back to the element's name, then its id. So does a name that no
+/// element carries — which is the ordinary failure here, since these are Revit
+/// parameter names typed by hand and nothing on the server knows a door's
+/// vocabulary. A typo costs a reader the feature, never the tooltip; the
+/// alternative, a blank hover, reads as a broken plan.
+///
+/// The lookup is the contract's own tier rule: the INSTANCE parameter, then
+/// the TYPE, and a tier only wins when it holds something. A blank instance
+/// parameter does not shadow a real type value — `Door Leaf Thickness` is
+/// blank on 22 of 26 sample doors while the type says 40.0, which is exactly
+/// the property someone would put here.
+#[derive(Debug, Default, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct HoverProperties {
+    /// Rooms. Model properties only: a joined reference field is not on the
+    /// wire for every read this has to serve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rooms: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doors: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ffe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spaces: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceilings: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floors: Option<String>,
+}
+
+impl HoverProperties {
+    /// True when no entity names one, so an untouched block stays out of the
+    /// written file.
+    pub fn is_default(&self) -> bool {
+        self.rooms.is_none()
+            && self.doors.is_none()
+            && self.windows.is_none()
+            && self.ffe.is_none()
+            && self.spaces.is_none()
+            && self.ceilings.is_none()
+            && self.floors.is_none()
     }
 }
 

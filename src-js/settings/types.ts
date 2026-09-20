@@ -44,6 +44,7 @@ export type { Appearance } from "./generated/Appearance";
 export type { RoomAppearance } from "./generated/RoomAppearance";
 export type { ElementAppearance } from "./generated/ElementAppearance";
 export type { OutlineAppearance } from "./generated/OutlineAppearance";
+export type { HoverProperties } from "./generated/HoverProperties";
 export type { ProjectFileSummary } from "./generated/ProjectFileSummary";
 export type { ProjectSettingsResponse } from "./generated/ProjectSettingsResponse";
 export type { SaveResponse } from "./generated/SaveResponse";

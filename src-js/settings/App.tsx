@@ -34,6 +34,7 @@ import { AppearanceSection } from "./sections/appearance.js";
 import { AreasSection } from "./sections/areas.js";
 import { ColourPlansSection } from "./sections/colourPlans.js";
 import { HierarchySection } from "./sections/hierarchy.js";
+import { HoverSection } from "./sections/hover.js";
 import { IdentitySection } from "./sections/identity.js";
 import { MilestonesSection } from "./sections/milestones.js";
 import { PoliciesSection } from "./sections/policies.js";
@@ -405,6 +406,7 @@ function Sections({
           a plan colours SOME rooms by what they are, and this colours every
           layer by what it is. Where both answer, the plan wins. */}
       <AppearanceSection settings={settings} edit={edit} />
+      <HoverSection settings={settings} edit={edit} />
     </>
   );
 }

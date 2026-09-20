@@ -33,10 +33,31 @@ export interface ViewerAppearance extends PlanAppearance {
   floors?: WithSelection<NonNullable<PlanAppearance["floors"]>> | undefined;
 }
 
+/**
+ * Which property a hover shows, per entity (G8).
+ *
+ * Read from the same settings fetch as the appearance, because it is the same
+ * file and the same trigger -- one request per project change, not two things
+ * to keep in step with the project picker.
+ *
+ * Every field absent is the ORDINARY state and means the viewer's existing
+ * behaviour: name, then id. Never an empty tooltip.
+ */
+export interface HoverProperties {
+  rooms?: string | null;
+  doors?: string | null;
+  windows?: string | null;
+  ffe?: string | null;
+  spaces?: string | null;
+  ceilings?: string | null;
+  floors?: string | null;
+}
+
 interface ResolvedSettings {
   settings?: {
     appearance?: ViewerAppearance;
     colour_plans?: ColourPlan[];
+    hover?: HoverProperties;
   };
 }
 
@@ -79,12 +100,13 @@ export function applySelectionColours(appearance: ViewerAppearance): void {
  */
 export async function loadAppearance(projectId: string | null): Promise<void> {
   if (!projectId) {
-    setState({ appearance: {}, colourPlans: [] });
+    setState({ appearance: {}, colourPlans: [], hoverProperties: {} });
     applySelectionColours({});
     return;
   }
   let appearance: ViewerAppearance = {};
   let colourPlans: ColourPlan[] = [];
+  let hoverProperties: HoverProperties = {};
   try {
     // Both fields from ONE read, deliberately: they are two fields of one
     // settings file fetched on one trigger, and a second request would be a
@@ -92,9 +114,11 @@ export async function loadAppearance(projectId: string | null): Promise<void> {
     const data = await fetchJson<ResolvedSettings>(`/api/settings/resolve/${encodeURIComponent(projectId)}`);
     appearance = data.settings?.appearance ?? {};
     colourPlans = data.settings?.colour_plans ?? [];
+    hoverProperties = data.settings?.hover ?? {};
   } catch {
     appearance = {};
     colourPlans = [];
+    hoverProperties = {};
   }
   // Only if the project is still the one asked for: two project changes in
   // quick succession would otherwise let the slower response win.
@@ -105,6 +129,7 @@ export async function loadAppearance(projectId: string | null): Promise<void> {
   setState({
     appearance,
     colourPlans,
+    hoverProperties,
     zones: getState().zones.map((z) => ({ ...z, colourPlan: active })),
   });
   applySelectionColours(appearance);

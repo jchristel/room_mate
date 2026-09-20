@@ -6,6 +6,7 @@ import type { ColourPlan } from "./ColourPlan";
 import type { FfePolicy } from "./FfePolicy";
 import type { HierarchyExclusion } from "./HierarchyExclusion";
 import type { HierarchyTier } from "./HierarchyTier";
+import type { HoverProperties } from "./HoverProperties";
 import type { Milestone } from "./Milestone";
 import type { OpeningPolicy } from "./OpeningPolicy";
 import type { Sources } from "./Sources";
@@ -272,4 +273,10 @@ anchor_model?: string | null,
  * after every scalar for the TOML ordering reason `comparison_key`
  * documents.
  */
-appearance?: Appearance, };
+appearance?: Appearance, 
+/**
+ * What a hover over the plan shows, per entity (see `HoverProperties`).
+ * A table, so it is declared after every scalar for the TOML ordering
+ * reason `comparison_key` documents.
+ */
+hover?: HoverProperties, };

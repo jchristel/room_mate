@@ -8,6 +8,7 @@ import {
   propertyRows,
   referenceRows,
   sourceDisplayName,
+  tieredValue,
 } from "./properties.js";
 import type { Room } from "../renderer/types.js";
 
@@ -143,5 +144,30 @@ describe("keepChosen", () => {
 
   it("never hands back the caller's array", () => {
     expect(keepChosen(rows, undefined)).not.toBe(rows);
+  });
+});
+
+describe("tieredValue", () => {
+  it("takes the instance when it holds something", () => {
+    expect(tieredValue("Width", { Width: { value: "900" } }, { Width: { value: "820" } })).toBe("900");
+  });
+
+  /** THE rule this function exists for, and the measurement behind it: a blank
+   *  instance parameter must not shadow a real type value. `Door Leaf
+   *  Thickness` is blank on 22 of 26 sample doors while the type says 40.0. */
+  it("falls through a BLANK instance to the type", () => {
+    expect(tieredValue("Door Leaf Thickness", { "Door Leaf Thickness": { value: "" } }, { "Door Leaf Thickness": { value: "40.0" } })).toBe("40.0");
+  });
+
+  /** And through Revit's literal "None", which is what an unset parameter
+   *  actually arrives as -- the same detail hide-empty turns on. */
+  it("treats Revit's None as absent in either tier", () => {
+    expect(tieredValue("Finish", { Finish: { value: "None" } }, { Finish: { value: "PAINT" } })).toBe("PAINT");
+    expect(tieredValue("Finish", { Finish: { value: "None" } }, { Finish: { value: "None" } })).toBeNull();
+  });
+
+  it("is null when neither tier carries it, so a caller can say so in its own words", () => {
+    expect(tieredValue("Nope", { A: { value: "1" } }, { B: { value: "2" } })).toBeNull();
+    expect(tieredValue("Nope", undefined, undefined)).toBeNull();
   });
 });
