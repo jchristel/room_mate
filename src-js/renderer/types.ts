@@ -36,6 +36,11 @@ export interface Level {
 export interface ClassificationTier {
   tier: string;
   name: string;
+  /** The tier's code, when the classification declares one. Absent from this
+   *  subset until the colour plans needed it: a hierarchy plan groups by CODE
+   *  first and falls back to the name, because two departments may share a
+   *  name and never a code. */
+  code?: string | null;
   undefined: boolean;
 }
 

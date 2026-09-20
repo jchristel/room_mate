@@ -15,13 +15,15 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import { levelLabel, levelsForPayload, pickerOrder, resolveLevel, roomsOnLevel } from "../levels.js";
+import { buildColourContext, colourForRoom } from "../colour.js";
 import { elementsOnStorey, type ElementOf } from "./layers.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
-import { setZoneLevel, type ZoneRow } from "./store.js";
+import { setZoneColourPlan, setZoneLevel, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
+import type { Room } from "../../renderer/types.js";
 
 /** Above this many rooms, show a busy panel while the plan is built.
  *
@@ -34,7 +36,8 @@ import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision } = useViewer();
+  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans } =
+    useViewer();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const handleRef = useRef<ZoneHandle | null>(null);
@@ -88,6 +91,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   // page's rule.
   const rooms = useMemo(() => (payload ? roomsOnLevel(payload, levelId) : []), [payload, levelId]);
   const levelName = levels.find((l) => l.id === levelId)?.name ?? levelId ?? "";
+  const plan = colourPlans.find((p) => p.name === zone.colourPlan) ?? null;
 
   // Paint. The dependency list is what decides a repaint, and `payload` changes
   // identity only when the poll saw a new revision — so a quiet system never
@@ -121,11 +125,19 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       // drew last time.
       const on = <E extends keyof ElementOf>(entity: E): readonly ElementOf[E][] =>
         layers[entity] ? elementsOnStorey(entity, levelId).kept : [];
+      // The plan resolves to a `colourFor` callback here rather than being
+      // handed to the renderer: the palette lives in `common.js`, which the
+      // renderer bundle cannot import, so the precedence rule stays in the
+      // typed module and the hex lookup stays with the palette. The context is
+      // built ONCE per paint -- two of the three modes need a property of the
+      // whole level before any room can be coloured.
+      const ctx = plan ? buildColourContext(rooms, plan) : null;
       const build = () =>
         renderer.paint(rooms, handle.fitted, {
           showLabels,
           showRooms,
           appearance,
+          ...(plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, plan, ctx) } : {}),
           doors: on("doors"),
           showDoors: layers.doors,
           windows: on("windows"),
@@ -164,7 +176,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision]);
+  }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, plan]);
 
   // The element reads only hold the storeys that WERE on screen, so a level
   // switch (or this zone appearing at all) has to ask again. A no-op when the
@@ -176,6 +188,21 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   return (
     <div className="zone">
       <div className="zone-toolbar">
+        {/* Per zone, because it is presentation: two zones on one level under
+            two plans is the comparison this picker exists for. Hidden when the
+            project declares none, which is the ordinary case. */}
+        <select
+          className={`picker colourSelect${colourPlans.length ? "" : " hidden"}`}
+          value={zone.colourPlan ?? ""}
+          onChange={(e) => setZoneColourPlan(zone.id, e.target.value || null)}
+        >
+          <option value="">No colour</option>
+          {colourPlans.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}
+            </option>
+          ))}
+        </select>
         <select
           className={`picker levelSelect${levels.length > 1 ? "" : " hidden"}`}
           value={levelId ?? ""}

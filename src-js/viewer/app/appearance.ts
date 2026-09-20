@@ -10,6 +10,7 @@
 import { fetchJson } from "./api.js";
 import { getState, setState } from "./store.js";
 import type { PlanAppearance } from "../../renderer/seam.js";
+import type { ColourPlan } from "../colour.js";
 
 /**
  * `[appearance]` as the PAGE reads it: the renderer's paint colours plus the
@@ -32,6 +33,7 @@ export interface ViewerAppearance extends PlanAppearance {
 interface ResolvedSettings {
   settings?: {
     appearance?: ViewerAppearance;
+    colour_plans?: ColourPlan[];
   };
 }
 
@@ -67,20 +69,33 @@ export function applySelectionColours(appearance: ViewerAppearance): void {
  */
 export async function loadAppearance(projectId: string | null): Promise<void> {
   if (!projectId) {
-    setState({ appearance: {} });
+    setState({ appearance: {}, colourPlans: [] });
     applySelectionColours({});
     return;
   }
   let appearance: ViewerAppearance = {};
+  let colourPlans: ColourPlan[] = [];
   try {
+    // Both fields from ONE read, deliberately: they are two fields of one
+    // settings file fetched on one trigger, and a second request would be a
+    // second thing to keep in step with the project picker.
     const data = await fetchJson<ResolvedSettings>(`/api/settings/resolve/${encodeURIComponent(projectId)}`);
     appearance = data.settings?.appearance ?? {};
+    colourPlans = data.settings?.colour_plans ?? [];
   } catch {
     appearance = {};
+    colourPlans = [];
   }
   // Only if the project is still the one asked for: two project changes in
   // quick succession would otherwise let the slower response win.
   if (getState().scope.projectId !== projectId) return;
-  setState({ appearance });
+  // Every zone takes the project's DEFAULT plan (the one marked active), which
+  // is what "this project is normally read by department" means.
+  const active = colourPlans.find((p) => p.active)?.name ?? null;
+  setState({
+    appearance,
+    colourPlans,
+    zones: getState().zones.map((z) => ({ ...z, colourPlan: active })),
+  });
   applySelectionColours(appearance);
 }
