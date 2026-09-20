@@ -99,6 +99,20 @@ export interface ViewerState {
   spacesModel: string;
   /** Every model that has spaces, learned from an unscoped payload. */
   spacesModels: readonly string[];
+  /** The room search: one query, one field set, one match set for the page.
+   *
+   *  `matches` is `null` for NO QUERY and an empty set for a query that matched
+   *  nothing — opposite states, and only the second dims the plan. `seen`
+   *  records which fields the picker has already offered, so a field arriving
+   *  with a new project can default ON without re-ticking one a reader
+   *  deliberately turned off. */
+  search: {
+    query: string;
+    fields: ReadonlySet<string>;
+    seen: ReadonlySet<string>;
+    matches: ReadonlySet<string> | null;
+    active: boolean;
+  };
   /** Bumped whenever a layer's payload changes.
    *
    *  The element payloads live on their polls, not in this store -- they are
@@ -131,6 +145,7 @@ const initial: ViewerState = {
   layers: { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
   showRooms: true,
   showLabels: true,
+  search: { query: "", fields: new Set(), seen: new Set(), matches: null, active: false },
   spacesModel: "",
   spacesModels: [],
   layersRevision: 0,
@@ -244,4 +259,11 @@ export function clearSelection(): void {
 
 export function setInspectorFilter(patch: Partial<FilterState>): void {
   setState({ inspector: { ...state.inspector, ...patch } });
+}
+
+/** Update the search, from a function of what it was — the field picker reads
+ *  the previous set to add a newly discovered field without re-ticking one a
+ *  reader turned off. */
+export function setSearch(patch: (prev: ViewerState["search"]) => Partial<ViewerState["search"]>): void {
+  setState({ search: { ...state.search, ...patch(state.search) } });
 }

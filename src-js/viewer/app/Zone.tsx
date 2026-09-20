@@ -36,7 +36,7 @@ import type { Room } from "../../renderer/types.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection } =
+  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection, search } =
     useViewer();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -179,6 +179,16 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     void renderer.ready.then(draw);
   }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, plan]);
 
+  // Search is applied to what is ALREADY drawn -- never by re-rendering. A
+  // search can match thousands of rooms, and a keystroke must not re-upload a
+  // level; the renderer writes a vertex attribute instead.
+  useEffect(() => {
+    handleRef.current?.renderer.applyHighlight({
+      searchActive: search.active,
+      matchRoomIds: search.matches as ReadonlySet<string> | null,
+    });
+  }, [search.active, search.matches, payload, levelId]);
+
   // The mark follows the PAGE selection, in every zone that draws the element:
   // one room can appear in two zones showing the same level, and a selection
   // visible in only one of them reads as a broken click in the other. Its own
@@ -229,7 +239,14 @@ export function Zone({ zone }: { zone: ZoneRow }) {
         </select>
         <span className="meta">
           {payload
-            ? `${levelName || "—"} · ${rooms.length} room${rooms.length === 1 ? "" : "s"} · v${payload.schema_version}`
+            ? `${levelName || "—"} · ${rooms.length} room${rooms.length === 1 ? "" : "s"} · v${payload.schema_version}${
+                // The match count spans the whole payload, not this level: the
+                // highlight is visible only here, but "how many matched" is a
+                // question about the search, not about the storey.
+                search.active && search.matches
+                  ? ` · ${search.matches.size} match${search.matches.size === 1 ? "" : "es"}`
+                  : ""
+              }`
             : status}
         </span>
       </div>
