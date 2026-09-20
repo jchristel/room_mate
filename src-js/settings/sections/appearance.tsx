@@ -7,11 +7,14 @@
 // colours that sit a few inches apart on the plan.
 //
 // **Every cell that exists is backed by something drawn.** The gaps in the grid
-// are the point rather than an omission -- a space has no fill and no pick
-// index, so a fill or a selection colour for it would be a control that does
-// nothing. The three Rust types behind this (`RoomAppearance`,
-// `ElementAppearance`, `OutlineAppearance`) are shaped so those cells cannot be
-// written by accident: there is no field to bind them to.
+// are the point rather than an omission -- a space is never filled, and hover
+// is a room-only FILL -- so a control for either would do nothing. The three
+// Rust types behind this (`RoomAppearance`, `ElementAppearance`,
+// `OutlineAppearance`) are shaped so those cells cannot be written by
+// accident: there is no field to bind them to. When a gap is filled it is
+// because the viewer grew, not because the grid looked untidy -- the three
+// outline layers gained a selection cell when the per-zone selection filter
+// gave them a pick index.
 //
 // The fallbacks below are the renderer's own hard defaults from
 // `gl/colour.ts::readPalette`, not the live CSS variables. They are what the
@@ -98,6 +101,8 @@ export function AppearanceSection({
     note: string,
   ) => {
     const current: OutlineAppearance = appearance[key] ?? {};
+    const editOutline = (change: (o: OutlineAppearance) => OutlineAppearance) =>
+      editAppearance((a) => ({ ...a, [key]: change(a[key] ?? {}) }));
     return (
       <tr key={key}>
         <th scope="row">{label}</th>
@@ -106,16 +111,21 @@ export function AppearanceSection({
             value={current.line}
             fallback={fallback}
             title={note}
-            onChange={(line) => editAppearance((a) => ({ ...a, [key]: { ...(a[key] ?? {}), line } }))}
+            onChange={(line) => editOutline((o) => ({ ...o, line }))}
           />
         </td>
         <td className="cell-absent" title="Drawn as an outline over the rooms, never filled.">
           &mdash;
         </td>
-        <td className="cell-absent" title="Not selectable: this layer has no pick index.">
-          &mdash;
+        <td>
+          <OptionalColour
+            value={current.selection}
+            fallback={ACCENT}
+            title="The solid ring around the selected element, and the pick list's fainter preview of it. Thicker than this layer's own line, which is what separates the selected piece from the layer around it."
+            onChange={(selection) => editOutline((o) => ({ ...o, selection }))}
+          />
         </td>
-        <td className="cell-absent" title="Not hoverable: this layer has no pick index.">
+        <td className="cell-absent" title="Hover is a room-only state today, so there is nothing here to colour.">
           &mdash;
         </td>
       </tr>
@@ -128,9 +138,9 @@ export function AppearanceSection({
       hint={
         <>
           What each layer is drawn in. A colour left on <strong>theme</strong> follows the reader&apos;s light/dark
-          palette, which is where every project starts &mdash; pin all fifteen and the plan will read correctly in one
-          theme and badly in the other, so override what needs distinguishing and leave the rest. A dash is a colour
-          this layer has nothing to apply it to.
+          palette, which is where every project starts &mdash; pin every one of them and the plan will read correctly
+          in one theme and badly in the other, so override what needs distinguishing and leave the rest. A dash is a
+          colour this layer has nothing to apply it to.
         </>
       }
     >

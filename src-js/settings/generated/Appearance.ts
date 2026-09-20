@@ -15,12 +15,19 @@ import type { RoomAppearance } from "./RoomAppearance";
  * additive: a project that sets nothing renders exactly as it did.
  *
  * **Three shapes rather than one, because the entities genuinely differ.** A
- * single struct with four optional colours for all six would offer a ceiling a
- * hover colour and a space a selection colour -- neither is drawn, neither is
- * pickable, and the setting would do nothing. The settings page is generated
- * from these types, so a field here becomes a control there; giving each
- * entity exactly the fields it can express is what keeps a dead control
- * impossible to build rather than merely discouraged.
+ * single struct with four optional colours for all six would offer a ceiling
+ * a hover FILL and a space a fill -- neither is drawn, and the setting would
+ * do nothing. The settings page is generated from these types, so a field
+ * here becomes a control there; giving each entity exactly the fields it can
+ * express is what keeps a dead control impossible to build rather than merely
+ * discouraged.
+ *
+ * **What an entity can express changes as the viewer grows, and this type is
+ * where that is recorded.** `OutlineAppearance` carried only `line` because
+ * spaces, ceilings and floors had no pick index when it was written; the
+ * selection filter gave them one, so `selection` is real now and the field
+ * exists. The direction of the dependency is the point: a control is added
+ * because something draws it, never the other way round.
  *
  * Values are CSS colour strings, stored VERBATIM and never parsed here -- the
  * same treatment `Band::colour` gets, and for the same reason: the server
@@ -47,8 +54,7 @@ windows?: ElementAppearance,
  */
 ffe?: ElementAppearance, 
 /**
- * Spaces: an outline over the rooms, with no fill and no pick index, so
- * `line` is the whole of what it can express.
+ * Spaces: an outline over the rooms, with no fill.
  */
 spaces?: OutlineAppearance, 
 /**

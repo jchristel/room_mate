@@ -18,8 +18,8 @@ C is eight steps, each its own PR, merged before the next starts.
 | C3 | Ceiling, floor and space inspectors (G1) | merged, #169 |
 | C4 | Room panel's contents chooser (G6) | merged, #171 |
 | C5 | Grid row → plan, with pan (G3) | merged, #172 |
-| C6 | Selection colour for the outline layers (G4) | **next** |
-| C7 | Property chooser on every panel and the grid (G7) | not started |
+| C6 | Selection colour for the outline layers (G4) | merged, #173 |
+| C7 | Property chooser on every panel and the grid (G7) | **next** |
 | C8 | Hover property per entity, from settings (G8) | not started |
 
 ## How this work is run
@@ -135,12 +135,43 @@ and ~20 s after switching an overlay layer on).
   and on RHH (3,013 rows: the mark survives scrolling 40,000 px away and back;
   a plan click marks the row at index ~2,140).
 
-## What C6 needs, specifically
+## What C6 left behind
 
-`[appearance] spaces`, `ceilings` and `floors` each gain a `selection` colour
-beside their existing `line`, with a control on the settings page — a type
-error there until there is one, which is the point of the generated types.
-`--sel-spaces` / `--sel-ceilings` / `--sel-floors` are set by the appearance
-module and `.surface-selected-mark` reads them, falling back to the accent so a
-project that sets nothing looks exactly as it does today. Remember `cargo test`
-rewrites `src-js/settings/generated/` and those files are committed.
+- **No renderer change was needed.** `#ring` already tags the mark with a
+  `spaces` / `ceilings` / `floors` modifier class, exactly as it does for
+  doors; C6 is three CSS rules, three `set()` calls and one Rust field.
+- **Three variables, not one for the class the three share.** A ceiling and the
+  floor under it are routinely selected in turn, and one colour for both would
+  make the two marks indistinguishable at the moment a reader is comparing
+  them. The pick list's hover preview follows the selection colour, which is
+  the rule doors/windows/FF&E already use.
+- **The Rust doc said "neither filled nor pickable", and half of it had gone
+  stale.** C2 gave these layers a pick index; the type now records that
+  `selection` arrived because the viewer grew and `fill` stays absent for a
+  structural reason (the layer is an outline BECAUSE the comparison with the
+  room beneath is the question it exists to answer).
+- **The Appearance hint no longer counts its controls.** It said "pin all
+  fifteen" against sixteen; it now says "every one of them", because a count in
+  prose beside a grid that grows is a thing that drifts twice.
+- **Driving this needs your OWN server, and the port is the obstacle.** Another
+  session's `roommate` holds port 5151 AND `target/debug/roommate.exe`, so a
+  second one fails to link with "Access is denied (os error 5)". A temporary
+  `.claude/launch.json` entry with `--port 5153` and `--target-dir target/c6`
+  works; expect a full cold compile (~6 min) and delete both afterwards.
+- **House A holds no spaces, ceilings or floors in this store** (all three read
+  200 with an empty list), so anything about the surface layers has to be
+  driven on RHH. LEVEL 6 again.
+- Verified end to end: saved through the settings page into
+  `settings/projects/*.toml`, served by `/api/settings/resolve`, applied as
+  `--sel-*`, and read by the mark — ceiling `rgb(0,160,255)`, floor
+  `rgb(0,192,96)`, space `rgb(255,0,192)`, hover preview matching. Reset back
+  to "theme" and the mark returned to `rgb(180,84,31)`, the accent.
+
+## What C7 needs, specifically
+
+One chooser component over a list of property NAMES with All / None, reused by
+every inspector and by the grid's columns. The chosen set lives per KIND in the
+store beside `inspector`, defaults to everything, and is not persisted. The
+"N of M shown" line counts against the property list the ELEMENT has, not
+against the chosen subset — critique 15 is what keeps the chooser and the name
+filter from contradicting each other silently. `DropMenu` (C4) is the shell.

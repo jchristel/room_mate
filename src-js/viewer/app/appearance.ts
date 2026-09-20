@@ -28,6 +28,9 @@ export interface ViewerAppearance extends PlanAppearance {
   doors?: WithSelection<NonNullable<PlanAppearance["doors"]>> | undefined;
   windows?: WithSelection<NonNullable<PlanAppearance["windows"]>> | undefined;
   ffe?: WithSelection<NonNullable<PlanAppearance["ffe"]>> | undefined;
+  spaces?: WithSelection<NonNullable<PlanAppearance["spaces"]>> | undefined;
+  ceilings?: WithSelection<NonNullable<PlanAppearance["ceilings"]>> | undefined;
+  floors?: WithSelection<NonNullable<PlanAppearance["floors"]>> | undefined;
 }
 
 interface ResolvedSettings {
@@ -57,6 +60,13 @@ export function applySelectionColours(appearance: ViewerAppearance): void {
   set("--sel-doors", appearance.doors?.selection);
   set("--sel-windows", appearance.windows?.selection);
   set("--sel-ffe", appearance.ffe?.selection);
+  // The three outline layers, since C6. Named by ENTITY like the rest, not by
+  // the one `surface-selected-mark` class the three share: they are three
+  // settings and a reader comparing a ceiling against the floor under it needs
+  // to be able to tell the two marks apart.
+  set("--sel-spaces", appearance.spaces?.selection);
+  set("--sel-ceilings", appearance.ceilings?.selection);
+  set("--sel-floors", appearance.floors?.selection);
 }
 
 /**
