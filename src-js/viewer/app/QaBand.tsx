@@ -17,9 +17,8 @@ import { setShowErrors, setValidation } from "./store.js";
 import { sourceDisplayName } from "../properties.js";
 import { useViewer } from "./useViewer.js";
 
-export function QaBand() {
+export function QaBand({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { scope, validation } = useViewer();
-  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -39,7 +38,7 @@ export function QaBand() {
           // control of its own: a reader opens QA to look at the flagged
           // rooms, and a plan that lit up on a background refresh would be a
           // change nobody asked for.
-          setOpen(!open);
+          onToggle();
           setShowErrors(!open);
         }}
       >
