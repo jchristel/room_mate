@@ -55,11 +55,18 @@ export function wirePlanGestures(
    *  ones: `setPointerCapture` retargets every later event to the svg, and by
    *  pointerup the pointer may have drifted within the slop. */
   let downAt = { x: 0, y: 0 };
+  /** What the press landed ON, for the footprints: the areas overlay stamps
+   *  each path with its group key, so a click on one resolves without a second
+   *  hit test. Rooms are picked from raw coordinates instead — `paintLevel` is
+   *  shared verbatim with the SVG export, and an export has no business
+   *  carrying selection plumbing. */
+  let downNode: Element | null = null;
 
   const onPointerDown = (e: PointerEvent) => {
     dragging = true;
     movedFar = false;
     downAt = { x: e.clientX, y: e.clientY };
+    downNode = e.target instanceof Element ? e.target : null;
     last = { x: e.clientX, y: e.clientY };
     svg.setPointerCapture(e.pointerId);
   };
@@ -70,6 +77,17 @@ export function wirePlanGestures(
     if (movedFar) return; // a pan, not a click
     const handle = handleOf(zoneId);
     if (!handle) return;
+    // Footprints win over everything beneath them, because that is what an
+    // areas-on plan is SHOWING: the rooms below are ghosted to 0.16 precisely
+    // so the overlay reads as the subject. Selecting a room under one means
+    // turning that zone's overlay off, which is per zone.
+    const areaKey = downNode?.closest?.(".area-poly")?.getAttribute("data-area-key");
+    if (areaKey) {
+      select("area", areaKey, zoneId);
+      downNode = null;
+      return;
+    }
+    downNode = null;
     const hit = handle.renderer.pickAt(downAt.x, downAt.y);
     // Empty space CLEARS the selection, which is how a reader deselects
     // without a second control.

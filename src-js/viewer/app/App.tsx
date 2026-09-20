@@ -11,9 +11,10 @@
 // not written from scratch, and a stylesheet rewritten alongside the markup
 // would make a visual difference impossible to attribute.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { Grid } from "./Grid.js";
+import { AreasBand } from "./AreasBand.js";
 import { QaBand } from "./QaBand.js";
 import { Header } from "./Header.js";
 import { Inspector } from "./inspector/Inspector.js";
@@ -22,6 +23,7 @@ import { useViewer } from "./useViewer.js";
 import { Zone } from "./Zone.js";
 
 export function App() {
+  const [areasOpen, setAreasOpen] = useState(false);
   // One loop for the page, started once and stopped on unmount — StrictMode
   // runs an effect twice in development, and a loop with no cleanup would
   // double the request rate against a server this page polls every 2s.
@@ -53,6 +55,7 @@ export function App() {
             zone. Areas and adjacency join QA here in the rest of B8. */}
         <div id="band1">
           <QaBand />
+          <AreasBand open={areasOpen} onToggle={() => setAreasOpen(!areasOpen)} />
         </div>
         <Grid />
       </footer>
