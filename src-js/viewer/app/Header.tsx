@@ -10,6 +10,7 @@
 import { buildingLabel, type Scope } from "../scope.js";
 import { setScope } from "./poll.js";
 import { LayerToggles } from "./LayerToggles.js";
+import { Search } from "./Search.js";
 import { addZone, MAX_ZONES, removeZone, setLinkViews } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
@@ -90,6 +91,7 @@ export function Header() {
         Link views: {linkViews ? "on" : "off"}
       </button>
       <LayerToggles />
+      <Search />
       <div className="links">
         <a href="/">the current viewer</a>
         <a href="/reports/">reports</a>
