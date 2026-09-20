@@ -29,7 +29,10 @@ import {
 } from "./api.js";
 import { persistSelection, seedProjectId, urlParam } from "./common.js";
 import { getState, setState } from "./store.js";
+import { loadAppearance } from "./appearance.js";
+import { pollLayers } from "./layers.js";
 import { keepBuilding, keepMilestone, resolveProject, roomsUrl, type Scope } from "../scope.js";
+import { elementUrl, visibleStoreys } from "../elementUrls.js";
 
 const TICK_MS = 2000;
 
@@ -39,6 +42,12 @@ let revision: string | null = null;
 /** One-shot: the URL/localStorage restore applies on the first resolve only, so
  *  the 2-second refresh can never clobber a later manual change. */
 let seeded = false;
+/** The project whose appearance is loaded, so the fetch happens on a project
+ *  change rather than on every tick. */
+let appearanceFor: string | null = null;
+/** The element reads' last URL scope, so a storey switch re-reads and a quiet
+ *  tick does not. */
+let lastStoreyKey: string | null = null;
 
 /** Force the next tick to treat whatever arrives as new. Called when the scope
  *  changes, so the page repaints at once rather than after the next push. */
@@ -112,6 +121,13 @@ async function refreshScope(projects: readonly ProjectRow[]): Promise<void> {
   }
 
   setState({ projects, scope: next, buildings: buildingRows, milestones: milestoneRows });
+
+  // Once per project change, not per tick: appearance is a property of the
+  // project, and the settings read is the viewer's only use of that API.
+  if (next.projectId !== appearanceFor) {
+    appearanceFor = next.projectId;
+    await loadAppearance(next.projectId);
+  }
 }
 
 async function pollRooms(): Promise<void> {
@@ -154,12 +170,41 @@ export async function tick(): Promise<void> {
     // the connection, in the words the reader sees.
     const projects = await fetchJson<ProjectRow[]>(projectsUrl).catch(() => null);
     if (projects) await refreshScope(projects);
+    // Every layer is asked on every tick and only re-renders when IT changed.
+    // Before the rooms read, so a tick that changed both paints once with both
+    // rather than painting rooms and then repainting to add the elements.
+    await pollLayers();
     await pollRooms();
   } catch {
     setState({ status: "connection lost" });
   } finally {
     inFlight = false;
   }
+}
+
+/**
+ * Re-read the element layers because the storeys on screen moved — a level
+ * switch, a zone added or removed, or the first rooms payload choosing each
+ * zone's level.
+ *
+ * Keyed on the URL the reads would use: that string IS the scope plus the
+ * storeys, so an unchanged key means nothing to ask for. Before the first rooms
+ * payload the key is null and nothing is asked, which is what stops a load
+ * fetching every storey once.
+ */
+export async function onStoreysChanged(): Promise<void> {
+  const key = elementUrl("doors", getState().scope, storeysKey());
+  if (key === null || key === lastStoreyKey) return;
+  lastStoreyKey = key;
+  await pollLayers();
+}
+
+function storeysKey() {
+  const { payload, zones } = getState();
+  return visibleStoreys(
+    payload?.levels ?? null,
+    zones.map((z) => z.levelId),
+  );
 }
 
 /** Start the loop. Returns the stop function, for React's effect cleanup —
