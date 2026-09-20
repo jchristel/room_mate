@@ -1,0 +1,701 @@
+/* The viewer page's stylesheet, moved WHOLE from static/index.html.
+
+   Moved rather than rewritten, and that is the port's discipline in one file:
+   a parity port is checked by running the two pages side by side, and a
+   restyle makes every difference impossible to classify. Same tokens, same
+   selectors, same element ids -- which is also why the components keep the
+   old page's ids, rather than the class names a fresh React page would use.
+
+   tokens.css is NOT imported here: it is served from static/ by axum and
+   linked absolutely by index.html, exactly as the settings and reports pages
+   link it. */
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--mono);
+    display: grid;
+    /* header / zones / bottom region (results + source-data grid).
+       The bottom row is auto so an empty region costs no plan height.
+       `minmax(0, 1fr)` is load-bearing, not decoration: a grid item defaults
+       to `min-width: auto`, so the grid's very wide table (dozens of columns)
+       would otherwise stretch the single column to its intrinsic width and
+       drag `main` — and the plan canvas — out to several thousand pixels. */
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  header {
+    display: flex;
+    flex-wrap: wrap; /* scope pickers joined the header; degrade by wrapping, not clipping */
+    align-items: baseline;
+    gap: 0.6rem 1rem;
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--ink);
+  }
+  header h1 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin: 0;
+  }
+  header .links { margin-left: auto; display: flex; gap: 1rem; align-items: baseline; }
+  header .links a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+  header .links a:hover { text-decoration: underline; }
+
+  /* Global scope pickers: project / milestone / building — one scope for the
+     whole page (the single-project viewer). */
+  header select.picker {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.25rem 0.4rem;
+  }
+  header select.picker.hidden { display: none; }
+
+  /* App-wide controls: add/remove zone, link toggle. */
+  header button.ctl {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.25rem 0.5rem; cursor: pointer;
+  }
+  header button.ctl:hover { background: var(--fill); }
+  header button.ctl:disabled { opacity: 0.4; cursor: default; }
+  header button.ctl.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+  /* Global room search: input + a "Fields" checklist popover. */
+  header .search { position: relative; display: flex; gap: 0.4rem; align-items: center; }
+  header #searchInput {
+    font-family: var(--mono); font-size: 0.72rem; color: var(--ink);
+    background: var(--paper); border: 1px solid var(--ink); padding: 0.25rem 0.5rem;
+  }
+  .fields-panel {
+    position: absolute; top: 100%; left: 0; margin-top: 0.3rem; z-index: 10;
+    background: var(--paper); border: 1px solid var(--rule); padding: 0.5rem 0.6rem;
+    max-height: 40vh; overflow: auto; min-width: 12rem;
+  }
+  .fields-panel.hidden { display: none; }
+  .fields-panel .fields-actions { margin-bottom: 0.4rem; display: flex; gap: 0.5rem; }
+  .fields-panel .fields-actions a { color: var(--accent); font-size: 0.66rem; cursor: pointer; }
+  .fields-panel label { display: block; font-size: 0.7rem; white-space: nowrap; cursor: pointer; }
+
+  /* The zone grid. The 1px gap over a dark background is the hairline rule
+     between zones. Column count is set on `main` from the zone count. */
+  /* Zones + inspector. `minmax(0, 1fr)` on the zones column for the same reason
+     `body` carries it: a grid item's min-width defaults to `auto`, so one long
+     unwrapped property value in the inspector would otherwise stretch this row
+     and drag the plan canvas out with it — the bug the band-2 table already hit
+     once. The inspector column is `auto`, so a hidden inspector costs nothing. */
+  #mainRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  main {
+    display: grid;
+    gap: 1px;
+    background: var(--ink);
+    min-height: 0;
+    min-width: 0;
+  }
+
+  /* ---- room inspector (selection is page state) ---------------------------
+     ONE per page, never one per zone: selection is page state, so a per-zone
+     inspector would sit empty in every zone but one. A layout participant that
+     reflows the plans, NOT an absolutely-positioned overlay inside
+     `.zone-canvas` — that was how `.validation-panel`/`.areas-panel` worked, and
+     getting them out of there was the point of the bottom-region work. */
+  #inspector {
+    width: 22rem;
+    max-width: 40vw;          /* never let the panel crowd out the plan */
+    background: var(--paper);
+    border-left: 1px solid var(--ink);
+    overflow-y: auto;
+    min-height: 0;
+    font-size: 0.7rem;
+  }
+  #inspector.hidden { display: none; }
+  #inspector .insp-head {
+    position: sticky; top: 0; background: var(--paper);
+    border-bottom: 1px solid var(--ink);
+    padding: 0.5rem 0.7rem;
+  }
+  #inspector .insp-title { font-weight: 600; letter-spacing: 0.06em; word-break: break-word; }
+  #inspector .insp-sub { color: var(--accent); font-size: 0.64rem; letter-spacing: 0.06em; margin-top: 0.15rem; }
+  #inspector .insp-controls { display: flex; flex-wrap: wrap; gap: 0.35rem 0.6rem; align-items: center; margin-top: 0.45rem; }
+  #inspector .insp-controls input[type="search"] {
+    flex: 1 1 7rem; min-width: 0;
+    font-family: var(--mono); font-size: 0.66rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--rule); padding: 0.2rem 0.3rem;
+  }
+  #inspector .insp-controls label { display: flex; align-items: center; gap: 0.25rem; font-size: 0.64rem; white-space: nowrap; }
+  #inspector .insp-count { color: var(--accent); font-size: 0.62rem; letter-spacing: 0.06em; }
+  #inspector h4 {
+    margin: 0; padding: 0.4rem 0.7rem 0.2rem;
+    font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  /* Model vs reference-source data stay visually distinct: STRATEGY-SOURCES
+     keeps every reference source a separate sub-object with its own
+     lifecycle, and band 2 already tints its columns as a block. The
+     inspector must not be the place that blurs it. `.src-reference` is
+     shared by every joined source (dRofus, or any other), not just dRofus. */
+  #inspector .insp-rows.src-reference { background: var(--reference-tint, rgba(0, 0, 0, 0.03)); }
+  #inspector .insp-row {
+    display: grid; grid-template-columns: 45% 1fr; gap: 0.4rem;
+    padding: 0.18rem 0.7rem; align-items: start;
+  }
+  #inspector .insp-row:nth-child(odd) { background: rgba(0, 0, 0, 0.02); }
+  #inspector .insp-k { color: var(--accent); word-break: break-word; }
+  #inspector .insp-v { word-break: break-word; white-space: pre-wrap; }
+  /* `insp-empty`, NOT a bare `empty`: the zone's no-data overlay owns `.empty`
+     globally as `position: absolute; inset: 0`. A row carrying that class picked
+     the positioning up, and with no positioned ancestor it resolved against the
+     viewport — an invisible full-page shield over the plans that swallowed every
+     click, drag and wheel. */
+  #inspector .insp-v.insp-empty { opacity: 0.45; font-style: italic; }
+  #inspector .insp-note { padding: 0.3rem 0.7rem 0.6rem; opacity: 0.6; font-style: italic; }
+  /* A contents row that moves the selection to the element it names. ONLY the
+     "in this room" rows carry it: every other row in this panel is a value, and
+     making a value look clickable is a worse lie than making a link look plain.
+     The indent is what separates an element row from the entity tally above it
+     without a second heading level. */
+  #inspector .insp-row.insp-link { cursor: pointer; }
+  #inspector .insp-row.insp-link:hover { background: rgba(0, 0, 0, 0.07); }
+  #inspector .insp-row.insp-link .insp-k { padding-left: 0.7rem; color: inherit; }
+  /* The tally row above each element list: entity name, then a count or the
+     reason there is no count. Not a link, and not indented. */
+  #inspector .insp-row.insp-tally .insp-k { font-weight: 600; }
+
+  .zone {
+    position: relative;
+    background: var(--paper);
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Per-zone toolbar — a caption strip: this zone's own colour/level pickers
+     (presentation) plus its validation toggle and meta line. Scope pickers
+     live in the header; a zone never chooses what data it shows. */
+  .zone-toolbar {
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: 0.4rem; padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--ink);
+  }
+  .zone-toolbar select.picker {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem;
+  }
+  .zone-toolbar select.picker.hidden { display: none; }
+  .zone-toolbar button.validation-toggle {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem; cursor: pointer;
+  }
+  .zone-toolbar button.validation-toggle.issues { border-color: var(--accent); color: var(--accent); }
+  .zone-toolbar button.validation-toggle.hidden { display: none; }
+  .zone-toolbar button.export-svg {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem; cursor: pointer;
+  }
+  .zone-toolbar button.export-svg.hidden { display: none; }
+  .zone-toolbar .meta { font-size: 0.66rem; letter-spacing: 0.08em; color: var(--accent); margin-left: auto; }
+  .zone-toolbar .meta.stale { color: var(--ink); opacity: 0.5; }
+
+  /* The canvas region below the toolbar; holds the SVG, the empty-state note,
+     and the validation panel (both absolutely positioned over the SVG). */
+  .zone-canvas { position: relative; overflow: hidden; min-height: 0; }
+  /* --- the zone's layer stack, stated explicitly ---
+     DOM order is NOT what decides this, and assuming it did was a real bug: the
+     canvas is `position: absolute` and the <svg> was `position: static`, and CSS
+     paints every positioned element AFTER every non-positioned one regardless of
+     which comes first in the document. So the canvas covered the overlay, and
+     the dashed selection outline drawn into that overlay disappeared under the
+     room fills — visible only where it overhung a fill's edge.
+     `pointer-events: none` on the canvas hid the symptom from hit-testing, so
+     `elementFromPoint` still reported the <svg> on top while the pixels said
+     otherwise.
+       0  canvas    the plan: fills, holes, outlines, labels
+       1  svg       the overlay: selection + hover marks, areas footprints
+       2  empty     "no rooms" message
+       4  busy      "drawing plan" panel, covers everything while it builds
+       5  tip       the room tooltip, above all of it */
+  .zone-canvas svg {
+    position: relative; z-index: 1;
+    width: 100%; height: 100%; display: block; cursor: grab;
+  }
+  .zone-canvas svg:active { cursor: grabbing; }
+  /* The WebGL plan layer sits UNDER the <svg>, which stays in the DOM for the
+     areas overlay, the selection/hover marks and every pointer handler. The svg
+     keeps its own background transparent, so the two read as one drawing.
+     `pointer-events: none` because the svg above owns the pointer -- the canvas
+     receiving a click would break the capture the drag/click distinction needs. */
+  .zone-canvas canvas.plan-gl {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    display: block; pointer-events: none;
+    z-index: 0; /* see the layer stack above -- without this it paints OVER the svg */
+  }
+
+  .grid line { stroke: var(--rule); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
+
+  .room { fill: var(--fill); stroke: var(--ink); stroke-width: 1.5;
+          stroke-linejoin: round; transition: fill 0.12s ease; vector-effect: non-scaling-stroke; }
+  .room:hover { fill: var(--fill-hover); }
+  .room.error { fill: var(--error); }
+  .room.error:hover { fill: var(--accent); }
+  /* Search: matches get a bold accent outline (composes over any fill — colour
+     plan or error); non-matches fade so matches stand out. `.dim` is opacity so
+     it works regardless of an inline colour-plan fill. */
+  .room.match { stroke: var(--accent); stroke-width: 3; }
+  /* Click-selection: ONE room at a time for the
+     whole page. Deliberately louder than `.match` and dashed, so a selected room
+     is still distinguishable when it is also a search match — the two states are
+     independent and routinely co-occur. Stroke only, never fill: a colour plan
+     fill must survive being selected. */
+  .room.selected { stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3; }
+
+  /* --- marks drawn by the WebGL renderer into this SVG layer ---
+     Selection and hover are ONE room each, so they stay SVG while the thousands
+     of rooms move to GL (HANDOVER-webgl-renderer.md, Decision 1). These rules
+     MIRROR `.room.selected` and `.room:hover` above rather than reusing them,
+     for one reason each:
+       - the selection mark carries `fill: none`, because the fill it sits on is
+         painted by a different technology and must show through. In SVG the
+         class went on the room polygon itself, so the fill came free.
+       - the hover mark is a real element, so `:hover` (which needs the pointer
+         to be over THAT element) cannot drive it -- the pick does. */
+  /* The stroke reads a per-entity custom property that FALLS BACK to the
+     accent, so a project which sets nothing gets exactly what it got before
+     these variables existed -- one colour for one idea. The page sets the
+     variables from `[appearance]`; see `applyAppearance`. Only the colour is
+     per entity: width and dash stay with the class, because they encode what
+     KIND of thing is selected rather than a preference. */
+  .plan-marks .room-selected-mark {
+    fill: none; stroke: var(--sel-rooms, var(--accent)); stroke-width: 5; stroke-dasharray: 6 3;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
+  /* A door mark is SOLID and thinner than a room's dashed one. A door glyph is
+     a few feet across, so the room's 6/3 dash would resolve to two or three
+     dashes around the whole outline and read as a rendering artefact rather
+     than as a selection. Same accent colour, because it is the same state. */
+  .plan-marks .door-selected-mark {
+    fill: none; stroke: var(--accent); stroke-width: 3;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
+  .plan-marks .door-selected-mark.doors { stroke: var(--sel-doors, var(--accent)); }
+  .plan-marks .door-selected-mark.windows { stroke: var(--sel-windows, var(--accent)); }
+  .plan-marks .door-selected-mark.ffe { stroke: var(--sel-ffe, var(--accent)); }
+  /* A selected space, ceiling or floor. SOLID, where the room mark is dashed:
+     these layers already draw their own rings dashed (ceiling) and dotted
+     (floor), so a dashed selection over them would read as the layer itself,
+     thicker. Accent only -- no per-entity variable, since `[appearance]`
+     offers these three a line colour and no selection colour. Every ring the
+     layer draws is marked, holes and all, so a multi-piece ceiling is ringed
+     whole. */
+  .plan-marks .surface-selected-mark {
+    fill: none; stroke: var(--accent); stroke-width: 4;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
+  /* A hovered element that is not a room: the pick menu's preview of an entry.
+     A ring rather than a fill, because the element sits over a room and a fill
+     would hide the room it is in. Thinner and fainter than the selection ring
+     it is previewing, and in the same per-entity colour, so the two read as
+     "this one" and "this one, chosen". Room hover is a GL fill -- see below. */
+  .plan-marks .pick-hover-mark {
+    fill: none; stroke: var(--accent); stroke-width: 2; stroke-opacity: 0.6;
+    stroke-linejoin: round; vector-effect: non-scaling-stroke;
+  }
+  .plan-marks .pick-hover-mark.doors { stroke: var(--sel-doors, var(--accent)); }
+  .plan-marks .pick-hover-mark.windows { stroke: var(--sel-windows, var(--accent)); }
+  .plan-marks .pick-hover-mark.ffe { stroke: var(--sel-ffe, var(--accent)); }
+  /* No ROOM hover rule here on purpose. Room hover is a FILL, and a fill in this overlay
+     sits above the canvas -- and so above the labels the canvas draws, hiding
+     the label of the room being pointed at. It is drawn in the GL layer beneath
+     the labels instead (gl/renderer.ts, `#drawHover`), which is the ordering the
+     SVG renderer got for free by recolouring the room polygon itself. */
+
+  /* Per-room tooltip. Every room polygon used to carry an SVG <title>, giving
+     the browser a native tooltip for free; WebGL has no elements and therefore
+     no equivalent, so the hover pick drives this instead. Small, but it is a
+     shipped feature that would otherwise disappear silently. */
+  .plan-tip {
+    position: absolute; z-index: 5; pointer-events: none;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.15rem 0.35rem;
+    font-family: var(--mono); font-size: 0.72rem; white-space: nowrap;
+    transform: translate(0.6rem, 0.6rem);
+  }
+  .plan-tip.hidden { display: none; }
+
+  /* Shown while a large level is being built. Covers the plan rather than
+     sitting beside it, because the thing underneath during a rebuild is either
+     the PREVIOUS level or nothing, and both are misleading. */
+  .plan-busy {
+    position: absolute; inset: 0; z-index: 4;
+    display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--paper) 78%, transparent);
+    font-family: var(--mono); font-size: 0.78rem; color: var(--ink);
+    letter-spacing: 0.08em;
+  }
+  .plan-busy.hidden { display: none; }
+  .plan-busy span::after {
+    content: ""; display: inline-block; width: 0.6rem;
+    animation: plan-busy-dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes plan-busy-dots { 0% { content: ""; } 100% { content: "..."; } }
+  /* Respect a reduced-motion preference: the message alone still says what is
+     happening, which is the whole job. */
+  @media (prefers-reduced-motion: reduce) {
+    .plan-busy span::after { animation: none; }
+  }
+  .dim { opacity: 0.15; }
+  .hole { fill: var(--paper); stroke: var(--ink); stroke-width: 1;
+          stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+
+  .label { fill: var(--ink); text-anchor: middle;
+           dominant-baseline: middle; pointer-events: none; }
+  .label .tag { fill: var(--accent); letter-spacing: 0.05em; }
+
+  /* Scoped to the zone canvas that owns it, NOT a bare `.empty`. Unscoped, this
+     rule reached anything anywhere that happened to use so generic a word: the
+     inspector's empty-value rows picked up `position: absolute; inset: 0`, and
+     with no positioned ancestor they sized against the viewport — an invisible
+     full-page shield over the plans that ate every click, drag and wheel.
+     (`#bottomRegion.empty` is a different state on a different element, already
+     scoped by its id.)
+
+     `:not(.hidden)` is load-bearing, not decoration: scoping raised this rule's
+     specificity above the `.hidden` utility that switches the overlay off, which
+     left it displayed over every plan — the same shield bug wearing a different
+     hat. Stated here rather than fought with `!important`. */
+  .zone-canvas .empty:not(.hidden) {
+    position: absolute; inset: 0; z-index: 2; display: grid; place-content: center;
+    text-align: center; gap: 0.4rem; color: var(--ink); padding: 1rem;
+    /* It is a message, not a control — nothing in it is clickable. Without this
+       it covers the canvas it sits on and eats pan, zoom and click, which is the
+       same shield this file has now been bitten by twice. */
+    pointer-events: none;
+  }
+  .zone-canvas .empty strong { font-weight: 600; letter-spacing: 0.05em; }
+  .zone-canvas .empty span { font-size: 0.72rem; opacity: 0.6; }
+  .zone-canvas .empty code { background: #0001; padding: 0.1rem 0.4rem; }
+  .hidden { display: none; }
+
+  /* --- bottom region: the results band ---
+     Tabular/temporal output lives at the bottom of the page, not in overlays
+     covering the plan. Band 1 = results (QA, area figures): sometimes
+     visible, collapsed to a one-line strip by default — a fully hidden band
+     gets forgotten, an always-open one eats plan area. Each block's body has
+     a max height and scrolls internally so a long mismatch list can never
+     squeeze the plans; expanding a block never resizes them either (the
+     region is auto-height below a cap). Band 2 (the always-on source-data
+     grid) is the next step and slots in as a sibling block. */
+  /* ONE height for the whole region, user-draggable, now that band 2 (the
+     always-visible grid) gives it a persistent height to drag. Expanding a
+     band-1 block takes space from the GRID, never from the plans — the plans
+     must not resize because a QA run finished. Band 1 blocks are auto-height
+     (capped, scrolling internally); the grid flexes into whatever is left. */
+  #bottomRegion {
+    border-top: 1px solid var(--ink); background: var(--paper);
+    display: flex; flex-direction: column;
+    /* 20rem, not 16: the region hosts a results band over the grid now, and
+       16rem left too little for both once a results block was expanded. */
+    height: var(--bottom-h, 20rem); min-height: 0;
+    min-width: 0; /* see body's grid-template-columns: the grid must scroll, not stretch */
+  }
+  /* Two shrink states, both dropping the dragged height so a folded region
+     doesn't hold a band of blank paper over the plans (see updateRegionHeight):
+     - `.empty`  — nothing to show at all: the footer collapses to ~0, its
+        content crushed by the greedy `1fr` zones row against min-height:0.
+     - `.strips` — everything collapsed to its one-line strip (band-1 blocks
+        closed, band 2 folded to its bar): the strips must stay visible at the
+        bottom, so min-content stops that same `1fr` row from crushing them. */
+  #bottomRegion.empty { height: auto; }
+  #bottomRegion.strips { height: auto; min-height: min-content; }
+  /* Drag handle: the region's whole top edge — resizes the region against
+     the plans. The second handle (#bandDivide) splits band 1 against band 2
+     *within* that height; the two never fight, because this one moves the
+     region's outer edge and that one moves an inner boundary. */
+  #regionDrag { flex: 0 0 4px; cursor: row-resize; background: transparent; }
+  #regionDrag:hover, #regionDrag.dragging { background: var(--accent); }
+
+  /* Band 1 as a real element, so the split between the results and the grid
+     has something to move. Content-sized by default (a collapsed strip costs
+     one line); once dragged it takes an explicit height and `.sized` wins. */
+  /* `--band1-max` is recomputed in JS as "region minus the grid's own
+     minimum", so band 1 can never starve the table — a percentage cap can't
+     express that, since the grid's floor depends on its toolbar and header. */
+  #band1 { display: flex; flex-direction: column; min-height: 0; flex: 0 1 auto; max-height: var(--band1-max, 65%); }
+  #band1.sized { flex: 0 0 var(--band1-h); }
+  #bandDivide {
+    flex: 0 0 5px; cursor: row-resize; background: var(--rule);
+    border-top: 1px solid var(--ink);
+  }
+  #bandDivide:hover, #bandDivide.dragging { background: var(--accent); }
+  #bandDivide.hidden { display: none; }
+
+  .result-band {
+    border-bottom: 1px solid var(--rule);
+    display: flex; flex-direction: column; min-height: 0;
+    flex: 0 0 auto;
+  }
+  /* An expanded block shares band 1's height with any sibling; a collapsed
+     one stays exactly its summary strip. `flex-basis: auto` (not 0) is
+     required: band 1 is content-sized until it is dragged, and a zero basis
+     would collapse that parent to nothing. */
+  .result-band.open { flex: 1 1 auto; }
+  .result-band.hidden { display: none; }
+  /* A block dragged against its immediate neighbour (the .band-split between
+     them) gets an explicit starting height instead of an equal automatic
+     share. `1 1`, not `0 0`: the pair must still yield under real space
+     pressure (region shrunk, a third block opened) rather than spilling out
+     of band 1 — the squeeze then shows up as internal scrolling, the same way
+     an un-sized open block already behaves. */
+  .result-band.open.sized { flex: 1 1 var(--band-h); }
+  /* The split between two adjacent band-1 blocks — #bandDivide's role
+     (band 1 vs band 2) generalized to a pair sharing band 1's own height.
+     Hidden unless BOTH neighbours are open: a collapsed block is a fixed
+     strip, nothing to trade height with. */
+  .band-split { flex: 0 0 5px; cursor: row-resize; background: var(--rule); }
+  .band-split:hover, .band-split.dragging { background: var(--accent); }
+  .band-split.hidden { display: none; }
+  .band-head {
+    display: block; width: 100%; text-align: left; flex: 0 0 auto;
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em;
+    background: none; color: var(--ink); border: none;
+    padding: 0.35rem 1.25rem; cursor: pointer;
+  }
+  .band-head:hover { background: var(--fill); }
+  .band-head .issues { color: var(--accent); font-weight: 600; }
+  /* Flex inside the region's capped height, so expanded blocks divide it and
+     each scrolls internally rather than growing the page. */
+  .band-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0.2rem 1.25rem 0.7rem; font-size: 0.72rem; }
+  .band-body.hidden { display: none; }
+  .band-body section { margin-bottom: 1rem; }
+  .band-body section h3 { font-size: 0.68rem; margin: 0 0 0.35rem; }
+  /* One QA block per reference source. The rule is the divider — a finding
+     only means something against the source that found it, so the sections
+     must not read as one flat list when a project configures two. */
+  .band-body section.qa-source { border-top: 1px solid var(--rule); padding-top: 0.5rem; }
+  .band-body section.qa-source > h2 {
+    font-size: 0.72rem; margin: 0 0 0.5rem; text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .band-body .qa-source-meta { text-transform: none; letter-spacing: 0; opacity: 0.7; font-weight: 400; }
+  /* The phase block is not a source block: it reports that the models disagree
+     about which Revit phase they were filtered to, which is a property of the
+     project rather than of anything joined onto it. Accented so it does not
+     read as a fourth reference source in the list. */
+  .band-body section.qa-phases { border-top-color: var(--accent); }
+  .band-body section.qa-phases > h2 { color: var(--accent); }
+  .band-body section.qa-phases > p { margin: 0 0 0.4rem; opacity: 0.8; }
+  .band-body ul { margin: 0; padding-left: 1.1rem; }
+  .band-body .mismatch { margin-bottom: 0.3rem; }
+  .band-body .ok { opacity: 0.6; }
+  /* A misconfigured join, not a data finding — the one thing in this band that
+     is about the SETTINGS rather than the rooms, so it is the one thing given a
+     box instead of a heading and a list. It sits above every list it invalidates. */
+  .band-body section.config-error {
+    margin: 0 0 0.6rem; padding: 0.5rem 0.7rem;
+    border: 2px solid var(--error);
+    background: color-mix(in srgb, var(--error) 12%, transparent);
+  }
+  .band-body section.config-error > h3 { margin: 0 0 0.3rem; }
+  /* QA entries are jump targets into the grid below. */
+  .band-body [data-room] { cursor: pointer; }
+  .band-body [data-room]:hover { color: var(--accent); }
+  .band-body button.refresh {
+    font-family: var(--mono); font-size: 0.68rem; background: var(--paper);
+    color: var(--ink); border: 1px solid var(--ink); padding: 0.25rem 0.5rem;
+    cursor: pointer; margin: 0.2rem 0.5rem 0.6rem 0;
+  }
+  .band-body select.picker {
+    font-family: var(--mono); font-size: 0.68rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem; margin-bottom: 0.6rem;
+  }
+
+  /* --- adjacency graph (band 1, canvas) ---
+     The canvas fills whatever height the band is given, same as before — but
+     that height can now drop below the canvas's own floor (its min-height
+     plus the bar), whether from the region being dragged small or from the
+     new split against a neighbouring block. Scroll rather than clip: the
+     canvas keeps its full min-height and the body scrolls to reach the rest,
+     so a small band loses convenience, not visibility, of the graph. */
+  #adjBody { display: flex; flex-direction: column; overflow-y: auto; padding-bottom: 0.4rem; }
+  /* `.band-body.hidden` (0,2,0) loses to the `#adjBody` rule above (1,0,0) —
+     the collapsed band kept its canvas flex-visible, holding the bottom
+     region open. Qualify with the id (1,1,0) so hidden always wins here. */
+  #adjBody.hidden { display: none; }
+  /* Sticky, not static: once the body scrolls, the depth/colour/wall-gap
+     controls must stay reachable rather than scrolling out of view with the
+     canvas — the same reasoning as the grid's sticky column headers. */
+  #adjBar {
+    position: sticky; top: 0; background: var(--paper); z-index: 1;
+    flex: 0 0 auto; display: flex; align-items: center; gap: 0.9rem;
+    flex-wrap: wrap; margin-bottom: 0.4rem;
+  }
+  #adjBar label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; letter-spacing: 0.04em; }
+  #adjBar select.picker { margin-bottom: 0; }
+  #adjBar input[type="range"] { width: 8rem; accent-color: var(--accent); }
+  #adjBar .count { font-size: 0.66rem; color: var(--accent); letter-spacing: 0.06em; }
+  #adjBar #adjMeta { margin-left: auto; }
+  /* A minimum so a collapsed-to-nothing band never renders a 3px canvas; the
+     region's own drag handle is how the user gives the graph real room. */
+  #adjCanvas { flex: 1 1 auto; min-height: 200px; width: 100%; display: block; }
+
+  /* --- hierarchy gross-area footprints: overlay + summary --- */
+  .zone-toolbar button.areas-toggle {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem; cursor: pointer;
+  }
+  .zone-toolbar button.areas-toggle.on { border-color: var(--accent); color: var(--accent); }
+  .zone-toolbar button.areas-toggle.hidden,
+  .zone-toolbar select.areasTier.hidden { display: none; }
+  /* Rooms recede so the dissolved footprints read clearly on top. */
+  svg.plan.areas-active .room,
+  svg.plan.areas-active .hole { opacity: 0.16; }
+  svg.plan.areas-active .label { opacity: 0.22; }
+  /* The selection is page state and must read in EVERY zone showing it — ghosted
+     to 0.16 under a footprint it was there but invisible, so a room selected
+     with areas on looked like nothing had happened. */
+  svg.plan.areas-active .room.selected { opacity: 1; }
+  /* Footprints ARE hit targets — they are what an areas-on plan is showing, and
+     `areaAtNode` resolves a click on one to its group. This was briefly
+     `pointer-events: none` to stop the overlay swallowing room clicks: a hit on
+     it made `roomAtNode` return null, which the pointerup handler reads as
+     "clicked empty space", so an areas-on zone silently CLEARED the page
+     selection — including one made in another zone. The click now means
+     something instead of being disabled. */
+  .area-poly { fill-opacity: 0.32; stroke: var(--area-colour); stroke-width: 2;
+               vector-effect: non-scaling-stroke; cursor: pointer; }
+  /* A group withheld from tiers above (Case-A exclusion) reads as dashed + faint. */
+  .area-poly.faded { fill-opacity: 0.12; stroke-dasharray: 5 4; }
+  /* Same visual language as `.room.selected` — dashed accent, stroke only, so a
+     selected footprint keeps its group colour and its counted/uncounted read.
+     AFTER `.faded` on purpose: equal specificity, so source order decides, and a
+     selected uncounted group must still show it is selected. */
+  .area-poly.selected { stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3; fill-opacity: 0.42; }
+  .area-label { fill: var(--ink); text-anchor: middle; dominant-baseline: middle;
+                pointer-events: none; font-weight: 600; }
+  /* Areas results table (band 1). Table shape shared with the old overlay
+     panel; the note/total/swatch styling carried over. */
+  .band-body .note { opacity: 0.6; margin: 0 0 0.6rem; }
+  .band-body table { border-collapse: collapse; min-width: 34rem; }
+  .band-body th, .band-body td { text-align: right; padding: 0.22rem 0.5rem; border-bottom: 1px solid var(--rule); }
+  .band-body th:first-child, .band-body td:first-child,
+  .band-body th.lvl, .band-body td.lvl { text-align: left; }
+  .band-body thead th { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; }
+  .band-body tr.total td { font-weight: 600; border-top: 2px solid var(--ink); }
+  .band-body .swatch { display: inline-block; width: 0.6rem; height: 0.6rem; margin-right: 0.35rem; vertical-align: middle; }
+  .band-body .uncounted { opacity: 0.6; font-style: italic; }
+
+  /* --- bottom region, band 2: the source-data grid ---
+     Ambient, always visible, not dismissable: the tabular view of what the
+     plans show graphically. Takes whatever height band 1 leaves. */
+  /* `flex-basis: 0`, not auto: an auto basis resolves to the whole table's
+     content height (thousands of px), which would dominate the region's
+     shrink distribution and squeeze band 1 to nothing. A zero basis makes
+     the grid purely "whatever is left over". */
+  #gridBand { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #gridBand.hidden { display: none; }
+  #gridBar {
+    flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+    padding: 0.3rem 1.25rem; font-size: 0.7rem; letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--rule);
+  }
+  #gridBar label { cursor: pointer; }
+  #gridBar .count { margin-left: auto; color: var(--accent); font-size: 0.66rem; }
+  #gridBar button {
+    font-family: var(--mono); font-size: 0.66rem; background: var(--paper);
+    color: var(--ink); border: 1px solid var(--ink); padding: 0.15rem 0.4rem; cursor: pointer;
+  }
+  /* The collapse toggle reads as the bar's label, not a button — matching the
+     band-1 blocks' ▾/▸ heads rather than the Clear/Download controls beside it. */
+  #gridBar button.grid-collapse {
+    font-weight: 700; letter-spacing: 0.06em; font-size: 0.7rem;
+    background: none; border: none; padding: 0;
+  }
+  #gridBar button.grid-collapse:hover { color: var(--accent); }
+  /* Collapsed: the band is just its bar. The table and empty-note fold away
+     and the band stops flex-filling, so band 1 (or, via the region shrinking
+     to its strips, the plans) reclaims the space. */
+  #gridBand.collapsed { flex: 0 0 auto; }
+  #gridBand.collapsed #gridScroll,
+  #gridBand.collapsed #gridEmpty { display: none; }
+  /* The scroll container for BOTH axes: rows scroll vertically (windowed —
+     only the visible slice is in the DOM), columns horizontally when model +
+     dRofus are shown together. */
+  #gridScroll { flex: 1 1 auto; overflow: auto; min-height: 0; min-width: 0; }
+  /* table-layout:fixed is load-bearing for windowing: content-derived widths
+     would jitter as rows swap in and out, since only the visible slice is
+     ever measured. */
+  #gridTable { border-collapse: collapse; table-layout: fixed; font-size: 0.68rem; }
+  #gridTable th, #gridTable td {
+    width: 8rem; max-width: 8rem; padding: 0.15rem 0.4rem; text-align: left;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-right: 1px solid var(--rule);
+  }
+  #gridTable td { border-bottom: 1px solid var(--rule); }
+  #gridTable thead th {
+    position: sticky; background: var(--paper); z-index: 2;
+    font-weight: 600; text-transform: uppercase; font-size: 0.6rem;
+    letter-spacing: 0.06em; cursor: pointer; user-select: none;
+  }
+  /* Two header rows: the source group spans its columns, names sit beneath.
+     The group label is pinned to the left of the *scroll viewport* rather
+     than centred in its span — a span 48 columns wide centres its label
+     thousands of pixels off-screen, so the group would be invisible exactly
+     when the table is wide enough to need it. */
+  #gridTable thead tr.group th { top: 0; text-align: left; cursor: default; border-bottom: 1px solid var(--ink); }
+  #gridTable thead tr.group th > span { position: sticky; left: 0.4rem; display: inline-block; }
+  #gridTable thead tr.names th { top: 1.35rem; border-bottom: 1px solid var(--ink); }
+  #gridTable thead tr.group th.src-model { color: var(--ink); }
+  #gridTable thead tr.group th.src-reference { color: var(--accent); }
+  /* Reference-source columns (dRofus, or any other configured source)
+     tinted as a block, so the "separate sub-object, never merged" boundary
+     is visible rather than implied. */
+  #gridTable .src-reference { background: color-mix(in srgb, var(--accent) 7%, var(--paper)); }
+  /* A reference-source column with no Revit counterpart in row 2 of the CSV
+     (only known for dRofus -- see detectReferenceSources): shown, visibly
+     distinguished, never hidden (see field coverage). */
+  #gridTable thead th.unmapped { font-style: italic; opacity: 0.75; }
+  #gridTable thead th.sorted::after { content: " ▾"; color: var(--accent); }
+  #gridTable thead th.sorted.asc::after { content: " ▴"; }
+  #gridTable tbody tr:hover td { background: var(--fill); }
+  #gridTable tbody tr.target td { outline: 1px solid var(--accent); }
+  /* A cell the QA report disagrees on, marked in place — the (room, field)
+     address compute_validation already produces IS a (row, column) here. */
+  #gridTable td.err { color: var(--accent); font-weight: 600; background: color-mix(in srgb, var(--error) 45%, transparent); }
+  #gridTable tr.spacer td { padding: 0; border: none; }
+  #gridFilters input {
+    font-family: var(--mono); font-size: 0.62rem; width: 100%;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--rule); padding: 0.1rem 0.2rem;
+  }
+  #gridEmpty { padding: 0.6rem 1.25rem; font-size: 0.7rem; opacity: 0.6; }
+
+  /* The only rule in this file that is NOT the old page's: the port notice
+     shown while `/viewer/` has nothing on it. It goes with `PortNotice.tsx`
+     at the cutover (B10). Everything above this comment is moved, not
+     written. */
+  /* On PAPER, because `main` is filled with the ink colour -- it is the 1px
+     gap between zones, normally covered by each zone's own light canvas. Ink
+     text straight onto it is invisible, which is how this rule was first
+     written. */
+  .port-notice {
+    margin: auto; max-width: 34rem; padding: 2rem; text-align: center;
+    background: var(--paper); color: var(--ink); font-size: 0.8rem; line-height: 1.6;
+  }
+  .port-notice h2 { font-size: 0.9rem; letter-spacing: 0.08em; text-transform: uppercase; }
+  .port-notice a { color: var(--accent); }

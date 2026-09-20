@@ -33,5 +33,12 @@
     // reach for a node API -- if one ever compiles, that is the signal.
     "types": ["vite/client", "node"]
   },
-  "include": ["src-js/**/*.ts", "src-js/**/*.tsx", "vite.config.ts", "vite.settings.config.ts"]
+  "include": [
+    "src-js/**/*.ts",
+    "src-js/**/*.tsx",
+    "vite.config.ts",
+    "vite.settings.config.ts",
+    "vite.reports.config.ts",
+    "vite.viewer.config.ts"
+  ]
 }
