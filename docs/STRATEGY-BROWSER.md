@@ -16,21 +16,23 @@ rediscover are below rather than in the code, because they are properties of the
 ## Deferred
 
 - **The room inspector's "in this room" section cannot say which model the
-  room is in.** The section ships for doors, windows and FF&E; what is unbuilt
-  is the disambiguation. A room id is unique only *within* a model, and
+  room is in.** The section ships for doors, windows, FF&E, ceilings and floors;
+  what is unbuilt is the disambiguation. A room id is unique only *within* a model, and
   `/rooms` does not serve one — `RoomResponse::model_id` is skip-serialized so
   the rooms JSON stays byte-for-byte unchanged — so the panel matches on a bare
   id and can only *detect* an ambiguous one, never resolve it. It says so when
   it happens, which is the same call the layer toggles make with their "(by
-  elevation)" suffix.
+  elevation)" suffix. The section lists ceilings and floors too, inverting the
+  `rooms` list each surface carries; those entries name a model, so they are the
+  one side of this join that could be resolved today.
 
   **Not yet worth the wire change**, and the measurement is why: no room id on
   RHH is claimed by more than one model, across 3,013 rooms, 1,857 doors and
   38,913 items in five models. The signal to serve the field is a project where
   that stops being true — the note is the instrument that would say so — not a
-  preference for stronger keys. Note that the viewer's whole selection model is
-  bare-id (`selectRoom(roomId)`), so serving `model_id` on `/rooms` alone would
-  not finish the job.
+  preference for stronger keys. Note that a selection is `{kind, id}` and the
+  id is still bare, so serving `model_id` on `/rooms` alone would not finish the
+  job: the ELEMENT reads would have to qualify their references too.
 
 - **Serve `model_to_shared` itself.** *Aligning* linked models is done and is
   not a browser concern any more: the server places every read's geometry into
@@ -93,12 +95,21 @@ rediscover are below rather than in the code, because they are properties of the
   export, raster (PNG/PDF) export, and a graph export. "Export SVGs" is a plan
   feature.
 
-- **Considered and deliberately not built: a checkbox property picker in the
-  inspector.** The hide-empty toggle and the name filter covered the cases it was
-  for, and unused UI is worse than none. If users do start re-picking the same
-  columns every session, the durable answer is extending `room_label` in project
-  settings — server-side, per project, shareable — rather than adding
-  `localStorage` here.
+- **The viewer's view preferences do not survive a reload, and the durable
+  version of them is unbuilt.** The property chooser on each panel and over the
+  grid's columns *is* built now — it was recorded here as deliberately skipped,
+  and what changed that was seven selectable kinds rather than one, a door
+  offering 162 property names against the room's 45. So are the per-zone
+  visibility menu, the selection filter, the room panel's contents chooser and
+  "Pan to room". Every one of them is page state, deliberately: they are
+  reading aids for one session, like the name filter beside them.
+
+  **What is not built is "which properties matter for THIS project", stored
+  server-side.** That already has a home — `room_label`, the comparison
+  properties, the reports page's column sets — and the signal to move a chooser
+  into it is readers re-making the same choice every morning, not a
+  `localStorage` key. A chooser that vanished on reload would be infuriating if
+  it claimed to be that; it does not.
 
 ## The hybrid's one invariant
 
@@ -256,7 +267,12 @@ The goal is a richer browser tool run locally, not a desktop app.
   code, with settings and reports already React. The port is
   `docs/Superseded/PLAN-viewer-react.md`; it was a PARITY port in ten slices,
   each checked against the old page running beside it at `/viewer/`, and the
-  cutover deleted that page.
+  cutover deleted that page. **That request then landed in full** — eight steps,
+  `docs/Superseded/PLAN-viewer-selection.md` — and grew on the way to seven
+  inspectors, three kinds of menu, a property chooser over every panel and the
+  grid, and two more settings blocks. It is the best evidence the decision has:
+  the slice that was "only twice more" in the old page was eight PRs in this
+  one, each adding an entry to a table rather than a branch.
 
   **What it cost, for the next time this question comes up.** Four bugs that no
   diff would have shown, each found by driving the two pages side by side: a
