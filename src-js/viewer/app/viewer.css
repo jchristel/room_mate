@@ -77,7 +77,7 @@
     max-height: 40vh; overflow: auto; min-width: 12rem;
   }
   .fields-panel.hidden { display: none; }
-  .fields-panel .fields-actions { margin-bottom: 0.4rem; display: flex; gap: 0.5rem; }
+  .fields-panel .fields-actions { margin-bottom: 0.4rem; display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; }
   .fields-panel .fields-actions a { color: var(--accent); font-size: 0.66rem; cursor: pointer; }
   .fields-panel label { display: block; font-size: 0.7rem; white-space: nowrap; cursor: pointer; }
 
@@ -186,6 +186,16 @@
      chooser and the property chooser alike, so the next one cannot get it
      wrong by being added somewhere new. */
   #inspector .fields-panel { left: auto; right: 0; }
+  /* ...but the property chooser anchors to the HEADER, not to its own button,
+     and the difference is not cosmetic. `.insp-controls` is a wrapping flex
+     row, so the button's x depends on how long its label happens to be: at
+     "Customize" it sits on the first line near the right edge and right-
+     anchoring works, and at "Customize: 274 of 313" it wraps to a line of its
+     own at the LEFT and the panel hangs 110px outside the inspector, over the
+     plan. Measured on an RHH door. Making `.insp-head` the containing block
+     pins the panel to the column instead, which no label can move. */
+  #inspector .insp-controls .layer-menu { position: static; }
+  #inspector .insp-controls .fields-panel { top: 100%; right: 0.7rem; }
   /* And it must not be wider than the column it hangs off: property names run
      to `VisionPanel_FullyGlazed_Height`, and the labels do not wrap. The
      panel's own scroll takes it from here. */
@@ -783,8 +793,26 @@
   }
   .layer-menu > button.ctl:hover { background: var(--fill); }
   /* An option that cannot be chosen, and the menu says why rather than hiding
-     it: the room panel's Spaces entry. */
-  .fields-panel label.menu-off { opacity: 0.5; cursor: default; }
+     it: the room panel's Spaces entry, and the property chooser's "nothing
+     matched" line. */
+  .fields-panel label.menu-off { opacity: 0.5; cursor: default; white-space: normal; }
+  /* The property chooser's head: the two actions and the prefix box they act
+     through. Sticky as ONE block, because the list under it runs to 162 names
+     on a door and scrolling to the bottom must not take either off screen.
+     The panel's own padding is what the negative margins pay back, so the
+     opaque strip reaches its edges rather than leaving a see-through gutter. */
+  .fields-panel .menu-head {
+    position: sticky; top: 0; z-index: 1;
+    margin: -0.5rem -0.6rem 0.35rem; padding: 0.5rem 0.6rem 0.35rem;
+    background: var(--paper); border-bottom: 1px solid var(--rule);
+  }
+  .fields-panel .menu-head .fields-actions { margin-bottom: 0.3rem; }
+  .fields-panel .menu-head input {
+    display: block; width: 100%;
+    font-family: var(--mono); font-size: 0.66rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--rule); padding: 0.2rem 0.3rem;
+  }
   /* A run of entries under one heading -- the grid's columns, grouped by the
      source they came from, because two sources' columns share a name far more
      often than not. */
