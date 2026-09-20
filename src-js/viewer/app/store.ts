@@ -13,6 +13,8 @@
 // only pointed at.
 
 import type { BuildingRow, MilestoneRow, ProjectRow, RoomsPayload } from "./api.js";
+import type { ElementEntity } from "../elementUrls.js";
+import type { ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
@@ -47,6 +49,34 @@ export interface ViewerState {
   /** Pan and zoom one zone, move them all. Page state, not per zone: it is a
    *  property of the strip rather than of any one panel. */
   linkViews: boolean;
+  /** Which element layers are drawn. Page state like the toggles above: the
+   *  question "are doors shown" has one answer for the page, and two zones
+   *  disagreeing about it would make a comparison between them meaningless. */
+  layers: Readonly<Record<ElementEntity, boolean>>;
+  /** The rooms themselves, and their labels. Rooms default ON, and this is the
+   *  only toggle that hides the layer every other one is drawn over: the
+   *  overlays are read AGAINST the rooms, and sometimes that is the problem —
+   *  a ceiling ring sits inches inside the room outline beneath it. */
+  showRooms: boolean;
+  showLabels: boolean;
+  /** Which services model's spaces to draw; "" is all of them. RHH keeps one
+   *  services file per service, so "all" stacks four near-identical outlines on
+   *  every room in one colour — which is why the picker exists. */
+  spacesModel: string;
+  /** Every model that has spaces, learned from an unscoped payload. */
+  spacesModels: readonly string[];
+  /** Bumped whenever a layer's payload changes.
+   *
+   *  The element payloads live on their polls, not in this store -- they are
+   *  large and only the paint reads them -- so nothing would tell React that a
+   *  doors push landed. This counter is that signal, and it is what the paint
+   *  effect depends on. Without it the plan drew rooms and no elements until
+   *  something else happened to repaint, which is exactly the bug the old
+   *  page's `redrawAllZones()` on a changed element poll exists to prevent. */
+  layersRevision: number;
+  /** The project's `[appearance]` block, or `{}` — which is the ordinary state
+   *  and means "every layer follows the theme". */
+  appearance: ViewerAppearance;
 }
 
 const initial: ViewerState = {
@@ -59,6 +89,13 @@ const initial: ViewerState = {
   updatedAt: null,
   zones: [{ id: "zone-0", levelId: null }],
   linkViews: false,
+  layers: { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
+  showRooms: true,
+  showLabels: true,
+  spacesModel: "",
+  spacesModels: [],
+  layersRevision: 0,
+  appearance: {},
 };
 
 let state: ViewerState = initial;
@@ -121,4 +158,27 @@ export function setZoneLevel(id: string, levelId: string | null): void {
 
 export function setLinkViews(on: boolean): void {
   setState({ linkViews: on });
+}
+
+// ---- layers -----------------------------------------------------------------
+
+export function setLayer(entity: ElementEntity, on: boolean): void {
+  setState({ layers: { ...state.layers, [entity]: on } });
+}
+
+export function setShowRooms(on: boolean): void {
+  setState({ showRooms: on });
+}
+
+export function setShowLabels(on: boolean): void {
+  setState({ showLabels: on });
+}
+
+export function setSpacesModel(model: string): void {
+  setState({ spacesModel: model });
+}
+
+/** Tell the page a layer's data moved. See `layersRevision`. */
+export function bumpLayers(): void {
+  setState({ layersRevision: state.layersRevision + 1 });
 }

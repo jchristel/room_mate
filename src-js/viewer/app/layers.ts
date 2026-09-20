@@ -1,0 +1,156 @@
+// The six element layers: their polls, their toggles, and which of their
+// elements stand on the storey a zone is showing.
+//
+// **One table, six layers.** Exactly five things vary per layer — the entity it
+// reads, what its toggle is called, whether it starts on, whether it is polled
+// while switched off, and (for spaces) a model picker — and nothing else does.
+// The old page had six hand-written `EntityPoll`s and six `…OnLevel` functions
+// beside them; four of them had already drifted once, which is what the shared
+// `EntityPoll` module was extracted to stop.
+//
+// **Three layers are not polled while off**, and that is not symmetry for its
+// own sake: spaces, ceilings and floors each overlay the rooms they sit on, so
+// each starts off and a reader switches it on to answer a specific question.
+// Polling a hidden overlay would cost every viewer of every project a read —
+// `/ceilings` is 9 MB on RHH — for a question most of them are not asking.
+
+import { EntityPoll, onStorey } from "./planRenderer.js";
+import { elementUrl, toggleLabel, visibleStoreys, type ElementEntity } from "../elementUrls.js";
+import { bumpLayers, getState, setState } from "./store.js";
+import type { Ceiling, Door, Floor, Item, Level, Space, WindowOpening } from "../../renderer/types.js";
+
+/** How a layer's storey match resolved, so its toggle can say when the answer
+ *  was a guess. */
+export type StoreyMatch = "exact" | "elevation" | "all" | "none";
+
+export interface LayerSpec {
+  entity: ElementEntity;
+  /** The key its elements arrive under, which is the entity name for all six. */
+  label: string;
+  /** Whether the layer starts on. The three overlays do not. */
+  defaultOn: boolean;
+  /** Whether it is polled while switched off. Only the glyph layers are. */
+  pollWhenOff: boolean;
+}
+
+export const LAYERS: readonly LayerSpec[] = [
+  { entity: "doors", label: "Doors", defaultOn: true, pollWhenOff: true },
+  { entity: "windows", label: "Windows", defaultOn: true, pollWhenOff: true },
+  { entity: "ffe", label: "FF&E", defaultOn: true, pollWhenOff: true },
+  { entity: "spaces", label: "Spaces", defaultOn: false, pollWhenOff: false },
+  { entity: "ceilings", label: "Ceilings", defaultOn: false, pollWhenOff: false },
+  { entity: "floors", label: "Floors", defaultOn: false, pollWhenOff: false },
+];
+
+/** What each entity's list holds. The paint request types every layer
+ *  separately, so this map is what keeps `elementsOnStorey` honest instead of
+ *  a cast at each of the six call sites. */
+export interface ElementOf {
+  doors: Door;
+  windows: WindowOpening;
+  ffe: Item;
+  spaces: Space;
+  ceilings: Ceiling;
+  floors: Floor;
+}
+
+interface ElementPayload {
+  [key: string]: unknown;
+  levels_by_model?: unknown;
+}
+
+/** The storeys every zone is showing, from the current state. */
+function storeysOnScreen(): Level[] | null {
+  const { payload, zones } = getState();
+  return visibleStoreys(
+    payload?.levels ?? null,
+    zones.map((z) => z.levelId),
+  );
+}
+
+const polls = new Map<ElementEntity, InstanceType<typeof EntityPoll<ElementPayload>>>();
+
+for (const layer of LAYERS) {
+  polls.set(
+    layer.entity,
+    new EntityPoll<ElementPayload>({
+      url: () =>
+        elementUrl(layer.entity, getState().scope, storeysOnScreen(), {
+          model: layer.entity === "spaces" ? getState().spacesModel : null,
+        }),
+      enabled: () => layer.pollWhenOff || getState().layers[layer.entity],
+      ...(layer.entity === "spaces"
+        ? {
+            // Only while UNSCOPED: a scoped payload lists one model and would
+            // collapse the picker to the option already chosen. The default is
+            // unscoped, so the list is always learned before it can be narrowed.
+            onPayload: (payload: ElementPayload) => {
+              if (!getState().spacesModel) refreshSpacesModels(payload);
+            },
+          }
+        : {}),
+    }),
+  );
+}
+
+/** Every model that has spaces, learned from an unscoped payload's
+ *  `phase_by_model` — which lists exactly the models that contributed. The
+ *  picker exists because RHH keeps one services file per service, so "all"
+ *  stacks four near-identical outlines on every room in one colour. */
+function refreshSpacesModels(payload: ElementPayload): void {
+  const { scope } = getState();
+  const byProject = (payload["phase_by_model"] ?? {}) as Record<string, Record<string, unknown>>;
+  const models = Object.keys(byProject[scope.projectId ?? ""] ?? {}).sort();
+  if (models.length) setState({ spacesModels: models });
+}
+
+/** Poll every layer once. Returns whether any of them changed what is drawn. */
+export async function pollLayers(): Promise<boolean> {
+  let changed = false;
+  for (const poll of polls.values()) {
+    const outcome = await poll.poll();
+    if (outcome === "changed" || outcome === "cleared") changed = true;
+  }
+  // One bump for the tick, not one per layer: a tick that moved three layers
+  // should repaint once.
+  if (changed) bumpLayers();
+  return changed;
+}
+
+/** One layer's elements on one storey, and how that match resolved.
+ *
+ * The join is `onStorey`'s — NAME plus ELEVATION, never a raw level id. A
+ * `Level.id` is per document, so comparing ids directly drops every element in
+ * a model that pushes no rooms: RHH's facade package has 78 external doors, and
+ * they were invisible on every level. */
+export function elementsOnStorey<E extends ElementEntity>(
+  entity: E,
+  levelId: string | null,
+): { kept: readonly ElementOf[E][]; match: StoreyMatch } {
+  const payload = polls.get(entity)?.payload;
+  const { payload: rooms } = getState();
+  if (!payload || !rooms) return { kept: [], match: "none" };
+  const levels = rooms.levels ?? [];
+  const level = levels.find((l) => String(l.id) === String(levelId)) ?? null;
+  const result = onStorey(
+    (payload[entity] ?? []) as ElementOf[E][],
+    payload.levels_by_model,
+    level,
+    // The whole displayed level list, not just the target: whether elevation
+    // alone can be trusted is a fact about the two vocabularies, not about one
+    // level.
+    levels,
+  );
+  return { kept: result.kept, match: result.match as StoreyMatch };
+}
+
+/** A layer's toggle text, carrying its storey match. */
+export function layerToggleLabel(layer: LayerSpec, levelId: string | null): string {
+  const on = getState().layers[layer.entity];
+  return toggleLabel(layer.label, on, on ? elementsOnStorey(layer.entity, levelId).match : "exact");
+}
+
+/** One layer's raw payload, for the console handle. See `main.tsx`. */
+export function layerPayload(entity: ElementEntity): unknown {
+  return polls.get(entity)?.payload ?? null;
+}

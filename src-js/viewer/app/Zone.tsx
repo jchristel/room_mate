@@ -15,6 +15,8 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import { levelLabel, levelsForPayload, pickerOrder, resolveLevel, roomsOnLevel } from "../levels.js";
+import { elementsOnStorey, type ElementOf } from "./layers.js";
+import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
 import { setZoneLevel, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
@@ -32,7 +34,7 @@ import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status } = useViewer();
+  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision } = useViewer();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const handleRef = useRef<ZoneHandle | null>(null);
@@ -113,7 +115,30 @@ export function Zone({ zone }: { zone: ZoneRow }) {
         renderer.setView(handle.view);
       }
       paintedLevel.current = levelId;
-      const build = () => renderer.paint(rooms, handle.fitted, { showLabels: true, showRooms: true });
+      // Every layer is resolved against THIS zone's storey, by name and
+      // elevation -- `elementsOnStorey`. A layer switched off contributes an
+      // empty list rather than being left out, so the renderer clears what it
+      // drew last time.
+      const on = <E extends keyof ElementOf>(entity: E): readonly ElementOf[E][] =>
+        layers[entity] ? elementsOnStorey(entity, levelId).kept : [];
+      const build = () =>
+        renderer.paint(rooms, handle.fitted, {
+          showLabels,
+          showRooms,
+          appearance,
+          doors: on("doors"),
+          showDoors: layers.doors,
+          windows: on("windows"),
+          showWindows: layers.windows,
+          ffe: on("ffe"),
+          showFfe: layers.ffe,
+          spaces: on("spaces"),
+          showSpaces: layers.spaces,
+          ceilings: on("ceilings"),
+          showCeilings: layers.ceilings,
+          floors: on("floors"),
+          showFloors: layers.floors,
+        });
       // Below the threshold the build runs INLINE: deferring every level by a
       // frame would make the common case worse to save a flash nobody sees.
       if (rooms.length < BUSY_ROOM_THRESHOLD || !busyRef.current) {
@@ -139,7 +164,14 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms]);
+  }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision]);
+
+  // The element reads only hold the storeys that WERE on screen, so a level
+  // switch (or this zone appearing at all) has to ask again. A no-op when the
+  // storeys did not actually move -- see `onStoreysChanged`.
+  useEffect(() => {
+    void onStoreysChanged();
+  }, [payload, levelId]);
 
   return (
     <div className="zone">

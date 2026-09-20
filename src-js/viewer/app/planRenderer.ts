@@ -13,7 +13,9 @@
 
 import type { GlRendererOptions } from "../../renderer/gl/renderer.js";
 import type { PlanRenderer as PlanRendererSeam } from "../../renderer/seam.js";
-import type { Rect, Room } from "../../renderer/types.js";
+import type { EntityPoll as EntityPollClass } from "../entityPoll.js";
+import type { Placed, StoreyResult } from "../../renderer/storey.js";
+import type { Level, Rect, Room } from "../../renderer/types.js";
 
 /** What this page uses from the bundle. A narrow view of a wider surface, for
  *  the reason the bundle's own index gives: every name here is an unchecked
@@ -24,6 +26,18 @@ interface RendererBundle {
     destroy(): void;
   };
   fittedBounds(rooms: readonly Room[]): Rect | null;
+  /** The storey join: NAME plus ELEVATION, never a raw level id — a `Level.id`
+   *  is per document, so comparing ids drops every element in a model that
+   *  pushes no rooms. The rule and its fallbacks are `storey.ts`. */
+  onStorey<T extends Placed>(
+    elements: readonly T[],
+    levelsByModel: unknown,
+    level: Level | null,
+    displayed: readonly Level[],
+  ): StoreyResult<T>;
+  /** The element layers' conditional poll, extracted because four hand-written
+   *  copies of it had already drifted. */
+  EntityPoll: typeof EntityPollClass;
 }
 
 const bundle = (globalThis as unknown as { PlanRenderer?: RendererBundle }).PlanRenderer;
@@ -34,5 +48,5 @@ if (!bundle) {
   throw new Error("renderer bundle missing: /vendor/renderer.bundle.js must load before this module");
 }
 
-export const { GlPlanRenderer, fittedBounds } = bundle;
+export const { GlPlanRenderer, fittedBounds, onStorey, EntityPoll } = bundle;
 export type PlanRendererInstance = InstanceType<RendererBundle["GlPlanRenderer"]>;

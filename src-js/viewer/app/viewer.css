@@ -722,3 +722,8 @@
   }
   .port-status dt { opacity: 0.6; }
   .port-status dd { margin: 0; font-family: var(--mono); }
+
+  /* A layer toggle and, for spaces, the model picker that belongs to it. The
+     old page had the picker as a sibling <select> the toggle handler showed
+     and hid; grouping them keeps the pair together when the header wraps. */
+  .layer-toggle { display: contents; }
