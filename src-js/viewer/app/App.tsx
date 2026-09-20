@@ -14,6 +14,8 @@
 import { useEffect, useState } from "react";
 
 import { Grid } from "./Grid.js";
+import { AdjacencyBand } from "./AdjacencyBand.js";
+import { BandDivide, RegionDrag } from "./DragHandles.js";
 import { AreasBand } from "./AreasBand.js";
 import { QaBand } from "./QaBand.js";
 import { Header } from "./Header.js";
@@ -24,6 +26,8 @@ import { Zone } from "./Zone.js";
 
 export function App() {
   const [areasOpen, setAreasOpen] = useState(false);
+  const [adjOpen, setAdjOpen] = useState(false);
+  const [qaOpen, setQaOpen] = useState(false);
   // One loop for the page, started once and stopped on unmount — StrictMode
   // runs an effect twice in development, and a loop with no cleanup would
   // double the request rate against a server this page polls every 2s.
@@ -50,13 +54,16 @@ export function App() {
           stop being a stable place a reader can point at. Band 1 -- QA, areas
           and adjacency -- lands in B8. */}
       <footer id="bottomRegion">
+        <RegionDrag />
         {/* Band 1: page-level RESULTS, derived from the scope rather than from
             any one zone — which is why there is one of each, never one per
             zone. Areas and adjacency join QA here in the rest of B8. */}
         <div id="band1">
-          <QaBand />
+          <QaBand open={qaOpen} onToggle={() => setQaOpen(!qaOpen)} />
           <AreasBand open={areasOpen} onToggle={() => setAreasOpen(!areasOpen)} />
+          <AdjacencyBand open={adjOpen} onToggle={() => setAdjOpen(!adjOpen)} />
         </div>
+        <BandDivide visible={areasOpen || adjOpen || qaOpen} />
         <Grid />
       </footer>
     </>
