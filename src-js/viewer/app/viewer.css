@@ -171,6 +171,17 @@
   /* The tally row above each element list: entity name, then a count or the
      reason there is no count. Not a link, and not indented. */
   #inspector .insp-row.insp-tally .insp-k { font-weight: 600; }
+  /* A heading with a control beside it -- "In this room" and its chooser. The
+     h4 keeps its own padding, so the row only has to put the menu at the end
+     and pull it back to the panel's gutter. */
+  #inspector .insp-section-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;
+    padding-right: 0.7rem;
+  }
+  #inspector .insp-section-head .layer-menu { flex: none; }
+  /* The drop-down panel would otherwise open past the inspector's right edge
+     and be clipped by its scroll container: anchor it to the RIGHT instead. */
+  #inspector .insp-section-head .fields-panel { left: auto; right: 0; }
 
   .zone {
     position: relative;
@@ -734,6 +745,19 @@
      cannot drift apart in padding or scroll behaviour. */
   .layer-menu { position: relative; display: inline-block; }
   .layer-menu .fields-panel { min-width: 14rem; }
+  /* The menu button looks like every other control. `header button.ctl` styled
+     only the ones in the header; these live in a zone toolbar and in the
+     inspector, and a browser-default button beside them read as a different
+     kind of thing. */
+  .layer-menu > button.ctl {
+    font-family: var(--mono); font-size: 0.7rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem; cursor: pointer;
+  }
+  .layer-menu > button.ctl:hover { background: var(--fill); }
+  /* An option that cannot be chosen, and the menu says why rather than hiding
+     it: the room panel's Spaces entry. */
+  .fields-panel label.menu-off { opacity: 0.5; cursor: default; }
   /* The services-model picker sits under its own Spaces entry, indented so it
      reads as belonging to that layer rather than as a ninth one. */
   .layer-menu select.ctl { margin: 0.15rem 0 0.35rem 1.2rem; max-width: 12rem; }

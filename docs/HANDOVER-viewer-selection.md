@@ -15,9 +15,9 @@ C is eight steps, each its own PR, merged before the next starts.
 |---|---|---|
 | C1 | Per-zone visibility menu (G5) | merged, #167 |
 | C2 | Per-zone selection filter + pick list (G2) | merged, #168 |
-| C3 | Ceiling, floor and space inspectors (G1) | PR #169, CI green when last checked |
-| C4 | Room panel's contents chooser (G6) | **next** |
-| C5 | Grid row → plan, with pan (G3) | not started |
+| C3 | Ceiling, floor and space inspectors (G1) | merged, #169 |
+| C4 | Room panel's contents chooser (G6) | merged, #171 |
+| C5 | Grid row → plan, with pan (G3) | **next** |
 | C6 | Selection colour for the outline layers (G4) | not started |
 | C7 | Property chooser on every panel and the grid (G7) | not started |
 | C8 | Hover property per entity, from settings (G8) | not started |
@@ -81,11 +81,36 @@ and ~20 s after switching an overlay layer on).
   chooser or "Pan to room". The durable version of "which properties matter"
   is project settings, which is a different feature (see the plan's critique).
 
-## What C4 needs, specifically
+## What C4 left behind
 
-`RoomContents.tsx` has a `SPECS` table of doors/windows/FF&E, each joined
-through `owner_rooms_qualified`. Ceilings and floors join differently — each
-surface carries the `rooms` it covers, so the panel inverts that list — and
-they default OFF, so the section reads as it does today until asked. The menu
-is the same component C1 and C2 use (`fields-panel` styling, `layer-menu`
-anchoring).
+- **The three menus are one component now** (`app/DropMenu.tsx`): a button with
+  its own summary, a panel of arbitrary children, and the outside-click close.
+  C1 and C2 were moved onto it rather than a third copy being written.
+- **Opening one menu closes the others**, and the reason is worth keeping: the
+  button calls `stopPropagation` so a click on it is not also a plan click,
+  which stops the NATIVE event at React's root container — so it never reaches
+  the `document` listener another menu is waiting on. `DropMenu` keeps a set of
+  open menus' closers instead. That bug shipped in C1/C2 and was only visible
+  with Layers and Select open together.
+- **`layerWanted` has two askers now.** A zone DRAWING a layer, and the room
+  panel LISTING it: ticking Ceilings in the chooser while no zone draws them is
+  what fetches `/ceilings`, or the section would read "not loaded yet" for ever.
+  Pinned in `app/store.test.ts` — the one rule here that costs a 9 MB read per
+  viewer if it regresses.
+- **This local store's House A has no ceilings and no floors** (`/ceilings?
+  project=House A` is a 200 with an empty list), so the surface join can only be
+  driven on RHH. LEVEL 6 is a good one: 165 ceilings, 191 floors, and rooms with
+  two ceilings at 37% and 60%.
+- **A surface row shows its share of the ROOM, not its id.** `fraction_of_room`
+  is what this join knows that the opening join does not, and the id is one
+  click away on the surface's own panel. Sliver overlaps are listed, as the
+  server intends — a floor at 0.5% of a room is a strip under a wall, and which
+  overlaps matter is the reader's policy.
+
+## What C5 needs, specifically
+
+A grid row click selects its room (`selectRoom(id)` is `select("room", id)` with
+no zone), the row's selected class derives from the selection when rows render,
+and "Pan to room" is a checked-by-default box in the grid header. The view is
+page state owned by the zone registry, so no renderer change. Critique 8 is the
+trap: a click that was a text selection must not move the plan.

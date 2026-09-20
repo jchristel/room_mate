@@ -97,6 +97,14 @@ export interface ZoneRow {
  *  an element the renderer knows about. */
 export type SelectionKind = ElementKind | "area";
 
+/** The entities the room panel can list.
+ *
+ *  **Spaces are excluded by the TYPE, not by a runtime check**, because the
+ *  reason is structural: a space carries no room reference at all, so there is
+ *  nothing to join it by. The chooser still names them, as a disabled entry
+ *  saying why — silence would read as an oversight. */
+export type ContentsEntity = Exclude<ElementEntity, "spaces">;
+
 export interface Selection {
   kind: SelectionKind;
   id: string;
@@ -127,6 +135,17 @@ export interface ViewerState {
   linkViews: boolean;
   /** Every model that has spaces, learned from an unscoped payload. */
   spacesModels: readonly string[];
+  /** Which related types the room panel's "In this room" section lists.
+   *
+   *  **Page state, not per room** (C4): it is a question about how the panel
+   *  READS, and a reader clicking room after room is comparing the same thing
+   *  — a choice that reset per element would be one they had to make again on
+   *  every click.
+   *
+   *  Ceilings and floors default OFF, so the section reads exactly as it did
+   *  before the chooser existed until it is asked. Ticking one is also what
+   *  FETCHES that layer when no zone draws it — see `layerWanted`. */
+  roomContents: Readonly<Record<ContentsEntity, boolean>>;
   /** The room search: one query, one field set, one match set for the page.
    *
    *  `matches` is `null` for NO QUERY and an empty set for a query that matched
@@ -204,6 +223,7 @@ const initial: ViewerState = {
   validation: null,
   showErrors: false,
   spacesModels: [],
+  roomContents: { doors: true, windows: true, ffe: true, ceilings: false, floors: false },
   layersRevision: 0,
   appearance: {},
   colourPlans: [],
@@ -330,10 +350,24 @@ export function setZoneSpacesModel(id: string, model: string): void {
   setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, spacesModel: model } : z)) });
 }
 
-/** Whether ANY zone draws this layer — what decides whether it is fetched. The
- *  read is scope-wide, so it cannot be per zone. */
+/** Change which related types the room panel lists. */
+export function setRoomContents(entity: ContentsEntity, on: boolean): void {
+  setState({ roomContents: { ...state.roomContents, [entity]: on } });
+}
+
+/**
+ * Whether anything on the page needs this layer's data — what decides whether
+ * it is fetched. The read is scope-wide, so it cannot be per zone.
+ *
+ * **Two askers, one answer.** A zone DRAWING the layer is the first, and since
+ * C4 the room panel LISTING it is the second: a reader who ticks Ceilings in
+ * the contents chooser while no zone draws them would otherwise read "not
+ * loaded yet" forever, which is a false state rather than a slow one. Both are
+ * page state, so this stays one question with one place to ask it.
+ */
 export function layerWanted(entity: ElementEntity): boolean {
-  return state.zones.some((z) => z.layers[entity]);
+  if (state.zones.some((z) => z.layers[entity])) return true;
+  return entity !== "spaces" && state.roomContents[entity];
 }
 
 /** Tell the page a layer's data moved. See `layersRevision`. */

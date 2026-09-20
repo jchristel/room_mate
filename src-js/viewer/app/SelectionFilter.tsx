@@ -8,8 +8,7 @@
 // the gesture code checks the layer as well, since a click resolving to
 // something nobody can see is the bug both rules exist to prevent.
 
-import { useEffect, useRef, useState } from "react";
-
+import { DropMenu } from "./DropMenu.js";
 import { setZonePickable, type SelectionKind, type ZoneRow } from "./store.js";
 
 /** The kinds, in the order the pick stack returns them, with `area` last: a
@@ -26,44 +25,20 @@ const KINDS: readonly { kind: SelectionKind; label: string }[] = [
 ];
 
 export function SelectionFilter({ zone }: { zone: ZoneRow }) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [open]);
-
   const on = KINDS.filter((k) => zone.pickable[k.kind]).length;
 
   return (
-    <div className="layer-menu" ref={root}>
-      <button
-        className="ctl"
-        title="Which kinds a click in this zone can select"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(!open);
-        }}
-      >
-        Select: {on} ▾
-      </button>
-      <div className={`fields-panel${open ? "" : " hidden"}`}>
-        {KINDS.map((k) => (
-          <label key={k.kind}>
-            <input
-              type="checkbox"
-              checked={zone.pickable[k.kind]}
-              onChange={(e) => setZonePickable(zone.id, k.kind, e.target.checked)}
-            />{" "}
-            {k.label}
-          </label>
-        ))}
-      </div>
-    </div>
+    <DropMenu label={`Select: ${on}`} title="Which kinds a click in this zone can select">
+      {KINDS.map((k) => (
+        <label key={k.kind}>
+          <input
+            type="checkbox"
+            checked={zone.pickable[k.kind]}
+            onChange={(e) => setZonePickable(zone.id, k.kind, e.target.checked)}
+          />{" "}
+          {k.label}
+        </label>
+      ))}
+    </DropMenu>
   );
 }

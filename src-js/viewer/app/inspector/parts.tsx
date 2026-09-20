@@ -10,10 +10,25 @@ import { isEmptyPropValue } from "../../properties.js";
 /** One key/value row. An empty value is rendered as a dash in a muted style
  *  rather than as blank space: "this property exists and holds nothing" and
  *  "this property is not here" are different, and only the first gets a row. */
-export function Row({ label, value, onClick }: { label: string; value: string; onClick?: () => void }) {
+export function Row({
+  label,
+  value,
+  onClick,
+  className,
+}: {
+  label: string;
+  value: string;
+  onClick?: () => void;
+  /** An extra class, for the one row that is not a value: the room panel's
+   *  entity tally, which heads a list rather than belonging to one. */
+  className?: string;
+}) {
   const empty = isEmptyPropValue(value);
   return (
-    <div className={`insp-row${onClick ? " insp-link" : ""}`} {...(onClick ? { onClick } : {})}>
+    <div
+      className={`insp-row${onClick ? " insp-link" : ""}${className ? ` ${className}` : ""}`}
+      {...(onClick ? { onClick } : {})}
+    >
       <div className="insp-k">{label}</div>
       <div className={`insp-v${empty ? " insp-empty" : ""}`}>{empty ? "—" : value}</div>
     </div>
