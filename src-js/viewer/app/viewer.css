@@ -737,3 +737,22 @@
   /* The services-model picker sits under its own Spaces entry, indented so it
      reads as belonging to that layer rather than as a ninth one. */
   .layer-menu select.ctl { margin: 0.15rem 0 0.35rem 1.2rem; max-width: 12rem; }
+
+  /* The pick list (C2): what a click found, when it found more than one thing.
+     Positioned at the click in viewport coordinates, so it is `fixed` rather
+     than absolute — the zone it belongs to scrolls and resizes under it. */
+  .pick-list {
+    position: fixed; z-index: 20; background: var(--paper); border: 1px solid var(--ink);
+    max-height: 40vh; overflow: auto; min-width: 14rem; box-shadow: 2px 2px 0 var(--rule);
+  }
+  .pick-list .pick-entry {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    border-bottom: 1px solid var(--rule); padding: 0.25rem 0.5rem; cursor: pointer;
+    font-family: var(--mono); font-size: 0.7rem; color: var(--ink);
+  }
+  .pick-list .pick-entry:last-child { border-bottom: none; }
+  .pick-list .pick-entry:hover { background: var(--fill); }
+  /* The KIND leads, because "which of these is this" is the question the list
+     answers; the id trails in the muted style the inspector uses for one. */
+  .pick-list .pick-kind { text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); }
+  .pick-list .pick-id { float: right; opacity: 0.55; margin-left: 0.75rem; }

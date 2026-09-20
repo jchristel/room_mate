@@ -59,6 +59,17 @@ export interface ZoneRow {
    *  in the way. */
   showRooms: boolean;
   showLabels: boolean;
+  /** What this zone lets a click and a hover reach.
+   *
+   *  **A filter, not an order.** The stack under a pointer is whatever is
+   *  there; this says which kinds of it count, so a reader who wants one-click
+   *  FF&E unticks Rooms, and one comparing a ceiling against its room ticks
+   *  Ceilings. Rooms, doors, windows and items start ticked and the three
+   *  outline layers do not, which is exactly the behaviour before it existed.
+   *
+   *  A kind only reaches the filter if its LAYER is on: something not drawn
+   *  must not be selectable, or a click would pick what nobody can see. */
+  pickable: Readonly<Record<SelectionKind, boolean>>;
   /** Which services model's spaces this zone draws; `""` is all of them.
    *
    *  **Presentation, not a scope.** The read is unscoped and the filtering
@@ -139,6 +150,17 @@ export interface ViewerState {
    *  on purpose: the overlay answers "what does this floor look like by
    *  department", the figures "what do the departments total across the job". */
   areasBandTier: number;
+  /** The open pick list, or null.
+   *
+   *  Page state rather than a zone's, because exactly one can be open: it is a
+   *  question about one click, and a second list open behind the first would be
+   *  two answers to it. `at` is in viewport coordinates, which is what the
+   *  click gave and what the panel positions against. */
+  pickList: {
+    zoneId: string;
+    at: { x: number; y: number };
+    entries: readonly { kind: SelectionKind; id: string; label: string }[];
+  } | null;
   /** The QA report for the scope, or null before one has been read. */
   validation: ValidationReport | null;
   /** Whether flagged rooms are marked on the plan. Follows the QA block's
@@ -178,6 +200,7 @@ const initial: ViewerState = {
   search: { query: "", fields: new Set(), seen: new Set(), matches: null, active: false },
   areas: null,
   areasBandTier: 0,
+  pickList: null,
   validation: null,
   showErrors: false,
   spacesModels: [],
@@ -241,6 +264,9 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
       : { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
     showRooms: from?.showRooms ?? true,
     showLabels: from?.showLabels ?? true,
+    pickable: from
+      ? { ...from.pickable }
+      : { room: true, door: true, window: true, item: true, space: false, ceiling: false, floor: false, area: true },
     spacesModel: from?.spacesModel ?? "",
   };
 }
@@ -290,6 +316,13 @@ export function setZoneLayer(
           }
         : z,
     ),
+  });
+}
+
+/** Change what one zone's clicks and hovers can reach. */
+export function setZonePickable(id: string, kind: SelectionKind, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) => (z.id === id ? { ...z, pickable: { ...z.pickable, [kind]: on } } : z)),
   });
 }
 
@@ -354,4 +387,12 @@ export function setAreasBandTier(depth: number): void {
 
 export function setZoneAreas(id: string, patch: { areasMode?: boolean; areasTier?: number }): void {
   setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, ...patch } : z)) });
+}
+
+export function openPickList(list: NonNullable<ViewerState["pickList"]>): void {
+  setState({ pickList: list });
+}
+
+export function closePickList(): void {
+  if (state.pickList) setState({ pickList: null });
 }

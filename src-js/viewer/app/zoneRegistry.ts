@@ -13,6 +13,7 @@
 // same rect to every zone, which is a cross-component write with no common
 // parent — a context would have to re-render the whole tree to do it.
 
+import { closePickList } from "./store.js";
 import type { Rect } from "../../renderer/types.js";
 import type { PlanRendererInstance } from "./planRenderer.js";
 
@@ -52,6 +53,9 @@ export function allHandles(): ZoneHandle[] {
  * would make two zones drift apart under a zoom.
  */
 export function commitView(originId: string, view: Rect, linked: boolean): void {
+  // A pan or a zoom moves the plan out from under an open pick list, whose
+  // entries name what was at a point that is no longer there.
+  closePickList();
   if (!linked) {
     const zone = handles.get(originId);
     if (zone) {

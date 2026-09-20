@@ -52,8 +52,12 @@ with a checkbox.
    and closes the list. Escape, a click outside, a pan, a zoom or a storey
    switch closes it and leaves no hover mark behind.
 5. The filter defaults to **doors, windows, FF&E and rooms checked, the three
-   outline layers unchecked** — which is exactly today's behaviour, so the
-   feature is opt-in per zone rather than a change nobody asked for.
+   outline layers unchecked**: the kinds a click could reach before it existed.
+   **That does list on a click straight onto a door, window or item**, since
+   each sits inside a room and both kinds are ticked — which is the filter's
+   job rather than a side effect. A reader who wants one-click FF&E unticks
+   Rooms in that zone; one comparing an item against its room leaves both on.
+   Clicking bare floor still selects the room, because only the room is there.
 
 ### G3 — A grid row selects its room
 
@@ -220,14 +224,14 @@ bundle committed — and driven in the browser on House A and RHH.
 
 ## Critique
 
-1. **A left-click list opens on nearly every click unless the filter is
-   narrow.** The room is under every item, door and window, so with rooms and
-   FF&E both checked, a click on a chair offers two entries. That is the cost
-   of dropping the right click, and the filter is what pays it: a reader who
-   wants one-click FF&E selection unchecks Rooms in that zone. The defaults
-   (outline layers off) keep today's behaviour, where a click on a chair
-   selects the chair because the room loses to it — **so the list appears only
-   once someone has asked for two things at once.**
+1. **The list opens on any click straight onto an element, at the defaults.**
+   The room is under every door, window and item, so with both ticked a click
+   on a chair offers two entries where it used to select the chair. That is the
+   cost of dropping the right click, and the filter is what pays it — untick
+   Rooms in that zone for one-click FF&E. **Measured on House A**: clicking a
+   chair lists "ITEM · FQBS-015" and "ROOM · RAMPUS 00.01". If that reads as
+   noise in practice, the cheap answer is a different default (Rooms off), not
+   a different rule.
 2. **A2 changes what the old page's first click selects, with no switch.** It
    touches every FF&E pick, not only stacked ones: an item nested wholly inside
    a larger one (a worktop inside a joinery unit) now answers first. The menu

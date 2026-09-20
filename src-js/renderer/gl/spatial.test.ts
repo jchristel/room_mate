@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DoorIndex, PICK_FIRST, RoomIndex, SurfaceIndex, pickStack } from "./spatial.js";
+import { DoorIndex, RoomIndex, SurfaceIndex, pickStack } from "./spatial.js";
 import { buildDoorGlyph } from "./doorGlyph.js";
 import type { Pick } from "../seam.js";
 import type { Ceiling, Door, Loop, Room, Space } from "../types.js";
@@ -283,15 +283,13 @@ describe("RoomIndex", () => {
     });
 
     /**
-     * Outside every room an outline layer is the FIRST entry -- an external
-     * soffit -- and a plain click there must still select nothing: those are
-     * chosen from the pick menu. The old page would otherwise hand the soffit
-     * to `selectRoom(hit.room.id)` and throw.
+     * Outside every room, an outline layer is the ONLY entry — an external
+     * soffit, a landscaping floor. Whether a click there selects it is the
+     * viewer's question (its per-zone selection filter), not this function's;
+     * what is pinned here is that the stack says what is there.
      */
-    it("never lets a plain click land on an outline layer", () => {
-      const outside = pickStack(layers, 150, -150);
-      expect(outside.map((p) => `${p.kind}:${idOf(p)}`)).toEqual(["ceiling:soffit"]);
-      expect(outside.find((p) => PICK_FIRST.has(p.kind))).toBeUndefined();
+    it("returns an outline layer with no room under it", () => {
+      expect(pickStack(layers, 150, -150).map((p) => `${p.kind}:${idOf(p)}`)).toEqual(["ceiling:soffit"]);
     });
 
     it("is empty where nothing is", () => {

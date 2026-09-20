@@ -32,7 +32,7 @@ import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js
 import { buildDoorGlyph } from "./doorGlyph.js";
 import { buildWindowGlyph } from "./windowGlyph.js";
 import { buildItemGlyph } from "./itemGlyph.js";
-import { DoorIndex, PICK_FIRST, RoomIndex, SurfaceIndex, pickStack, type PickableDoor } from "./spatial.js";
+import { DoorIndex, RoomIndex, SurfaceIndex, pickStack, type PickableDoor } from "./spatial.js";
 import { fitViewToAspect, labelTransform } from "./viewport.js";
 
 /** Stroke widths, in CSS pixels — the same numbers the stylesheet uses, so the
@@ -539,9 +539,6 @@ export class GlPlanRenderer implements PlanRenderer {
     };
   }
 
-  pickAt(clientX: number, clientY: number): Pick | null {
-    return this.pickAllAt(clientX, clientY).find((p) => PICK_FIRST.has(p.kind)) ?? null;
-  }
 
   pickAllAt(clientX: number, clientY: number): Pick[] {
     const p = this.toWorld(clientX, clientY);
