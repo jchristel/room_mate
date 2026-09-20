@@ -18,6 +18,7 @@ import { levelLabel, levelsForPayload, pickerOrder, resolveLevel, roomsOnLevel }
 import { buildColourContext, colourForRoom } from "../colour.js";
 import { errorRoomIds } from "../validation.js";
 import { AreasOverlay } from "./AreasOverlay.js";
+import { exportLevels } from "./svgExport.js";
 import { loadAreas } from "./areasData.js";
 import { tierNames } from "../areas.js";
 import { elementsOnStorey, type ElementOf } from "./layers.js";
@@ -40,7 +41,7 @@ import type { Room } from "../../renderer/types.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection, search, validation, showErrors, areas } =
+  const { payload, status, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, colourPlans, selection, search, validation, showErrors, areas, scope } =
     useViewer();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -257,6 +258,29 @@ export function Zone({ zone }: { zone: ZoneRow }) {
               ))
             : null}
         </select>
+        <button
+          className="export-svg"
+          title="Export every level as its own SVG file"
+          disabled={!payload}
+          onClick={() =>
+            payload &&
+            void exportLevels(payload, scope.projectId, scope.milestone, {
+              plan,
+              errorRoomIds: errorRooms,
+              // Error highlighting follows the QA band, exactly as the plans
+              // on screen do.
+              showErrors,
+              // The LABELS toggle reaches the export; the ROOMS toggle does
+              // not, and this is the one place the two part company.
+              // `svg/paint.ts` draws rooms and labels and nothing else -- every
+              // overlay is GL-only -- so an export honouring "rooms off" would
+              // not be a plan without rooms, it would be an empty file.
+              showLabels,
+            })
+          }
+        >
+          Export SVGs
+        </button>
         <button
           className={`areas-toggle${zone.areasMode ? " on" : ""}`}
           title="Show hierarchy footprints on this zone's plan"
