@@ -19,13 +19,14 @@ import { buildColourContext, colourForRoom } from "../colour.js";
 import { errorRoomIds } from "../validation.js";
 import { AreasOverlay } from "./AreasOverlay.js";
 import { LayerMenu } from "./LayerMenu.js";
+import { SelectionFilter } from "./SelectionFilter.js";
 import { exportLevels } from "./svgExport.js";
 import { loadAreas } from "./areasData.js";
 import { tierNames } from "../areas.js";
 import { elementsOnStorey, type ElementOf } from "./layers.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
-import { setZoneAreas, setZoneColourPlan, setZoneLevel, type ZoneRow } from "./store.js";
+import { closePickList, setZoneAreas, setZoneColourPlan, setZoneLevel, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
@@ -229,6 +230,12 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     if (zone.areasMode) void loadAreas();
   }, [zone.areasMode, payload]);
 
+  // A storey switch invalidates an open list for the same reason a pan does:
+  // its entries name elements that are no longer drawn.
+  useEffect(() => {
+    closePickList();
+  }, [levelId]);
+
   // The element reads only hold the storeys that WERE on screen, so a level
   // switch (or this zone appearing at all) has to ask again. A no-op when the
   // storeys did not actually move -- see `onStoreysChanged`.
@@ -240,6 +247,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     <div className="zone">
       <div className="zone-toolbar">
         <LayerMenu zone={zone} />
+        <SelectionFilter zone={zone} />
         {/* Per zone, because it is presentation: two zones on one level under
             two plans is the comparison this picker exists for. Hidden when the
             project declares none, which is the ordinary case. */}

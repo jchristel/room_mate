@@ -14,13 +14,72 @@
 // problem rather than a projection one.
 
 import { commitView, handleOf } from "./zoneRegistry.js";
-import { clearSelection, getState, select } from "./store.js";
+import { clearSelection, closePickList, getState, openPickList, select } from "./store.js";
 import type { Pick as PlanPick } from "../../renderer/seam.js";
 
 /** Pointer travel below which a press-release is a CLICK, not a pan. Zero
  *  would make selection feel broken: a click on a trackpad drifts a pixel or
  *  two. */
 export const CLICK_SLOP_PX = 4;
+
+/**
+ * What this zone's click and hover may reach: the stack, filtered by the
+ * zone's selection filter.
+ *
+ * Drawn AND ticked. A layer that is off is not selectable whatever the filter
+ * says, because a click must never resolve to something nobody can see — that
+ * was true of the layer toggles before the filter existed and is the half of
+ * the rule the filter does not replace.
+ */
+function pickable(zoneId: string, x: number, y: number): PlanPick[] {
+  const handle = handleOf(zoneId);
+  const zone = getState().zones.find((z) => z.id === zoneId);
+  if (!handle || !zone) return [];
+  return handle.renderer
+    .pickAllAt(x, y)
+    .filter((p) => zone.pickable[p.kind] && (p.kind === "room" ? zone.showRooms : zone.layers[entityOf(p.kind)]));
+}
+
+/** The layer a pick kind is drawn by. `room` has none — it is the base layer,
+ *  behind its own toggle — so callers check that separately. */
+function entityOf(kind: Exclude<PlanPick["kind"], "room">): "doors" | "windows" | "ffe" | "spaces" | "ceilings" | "floors" {
+  switch (kind) {
+    case "door":
+      return "doors";
+    case "window":
+      return "windows";
+    case "item":
+      return "ffe";
+    case "space":
+      return "spaces";
+    case "ceiling":
+      return "ceilings";
+    case "floor":
+      return "floors";
+  }
+}
+
+/** How an entry reads in the pick list: its type name, then what the element
+ *  calls itself. The KIND leads because "which of the things under the pointer
+ *  is this" is the question the list exists to answer. */
+function labelOf(p: PlanPick): string {
+  switch (p.kind) {
+    case "room":
+      return p.room.name || p.room.id;
+    case "door":
+      return p.door.type_name || p.door.id;
+    case "window":
+      return p.window.type_name || p.window.id;
+    case "item":
+      return (p.item.category ? `${p.item.category} · ` : "") + (p.item.type_name || p.item.id);
+    case "space":
+      return p.space.name || p.space.id;
+    case "ceiling":
+      return p.ceiling.type_name || p.ceiling.id;
+    case "floor":
+      return p.floor.type_name || p.floor.id;
+  }
+}
 
 /** The id of whatever a pick found. */
 function idOf(pick: PlanPick): string {
@@ -63,6 +122,9 @@ export function wirePlanGestures(
   let downNode: Element | null = null;
 
   const onPointerDown = (e: PointerEvent) => {
+    // A new press supersedes an open list: it is about to answer the same
+    // question somewhere else.
+    closePickList();
     dragging = true;
     movedFar = false;
     downAt = { x: e.clientX, y: e.clientY };
@@ -88,11 +150,29 @@ export function wirePlanGestures(
       return;
     }
     downNode = null;
-    const hit = handle.renderer.pickAt(downAt.x, downAt.y);
-    // Empty space CLEARS the selection, which is how a reader deselects
-    // without a second control.
-    if (hit) select(hit.kind, idOf(hit), zoneId);
-    else clearSelection();
+    const hits = pickable(zoneId, downAt.x, downAt.y);
+    // ONE match selects it; SEVERAL open the list. Empty space clears the
+    // selection, which is how a reader deselects without a second control.
+    //
+    // **The defaults DO list on a click straight onto an element**, because a
+    // door, window or item sits inside a room and both kinds start ticked. That
+    // is the filter's whole job: a reader who wants one-click FF&E unticks
+    // Rooms in that zone, and one comparing an item against its room leaves
+    // both on. Empty floor inside a room still selects the room directly --
+    // only the room is under the pointer there.
+    if (hits.length === 0) {
+      clearSelection();
+      return;
+    }
+    if (hits.length === 1) {
+      select(hits[0]!.kind, idOf(hits[0]!), zoneId);
+      return;
+    }
+    openPickList({
+      zoneId,
+      at: { x: downAt.x, y: downAt.y },
+      entries: hits.map((p) => ({ kind: p.kind, id: idOf(p), label: labelOf(p) })),
+    });
   };
 
   /**
@@ -135,8 +215,12 @@ export function wirePlanGestures(
       const at = hoverAt;
       const handle = handleOf(zoneId);
       if (!at || !handle) return;
-      const room = handle.renderer.roomAt(at.x, at.y);
-      handle.renderer.setHover(room ? { kind: "room", id: room.id } : null);
+      // Hover marks the FIRST entry of the same filtered stack a click would
+      // use, so hover and click can never disagree about what is under the
+      // pointer.
+      const first = pickable(zoneId, at.x, at.y)[0] ?? null;
+      handle.renderer.setHover(first ? { kind: first.kind, id: idOf(first) } : null);
+      const room = first?.kind === "room" ? first.room : null;
       // The same text the `<title>` carried -- name, else id.
       showTip(room ? room.name || room.id : null, room ? at : null);
     });

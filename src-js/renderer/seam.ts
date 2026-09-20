@@ -258,24 +258,15 @@ export interface PlanRenderer {
   roomAt(clientX: number, clientY: number): Room | null;
 
   /**
-   * The one element a plain click selects: the first of `pickAllAt` that is a
-   * door, window, item or room, or `null`. Spaces, ceilings and floors are
-   * never a plain click's answer -- they are chosen from the pick menu -- so
-   * a click outside every room, on an external soffit, still selects nothing.
-   *
-   * An element wins over the room it sits in, which is most places one is: a
-   * glyph is drawn over the room it serves, it is much smaller, and clicking a
-   * thing you can see should select that thing. `roomAt` is kept beside this,
-   * still room-only, because hover and the tooltip want exactly that, and
-   * widening their return type would make each handle a case it has no use for.
-   */
-  pickAt(clientX: number, clientY: number): Pick | null;
-
-  /**
    * EVERYTHING under a viewport point, in pick order: element layers before the
-   * room, smallest first within a layer. `pickAt` is its first entry. The pick
-   * menu lists this, which is why it is a list and not a better single answer:
-   * where one thing covers another, no single answer reaches both.
+   * room, smallest first within a layer.
+   *
+   * A list rather than a better single answer, because where one thing covers
+   * another no single answer reaches both. **Which of them may be picked is the
+   * caller's question** — the viewer filters this per zone (its selection
+   * filter), selects when one entry survives and lists them when several do.
+   * There used to be a `pickAt` here returning the first of the four kinds a
+   * plain click could land on; the filter replaced it.
    */
   pickAllAt(clientX: number, clientY: number): Pick[];
 

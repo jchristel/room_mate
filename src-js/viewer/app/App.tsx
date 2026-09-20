@@ -19,6 +19,7 @@ import { AreasBand } from "./AreasBand.js";
 import { QaBand } from "./QaBand.js";
 import { Header } from "./Header.js";
 import { Inspector } from "./inspector/Inspector.js";
+import { PickList } from "./PickList.js";
 import { startPolling } from "./poll.js";
 import { useViewer } from "./useViewer.js";
 import { Zone } from "./Zone.js";
@@ -48,6 +49,8 @@ export function App() {
         </main>
         <Inspector />
       </div>
+      {/* Above everything, positioned at the click it answers. */}
+      <PickList />
       {/* The bottom region, band 2. One instance per page, never per zone: it
           is scope-derived, and a region that multiplied with zone count would
           stop being a stable place a reader can point at. Band 1 -- QA, areas

@@ -18,7 +18,8 @@
 // cheap overlay redraw, and it will reuse this.
 //
 // **A pick answers a LIST, smallest first.** Everything under the pointer is
-// returned, not just one element, because the pick menu lists the whole stack.
+// returned, not just one element, because the viewer filters that list per zone
+// and shows what survives.
 // Within a layer the smallest ring leads: a large item drawn over a small one
 // used to catch every click inside it (paint order, last drawn wins), which
 // left the small one unreachable. The smaller thing is the more specific one a
@@ -328,9 +329,13 @@ export interface PickLayers {
  *
  * Spaces, ceilings and floors come AFTER the room, in their paint order top
  * first. They cover the same ground as the room under them, so ahead of it a
- * room could not be clicked at all while one of their layers was on. Behind it
- * they are never a plain click's answer and are reached through the pick menu,
- * which lists this whole stack -- see `PICK_FIRST`.
+ * room could not be clicked at all while one of their layers was on.
+ *
+ * **What may be picked at all is the CALLER's question.** This returns the
+ * whole stack in one order; the viewer filters it per zone, which is what the
+ * selection filter is. There was briefly a `PICK_FIRST` set here naming the
+ * four kinds a plain click could land on -- it was a stand-in for that filter,
+ * and two rules for one question is one too many.
  *
  * Within a layer, smallest first -- see the header. Here rather than in the
  * renderer so the order is tested without WebGL.
@@ -346,15 +351,3 @@ export function pickStack(layers: PickLayers, x: number, y: number): Pick[] {
     ...layers.floors.at(x, y).map((floor): Pick => ({ kind: "floor", floor })),
   ];
 }
-
-/**
- * The kinds a plain click may select -- `pickAt`'s answer is the first stack
- * entry of one of these.
- *
- * The outline layers are left out, and not only because they sit behind the
- * room: outside every room -- an external soffit, a landscaping floor -- they
- * would be the FIRST entry, and a click there would select one. The pick menu
- * is where those are chosen, and a plain click keeps meaning "the element or
- * room I clicked on".
- */
-export const PICK_FIRST: ReadonlySet<Pick["kind"]> = new Set(["door", "window", "item", "room"]);
