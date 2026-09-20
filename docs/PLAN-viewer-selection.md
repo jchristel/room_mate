@@ -1,8 +1,14 @@
-# Plan — viewer selection: surfaces, stacked picks, grid → plan
+# Plan — viewer selection: layer menus, stacked picks, grid → plan
 
-Four viewer behaviours (G4 added 2026-09-20). Asked for on 2026-09-19. This plan is **closed-scope**:
-it ends when the four goals below are met, and anything not written under
-"Goals" is out of it. Archive to `Superseded/` when it lands.
+Six viewer behaviours. Asked for on 2026-09-19, revised 2026-09-20 — the
+revision replaced the right-click pick menu with a per-zone **selection
+filter**, folded the eight header toggles into a per-zone **visibility menu**,
+and gave the room panel a chooser of its own. This plan is **closed-scope**: it
+ends when the six goals below are met, and anything not written under "Goals"
+is out of it. Archive to `Superseded/` when it lands.
+
+**Phase A (the plan-side groundwork) and phase B (the viewer's move to React)
+are both done.** What is left is phase C, below.
 
 ## Goals
 
@@ -12,7 +18,7 @@ the page (House A and RHH), not by reading the diff.
 ### G1 — Ceilings, floors and spaces are selectable and inspected
 
 1. With a layer switched on, a ceiling, floor or space under the pointer can be
-   selected (through the pick menu, G2). A layer that is off is never
+   selected (through the pick list, G2). A layer that is off is never
    selectable.
 2. The selected element is marked on the plan across its **whole** footprint:
    every piece of a multi-piece ceiling or floor, holes cut out.
@@ -26,20 +32,28 @@ the page (House A and RHH), not by reading the diff.
 4. An element no longer in the current payload (storey switched, layer turned
    off) shows the "not in the current scope" note the door panel already uses.
 
-### G2 — Stacked objects are listed and pickable
+### G2 — Stacked objects are listed on a LEFT click, filtered per zone
+
+**Revised 2026-09-20: no right click, and no special mouse behaviour at all.**
+What decides whether something can be picked is a per-zone **selection filter**
+— the same drop-down shape as G5's visibility menu, listing every object type
+with a checkbox.
 
 1. Everything under a point comes back as one ordered list:
    doors → windows → FF&E → room → spaces → ceilings → floors, and **smallest
-   first within each layer**. Only layers switched on contribute.
-2. **Left click is unchanged**: it selects the first entry. **Right click** on
-   the plan opens a pick menu at the pointer listing every entry — kind, then
-   name or type name, then id — even when there is only one. Right click on
-   empty plan opens nothing, and the browser's own context menu is suppressed
-   only where the pick menu opens.
-3. Hovering an entry marks that element on the plan; leaving it removes the
-   mark. Clicking an entry selects it and closes the menu.
-4. Escape, a click outside, a pan, a zoom or a storey switch closes the menu
-   and leaves no hover mark behind.
+   first within each layer**. A type contributes only when the zone's layer is
+   ON **and** its selection filter is checked.
+2. **One match, left click selects it.** More than one, the click opens a pick
+   list at the pointer naming each — kind, then name or type name, then id.
+   Empty space clears the selection, as it does today.
+3. **Hover marks what a click would select**, which is the first entry of the
+   same filtered list, so hover and click can never disagree.
+4. Hovering an entry in the list marks that element; clicking one selects it
+   and closes the list. Escape, a click outside, a pan, a zoom or a storey
+   switch closes it and leaves no hover mark behind.
+5. The filter defaults to **doors, windows, FF&E and rooms checked, the three
+   outline layers unchecked** — which is exactly today's behaviour, so the
+   feature is opt-in per zone rather than a change nobody asked for.
 
 ### G3 — A grid row selects its room
 
@@ -69,16 +83,50 @@ contract offers these three a `line` colour and no `selection` one).
 2. `.surface-selected-mark` reads it per entity, falling back to the accent,
    so a project that sets nothing looks exactly as it does today.
 
+### G5 — One visibility menu per zone
+
+The eight header toggles — Labels, Rooms, Doors, Windows, FF&E, Spaces,
+Ceilings, Floors — are a row of buttons that wraps onto three lines on a narrow
+window, and they are **page state**, so two zones cannot be compared with
+different layers on.
+
+1. One drop-down per zone, in its toolbar, with a checkbox per layer. The
+   button says how many layers are on, so the state is readable without
+   opening it.
+2. **Per zone**: each zone paints its own set. Two zones on one storey, one
+   showing ceilings and one not, is the comparison this makes possible.
+3. Each entry keeps its storey-match suffix — "(by elevation)", "(all levels)"
+   — computed for THAT zone's storey, because a fallback nobody can see is this
+   area's recurring failure.
+4. The spaces model picker moves into the menu, beside the Spaces entry, and
+   appears only when the project has more than one services model.
+5. An element layer is FETCHED while any zone shows it, and not otherwise —
+   the read is scope-wide, so it cannot be per zone.
+
+### G6 — The room panel chooses which contents it lists
+
+"In this room" lists doors, windows and FF&E, always, in that order.
+
+1. A drop-down on the room panel, the same shape as G5's, choosing which
+   related types the section lists.
+2. Ceilings and floors join the options, since each carries the rooms it covers.
+   They default OFF, so the panel reads as it does today until asked.
+3. **Spaces are not an option**, and the menu says why rather than omitting
+   them silently: a space carries no room reference at all, so there is nothing
+   to list it by. (The QA report's key match is a different question.)
+4. The choice is page state, not per room: it is a question about how the panel
+   reads, and a reader clicking room after room is comparing the same thing.
+
 ## Non-goals
 
-Stated so they are not drifted into: click-to-cycle and Tab-key cycling (the
-menu replaces both); a count badge or any other "there is more here" hint
-outside the menu; ceilings/floors in the room panel's "in this room"; a space →
-room join in the panel; length units (a separate exercise); zooming to a
-room, and panning on any selection that did not come from the grid; switching
-a zone's storey to reach a room; remembering the "Pan to room" checkbox across
-reloads; scrolling the grid to a plan selection; persisting a selection across
-reloads; multi-select; selection marks in the SVG
+Stated so they are not drifted into: **right-click behaviour of any kind**
+(dropped in the revision); click-to-cycle and Tab-key cycling; a count badge or
+any other "there is more here" hint outside the pick list; a space → room join
+anywhere; length units (a separate exercise); zooming to a room, and panning on
+any selection that did not come from the grid; switching a zone's storey to
+reach a room; remembering the "Pan to room" checkbox, the selection filter or
+the visibility menu across reloads; scrolling the grid to a plan selection;
+persisting a selection across reloads; multi-select; selection marks in the SVG
 export; the ceilings/floors QA reports; and any server or wire change **other
 than G4's three settings fields**, which are settings, not entity data.
 
@@ -128,42 +176,58 @@ and C2 add entries rather than branches. Two notes for phase C:
   because adding behaviour inside a parity slice would have made the comparison
   against the old page meaningless. C3 adds it.
 
-### C — the features (React viewer), one PR each
+### C — the features (React viewer), one PR each, merged before the next starts
 
-- **C1. Pick menu (G2).** A component anchored at the pointer, fed by
-  `pickAllAt`. Entry hover → `setHover`, entry click → select. Closes on the
-  events in G2.4; clamps to the zone so it never opens off-screen.
-- **C2. Inspectors (G1).** One component for ceiling and floor (one record on
-  the wire), one for space. Type properties through the existing
-  `typePropertiesOf`.
-- **C3. Grid → plan (G3).** Row click → `selectRoom(id)`; the row's selected
-  class derives from the selection when rows render. When "Pan to room" is
-  checked, each zone whose storey holds the room tests the room's bounding box
-  against its view and, if not wholly inside, re-centres the view on it. The
-  view is page state (the page owns pan/zoom and hands it to `setView`), so
-  this needs no renderer change.
-- **C4. A selection colour for the three outline layers (G4).** A Rust field
-  each on `[appearance] spaces/ceilings/floors` beside their `line`, a control
-  on the settings page (a type error there until there is one, which is the
-  point of the generated types), `--sel-spaces` / `--sel-ceilings` /
-  `--sel-floors` set by `applyAppearance`, and the `.surface-selected-mark`
-  modifiers reading them with the accent as the fallback. **After the React
-  move, not before**, and last of the four: `cargo test` regenerates
-  `src-js/settings/generated/` and the control goes on the settings page, so
-  this is settings work either way — but doing it while the viewer is still
-  hand-written means writing the viewer half twice.
+Ordered so each step stands on the one before: the visibility menu settles the
+per-zone state shape, the selection filter reuses its component, and the
+inspectors are what the filter makes reachable.
+
+- **C1. The per-zone visibility menu (G5).** `layers`, `showRooms` and
+  `showLabels` move from page state onto `ZoneRow`; one `LayerMenu` component
+  replaces the eight header buttons and lives in the zone toolbar. The element
+  polls gate on "any zone shows it" rather than one flag. The storey-match
+  suffix is computed per zone, and the spaces model picker moves inside.
+  The SVG export follows its OWN zone's labels toggle, which it already did.
+- **C2. The selection filter and the pick list (G2).** A second menu of the
+  same component, per zone, over the seven kinds; `pickAllAt` filtered by it;
+  one match selects, several open a list at the pointer. Hover marks the first
+  filtered entry, so hover and click agree. `PICK_FIRST` in
+  `src-js/renderer/gl/spatial.ts` goes: it was the stand-in for exactly this
+  filter, and keeping both would mean two rules for one question.
+- **C3. Ceiling, floor and space inspectors (G1).** One component for ceilings
+  and floors (one record on the wire), one for spaces, registered in the
+  inspector table beside the existing four. Rooms covered, with
+  `fraction_of_element` and `fraction_of_room`; "(unattributed)" spelled out.
+- **C4. The room panel's contents chooser (G6).** The `ROOM_CONTENTS`-style
+  table gains ceilings and floors, each joined through the surface's own
+  `rooms` list; a menu (the C1 component again) chooses which types show.
+  Spaces appear in the menu as a disabled entry naming why they cannot.
+- **C5. Grid → plan (G3).** Row click → `selectRoom(id)`; the row's selected
+  class derives from the selection when rows render. With "Pan to room"
+  checked, each zone whose storey holds the room tests its bounding box
+  against the view and re-centres if it is not wholly inside. The view is page
+  state owned by the zone registry, so this needs no renderer change.
+- **C6. A selection colour for the three outline layers (G4).** A Rust field
+  each on `[appearance] spaces/ceilings/floors`, a control on the settings page
+  (a type error there until there is one, which is the point of the generated
+  types), `--sel-spaces` / `--sel-ceilings` / `--sel-floors` set by the
+  appearance module, and `.surface-selected-mark` reading them with the accent
+  as the fallback. Last, because it is settings work either way.
 
 Every PR: `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D
 warnings`, `npm run typecheck && npm test && npm run build`, with the rebuilt
-bundle committed.
+bundle committed — and driven in the browser on House A and RHH.
 
 ## Critique
 
-1. **Nothing on the plan says a right click would find more.** Decided: the
-   menu is opened on right click (not on every multi-entry left click, which
-   would be nearly every click, the room being under every item, door and
-   window). The cost is discoverability, and a hint outside the menu is a
-   non-goal.
+1. **A left-click list opens on nearly every click unless the filter is
+   narrow.** The room is under every item, door and window, so with rooms and
+   FF&E both checked, a click on a chair offers two entries. That is the cost
+   of dropping the right click, and the filter is what pays it: a reader who
+   wants one-click FF&E selection unchecks Rooms in that zone. The defaults
+   (outline layers off) keep today's behaviour, where a click on a chair
+   selects the chair because the room loses to it — **so the list appears only
+   once someone has asked for two things at once.**
 2. **A2 changes what the old page's first click selects, with no switch.** It
    touches every FF&E pick, not only stacked ones: an item nested wholly inside
    a larger one (a worktop inside a joinery unit) now answers first. The menu
@@ -191,11 +255,36 @@ bundle committed.
    and is a non-goal.
 10. **The checkbox resets to checked on every load.** Deliberately not
     remembered — a stated non-goal, not an oversight.
-11. **The pick menu needs a pointer with a right button.** Touch and pen have
-    no right click, so on those the menu is unreachable and G1's surfaces with
-    it. The viewer is a desktop tool; accepted.
+11. **Per-zone layers make one comparison possible and another harder.** Two
+    zones with different layers is the point, but "is FF&E on?" stops having
+    one answer, and a reader looking at the wrong zone's menu will think a
+    layer failed to draw. The count on the button is the mitigation.
+12. **Per-zone layers do not make the READS per zone.** An element layer is
+    fetched while any zone shows it, so switching ceilings on in one zone costs
+    the fetch for every storey on screen. That is the storey-scoped read's
+    shape and not worth changing; it is stated so nobody reads the menu as a
+    cost control.
+13. **The room panel's chooser cannot offer spaces**, because a space carries
+    no room reference — the one entity here with nothing to join on. A disabled
+    entry naming that is better than silence, and it is the same "reported
+    state" discipline the rest of this plan follows.
+14. **Ceilings and floors in the room panel are a join the page computes**, not
+    one the server serves: each surface lists the rooms it covers, so the panel
+    inverts that list. It is the same client-side reshuffle as the other three
+    types, and it is bounded by the storeys on screen for the same reason.
 
 ## Questions
 
-None open. Q1–Q5 were answered on 2026-09-19 and are folded into the goals and
-non-goals above.
+None open.
+
+Q1–Q5 were answered on 2026-09-19 and are folded into the goals and non-goals
+above. The 2026-09-20 revision answered three more, and the answers are the
+reason this plan changed shape rather than growing:
+
+- **The eight layer toggles are a drop-down, per zone** (G5), not a row of
+  page-level buttons.
+- **No right click.** A left click selects when one thing is under it and lists
+  when several are, and what counts as "under it" is a per-zone selection
+  filter (G2).
+- **The room panel chooses its own contents** (G6), which is what brought
+  ceilings and floors into a section that deliberately did not have them.
