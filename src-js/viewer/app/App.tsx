@@ -14,6 +14,7 @@
 import { useEffect } from "react";
 
 import { Header } from "./Header.js";
+import { Inspector } from "./inspector/Inspector.js";
 import { startPolling } from "./poll.js";
 import { useViewer } from "./useViewer.js";
 import { Zone } from "./Zone.js";
@@ -38,6 +39,7 @@ export function App() {
             <Zone key={zone.id} zone={zone} />
           ))}
         </main>
+        <Inspector />
       </div>
     </>
   );

@@ -15,6 +15,8 @@
 import type { BuildingRow, MilestoneRow, ProjectRow, RoomsPayload } from "./api.js";
 import type { ElementEntity } from "../elementUrls.js";
 import type { ColourPlan } from "../colour.js";
+import type { ElementKind } from "../../renderer/seam.js";
+import type { FilterState } from "../properties.js";
 import type { ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
 
@@ -40,8 +42,33 @@ export interface ZoneRow {
   colourPlan: string | null;
 }
 
+/**
+ * What is selected, page-wide.
+ *
+ * PAGE state, not zone state, and that is the decision the old page made and
+ * this keeps: one room can legitimately appear in two zones showing the same
+ * level, so the mark is applied in EVERY zone that draws it, while `zoneId`
+ * records where the click came from. That id is a LABEL the panel shows, never
+ * focus machinery — selection is explicit, never inferred from where the reader
+ * last interacted.
+ *
+ * `kind` is what makes this more than an id: ids are unique only within an
+ * entity, so a door and a room may share one.
+ */
+export interface Selection {
+  kind: ElementKind;
+  id: string;
+  zoneId: string | null;
+}
+
 export interface ViewerState {
   scope: Scope;
+  selection: Selection | null;
+  /** The inspector's property filters. Page state, and deliberately kept
+   *  ACROSS selection changes: the common use is comparing one field over
+   *  several rooms by clicking each in turn. Not persisted across reloads,
+   *  like every other view preference here. */
+  inspector: FilterState;
   projects: readonly ProjectRow[];
   buildings: readonly BuildingRow[];
   milestones: readonly MilestoneRow[];
@@ -91,6 +118,8 @@ export interface ViewerState {
 
 const initial: ViewerState = {
   scope: { projectId: null, building: null, milestone: null },
+  selection: null,
+  inspector: { filter: "", hideEmpty: true },
   projects: [],
   buildings: [],
   milestones: [],
@@ -199,4 +228,20 @@ export function bumpLayers(): void {
 /** Apply a colour plan to one zone, by name. `null` is no colour. */
 export function setZoneColourPlan(id: string, plan: string | null): void {
   setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, colourPlan: plan } : z)) });
+}
+
+// ---- selection --------------------------------------------------------------
+
+/** Select one element, or nothing. `zoneId` is where the click came from, and
+ *  is null for a selection made anywhere else (the grid, a search result). */
+export function select(kind: ElementKind, id: string, zoneId: string | null = null): void {
+  setState({ selection: { kind, id, zoneId } });
+}
+
+export function clearSelection(): void {
+  if (state.selection) setState({ selection: null });
+}
+
+export function setInspectorFilter(patch: Partial<FilterState>): void {
+  setState({ inspector: { ...state.inspector, ...patch } });
 }

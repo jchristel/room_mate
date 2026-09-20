@@ -154,3 +154,43 @@ export function layerToggleLabel(layer: LayerSpec, levelId: string | null): stri
 export function layerPayload(entity: ElementEntity): unknown {
   return polls.get(entity)?.payload ?? null;
 }
+
+/** One element by id, with the payload it came from — which the type-property
+ *  lookup needs, since a row indexes its OWN response only. */
+export function findElement<E extends ElementEntity>(
+  entity: E,
+  id: string,
+): { element: ElementOf[E]; payload: ElementPayload } | null {
+  const payload = polls.get(entity)?.payload;
+  const list = (payload?.[entity] ?? []) as ElementOf[E][];
+  const element = list.find((e) => (e as { id: string }).id === id);
+  return element && payload ? { element, payload } : null;
+}
+
+/**
+ * An element's family-type properties.
+ *
+ * An element read sends each distinct bag ONCE, in `type_property_sets`, and
+ * each element names its row in `type_properties_ref` — the same bag on 1,000
+ * chairs used to arrive 1,000 times, which on RHH was most of a 293 MB `/ffe`
+ * body. The row indexes THIS payload only, so it is always resolved against the
+ * payload the element came from; an element with no type properties names no
+ * row.
+ */
+export function typePropertiesOf(
+  payload: ElementPayload,
+  element: { type_properties_ref?: number | null },
+): Record<string, { value?: string } | undefined> {
+  const row = element.type_properties_ref;
+  const sets = payload["type_property_sets"] as Record<string, unknown>[] | undefined;
+  if (row == null || !sets) return {};
+  return (sets[row] ?? {}) as Record<string, { value?: string } | undefined>;
+}
+
+/** What a layer's last read SAID, which a null payload cannot tell you: not
+ *  asked yet, a 204 meaning the scope holds none, or a failure. The room
+ *  contents panel keeps them apart, because "this room has no doors" and "the
+ *  doors have not arrived" are opposite answers and only one is a finding. */
+export function layerState(entity: ElementEntity): "pending" | "loaded" | "empty" | "error" {
+  return polls.get(entity)?.fetchState ?? "pending";
+}
