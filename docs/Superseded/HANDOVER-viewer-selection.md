@@ -1,9 +1,10 @@
 # Handover — the viewer's selection work (phase C)
 
-Written 2026-09-20, mid-flight, because the session that had the context ran
-out of it. **Read `PLAN-viewer-selection.md` first** — this file says only
-where the work got to, what the plan does not, and what is worth not
-rediscovering.
+**Phase C is complete: all eight steps are merged, and this file is the
+record.** It was written 2026-09-20, mid-flight, because the session that had
+the context ran out of it; the notes below are what each step cost to learn.
+The plan it served is beside it in this directory. **Nothing here is live** —
+what shipped is documented by the code.
 
 ## Where it got to
 
@@ -20,7 +21,7 @@ C is eight steps, each its own PR, merged before the next starts.
 | C5 | Grid row → plan, with pan (G3) | merged, #172 |
 | C6 | Selection colour for the outline layers (G4) | merged, #173 |
 | C7 | Property chooser on every panel and the grid (G7) | merged, #174 |
-| C8 | Hover property per entity, from settings (G8) | **next** |
+| C8 | Hover property per entity, from settings (G8) | merged, #175 |
 
 ## How this work is run
 
@@ -196,13 +197,40 @@ and ~20 s after switching an overlay layer on).
   a name filter of "fire" and an unticked `Fire Rating` compose rather than
   fight.
 
-## What C8 needs, specifically
+## What C8 left behind
 
-A settings block per entity naming **which property a hover shows** — rooms,
-doors, windows, FF&E, spaces, ceilings, floors — a control on the settings
-page, and the tooltip reading it out of the same `[appearance]`-era settings
-fetch. **Unset is the CURRENT behaviour**, not an empty tooltip: name, else id,
-and a property the element does not carry falls back the same way, because a
-blank tooltip reads as a broken hover rather than as an absent value. It is the
-same Rust-plus-generated-types shape as C6, so re-read that section's notes on
-running your own server.
+- **`[hover]` is one flat struct where `Appearance` needed three.** Appearance
+  is shaped by what each entity DRAWS, which genuinely differs; every entity
+  carries properties, so every entity can answer this question, and splitting
+  it would have been shape for its own sake.
+- **The tier rule is `tieredValue` in `viewer/properties.ts`, with tests.** It
+  is the contract's `lookup_property` rule restated for the page — instance,
+  then type, and a tier only wins when it holds something — and it shares
+  `isEmptyPropValue` with hide-empty, so Revit's literal `"None"` counts as
+  absent in both tiers. Measured on RHH: `Fire Rating` is absent on a door's
+  instance and `"None"` on its type, so that door falls back to its type name;
+  `Classification Number` is absent on the instance and real on the type, and
+  the tooltip reads `23.30.10.00`.
+- **Every kind has a tooltip now**, where only rooms did. Six of the seven a
+  hover can land on since C2 answered with nothing at all.
+- **Free text, no datalist, and that is a statement about the server.** It
+  knows the ROOM property vocabulary — that is what the room-label picker uses
+  — and knows nothing about a door's or a ceiling's, so suggesting room names
+  against every row would offer names that cannot work.
+- Driven on RHH LEVEL 6: room → `Inpatient Unit #1 - Medical Short Stay (28
+  Beds)`, ceiling → `2700.0`, door → `23.30.10.00`, and FF&E (nothing set) →
+  `Generic Models · FIRT-032`, which is the unchanged name-else-id fallback.
+
+## What is left
+
+Nothing in this plan. Two things it deliberately did not do, stated here so
+they are found rather than rediscovered:
+
+- **None of these preferences survive a reload** — not the visibility menu, the
+  selection filter, the contents chooser, "Pan to room" or the property
+  chooser. The durable version of "which properties matter for this project" is
+  project settings, and the plan's critique 14 says what would justify moving
+  one there: readers re-making the same choice every morning, not a
+  `localStorage` key.
+- **No overlay layer reaches the SVG export**, selection marks included. Also
+  pre-existing, also stated in CLAUDE.md.

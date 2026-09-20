@@ -145,6 +145,13 @@ input[type="text"]:read-only { background: var(--fill); opacity: 0.8; }
 .appearance-grid tbody th { font-weight: normal; padding-right: 1.2rem; }
 .appearance-grid .cell-absent { opacity: 0.35; cursor: help; }
 
+/* The hover properties: seven entity/property pairs, read down rather than
+   across. A grid with the labels in their own column so the inputs line up --
+   "FF&E" and "Ceilings" are different widths, and inline fields would stagger
+   every box, which is what makes seven rows hard to scan as one decision. */
+.hover-grid { display: grid; grid-template-columns: max-content max-content; gap: 0.25rem 0.8rem; }
+.hover-grid label.field { display: contents; margin-right: 0; }
+
 .colour-field { display: inline-flex; align-items: center; gap: 0.3rem; }
 /* Unset swatches are muted so "following the theme" is visible down a column
    at a glance, rather than needing the button beside each one read. */

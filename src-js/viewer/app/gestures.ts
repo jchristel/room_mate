@@ -15,6 +15,8 @@
 
 import { commitView, handleOf } from "./zoneRegistry.js";
 import { clearSelection, closePickList, getState, openPickList, select } from "./store.js";
+import { tieredValue } from "../properties.js";
+import { layerPayload, typePropertiesOf } from "./layers.js";
 import type { Pick as PlanPick } from "../../renderer/seam.js";
 
 /** Pointer travel below which a press-release is a CLICK, not a pan. Zero
@@ -79,6 +81,68 @@ function labelOf(p: PlanPick): string {
     case "floor":
       return p.floor.type_name || p.floor.id;
   }
+}
+
+/** The element a pick found, as a bag of the fields the tooltip reads. */
+function elementOf(pick: PlanPick): { id: string; properties?: Record<string, { value?: string }>; type_properties_ref?: number | null } {
+  switch (pick.kind) {
+    case "room":
+      return pick.room as never;
+    case "door":
+      return pick.door as never;
+    case "window":
+      return pick.window as never;
+    case "item":
+      return pick.item as never;
+    case "space":
+      return pick.space as never;
+    case "ceiling":
+      return pick.ceiling as never;
+    case "floor":
+      return pick.floor as never;
+  }
+}
+
+/**
+ * What the tooltip says: the property this project named for that kind, else
+ * the element's own name.
+ *
+ * **Never an empty string**, which is the whole of G8's third criterion. A
+ * project that names nothing, a name no element carries, and a parameter Revit
+ * left unset all fall back to `labelOf` — because a blank tooltip reads as a
+ * broken hover rather than as an absent value, and these are parameter names
+ * typed by hand into settings with nothing on the server able to check them.
+ *
+ * **The lookup is tiered, instance then type, and a tier only wins when it
+ * holds something** — the contract's own `lookup_property` rule, restated here
+ * because the page does its own lookup. A blank instance parameter must not
+ * shadow a real type value: `Door Leaf Thickness` is blank on 22 of 26 sample
+ * doors while the type says 40.0, and that is exactly the kind of property
+ * someone puts in this setting.
+ *
+ * The type bag is resolved against the payload the element came from, since a
+ * `type_properties_ref` indexes its OWN response only. A room has no type
+ * tier and no layer payload, so it stops at the instance.
+ */
+function hoverText(pick: PlanPick): string {
+  const name = getState().hoverProperties[hoverKeyOf(pick.kind)];
+  if (!name) return labelOf(pick);
+  const element = elementOf(pick);
+  // A room has no type tier and no layer payload -- it comes from `/rooms` --
+  // so it stops at the instance.
+  const payload = pick.kind === "room" ? null : (layerPayload(entityOf(pick.kind)) as ElementPayloadArg | null);
+  const type = payload ? typePropertiesOf(payload, element) : undefined;
+  return tieredValue(name, element.properties, type) ?? labelOf(pick);
+}
+
+/** What `typePropertiesOf` takes, named so the cast off `layerPayload`'s
+ *  `unknown` has somewhere to point. */
+type ElementPayloadArg = Parameters<typeof typePropertiesOf>[0];
+
+/** The settings key for a pick kind. `rooms` is the one the layer table has no
+ *  entry for, rooms being the base layer rather than a layer. */
+function hoverKeyOf(kind: PlanPick["kind"]): "rooms" | "doors" | "windows" | "ffe" | "spaces" | "ceilings" | "floors" {
+  return kind === "room" ? "rooms" : entityOf(kind);
 }
 
 /** The id of whatever a pick found. */
@@ -220,9 +284,10 @@ export function wirePlanGestures(
       // pointer.
       const first = pickable(zoneId, at.x, at.y)[0] ?? null;
       handle.renderer.setHover(first ? { kind: first.kind, id: idOf(first) } : null);
-      const room = first?.kind === "room" ? first.room : null;
-      // The same text the `<title>` carried -- name, else id.
-      showTip(room ? room.name || room.id : null, room ? at : null);
+      // EVERY kind gets a tooltip since G8, where only rooms did: a hover can
+      // land on any of seven since the selection filter, and six of them
+      // answered with nothing at all.
+      showTip(first ? hoverText(first) : null, first ? at : null);
     });
   };
 

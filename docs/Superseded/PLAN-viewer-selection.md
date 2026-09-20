@@ -7,7 +7,12 @@ and gave the room panel a chooser of its own. G7 and G8 were added the same
 day, after C3 shipped: a property chooser on every panel and the grid, and a
 per-entity hover property in project settings. This plan is **closed-scope**: it
 ends when the six goals below are met, and anything not written under "Goals"
-is out of it. Archive to `Superseded/` when it lands.
+is out of it.
+
+**Landed and archived 2026-09-20**: phase C's eight steps are merged (#167,
+#168, #169, #171, #172, #173, #174, #175). Nothing here is live — what shipped
+is documented by the code. `HANDOVER-viewer-selection.md`, beside this file,
+records what each step cost to learn.
 
 **Phase A (the plan-side groundwork) and phase B (the viewer's move to React)
 are both done.** What is left is phase C, below.

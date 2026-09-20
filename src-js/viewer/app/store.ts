@@ -19,7 +19,7 @@ import type { ElementKind } from "../../renderer/seam.js";
 import type { FilterState } from "../properties.js";
 import type { AreasData } from "../areas.js";
 import type { ValidationReport } from "../validation.js";
-import type { ViewerAppearance } from "./appearance.js";
+import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
@@ -228,6 +228,10 @@ export interface ViewerState {
    * be that would be infuriating when it vanished.
    */
   hiddenProperties: Readonly<Partial<Record<PropertyScope, ReadonlySet<string>>>>;
+  /** Which property a hover shows, per entity, from the same settings read as
+   *  `appearance`. Every field absent is the ordinary state and means the
+   *  tooltip keeps naming the element. */
+  hoverProperties: HoverProperties;
 }
 
 const initial: ViewerState = {
@@ -254,6 +258,7 @@ const initial: ViewerState = {
   appearance: {},
   colourPlans: [],
   hiddenProperties: {},
+  hoverProperties: {},
 };
 
 let state: ViewerState = initial;
