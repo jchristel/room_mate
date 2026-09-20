@@ -93,7 +93,6 @@ export function Header() {
       <LayerToggles />
       <Search />
       <div className="links">
-        <a href="/">the current viewer</a>
         <a href="/reports/">reports</a>
         <a href="/settings/">settings</a>
       </div>

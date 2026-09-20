@@ -1,5 +1,15 @@
 # Plan — the viewer moves to React
 
+**LANDED 2026-09-20, and archived.** All ten slices shipped; `/` serves the
+React viewer and the hand-written page is deleted. What the port cost, and the
+four bugs the side-by-side comparison caught, is summarised in
+[STRATEGY-BROWSER.md](../STRATEGY-BROWSER.md) under "UI growth" — this file is
+kept for how it was sequenced and what was deliberately left out.
+
+One goal moved rather than shipped: the two band-to-band drag splits were
+missing from B8 and were closed in B10, which is why the slice list says one
+thing and the history another.
+
 `static/index.html` is 5,568 lines of hand-written HTML, CSS and JavaScript:
 182 top-level functions over one graph of module-scope globals. The settings
 page (2026-09-12) and the reports page are React; this is the last page, and

@@ -5,10 +5,11 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [MCP](STRATEGY-MCP.md) · [Authored](STRATEGY-AUTHORED.md) ·
 [Entities](STRATEGY-ENTITIES.md) · [Security](STRATEGY-SECURITY.md)
 
-**Open work only.** The viewer is a WebGL plan with a thin SVG overlay, three
-sibling static pages, and a `src-js/` TypeScript build emitting the committed
-renderer bundle and the React settings page. How each part works is documented where it is built — `src-js/renderer/`,
-`static/index.html`, `static/graph.js` — and the invariants that are expensive to
+**Open work only.** The viewer is a WebGL plan with a thin SVG overlay, and
+every page is now React over a `src-js/` TypeScript build: the viewer
+(`src-js/viewer/`), settings, reports, plus the committed renderer bundle. How
+each part works is documented where it is built — `src-js/renderer/`,
+`src-js/viewer/`, `static/graph.js` — and the invariants that are expensive to
 rediscover are below rather than in the code, because they are properties of the
 *seam* between two layers and no single file owns them.
 
@@ -246,12 +247,25 @@ The goal is a richer browser tool run locally, not a desktop app.
   preference for one language end to end is not on that list: it was weighed
   against the table above and lost.
 
-- **The trigger for adopting React on a live page is still unmet**, and it is the
-  one this doc has always named: the same state written into several DOM places
-  and drifting. The one instance found so far — the four copy-pasted entity polls
-  in `index.html` — was fixed by extracting a typed module, not by a framework
-  (PR #120). Selection persistence remains a small URL + `localStorage` fix on
-  purpose.
+- **The viewer is React too, since 2026-09-20**, and what finally moved it was
+  not the trigger this doc named. The predicted signal — the same state written
+  into several DOM places and drifting — fired once (the four copy-pasted entity
+  polls) and was answered by extracting a typed module, not a framework. What
+  moved the page was a feature request the hand-written page could only take
+  twice: a pick menu, three more inspectors and a grid-to-plan link, all page
+  code, with settings and reports already React. The port is
+  `docs/Superseded/PLAN-viewer-react.md`; it was a PARITY port in ten slices,
+  each checked against the old page running beside it at `/viewer/`, and the
+  cutover deleted that page.
+
+  **What it cost, for the next time this question comes up.** Four bugs that no
+  diff would have shown, each found by driving the two pages side by side: a
+  picker reverted by an in-flight poll, a plan drawn many times its panel's
+  height because the page grid no longer applied under React's root, a grid that
+  put all 3,013 RHH rows in the DOM because its scroller was measured before
+  layout, and element layers that never repainted because their payloads live
+  outside React. The last two are one lesson — **measure after layout, then keep
+  measuring** — and it bit a third time on the adjacency canvas.
 
 ## Endpoints follow fetch lifecycle, not data type
 
