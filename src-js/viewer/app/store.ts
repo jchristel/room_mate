@@ -17,6 +17,7 @@ import type { ElementEntity } from "../elementUrls.js";
 import type { ColourPlan } from "../colour.js";
 import type { ElementKind } from "../../renderer/seam.js";
 import type { FilterState } from "../properties.js";
+import type { ValidationReport } from "../validation.js";
 import type { ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
 
@@ -113,6 +114,13 @@ export interface ViewerState {
     matches: ReadonlySet<string> | null;
     active: boolean;
   };
+  /** The QA report for the scope, or null before one has been read. */
+  validation: ValidationReport | null;
+  /** Whether flagged rooms are marked on the plan. Follows the QA block's
+   *  expansion rather than the report: a reader opens QA to look at the
+   *  flagged rooms, and a plan lighting up on a background refresh would be a
+   *  change nobody asked for. */
+  showErrors: boolean;
   /** Bumped whenever a layer's payload changes.
    *
    *  The element payloads live on their polls, not in this store -- they are
@@ -146,6 +154,8 @@ const initial: ViewerState = {
   showRooms: true,
   showLabels: true,
   search: { query: "", fields: new Set(), seen: new Set(), matches: null, active: false },
+  validation: null,
+  showErrors: false,
   spacesModel: "",
   spacesModels: [],
   layersRevision: 0,
@@ -266,4 +276,12 @@ export function setInspectorFilter(patch: Partial<FilterState>): void {
  *  reader turned off. */
 export function setSearch(patch: (prev: ViewerState["search"]) => Partial<ViewerState["search"]>): void {
   setState({ search: { ...state.search, ...patch(state.search) } });
+}
+
+export function setValidation(report: ValidationReport | null): void {
+  setState({ validation: report });
+}
+
+export function setShowErrors(on: boolean): void {
+  setState({ showErrors: on });
 }
