@@ -15,8 +15,8 @@
 // `/ceilings` is 9 MB on RHH — for a question most of them are not asking.
 
 import { EntityPoll, onStorey } from "./planRenderer.js";
-import { elementUrl, toggleLabel, visibleStoreys, type ElementEntity } from "../elementUrls.js";
-import { bumpLayers, getState, setState } from "./store.js";
+import { elementUrl, matchSuffix, visibleStoreys, type ElementEntity } from "../elementUrls.js";
+import { bumpLayers, getState, layerWanted, setState } from "./store.js";
 import type { Ceiling, Door, Floor, Item, Level, Space, WindowOpening } from "../../renderer/types.js";
 
 /** How a layer's storey match resolved, so its toggle can say when the answer
@@ -74,29 +74,30 @@ for (const layer of LAYERS) {
   polls.set(
     layer.entity,
     new EntityPoll<ElementPayload>({
-      url: () =>
-        elementUrl(layer.entity, getState().scope, storeysOnScreen(), {
-          model: layer.entity === "spaces" ? getState().spacesModel : null,
-        }),
-      enabled: () => layer.pollWhenOff || getState().layers[layer.entity],
+      // **Spaces are read UNSCOPED**, with no `?model=`, since C1 made the
+      // model a per-ZONE choice: two zones may pick different services models
+      // and one request cannot serve both, so the filtering moved to the paint.
+      // Nothing fetches more than it did — the picker's default was already
+      // "all models".
+      url: () => elementUrl(layer.entity, getState().scope, storeysOnScreen()),
+      // ANY zone showing it is what makes a layer worth fetching. The read is
+      // scope-wide, so it cannot be per zone — a menu is a drawing decision,
+      // never a cost control.
+      enabled: () => layer.pollWhenOff || layerWanted(layer.entity),
       ...(layer.entity === "spaces"
-        ? {
-            // Only while UNSCOPED: a scoped payload lists one model and would
-            // collapse the picker to the option already chosen. The default is
-            // unscoped, so the list is always learned before it can be narrowed.
-            onPayload: (payload: ElementPayload) => {
-              if (!getState().spacesModel) refreshSpacesModels(payload);
-            },
-          }
+        ? { onPayload: (payload: ElementPayload) => refreshSpacesModels(payload) }
         : {}),
     }),
   );
 }
 
-/** Every model that has spaces, learned from an unscoped payload's
- *  `phase_by_model` — which lists exactly the models that contributed. The
- *  picker exists because RHH keeps one services file per service, so "all"
- *  stacks four near-identical outlines on every room in one colour. */
+/** Every model that has spaces, learned from the payload's `phase_by_model` —
+ *  which lists exactly the models that contributed. The picker exists because
+ *  RHH keeps one services file per service, so "all" stacks four
+ *  near-identical outlines on every room in one colour.
+ *
+ *  Unconditional since C1: the read is always unscoped now, so the list can
+ *  never be narrowed to the one model a zone happens to be showing. */
 function refreshSpacesModels(payload: ElementPayload): void {
   const { scope } = getState();
   const byProject = (payload["phase_by_model"] ?? {}) as Record<string, Record<string, unknown>>;
@@ -144,10 +145,11 @@ export function elementsOnStorey<E extends ElementEntity>(
   return { kept: result.kept, match: result.match as StoreyMatch };
 }
 
-/** A layer's toggle text, carrying its storey match. */
+/** A layer's menu text: its name, plus how its storey resolved for THIS zone.
+ *  A layer that fell back to elevation, or to every level, says so where the
+ *  reader switches it on. */
 export function layerToggleLabel(layer: LayerSpec, levelId: string | null): string {
-  const on = getState().layers[layer.entity];
-  return toggleLabel(layer.label, on, on ? elementsOnStorey(layer.entity, levelId).match : "exact");
+  return layer.label + matchSuffix(elementsOnStorey(layer.entity, levelId).match);
 }
 
 /** One layer's raw payload, for the console handle. See `main.tsx`. */
