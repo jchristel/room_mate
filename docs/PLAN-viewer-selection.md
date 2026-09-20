@@ -1,7 +1,7 @@
 # Plan — viewer selection: surfaces, stacked picks, grid → plan
 
-Three viewer behaviours, asked for on 2026-09-19. This plan is **closed-scope**:
-it ends when the three goals below are met, and anything not written under
+Four viewer behaviours (G4 added 2026-09-20). Asked for on 2026-09-19. This plan is **closed-scope**:
+it ends when the four goals below are met, and anything not written under
 "Goals" is out of it. Archive to `Superseded/` when it lands.
 
 ## Goals
@@ -49,12 +49,25 @@ the page (House A and RHH), not by reading the diff.
    and the panel says "storey not on screen", as it already does.
 3. The selected room's row is marked in the grid, whichever way it was selected,
    and the mark survives scrolling the virtualised grid.
+
 4. **Pan is the default.** A zone showing the room's storey, where the room is
    not wholly inside the view, pans so the room is centred; zoom is unchanged.
    A zone where the room is already wholly visible does not move. Each zone is
    decided on its own.
 5. A checkbox in the grid header, **"Pan to room"**, checked by default.
    Unchecked, a row click highlights only (criteria 1–3, no pan).
+
+### G4 — An outline layer's selection colour is a project setting
+
+A space, ceiling or floor marks in the accent and ignores `[appearance]`,
+where a room, door, window and item each read a `--sel-<entity>` custom
+property the project sets (A3 shipped it that way because the settings
+contract offers these three a `line` colour and no `selection` one).
+
+1. `[appearance] spaces`, `ceilings` and `floors` each take a `selection`
+   colour, like `rooms` does, with a control on the settings page.
+2. `.surface-selected-mark` reads it per entity, falling back to the accent,
+   so a project that sets nothing looks exactly as it does today.
 
 ## Non-goals
 
@@ -66,7 +79,8 @@ room, and panning on any selection that did not come from the grid; switching
 a zone's storey to reach a room; remembering the "Pan to room" checkbox across
 reloads; scrolling the grid to a plan selection; persisting a selection across
 reloads; multi-select; selection marks in the SVG
-export; any server or wire change; the ceilings/floors QA reports.
+export; the ceilings/floors QA reports; and any server or wire change **other
+than G4's three settings fields**, which are settings, not entity data.
 
 ## Phases
 
@@ -122,6 +136,16 @@ unmet" line in `STRATEGY-BROWSER.md`, which the decision made stale.
   against its view and, if not wholly inside, re-centres the view on it. The
   view is page state (the page owns pan/zoom and hands it to `setView`), so
   this needs no renderer change.
+- **C4. A selection colour for the three outline layers (G4).** A Rust field
+  each on `[appearance] spaces/ceilings/floors` beside their `line`, a control
+  on the settings page (a type error there until there is one, which is the
+  point of the generated types), `--sel-spaces` / `--sel-ceilings` /
+  `--sel-floors` set by `applyAppearance`, and the `.surface-selected-mark`
+  modifiers reading them with the accent as the fallback. **After the React
+  move, not before**, and last of the four: `cargo test` regenerates
+  `src-js/settings/generated/` and the control goes on the settings page, so
+  this is settings work either way — but doing it while the viewer is still
+  hand-written means writing the viewer half twice.
 
 Every PR: `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D
 warnings`, `npm run typecheck && npm test && npm run build`, with the rebuilt
