@@ -1,9 +1,11 @@
 # Plan — viewer selection: layer menus, stacked picks, grid → plan
 
-Six viewer behaviours. Asked for on 2026-09-19, revised 2026-09-20 — the
+Eight viewer behaviours. Asked for on 2026-09-19, revised 2026-09-20 — the
 revision replaced the right-click pick menu with a per-zone **selection
 filter**, folded the eight header toggles into a per-zone **visibility menu**,
-and gave the room panel a chooser of its own. This plan is **closed-scope**: it
+and gave the room panel a chooser of its own. G7 and G8 were added the same
+day, after C3 shipped: a property chooser on every panel and the grid, and a
+per-entity hover property in project settings. This plan is **closed-scope**: it
 ends when the six goals below are met, and anything not written under "Goals"
 is out of it. Archive to `Superseded/` when it lands.
 
@@ -121,6 +123,41 @@ different layers on.
 4. The choice is page state, not per room: it is a question about how the panel
    reads, and a reader clicking room after room is comparing the same thing.
 
+### G7 — Every panel and the grid choose which properties they show
+
+A room carries 45 properties on House A and a reader wants six of them. The
+inspector has a name filter and a hide-empty box, which narrow a list nobody
+chose; the grid has per-column filters and source toggles, which narrow rows
+and groups rather than columns.
+
+1. A **Customize** control on each property panel — room, door, window, item,
+   ceiling/floor, space — listing every property that kind offers, with a
+   checkbox each and All / None actions.
+2. The same control over the grid's COLUMNS, beside its existing source
+   toggles: those switch a whole source on and off, this picks within one.
+3. **Per KIND, not per element**: a reader clicking door after door is
+   comparing the same six fields, and a choice that reset per element would be
+   a choice they had to make again every click.
+4. Everything checked by default, so an untouched panel reads exactly as it
+   does today, and the name filter and hide-empty box keep working over
+   whatever survives the chooser.
+5. **Not persisted**, like every other view preference here. The durable
+   version of "which properties matter" is project settings (`room_label`
+   already is one), and that is a different feature — see the critique.
+
+### G8 — A hover shows the property the project chose
+
+Hovering a room shows its name, or its id. Nothing else has a tooltip at all,
+and since C2 a hover can land on any of seven kinds.
+
+1. A settings-page section defining, per entity, **which property a hover
+   shows** — rooms, doors, windows, FF&E, spaces, ceilings, floors.
+2. The viewer reads it with the rest of `[appearance]`'s settings fetch and
+   shows that property's value in the tooltip.
+3. **Unset is the current behaviour**, not an empty tooltip: name, else id. A
+   property the element does not carry falls back the same way, because a
+   blank tooltip reads as a broken hover rather than as an absent value.
+
 ## Non-goals
 
 Stated so they are not drifted into: **right-click behaviour of any kind**
@@ -217,6 +254,14 @@ inspectors are what the filter makes reachable.
   types), `--sel-spaces` / `--sel-ceilings` / `--sel-floors` set by the
   appearance module, and `.surface-selected-mark` reading them with the accent
   as the fallback. Last, because it is settings work either way.
+- **C7. The property chooser (G7).** One component over a list of property
+  names with All / None, reused by every inspector and by the grid's columns.
+  The chosen set lives per KIND in the store, beside the inspector's filter
+  state, and defaults to everything — an untouched panel is unchanged.
+- **C8. The hover property (G8).** A settings block per entity, a control on
+  the settings page, and the tooltip reading it. Last, because it is the same
+  settings-plus-generated-types work as C6 and should follow it rather than
+  interleave.
 
 Every PR: `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D
 warnings`, `npm run typecheck && npm test && npm run build`, with the rebuilt
@@ -272,7 +317,25 @@ bundle committed — and driven in the browser on House A and RHH.
     no room reference — the one entity here with nothing to join on. A disabled
     entry naming that is better than silence, and it is the same "reported
     state" discipline the rest of this plan follows.
-14. **Ceilings and floors in the room panel are a join the page computes**, not
+14. **A property chooser is not the durable answer, and should not pretend to
+    be.** "Which properties matter for this project" already has a server-side
+    home — `room_label`, and the reports page's column sets — and a chooser
+    that vanished on reload would be infuriating if it were meant to be that.
+    It is not: it is a reading aid for one session, like the name filter beside
+    it. If it turns out readers re-make the same choice every morning, that is
+    the signal to move it into project settings, not to add a `localStorage`
+    key.
+15. **The chooser and the filter can contradict each other**, and the panel
+    must not hide that. Unticking a property in the chooser while a name
+    filter matches it leaves the section emptier than the filter explains; the
+    "N of M shown" line is what keeps that honest, and it counts against the
+    property list the ELEMENT has, not against the chosen subset.
+16. **A hover property per entity is seven more settings fields**, and every
+    one of them is a property NAME that may not exist on any element — the
+    same class as a colour plan naming a missing property, which greys a room.
+    A hover falls back to name-else-id rather than showing nothing, so a typo
+    costs a reader the feature rather than the tooltip.
+17. **Ceilings and floors in the room panel are a join the page computes**, not
     one the server serves: each surface lists the rooms it covers, so the panel
     inverts that list. It is the same client-side reshuffle as the other three
     types, and it is bounded by the storeys on screen for the same reason.
