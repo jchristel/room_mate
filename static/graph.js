@@ -23,7 +23,7 @@
 // summing. It also means switching granularity is a re-layout, not a refetch.
 //
 // Group identity is `level|pathKey(path, tier)` — byte-identical to
-// `areaKey` in index.html — so a footprint clicked on the plan focuses the
+// `areaKey` in src-js/viewer/areas.ts — so a footprint clicked on the plan focuses the
 // matching node, and a node clicked here selects the matching footprint. That
 // shared key is the whole reason the vocabulary sits in common.js.
 //
