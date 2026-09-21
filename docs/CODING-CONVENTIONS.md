@@ -86,9 +86,11 @@ known and only the writing-down is missing:
 **Extract when two consumers must agree, or when the boundary is a genuinely
 different concern — not to hit a line count.** The two extractions that happened
 before any rule prompted them were each pulled by a specific argument, and they
-are the two shapes: `common.js` (the palette and, once, the classification-path
-vocabulary, because two views disagreeing about a group's identity is worse than
-either being arbitrary) and `graph.js`, now `src-js/viewer/adjacency/` (because
+are the two shapes: `common.js` (the palette and the classification-path
+vocabulary, because two views disagreeing about a colour or a group's identity
+is worse than either being arbitrary — both have since moved into
+`src-js/viewer/`, `palette.ts` and `areas.ts`, once every reader was
+TypeScript) and `graph.js`, now `src-js/viewer/adjacency/` (because
 the concern boundary is a different renderer). The first shape has a sequel
 worth knowing: when the viewer moved to TypeScript it grew its own copy of the
 vocabulary, and the copies drifted — "/" against ">" — so every area below tier
