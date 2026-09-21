@@ -10,9 +10,11 @@
 //
 // Pure, because the identity that joins a room to a group — level plus
 // classification prefix — is the part that silently produces wrong totals when
-// it drifts. `tierSig` itself comes from `common.js`, which the adjacency graph
-// also loads, so the plan and the graph cannot disagree about which rooms form
-// one group.
+// it drifts. The adjacency graph imports `pathKey` and `tierLabel` from here to
+// name its area nodes, so a footprint and a graph node are the same string. It
+// used to keep a copy in `common.js`, which joined with "/" where this joins
+// with ">": equal at tier 0, where there is no separator, and matching nothing
+// below it.
 
 import type { ClassificationTier, Room } from "../renderer/types.js";
 

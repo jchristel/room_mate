@@ -1,17 +1,18 @@
 // Band 1's adjacency block: pick a room, see what it shares a wall with.
 //
-// **`graph.js` is WRAPPED, not ported.** It is the page's second renderer — a
-// canvas, where the plan is WebGL and the overlays are SVG — and rewriting it
-// is a separate project with its own history (`HANDOVER-adjacency.md`). What
-// this component owns is its lifecycle: create the graph once the panel has a
-// box to measure, feed it data, focus and tier, and tear it down.
+// React owns the controls, the fetch and the selection; `RoomGraph` owns the
+// canvas (`../adjacency/`, where the layout's rules are written down and
+// tested). What this component adds is the lifecycle: create the graph once the
+// panel has a box to measure, feed it data, focus and tier, and destroy it.
 //
 // A hidden canvas measures zero, so the graph is created when the block OPENS
-// rather than on mount — the old page's `ensureGraph` rule, and the reason the
-// block is on-demand rather than part of the poll.
+// rather than on mount — and that is also why the block is on-demand rather
+// than part of the poll.
 
 import { useEffect, useRef, useState } from "react";
 
+import { RoomGraph, type GraphFocus } from "../adjacency/canvas.js";
+import { tierNames, type AdjacencyPayload } from "../adjacency/view.js";
 import { areaKey, tierLabel } from "../areas.js";
 import { fetchJson } from "./api.js";
 import { getState, select } from "./store.js";
@@ -21,20 +22,10 @@ import { useViewer } from "./useViewer.js";
  *  what a UK/EU hospital job is drawn in. */
 const FT_TO_MM = 304.8;
 
-/** What `createRoomGraph` returns, as far as this component uses it. */
-interface RoomGraph {
-  setData(data: unknown): void;
-  setFocus(focus: { kind: string; id: string; depth?: number } | null): void;
-  setDepth(d: number): void;
-  setTierDepth(d: number): void;
-  tierNames(): string[];
-  shownCount(): number;
-  focusDegree(): number;
-  groupDepth(): number | null;
-  resize?(): void;
-}
-
-type GraphFactory = (canvas: HTMLCanvasElement, opts: { onSelect: (id: string, kind: string) => void }) => RoomGraph;
+/** How long the wall-gap slider must rest before it asks the server. `/adjacency`
+ *  re-derives every shared wall on each call — the expensive read the endpoint is
+ *  on-demand for — and a drag across the range is ninety steps. */
+const WALL_SETTLE_MS = 250;
 
 export function AdjacencyBand({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { payload, selection, areas, scope } = useViewer();
@@ -48,7 +39,13 @@ export function AdjacencyBand({ open, onToggle }: { open: boolean; onToggle: () 
    *  request sends it explicitly and the project's declared thickness no
    *  longer reaches the graph until the scope changes. */
   const [wallMm, setWallMm] = useState<number | null>(null);
+  /** `wallMm` once the slider has rested — what the request actually sends,
+   *  while the readout follows the thumb. */
+  const [wallQuery, setWallQuery] = useState<number | null>(null);
   const [serverWallMm, setServerWallMm] = useState<number | null>(null);
+  /** Bumped when data lands, so the meta line is recomputed from the graph that
+   *  now holds it rather than the empty one the focus was first set on. */
+  const [dataVersion, setDataVersion] = useState(0);
   const [meta, setMeta] = useState("no room or area selected");
 
   // Create on OPEN, destroy on close: a hidden canvas measures zero, and a
@@ -56,70 +53,72 @@ export function AdjacencyBand({ open, onToggle }: { open: boolean; onToggle: () 
   useEffect(() => {
     if (!open) return;
     const canvas = canvasRef.current;
-    const factory = (globalThis as unknown as { createRoomGraph?: GraphFactory }).createRoomGraph;
-    if (!canvas || !factory) return;
-    const graph = factory(canvas, {
-      // A click on a node sets the PAGE selection, which re-centres the graph
-      // and marks the room on every plan showing it. The graph does not own the
-      // selection — it reads and writes it, which is what makes plan → graph
-      // and graph → plan the same one-way flow twice rather than two views
-      // trying to stay in sync.
-      onSelect: (id, kind) => select(kind === "area" ? "area" : "room", id, null),
-    });
+    if (!canvas) return;
+    // A click on a node sets the PAGE selection, which re-centres the graph and
+    // marks the room on every plan showing it. The graph does not own the
+    // selection — it reads and writes it, which is what makes plan → graph and
+    // graph → plan the same one-way flow twice rather than two views trying to
+    // stay in sync.
+    const graph = new RoomGraph(canvas, (id, kind) => select(kind, id, null));
     graphRef.current = graph;
-    // MEASURE AFTER LAYOUT. `createRoomGraph` sizes its backing store from the
-    // canvas's box, and at this point in the effect the block has been added
-    // but not laid out -- the canvas still reports the HTML default of
-    // 300x150, so the graph draws into a box that is not the one on screen.
-    // A frame later it is real, and a ResizeObserver keeps it real through
-    // region drags and window resizes.
-    requestAnimationFrame(() => graph.resize?.());
-    const observer = new ResizeObserver(() => graph.resize?.());
+    // MEASURE AFTER LAYOUT. At this point in the effect the block has been
+    // added but not laid out — the canvas still reports the HTML default of
+    // 300x150. A frame later it is real, and a ResizeObserver keeps it real
+    // through region drags and window resizes.
+    const frame = requestAnimationFrame(() => graph.resize());
+    const observer = new ResizeObserver(() => graph.resize());
     observer.observe(canvas);
-    // No teardown call: `createRoomGraph` returns no destroy, and the canvas
-    // it drew on is unmounted with this block — a second open builds a fresh
-    // graph against a fresh canvas.
     return () => {
+      cancelAnimationFrame(frame);
       observer.disconnect();
+      graph.destroy();
       graphRef.current = null;
     };
   }, [open]);
 
-  // Fetch when the block is open and the scope or tolerance moves.
+  useEffect(() => {
+    if (wallMm === wallQuery) return;
+    const timer = setTimeout(() => setWallQuery(wallMm), WALL_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [wallMm, wallQuery]);
+
+  // Fetch when the block is open and the scope or tolerance moves. A superseded
+  // request is ABORTED, not merely ignored: ignoring it still leaves the browser
+  // holding a connection for an answer nobody will read.
   useEffect(() => {
     const projectId = scope.projectId;
     if (!open || !projectId) return;
-    let cancelled = false;
+    const abort = new AbortController();
     void (async () => {
       const params = new URLSearchParams();
       if (scope.building) params.set("building", scope.building);
       if (scope.milestone) params.set("milestone", scope.milestone);
-      if (wallMm != null) params.set("wall_max", String(wallMm / FT_TO_MM));
+      if (wallQuery != null) params.set("wall_max", String(wallQuery / FT_TO_MM));
       const qs = params.toString();
+      let data: AdjacencyPayload | null = null;
       try {
-        const data = await fetchJson<{ wall_max?: number }>(
+        data = await fetchJson<AdjacencyPayload>(
           `/projects/${encodeURIComponent(projectId)}/adjacency${qs ? `?${qs}` : ""}`,
+          abort.signal,
         );
-        if (cancelled) return;
-        // The tolerance the server says it APPLIED, reflected without taking
-        // ownership: `wallMm` stays null, so the next request still omits it
-        // and a change to the project's `[areas] max_wall_thickness` still
-        // reaches the viewer.
-        if (typeof data.wall_max === "number" && Number.isFinite(data.wall_max)) {
-          setServerWallMm(Math.round(data.wall_max * FT_TO_MM));
-        }
-        graphRef.current?.setData(data);
-        setTiers(graphRef.current?.tierNames() ?? []);
       } catch {
         // A 400 is a caller fault (an out-of-range tolerance) and a 204 is an
         // empty store; neither is worth a modal. Clear and let the canvas say so.
-        if (!cancelled) graphRef.current?.setData(null);
       }
+      if (abort.signal.aborted) return;
+      // The tolerance the server says it APPLIED, reflected without taking
+      // ownership: `wallMm` stays null, so the next request still omits it and a
+      // change to the project's `[areas] max_wall_thickness` still reaches the
+      // viewer.
+      if (typeof data?.wall_max === "number" && Number.isFinite(data.wall_max)) {
+        setServerWallMm(Math.round(data.wall_max * FT_TO_MM));
+      }
+      graphRef.current?.setData(data);
+      setTiers(tierNames(data));
+      setDataVersion((v) => v + 1);
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, scope.projectId, scope.building, scope.milestone, wallMm, payload]);
+    return () => abort.abort();
+  }, [open, scope.projectId, scope.building, scope.milestone, wallQuery, payload]);
 
   // Focus, depth and tier follow their controls and the page selection.
   useEffect(() => {
@@ -129,7 +128,7 @@ export function AdjacencyBand({ open, onToggle }: { open: boolean; onToggle: () 
     graph.setTierDepth(tier);
     graph.setFocus(focusOf(graph));
     setMeta(metaLine(graph));
-  }, [depth, tier, selection, areas, open]);
+  }, [depth, tier, selection, areas, open, dataVersion]);
 
   const shownWall = wallMm ?? serverWallMm ?? 0;
 
@@ -208,7 +207,7 @@ export function AdjacencyBand({ open, onToggle }: { open: boolean; onToggle: () 
  * on a graph node means the group is one the graph itself derived, and those
  * can outrun `/areas`, which drops hierarchy-excluded rooms.
  */
-function focusOf(graph: RoomGraph): { kind: string; id: string; depth?: number } | null {
+function focusOf(graph: RoomGraph): GraphFocus | null {
   const { selection, areas } = getState();
   if (!selection) return null;
   if (selection.kind === "room") return { kind: "room", id: selection.id };

@@ -12,8 +12,8 @@ import type { Level, Room } from "../../renderer/types.js";
  *  The viewer's own variant rather than `common.js`'s `apiGet`: this page shows
  *  a connection state in its own words ("connection lost") and never the
  *  server's error text, which belongs to the settings API's save path. */
-export async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { cache: "no-store" });
+export async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(url, { cache: "no-store", signal: signal ?? null });
   if (!res.ok) throw new Error(`${url} -> ${res.status}`);
   return (await res.json()) as T;
 }

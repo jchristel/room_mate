@@ -182,7 +182,7 @@ export class GlPlanRenderer implements PlanRenderer {
       preference: "webgl",
       antialias: true,
       backgroundAlpha: 0, // the page's own background shows through
-      // Size the backing store by DPR, the way static/graph.js already does.
+      // Size the backing store by DPR, as the adjacency canvas does.
       // The POC measured at DPR 1 and a retina display roughly 4x's fill cost,
       // so this is the number to report a measurement against.
       resolution: this.#resolution,

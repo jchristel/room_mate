@@ -615,10 +615,10 @@
     main: [193, 765, 257, 292],
     mcp: [830, 1315, 323, 92],
     p_bundle: [918, 1122, 45, 0],
-    p_common: [67, 176, 90, 0],
+    p_common: [64, 154, 73, 0],
     p_generated: [165, 1414, 1177, 0],
-    p_graph: [411, 721, 255, 0],
-    p_index: [4949, 8262, 1341, 1214],
+    p_graph: [506, 1101, 264, 224],
+    p_index: [5198, 8586, 1395, 1214],
     p_reports: [2170, 3121, 254, 409],
     p_settings: [2944, 3276, 79, 65],
     p_tokens: [20, 22, 0, 0],
@@ -1170,8 +1170,8 @@
       deps: ["p_common", "p_tokens"]
     },
     {
-      id: "p_graph", name: "graph.js", path: "static/graph.js", zone: "pages", lang: "JavaScript",
-      blurb: "The radial adjacency graph the viewer draws, on a canvas in the page own token palette so it follows the theme with everything else.",
+      id: "p_graph", name: "adjacency/", path: "src-js/viewer/adjacency/", zone: "pages", lang: "TypeScript",
+      blurb: "The radial adjacency graph in the viewer's adjacency band: a canvas renderer, imperative beside the React page because its layout settles over a run of frames. Rings are hop counts and only angles are simulated. Area groups are named by areas.ts's own areaKey, imported rather than copied, since the hand-written graph.js it replaced (2026-09-21) kept a copy that had drifted. The view and the layout are pure, tested modules; the canvas class is drawing, picking and the settle loop.",
       deps: ["p_tokens"]
     },
     {

@@ -166,7 +166,9 @@ MODULES = {
     + sorted(glob.glob("src-js/viewer/app/*.tsx"))
     + sorted(glob.glob("src-js/viewer/app/inspector/*.tsx")),
     "p_reports": sorted(glob.glob("src-js/reports/*.ts")) + sorted(glob.glob("src-js/reports/*.tsx")),
-    "p_graph": ["static/graph.js"],
+    # The adjacency graph, TypeScript since 2026-09-21; its own cell rather than
+    # part of `p_index` because it is a second renderer, not a component.
+    "p_graph": sorted(glob.glob("src-js/viewer/adjacency/*.ts")),
     "p_common": ["static/common.js"],
     "p_tokens": ["static/tokens.css"],
     "p_bundle": ["static/vendor/renderer.bundle.js"],

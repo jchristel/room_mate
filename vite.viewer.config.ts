@@ -10,8 +10,8 @@ import { resolve } from "node:path";
 // cutover moved `base` to "/" and deleted that page.
 //
 // **`emptyOutDir` is FALSE and must stay false.** The out dir is `static/`
-// itself, which holds hand-written files — `common.js`, `graph.js`,
-// `tokens.css` — and the other two pages' committed output. Emptying it would
+// itself, which holds hand-written files — `common.js` and `tokens.css` —
+// and the other two pages' committed output. Emptying it would
 // delete all of them.
 //
 // Committed output, like the other two pages: a fresh clone plus `cargo run`
@@ -21,7 +21,7 @@ export default defineConfig({
   root: resolve(import.meta.dirname, "src-js/viewer/app"),
   base: "/",
   plugins: [react()],
-  // Nothing to copy: tokens.css, common.js, graph.js and the renderer bundle
+  // Nothing to copy: tokens.css, common.js and the renderer bundle
   // are served from static/ by axum and referenced by absolute URL, which Vite
   // leaves alone.
   publicDir: false,

@@ -5,9 +5,9 @@
 //
 // "No build step" USED to be the reason for that shape. It no longer is: the
 // frontend has a Vite/TypeScript toolchain (docs/Superseded/PLAN-webgl-renderer.md), and
-// this file stays a classic script for a narrower reason — it is loaded by four
-// pages (index, graph, settings, comparison), so converting it would drag all
-// four into needing the bundle for no benefit. See CODING-CONVENTIONS.md,
+// this file stays a classic script for a narrower reason — it is loaded by all
+// three pages (viewer, settings, reports), so converting it would drag all
+// three into sharing a module build for no benefit. See CODING-CONVENTIONS.md,
 // "`static/`".
 //
 // The settings page and the reports page both talk to the same settings API in
@@ -18,18 +18,15 @@
 // error message) and does not use these.
 
 // ---------------------------------------------------------------------------
-// Palette (shared by the plan renderer in index.html and the adjacency graph in
-// graph.js).
+// Palette, read by the viewer through src-js/viewer/palette.ts.
 //
-// These live here rather than inline in index.html for one reason: two views
-// that disagree about what colour a department is are worse than either being
-// arbitrary. The plan's hierarchy colour plan and the graph's node colouring
-// MUST sample the same stops from the same function — a copy would drift the
-// first time a scheme changed. See HANDOVER-adjacency.md "Prerequisites".
+// Its only reader now is the viewer — the plan's colour plans and the
+// adjacency graph both reach it through palette.ts, which is what keeps the two
+// agreeing about what colour a department is. It stays a global only because
+// it predates the TypeScript build; moving the stops into palette.ts would
+// leave this file to the pages that load it for the helpers below.
 //
-// Literal hex stops, no d3/npm: the browser layer stays a zero-build vanilla
-// page. index.html keeps the colour-plan maths that reads these (sampleScheme,
-// lighten) — those are plan-specific, and only the shared vocabulary moved.
+// Literal hex stops, no d3/npm.
 // ---------------------------------------------------------------------------
 
 // A few ColorBrewer schemes. Sequential/diverging ones are sampled at t∈[0,1]
@@ -61,25 +58,6 @@ function qualitative(scheme, k) {
   const stops = SCHEMES[scheme] || SCHEMES.Set2;
   return stops[k % stops.length];
 }
-
-// ---------------------------------------------------------------------------
-// Classification-path vocabulary, read by the adjacency graph in graph.js.
-//
-// The areas overlay stamps `areaKey(group)` on a footprint and the graph
-// aggregates the room graph to the same key, so a footprint clicked on the plan
-// names a graph node without a second request. The React viewer no longer reads
-// these globals: `src-js/viewer/areas.ts` holds its own copy, and `pathKey`
-// here MUST join with the same separator it does. It once did not ("/" here,
-// ">" there), which matched at tier 0 — one segment, no separator — and matched
-// nothing below it: every deeper area focused an empty graph. That drift was
-// invisible for exactly the reason this block used to warn about.
-// ---------------------------------------------------------------------------
-
-// Identity of a classification prefix — matches server area-groups to client
-// rooms by the same (code,name,undefined) tuple everything else resolves.
-function tierSig(t) { return `${t.code == null ? "" : t.code}|${t.name == null ? "" : t.name}|${t.undefined ? "U" : ""}`; }
-function pathKey(path, depth) { return path.slice(0, depth + 1).map(tierSig).join(">"); }
-function tierLabel(t) { return t.undefined ? `undefined ${t.tier}` : (t.name || t.code || t.tier); }
 
 // GET JSON with no-store caching; throws the server's error text (falling back
 // to "<url> -> <status>") on a non-2xx so callers surface it verbatim.

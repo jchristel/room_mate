@@ -9,7 +9,7 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 every page is now React over a `src-js/` TypeScript build: the viewer
 (`src-js/viewer/`), settings, reports, plus the committed renderer bundle. How
 each part works is documented where it is built — `src-js/renderer/`,
-`src-js/viewer/`, `static/graph.js` — and the invariants that are expensive to
+`src-js/viewer/` (the adjacency graph in its `adjacency/`) — and the invariants that are expensive to
 rediscover are below rather than in the code, because they are properties of the
 *seam* between two layers and no single file owns them.
 

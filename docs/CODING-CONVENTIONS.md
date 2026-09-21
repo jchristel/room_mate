@@ -86,10 +86,15 @@ known and only the writing-down is missing:
 **Extract when two consumers must agree, or when the boundary is a genuinely
 different concern — not to hit a line count.** The two extractions that happened
 before any rule prompted them were each pulled by a specific argument, and they
-are the two shapes: `common.js` (the palette and the classification-path
+are the two shapes: `common.js` (the palette and, once, the classification-path
 vocabulary, because two views disagreeing about a group's identity is worse than
-either being arbitrary) and `graph.js` (because the concern boundary is a
-different renderer).
+either being arbitrary) and `graph.js`, now `src-js/viewer/adjacency/` (because
+the concern boundary is a different renderer). The first shape has a sequel
+worth knowing: when the viewer moved to TypeScript it grew its own copy of the
+vocabulary, and the copies drifted — "/" against ">" — so every area below tier
+0 focused an empty graph. Extraction only prevents drift while there is ONE
+copy; a port that re-declares a shared helper instead of importing it undoes
+the extraction silently.
 
 Page size is deliberately **not** the trigger, and reading it as one inverts the
 answer: `index.html` grew while the code it owns shrank, because the renderer
@@ -112,8 +117,7 @@ The zero-build vanilla rule was a proof-of-concept-stage decision and is
 - **Tests are co-located**: `foo.ts` beside `foo.test.ts`. The Rust rule below
   says "never a `tests/` tree", and its *spirit* is tests beside what they
   exercise; co-location honours it rather than contradicting it.
-- **The migration is incremental, by design.** `index.html`'s inline script and
-  `common.js`/`graph.js` stay JavaScript. The standing rule is that **each
+- **The migration is incremental, by design.** `common.js` stays JavaScript. The standing rule is that **each
   frontend change moves the module it touches** into `src-js/` — not a big-bang
   conversion, which on code with no test coverage is a refactor of shared
   mutable globals wearing a translation's clothes.

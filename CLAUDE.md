@@ -476,7 +476,7 @@ green one serving a stale renderer. The same build, and the same gate, cover
 `static/settings/`, `static/reports/` and — since the viewer moved to React on
 2026-09-20 — `static/index.html` with `static/viewer.js` and `static/viewer.css`.
 **Every page is generated now**: `static/` holds no hand-written HTML, and the
-only hand-written files left in it are `common.js`, `graph.js` and `tokens.css`.
+only hand-written files left in it are `common.js` and `tokens.css`.
 The viewer's own Vite config writes into `static/` itself, which is why its
 `emptyOutDir` is false and must stay false — emptying that directory would
 delete the other three pages and the shared scripts. The settings page was the

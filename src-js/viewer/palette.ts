@@ -1,10 +1,11 @@
 // The shared palette, read from `static/common.js`.
 //
-// **Not ported, on purpose.** `SCHEMES` and `qualitative` are loaded by the
-// adjacency graph as well as by this page, and two views that disagree about
-// what colour a department is are worse than either being arbitrary. A copy
-// here would drift the first time a scheme changed, and the drift would be
-// invisible — the plan and the graph would simply stop agreeing.
+// **One reader for two views.** The plan's colour plans and the adjacency
+// graph (`adjacency/canvas.ts`) both take their colours from here, and two
+// views that disagree about what colour a department is are worse than either
+// being arbitrary. The stops are still `common.js` globals only because they
+// predate the build; nothing outside the viewer reads them any more, so moving
+// them in here is a deletion waiting to happen, not a sharing constraint.
 //
 // Accessors rather than re-exports of the globals, so the colour maths can be
 // tested: a test defines these four names on `globalThis` and gets a known
