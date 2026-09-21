@@ -63,22 +63,22 @@ function qualitative(scheme, k) {
 }
 
 // ---------------------------------------------------------------------------
-// Classification-path vocabulary (shared by the areas overlay and band in
-// index.html and the adjacency graph in graph.js).
+// Classification-path vocabulary, read by the adjacency graph in graph.js.
 //
-// Here for the same reason the palette is: two views that disagree about which
-// rooms form one group are worse than either being arbitrary. The areas overlay
-// stamps `areaKey(group)` on a footprint, the graph aggregates the room graph to
-// the same key, and a footprint clicked on the plan therefore names a graph node
-// without a second request. A copy of these three lines would drift the first
-// time the tuple changed, and the drift would be invisible — a selection that
-// silently matches nothing.
+// The areas overlay stamps `areaKey(group)` on a footprint and the graph
+// aggregates the room graph to the same key, so a footprint clicked on the plan
+// names a graph node without a second request. The React viewer no longer reads
+// these globals: `src-js/viewer/areas.ts` holds its own copy, and `pathKey`
+// here MUST join with the same separator it does. It once did not ("/" here,
+// ">" there), which matched at tier 0 — one segment, no separator — and matched
+// nothing below it: every deeper area focused an empty graph. That drift was
+// invisible for exactly the reason this block used to warn about.
 // ---------------------------------------------------------------------------
 
 // Identity of a classification prefix — matches server area-groups to client
 // rooms by the same (code,name,undefined) tuple everything else resolves.
 function tierSig(t) { return `${t.code == null ? "" : t.code}|${t.name == null ? "" : t.name}|${t.undefined ? "U" : ""}`; }
-function pathKey(path, depth) { return path.slice(0, depth + 1).map(tierSig).join("/"); }
+function pathKey(path, depth) { return path.slice(0, depth + 1).map(tierSig).join(">"); }
 function tierLabel(t) { return t.undefined ? `undefined ${t.tier}` : (t.name || t.code || t.tier); }
 
 // GET JSON with no-store caching; throws the server's error text (falling back
