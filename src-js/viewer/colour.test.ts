@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   buildColourContext,
@@ -16,14 +16,14 @@ import {
 } from "./colour.js";
 import type { Room } from "../renderer/types.js";
 
-/** The palette is `static/common.js`'s, a classic script no test loads. Two
- *  stops are enough to pin the maths, which is what these tests are about. */
-beforeAll(() => {
-  (globalThis as unknown as { SCHEMES: Record<string, string[]> }).SCHEMES = {
-    RdBu: ["#000000", "#ffffff"],
-    Set2: ["#112233", "#445566", "#778899"],
-  };
-});
+/** The real stops, from `palette.ts`. RdBu has five, so t = 0.5 lands exactly
+ *  on its middle stop and proves nothing about interpolation; the t = 0.125
+ *  case sits half-way inside the first segment, and that is the one that pins
+ *  the maths. */
+const RDBU_FIRST = "#ca0020";
+const RDBU_LAST = "#0571b0";
+const SET2_0 = "#66c2a5";
+const SET2_1 = "#fc8d62";
 
 const room = (id: string, props: Record<string, string>): Room => ({
   id,
@@ -53,18 +53,20 @@ describe("roomValue", () => {
 
 describe("sampleScheme and lighten", () => {
   it("interpolates between stops", () => {
-    expect(sampleScheme("RdBu", 0)).toBe("#000000");
-    expect(sampleScheme("RdBu", 1)).toBe("#ffffff");
-    expect(sampleScheme("RdBu", 0.5)).toBe("#808080");
+    expect(sampleScheme("RdBu", 0)).toBe(RDBU_FIRST);
+    expect(sampleScheme("RdBu", 1)).toBe(RDBU_LAST);
+    expect(sampleScheme("RdBu", 0.5)).toBe("#f7f7f7");
+    // Half-way from #ca0020 to #f4a582, channel by channel and rounded.
+    expect(sampleScheme("RdBu", 0.125)).toBe("#df5351");
   });
 
   it("clamps out-of-range t rather than extrapolating a colour", () => {
-    expect(sampleScheme("RdBu", -5)).toBe("#000000");
-    expect(sampleScheme("RdBu", 5)).toBe("#ffffff");
+    expect(sampleScheme("RdBu", -5)).toBe(RDBU_FIRST);
+    expect(sampleScheme("RdBu", 5)).toBe(RDBU_LAST);
   });
 
   it("falls back to a default scheme rather than throwing", () => {
-    expect(sampleScheme("no-such-scheme", 0)).toBe("#000000");
+    expect(sampleScheme("no-such-scheme", 0)).toBe(RDBU_FIRST);
   });
 
   it("lightens toward white", () => {
@@ -169,8 +171,8 @@ describe("propertycompare", () => {
     };
     const ctx = buildColourContext(rooms, plan);
     expect(ctx.maxAbs).toBe(6);
-    expect(colourForRoom(rooms[0]!, plan, ctx)).toBe("#ffffff"); // +6 -> t=1
-    expect(colourForRoom(rooms[1]!, plan, ctx)).toBe("#555555"); // -2 -> t=1/3
+    expect(colourForRoom(rooms[0]!, plan, ctx)).toBe(RDBU_LAST); // +6 -> t=1
+    expect(colourForRoom(rooms[1]!, plan, ctx)).toBe("#f5c0a9"); // -2 -> t=1/3, inside the second segment
   });
 
   it("refuses a ratio by zero rather than colouring an infinity", () => {
@@ -204,8 +206,8 @@ describe("hierarchy", () => {
   it("gives each parent a distinct hue, in sorted order so it survives a repaint", () => {
     const rooms = [withTiers("b", "SURG"), withTiers("a", "MED")];
     const ctx = buildColourContext(rooms, plan);
-    expect(ctx.parentHue?.get("MED")).toBe("#112233");
-    expect(ctx.parentHue?.get("SURG")).toBe("#445566");
+    expect(ctx.parentHue?.get("MED")).toBe(SET2_0);
+    expect(ctx.parentHue?.get("SURG")).toBe(SET2_1);
   });
 
   it("tints children of one parent so they read as siblings", () => {
@@ -215,7 +217,7 @@ describe("hierarchy", () => {
     const second = colourForRoom(rooms[1]!, plan, ctx);
     expect(first).not.toBe(second);
     // Both lighter than or equal to the parent hue, never a different hue.
-    expect(colourForRoom(withTiers("c", "MED"), plan, ctx)).toBe("#112233");
+    expect(colourForRoom(withTiers("c", "MED"), plan, ctx)).toBe(SET2_0);
   });
 
   it("is the no-data colour for a room with no parent tier", () => {
@@ -238,8 +240,8 @@ describe("daterange", () => {
 
   it("ramps the past and flags the future separately", () => {
     const ctx = buildColourContext(rooms, plan);
-    expect(colourForRoom(rooms[0]!, plan, ctx)).toBe("#ffffff"); // at the near date -> t=1
-    expect(colourForRoom(rooms[1]!, plan, ctx)).toBe("#000000"); // the oldest -> t=0
+    expect(colourForRoom(rooms[0]!, plan, ctx)).toBe(RDBU_LAST); // at the near date -> t=1
+    expect(colourForRoom(rooms[1]!, plan, ctx)).toBe(RDBU_FIRST); // the oldest -> t=0
     expect(colourForRoom(rooms[2]!, plan, ctx)).toBe(FUTURE_COLOUR);
     expect(colourForRoom(rooms[3]!, plan, ctx)).toBe(NO_DATA_COLOUR);
   });

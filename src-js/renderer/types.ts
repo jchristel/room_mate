@@ -302,9 +302,10 @@ export interface RoomAppearance {
 export interface AppearanceContext {
   /**
    * Resolves the active colour plan to a literal colour, or `null` when no plan
-   * is active. INJECTED rather than implemented here: the palette
-   * (`qualitative`/`SCHEMES`) lives in `static/common.js`, which every page loads
-   * as a classic script and which therefore cannot be imported. The precedence
+   * is active. INJECTED rather than implemented here: colour plans and their
+   * palette are the viewer's (`src-js/viewer/colour.ts`, `palette.ts`), and
+   * this bundle is built and committed separately, so importing them would
+   * put a second copy of the palette in a second artifact. The precedence
    * *rule* is what matters and it lives in `resolveRoomAppearance`; which hex a
    * value maps to is a separate concern.
    */

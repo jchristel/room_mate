@@ -10,10 +10,9 @@
 // any one room can be coloured (the largest absolute difference, which hues are
 // taken), so resolving that once per paint keeps it out of the per-room path.
 //
-// The palette itself is NOT here. `SCHEMES` and `qualitative` live in
-// `static/common.js`, a classic script the adjacency graph also loads, and two
-// views that disagree about what colour a department is are worse than either
-// being arbitrary. This module reads them through `palette.ts`.
+// The palette itself is NOT here: the stops live in `palette.ts`, which the
+// adjacency graph imports too, and two views that disagree about what colour a
+// department is are worse than either being arbitrary.
 
 import { hexToRgb, qualitative, rgbToHex, schemeStops } from "./palette.js";
 import type { Room } from "../renderer/types.js";
