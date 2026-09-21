@@ -109,6 +109,20 @@ pub struct Candidates {
     /// Model id → the wall gap its rooms were drawn to, so a probe is sized by
     /// the regime of the rooms it is reaching for rather than by a constant.
     gap_by_model: BTreeMap<String, f64>,
+    /// The step for an element whose OWN model holds no rooms -- a facade or
+    /// envelope file -- which is the project's `max_wall_thickness` whatever
+    /// regime the rooms were drawn to.
+    ///
+    /// **A centreline gap of zero is a claim about walls the rooms share**, and
+    /// the facade's wall is not one of them: it lives in another document, so
+    /// the interior rooms stop at their own lining or at a link-bounded line
+    /// short of it, never at the facade window's insertion point. Measured on
+    /// RHH 2026-09-21: the median facade window sat 0.64 ft from the nearest
+    /// room edge, so the 15 mm centreline step resolved 3 of 149 and a wall
+    /// thickness reaches about 135. Only the room-less model gets it, because an
+    /// opening in a model that has rooms IS on a shared line, and a 1.5 ft step
+    /// there would jump a cupboard into the room beyond it.
+    cross_model_gap: f64,
     /// Model id → its `model_to_shared`, needed in `Project` mode to lift the
     /// door's own point into the frame the candidates are already in.
     transform_by_model: BTreeMap<String, ModelToShared>,
@@ -165,6 +179,7 @@ pub fn build_candidates<'a, P: SnapshotEnvelope>(
         shared: Vec::new(),
         elevation: BTreeMap::new(),
         gap_by_model: BTreeMap::new(),
+        cross_model_gap: 0.0,
         transform_by_model: BTreeMap::new(),
         shared_frame,
     };
@@ -172,6 +187,7 @@ pub fn build_candidates<'a, P: SnapshotEnvelope>(
     for (key, payload, bundle) in scoped {
         let boundary = bundle.areas.resolve_boundary(payload.room_boundary);
         out.gap_by_model.insert(key.model_id.clone(), bundle.areas.wall_gap_ft(boundary));
+        out.cross_model_gap = out.cross_model_gap.max(bundle.areas.max_wall_thickness);
         if let Some(transform) = payload.model_to_shared {
             out.transform_by_model.insert(key.model_id.clone(), transform);
         }
@@ -315,9 +331,15 @@ impl Candidates {
         // Sized by the regime of the rooms being reached for. `SameModel` only
         // ever reaches its own model's rooms; `Project` may reach any, so the
         // widest gap in scope is the honest step — a shorter one would resolve
-        // some models and silently not others.
+        // some models and silently not others. An element whose own model has
+        // no rooms is reaching across a wall no room shares: `cross_model_gap`.
         let gap = if self.shared_frame {
-            self.gap_by_model.values().copied().fold(0.0_f64, |a, b| a.max(b))
+            let widest = self.gap_by_model.values().copied().fold(0.0_f64, |a, b| a.max(b));
+            if self.gap_by_model.contains_key(model_id) {
+                widest
+            } else {
+                widest.max(self.cross_model_gap)
+            }
         } else {
             self.gap_by_model.get(model_id).copied().unwrap_or_default()
         };

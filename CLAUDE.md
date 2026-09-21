@@ -462,6 +462,14 @@ All three are CI gates; clippy runs with `-D warnings`, so a warning is a
 failure. Frontend changes are verified by driving the page, not by reading the
 diff — a bug shipped this week was only visible after expanding a panel.
 
+**Stop every server you start, as soon as you no longer need it.** That covers
+`preview_start`, a background `roommate.exe`, and `npm run dev`. Nobody else
+starts them: a server still running on :5151 was started by *some* session,
+and it keeps serving whatever it loaded at startup (settings are not
+file-watched). So before you stop one, check it is yours; another session may
+be driving it. Measure against a second instance on its own `--port` and a
+copied store rather than restarting a shared one.
+
 **Touched `src-js/`?** Then also:
 
 ```
@@ -589,10 +597,18 @@ with one, not here.
   since `StoreyScope` (one RHH storey: 23.6 MB). What is left: every snapshot is
   still parsed whole before the storey filter, instance property keys repeat
   per item on the wire, and `assemble_items` still clones each item it serves.
-- **RHH has no windows snapshot at all.** Not a code gap: `windows_export_entry`
-  has simply never been run against it, so `/windows?project=RHH` answers 200
-  with an empty list. The level-id fix above is what windows needed to be
-  visible once pushed, since they live in the facade model that has no rooms.
+- **RHH's windows are pushed (2026-09-07, 2026-09-12) and draw — but "no
+  external windows" is still what a reader will report.** Checked end to end
+  2026-09-21: 368 windows, 152 of them in `HOS-FACADE`, every one resolving to
+  a picker storey (bar 3 at `level_id` `-1`) and drawn. No facade window names
+  a room, so they are attributed only by `[windows] room_resolution =
+  "project"` (set in RHH's local settings the same day): 132 of 152, once a
+  room-less model's opening stepped a wall thickness rather than the 15 mm
+  centreline floor (`entity_scope::Candidates::cross_model_gap`). The 20 left
+  homeless are LEVEL 8's 14 (no room within 8 ft of that facade), 3
+  ambiguous and the 3 unhosted. Still true: the facade exports only punched
+  windows and louvres (none on LEVEL 2 or 4) — curtain-wall glazing is not
+  `OST_Windows` and no entry point exports it.
 - **RHH's FF&E is on the wrong storeys until it is re-exported** — see the FF&E
   level trap above. The fix is upstream and lands on the next export.
 - **`/ceilings` was 9.25 MB and 33 s on RHH** (1,833 ceilings against 3,112

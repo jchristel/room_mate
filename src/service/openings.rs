@@ -974,6 +974,16 @@ mod tests {
         door_levels: &[(&str, f64)],
         doors: Vec<Opening>,
     ) -> AppState {
+        state_split_models_drawn(mode, crate::contract::RoomBoundary::FinishFace, door_levels, doors)
+    }
+
+    /// `state_split_models` with the interior rooms drawn to `boundary`.
+    fn state_split_models_drawn(
+        mode: crate::settings::RoomResolution,
+        boundary: crate::contract::RoomBoundary,
+        door_levels: &[(&str, f64)],
+        doors: Vec<Opening>,
+    ) -> AppState {
         let mut bundle = bundle();
         bundle.doors.room_resolution = mode;
         let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle)]), None);
@@ -987,7 +997,7 @@ mod tests {
                 snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
                 phase: Some("New Construction".into()),
                 model_to_shared: Some(ModelToShared { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }),
-                room_boundary: Some(crate::contract::RoomBoundary::FinishFace),
+                room_boundary: Some(boundary),
                 levels: vec![crate::contract::Level { id: "lvl1".into(), name: "Level 1".into(), elevation: 0.0 }],
                 rooms: vec![room_rect("left", 0.0, 10.0), room_rect("right", 10.5, 20.0)],
             })
@@ -1048,6 +1058,89 @@ mod tests {
         assert!(
             door.owner_rooms.is_empty(),
             "the bare list stays same-model: a foreign room id there would resolve against the wrong model"
+        );
+    }
+
+    /// **A facade opening reaches centreline rooms a wall thickness away.** The
+    /// interior rooms here are drawn to centrelines, which would size the step
+    /// at the 15 mm floor -- and the door sits 0.25 ft from each, in a wall
+    /// neither room shares because it belongs to the facade document. RHH's
+    /// facade resolved 3 windows of 149 that way; the room-less model steps by
+    /// `max_wall_thickness` instead.
+    #[test]
+    fn test_a_room_less_models_opening_steps_a_wall_thickness_into_centreline_rooms() {
+        let state = state_split_models_drawn(
+            crate::settings::RoomResolution::Project,
+            crate::contract::RoomBoundary::Centreline,
+            &[("facade-lvl", 0.0)],
+            vec![facade_door("d1", "facade-lvl")],
+        );
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        let door = &result.openings[0];
+
+        assert_eq!(
+            door.room_origin.from_room,
+            SideOrigin::Derived(RoomRef { model_id: "interior".into(), room_id: "left".into() })
+        );
+        assert_eq!(
+            door.room_origin.to_room,
+            SideOrigin::Derived(RoomRef { model_id: "interior".into(), room_id: "right".into() }),
+            "a 15 mm step would land in the wall and report NoCandidate"
+        );
+    }
+
+    /// **...and an opening in a model WITH rooms keeps the centreline step**,
+    /// under `Project` too. Its wall is one its rooms share, so the line it sits
+    /// on is the rooms' own boundary; a wall-thickness step from a door into a
+    /// 1 ft cupboard would land in the room beyond the cupboard.
+    #[test]
+    fn test_an_opening_beside_its_own_centreline_rooms_keeps_the_short_step() {
+        let mut bundle = bundle();
+        bundle.doors.room_resolution = crate::settings::RoomResolution::Project;
+        let state = AppState::new(Box::new(MemStore::new()), HashMap::from([("p1".to_string(), bundle)]), None);
+        let identity = Some(ModelToShared { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] });
+        state
+            .set_snapshot(RoomPayload {
+                schema_version: SUPPORTED_SCHEMA,
+                project: Project { id: "p1".into(), name: "P".into() },
+                model: Model { id: "m1".into(), name: "M".into(), source: "revit".into() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                phase: Some("New Construction".into()),
+                model_to_shared: identity,
+                room_boundary: Some(crate::contract::RoomBoundary::Centreline),
+                levels: vec![crate::contract::Level { id: "lvl1".into(), name: "Level 1".into(), elevation: 0.0 }],
+                rooms: vec![
+                    room_rect("left", 0.0, 10.0),
+                    room_rect("cupboard", 10.0, 11.0),
+                    room_rect("right", 11.0, 20.0),
+                ],
+            })
+            .unwrap();
+        state
+            .set_door_snapshot(DoorPayload {
+                schema_version: SUPPORTED_DOOR_SCHEMA,
+                project: Project { id: "p1".into(), name: "P".into() },
+                model: Model { id: "m1".into(), name: "M".into(), source: "revit".into() },
+                snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                phase: Some("New Construction".into()),
+                model_to_shared: identity,
+                levels: vec![],
+                doors: vec![Opening {
+                    insertion_point: Some(crate::contract::Point2D { x: 10.0, y: 5.0 }),
+                    ..wall_door("d1")
+                }],
+            })
+            .unwrap();
+
+        let result = assemble_openings::<DoorPayload>(&state, OPENING_KIND, &OpeningScope::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.openings[0].room_origin.to_room,
+            SideOrigin::Derived(RoomRef { model_id: "m1".into(), room_id: "cupboard".into() }),
+            "the cupboard, not the room past it"
         );
     }
 
