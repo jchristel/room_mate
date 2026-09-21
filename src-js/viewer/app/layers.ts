@@ -54,7 +54,7 @@ export interface ElementOf {
   floors: Floor;
 }
 
-interface ElementPayload {
+export interface ElementPayload {
   [key: string]: unknown;
   levels_by_model?: unknown;
 }
@@ -128,7 +128,22 @@ export function elementsOnStorey<E extends ElementEntity>(
   entity: E,
   levelId: string | null,
 ): { kept: readonly ElementOf[E][]; match: StoreyMatch } {
-  const payload = polls.get(entity)?.payload;
+  return storeyElements(entity, polls.get(entity)?.payload ?? null, levelId);
+}
+
+/**
+ * The same join over ANY payload of the layer, not just the poll's.
+ *
+ * The SVG export needs it for storeys no zone is showing: the polls hold only
+ * the storeys on screen, so the export fetches each level itself and must then
+ * keep exactly what the screen would. One function for both is what makes an
+ * exported level agree with the same level drawn.
+ */
+export function storeyElements<E extends ElementEntity>(
+  entity: E,
+  payload: ElementPayload | null,
+  levelId: string | null,
+): { kept: readonly ElementOf[E][]; match: StoreyMatch } {
   const { payload: rooms } = getState();
   if (!payload || !rooms) return { kept: [], match: "none" };
   const levels = rooms.levels ?? [];

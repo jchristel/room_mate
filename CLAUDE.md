@@ -215,10 +215,14 @@ store's RHH ceilings for the four `HOS-INT_*` models were re-exported
   hidden overlay would cost every viewer a read for a question most are not
   asking. Unlike spaces it has no model picker -- that exists because RHH keeps
   one services file per service, and `/ceilings` takes no `?model=` at all.
-- **No overlay layer reaches the SVG export, ceilings included.**
-  `svg/paint.ts` draws rooms and labels; doors, windows, FF&E, spaces and
-  ceilings are all GL-only. Pre-existing and not specific to this entity, but
-  worth knowing before promising an export that shows a ceiling.
+- **The SVG export draws the zone's layers, and fetches them itself**
+  (2026-09-21). The polls hold only the storeys on screen, so `svgExport`
+  re-reads each chosen level's layers and runs them through the same
+  `storeyElements` join; an export built from the polls would silently drop
+  every overlay on every level nobody is looking at. How a layer LOOKS --
+  dashes, footprint alpha, theme fallback, the override test -- is
+  `renderer/style.ts`, read by both painters: change a ceiling's dash anywhere
+  else and the file and the screen disagree.
 - **`/ceilings`' ETag cursor covers ROOMS as well as ceilings**, which no other
   entity read needs. Attribution derives from the rooms in scope, so a rooms
   push alone changes every answer and a ceilings-only cursor would serve a stale

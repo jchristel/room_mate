@@ -29,6 +29,7 @@ export {
   roomBBox,
 } from "./geometry.js";
 export { addLabel, paintLevel } from "./svg/paint.js";
+export { exportStyle } from "./svg/style.js";
 export { LEVEL_EPS_MM, onStorey, sameStorey } from "./storey.js";
 export { GlPlanRenderer } from "./gl/renderer.js";
 export { DoorIndex, RoomIndex } from "./gl/spatial.js";
@@ -39,6 +40,8 @@ export { parseColour, readPalette, withAlpha } from "./gl/colour.js";
 export { EntityPoll, conditionalHeaders, pollInOrder, repaints } from "../viewer/entityPoll.js";
 
 export type { PaintOptions } from "./svg/paint.js";
+export type { ExportPalette } from "./svg/style.js";
+export type { OverlayLayers } from "./svg/overlays.js";
 export type { Placed, StoreyMatch, StoreyResult } from "./storey.js";
 export type { GlRendererOptions } from "./gl/renderer.js";
 export type { DoorGlyph } from "./gl/doorGlyph.js";

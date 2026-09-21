@@ -22,6 +22,7 @@
 
 import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
+import { CEILING_DASH, FLOOR_DASH, FOOTPRINT_ALPHA, HOLE_DASH, LAYER_THEME_COLOUR, W_OUTLINE } from "../style.js";
 import { flip, pointsAttr } from "../geometry.js";
 import type { ElementRef, HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
 import type { Ceiling, Door, Floor, Item, Loop, Rect, Room, Space, WindowOpening } from "../types.js";
@@ -38,25 +39,12 @@ import { fitViewToAspect, labelTransform } from "./viewport.js";
 /** Stroke widths, in CSS pixels — the same numbers the stylesheet uses, so the
  *  two renderers can be compared without converting anything. */
 const W_GRID = 0.5;
-const W_OUTLINE = 1.5;
 const W_MATCH = 3;
 const W_HOLE = 1;
-/** `stroke-dasharray: 4 3` on `.hole`. */
-const HOLE_DASH: readonly [number, number] = [4, 3];
-/** The ceiling outline's dash. Longer than `HOLE_DASH` on purpose: a hole and a
- *  ceiling can sit on the same plan, and two dashes a pixel apart in period read
- *  as one pattern drawn badly rather than as two different things. */
-const CEILING_DASH: readonly [number, number] = [6, 4];
-/** The floor outline's dot. Told apart from the ceiling's dash and the hole's
- *  by DUTY CYCLE rather than period -- 20% ink against 60% and 57% -- so a floor
- *  ring reads as dotted wherever it lies on either of them. */
-const FLOOR_DASH: readonly [number, number] = [2, 8];
+// The dashes, the footprint alpha and the outline width are `../style.ts`,
+// because the SVG export draws every layer too and the two must not drift.
 /** `.dim { opacity: 0.15 }`. */
 const DIM_ALPHA = 0.15;
-/** The door footprint's fill, as an alpha over the ink colour. Light enough
- *  that a room's label still reads through a door drawn over it, dark enough to
- *  register as a solid object rather than a smudge. */
-const DOOR_RECT_ALPHA = 0.25;
 /** `svg.plan.areas-active` ghosting. */
 const GHOST_ROOMS = 0.16;
 const GHOST_LABELS = 0.22;
@@ -737,8 +725,8 @@ export class GlPlanRenderer implements PlanRenderer {
     // computations here — one for the vertices, one for the hit target — is
     // how the two come to disagree about a door in a diagonal wall.
     const doorBatch = new FillBatch();
-    const doorLine = overrideOr(app.doors?.line, pal.ink);
-    const doorFill = overrideOr(app.doors?.fill, pal.ink);
+    const doorLine = overrideOr(app.doors?.line, pal[LAYER_THEME_COLOUR.doors]);
+    const doorFill = overrideOr(app.doors?.fill, pal[LAYER_THEME_COLOUR.doors]);
     const pickable: PickableDoor[] = [];
     const doorEntries: DoorEntry[] = [];
     for (const door of this.#activeDoors()) {
@@ -753,7 +741,7 @@ export class GlPlanRenderer implements PlanRenderer {
       // transparency is what stops a footprint hiding the room under it, which
       // is structural, not a shade anyone chose.
       const rect = glyph.rect.length
-        ? doorBatch.pushTriangles(glyph.rect, withAlpha(doorFill, DOOR_RECT_ALPHA))
+        ? doorBatch.pushTriangles(glyph.rect, withAlpha(doorFill, FOOTPRINT_ALPHA))
         : null;
       // Arrow and cross are mutually exclusive by construction, so one range
       // covers whichever was drawn.
@@ -775,8 +763,8 @@ export class GlPlanRenderer implements PlanRenderer {
     // moved. Two meshes is two draw calls for the whole plan, not two per
     // element, which is what the one-draw-call-per-layer rule actually asks.
     const windowBatch = new FillBatch();
-    const windowLine = overrideOr(app.windows?.line, pal.ink);
-    const windowFill = overrideOr(app.windows?.fill, pal.ink);
+    const windowLine = overrideOr(app.windows?.line, pal[LAYER_THEME_COLOUR.windows]);
+    const windowFill = overrideOr(app.windows?.fill, pal[LAYER_THEME_COLOUR.windows]);
     const pickableWindows: PickableDoor[] = [];
     const windowEntries: WindowEntry[] = [];
     for (const window of this.#activeWindows()) {
@@ -786,7 +774,7 @@ export class GlPlanRenderer implements PlanRenderer {
       if (!glyph) continue;
 
       const rect = glyph.rect.length
-        ? windowBatch.pushTriangles(glyph.rect, withAlpha(windowFill, DOOR_RECT_ALPHA))
+        ? windowBatch.pushTriangles(glyph.rect, withAlpha(windowFill, FOOTPRINT_ALPHA))
         : null;
       // Symbol and cross are mutually exclusive by construction, so one range
       // covers whichever was drawn.
@@ -805,8 +793,8 @@ export class GlPlanRenderer implements PlanRenderer {
     // of openings, so this is the layer a reader toggles most and the one whose
     // rebuild cost most wants isolating from the others.
     const ffeBatch = new FillBatch();
-    const ffeLine = overrideOr(app.ffe?.line, pal.ink);
-    const ffeFill = overrideOr(app.ffe?.fill, pal.ink);
+    const ffeLine = overrideOr(app.ffe?.line, pal[LAYER_THEME_COLOUR.ffe]);
+    const ffeFill = overrideOr(app.ffe?.fill, pal[LAYER_THEME_COLOUR.ffe]);
     const pickableFfe: PickableDoor[] = [];
     const ffeEntries: ItemEntry[] = [];
     for (const item of this.#activeFfe()) {
@@ -815,7 +803,7 @@ export class GlPlanRenderer implements PlanRenderer {
       if (!glyph) continue;
 
       const rect = glyph.rect.length
-        ? ffeBatch.pushTriangles(glyph.rect, withAlpha(ffeFill, DOOR_RECT_ALPHA))
+        ? ffeBatch.pushTriangles(glyph.rect, withAlpha(ffeFill, FOOTPRINT_ALPHA))
         : null;
       // Marker and rectangle are mutually exclusive by construction; the tick
       // rides with whichever was drawn, so one range covers the marks.
@@ -851,7 +839,7 @@ export class GlPlanRenderer implements PlanRenderer {
     const spaceBatch = new LineBatch();
     // Defaults to the ACCENT, where every other layer defaults to ink -- see the
     // note above. Overriding this and not the ceilings is a way to lose that.
-    const spaceLine = overrideOr(app.spaces?.line, pal.accent);
+    const spaceLine = overrideOr(app.spaces?.line, pal[LAYER_THEME_COLOUR.spaces]);
     for (const space of this.#activeSpaces()) {
       const outer = space.loops?.[0];
       if (!outer?.points?.length) continue;
@@ -878,7 +866,7 @@ export class GlPlanRenderer implements PlanRenderer {
     // It is still counted and still attributed to no room by the server, which
     // is where that state is visible; a plan cannot show an absent polygon.
     const ceilingBatch = new LineBatch();
-    const ceilingLine = overrideOr(app.ceilings?.line, pal.ink);
+    const ceilingLine = overrideOr(app.ceilings?.line, pal[LAYER_THEME_COLOUR.ceilings]);
     for (const ceiling of this.#activeCeilings()) {
       // EVERY piece, and every ring of it. A ceiling is a list of polygons
       // because RHH's arrive in genuinely disjoint pieces -- drawing only the
@@ -900,7 +888,7 @@ export class GlPlanRenderer implements PlanRenderer {
     // floor is architecture; the dot, not the colour, is what separates it from
     // the room outline and the ceiling ring that can share its line.
     const floorBatch = new LineBatch();
-    const floorLine = overrideOr(app.floors?.line, pal.ink);
+    const floorLine = overrideOr(app.floors?.line, pal[LAYER_THEME_COLOUR.floors]);
     for (const floor of this.#activeFloors()) {
       for (const piece of floor.polygons ?? []) {
         for (const ring of piece.loops ?? []) {

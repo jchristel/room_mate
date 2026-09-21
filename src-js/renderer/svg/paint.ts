@@ -19,11 +19,17 @@
 import { holeClassName, resolveRoomAppearance, roomClassName } from "../appearance.js";
 import { centroid, loopBox, pointsAttr } from "../geometry.js";
 import type { AppearanceContext, Rect, Room, RoomAppearance } from "../types.js";
+import { paintGlyphs, paintSurfaces, type OverlayLayers } from "./overlays.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-export interface PaintOptions extends AppearanceContext {
+export interface PaintOptions extends AppearanceContext, OverlayLayers {
   showLabels?: boolean | undefined;
+  /** Whether to draw the rooms -- polygons, holes and labels. Absent means yes.
+   *  The rooms are still passed when this is false, as they are to the screen:
+   *  they are what `fitted` came from, so an overlay-only file keeps the same
+   *  frame as the full one. */
+  showRooms?: boolean | undefined;
 }
 
 function line(doc: Document, x1: number, y1: number, x2: number, y2: number): SVGElement {
@@ -99,7 +105,7 @@ export function paintLevel(
   fitted: Rect,
   opts: PaintOptions = {},
 ): void {
-  const { showLabels = true } = opts;
+  const { showLabels = true, showRooms = true } = opts;
   const doc = svg.ownerDocument;
   const baseFont = Math.max(fitted.w, fitted.h) * 0.02;
 
@@ -121,7 +127,7 @@ export function paintLevel(
   // TWO passes, not one: every room's polygons first, then every room's label.
   // SVG has no reliable z-index — paint order is DOM order — so appending all
   // polygons before any label is what guarantees labels sit on top.
-  for (const room of rooms) {
+  for (const room of showRooms ? rooms : []) {
     const loops = room.loops;
     const outerLoop = loops?.[0];
     if (!loops || !outerLoop) continue;
@@ -146,9 +152,17 @@ export function paintLevel(
     }
   }
 
+  // The element layers, between the rooms and the labels -- the screen's order.
+  // Each emits nothing at all when it has nothing to draw, so a rooms-only
+  // export is byte-identical to what it was before they existed.
+  paintSurfaces(svg, opts);
+  paintGlyphs(svg, opts);
+
   // Labels off skips the pass entirely. Omitting elements beats styling them
-  // away: an exported file then simply has no `<text>` nodes.
-  if (showLabels) {
+  // away: an exported file then simply has no `<text>` nodes. Labels follow the
+  // ROOMS too, as on screen: a room's name with the room gone is a caption
+  // floating over whatever the reader turned the rooms off to look at.
+  if (showLabels && showRooms) {
     for (const room of rooms) {
       if (!room.loops?.[0]) continue;
       const label = addLabel(svg, room, baseFont);
