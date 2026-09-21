@@ -15,8 +15,8 @@
 // `/ceilings` is 9 MB on RHH — for a question most of them are not asking.
 
 import { EntityPoll, onStorey } from "./planRenderer.js";
-import { elementUrl, matchSuffix, visibleStoreys, type ElementEntity } from "../elementUrls.js";
-import { bumpLayers, getState, layerWanted, setState } from "./store.js";
+import { coversStorey, elementUrl, matchSuffix, visibleStoreys, type ElementEntity } from "../elementUrls.js";
+import { bumpLayers, getState, layerWanted, markLayerLoading, setState, type ZoneRow } from "./store.js";
 import type { Ceiling, Door, Floor, Item, Level, Space, WindowOpening } from "../../renderer/types.js";
 
 /** How a layer's storey match resolved, so its toggle can say when the answer
@@ -107,10 +107,18 @@ function refreshSpacesModels(payload: ElementPayload): void {
 
 /** Poll every layer once. Returns whether any of them changed what is drawn. */
 export async function pollLayers(): Promise<boolean> {
+  // Every layer that will read a new scope is marked BEFORE the first await:
+  // the polls run in series, and a zone drawing only FF&E is waiting while the
+  // doors read is still going.
+  for (const [entity, poll] of polls) markLayerLoading(entity, poll.newScopeUrl());
   let changed = false;
-  for (const poll of polls.values()) {
+  for (const [entity, poll] of polls) {
     const outcome = await poll.poll();
     if (outcome === "changed" || outcome === "cleared") changed = true;
+    // Still wanting a new scope after its poll means the scope moved while it
+    // was in flight, so the next read is the one to wait for. A failure is not
+    // loading: the bar would otherwise run forever against a dead layer.
+    markLayerLoading(entity, outcome === "error" ? null : poll.newScopeUrl());
   }
   // One bump for the tick, not one per layer: a tick that moved three layers
   // should repaint once.
@@ -210,4 +218,25 @@ export function typePropertiesOf(
  *  doors have not arrived" are opposite answers and only one is a finding. */
 export function layerState(entity: ElementEntity): "pending" | "loaded" | "empty" | "error" {
   return polls.get(entity)?.fetchState ?? "pending";
+}
+
+/**
+ * Whether one zone is waiting on an element layer it DRAWS.
+ *
+ * Per zone, though the reads are shared: a read in flight counts only if what
+ * the layer holds does not already cover this zone's storey (`coversStorey`),
+ * so one zone switching level does not light every zone's bar. A layer that
+ * has never answered counts too -- an overlay switched on is not asked until
+ * the next tick, and the reader should see it coming from the click.
+ */
+export function zoneAwaitsLayers(zone: ZoneRow, levelId: string | null): boolean {
+  const { loadingLayers, payload } = getState();
+  return LAYERS.some(({ entity }) => {
+    if (!zone.layers[entity]) return false;
+    const poll = polls.get(entity);
+    if (!poll) return false;
+    const target = loadingLayers[entity];
+    if (target) return !coversStorey(poll.acceptedUrl, target, levelId);
+    return payload !== null && poll.neverAnswered() && poll.newScopeUrl() !== null;
+  });
 }

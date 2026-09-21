@@ -140,6 +140,25 @@ export class EntityPoll<P> {
     return this.accepted !== null && this.accepted === this.options.url();
   }
 
+  /** The URL a poll would read if it would read a NEW scope -- nothing held
+   *  for it yet -- else null. Null too while the layer is not polled at all, so
+   *  a hidden overlay never reads as loading. This is the distinction the
+   *  loading bar needs and `isCurrent` cannot make: a same-scope revalidation
+   *  is a read in flight, and not something the reader is waiting for. */
+  newScopeUrl(): string | null {
+    const { enabled, url } = this.options;
+    if (enabled && !enabled()) return null;
+    const target = url();
+    return target !== null && target !== this.accepted ? target : null;
+  }
+
+  /** Whether this layer has never answered anything -- not a payload, not a
+   *  204, not a failure. A layer switched on between ticks is in this state
+   *  until the next one asks. */
+  neverAnswered(): boolean {
+    return this.accepted === null && this.fetchState === "pending";
+  }
+
   /**
    * Ask once. Never throws: a layer that fails must not take the rooms, or any
    * other layer, down with it — a model with rooms and no furniture is

@@ -83,3 +83,36 @@ export function matchSuffix(match: "exact" | "elevation" | "all" | "none"): stri
   if (match === "elevation") return " (by elevation)";
   return "";
 }
+
+/**
+ * Whether the payload a layer HOLDS (read from `accepted`) already answers what
+ * one zone shows, while a read for `target` is in flight.
+ *
+ * **This is what makes the loading bar per zone.** The reads are scope-wide --
+ * one URL carries every zone's storey -- so switching one zone's level re-reads
+ * every layer, and a bar keyed on "a read is in flight" would light up every
+ * zone for a change only one of them is waiting on. The others still hold
+ * their storey and are drawing it correctly; only a zone whose storey the held
+ * payload never asked for is actually missing something.
+ *
+ * Anything but the storeys differing (project, building, milestone) means the
+ * held payload answers another scope entirely, so it covers nothing. A held
+ * read with no storey list was unscoped and covers every storey.
+ */
+export function coversStorey(accepted: string | null, target: string, levelId: string | null): boolean {
+  if (accepted === null) return false;
+  const held = splitStoreys(accepted);
+  if (held.rest !== splitStoreys(target).rest) return false;
+  if (held.ids === null || levelId === null) return true;
+  return held.ids.includes(levelId);
+}
+
+function splitStoreys(url: string): { rest: string; ids: string[] | null } {
+  const [path = "", query = ""] = url.split("?", 2);
+  const params = new URLSearchParams(query);
+  const ids = params.get("storey_level_ids");
+  params.delete("storey_level_ids");
+  params.delete("storey_elevations");
+  params.sort();
+  return { rest: `${path}?${params.toString()}`, ids: ids === null ? null : ids.split(",") };
+}
