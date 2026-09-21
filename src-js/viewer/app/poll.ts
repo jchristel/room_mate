@@ -28,7 +28,7 @@ import {
   type RoomsPayload,
 } from "./api.js";
 import { persistSelection, seedProjectId, urlParam } from "./common.js";
-import { getState, setState } from "./store.js";
+import { getState, setRoomsLoading, setState } from "./store.js";
 import { loadAppearance } from "./appearance.js";
 import { pollLayers } from "./layers.js";
 import { keepBuilding, keepMilestone, resolveProject, roomsUrl, type Scope } from "../scope.js";
@@ -39,6 +39,9 @@ const TICK_MS = 2000;
 let inFlight = false;
 let roomsEtag: string | null = null;
 let revision: string | null = null;
+/** The rooms URL whose answer (a payload or a 204) is on screen, so the
+ *  loading bar can tell a scope change from the 2-second revalidation. */
+let roomsAccepted: string | null = null;
 /** One-shot: the URL/localStorage restore applies on the first resolve only, so
  *  the 2-second refresh can never clobber a later manual change. */
 let seeded = false;
@@ -131,20 +134,34 @@ async function refreshScope(projects: readonly ProjectRow[]): Promise<void> {
 }
 
 async function pollRooms(): Promise<void> {
-  const scope = getState().scope;
+  const url = roomsUrl(getState().scope);
+  // Cleared however the read ends -- a thrown one included, or the bar would
+  // run on under "connection lost".
+  const fresh = url !== roomsAccepted;
+  if (fresh) setRoomsLoading(true);
+  try {
+    await readRooms(url);
+  } finally {
+    if (fresh) setRoomsLoading(false);
+  }
+}
+
+async function readRooms(url: string): Promise<void> {
   const headers: Record<string, string> = roomsEtag ? { "If-None-Match": roomsEtag } : {};
-  const res = await fetch(roomsUrl(scope), { cache: "no-store", headers });
+  const res = await fetch(url, { cache: "no-store", headers });
 
   if (res.status === 204) {
     // The scope holds no rooms snapshot at all — an ordinary state for a
     // project nobody has pushed to yet, not a failure.
     roomsEtag = null;
+    roomsAccepted = url;
     setState({ status: "waiting for data", payload: null });
     return;
   }
   if (res.status !== 304 && !res.ok) throw new Error(String(res.status));
 
   if (res.status === 304) {
+    roomsAccepted = url;
     setState({ status: "ready" });
     return;
   }
@@ -153,6 +170,7 @@ async function pollRooms(): Promise<void> {
   // After the parse, never before: a tag stored ahead of a body that failed to
   // arrive turns every later tick into a 304 for data that never landed.
   roomsEtag = res.headers.get("ETag");
+  roomsAccepted = url;
   const incoming = payload.revision ?? JSON.stringify(payload);
   if (incoming === revision) {
     setState({ status: "ready" });

@@ -23,7 +23,7 @@ import { SelectionFilter } from "./SelectionFilter.js";
 import { ExportMenu } from "./ExportMenu.js";
 import { loadAreas } from "./areasData.js";
 import { tierNames } from "../areas.js";
-import { elementsOnStorey, type ElementOf } from "./layers.js";
+import { elementsOnStorey, zoneAwaitsLayers, type ElementOf } from "./layers.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
 import { closePickList, setZoneAreas, setZoneColourPlan, setZoneLevel, type ZoneRow } from "./store.js";
@@ -43,8 +43,20 @@ import type { Room } from "../../renderer/types.js";
 const BUSY_ROOM_THRESHOLD = 1000;
 
 export function Zone({ zone }: { zone: ZoneRow }) {
-  const { payload, status, appearance, layersRevision, colourPlans, selection, search, validation, showErrors, areas, scope } =
-    useViewer();
+  const {
+    payload,
+    status,
+    appearance,
+    layersRevision,
+    colourPlans,
+    selection,
+    search,
+    validation,
+    showErrors,
+    areas,
+    scope,
+    roomsLoading,
+  } = useViewer();
   // This zone's own visibility, since C1 — see `ZoneRow.layers`.
   const { layers, showRooms, showLabels, spacesModel } = zone;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -105,6 +117,10 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   // The union across sources: a room is flagged on the plan if ANY source has
   // something to say about it. Which source said it belongs in the band.
   const errorRooms = useMemo(() => errorRoomIds(validation), [validation]);
+  // Rooms first: until they land, no zone knows its storey and nothing else
+  // has been asked for.
+  const roomsPending = status === "starting" || roomsLoading;
+  const loading = roomsPending || zoneAwaitsLayers(zone, levelId);
 
   // Paint. The dependency list is what decides a repaint, and `payload` changes
   // identity only when the poll saw a new revision — so a quiet system never
@@ -246,6 +262,11 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   return (
     <div className="zone">
       <div className="zone-toolbar">
+        {/* On the toolbar's bottom rule, not a row of its own: a row that came
+            and went would resize the canvas under it, and the plan would jump
+            on every level switch. Indeterminate on purpose -- the server's
+            time before the first byte has no size to measure against. */}
+        {loading ? <div className="zone-loading" role="progressbar" aria-label="Loading data" /> : null}
         <LayerMenu zone={zone} />
         <SelectionFilter zone={zone} />
         {/* Per zone, because it is presentation: two zones on one level under
@@ -332,7 +353,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
             `<title>`. WebGL has no elements, so it is a DOM node the hover
             code positions. */}
         <div className="plan-tip hidden" ref={tipRef} />
-        <ZoneEmpty payload={!!payload} rooms={rooms.length} levels={levels.length} levelName={levelName} />
+        <ZoneEmpty payload={!!payload} loading={roomsPending} rooms={rooms.length} levels={levels.length} levelName={levelName} />
         <div className="plan-busy hidden" ref={busyRef}>
           <span>Drawing plan…</span>
         </div>
@@ -349,16 +370,27 @@ export function Zone({ zone }: { zone: ZoneRow }) {
  *  question, and this panel is the only place that answers it. */
 function ZoneEmpty({
   payload,
+  loading,
   rooms,
   levels,
   levelName,
 }: {
   payload: boolean;
+  loading: boolean;
   rooms: number;
   levels: number;
   levelName: string;
 }) {
   if (rooms > 0) return null;
+  // Not "No rooms received yet": telling a reader to POST data that is on
+  // its way is advice for a problem they do not have.
+  if (!payload && loading) {
+    return (
+      <div className="empty">
+        <strong>Loading rooms…</strong>
+      </div>
+    );
+  }
   if (!payload) {
     return (
       <div className="empty">

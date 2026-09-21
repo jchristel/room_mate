@@ -207,6 +207,17 @@ export interface ViewerState {
    *  something else happened to repaint, which is exactly the bug the old
    *  page's `redrawAllZones()` on a changed element poll exists to prevent. */
   layersRevision: number;
+  /** Each element layer with a read in flight for a NEW scope, mapped to the
+   *  URL it is reading. The zones' loading bar is derived from it.
+   *
+   *  **A new scope only, never the 2-second revalidation.** A quiet tick asks
+   *  every layer again and almost always hears 304; recording those would
+   *  flicker every bar every two seconds, and would re-render the page twice
+   *  per layer per tick to say nothing had changed. */
+  loadingLayers: Readonly<Partial<Record<ElementEntity, string>>>;
+  /** Whether a rooms read for a scope other than the one held is in flight --
+   *  the first load, or a project, building or milestone change. */
+  roomsLoading: boolean;
   /** The project's `[appearance]` block, or `{}` — which is the ordinary state
    *  and means "every layer follows the theme". */
   appearance: ViewerAppearance;
@@ -255,6 +266,8 @@ const initial: ViewerState = {
   spacesModels: [],
   roomContents: { doors: true, windows: true, ffe: true, ceilings: false, floors: false },
   layersRevision: 0,
+  loadingLayers: {},
+  roomsLoading: false,
   appearance: {},
   colourPlans: [],
   hiddenProperties: {},
@@ -405,6 +418,21 @@ export function layerWanted(entity: ElementEntity): boolean {
 /** Tell the page a layer's data moved. See `layersRevision`. */
 export function bumpLayers(): void {
   setState({ layersRevision: state.layersRevision + 1 });
+}
+
+/** Record whether one layer is reading a new scope (`url`) or not (`null`).
+ *  A no-op when nothing moved, so the tick that re-marks every layer costs no
+ *  render. */
+export function markLayerLoading(entity: ElementEntity, url: string | null): void {
+  if ((state.loadingLayers[entity] ?? null) === url) return;
+  const next = { ...state.loadingLayers };
+  if (url === null) delete next[entity];
+  else next[entity] = url;
+  setState({ loadingLayers: next });
+}
+
+export function setRoomsLoading(on: boolean): void {
+  if (state.roomsLoading !== on) setState({ roomsLoading: on });
 }
 
 /** Apply a colour plan to one zone, by name. `null` is no colour. */

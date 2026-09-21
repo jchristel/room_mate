@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { elementUrl, matchSuffix, visibleStoreys } from "./elementUrls.js";
+import { coversStorey, elementUrl, matchSuffix, visibleStoreys } from "./elementUrls.js";
 import type { Level } from "../renderer/types.js";
 
 const level = (id: string, name: string, elevation: number): Level => ({ id, name, elevation });
@@ -66,5 +66,31 @@ describe("matchSuffix", () => {
   it("names a fallback, because an invisible one is the failure mode here", () => {
     expect(matchSuffix("elevation")).toBe(" (by elevation)");
     expect(matchSuffix("all")).toBe(" (all levels)");
+  });
+});
+
+describe("coversStorey", () => {
+  const url = (ids: string, extra = "") => `/doors?project=RHH${extra}&storey_elevations=0&storey_level_ids=${ids}`;
+
+  it("covers a zone whose storey the held read already asked for", () => {
+    expect(coversStorey(url("7,9"), url("7,9,11"), "9")).toBe(true);
+  });
+
+  it("does not cover the zone that switched to a new storey", () => {
+    expect(coversStorey(url("7,9"), url("7,11"), "11")).toBe(false);
+  });
+
+  it("covers nothing before anything is held", () => {
+    expect(coversStorey(null, url("7"), "7")).toBe(false);
+  });
+
+  /** A building or milestone change leaves the storeys alone and changes every
+   *  answer, so a held payload for the old scope must not vouch for the new. */
+  it("covers nothing when the scope outside the storeys moved", () => {
+    expect(coversStorey(url("7"), url("7", "&building=B1"), "7")).toBe(false);
+  });
+
+  it("treats an unscoped held read as covering every storey", () => {
+    expect(coversStorey("/doors?project=RHH", url("7"), "7")).toBe(true);
   });
 });

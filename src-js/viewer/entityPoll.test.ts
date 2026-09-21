@@ -319,3 +319,41 @@ describe("conditionalHeaders", () => {
     expect(conditionalHeaders('"abc"')).toEqual({ "If-None-Match": '"abc"' });
   });
 });
+
+/** What the zones' loading bar reads. A same-scope revalidation is a read in
+ *  flight too, and the one thing it must never do is light the bar every two
+ *  seconds -- so "new scope" is the distinction pinned here. */
+describe("EntityPoll.newScopeUrl", () => {
+  it("names the URL until the first answer, then nothing while the scope holds", async () => {
+    const server = scriptedServer([{ status: 200, etag: '"t1"', body: doors("r1") }]);
+    const poll = new EntityPoll({ url: () => "/doors", fetch: server.fetch });
+
+    expect(poll.newScopeUrl()).toBe("/doors");
+    expect(poll.neverAnswered()).toBe(true);
+    await poll.poll();
+    expect(poll.newScopeUrl()).toBeNull();
+    expect(poll.neverAnswered()).toBe(false);
+  });
+
+  it("names the new URL once the scope moves", async () => {
+    let url = "/doors?storey_level_ids=1";
+    const server = scriptedServer([{ status: 200, body: doors("r1") }]);
+    const poll = new EntityPoll({ url: () => url, fetch: server.fetch });
+    await poll.poll();
+
+    url = "/doors?storey_level_ids=2";
+    expect(poll.newScopeUrl()).toBe(url);
+  });
+
+  it("counts a 204 as an answer, so an empty layer does not load forever", async () => {
+    const server = scriptedServer([{ status: 204 }]);
+    const poll = new EntityPoll({ url: () => "/ceilings", fetch: server.fetch });
+    await poll.poll();
+    expect(poll.newScopeUrl()).toBeNull();
+  });
+
+  it("is null for a layer that is not being polled", () => {
+    const poll = new EntityPoll({ url: () => "/spaces", enabled: () => false });
+    expect(poll.newScopeUrl()).toBeNull();
+  });
+});
