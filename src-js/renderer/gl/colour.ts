@@ -9,6 +9,8 @@
 // running page, and a cached palette would leave the plan in the old theme while
 // every other surface moved.
 
+import { usableColour } from "../style.js";
+
 export type Rgba = readonly [number, number, number, number];
 
 const CACHE = new Map<string, Rgba>();
@@ -61,11 +63,8 @@ export function parseColour(css: string): Rgba {
  * absent one, which is the "signal, not error" reading of a bad value.
  */
 export function overrideOr(css: string | null | undefined, fallback: Rgba): Rgba {
-  if (typeof css !== "string") return fallback;
-  const key = css.trim();
-  if (!key) return fallback;
-  const usable = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(key) || /^rgba?\([^)]+\)$/i.test(key);
-  return usable ? parseColour(key) : fallback;
+  const usable = usableColour(css);
+  return usable ? parseColour(usable) : fallback;
 }
 
 export interface PlanPalette {

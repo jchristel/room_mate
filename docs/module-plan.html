@@ -1139,7 +1139,7 @@
     },
     {
       id: "js_paint", name: "svg/paint.ts", path: "src-js/renderer/svg/paint.ts", zone: "renderer", lang: "TypeScript",
-      blurb: "The SVG painter for the <strong>export</strong>, and nothing else — it used to draw the live plan too, and saying plainly that it no longer does matters, because a comment describing a dead relationship sends the next reader hunting for a path that was deleted.",
+      blurb: "The SVG painter for the <strong>export</strong>, and nothing else — it used to draw the live plan too, and saying plainly that it no longer does matters, because a comment describing a dead relationship sends the next reader hunting for a path that was deleted. Since 2026-09-21 it draws every element layer too (svg/overlays.ts, from the same GL-free glyph builders the screen uses), with the look of each layer in renderer/style.ts, which both painters read.",
       deps: ["js_app", "js_geom", "js_types"]
     },
     {

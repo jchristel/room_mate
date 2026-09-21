@@ -232,12 +232,16 @@
   }
   .zone-toolbar button.validation-toggle.issues { border-color: var(--accent); color: var(--accent); }
   .zone-toolbar button.validation-toggle.hidden { display: none; }
-  .zone-toolbar button.export-svg {
-    font-family: var(--mono); font-size: 0.72rem;
+  /* The export menu's run button and its one-line report. Inside the panel's
+     sticky head, so a project with forty levels can still press it without
+     scrolling back up. */
+  .fields-panel button.export-run {
+    font-family: var(--mono); font-size: 0.7rem;
     background: var(--paper); color: var(--ink);
     border: 1px solid var(--ink); padding: 0.2rem 0.4rem; cursor: pointer;
   }
-  .zone-toolbar button.export-svg.hidden { display: none; }
+  .fields-panel button.export-run:disabled { opacity: 0.4; cursor: default; }
+  .fields-panel .export-report { margin-top: 0.3rem; font-size: 0.64rem; white-space: normal; max-width: 16rem; }
   .zone-toolbar .meta { font-size: 0.66rem; letter-spacing: 0.08em; color: var(--accent); margin-left: auto; }
   .zone-toolbar .meta.stale { color: var(--ink); opacity: 0.5; }
 

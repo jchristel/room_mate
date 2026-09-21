@@ -15,8 +15,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { fittedBounds } from "../geometry.js";
-import type { Room } from "../types.js";
+import type { Ceiling, Door, Item, Room, Space, WindowOpening } from "../types.js";
 import { paintLevel, type PaintOptions } from "./paint.js";
+import { exportStyle } from "./style.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -31,6 +32,30 @@ function fixture(name: string): Room[] {
 
 const houseA = fixture("house-a-level-00");
 const edgeCases = fixture("edge-cases");
+
+/** House A's level-00 doors, the ones that stand among these rooms. */
+const houseADoors = (
+  JSON.parse(readFileSync(resolve(import.meta.dirname, "..", "fixtures", "house-a.doors.json"), "utf8")) as Door[]
+).filter((d) => d.level_id === houseA[0]!.level_id);
+
+/**
+ * One of every other element layer, built on House A's own rooms so the golden
+ * stays in frame. Synthetic on purpose: what these guard is the EMITTING -- the
+ * group, the class, the paint order -- and the glyph shapes already have their
+ * own tests against real exports.
+ */
+function houseAOverlays() {
+  const [a, b, c, d] = houseA;
+  const at = (room: Room) => room.loops![0]!.points[0]!;
+  const ceilings: Ceiling[] = [{ id: "c1", polygons: [{ loops: a!.loops! }, { loops: b!.loops! }] }];
+  const floors: Ceiling[] = [{ id: "f1", polygons: [{ loops: c!.loops! }] }];
+  const spaces: Space[] = [{ id: "s1", loops: d!.loops! }];
+  const windows: WindowOpening[] = [
+    { id: "w1", insertion_point: at(a!), through_wall_normal: { x: 0, y: 1 } } as WindowOpening,
+  ];
+  const ffe: Item[] = [{ id: "i1", insertion_point: at(b!), facing: { x: 1, y: 0 } }];
+  return { doors: houseADoors, windows, ffe, spaces, ceilings, floors };
+}
 
 /** Paint into a detached <svg> and serialize, exactly as `buildLevelSvgFile`
  *  does — minus the style block and paper background, which are pure CSS-variable
@@ -79,6 +104,66 @@ describe("paintLevel golden output", () => {
         matchRoomIds: new Set(["plain", "concave"]),
       }),
     ).toMatchFileSnapshot("./__golden__/edge-cases.all-states.svg");
+  });
+});
+
+describe("paintLevel element layers", () => {
+  it("matches the golden file with every element layer on", () => {
+    // A changed golden here is a claim that every exported overlay was wrong.
+    expect(houseADoors.length).toBeGreaterThan(0);
+    expect(paintToString(houseA, houseAOverlays())).toMatchFileSnapshot("./__golden__/house-a-level-00.layers.svg");
+  });
+
+  function paintLayers(opts: PaintOptions = {}): SVGElement {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    paintLevel(svg, houseA, fittedBounds(houseA)!, { ...houseAOverlays(), ...opts });
+    return svg;
+  }
+
+  it("paints the layers in the screen's order, between the rooms and the labels", () => {
+    // SVG has no z-index: DOM order IS paint order, so this is the whole rule.
+    const order = [...paintLayers().children].map((el) => el.getAttribute("id") ?? el.tagName);
+    const at = (name: string) => order.indexOf(name);
+    expect(order.lastIndexOf("polygon")).toBeLessThan(at("floors"));
+    const layers = ["floors", "ceilings", "spaces", "doors", "windows", "ffe"].map(at);
+    expect(layers.every((i) => i >= 0)).toBe(true);
+    expect([...layers].sort((x, y) => x - y)).toEqual(layers);
+    expect(at("ffe")).toBeLessThan(order.indexOf("text"));
+  });
+
+  it("draws every piece of a ceiling, not just the first", () => {
+    // RHH's multi-piece ceilings are genuinely disjoint; one piece loses 44%.
+    expect(paintLayers().querySelectorAll("#ceilings polygon.ceiling")).toHaveLength(2);
+  });
+
+  it("emits no group for a layer with nothing to draw", () => {
+    // An empty group would change every rooms-only export, and every golden.
+    expect(paintLayers({ spaces: [] }).querySelector("#spaces")).toBeNull();
+  });
+
+  it("draws overlays alone with rooms off, and no labels with them", () => {
+    const svg = paintLayers({ showRooms: false });
+    expect(svg.querySelectorAll("polygon.room")).toHaveLength(0);
+    expect(svg.querySelectorAll("text")).toHaveLength(0);
+    expect(svg.querySelector("#doors")).not.toBeNull();
+  });
+});
+
+describe("exportStyle", () => {
+  const pal = { ink: "#111111", fill: "#dddddd", paper: "#ffffff", accent: "#c8102e", error: "#ff0000", rule: "#cccccc" };
+
+  it("uses the screen's dashes, so a ceiling never exports with the floor's dot", () => {
+    const css = exportStyle(pal);
+    expect(css).toMatch(/\.ceiling \{[^}]*stroke-dasharray: 6 4/);
+    expect(css).toMatch(/\.floor \{[^}]*stroke-dasharray: 2 8/);
+    expect(css).toMatch(/\.space \{[^}]*stroke: #c8102e/);
+  });
+
+  it("applies a usable override and ignores an unusable one, as the screen does", () => {
+    const css = exportStyle(pal, { doors: { line: "#00ff00", fill: "not a colour" }, rooms: { fill: "#abcdef" } });
+    expect(css).toMatch(/\.door-mark \{ fill: #00ff00/);
+    expect(css).toMatch(/\.door-rect \{ fill: #111111; fill-opacity: 0.25/);
+    expect(css).toMatch(/\.room \{ fill: #abcdef/);
   });
 });
 
