@@ -303,7 +303,7 @@ export interface AppearanceContext {
   /**
    * Resolves the active colour plan to a literal colour, or `null` when no plan
    * is active. INJECTED rather than implemented here: the palette
-   * (`qualitative`/`SCHEMES`) lives in `static/common.js`, which four pages load
+   * (`qualitative`/`SCHEMES`) lives in `static/common.js`, which every page loads
    * as a classic script and which therefore cannot be imported. The precedence
    * *rule* is what matters and it lives in `resolveRoomAppearance`; which hex a
    * value maps to is a separate concern.

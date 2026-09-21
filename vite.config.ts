@@ -15,7 +15,7 @@ export default defineConfig({
       entry: resolve(import.meta.dirname, "src-js/renderer/index.ts"),
       name: "PlanRenderer",
       // IIFE, not ESM: `index.html` loads this with a plain <script> alongside
-      // common.js and graph.js. A module build would need `type="module"`,
+      // common.js. A module build would need `type="module"`,
       // which defers execution past the inline script that calls it.
       formats: ["iife"],
       fileName: () => "renderer.bundle.js",
