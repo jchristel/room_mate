@@ -126,6 +126,12 @@ export async function pollLayers(): Promise<boolean> {
   return changed;
 }
 
+/** Cancel every layer read whose scope the page has already left, so the
+ *  lane is free for the read that replaces it. See `EntityPoll.abortIfStale`. */
+export function abortStaleLayers(): void {
+  for (const poll of polls.values()) poll.abortIfStale();
+}
+
 /** One layer's elements on one storey, and how that match resolved.
  *
  * The join is `onStorey`'s — NAME plus ELEVATION, never a raw level id. A

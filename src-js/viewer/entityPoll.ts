@@ -56,7 +56,7 @@ export interface PollResponse {
 
 export type PollFetch = (
   url: string,
-  init: { cache: RequestCache; headers: Record<string, string> },
+  init: { cache: RequestCache; headers: Record<string, string>; signal?: AbortSignal },
 ) => Promise<PollResponse>;
 
 export interface EntityPollOptions<P> {
@@ -125,6 +125,9 @@ export class EntityPoll<P> {
   private etag: string | null = null;
   private revision: string | null = null;
   private accepted: string | null = null;
+  /** The read in flight, if any, so a scope change can cancel it -- see
+   *  `abortIfStale`. */
+  private inFlight: { target: string; controller: AbortController } | null = null;
 
   constructor(private readonly options: EntityPollOptions<P>) {}
 
@@ -171,10 +174,14 @@ export class EntityPoll<P> {
     if (target === null) return "skipped";
     const sameScope = target === this.accepted;
     const doFetch = this.options.fetch ?? ((u, init) => fetch(u, init));
+    const controller = new AbortController();
+    const flight = { target, controller };
+    this.inFlight = flight;
     try {
       const res = await doFetch(target, {
         cache: "no-store",
         headers: conditionalHeaders(sameScope ? this.etag : null),
+        signal: controller.signal,
       });
       // The scope moved while this was in flight -- a storey switch, typically,
       // whose own poll may already have landed. Accepting this answer would put
@@ -225,10 +232,31 @@ export class EntityPoll<P> {
       onPayload?.(payload);
       return "changed";
     } catch {
+      // Cancelled because the scope moved (`abortIfStale`), or failed for a
+      // scope nobody is looking at any more: either way the answer was never
+      // going to be used, and reporting it as this layer's failure would put
+      // "error" on a layer whose current read has not even been asked yet.
+      if (url() !== target) return "skipped";
       // The rooms read already reports connection loss; one message is enough.
       this.fetchState = "error";
       return "error";
+    } finally {
+      if (this.inFlight === flight) this.inFlight = null;
     }
+  }
+
+  /**
+   * Cancel the read in flight if the page no longer wants its answer.
+   *
+   * `poll` already drops such an answer unread; this stops the transfer and
+   * the parse as well, which on RHH is up to 24 MB of FF&E for a storey the
+   * reader has just left. The server may still finish building the body it
+   * had started -- cancelling cannot reach into that -- but it is not sent,
+   * and the next read in the lane starts at once instead of waiting for it.
+   */
+  abortIfStale(): void {
+    const flight = this.inFlight;
+    if (flight && flight.target !== this.options.url()) flight.controller.abort();
   }
 
   /** Drop both cursors, so the next poll fetches a body and repaints from it
