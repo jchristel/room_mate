@@ -30,13 +30,20 @@ import {
 import { persistSelection, seedProjectId, urlParam } from "./common.js";
 import { getState, setRoomsLoading, setState } from "./store.js";
 import { loadAppearance } from "./appearance.js";
-import { pollLayers } from "./layers.js";
+import { abortStaleLayers, pollLayers } from "./layers.js";
 import { keepBuilding, keepMilestone, resolveProject, roomsUrl, type Scope } from "../scope.js";
 import { elementUrl, visibleStoreys } from "../elementUrls.js";
+import { Serial, coalesced } from "../serial.js";
 
 const TICK_MS = 2000;
 
 let inFlight = false;
+/** The one lane every server read takes -- the tick's and a storey switch's.
+ *  See `serial.ts` for why they must not overlap. */
+const lane = new Serial();
+/** A storey switch's layer reads, queued at most once behind whatever the lane
+ *  is doing. */
+const storeyReads = coalesced(lane, pollLayers);
 let roomsEtag: string | null = null;
 let revision: string | null = null;
 /** The rooms URL whose answer (a payload or a 204) is on screen, so the
@@ -184,6 +191,14 @@ export async function tick(): Promise<void> {
   if (inFlight) return;
   inFlight = true;
   try {
+    await lane.run(tickReads);
+  } finally {
+    inFlight = false;
+  }
+}
+
+async function tickReads(): Promise<void> {
+  try {
     // A failed project list is not a failed tick: the rooms read below reports
     // the connection, in the words the reader sees.
     const projects = await fetchJson<ProjectRow[]>(projectsUrl).catch(() => null);
@@ -195,8 +210,6 @@ export async function tick(): Promise<void> {
     await pollRooms();
   } catch {
     setState({ status: "connection lost" });
-  } finally {
-    inFlight = false;
   }
 }
 
@@ -214,7 +227,12 @@ export async function onStoreysChanged(): Promise<void> {
   const key = elementUrl("doors", getState().scope, storeysKey());
   if (key === null || key === lastStoreyKey) return;
   lastStoreyKey = key;
-  await pollLayers();
+  // Queued behind a tick in progress, never beside it -- that was two full
+  // sets of layer reads at once. Whatever the tick is still reading for the
+  // storeys just left is cancelled first, so the queue drains quickly; the
+  // tick's remaining layers then read the new storeys themselves.
+  abortStaleLayers();
+  await storeyReads();
 }
 
 function storeysKey() {

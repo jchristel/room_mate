@@ -357,3 +357,41 @@ describe("EntityPoll.newScopeUrl", () => {
     expect(poll.newScopeUrl()).toBeNull();
   });
 });
+
+/** A storey switch cancels the read for the storeys just left, so the lane is
+ *  free for the one that replaces it. Cancelled is not failed: the layer's
+ *  current read has not even been asked yet. */
+describe("EntityPoll.abortIfStale", () => {
+  /** A server that never answers until the request is aborted. */
+  const hangingFetch: PollFetch = (_url, init) =>
+    new Promise((_resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+
+  it("cancels a read whose scope the page has left, and reports it skipped", async () => {
+    let url = "/doors?storey_level_ids=1";
+    const poll = new EntityPoll({ url: () => url, fetch: hangingFetch });
+    const running = poll.poll();
+
+    url = "/doors?storey_level_ids=2";
+    poll.abortIfStale();
+
+    expect(await running).toBe("skipped");
+    expect(poll.fetchState).toBe("pending");
+    expect(poll.newScopeUrl()).toBe(url);
+  });
+
+  it("leaves a read alone while its scope is still the page's", async () => {
+    const aborted: boolean[] = [];
+    const fetch: PollFetch = async (_url, init) => {
+      await Promise.resolve();
+      aborted.push(init.signal?.aborted ?? false);
+      return { status: 204, ok: true, headers: { get: () => null }, json: async () => null };
+    };
+    const poll = new EntityPoll({ url: () => "/doors", fetch });
+    const running = poll.poll();
+    poll.abortIfStale();
+    expect(await running).toBe("empty");
+    expect(aborted).toEqual([false]);
+  });
+});
