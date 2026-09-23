@@ -1,0 +1,22 @@
+# Named duHast so this panel lands on the duHast TAB where one already exists.
+#
+# pyRevit merges by tab NAME, not by extension name: uimaker calls
+# create_ribbon_tab(name, update_if_exists=True), so the second extension to
+# declare "duHast" adds its panels to the tab the first one created. On a
+# machine with no duHast extension, this creates the tab on its own.
+#
+# The EXTENSION is still called RoomMate, and must stay that way. pyRevit keys
+# its parse cache on the extension name (cacher_asc/cacher_bin write
+# "cache_<name>"), so a second duHast-2025.extension would share a cache file
+# with the real one -- and command ids are built from the folder names inside
+# the extension, so identical paths would collide in the generated assembly.
+layout:
+  - Export
+
+# bundle tooltip
+tooltip: Exports Revit model data to a local RoomMate server
+
+
+# bundle author
+author:
+  - Jan Christel

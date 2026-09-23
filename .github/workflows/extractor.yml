@@ -1,0 +1,59 @@
+# Checks the pyRevit extension source, which no other workflow can.
+#
+# Its own workflow for the reason release.yml is: the others are named for a
+# toolchain each, and this one is python -- run over files that never execute
+# on any runner, because their runtime is Revit. That is exactly why the checks
+# exist. A bad bundle, a non-ASCII byte or an entry point that no longer exists
+# does not fail a build here; it fails silently in somebody's Revit session, as
+# a button that is missing or a dialog nobody can act on.
+#
+# The duHast closure check is NOT here. It needs a staged extension, which
+# means fetching the pinned duHast, and that belongs to the build -- build.ps1
+# runs it on every installer, including every release.
+name: Extractor
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "extractor/**"
+      - "scripts/check_extension.py"
+      - ".github/workflows/extractor.yml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "extractor/**"
+      - "scripts/check_extension.py"
+      - ".github/workflows/extractor.yml"
+
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-python@v6
+      with:
+        # The checks are plain stdlib and run on the runner's python, not on
+        # the IronPython the extractor itself runs under -- which is the whole
+        # difficulty here and the reason the ASCII rule is checked rather than
+        # trusted.
+        python-version: "3.12"
+
+    - name: Check the extension bundles
+      run: python scripts/check_extension.py
+
+    # The lock file is what makes a build reproducible, so a malformed one is
+    # worth catching here rather than at the next release.
+    - name: Check the duHast pin
+      run: |
+        python - <<'PY'
+        import json, re, sys
+        lock = json.load(open("extractor/duhast.lock"))
+        for field in ("repo", "commit", "path"):
+            if not lock.get(field):
+                sys.exit("duhast.lock has no %r" % field)
+        if not re.fullmatch(r"[0-9a-f]{40}", lock["commit"]):
+            sys.exit("duhast.lock commit is not a full sha: %r" % lock["commit"])
+        print("duHast pinned at %s" % lock["commit"][:8])
+        PY

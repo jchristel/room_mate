@@ -36,6 +36,10 @@ from room_m.utils.generic import (
     entities_label,
 )
 
+from room_m.utils.provenance import (
+    report_build,
+)
+
 from room_m.utils.post_envelope import (
     build_run_envelope,
     build_model_block,
@@ -71,8 +75,9 @@ EntityExporter = namedtuple(
 # **Windows cost exactly one row**, which is what this table was written to make
 # true and is now measured rather than claimed: no new branch in the run driver,
 # no ordering, no new envelope field. The one thing that did NOT come for free
-# was the pyRevit button, which lives outside this repository -- see
-# `windows_export_entry`.
+# was the pyRevit button, which used to live outside this repository -- the
+# bundles are in `extractor/pyRevit/RoomMate.extension` now, so a new entity
+# costs a row here and a button in the same commit.
 #
 # **FF&E cost one row too, and that is the stronger result.** Windows are a
 # second OPENING and reuse the door record entirely, so a row was always going
@@ -140,12 +145,15 @@ ENTITY_EXPORTERS = {
 def rooms_export_entry(doc, uiapp, output, forms):
     """Push ROOMS AND THEN DOORS -- the full push, and the original entry point.
 
-    Kept combined under its original name deliberately. The pyRevit button that
-    calls this lives outside this repository, so narrowing this function to
-    rooms would not fail: it would keep succeeding while quietly no longer
-    pushing doors, which is the worst shape a behaviour change can take. The
-    split lives in the two siblings below instead, where wiring a new button is
-    what opts into it.
+    Kept combined under its original name deliberately. Narrowing it to rooms
+    would not fail -- it would keep succeeding while quietly no longer pushing
+    doors, which is the worst shape a behaviour change can take. The split
+    lives in the two siblings below instead, where wiring a new button is what
+    opts into it.
+
+    The BUTTON is called "Rooms + Doors" (`RoomsAndDoors.pushbutton`), which is
+    the half of this that a modeller can see. It used to be called Export, over
+    a function named for rooms, in a repository that held neither.
 
     :return: Result object with status and message.
     :rtype: Result
@@ -191,11 +199,12 @@ def windows_export_entry(doc, uiapp, output, forms):
     reference is reported rather than refused, so windows may be pushed before
     their rooms or without them entirely.
 
-    **Its pyRevit button has to be wired outside this repository**, which is the
-    one cost adding an entity does not absorb. Widening an existing entry point
-    instead would be worse: `rooms_export_entry` still pushes rooms AND doors
-    despite its name, and quietly adding windows to it would keep succeeding
-    while changing what every existing button does.
+    **Its button is wired in this repository**, under
+    `extractor/pyRevit/RoomMate.extension`, which is what stops an entity being
+    added without one. Widening an existing entry point instead would be worse:
+    `rooms_export_entry` still pushes rooms AND doors despite its name, and
+    quietly adding windows to it would keep succeeding while changing what every
+    existing button does.
 
     :return: Result object with status and message.
     :rtype: Result
@@ -215,12 +224,11 @@ def ffe_export_entry(doc, uiapp, output, forms):
     It needs nothing on the server first: an unresolvable or absent reference is
     reported rather than refused, so FF&E may be pushed before its rooms.
 
-    **Its pyRevit button has to be wired outside this repository**, and it is the
-    second entry point in that state -- `windows_export_entry` is still waiting
-    for one. Widening an existing entry instead would be worse:
-    `rooms_export_entry` still pushes rooms AND doors despite its name, and
-    quietly adding a third entity to it would keep succeeding while changing what
-    every existing button does.
+    **Its button is wired in this repository**, under
+    `extractor/pyRevit/RoomMate.extension`. Widening an existing entry instead
+    would be worse: `rooms_export_entry` still pushes rooms AND doors despite
+    its name, and quietly adding a third entity to it would keep succeeding
+    while changing what every existing button does.
 
     **A combined rooms-and-FF&E entry would be genuinely useful** and is
     deliberately not added here. The two live in one document, so one run could
@@ -260,12 +268,11 @@ def spaces_export_entry(doc, uiapp, output, forms):
     "This services model was audited and holds no spaces" is the finding, and a
     different fact from "it was never pushed".
 
-    **Its pyRevit button has to be wired outside this repository**, and it is the
-    third entry point in that state -- `windows_export_entry` and
-    `ffe_export_entry` are both still waiting for one. Widening an existing entry
-    instead would be worse: `rooms_export_entry` still pushes rooms AND doors
-    despite its name, and quietly adding a fifth entity to it would keep
-    succeeding while changing what every existing button does.
+    **Its button is wired in this repository**, under
+    `extractor/pyRevit/RoomMate.extension`. Widening an existing entry instead
+    would be worse: `rooms_export_entry` still pushes rooms AND doors despite
+    its name, and quietly adding a fifth entity to it would keep succeeding
+    while changing what every existing button does.
 
     :return: Result object with status and message.
     :rtype: Result
@@ -320,8 +327,8 @@ def floors_export_entry(doc, uiapp, output, forms):
     no room. That is a reported state, not a failure, and it is the first
     thing a floors probe on such a project should look at.
 
-    **Its pyRevit button has to be wired outside this repository**, like every
-    entry point since windows.
+    **Its button is wired in this repository**, like every entry point's since
+    the bundles moved here.
 
     :return: Result object with status and message.
     :rtype: Result
@@ -364,6 +371,14 @@ def export_entry(doc, uiapp, output, forms, entities):
     return_value = Result()
 
     try:
+
+        # Which RoomMate and which duHast are about to run, recorded BEFORE a
+        # document is picked. Three separate investigations have started with
+        # "check which duHast the extension is running", and until this line
+        # existed the answer had to be reconstructed from files on disk -- by
+        # which time the session that produced the export was long gone. It
+        # never fails a run: an unexpected duHast is usually a dev setup.
+        report_build(return_value, output)
 
         # ask user to select active or linked document
         selected_docs = pick_document(
