@@ -215,6 +215,12 @@ def translate_item(item, contribution):
         # than Absent -- the field always exists on the record.
         "category": facts.get("category") or "",
         "room": facts.get("room"),
+        # Populated only when this run identified items by space rather than
+        # room (`ffe_by_space_export_entry`); empty otherwise. See
+        # `room_m.utils.items.item_facts` for why a run reads one reference,
+        # never both, and `contract::items::Item::owner_spaces` for the wire
+        # shape this rides in as.
+        "owner_spaces": facts.get("owner_spaces") or [],
         "insertion_point": plan_point_from_mm(location.get("translation_coord")),
         "facing": facing_from_rotation(location.get("rotation_coord")),
         # Read from the export and NOT measured here -- see the module

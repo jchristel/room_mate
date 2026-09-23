@@ -2764,6 +2764,9 @@ mod tests {
             level_id: "1".to_string(),
             category: "OST_Furniture".to_string(),
             room: room.map(str::to_string),
+            // This helper exercises room references and policy, never the
+            // space-identified path, so empty is the honest input.
+            owner_spaces: vec![],
             // This helper exercises references and policy, never placement, so
             // `None` is the honest input rather than a stub.
             insertion_point: None,

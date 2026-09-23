@@ -116,6 +116,34 @@ pub struct Item {
     #[serde(default)]
     pub room: Option<String>,
 
+    /// The space(s) this item is in, when the push identified it against
+    /// Spaces rather than Rooms — for a services model that carries no Room
+    /// elements at all. See `room_m.room_mate.ffe_by_space_export_entry`.
+    ///
+    /// **Extractor-authored, not server-derived, and that is the whole
+    /// difference from `owner_rooms` on `ItemResponse`.** There is no
+    /// `RoomResolution` equivalent for spaces and no geometric fallback here:
+    /// this is exactly what `FamilyInstance.get_Space(phase)` answered in the
+    /// push that named it, carried straight through with no read-time work at
+    /// all — which is also why it lives on `Item` itself rather than being
+    /// computed alongside `owner_rooms` in `service::items`.
+    ///
+    /// **A list, following `owner_rooms`'s shape on the wire**, even though
+    /// the extractor only ever populates zero or one: `get_Space(phase)`
+    /// answers exactly one space, the same as `get_Room(phase)` answers
+    /// exactly one room. The list shape buys nothing today and is chosen
+    /// anyway, so that "empty means unattributed" reads the same way on every
+    /// entity a consumer compares.
+    ///
+    /// **In practice mutually exclusive with `room`.** A run identifies an
+    /// item's spatial container by ONE reference, never both — reading both
+    /// per instance would double the slow half of every push for a value the
+    /// run was not asked for, see `room_m.utils.items.item_facts`. Both fields
+    /// exist on every item regardless, defaulting to their empty state, so a
+    /// snapshot pushed before this field existed still parses.
+    #[serde(default)]
+    pub owner_spaces: Vec<String>,
+
     /// Where the item sits, in the same space as `loops` — decimal feet, model
     /// space, Y up.
     ///
@@ -341,6 +369,39 @@ mod tests {
         assert!(item.loops.is_empty(), "an unmeasured footprint is empty, not absent");
         assert!(item.facing.is_none());
         assert_eq!(item.room, None, "an item outside every room is ordinary, not broken");
+        assert!(item.owner_spaces.is_empty(), "no push identified this item by space either");
+    }
+
+    /// `owner_spaces` defaults to empty for a snapshot pushed before the field
+    /// existed, on the same terms every other additive field here parses: the
+    /// type stays permissive because a stored snapshot re-parses through it at
+    /// boot.
+    #[test]
+    fn test_owner_spaces_defaults_to_empty_on_a_legacy_snapshot() {
+        let json = serde_json::json!({
+            "id": "1", "level_id": "1", "category": "OST_Furniture",
+            "type_id": "t", "type_name": "Chair"
+        });
+
+        let item: Item = serde_json::from_value(json).unwrap();
+        assert!(item.owner_spaces.is_empty());
+    }
+
+    /// A push from `ffe_by_space_export_entry` carries `owner_spaces` and no
+    /// `room` -- the mirror image of `test_item_round_trips`, which carries
+    /// `room` and no `owner_spaces`. Both fields exist on every item
+    /// regardless, per the field doc: a run populates one, never both.
+    #[test]
+    fn test_owner_spaces_round_trips_with_no_room() {
+        let json = serde_json::json!({
+            "id": "1", "level_id": "1", "category": "OST_Furniture",
+            "owner_spaces": ["4001"],
+            "type_id": "t", "type_name": "Chair"
+        });
+
+        let item: Item = serde_json::from_value(json).unwrap();
+        assert_eq!(item.owner_spaces, vec!["4001".to_string()]);
+        assert_eq!(item.room, None, "a space-identified push never populates room");
     }
 
     /// `"-1"` is a level id like any other on the wire. Revit gives an unhosted
@@ -390,6 +451,7 @@ mod tests {
             level_id: "1483".into(),
             category: "OST_Furniture".into(),
             room: None,
+            owner_spaces: vec![],
             insertion_point: None,
             facing: None,
             loops: vec![],

@@ -618,6 +618,10 @@ impl RoommateMcp {
                           An item sits IN one room, so it carries a single 'room' and 'owner_rooms' is a list of AT MOST ONE -- there is no from_room/to_room, no swing, \
                           no through-wall direction, and no attribution policy, because there are no sides to choose between. Empty owner_rooms means homeless: an item in \
                           a corridor void, a shaft or outside the envelope, which is an ordinary reported state, and a homeless item matches no 'building' filter. \
+                          'owner_spaces' is a SEPARATE, extractor-authored list, populated only when the push that sent this item identified it against Revit Spaces \
+                          rather than Rooms -- the entry a services model with no Room elements uses. It is unrelated to 'owner_rooms'/'building': nothing server-side \
+                          joins it to anything, there is no geometric fallback, and a 'building' filter cannot see it. In practice a given item carries one or the other, \
+                          never both. \
                           Each item carries 'category' (the Revit category it was collected under, e.g. OST_Furniture) -- filter on it with $category, which is usually the \
                           first question worth asking. There is no equivalent on any other entity. \
                           'loops' is EMPTY on every item today: the upstream exporter carries no footprint for FF&E yet, so an item is placed by 'insertion_point' and \
