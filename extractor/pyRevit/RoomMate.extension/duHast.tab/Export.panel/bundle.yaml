@@ -1,0 +1,11 @@
+layout:
+  - RoomsAndDoors
+  - ByCategory
+
+# bundle tooltip
+tooltip: Rooms and doors together, or one entity at a time
+
+
+# bundle author
+author:
+  - Jan Christel

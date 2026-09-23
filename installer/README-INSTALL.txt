@@ -23,6 +23,7 @@ Where things are
 
 Program files   %LOCALAPPDATA%\Programs\RoomMate
 Your data       %LOCALAPPDATA%\RoomMate
+pyRevit toolbar %APPDATA%\pyRevit\Extensions\RoomMate.extension
 
 Under your data folder:
 
@@ -46,6 +47,19 @@ The store starts empty, so the viewer has nothing to draw until a model is
 pushed to it. Pushes come from the pyRevit extension that runs inside Revit;
 it posts to http://127.0.0.1:5151, so the server has to be running when you
 push.
+
+If you installed the pyRevit toolbar component, the buttons are on the duHast
+tab, in the Export panel: "Rooms + Doors" pushes both, and the By Category
+pulldown pushes one entity at a time. Restart Revit after installing to see
+them. Revit 2025 or newer, and pyRevit has to be installed already.
+
+The toolbar carries its own copy of duHast, so it does not matter whether you
+have duHast installed separately. Every export starts by printing which
+RoomMate and which duHast it is running, and where that duHast was loaded
+from. If an export ever looks wrong, that is the first line to read -- and the
+first thing to quote when reporting it.
+
+Uninstalling removes the toolbar. Your settings and pushed data stay.
 
 
 The MCP server

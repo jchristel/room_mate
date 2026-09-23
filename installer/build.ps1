@@ -18,6 +18,12 @@
 .PARAMETER IsccPath
     Full path to ISCC.exe, if it is somewhere this script does not look.
 
+.PARAMETER DuHastPath
+    Build the extension against a LOCAL duHast (a path to src\duHast) instead
+    of the commit pinned in extractor\duhast.lock. For developing the two
+    together; a release build must not use it, since what it produces is not
+    reproducible from this repository alone.
+
 .PARAMETER Version
     Version to stamp the installer with. Defaults to the crate version in
     Cargo.toml, which now follows the tag format (0.0.1-beta.N).
@@ -35,7 +41,8 @@
 param(
     [switch] $SkipBuild,
     [string] $IsccPath,
-    [string] $Version
+    [string] $Version,
+    [string] $DuHastPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,6 +114,17 @@ if (-not (Test-Path $bundle)) {
     throw "Missing $bundle -- run ``npm run build`` before packaging."
 }
 
+# The producer half. Assembled here rather than committed, because it holds a
+# duHast this repository does not own -- see build-extension.ps1. This is also
+# where the extension's own checks run, so a bad bundle or a missing duHast
+# module fails on this machine instead of in a Revit session.
+& (Join-Path $PSScriptRoot 'build-extension.ps1') -Version $Version -DuHastPath $DuHastPath
+if ($LASTEXITCODE -ne 0) { throw 'extension build failed' }
+
+# What the wizard tells the user it ships, so the two cannot disagree.
+$lock = Get-Content (Join-Path $RepoRoot 'extractor\duhast.lock') -Raw | ConvertFrom-Json
+$DuHastCommit = $lock.commit
+
 if (-not $IsccPath) {
     $candidates = @(
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
@@ -126,7 +144,7 @@ if (-not $IsccPath) {
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 Write-Host "Compiling installer with $IsccPath ..." -ForegroundColor Cyan
-& $IsccPath "/DAppVersion=$Version" "/DAppNumericVersion=$NumericVersion" $Iss
+& $IsccPath "/DAppVersion=$Version" "/DAppNumericVersion=$NumericVersion" "/DDuHastCommit=$DuHastCommit" $Iss
 if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
 
 $setup = Join-Path $OutDir "RoomMate-Setup-$Version.exe"

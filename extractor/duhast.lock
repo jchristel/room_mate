@@ -1,0 +1,7 @@
+{
+  "_comment": "The duHast the extension ships. Bump `commit` to move it, and re-run a probe before believing an export that changed. duHast is not committed to this repository: it has its own, and a copy here would fork it silently. See extractor/pyRevit/RoomMate.extension/lib/README.md.",
+  "repo": "https://github.com/jchristel/SampleCodeRevitBatchProcessor.git",
+  "branch": "net8DuHast",
+  "commit": "e89002e1fa3fe596775d9bf5470b27760d0b3d30",
+  "path": "src/duHast"
+}

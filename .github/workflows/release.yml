@@ -107,6 +107,13 @@ jobs:
     # two versions (display and numeric file version); this workflow does not
     # invoke ISCC itself, so there is exactly one way an installer gets built.
     #
+    # build.ps1 also assembles the pyRevit extension, which FETCHES the duHast
+    # commit pinned in extractor\duhast.lock from its own public repository and
+    # runs the extension checks under python. Both are preinstalled on the
+    # runner image. A release therefore depends on that repository still
+    # serving that commit -- if it ever stops, this step fails loudly rather
+    # than shipping a toolbar built from something else.
+    #
     # Values arrive through env rather than being interpolated into the script
     # body: a tag name is attacker-controlled text in the general case, and
     # `${{ }}` inside a run block is textual substitution, not an argument.

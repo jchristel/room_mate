@@ -29,9 +29,23 @@
   #define AppNumericVersion AppVersion
 #endif
 
+; The duHast the toolbar ships, so the wizard can say how it compares to
+; whatever is already on the machine. build.ps1 reads it from
+; extractor\duhast.lock and passes it in; a hand compile gets "unknown", which
+; the wizard words as "could not be compared" rather than as a mismatch.
+#ifndef DuHastCommit
+  #define DuHastCommit "unknown"
+#endif
+
 #define AppName    "RoomMate"
 #define AppExeName "roommate.exe"
 #define DataRoot   "{localappdata}\RoomMate"
+
+; pyRevit's own default extension folder. It is scanned without being
+; registered anywhere, which is why the installer writes here rather than
+; editing pyRevit_config.ini -- an installer changing another application's
+; config file is a surprise, and this needs no elevation either.
+#define ExtensionRoot "{userappdata}\pyRevit\Extensions\RoomMate.extension"
 
 [Setup]
 ; Never reuse this GUID for anything else -- it is how Windows recognises an
@@ -63,6 +77,19 @@ WizardStyle=modern
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Types]
+Name: "full";   Description: "Server and pyRevit toolbar"
+Name: "server"; Description: "Server only"
+Name: "custom"; Description: "Custom"; Flags: iscustom
+
+[Components]
+; The server half is not optional -- the toolbar pushes to it, and an install
+; with neither is nothing at all.
+Name: "server";  Description: "RoomMate server and viewer"; Types: full server custom; Flags: fixed
+; The producer. Unchecked automatically when pyRevit is not installed (see
+; InitializeWizard), because its files would land where nothing reads them.
+Name: "toolbar"; Description: "pyRevit toolbar (exports from Revit 2025+)"; Types: full
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -102,6 +129,30 @@ Source: "..\settings\projects\sample-project.toml"; DestDir: "{app}\settings-tem
 Source: "server.toml";                 DestDir: "{#DataRoot}\settings";          Flags: onlyifdoesntexist uninsneveruninstall
 Source: "..\settings\projects\sample-project.toml"; DestDir: "{#DataRoot}\settings\projects"; Flags: onlyifdoesntexist uninsneveruninstall
 
+; The pyRevit toolbar: the producer half, assembled by build-extension.ps1 with
+; room_m and a duHast pinned in extractor\duhast.lock. It goes into pyRevit's
+; default extension folder, which pyRevit scans without being told to -- so
+; nothing here edits pyRevit's config, and no admin rights are involved.
+;
+; The TAB is called duHast, so this panel joins that tab where the duHast
+; extension is also installed (pyRevit merges by tab name) and creates it alone
+; where it is not. The EXTENSION is called RoomMate and must stay so: pyRevit
+; keys its parse cache on the extension name.
+Source: "..\target\extension\RoomMate.extension\*"; DestDir: "{#ExtensionRoot}"; \
+    Components: toolbar; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+; Wipe the extension before writing it, rather than merging into what is there.
+; A module deleted in a newer version would otherwise stay behind and keep
+; importing -- and a stale .py that still imports is the failure this whole
+; area is built to avoid. Safe because nothing here is user data: the folder is
+; entirely ours, and everything in it came from an installer.
+Type: filesandordirs; Name: "{#ExtensionRoot}"; Components: toolbar
+
+[UninstallDelete]
+; The extension is app, not data, so it goes on uninstall.
+Type: filesandordirs; Name: "{#ExtensionRoot}"
+
 [Dirs]
 ; The snapshot store. Created empty and left behind on uninstall -- it holds
 ; pushed model data that exists nowhere else on this machine.
@@ -131,3 +182,210 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\RoomMate.ps1"""; \
     WorkingDir: "{app}"; Description: "Start {#AppName} now"; \
     Flags: postinstall nowait skipifsilent unchecked
+
+[Code]
+{ Everything below only WARNS. Nothing it finds changes what is installed, and
+  that is deliberate: what the installer can see is a snapshot of a machine, and
+  the question that matters -- which duHast a Revit session actually imports --
+  is decided later, by sys.path and by what is already loaded. room_m answers
+  that one at the top of every run. This is here so the answer is not a
+  surprise. }
+
+const
+  TOOLBAR_COMPONENT_INDEX = 1;
+
+var
+  PyRevitFound: Boolean;
+
+function PyRevitConfigPath(): String;
+begin
+  Result := ExpandConstant('{userappdata}\pyRevit\pyRevit_config.ini');
+end;
+
+function DetectPyRevit(): Boolean;
+begin
+  { Either marker is enough: the config file exists once pyRevit has run, and
+    the Extensions folder exists once anything has been installed into it. }
+  Result := FileExists(PyRevitConfigPath()) or
+            DirExists(ExpandConstant('{userappdata}\pyRevit\Extensions'));
+end;
+
+function ExtensionSearchDirs(): TStringList;
+var
+  Raw, Current: String;
+  I: Integer;
+  InQuotes: Boolean;
+  Ch: Char;
+begin
+  Result := TStringList.Create();
+  Result.Add(ExpandConstant('{userappdata}\pyRevit\Extensions'));
+
+  { userextensions is a JSON-style list of paths in an INI file, so it comes
+    back as one string with escaped backslashes. Parsed by hand because
+    GetIniString returns the raw text and there is no JSON in Pascal script. }
+  Raw := GetIniString('core', 'userextensions', '', PyRevitConfigPath());
+  if Raw = '' then
+    Exit;
+
+  Current := '';
+  InQuotes := False;
+  for I := 1 to Length(Raw) do
+  begin
+    Ch := Raw[I];
+    if Ch = '"' then
+    begin
+      if InQuotes then
+      begin
+        if Current <> '' then
+          Result.Add(Current);
+        Current := '';
+      end;
+      InQuotes := not InQuotes;
+    end
+    else if InQuotes then
+      Current := Current + Ch;
+  end;
+
+  { The INI value is JSON, so its separators arrive doubled. StringChangeEx
+    rather than StringReplace: Pascal script has the former only. }
+  for I := 0 to Result.Count - 1 do
+  begin
+    Current := Result[I];
+    StringChangeEx(Current, '\\', '\', True);
+    Result[I] := Current;
+  end;
+end;
+
+function StampedCommit(BuildInfoPath: String): String;
+var
+  Lines: TArrayOfString;
+  I, Start, Stop: Integer;
+  Line: String;
+begin
+  { COMMIT = "abcdef..." from a _build_info.py, or '' when the file has none.
+    Every duHast deployed before the stamp existed reads as unstamped, which is
+    a fact about the copy rather than a fault. }
+  Result := '';
+  if not FileExists(BuildInfoPath) then
+    Exit;
+  if not LoadStringsFromFile(BuildInfoPath, Lines) then
+    Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if Pos('COMMIT', Line) = 1 then
+    begin
+      Start := Pos('"', Line);
+      if Start = 0 then
+        Exit;
+      Line := Copy(Line, Start + 1, Length(Line) - Start);
+      Stop := Pos('"', Line);
+      if Stop = 0 then
+        Exit;
+      Result := Copy(Line, 1, Stop - 1);
+      Exit;
+    end;
+  end;
+end;
+
+function DescribeOtherDuHasts(): String;
+var
+  Dirs: TStringList;
+  FindRec: TFindRec;
+  I: Integer;
+  Root, Candidate, Commit, Ours: String;
+begin
+  Result := '';
+  Ours := LowerCase(ExpandConstant('{#ExtensionRoot}'));
+  Dirs := ExtensionSearchDirs();
+  try
+    for I := 0 to Dirs.Count - 1 do
+    begin
+      Root := Dirs[I];
+      if not DirExists(Root) then
+        Continue;
+      if FindFirst(AddBackslash(Root) + '*', FindRec) then
+      begin
+        try
+          repeat
+            if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+              Continue;
+            if (FindRec.Name = '.') or (FindRec.Name = '..') then
+              Continue;
+            Candidate := AddBackslash(Root) + FindRec.Name;
+            { Skip our own install: a second RoomMate is an upgrade, not a rival. }
+            if LowerCase(Candidate) = Ours then
+              Continue;
+            if not FileExists(AddBackslash(Candidate) + 'lib\duHast\__init__.py') then
+              Continue;
+            Commit := StampedCommit(AddBackslash(Candidate) + 'lib\duHast\_build_info.py');
+            if Commit = '' then
+              Commit := 'no build stamp'
+            else
+              Commit := Copy(Commit, 1, 8);
+            Result := Result + Candidate + '  (' + Commit + ')' + #13#10;
+          until not FindNext(FindRec);
+        finally
+          FindClose(FindRec);
+        end;
+      end;
+    end;
+  finally
+    Dirs.Free();
+  end;
+end;
+
+procedure InitializeWizard();
+begin
+  PyRevitFound := DetectPyRevit();
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpSelectComponents) and (not PyRevitFound) then
+  begin
+    { Unchecked rather than hidden: somebody installing pyRevit next week can
+      still tick it, and an installer that silently drops a component is worse
+      than one that explains itself. }
+    if WizardForm.ComponentsList.Items.Count > TOOLBAR_COMPONENT_INDEX then
+      WizardForm.ComponentsList.Checked[TOOLBAR_COMPONENT_INDEX] := False;
+    MsgBox('pyRevit was not found on this machine.' + #13#10#13#10 +
+           'The pyRevit toolbar has been unticked: its files would land in a ' +
+           'folder nothing reads. Install pyRevit first, then run this setup ' +
+           'again to add the toolbar.',
+           mbInformation, MB_OK);
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Others: String;
+begin
+  Result := '';
+  if not WizardIsComponentSelected('toolbar') then
+    Exit;
+
+  Others := DescribeOtherDuHasts();
+  if Others = '' then
+    Exit;
+
+  { A warning, never a refusal. Another duHast is usually somebody's working
+    setup, and this installer has no business deciding it is wrong. }
+  MsgBox('Another duHast was found on this machine:' + #13#10#13#10 +
+         Others + #13#10 +
+         'RoomMate ships its own copy (' + Copy('{#DuHastCommit}', 1, 8) + ') and ' +
+         'its buttons run in a clean engine so that copy is the one they load.' + #13#10#13#10 +
+         'Every RoomMate export prints which duHast it actually loaded -- read ' +
+         'that line if an export looks wrong.',
+         mbInformation, MB_OK);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and WizardIsComponentSelected('toolbar') then
+    MsgBox('The RoomMate panel is installed.' + #13#10#13#10 +
+           'Restart Revit (or reload pyRevit) to see it. It appears on the ' +
+           'duHast tab, joining the existing one if you have the duHast ' +
+           'extension installed.',
+           mbInformation, MB_OK);
+end;

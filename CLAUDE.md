@@ -626,24 +626,48 @@ Revit, and R4 landed.
 
 ## The extractor has eight entry points, and one of them is a trap
 
-`rooms_export_entry` still pushes **rooms and doors**, despite the name. Its
-pyRevit button lives outside this repo, so narrowing it to rooms would not fail —
-it would keep succeeding while quietly no longer pushing doors. The split is in
+`rooms_export_entry` still pushes **rooms and doors**, despite the name, so
+narrowing it to rooms would not fail — it would keep succeeding while quietly no
+longer pushing doors. Its button says what it does (`RoomsAndDoors.pushbutton`,
+titled "Rooms + Doors"); the function name is the one that still reads wrong. The split is in
 the siblings instead: `rooms_only_export_entry`, `doors_export_entry`,
 `windows_export_entry`, `ffe_export_entry`, `spaces_export_entry`,
 `ceilings_export_entry` and `floors_export_entry`. All eight are one line over
 `export_entry(..., entities)`; document selection, the one project and the one
 phase never differ.
 
-**Their buttons live outside this repository**, in
-`SampleCodeRevitBatchProcessor-NET8/.../duHast.tab/RoomMate.panel`, over a COPY
-of `extractor/pyRevit/room_m` under that tab's `lib/`. Six are wired as of
-2026-09-06 and the seventh, `ceilings_export_entry`, since 2026-09-11 —
-`RoomMate.panel/ByCategory.pulldown/Ceilings.pushbutton`. The eighth,
-`floors_export_entry`, since 2026-09-13 --
-`RoomMate.panel/ByCategory.pulldown/Floors.pushbutton`. **The copy is the trap**: an
-extractor change here is inert until it is copied there, and nothing checks the
-two are in step — `diff -rq` between them is the only check there is.
+**The buttons live in this repository now** (2026-09-23), in
+`extractor/pyRevit/RoomMate.extension`, and the installer ships them. That ends
+the copy-under-the-duHast-tab arrangement and the `diff -rq` that was the only
+thing keeping the two in step — but **the NET8 copy is only gone once it is
+deleted there**, which is the last step of the move and is verified in Revit
+first. Until then a dev machine loads both, and the panel appears twice.
+
+- **A checkout is not a loadable extension.** `lib/` is empty on purpose:
+  `room_m` has one source and duHast has its own repository.
+  `installer\build-extension.ps1 -Deploy` assembles one and writes it to
+  `%APPDATA%\pyRevit\Extensions`, which is the development loop;
+  `-DuHastPath` builds against a local duHast instead of the pinned one.
+- **duHast is pinned in `extractor/duhast.lock` and shipped**, python only —
+  nothing `room_m` imports loads one of its DLLs, and
+  `scripts/check_duhast_closure.py` is what keeps that true. Shipped rather
+  than found because duHast decides what an export MEANS, and a copy of
+  unknown age answers differently while still looking successful.
+- **The check that decides runs in Revit, not in the installer.**
+  `room_m.utils.provenance` prints the RoomMate build, the duHast build and
+  the path it loaded from at the top of every run, and warns when that is not
+  the shipped copy. The installer's scan of other duHast copies is a warning
+  about a snapshot; `sys.path` order and an already-imported module decide the
+  real answer. The buttons declare a clean engine for the same reason.
+- **The TAB is `duHast`, the EXTENSION is `RoomMate`, and neither name is
+  cosmetic.** pyRevit merges ribbon tabs by tab name
+  (`create_ribbon_tab(..., update_if_exists=True)`), so the panel joins the
+  duHast tab where that extension is installed. It keys its parse cache on the
+  EXTENSION name (`cache_<name>`) and builds command ids from the folder names
+  inside it, so a second `duHast-2025.extension` would collide with the real
+  one in both.
+- The combined button is `RoomsAndDoors.pushbutton`, titled "Rooms + Doors",
+  because `rooms_export_entry` pushes both and the old name said otherwise.
 
 **A run exports every selected model first, then pushes one bucket per entity.**
 So `entities` no longer carries a push *order* — the buckets are independent, and

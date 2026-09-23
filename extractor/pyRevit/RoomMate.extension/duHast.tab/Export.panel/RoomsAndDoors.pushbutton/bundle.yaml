@@ -1,0 +1,24 @@
+# Named for what it pushes, which is BOTH entities. It was called "Export" and
+# ran rooms_export_entry, a name that reads as rooms only while pushing doors
+# as well -- and the one thing nobody could see from the button.
+title: "Rooms + Doors"
+
+# bundle tooltip
+tooltip: |
+  Exports rooms AND doors together from the selected models.
+  Use the By Category pulldown to push one entity on its own.
+
+
+# bundle author
+author:
+  - Jan Christel
+
+
+# bundle highlighting ('new' or 'updated')
+# Revit UI will show a orange marker on the button and a border around the tooltip
+#highlight: new      # highlight as new
+#highlight: updated  # highlight as updated
+
+
+# bundle help url
+help_url: "https://www.youtube.com/watch?v=H7b8hjHbauE&t=8s&list=PLc_1PNcpnV57FWI6G8Cd09umHpSOzvamf"

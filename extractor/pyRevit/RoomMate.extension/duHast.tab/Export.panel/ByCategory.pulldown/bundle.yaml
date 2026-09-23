@@ -1,0 +1,18 @@
+title: "By Category"
+
+layout:
+  - Rooms
+  - Doors
+  - Windows
+  - FFE
+  - Spaces
+  - Ceilings
+  - Floors
+
+# bundle tooltip
+tooltip: Separate exports of rooms, doors, windows, FFE, MEP spaces, ceilings and floors
+
+
+# bundle author
+author:
+  - Jan Christel
