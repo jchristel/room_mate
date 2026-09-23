@@ -624,17 +624,35 @@ with one, not here.
 Both older items stay closed: the extractor's phase filter is verified against
 Revit, and R4 landed.
 
-## The extractor has eight entry points, and one of them is a trap
+## The extractor has nine entry points, and one of them is a trap
 
 `rooms_export_entry` still pushes **rooms and doors**, despite the name, so
 narrowing it to rooms would not fail — it would keep succeeding while quietly no
 longer pushing doors. Its button says what it does (`RoomsAndDoors.pushbutton`,
 titled "Rooms + Doors"); the function name is the one that still reads wrong. The split is in
 the siblings instead: `rooms_only_export_entry`, `doors_export_entry`,
-`windows_export_entry`, `ffe_export_entry`, `spaces_export_entry`,
-`ceilings_export_entry` and `floors_export_entry`. All eight are one line over
-`export_entry(..., entities)`; document selection, the one project and the one
-phase never differ.
+`windows_export_entry`, `ffe_export_entry`, `ffe_by_space_export_entry`,
+`spaces_export_entry`, `ceilings_export_entry` and `floors_export_entry`. All
+nine are one line over `export_entry(..., entities)`; document selection, the
+one project and the one phase never differ.
+
+**FF&E identifies an item against a Room or a Space, never both, and that is
+two entry points rather than a flag that probes the document.** A fit-out
+services model usually holds no Room elements at all, so `ffe_export_entry`'s
+`get_Room(phase)` resolves nothing for every instance in it.
+`room_m.utils.items.item_facts` takes `identify_by` and reads `get_Space(phase)`
+instead when asked; `ffe_by_space_export_entry` is the button that asks. Reading
+both references per instance was rejected for the same reason
+`rooms_only_export_entry` exists — it is the slow half of a push, doubled, for a
+value the run was not asked for. **The result rides the same "ffe" server bucket
+and the same
+schema either way** — `Item.owner_spaces` is a list alongside `room`, populated
+by whichever reference the run read, following `owner_rooms`'s list shape on
+the wire though the extractor only ever fills zero or one. It is
+extractor-authored, not server-derived: unlike `owner_rooms`, nothing
+server-side joins it to anything, there is no `RoomResolution` equivalent, and
+no `?building=` filter can see it — it is exactly what `get_Space(phase)`
+answered in the push that sent it, carried straight through.
 
 **The buttons live in this repository now** (2026-09-23), in
 `extractor/pyRevit/RoomMate.extension`, and the installer ships them. That ends

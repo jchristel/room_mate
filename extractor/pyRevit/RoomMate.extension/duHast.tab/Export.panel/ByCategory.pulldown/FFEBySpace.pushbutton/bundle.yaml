@@ -1,0 +1,10 @@
+# bundle title
+title: "FF & E (by Space)"
+
+# bundle tooltip
+tooltip: Exports FF & E identified against Spaces rather than Rooms -- for a services model that holds no rooms
+
+
+# bundle author
+author:
+  - Jan Christel

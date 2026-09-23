@@ -58,6 +58,7 @@ ROOMS = "rooms"
 DOORS = "doors"
 WINDOWS = "windows"
 FFE = "ffe"
+FFE_BY_SPACE = "ffe_by_space"
 SPACES = "spaces"
 CEILINGS = "ceilings"
 FLOORS = "floors"
@@ -87,6 +88,14 @@ EntityExporter = namedtuple(
 # a run", which was never about what the entity is. What each row points at
 # absorbed the difference: `room_m.post_entity` grew a `translate` field, and
 # `room_m.exporters.ffe` supplies its own.
+#
+# **FF&E's second row costs nothing new either, and that is the table proving
+# the same point from a third direction.** `FFE_BY_SPACE` pushes the identical
+# record to the identical server bucket -- only `export_model` differs, by one
+# keyword argument -- so it is a row whose `post_bucket` and `stamp_envelope`
+# are literally the ones already in the table above it. See
+# `room_m.exporters.ffe` for why this is two rows and two buttons rather than
+# one row auto-detecting which reference a document has.
 #
 # **Spaces cost one row as well, and they are the case that tested the table
 # from the other side.** Doors, windows and FF&E all push elements that reference
@@ -126,6 +135,15 @@ ENTITY_EXPORTERS = {
     ),
     FFE: EntityExporter(
         export_model=ffe_exporter.export_model,
+        post_bucket=ffe_exporter.post_bucket,
+        stamp_envelope=ffe_exporter.stamp_envelope,
+    ),
+    # Same server bucket as FFE -- `ffe_exporter.post_bucket` posts under the
+    # one "ffe" entity regardless of which row called it. Only `export_model`
+    # differs, and only by which spatial reference it reads; see
+    # `room_m.exporters.ffe.export_model_by_space`.
+    FFE_BY_SPACE: EntityExporter(
+        export_model=ffe_exporter.export_model_by_space,
         post_bucket=ffe_exporter.post_bucket,
         stamp_envelope=ffe_exporter.stamp_envelope,
     ),
@@ -240,6 +258,40 @@ def ffe_export_entry(doc, uiapp, output, forms):
     :rtype: Result
     """
     return export_entry(doc, uiapp, output, forms, (FFE,))
+
+
+def ffe_by_space_export_entry(doc, uiapp, output, forms):
+    """Push FF&E alone, identified against SPACES rather than rooms.
+
+    The entry a services model uses: `ffe_export_entry` reads
+    `FamilyInstance.get_Room(phase)`, which resolves nothing for every
+    instance in a document that holds no Room elements at all -- the ordinary
+    shape of a fit-out services model, which holds Spaces instead. This entry
+    reads `get_Space(phase)` in the same way and writes what it finds to
+    `owner_spaces` rather than `room`.
+
+    **A separate entry point rather than a flag that probes the document.**
+    Which spatial element a model actually carries is a project fact this run
+    does not detect; `ffe_export_entry` and this one are two explicit choices,
+    on the same terms `rooms_export_entry` and `rooms_only_export_entry` are.
+    Reading both references per instance was rejected for the same reason
+    `rooms_only_export_entry` exists: it is the slow half of a push, doubled,
+    for a value this run was not asked for.
+
+    Still pushes to the same server bucket as `ffe_export_entry` -- FF&E is one
+    entity on the wire regardless of which reference identified it, and
+    `owner_spaces` rides every item alongside `room`, whichever one a given
+    run populated. It needs nothing on the server first, for the same reason
+    `ffe_export_entry` does not: nothing server-side joins `owner_spaces` to
+    anything, so there is nothing for it to arrive too early for.
+
+    **Its button is wired in this repository**, under
+    `extractor/pyRevit/RoomMate.extension`.
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return export_entry(doc, uiapp, output, forms, (FFE_BY_SPACE,))
 
 
 def spaces_export_entry(doc, uiapp, output, forms):

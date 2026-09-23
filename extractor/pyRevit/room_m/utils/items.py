@@ -106,23 +106,37 @@ def items_in_phase(doc, phase_name, categories):
     return allowed
 
 
-def item_facts(doc, phase_name, categories):
-    """`{item id: {"room", "category"}}` for every instance of `categories`.
+def item_facts(doc, phase_name, categories, identify_by="room"):
+    """`{item id: {"room", "owner_spaces", "category"}}` for every instance of
+    `categories`.
 
-    **One collector pass per category, two facts.** They are gathered together
-    rather than in two passes for the reason `opening_placements` gives: a
-    second walk could silently disagree with this one about which elements it
-    saw, and then the category and the room would describe different sets.
+    **One collector pass per category, and ONE spatial reference, not two.**
+    `identify_by` picks which: `"room"` (the default) reads
+    `FamilyInstance.get_Room(phase)`, for a document that holds the rooms FF&E
+    serves -- the entity's premise, see `room_m.exporters.ffe`. `"space"` reads
+    `get_Space(phase)` instead, for a services model that holds Spaces and no
+    Room elements at all, where the room lookup would resolve nothing for every
+    instance. Never both per instance: this walk is already the slow half of a
+    push -- House A alone is 647 Revit calls -- and doubling it for a reference
+    the run's entry point was not asked for would cost every project the same
+    thing `rooms_only_export_entry` exists to avoid paying.
 
-    The room is read through the extractor's own `room_reference` with
-    `which="Room"` -- the argument that helper has carried since before this
-    entity existed, added for exactly this day. `FamilyInstance.get_Room(phase)`
-    takes the phase and answers exactly one room, which is what makes the
-    contract's single `Option<String>` honest.
+    The facts are gathered together with the category rather than in a second
+    pass, for the reason `opening_placements` gives: a second walk could
+    silently disagree with this one about which elements it saw, and then the
+    category and the spatial reference would describe different sets.
 
-    An item whose room lookup raises is recorded with no room rather than
+    The room/space is read through the extractor's own `room_reference`, giving
+    it `which="Room"` or `which="Space"` -- the same phase-indexed accessor
+    pattern, since `FamilyInstance.get_Space(phase)` mirrors `get_Room(phase)`
+    exactly and answers exactly one Space. `owner_spaces` is a list on the wire
+    even though this only ever populates zero or one, following `owner_rooms`'s
+    established shape everywhere else in the contract -- see
+    `contract::items::Item::owner_spaces`.
+
+    An item whose lookup raises is recorded with no reference rather than
     aborting the model: one unreadable instance must not cost the other
-    hundreds, and the server reports it as an item with no room reference --
+    hundreds, and the server reports it as an item with no room/space --
     visible, in the place a reader would look. An item with no room at all is
     ordinary rather than exceptional; measured on House A, 572 of 647 named one
     in the pushed phase and every one of the rest is a real item.
@@ -132,6 +146,10 @@ def item_facts(doc, phase_name, categories):
     reader recognises is the one Revit shows: `"Furniture"`, not
     `"OST_Furniture"`. What goes on the wire is what a `?category=` filter will
     be written against."""
+    if identify_by not in ("room", "space"):
+        raise ValueError("identify_by must be 'room' or 'space', got {!r}".format(identify_by))
+    which = "Room" if identify_by == "room" else "Space"
+
     phase = phase_by_name(doc, phase_name)
     facts = {}
     for category in categories:
@@ -146,11 +164,11 @@ def item_facts(doc, phase_name, categories):
             except Exception:
                 continue
 
-            room = None
+            reference = None
             try:
-                room = room_reference(instance, phase, "Room")
+                reference = room_reference(instance, phase, which)
             except Exception:
-                room = None
+                reference = None
 
             name = None
             try:
@@ -159,5 +177,9 @@ def item_facts(doc, phase_name, categories):
             except Exception:
                 name = None
 
-            facts[item_id] = {"room": room, "category": name}
+            facts[item_id] = {
+                "room": reference if identify_by == "room" else None,
+                "owner_spaces": [reference] if identify_by == "space" and reference else [],
+                "category": name,
+            }
     return facts

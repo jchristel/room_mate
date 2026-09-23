@@ -27,17 +27,31 @@ One of the entity exporters `room_mate.ENTITY_EXPORTERS` dispatches over -- see
 `room_m.exporters.rooms` for the three names every module in this package
 offers.
 
-**FF&E lives in the same document as the rooms it serves, and that is the
-premise of the entity rather than a convenience.** Revit cannot schedule FF&E
-against rooms; RoomMate performs the join Revit will not. So unlike the windows
-exporter, nothing here is shaped around a model that links its interiors: the
-rooms are in the file, `get_Room(phase)` has a live room to answer with, and on
-House A 572 of 647 items named one.
+**FF&E lives in the same document as whatever it is identified against, and
+that is the premise of the entity rather than a convenience.** Revit cannot
+schedule FF&E against rooms; RoomMate performs the join Revit will not. So
+unlike the windows exporter, nothing here is shaped around a model that links
+its interiors: the rooms are normally in the file, `get_Room(phase)` has a
+live room to answer with, and on House A 572 of 647 items named one.
+
+**A services model usually holds no Room elements at all**, only Spaces, so
+`get_Room(phase)` resolves nothing for every instance in it -- not a failure,
+just a lookup with no answer, ever, in that document. `export_model` takes an
+`identify_by` flag for exactly that document: `"room"` (the default, wired to
+`ffe_export_entry`) or `"space"` (wired to `ffe_by_space_export_entry`,
+`export_model_by_space` below), which reads `get_Space(phase)` instead and
+writes what it finds to `owner_spaces` rather than `room`. **Two entry points,
+not auto-detection**: which spatial element a document actually carries is a
+project fact this run does not probe for, the same reason `rooms_export_entry`
+and `rooms_only_export_entry` are two buttons rather than one guessing, and
+reading both references per instance would double the slow half of every push
+for a value nobody asked for.
 
 FF&E depends on nothing else having been pushed. The server resolves an item's
 room itself and reports "the rooms have not arrived yet" rather than refusing,
 so the buckets stay independent and a run may push any of them alone, in any
-order.
+order. The same holds for `owner_spaces`: nothing joins it to anything
+server-side, so there is nothing to arrive late.
 
 ASCII only: IronPython 2.7 will not parse a file containing an em-dash.
 """
@@ -65,9 +79,14 @@ from room_m.utils.items import (
 stamp_envelope = None
 
 
-def export_model(selected_doc, phase_name, return_value):
+def export_model(selected_doc, phase_name, return_value, identify_by="room"):
     """Export one model's FF&E as this document's contribution to the run's FF&E
     bucket, or None when it could not be read.
+
+    `identify_by` is `"room"` (default) or `"space"` -- see the module
+    docstring. It changes nothing here beyond which reference `item_facts`
+    reads; the rest of the export (geometry, type, category, phase filter) is
+    identical either way, because it is identical in Revit either way.
 
     Failures are recorded and swallowed rather than raised, so one unreadable
     document costs its own items and not the rest of the run's.
@@ -80,8 +99,8 @@ def export_model(selected_doc, phase_name, return_value):
     the export walked nine would report a drop that was its own.
 
     :return: `{"elements", "levels", "facts", "allowed_ids"}` -- the raw duHast
-        exports, the Revit-read room and category per item, and this document's
-        phase filter.
+        exports, the Revit-read room/space and category per item, and this
+        document's phase filter.
     :rtype: dict
     """
     try:
@@ -96,7 +115,7 @@ def export_model(selected_doc, phase_name, return_value):
         # a component is an item is a project convention, so it is the server's
         # `[ffe] nested_components` applied at read time -- where it can change
         # without a re-push and where the count of what it removed is reported.
-        facts = item_facts(selected_doc, phase_name, DEFAULT_ITEM_CATEGORIES)
+        facts = item_facts(selected_doc, phase_name, DEFAULT_ITEM_CATEGORIES, identify_by=identify_by)
 
         item_data = get_all_item_data(selected_doc)
         json_formatted_items = build_json_for_file(
@@ -125,6 +144,19 @@ def export_model(selected_doc, phase_name, return_value):
         "facts": facts,
         "allowed_ids": allowed_item_ids,
     }
+
+
+def export_model_by_space(selected_doc, phase_name, return_value):
+    """`export_model`, identifying each item against its SPACE rather than its
+    room -- `ENTITY_EXPORTERS[FFE_BY_SPACE]`'s row, wired to
+    `ffe_by_space_export_entry`.
+
+    A thin wrapper rather than a second copy of `export_model`, for the reason
+    `ENTITY_EXPORTERS` is a table in the first place: everything about reading
+    one model's FF&E is identical between the two entries except which
+    reference `item_facts` is asked for, so that is the only thing that
+    varies."""
+    return export_model(selected_doc, phase_name, return_value, identify_by="space")
 
 
 def post_bucket(run_envelope, entries, return_value):

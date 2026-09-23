@@ -131,7 +131,18 @@ def elements_in_phase(doc, phase_name, category):
     return allowed
 
 
+# Entity keys whose label is not "the key minus a trailing s": "ffe" is an
+# acronym, not a plural, and its by-space sibling compounds that. Every other
+# key in `ENTITY_EXPORTERS` is a regular plural and needs no entry here.
+_IRREGULAR_ENTITY_LABELS = {
+    "ffe": "FF&E",
+    "ffe_by_space": "FF&E (by space)",
+}
+
+
 def entities_label(entities):
     """The chosen entities as the noun phrase in "<...> data" -- singular, since
-    both names are regular plurals and "rooms data" reads as a typo."""
-    return " and ".join(entity[:-1] for entity in entities)
+    most names are regular plurals and "rooms data" reads as a typo. An entity
+    in `_IRREGULAR_ENTITY_LABELS` is looked up rather than singularised, for the
+    ones that are not regular plurals at all."""
+    return " and ".join(_IRREGULAR_ENTITY_LABELS.get(entity, entity[:-1]) for entity in entities)

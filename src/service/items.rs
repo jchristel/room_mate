@@ -487,6 +487,10 @@ mod tests {
             level_id: "1".to_string(),
             category: category.to_string(),
             room: room.map(str::to_string),
+            // These tests exercise room attribution, never the space-identified
+            // path, so empty is the honest input -- see
+            // `contract::items::Item::owner_spaces`.
+            owner_spaces: vec![],
             // These tests exercise attribution, policy and filtering, never
             // placement, so `None` is the honest input rather than a stub: an
             // item with no measured position is a state the contract carries.
