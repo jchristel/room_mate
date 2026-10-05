@@ -563,6 +563,15 @@ with one, not here.
 
 ## Traps
 
+- **Shipped binaries are x64, and they come from CI, not a dev machine.**
+  `release.yml` builds on `windows-latest` (x64), and that is the only source of
+  an installer anyone is given. A dev VM may be Windows on arm64 (this one has
+  been since 2026-10-05), where `cargo build --release` yields arm64 exes that
+  will not run on Intel. That is fine for `cargo test`/`clippy`/running the
+  viewer locally, and the reason **not** to hand out a local
+  `installer\build.ps1` output. Decided deliberately: do not add
+  `--target`/arch switching to `build.ps1` or `roommate.iss`.
+
 - **A fixed duHast file is not a fixed duHast run.** A script exec'd into a
   Revit console keeps `duHast` in `sys.modules` for the life of the session,
   so an upstream fix on disk does nothing until Revit restarts. Measured
