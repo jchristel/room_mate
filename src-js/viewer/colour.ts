@@ -225,7 +225,7 @@ function propertyCompareNumber(room: Room, mode: ColourMode, sources: readonly s
 export function buildColourContext(
   rooms: readonly Room[],
   plan: ColourPlan | null,
-  sources: readonly string[] = [],
+  sources: readonly string[],
 ): ColourContext {
   const ctx: ColourContext = { maxAbs: 0 };
   if (!plan) return ctx;
@@ -291,7 +291,7 @@ export function colourForRoom(
   room: Room,
   plan: ColourPlan,
   ctx: ColourContext,
-  sources: readonly string[] = [],
+  sources: readonly string[],
 ): string {
   const mode = plan.mode;
 

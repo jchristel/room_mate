@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import { levelLabel, levelsForPayload, pickerOrder, resolveLevel, roomsOnLevel } from "../levels.js";
+import { detectReferenceSources } from "../properties.js";
 import { buildColourContext, colourForRoom } from "../colour.js";
 import { errorRoomIds } from "../validation.js";
 import { AreasOverlay } from "./AreasOverlay.js";
@@ -114,6 +115,10 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   const rooms = useMemo(() => (payload ? roomsOnLevel(payload, levelId) : []), [payload, levelId]);
   const levelName = levels.find((l) => l.id === levelId)?.name ?? levelId ?? "";
   const plan = colourPlans.find((p) => p.name === zone.colourPlan) ?? null;
+  // Which joined sources this payload carries. A plan names a field as
+  // `<source>.<field>` and the lookup binds the prefix only against this list, so
+  // leaving it out colours every room "no data" without an error.
+  const sources = useMemo(() => detectReferenceSources(payload), [payload]);
   // The union across sources: a room is flagged on the plan if ANY source has
   // something to say about it. Which source said it belongs in the band.
   const errorRooms = useMemo(() => errorRoomIds(validation), [validation]);
@@ -166,7 +171,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       // typed module and the hex lookup stays with the palette. The context is
       // built ONCE per paint -- two of the three modes need a property of the
       // whole level before any room can be coloured.
-      const ctx = plan ? buildColourContext(rooms, plan) : null;
+      const ctx = plan ? buildColourContext(rooms, plan, sources) : null;
       const build = () =>
         renderer.paint(rooms, handle.fitted, {
           showLabels,
@@ -174,7 +179,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           appearance,
           errorRoomIds: errorRooms,
           showErrors,
-          ...(plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, plan, ctx) } : {}),
+          ...(plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, plan, ctx, sources) } : {}),
           doors: on("doors"),
           showDoors: layers.doors,
           windows: on("windows"),
@@ -213,7 +218,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, plan, errorRooms, showErrors]);
+  }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, plan, sources, errorRooms, showErrors]);
 
   // Search is applied to what is ALREADY drawn -- never by re-rendering. A
   // search can match thousands of rooms, and a keystroke must not re-upload a

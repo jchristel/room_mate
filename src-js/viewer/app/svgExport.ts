@@ -23,6 +23,7 @@
 import { buildColourContext, colourForRoom, type ColourPlan } from "../colour.js";
 import { elementUrl, matchSuffix, type ElementEntity } from "../elementUrls.js";
 import { levelsForPayload, roomsOnLevel } from "../levels.js";
+import { detectReferenceSources } from "../properties.js";
 import type { Scope } from "../scope.js";
 import { LAYERS, storeyElements, type ElementPayload, type StoreyMatch } from "./layers.js";
 import { fittedBounds } from "./planRenderer.js";
@@ -139,9 +140,10 @@ export function buildLevelSvg(
   bg.setAttribute("fill", pal.paper);
   svg.appendChild(bg);
 
-  const ctx = opts.plan ? buildColourContext(rooms, opts.plan) : null;
+  const sources = detectReferenceSources(payload);
+  const ctx = opts.plan ? buildColourContext(rooms, opts.plan, sources) : null;
   paintLevel(svg, rooms, fitted, {
-    ...(opts.plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, opts.plan!, ctx) } : {}),
+    ...(opts.plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, opts.plan!, ctx, sources) } : {}),
     errorRoomIds: opts.errorRoomIds,
     showErrors: opts.showErrors,
     showLabels: opts.showLabels,

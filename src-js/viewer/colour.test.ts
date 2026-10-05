@@ -136,10 +136,41 @@ describe("propertycompare", () => {
         },
       },
     };
-    const ctx = buildColourContext(rooms, plan);
-    expect(colourForRoom(rooms[0]!, plan, ctx)).toBe("#mid"); // 6
-    expect(colourForRoom(rooms[1]!, plan, ctx)).toBe("#low"); // -2
-    expect(colourForRoom(rooms[2]!, plan, ctx)).toBe(NO_DATA_COLOUR); // unparseable
+    const ctx = buildColourContext(rooms, plan, []);
+    expect(colourForRoom(rooms[0]!, plan, ctx, [])).toBe("#mid"); // 6
+    expect(colourForRoom(rooms[1]!, plan, ctx, [])).toBe("#low"); // -2
+    expect(colourForRoom(rooms[2]!, plan, ctx, [])).toBe(NO_DATA_COLOUR); // unparseable
+  });
+
+  /** The RHH report: a plan over `<source>.<field>` coloured every room "no
+   *  data" because the viewer never passed the source list, and the lookup binds
+   *  a prefix only against that list. Both halves are asserted, so the test
+   *  fails if the argument is ignored as well as if it is omitted. */
+  it("colours a plan over a joined reference field when its source is known", () => {
+    const joined = (count: string) =>
+      ({ id: "r", arch_discrepancy: { fields: { "Discrepancy Count": count, "Discrepancy Baseline Arch": "0" } } }) as unknown as Room;
+    const plan: ColourPlan = {
+      name: "arch_desc",
+      mode: {
+        kind: "propertycompare",
+        property_a: "arch_discrepancy.Discrepancy Count",
+        property_b: "arch_discrepancy.Discrepancy Baseline Arch",
+        op: "diff",
+        colouring: {
+          style: "bands",
+          bands: [
+            { lo: 0, hi: 1, colour: "#green" },
+            { lo: 1, hi: null, colour: "#red" },
+          ],
+        },
+      },
+    };
+    const rs = [joined("0"), joined("5")];
+    const known = ["arch_discrepancy"];
+    expect(colourForRoom(rs[0]!, plan, buildColourContext(rs, plan, known), known)).toBe("#green");
+    expect(colourForRoom(rs[1]!, plan, buildColourContext(rs, plan, known), known)).toBe("#red");
+    // Without the source the prefix is just part of a Revit property name.
+    expect(colourForRoom(rs[0]!, plan, buildColourContext(rs, plan, []), [])).toBe(NO_DATA_COLOUR);
   });
 
   it("matches within a tolerance", () => {
@@ -152,9 +183,9 @@ describe("propertycompare", () => {
         colouring: { style: "match", tolerance: 3 },
       },
     };
-    const ctx = buildColourContext(rooms, plan);
-    expect(colourForRoom(rooms[0]!, plan, ctx)).toBe(MISMATCH_COLOUR); // 6
-    expect(colourForRoom(rooms[1]!, plan, ctx)).toBe(MATCH_COLOUR); // -2
+    const ctx = buildColourContext(rooms, plan, []);
+    expect(colourForRoom(rooms[0]!, plan, ctx, [])).toBe(MISMATCH_COLOUR); // 6
+    expect(colourForRoom(rooms[1]!, plan, ctx, [])).toBe(MATCH_COLOUR); // -2
   });
 
   /** The diverging ramp is measured against the LEVEL's largest absolute
@@ -169,10 +200,10 @@ describe("propertycompare", () => {
         colouring: { style: "diverging", scheme: "RdBu" },
       },
     };
-    const ctx = buildColourContext(rooms, plan);
+    const ctx = buildColourContext(rooms, plan, []);
     expect(ctx.maxAbs).toBe(6);
-    expect(colourForRoom(rooms[0]!, plan, ctx)).toBe(RDBU_LAST); // +6 -> t=1
-    expect(colourForRoom(rooms[1]!, plan, ctx)).toBe("#f5c0a9"); // -2 -> t=1/3, inside the second segment
+    expect(colourForRoom(rooms[0]!, plan, ctx, [])).toBe(RDBU_LAST); // +6 -> t=1
+    expect(colourForRoom(rooms[1]!, plan, ctx, [])).toBe("#f5c0a9"); // -2 -> t=1/3, inside the second segment
   });
 
   it("refuses a ratio by zero rather than colouring an infinity", () => {
@@ -187,7 +218,7 @@ describe("propertycompare", () => {
       },
     };
     const zeroed = [room("z", { A: "1", B: "0" })];
-    expect(colourForRoom(zeroed[0]!, plan, buildColourContext(zeroed, plan))).toBe(NO_DATA_COLOUR);
+    expect(colourForRoom(zeroed[0]!, plan, buildColourContext(zeroed, plan, []), [])).toBe(NO_DATA_COLOUR);
   });
 });
 
@@ -205,24 +236,24 @@ describe("hierarchy", () => {
 
   it("gives each parent a distinct hue, in sorted order so it survives a repaint", () => {
     const rooms = [withTiers("b", "SURG"), withTiers("a", "MED")];
-    const ctx = buildColourContext(rooms, plan);
+    const ctx = buildColourContext(rooms, plan, []);
     expect(ctx.parentHue?.get("MED")).toBe(SET2_0);
     expect(ctx.parentHue?.get("SURG")).toBe(SET2_1);
   });
 
   it("tints children of one parent so they read as siblings", () => {
     const rooms = [withTiers("a", "MED", "WARD"), withTiers("b", "MED", "THEATRE")];
-    const ctx = buildColourContext(rooms, plan);
-    const first = colourForRoom(rooms[0]!, plan, ctx);
-    const second = colourForRoom(rooms[1]!, plan, ctx);
+    const ctx = buildColourContext(rooms, plan, []);
+    const first = colourForRoom(rooms[0]!, plan, ctx, []);
+    const second = colourForRoom(rooms[1]!, plan, ctx, []);
     expect(first).not.toBe(second);
     // Both lighter than or equal to the parent hue, never a different hue.
-    expect(colourForRoom(withTiers("c", "MED"), plan, ctx)).toBe(SET2_0);
+    expect(colourForRoom(withTiers("c", "MED"), plan, ctx, [])).toBe(SET2_0);
   });
 
   it("is the no-data colour for a room with no parent tier", () => {
-    const ctx = buildColourContext([withTiers("a", "MED")], plan);
-    expect(colourForRoom({ id: "x" }, plan, ctx)).toBe(NO_DATA_COLOUR);
+    const ctx = buildColourContext([withTiers("a", "MED")], plan, []);
+    expect(colourForRoom({ id: "x" }, plan, ctx, [])).toBe(NO_DATA_COLOUR);
   });
 });
 
@@ -239,15 +270,15 @@ describe("daterange", () => {
   ];
 
   it("ramps the past and flags the future separately", () => {
-    const ctx = buildColourContext(rooms, plan);
-    expect(colourForRoom(rooms[0]!, plan, ctx)).toBe(RDBU_LAST); // at the near date -> t=1
-    expect(colourForRoom(rooms[1]!, plan, ctx)).toBe(RDBU_FIRST); // the oldest -> t=0
-    expect(colourForRoom(rooms[2]!, plan, ctx)).toBe(FUTURE_COLOUR);
-    expect(colourForRoom(rooms[3]!, plan, ctx)).toBe(NO_DATA_COLOUR);
+    const ctx = buildColourContext(rooms, plan, []);
+    expect(colourForRoom(rooms[0]!, plan, ctx, [])).toBe(RDBU_LAST); // at the near date -> t=1
+    expect(colourForRoom(rooms[1]!, plan, ctx, [])).toBe(RDBU_FIRST); // the oldest -> t=0
+    expect(colourForRoom(rooms[2]!, plan, ctx, [])).toBe(FUTURE_COLOUR);
+    expect(colourForRoom(rooms[3]!, plan, ctx, [])).toBe(NO_DATA_COLOUR);
   });
 
   /** The future must not stretch the ramp the past is measured against. */
   it("measures the ramp on past dates only", () => {
-    expect(buildColourContext(rooms, plan).maxPast).toBe(10 * 24 * 3600 * 1000);
+    expect(buildColourContext(rooms, plan, []).maxPast).toBe(10 * 24 * 3600 * 1000);
   });
 });
