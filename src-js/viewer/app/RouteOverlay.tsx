@@ -1,4 +1,4 @@
-// One zone's slice of the route: the polyline on its level, and a mark on each
+// One zone's own route: the polyline on its level, and a mark on each
 // endpoint that is on it.
 //
 // SVG over the plan, like the area footprints, and for the rule in
@@ -11,12 +11,20 @@
 // Marks are placed from the rooms the page already holds rather than from the
 // route result, so a start with no end yet still shows where it is.
 
-import { markerPoint, polylinePoints, segmentsOnLevel } from "../route.js";
+import { markerPoint, polylinePoints, segmentsOnLevel, type RouteState } from "../route.js";
 import { handleOf } from "./zoneRegistry.js";
 import { useViewer } from "./useViewer.js";
 
-export function RouteOverlay({ zoneId, levelId }: { zoneId: string; levelId: string | null }) {
-  const { route, payload } = useViewer();
+export function RouteOverlay({
+  zoneId,
+  levelId,
+  route,
+}: {
+  zoneId: string;
+  levelId: string | null;
+  route: RouteState | null;
+}) {
+  const { payload } = useViewer();
   if (!route || levelId === null) return null;
 
   const path = route.result.state === "done" ? route.result.path : null;

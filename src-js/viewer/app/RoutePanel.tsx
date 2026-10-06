@@ -21,7 +21,7 @@ import { useEffect, useMemo } from "react";
 
 import type { Level, Room } from "../../renderer/types.js";
 import { connectivityUrl, describeResult, type RoutePath, type RouteState } from "../route.js";
-import { clearRoute, patchRoute, select, setRouteMode, setZoneLevel } from "./store.js";
+import { clearZoneRoute, patchZoneRoute, select, setZoneLevel, setZoneRouteMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
 /** How many search matches the bar offers. A search can match thousands of
@@ -50,8 +50,11 @@ interface Summary {
   path?: RoutePath | null;
 }
 
-export function RoutePanel() {
-  const { route, scope, payload, search, zones } = useViewer();
+export function RoutePanel({ zone }: { zone: ZoneRow }) {
+  const { scope, payload, search, routeFocus } = useViewer();
+  const route = zone.route;
+  const zoneId = zone.id;
+  const patchRoute = (patch: Partial<RouteState>) => patchZoneRoute(zoneId, patch);
   const active = route !== null;
   const revision = payload?.revision ?? "";
   const scopeKey = `${scope.projectId}|${scope.building}|${scope.milestone}`;
@@ -103,11 +106,11 @@ export function RoutePanel() {
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setRouteMode(false);
+      if (e.key === "Escape" && routeFocus === zoneId) setZoneRouteMode(zoneId, false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active]);
+  }, [active, routeFocus, zoneId]);
 
   const rooms = useMemo(() => new Map((payload?.rooms ?? []).map((r) => [r.id, r])), [payload]);
   const levels = payload?.levels ?? [];
@@ -129,15 +132,15 @@ export function RoutePanel() {
 
   const showOnPlan = (roomId: string | null) => {
     const room = roomId ? rooms.get(roomId) : null;
-    if (room?.level_id && zones[0]) setZoneLevel(zones[0].id, room.level_id);
+    if (room?.level_id) setZoneLevel(zoneId, room.level_id);
   };
 
   return (
-    <div id="routeBar">
+    <div className="routeBar">
       <strong>Route</strong>
-      <Slot label="Start" roomId={start} rooms={rooms} levels={levels} next={start === null} onShow={() => showOnPlan(start)} onClear={() => select("room", start ?? "")} />
+      <Slot label="Start" roomId={start} rooms={rooms} levels={levels} next={start === null} onShow={() => showOnPlan(start)} onClear={() => select("room", start ?? "", zoneId)} />
       <span aria-hidden="true">→</span>
-      <Slot label="End" roomId={end} rooms={rooms} levels={levels} next={start !== null && end === null} onShow={() => showOnPlan(end)} onClear={() => select("room", end ?? "")} />
+      <Slot label="End" roomId={end} rooms={rooms} levels={levels} next={start !== null && end === null} onShow={() => showOnPlan(end)} onClear={() => select("room", end ?? "", zoneId)} />
       <span className="routeResult">{describeResult(route.result)}</span>
       <Notice route={route} rooms={rooms} />
       {matches ? (
@@ -146,7 +149,7 @@ export function RoutePanel() {
             <em>no usable search match</em>
           ) : (
             matches.usable.map((r) => (
-              <button key={r.id} className="chip" onClick={() => select("room", r.id)}>
+              <button key={r.id} className="chip" onClick={() => select("room", r.id, zoneId)}>
                 {r.name || r.id}
               </button>
             ))
@@ -154,10 +157,10 @@ export function RoutePanel() {
           {matches.total > matches.usable.length ? <em>+{matches.total - matches.usable.length} more</em> : null}
         </span>
       ) : null}
-      <button className="ctl" onClick={clearRoute} disabled={start === null && end === null}>
+      <button className="ctl" onClick={() => clearZoneRoute(zoneId)} disabled={start === null && end === null}>
         Clear
       </button>
-      <button className="ctl" onClick={() => setRouteMode(false)} title="Leave the route tool (Esc)">
+      <button className="ctl" onClick={() => setZoneRouteMode(zoneId, false)} title="Leave the route tool (Esc)">
         Done
       </button>
     </div>
@@ -194,7 +197,7 @@ function Slot({
     <span className="routeSlot">
       {label}: <strong>{room?.name || roomId}</strong>
       {level ? <span className="routeLevel"> · {level}</span> : null}
-      <button className="link" onClick={onShow} title="Show this room's level in the first zone">
+      <button className="link" onClick={onShow} title="Show this room's level in this zone">
         show
       </button>
       <button className="link" onClick={onClear} title="Clear this endpoint">

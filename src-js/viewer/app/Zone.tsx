@@ -20,6 +20,7 @@ import { buildColourContext, colourForRoom } from "../colour.js";
 import { errorRoomIds } from "../validation.js";
 import { AreasOverlay } from "./AreasOverlay.js";
 import { RouteOverlay } from "./RouteOverlay.js";
+import { RoutePanel } from "./RoutePanel.js";
 import { LayerMenu } from "./LayerMenu.js";
 import { SelectionFilter } from "./SelectionFilter.js";
 import { ExportMenu } from "./ExportMenu.js";
@@ -28,7 +29,7 @@ import { tierNames } from "../areas.js";
 import { elementsOnStorey, zoneAwaitsLayers, type ElementOf } from "./layers.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
-import { closePickList, setZoneAreas, setZoneColourPlan, setZoneLevel, type ZoneRow } from "./store.js";
+import { closePickList, setZoneAreas, setZoneColourPlan, setZoneLevel, setZoneRouteMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
@@ -313,6 +314,13 @@ export function Zone({ zone }: { zone: ZoneRow }) {
         >
           Areas
         </button>
+        <button
+          className={`route-toggle${zone.route ? " on" : ""}`}
+          title="Pick a start room and an end room on this zone, and show the shortest route through doors"
+          onClick={() => setZoneRouteMode(zone.id, zone.route === null)}
+        >
+          Route
+        </button>
         {zone.areasMode && areas ? (
           <select
             className="picker areasTier"
@@ -340,6 +348,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
             : status}
         </span>
       </div>
+      <RoutePanel zone={zone} />
       <div className="zone-canvas">
         <canvas className="plan-gl" ref={canvasRef} />
         <svg className={`plan${zone.areasMode ? " areas-active" : ""}`} ref={svgRef} xmlns="http://www.w3.org/2000/svg">
@@ -355,7 +364,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
             selectedKey={selection?.kind === "area" ? selection.id : null}
           />
           {/* Above the footprints: a route is the thing being asked about. */}
-          <RouteOverlay zoneId={zone.id} levelId={levelId} />
+          <RouteOverlay zoneId={zone.id} levelId={levelId} route={zone.route} />
         </svg>
         {/* The per-room tooltip the browser used to draw for free from an SVG
             `<title>`. WebGL has no elements, so it is a DOM node the hover

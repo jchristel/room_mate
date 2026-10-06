@@ -9,13 +9,12 @@
 
 import { buildingLabel, type Scope } from "../scope.js";
 import { setScope } from "./poll.js";
-import { RoutePanel } from "./RoutePanel.js";
 import { Search } from "./Search.js";
-import { addZone, MAX_ZONES, removeZone, setLinkViews, setRouteMode } from "./store.js";
+import { addZone, MAX_ZONES, removeZone, setLinkViews } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
 export function Header() {
-  const { scope, projects, buildings, milestones, zones, linkViews, route } = useViewer();
+  const { scope, projects, buildings, milestones, zones, linkViews } = useViewer();
 
   const change = (patch: Partial<Scope>) => {
     const next: Scope = { ...scope, ...patch };
@@ -90,19 +89,11 @@ export function Header() {
       >
         Link views: {linkViews ? "on" : "off"}
       </button>
-      <button
-        className={`ctl${route ? " on" : ""}`}
-        title="Pick a start room and an end room, and show the shortest route through doors"
-        onClick={() => setRouteMode(route === null)}
-      >
-        Route: {route ? "on" : "off"}
-      </button>
       <Search />
       <div className="links">
         <a href="/reports/">reports</a>
         <a href="/settings/">settings</a>
       </div>
-      <RoutePanel />
     </header>
   );
 }
