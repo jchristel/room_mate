@@ -73,35 +73,22 @@ stops a future route quietly voiding it.
 
 The net: maximum achievable damage is (a) mangling settings, undone by backups,
 and (b) volume — flooding with writes, bounded by rate limiting. Neither reaches
-the irreplaceable data. Both of those bounds are unbuilt; they are the two
-sections that follow.
+the irreplaceable data. The backups are built; the rate limit is the one bound
+left, and the section that follows.
 
-## Settings backups — not built
+## Settings backups — built, with what they do not cover
 
-Because settings are the one hostile-reachable mutable surface, **every accepted
-settings write should first snapshot the file it is about to replace**, so any
-change (hostile or merely mistaken) can be rolled back.
+`settings_api::save_project` copies the file it is about to replace into
+`.backups/` before the install, keeping the newest 20 per project; its helpers
+carry the rationale. What stays open, deliberately:
 
-- **Where it hooks in:** `settings_api::save_project`, immediately before the
-  atomic rename that installs the new file — the point where the prior file
-  still exists and the new one has already passed full validation. Reference
-  uploads take the same hook if CSV rollback is wanted; both already run under
-  `SAVE_LOCK` and share `reload_and_swap`, so the backup step rides the same
-  serialized path and cannot race.
-- **Backups are copies, not moves, and never overwritten.** The live file must
-  stay in place until the rename installs its replacement, so the prior version
-  is *copied* to a timestamped name under a `.backups/` subdirectory of the
-  projects dir (`.backups/<id>.<rfc3339-utc>.toml`). Keying the timestamp the
-  same way as snapshot ids (UTC, lexically sortable) means newest-is-lexical-max
-  holds here too and no two backups of one project collide.
-- **Retention is a prune, not a cap-at-write.** Keep the last N per project,
-  pruning after a successful install. A flood of hostile saves is bounded by the
-  rate limiter, so the backup dir cannot grow without limit even under attack.
-- **Restore is out-of-band for v1.** Rolling back is "copy a `.backups/` file
-  over the live one and let the next save or boot pick it up", done by an
-  operator on the box — deliberately *not* an HTTP route, since a restore
-  endpoint would itself be a hostile-reachable mutation needing the same
-  scrutiny as delete. A restore UI can come later, behind auth.
+- **Restore is out-of-band.** Rolling back is "copy a `.backups/` file over the
+  live one and let the next save or boot pick it up", done by an operator on the
+  box — *not* an HTTP route, since a restore endpoint would itself be a
+  hostile-reachable mutation needing the same scrutiny as delete. A restore UI
+  can come later, behind auth.
+- **Reference CSV uploads are not backed up here**: they are stored as
+  snapshots, so history is already kept.
 - **Scope, stated honestly:** this defends against settings being edited or
   mangled. It does **not** defend the projects dir being deleted wholesale —
   a filesystem-permissions concern this process cannot undo, and out of the HTTP

@@ -404,15 +404,84 @@ pub fn save_project(
         return Err(SettingsError::Invalid(format!("{e:#}")));
     }
 
+    // The candidate has passed full validation and the file it replaces is
+    // still in place: this is the one moment a backup can be taken. A backup
+    // that cannot be written refuses the save, because an unrecoverable
+    // overwrite is exactly what the backup exists to prevent.
+    if previous.is_some()
+        && let Err(e) = backup_settings(&projects_dir, &id, &target)
+    {
+        std::fs::remove_file(&temp).ok();
+        return Err(e);
+    }
+
     // Atomic install (std::fs::rename replaces an existing target on both
     // Unix and Windows), then rebuild the registry from the whole directory
     // and swap it in.
     std::fs::rename(&temp, &target)
         .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not install settings file: {e}")))?;
+    prune_backups(&projects_dir, &id);
 
     reload_and_swap(state, &projects_dir)?;
     tracing::info!("settings saved and applied: {} ({})", id, file_name(&target));
     Ok(settings)
+}
+
+/// Directory under the projects dir holding prior versions of settings files.
+/// A subdirectory, so `settings_files` (which lists `*.toml` in the projects
+/// dir itself) can never mistake a backup for a live project.
+const BACKUP_DIR: &str = ".backups";
+
+/// Backups kept per project; older ones are pruned after a successful install.
+const BACKUPS_KEPT: usize = 20;
+
+/// Length of the timestamp in a backup name, `20260101T000000.000000Z`.
+const BACKUP_STAMP_LEN: usize = 23;
+
+/// Copy the settings file about to be replaced to
+/// `.backups/<id>.<utc-stamp>.toml`. A copy, never a move: the live file stays
+/// until the rename installs its replacement. The stamp is UTC and sorts
+/// lexically like a snapshot id, but is not RFC 3339 — a colon is not a legal
+/// file-name character on Windows. Never overwrites: a name collision is an
+/// error rather than a silent loss of the older backup.
+fn backup_settings(projects_dir: &Path, id: &str, target: &Path) -> Result<(), SettingsError> {
+    let dir = projects_dir.join(BACKUP_DIR);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not create {}: {e}", dir.display())))?;
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ");
+    let backup = dir.join(format!("{id}.{stamp}.toml"));
+    if backup.exists() {
+        return Err(SettingsError::Internal(anyhow::anyhow!("backup {} already exists", backup.display())));
+    }
+    std::fs::copy(target, &backup)
+        .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not back up {}: {e}", file_name(target))))?;
+    Ok(())
+}
+
+/// Keep the newest `BACKUPS_KEPT` backups of one project. Best effort and run
+/// after the install: failing to prune costs disk, never a save. A name only
+/// counts as this project's when what follows `<id>.` is exactly a stamp, so
+/// project `a` never prunes project `a.b`'s history.
+fn prune_backups(projects_dir: &Path, id: &str) {
+    let dir = projects_dir.join(BACKUP_DIR);
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let prefix = format!("{id}.");
+    let mut mine: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            let name = file_name(p);
+            name.strip_prefix(&prefix)
+                .and_then(|rest| rest.strip_suffix(".toml"))
+                .is_some_and(|stamp| stamp.len() == BACKUP_STAMP_LEN && stamp.ends_with('Z'))
+        })
+        .collect();
+    mine.sort();
+    let excess = mine.len().saturating_sub(BACKUPS_KEPT);
+    for old in mine.into_iter().take(excess) {
+        if let Err(e) = std::fs::remove_file(&old) {
+            tracing::warn!("could not prune settings backup {}: {e}", old.display());
+        }
+    }
 }
 
 /// Rebuild the registry from the whole projects directory and swap it in —
@@ -927,6 +996,53 @@ ids = ["12345", "67890"]
         let (file, settings) = get_project_file(&dir, "p1").unwrap();
         assert_eq!(file, "p1.toml");
         assert_eq!(settings.project_id, "p1");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An update keeps the file it replaces under `.backups/`; a create has
+    /// nothing to keep. The backup is the prior text, byte for byte.
+    #[test]
+    fn test_update_backs_up_prior_file() {
+        let dir = temp_dir("backup");
+        let state = file_backed_state(&dir);
+        save_project(&state, None, minimal_settings("p1")).unwrap();
+        assert!(!dir.join(BACKUP_DIR).exists(), "a create backs nothing up");
+        let before = std::fs::read_to_string(dir.join("p1.toml")).unwrap();
+
+        let mut changed = minimal_settings("p1");
+        changed.name = Some("Renamed".to_string());
+        save_project(&state, Some("p1"), changed).unwrap();
+
+        let backups: Vec<_> = std::fs::read_dir(dir.join(BACKUP_DIR)).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), before);
+        assert_eq!(list_project_files(&dir).unwrap().len(), 1, "a backup is not a project");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Pruning keeps the newest `BACKUPS_KEPT` of this project without
+    /// touching a project whose id merely begins with it.
+    #[test]
+    fn test_backups_pruned_per_project() {
+        let dir = temp_dir("backup-prune");
+        let state = file_backed_state(&dir);
+        save_project(&state, None, minimal_settings("p1")).unwrap();
+        std::fs::create_dir_all(dir.join(BACKUP_DIR)).unwrap();
+        let other = dir.join(BACKUP_DIR).join("p1.x.20200101T000000.000000Z.toml");
+        std::fs::write(&other, "project_id = \"p1.x\"\n").unwrap();
+
+        for _ in 0..BACKUPS_KEPT + 3 {
+            save_project(&state, Some("p1"), minimal_settings("p1")).unwrap();
+        }
+
+        let count = std::fs::read_dir(dir.join(BACKUP_DIR))
+            .unwrap()
+            .filter(|e| file_name(&e.as_ref().unwrap().path()).starts_with("p1.2"))
+            .count();
+        assert_eq!(count, BACKUPS_KEPT);
+        assert!(other.exists(), "another project's history is not pruned");
 
         std::fs::remove_dir_all(&dir).ok();
     }

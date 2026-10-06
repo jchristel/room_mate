@@ -17,15 +17,6 @@ yet. When a piece ships, its section is deleted from here and
 the rationale moves to the module header — see "Code documents what is built"
 in [Coding Conventions](CODING-CONVENTIONS.md).
 
-**[reports-mockup.html](reports-mockup.html)** is a clickable mockup of the
-page described below: the report type dropdown, the four forms, the filter
-builder and the preview, over invented sample rows. Open the file in a browser.
-It is a picture of the design, not a prototype: it reads nothing, saves
-nothing, and none of its code is meant to be reused. It does follow the decided
-filter semantics -- set-wise conditions on the associated side, and text that
-ignores case unless a condition says otherwise -- because a mockup that
-contradicts the rules is worse than none. Delete it when the page ships.
-
 The ask is a page where a user builds tabular reports over the entities — and,
 above all, **reports through an association**: ceilings by room, spaces by
 room, FF&E by room. The rest of this document is mostly about why the obvious
