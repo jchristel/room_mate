@@ -321,6 +321,11 @@ struct ConnectivityParams {
     /// (fewest doors).
     #[serde(default)]
     metric: Option<String>,
+    /// `summary` (default) returns components, isolated rooms, counts and the
+    /// route. `full` adds every node and edge, which on a large project is over
+    /// a megabyte: ask for it only when you need the graph itself.
+    #[serde(default)]
+    detail: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1015,13 +1020,14 @@ impl RoommateMcp {
                        THE GRAPH IS DOORS ONLY, and that is a limit of the method, not a fact about the building: a bay, an open-plan area, an archway modelled as a wall opening, or a shaft has no door, so it appears under `isolated` and no route reaches it. An isolated room is NOT a model fault and `isolated` is not a list of bays -- it is the list of rooms this method cannot reach, and some of them are simply rooms whose doors name no room. No route crosses a LEVEL either: until connections between levels are authored, a route from one storey to another is reported as not found. \
                        A route that does not exist is a FINDING, not an error: `path.found` is false and `path.reason` names the component each room is in. Do not report it as 'these rooms are not connected'; report it as 'no door route', and read `isolated` and `components` before concluding anything. An error means the request was wrong -- a room that is not in scope, or a bare room id that exists in several models (the message lists them; pass `from_model`/`to_model`). \
                        Other reported states: `exits` on a node counts doors with that room on one side and nothing on the other (the way outside, or into a model that holds no rooms) -- they are not edges; `counts` tallies doors that name no room (`unattached`), the same room twice (`same_room`) or a room outside the scope (`out_of_scope`); `doors_pushed` false means NO doors snapshot exists for the project, so every room is isolated for that reason alone. \
-                       `path.distance_ft` is an APPROXIMATE walking distance (room centroid to door to room centroid): good for ranking routes, not a figure to quote as a measured distance. Each edge's `point_source` says whether its door point was the door's own insertion point, its footprint, or a midpoint between the rooms because the door had neither. Rooms are always named by `model_id` plus `room_id`. `path.segments` is the route as polylines, one per run on one level, in the project's local frame."
+                       `path.distance_ft` is an APPROXIMATE walking distance (room centroid to door to room centroid): good for ranking routes, not a figure to quote as a measured distance. Each edge's `point_source` says whether its door point was the door's own insertion point, its footprint, or a midpoint between the rooms because the door had neither. Rooms are always named by `model_id` plus `room_id`. `path.segments` is the route as polylines, one per run on one level, in the project's local frame. THE DEFAULT RESPONSE OMITS `nodes` AND `edges` (a large project's graph is over a megabyte); it still carries components, isolated rooms, counts and the route. Pass detail=full only when you need the graph itself."
     )]
     fn get_connectivity(&self, Parameters(p): Parameters<ConnectivityParams>) -> Result<CallToolResult, McpError> {
         let known = self.state.settings().known_reference_sources();
         let filter =
             rooms::RoomFilter::parse(&p.door_filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
         let metric = connectivity::Metric::parse(p.metric.as_deref()).map_err(to_mcp_error)?;
+        let detail = connectivity::Detail::parse(p.detail.as_deref()).map_err(to_mcp_error)?;
         let route =
             connectivity::endpoints(p.from.as_deref(), p.from_model.as_deref(), p.to.as_deref(), p.to_model.as_deref())
                 .map_err(to_mcp_error)?;
@@ -1036,6 +1042,7 @@ impl RoommateMcp {
             &scope,
             route.as_ref().map(|(a, b)| (a, b)),
             metric,
+            detail,
         )
         .map_err(to_mcp_error)?;
         match result {

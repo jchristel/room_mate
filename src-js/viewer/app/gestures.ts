@@ -37,6 +37,13 @@ function pickable(zoneId: string, x: number, y: number): PlanPick[] {
   const handle = handleOf(zoneId);
   const zone = getState().zones.find((z) => z.id === zoneId);
   if (!handle || !zone) return [];
+  // While routing, a click is asking "which ROOM", and the doors and furniture
+  // drawn inside it must not turn every click into a pick list. Rooms only, and
+  // regardless of the zone's selection filter: the filter answers a different
+  // question, and a route cannot start on a door.
+  if (getState().route) {
+    return zone.showRooms ? handle.renderer.pickAllAt(x, y).filter((p) => p.kind === "room") : [];
+  }
   return handle.renderer
     .pickAllAt(x, y)
     .filter((p) => zone.pickable[p.kind] && (p.kind === "room" ? zone.showRooms : zone.layers[entityOf(p.kind)]));

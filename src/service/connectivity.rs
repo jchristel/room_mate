@@ -31,7 +31,7 @@
 //! not a figure to quote as a distance. `Metric::Hops` is the alternative.
 //!
 //! **On length** (CODING-CONVENTIONS "Module structure & length"): past the
-//! ~500-line trigger, but about 250 of the lines are tests over one algorithm
+//! ~500-line trigger, but more than 300 of the lines are tests over one algorithm
 //! (join, components, Dijkstra, resolve) that share a fixture. The seam if it
 //! grows is `link`/`components`/`shortest`, which are already pure functions.
 
@@ -50,6 +50,26 @@ use super::rooms::{assemble_rooms, RoomFilter, RoomScope};
 use super::ServiceError;
 
 pub const SCHEMA_VERSION: u32 = 1;
+
+/// How much of the graph a read returns.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Detail {
+    /// Components, isolated rooms, counts and the route; no nodes or edges.
+    #[default]
+    Summary,
+    /// Everything, including every node and edge.
+    Full,
+}
+
+impl Detail {
+    pub fn parse(raw: Option<&str>) -> Result<Self, ServiceError> {
+        match raw.map(str::trim) {
+            None | Some("") | Some("summary") => Ok(Detail::Summary),
+            Some("full") => Ok(Detail::Full),
+            Some(other) => Err(ServiceError::Invalid(format!("detail {other:?} is not one of: summary, full"))),
+        }
+    }
+}
 
 /// What "shortest" means.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -104,8 +124,13 @@ pub struct ConnectivityResult {
     /// then isolated, which says "no doors were pushed", not "no doors exist".
     pub doors_pushed: bool,
     pub levels: Vec<Level>,
-    pub nodes: Vec<Node>,
-    pub edges: Vec<Edge>,
+    /// The graph itself, present only for `Detail::Full`. The summary is what a
+    /// picker or an agent needs (components, isolated rooms, counts, the route),
+    /// and on a large project the graph is over a megabyte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<Vec<Node>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edges: Option<Vec<Edge>>,
     /// Connected sets of rooms, largest first. `Node::component` indexes this.
     pub components: Vec<Component>,
     /// Rooms no door reaches: the worklist for authored connections. Not all of
@@ -542,6 +567,7 @@ pub fn assemble_connectivity(
     scope: &ConnectivityScope<'_>,
     route_between: Option<(&Endpoint, &Endpoint)>,
     metric: Metric,
+    detail: Detail,
 ) -> Result<Option<ConnectivityResult>, ServiceError> {
     let room_scope = RoomScope {
         project: Some(project),
@@ -622,8 +648,8 @@ pub fn assemble_connectivity(
         metric,
         doors_pushed,
         levels: rooms.levels,
-        nodes,
-        edges,
+        nodes: (detail == Detail::Full).then_some(nodes),
+        edges: (detail == Detail::Full).then_some(edges),
         components,
         isolated,
         counts,
@@ -987,9 +1013,10 @@ mod tests {
         #[test]
         fn test_the_read_builds_the_graph_and_lists_the_bay() {
             let s = state(standard());
-            let result = assemble_connectivity(&s, "p1", &ConnectivityScope::default(), None, Metric::Distance)
-                .unwrap()
-                .expect("rooms were pushed");
+            let result =
+                assemble_connectivity(&s, "p1", &ConnectivityScope::default(), None, Metric::Distance, Detail::Full)
+                    .unwrap()
+                    .expect("rooms were pushed");
             assert!(result.doors_pushed);
             assert_eq!(result.counts.edges, 2);
             assert_eq!(result.counts.exits, 1);
@@ -998,7 +1025,7 @@ mod tests {
             assert!(result.path.is_none());
             // A door with no point sits between its rooms' centroids, so the walk
             // from a to b is the 10 ft between them.
-            let ab = result.edges.iter().find(|e| e.door_id == "ab").unwrap();
+            let ab = result.edges.as_ref().unwrap().iter().find(|e| e.door_id == "ab").unwrap();
             assert!((ab.length - 10.0).abs() < 1e-6, "{}", ab.length);
         }
 
@@ -1006,17 +1033,31 @@ mod tests {
         fn test_the_read_routes_and_reports_an_unreachable_bay() {
             let (a, c, d) = (ep(None, "a"), ep(None, "c"), ep(None, "d"));
             let s = state(standard());
-            let ok = assemble_connectivity(&s, "p1", &ConnectivityScope::default(), Some((&a, &c)), Metric::Distance)
-                .unwrap()
-                .unwrap();
+            let ok = assemble_connectivity(
+                &s,
+                "p1",
+                &ConnectivityScope::default(),
+                Some((&a, &c)),
+                Metric::Distance,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap();
             let path = ok.path.unwrap();
             assert!(path.found);
             assert_eq!(path.rooms.len(), 3);
             assert!((path.distance_ft - 20.0).abs() < 1e-6);
 
-            let bay = assemble_connectivity(&s, "p1", &ConnectivityScope::default(), Some((&a, &d)), Metric::Distance)
-                .unwrap()
-                .unwrap();
+            let bay = assemble_connectivity(
+                &s,
+                "p1",
+                &ConnectivityScope::default(),
+                Some((&a, &d)),
+                Metric::Distance,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap();
             assert!(!bay.path.unwrap().found, "the bay has no door, which is a finding and not an error");
         }
 
@@ -1028,9 +1069,10 @@ mod tests {
             let filter = RoomFilter::parse_query("Fire Rating=none", &known).unwrap();
             let scope = ConnectivityScope { door_filter: Some(&filter), ..Default::default() };
             let (a, c) = (ep(None, "a"), ep(None, "c"));
-            let result = assemble_connectivity(&state(standard()), "p1", &scope, Some((&a, &c)), Metric::Distance)
-                .unwrap()
-                .unwrap();
+            let result =
+                assemble_connectivity(&state(standard()), "p1", &scope, Some((&a, &c)), Metric::Distance, Detail::Full)
+                    .unwrap()
+                    .unwrap();
             assert_eq!(result.counts.doors, 2, "the fire-rated door is not in the graph");
             assert!(!result.path.unwrap().found);
         }
@@ -1042,19 +1084,47 @@ mod tests {
         fn test_no_doors_pushed_is_stated() {
             let state = empty_state();
             state.set_snapshot(rooms_payload(vec![rect("a", 0.0, 10.0)])).unwrap();
-            let result = assemble_connectivity(&state, "p1", &ConnectivityScope::default(), None, Metric::Distance)
-                .unwrap()
-                .unwrap();
+            let result = assemble_connectivity(
+                &state,
+                "p1",
+                &ConnectivityScope::default(),
+                None,
+                Metric::Distance,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap();
             assert!(!result.doors_pushed);
             assert_eq!(result.isolated.len(), 1);
         }
 
+        /// The summary leaves the graph out of the body; `full` puts it in.
+        #[test]
+        fn test_summary_omits_the_graph_and_full_includes_it() {
+            let s = state(standard());
+            let summary =
+                assemble_connectivity(&s, "p1", &ConnectivityScope::default(), None, Metric::Distance, Detail::Summary)
+                    .unwrap()
+                    .unwrap();
+            let json = serde_json::to_value(&summary).unwrap();
+            assert!(json.get("nodes").is_none() && json.get("edges").is_none());
+            assert_eq!(json["isolated"].as_array().unwrap().len(), 1, "what a picker needs is still there");
+            assert_eq!(json["counts"]["edges"], 2);
+            assert!(Detail::parse(Some("everything")).is_err());
+        }
         #[test]
         fn test_nothing_pushed_is_none() {
             let state = AppState::new(Box::new(MemStore::new()), HashMap::new(), None);
-            assert!(assemble_connectivity(&state, "p1", &ConnectivityScope::default(), None, Metric::Distance)
-                .unwrap()
-                .is_none());
+            assert!(assemble_connectivity(
+                &state,
+                "p1",
+                &ConnectivityScope::default(),
+                None,
+                Metric::Distance,
+                Detail::Full
+            )
+            .unwrap()
+            .is_none());
         }
     }
 }

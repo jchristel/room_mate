@@ -2983,6 +2983,10 @@ pub struct ConnectivityQuery {
     /// `distance` (default) or `hops`.
     #[serde(default)]
     pub metric: Option<String>,
+    /// `summary` (default: components, isolated rooms, counts and the route) or
+    /// `full` (also every node and edge).
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 /// Door connectivity and, when `from` and `to` are given, the shortest route
@@ -3002,6 +3006,7 @@ pub async fn get_project_connectivity(
         .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
         .filter(|f| !f.is_empty());
     let metric = connectivity::Metric::parse(query.metric.as_deref()).map_err(map_service_error)?;
+    let detail = connectivity::Detail::parse(query.detail.as_deref()).map_err(map_service_error)?;
     let route = connectivity::endpoints(
         query.from.as_deref(),
         query.from_model.as_deref(),
@@ -3015,9 +3020,15 @@ pub async fn get_project_connectivity(
         door_filter: door_filter.as_ref(),
     };
 
-    let result =
-        connectivity::assemble_connectivity(&state, &project_id, &scope, route.as_ref().map(|(a, b)| (a, b)), metric)
-            .map_err(map_service_error)?;
+    let result = connectivity::assemble_connectivity(
+        &state,
+        &project_id,
+        &scope,
+        route.as_ref().map(|(a, b)| (a, b)),
+        metric,
+        detail,
+    )
+    .map_err(map_service_error)?;
     match result {
         None => Ok(StatusCode::NO_CONTENT.into_response()),
         Some(result) => Ok(Json(result).into_response()),
@@ -3906,6 +3917,7 @@ mod tests {
             to: to.map(str::to_string),
             to_model: None,
             metric: None,
+            detail: None,
         }
     }
 

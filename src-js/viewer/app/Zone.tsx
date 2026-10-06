@@ -19,6 +19,7 @@ import { detectReferenceSources } from "../properties.js";
 import { buildColourContext, colourForRoom } from "../colour.js";
 import { errorRoomIds } from "../validation.js";
 import { AreasOverlay } from "./AreasOverlay.js";
+import { RouteOverlay } from "./RouteOverlay.js";
 import { LayerMenu } from "./LayerMenu.js";
 import { SelectionFilter } from "./SelectionFilter.js";
 import { ExportMenu } from "./ExportMenu.js";
@@ -353,6 +354,8 @@ export function Zone({ zone }: { zone: ZoneRow }) {
             active={zone.areasMode}
             selectedKey={selection?.kind === "area" ? selection.id : null}
           />
+          {/* Above the footprints: a route is the thing being asked about. */}
+          <RouteOverlay zoneId={zone.id} levelId={levelId} />
         </svg>
         {/* The per-room tooltip the browser used to draw for free from an SVG
             `<title>`. WebGL has no elements, so it is a DOM node the hover

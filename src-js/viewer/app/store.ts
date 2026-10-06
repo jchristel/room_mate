@@ -21,6 +21,7 @@ import type { AreasData } from "../areas.js";
 import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
+import { newRoute, pickEndpoint, type RouteState } from "../route.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
  *  enum of HTTP states: "waiting for data" (a 204 — the project exists and
@@ -243,6 +244,10 @@ export interface ViewerState {
    *  `appearance`. Every field absent is the ordinary state and means the
    *  tooltip keeps naming the element. */
   hoverProperties: HoverProperties;
+  /** The two-click route tool, or `null` when it is off. Page state like the
+   *  selection: the two endpoints may be on different levels, shown in different
+   *  zones, so neither is a zone's. */
+  route: RouteState | null;
 }
 
 const initial: ViewerState = {
@@ -272,6 +277,7 @@ const initial: ViewerState = {
   colourPlans: [],
   hiddenProperties: {},
   hoverProperties: {},
+  route: null,
 };
 
 let state: ViewerState = initial;
@@ -445,7 +451,33 @@ export function setZoneColourPlan(id: string, plan: string | null): void {
 /** Select one element, or nothing. `zoneId` is where the click came from, and
  *  is null for a selection made anywhere else (the grid, a search result). */
 export function select(kind: SelectionKind, id: string, zoneId: string | null = null): void {
+  // While the route tool is on, a ROOM pick fills an endpoint instead of
+  // selecting. This one choke point is what makes every way of reaching a room
+  // work as an endpoint -- a plan click, an entry in the pick list, a grid row,
+  // a search result -- without any of them knowing the tool exists. Every other
+  // kind still selects, so a door can be inspected mid-route.
+  if (kind === "room" && state.route) {
+    setState({ route: pickEndpoint(state.route, id) });
+    return;
+  }
   setState({ selection: { kind, id, zoneId } });
+}
+
+/** Turn the route tool on (fresh) or off. */
+export function setRouteMode(on: boolean): void {
+  if (on === (state.route !== null)) return;
+  setState({ route: on ? newRoute() : null });
+}
+
+/** Patch the route; a no-op when the tool is off. */
+export function patchRoute(patch: Partial<RouteState>): void {
+  if (state.route) setState({ route: { ...state.route, ...patch } });
+}
+
+/** Forget both endpoints, keeping the tool on and what it knows about the
+ *  scope. */
+export function clearRoute(): void {
+  if (state.route) setState({ route: { ...state.route, start: null, end: null, notice: null, result: { state: "idle" } } });
 }
 
 export function clearSelection(): void {
