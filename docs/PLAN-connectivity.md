@@ -309,3 +309,31 @@ milestone pinning.)*
 6. **Decide the storage type** from the "Storage inputs" list, then migrate the
    document behind the `connections` module if it moves. Amend
    [Authored](STRATEGY-AUTHORED.md) to match whichever way it goes.
+
+## Measured after the step 1 server (2026-10-06)
+
+Over the largest project (3,043 rooms, 1,797 doors, latest snapshots; read in
+about 1 s):
+
+- **1,627 door edges; 1,510 components; 1,379 rooms (45%) isolated.** The largest
+  component is 157 rooms; only 1,300 rooms sit in a component of ten or more.
+  Level 1 has 478 rooms in 239 components, so **most room pairs on one level have
+  no door route.** A doors-only graph answers few "how do I get from here to
+  there" questions on this project.
+- **The isolated rooms are not mostly bays.** By name: 120 lifts, 79 stairs, 93
+  risers, 24 bays, and 1,051 others. Lifts and stairs are step 3's rooms; risers
+  are not part of any walking route; the 1,051 others are the open question.
+- **Door room-resolution does not rescue it.** Setting `[doors] room_resolution`
+  to `same_model` or `project` changed 1,627 edges into 1,627: authored
+  references already decide almost every door, so the missing connections are not
+  doors lacking a room reference. 84 doors name no room, 71 name the same room on
+  both sides.
+- **Points are sound:** 1,626 of 1,627 door points are the door's own insertion
+  point.
+
+**What this changes.** Step 2's worklist is 1,379 rooms, far too many to author by
+hand one at a time, so step 2 needs bulk tools (select several rooms, connect to
+one) and a first look at *why* 1,051 ordinary rooms have no door, which is a data
+question before it is a UI one: open-plan areas, doors modelled outside the
+pushed models, or archways that are not doors. Resolve that before building the
+connect flow.
