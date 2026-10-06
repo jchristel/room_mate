@@ -11,6 +11,7 @@
 pub mod adjacency;
 pub mod areas;
 pub mod comparison;
+pub mod connectivity;
 pub mod entity_scope;
 pub mod items;
 pub mod milestones;

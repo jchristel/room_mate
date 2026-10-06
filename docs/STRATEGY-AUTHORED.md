@@ -100,6 +100,14 @@ Identical discipline to a reference source (stored raw, joined as its own
 sub-object)
 and for the same reason: a stored snapshot must remain exactly what was pushed.
 
+**Provisional storage, decided 2026-10-06.** Connections are being built first as
+one JSON document per project beside the settings, not as the store stream below,
+so that the shortest-path work ([plan](PLAN-connectivity.md)) can ship without a
+new `SnapshotStore` method. The storage type is decided again once the three
+steps are done and everything that needs storing is known; milestone pinning is
+the main thing that document form gives up. Read the rest of this section as the
+candidate design, not the current one.
+
 **The one genuinely open question — durable vs per-snapshot.** Are connections
 re-authored when the geometry changes, or do they survive model pushes?
 

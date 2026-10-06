@@ -691,7 +691,7 @@ fn adjacency_revision(rooms_revision: &str, wall_max: f64) -> String {
 /// for geometry too degenerate to have one (an unplaced room), and to the origin
 /// for a room with no points at all — a node still needs a position, and a
 /// missing one is a diagnostic signal, not an error.
-fn centroid_of(room: &Room) -> Point2D {
+pub(super) fn centroid_of(room: &Room) -> Point2D {
     if let Some(c) = outer_polygon(room).and_then(|p| p.centroid()) {
         return Point2D { x: c.x(), y: c.y() };
     }

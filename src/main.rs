@@ -28,9 +28,9 @@ use roommate::bootstrap::build_state;
 use roommate::handlers::{
     activate_model_pending_snapshot, build_project_report, compare_project_milestones, get_ceilings, get_doors,
     get_ffe, get_floors, get_model_latest_snapshot, get_model_pending_snapshot, get_project_adjacency,
-    get_project_areas, get_project_buildings, get_project_milestones, get_project_snapshots, get_project_validation,
-    get_projects, get_reference_latest, get_reference_snapshots, get_report_columns, get_rooms, get_spaces,
-    get_windows, ingest_ceilings, ingest_ceilings_stream, ingest_doors, ingest_doors_stream, ingest_ffe,
+    get_project_areas, get_project_buildings, get_project_connectivity, get_project_milestones, get_project_snapshots,
+    get_project_validation, get_projects, get_reference_latest, get_reference_snapshots, get_report_columns, get_rooms,
+    get_spaces, get_windows, ingest_ceilings, ingest_ceilings_stream, ingest_doors, ingest_doors_stream, ingest_ffe,
     ingest_ffe_stream, ingest_floors, ingest_floors_stream, ingest_rooms, ingest_rooms_stream, ingest_spaces,
     ingest_spaces_stream, ingest_windows, ingest_windows_stream,
 };
@@ -365,6 +365,9 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // room SELECTION change, not the 2s poll -- its own trigger and its own
         // consumer, which is why it is not part of /rooms. See service::adjacency.
         .route("/projects/{id}/adjacency", get(get_project_adjacency))
+        // Door connectivity and the shortest route between two rooms: its own
+        // trigger (a pair of clicks) and its own consumer, so not part of /rooms.
+        .route("/projects/{id}/connectivity", get(get_project_connectivity))
         // Milestone comparison: a baseline-vs-each-other diff of rooms and a
         // user-defined property set. POST (not GET) for its list body — see
         // `handlers::compare_project_milestones`.

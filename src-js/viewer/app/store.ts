@@ -21,6 +21,7 @@ import type { AreasData } from "../areas.js";
 import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
+import { newRoute, pickEndpoint, type RouteState } from "../route.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
  *  enum of HTTP states: "waiting for data" (a 204 — the project exists and
@@ -34,6 +35,11 @@ export type Status = "starting" | "ready" | "waiting for data" | "connection los
  *  the renderer reads. */
 export interface ZoneRow {
   id: string;
+  /** This zone's route tool, or `null` when it is off. Per zone, like the
+   *  layers: a reader comparing two routes opens two zones, and each plan is
+   *  asked about its own start and end. The endpoints are room ids, so changing
+   *  the zone's level mid-route cannot lose either. */
+  route: RouteState | null;
   /** This zone's footprint overlay: on/off and which tier. Per zone because
    *  both are presentation — two zones showing one level at two tiers is a
    *  comparison the overlay exists to make. */
@@ -243,6 +249,10 @@ export interface ViewerState {
    *  `appearance`. Every field absent is the ordinary state and means the
    *  tooltip keeps naming the element. */
   hoverProperties: HoverProperties;
+  /** The zone whose route most recently took a pick, so a pick that did not
+   *  come from a plan (a grid row, a search chip) knows which route it is for
+   *  when several zones have the tool on. */
+  routeFocus: string | null;
 }
 
 const initial: ViewerState = {
@@ -272,6 +282,7 @@ const initial: ViewerState = {
   colourPlans: [],
   hiddenProperties: {},
   hoverProperties: {},
+  routeFocus: null,
 };
 
 let state: ViewerState = initial;
@@ -333,6 +344,8 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
       ? { ...from.pickable }
       : { room: true, door: true, window: true, item: true, space: false, ceiling: false, floor: false, area: true },
     spacesModel: from?.spacesModel ?? "",
+    // A copy of a zone does not copy an unfinished question.
+    route: null,
   };
 }
 
@@ -445,7 +458,51 @@ export function setZoneColourPlan(id: string, plan: string | null): void {
 /** Select one element, or nothing. `zoneId` is where the click came from, and
  *  is null for a selection made anywhere else (the grid, a search result). */
 export function select(kind: SelectionKind, id: string, zoneId: string | null = null): void {
+  // While a zone's route tool is on, a ROOM pick fills one of its endpoints
+  // instead of selecting. This one choke point is what makes every way of
+  // reaching a room work as an endpoint -- a plan click, an entry in the pick
+  // list, a grid row, a search chip -- without any of them knowing the tool
+  // exists. Every other kind still selects, so a door can be inspected mid-route.
+  if (kind === "room") {
+    const target = routeTarget(zoneId);
+    if (target) {
+      const zone = state.zones.find((z) => z.id === target)!;
+      setState({ routeFocus: target });
+      patchZoneRoute(target, pickEndpoint(zone.route!, id));
+      return;
+    }
+  }
   setState({ selection: { kind, id, zoneId } });
+}
+
+/** Which zone's route a room pick is for, or `null` for none.
+ *
+ *  A click on a plan is for THAT zone's route, if it has one -- and if it does
+ *  not, the click is an ordinary selection even while another zone is routing.
+ *  A pick from anywhere else (the grid, search) has no zone, so it goes to the
+ *  zone that last took one, else the first with the tool on. */
+function routeTarget(zoneId: string | null): string | null {
+  if (zoneId !== null) return state.zones.find((z) => z.id === zoneId)?.route ? zoneId : null;
+  const focused = state.zones.find((z) => z.id === state.routeFocus && z.route);
+  return (focused ?? state.zones.find((z) => z.route))?.id ?? null;
+}
+
+/** Turn one zone's route tool on (fresh) or off. */
+export function setZoneRouteMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) => (z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null } : z)),
+    routeFocus: on ? id : state.routeFocus,
+  });
+}
+
+/** Patch one zone's route; a no-op when its tool is off. */
+export function patchZoneRoute(id: string, patch: Partial<RouteState>): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.route ? { ...z, route: { ...z.route, ...patch } } : z)) });
+}
+
+/** Forget both endpoints, keeping the tool on and what it knows about the scope. */
+export function clearZoneRoute(id: string): void {
+  patchZoneRoute(id, { start: null, end: null, notice: null, result: { state: "idle" } });
 }
 
 export function clearSelection(): void {

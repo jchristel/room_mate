@@ -654,6 +654,38 @@
   .area-poly.selected { stroke: var(--accent); stroke-width: 5; stroke-dasharray: 6 3; fill-opacity: 0.42; }
   .area-label { fill: var(--ink); text-anchor: middle; dominant-baseline: middle;
                 pointer-events: none; font-weight: 600; }
+
+  /* The route tool (docs/PLAN-connectivity.md), one bar per zone. */
+  .routeBar {
+    display: flex; flex-wrap: wrap; align-items: baseline;
+    gap: 0.3rem 0.7rem; font-size: 0.7rem; padding: 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--rule); background: var(--paper);
+  }
+  .zone-toolbar button.route-toggle {
+    font-family: var(--mono); font-size: 0.72rem;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--ink); padding: 0.2rem 0.4rem; cursor: pointer;
+  }
+  .zone-toolbar button.route-toggle.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .routeBar .routeSlot.empty { opacity: 0.55; }
+  .routeBar .routeSlot.empty.next { opacity: 1; color: var(--accent); font-weight: 600; }
+  .routeBar .routeLevel { opacity: 0.65; }
+  .routeBar .routeResult { color: var(--accent); font-weight: 600; }
+  .routeBar .routeNotice { color: var(--ink); background: var(--fill); padding: 0.1rem 0.4rem; }
+  .routeBar .routeMatches { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; align-items: baseline; }
+  .routeBar button.chip, .routeBar button.link {
+    font-family: var(--mono); font-size: 0.68rem; cursor: pointer;
+    background: var(--paper); color: var(--ink); border: 1px solid var(--rule); padding: 0.05rem 0.35rem;
+  }
+  .routeBar button.link { border: none; color: var(--accent); background: none; padding: 0 0.2rem; }
+  .routeBar button.chip:hover { background: var(--fill); }
+  /* The route is a stroke with no fill, so it adds pixels without removing any
+     (the overlay rule), and non-scaling so it stays readable at any zoom. */
+  .route-line { fill: none; stroke: var(--accent); stroke-width: 4; vector-effect: non-scaling-stroke;
+                stroke-linejoin: round; stroke-linecap: round; pointer-events: none; }
+  .route-mark { stroke: var(--paper); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+  .route-mark.start { fill: #2e9e4f; }
+  .route-mark.end { fill: #d64545; }
   /* Areas results table (band 1). Table shape shared with the old overlay
      panel; the note/total/swatch styling carried over. */
   .band-body .note { opacity: 0.6; margin: 0 0 0.6rem; }

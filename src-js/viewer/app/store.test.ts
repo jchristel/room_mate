@@ -8,7 +8,17 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { getState, layerWanted, resetState, setRoomContents, setZoneLayer } from "./store.js";
+import {
+  addZone,
+  getState,
+  layerWanted,
+  patchZoneRoute,
+  resetState,
+  select,
+  setRoomContents,
+  setZoneLayer,
+  setZoneRouteMode,
+} from "./store.js";
 
 describe("layerWanted", () => {
   beforeEach(() => resetState());
@@ -46,5 +56,65 @@ describe("layerWanted", () => {
     // `ContentsEntity` and nothing can tick it into a fetch.
     expect(Object.keys(getState().roomContents)).not.toContain("spaces");
     expect(layerWanted("spaces")).toBe(false);
+  });
+});
+
+describe("a zone's route tool", () => {
+  beforeEach(() => resetState());
+
+  const ready = (zone: string, unreachable: string[] = []) => {
+    setZoneRouteMode(zone, true);
+    patchZoneRoute(zone, { unreachable: new Set(unreachable) });
+  };
+  const route = (zone: string) => getState().zones.find((z) => z.id === zone)!.route;
+
+  it("takes a plan click as an endpoint instead of selecting, and only in the zone that asked", () => {
+    addZone();
+    const [a, b] = getState().zones.map((z) => z.id) as [string, string];
+    ready(a);
+
+    select("room", "r1", a);
+    expect(route(a)!.start).toBe("r1");
+    expect(getState().selection).toBeNull();
+
+    // A click in the OTHER zone is an ordinary selection: it did not ask.
+    select("room", "r2", b);
+    expect(getState().selection?.id).toBe("r2");
+    expect(route(b)).toBeNull();
+  });
+
+  it("sends a pick with no zone (a grid row, a search chip) to the zone that last took one", () => {
+    addZone();
+    const [a, b] = getState().zones.map((z) => z.id) as [string, string];
+    ready(a);
+    ready(b);
+
+    select("room", "r1", a);
+    select("room", "r2", null);
+    expect(route(a)!.end).toBe("r2");
+    select("room", "r3", b);
+    select("room", "r4", null);
+    expect(route(b)!.end).toBe("r4");
+    expect(route(a)!.end).toBe("r2");
+  });
+
+  it("selects normally when no zone is routing, and for every kind but rooms", () => {
+    const a = getState().zones[0]!.id;
+    select("room", "r1", null);
+    expect(getState().selection?.id).toBe("r1");
+    ready(a);
+    select("door", "d1", a);
+    expect(getState().selection).toMatchObject({ kind: "door", id: "d1" });
+    expect(route(a)!.start).toBeNull();
+  });
+
+  it("turning the tool off forgets the route, and a copied zone does not inherit one", () => {
+    const a = getState().zones[0]!.id;
+    ready(a);
+    select("room", "r1", a);
+    addZone();
+    expect(getState().zones[1]!.route).toBeNull();
+    setZoneRouteMode(a, false);
+    expect(route(a)).toBeNull();
   });
 });
