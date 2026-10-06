@@ -338,6 +338,7 @@ def check_mcp_parity(findings: Findings) -> None:
         "/projects/{id}/buildings": "list_buildings", "/projects/{id}/validation": "get_validation",
         "/projects/{id}/snapshots": "list_snapshots", "/projects/{id}/milestones": "list_milestones",
         "/projects/{id}/areas": "get_hierarchy_areas", "/projects/{id}/adjacency": "get_adjacency",
+        "/projects/{id}/connectivity": "get_connectivity",
         "/projects/{id}/comparison": "compare_milestones",
         "/projects/{project_id}/models/{model_id}/snapshots/latest": "get_latest_snapshot",
         "/projects/{project_id}/models/{model_id}/snapshots/pending": "get_pending_snapshot",

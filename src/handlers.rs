@@ -29,6 +29,7 @@ use crate::contract::{
 use crate::service::adjacency;
 use crate::service::areas;
 use crate::service::comparison::{self, ComparisonResponse};
+use crate::service::connectivity;
 use crate::service::items;
 use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
@@ -2957,6 +2958,72 @@ pub async fn get_project_adjacency(
     }
 }
 
+/// Scoping and route for `GET /projects/{id}/connectivity`. Every value is a
+/// string for the reason `AdjacencyQuery::wall_max` is: a malformed one should
+/// reach `map_service_error` and be answered in this API's words.
+#[derive(Deserialize)]
+pub struct ConnectivityQuery {
+    #[serde(default)]
+    pub building: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<String>,
+    /// Predicates over DOORS (the `/doors` grammar). A door that fails one is
+    /// not in the graph.
+    #[serde(default)]
+    pub door_filter: Option<String>,
+    /// The start room id, and its model when the id alone is ambiguous.
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub from_model: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub to_model: Option<String>,
+    /// `distance` (default) or `hops`.
+    #[serde(default)]
+    pub metric: Option<String>,
+}
+
+/// Door connectivity and, when `from` and `to` are given, the shortest route
+/// between two rooms — see `service::connectivity`. 204 when no rooms have ever
+/// been pushed; an unreachable pair is a 200 with `path.found = false`.
+pub async fn get_project_connectivity(
+    State(state): State<Shared>,
+    Path(project_id): Path<String>,
+    Query(query): Query<ConnectivityQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let known = state.settings().known_reference_sources();
+    let door_filter = query
+        .door_filter
+        .as_deref()
+        .map(|s| rooms::RoomFilter::parse_query(s, &known))
+        .transpose()
+        .map_err(|msg| map_service_error(ServiceError::Invalid(msg)))?
+        .filter(|f| !f.is_empty());
+    let metric = connectivity::Metric::parse(query.metric.as_deref()).map_err(map_service_error)?;
+    let route = connectivity::endpoints(
+        query.from.as_deref(),
+        query.from_model.as_deref(),
+        query.to.as_deref(),
+        query.to_model.as_deref(),
+    )
+    .map_err(map_service_error)?;
+    let scope = connectivity::ConnectivityScope {
+        building: query.building.as_deref(),
+        milestone: query.milestone.as_deref(),
+        door_filter: door_filter.as_ref(),
+    };
+
+    let result =
+        connectivity::assemble_connectivity(&state, &project_id, &scope, route.as_ref().map(|(a, b)| (a, b)), metric)
+            .map_err(map_service_error)?;
+    match result {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(Json(result).into_response()),
+    }
+}
+
 /// The baseline milestone plus the milestones to compare against it. A POST
 /// body rather than query params because the compared set is a list (repeated
 /// query keys don't deserialize cleanly, and milestone names can contain any
@@ -3827,6 +3894,43 @@ mod tests {
 
     fn adjacency_query(wall_max: Option<&str>) -> AdjacencyQuery {
         AdjacencyQuery { building: None, milestone: None, wall_max: wall_max.map(str::to_string) }
+    }
+
+    fn connectivity_query(from: Option<&str>, to: Option<&str>) -> ConnectivityQuery {
+        ConnectivityQuery {
+            building: None,
+            milestone: None,
+            door_filter: None,
+            from: from.map(str::to_string),
+            from_model: None,
+            to: to.map(str::to_string),
+            to_model: None,
+            metric: None,
+        }
+    }
+
+    /// Connectivity answers an empty store like `/rooms` and `/adjacency`: 204.
+    #[tokio::test]
+    async fn test_get_connectivity_returns_204_when_store_empty() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let response =
+            get_project_connectivity(State(state), Path("p1".to_string()), Query(connectivity_query(None, None)))
+                .await
+                .expect("204 is not an error");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    /// A route with one end is the caller's mistake: 400, and the message says
+    /// what was missing.
+    #[tokio::test]
+    async fn test_get_connectivity_rejects_half_a_route_with_400() {
+        let state: Shared = std::sync::Arc::new(AppState::new(Box::new(MemStore::new()), single_project("p1"), None));
+        let (status, message) =
+            get_project_connectivity(State(state), Path("p1".to_string()), Query(connectivity_query(Some("r1"), None)))
+                .await
+                .expect_err("one end is not a route");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("from") && message.contains("to"), "{message}");
     }
 
     /// Adjacency mirrors `/rooms` and `/areas` on the empty store: 204, and

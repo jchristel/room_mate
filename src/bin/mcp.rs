@@ -1,6 +1,7 @@
 //! roommate's MCP server: exposes the read side as MCP tools over stdio, one
 //! per existing HTTP read route -- `list_projects`, `list_buildings`,
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
+//! `get_connectivity`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
@@ -8,7 +9,7 @@
 //! `list_saved_reports`, `get_saved_report` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Twenty-seven in
+//! and the one forwarded mutation (`upload_reference`, below). Twenty-eight in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -52,8 +53,8 @@ use roommate::contract::{CeilingPayload, FloorPayload};
 use roommate::default_http_addr;
 use roommate::reports_api;
 use roommate::service::{
-    adjacency, areas, comparison, items, milestones, openings, projects, reference, reports, rooms, snapshots, spaces,
-    surfaces, validation, ServiceError,
+    adjacency, areas, comparison, connectivity, items, milestones, openings, projects, reference, reports, rooms,
+    snapshots, spaces, surfaces, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -282,6 +283,44 @@ struct AdjacencyParams {
     /// different tolerance than the project declares; must be between 0 and 5.
     #[serde(default)]
     wall_max: Option<f64>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ConnectivityParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Opaque building key from `list_buildings`. Scopes the ROOMS; a door is in
+    /// the graph when its rooms are. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`: build the graph from the rooms and
+    /// doors that milestone pins instead of each model's latest. Omit for latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Property predicates over DOORS, ALL of which must hold (AND). A door that
+    /// fails one is not in the graph, so a route that needed it stops existing:
+    /// ["Fire Rating!=FRL120"] asks for a route that avoids those doors. Same
+    /// grammar as get_doors' filter. Omit for every door.
+    #[serde(default)]
+    door_filter: Vec<String>,
+    /// Start room id. Give BOTH `from` and `to` to get a route, or neither for
+    /// the graph alone. A room id is unique only within its model: if two models
+    /// hold it the call is refused and names them, and `from_model` resolves it.
+    #[serde(default)]
+    from: Option<String>,
+    /// The model of the start room, only needed when `from` exists in several.
+    #[serde(default)]
+    from_model: Option<String>,
+    /// End room id. See `from`.
+    #[serde(default)]
+    to: Option<String>,
+    /// The model of the end room, only needed when `to` exists in several.
+    #[serde(default)]
+    to_model: Option<String>,
+    /// `distance` (default, approximate walking distance in feet) or `hops`
+    /// (fewest doors).
+    #[serde(default)]
+    metric: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -957,6 +996,46 @@ impl RoommateMcp {
             p.building.as_deref(),
             p.milestone.as_deref(),
             p.wall_max,
+        )
+        .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Door connectivity and the shortest route between two rooms -- see
+    /// `service::connectivity::assemble_connectivity`. The same read the HTTP
+    /// `GET /projects/{id}/connectivity` uses, including the refusal to guess
+    /// between models.
+    #[tool(
+        description = "Build the DOOR connectivity graph for one project -- which rooms are joined by a door -- and, when `from` and `to` are given, the shortest route between two rooms. Optionally scoped by building key and milestone name, and by `door_filter` predicates over doors (a door that fails one is not in the graph, so \"Fire Rating!=FRL120\" asks for a route avoiding those doors). \
+                       THE GRAPH IS DOORS ONLY, and that is a limit of the method, not a fact about the building: a bay, an open-plan area, an archway modelled as a wall opening, or a shaft has no door, so it appears under `isolated` and no route reaches it. An isolated room is NOT a model fault and `isolated` is not a list of bays -- it is the list of rooms this method cannot reach, and some of them are simply rooms whose doors name no room. No route crosses a LEVEL either: until connections between levels are authored, a route from one storey to another is reported as not found. \
+                       A route that does not exist is a FINDING, not an error: `path.found` is false and `path.reason` names the component each room is in. Do not report it as 'these rooms are not connected'; report it as 'no door route', and read `isolated` and `components` before concluding anything. An error means the request was wrong -- a room that is not in scope, or a bare room id that exists in several models (the message lists them; pass `from_model`/`to_model`). \
+                       Other reported states: `exits` on a node counts doors with that room on one side and nothing on the other (the way outside, or into a model that holds no rooms) -- they are not edges; `counts` tallies doors that name no room (`unattached`), the same room twice (`same_room`) or a room outside the scope (`out_of_scope`); `doors_pushed` false means NO doors snapshot exists for the project, so every room is isolated for that reason alone. \
+                       `path.distance_ft` is an APPROXIMATE walking distance (room centroid to door to room centroid): good for ranking routes, not a figure to quote as a measured distance. Each edge's `point_source` says whether its door point was the door's own insertion point, its footprint, or a midpoint between the rooms because the door had neither. Rooms are always named by `model_id` plus `room_id`. `path.segments` is the route as polylines, one per run on one level, in the project's local frame."
+    )]
+    fn get_connectivity(&self, Parameters(p): Parameters<ConnectivityParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.door_filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let metric = connectivity::Metric::parse(p.metric.as_deref()).map_err(to_mcp_error)?;
+        let route =
+            connectivity::endpoints(p.from.as_deref(), p.from_model.as_deref(), p.to.as_deref(), p.to_model.as_deref())
+                .map_err(to_mcp_error)?;
+        let scope = connectivity::ConnectivityScope {
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            door_filter: Some(&filter).filter(|f| !f.is_empty()),
+        };
+        let result = connectivity::assemble_connectivity(
+            &self.state,
+            &p.project_id,
+            &scope,
+            route.as_ref().map(|(a, b)| (a, b)),
+            metric,
         )
         .map_err(to_mcp_error)?;
         match result {
