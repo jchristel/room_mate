@@ -31,14 +31,14 @@ invariants that are expensive to rediscover.
   text, and the hierarchy scopes that bind them — will be stored, pinned by
   milestones, and served. Read it before building any of that.
 - **[Entities](STRATEGY-ENTITIES.md)** — what makes something a primary entity
-  rather than a reference source, and what five of them proved comes for free.
+  rather than a reference source, and what seven of them proved comes for free.
   Open: the door connectivity graph, design options, the geometric space↔room
   check, FF&E at scale.
-- **[Reports](STRATEGY-REPORTS.md)** — *nothing here is built.* The `/reports/`
-  page and the association reports on it — ceilings, spaces and FF&E by room —
+- **[Reports](STRATEGY-REPORTS.md)** — the `/reports/` page is built. Open: server debts
+  (streamed CSV, report URLs) and the design of association reports — ceilings, spaces and FF&E by room —
   and why the user picks an association rather than defining a join.
 - **[Security](STRATEGY-SECURITY.md)** — the threat model for the near-future
-  shift from a loopback bind to a LAN-reachable server. Mostly unbuilt by design.
+  shift from a loopback bind to a LAN-reachable server. Rate limiting is the one bound still unbuilt.
   **Read it before widening the bind past `127.0.0.1`.**
 
 Implementation rules live in [Coding Conventions](CODING-CONVENTIONS.md).
