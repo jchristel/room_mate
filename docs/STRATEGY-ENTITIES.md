@@ -157,7 +157,6 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
 
 ## Deferred
 
-
 - **Design options, as a second model-variant axis.** They cross phase the same
   way, and the same "one at a time, chosen at export" logic would apply. Still no
   varying sample data — all 26 House A doors sit in `{"option_name": "-",
