@@ -54,8 +54,11 @@ pub fn default_http_addr() -> String {
     format!("{DEFAULT_HTTP_HOST}:{DEFAULT_HTTP_PORT}")
 }
 
+pub mod backups;
 pub mod bootstrap;
 pub mod classify;
+pub mod connections;
+pub mod connections_api;
 pub mod contract;
 
 /// A saved report definition — see `roommate_shared::reports`. Re-exported so
