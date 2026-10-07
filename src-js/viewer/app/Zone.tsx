@@ -325,7 +325,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
         </button>
         <button
           className={`route-toggle${zone.edit ? " on" : ""}`}
-          title="Define open zones (rooms the model does not join with doors) and vertical zones (stairs and lifts)"
+          title="Define open zones (rooms the model does not join with doors) and vertical links (floor-to-floor hops for lifts and stairs)"
           onClick={() => setZoneEditMode(zone.id, zone.edit === null)}
         >
           Connections

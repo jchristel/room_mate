@@ -215,8 +215,8 @@ Recorded as the steps are built; this list is the input to the storage decision.
 **After step 2:**
 
 - A document per project: `schema_version`, `taken_at`, `zones[]`.
-- A zone: `id`, `name`, `kind` (`open` or `vertical`), `rooms[] {model_id, room_id}`,
-  `note`, and for a vertical zone `level_cost_ft`.
+- A zone: `id`, `name`, `kind` (`open`), `rooms[] {model_id, room_id}`, `note`.
+- A link: `id`, `a`, `b` (model-qualified rooms), `cost_ft`, `note`.
 - A version stamp per save and a check against it (optimistic concurrency).
 - A copy of each replaced document (20 kept): history is recovery only, not
   pinned or queryable. Nothing has yet asked for either.
@@ -224,10 +224,10 @@ Recorded as the steps are built; this list is the input to the storage decision.
   and nothing re-links it.
 - Nothing stores anything derived.
 
-**After step 3:** one new field, `level_cost_ft`, and one new kind. Nothing asked
-for history, pinning, or per-room roles; the one pressure was a stack that needs
-its stack rooms and its access rooms told apart (see step 3), which would add a
-second room list to the record.
+**After step 3:** a second list, `links`, beside `zones`. Nothing asked for history,
+pinning or per-room roles. The pressure that a zone cannot tell a lift from its
+lobbies was answered by making a vertical connection two rooms rather than by
+adding roles, so the record stayed small.
 
 ### Server and viewer
 
@@ -258,42 +258,62 @@ second room list to the record.
 - The route tool's description gains the authored half: connections are
   user-stated, not model-derived; `stale_connections` is a finding.
 
-## Step 3 — vertical connections (built)
+## Step 3 — vertical connections (built, as manual links)
 
-**Status: built.** It is the same record as an open zone with `kind: "vertical"`
-(`src/connections.rs`, `service::connectivity`, the editor's kind select).
+**Status: built.** A vertical connection is **one explicit link between two
+rooms on different storeys, drawn by hand**, one floor-to-floor hop per link
+(`src/connections.rs`, `service::connectivity`, the editor's "Vertical link"
+mode). A lift or stair is a run of links (level 1 to 2, 2 to 3, ...), never a jump
+from level 1 to 8.
 
-- **A vertical zone is a stack.** Its members are open to each other across the
-  walls they share on one storey (exactly as an open zone), and each member of a
-  storey is joined to each member of the NEXT storey the zone reaches. A chain,
-  not a clique, so a stair cannot skip a floor and a route across several storeys
-  pays once per storey crossed. A storey the zone skips is skipped.
-- **Cost is per zone, not a setting** (a change from this plan's first version).
-  `level_cost_ft` is stored on the zone, default 40 ft, because a stair and a lift
-  do not cost the same and a per-zone value needs no settings field, regenerated
-  TypeScript, settings-page control or SETTINGS.md entry. It is the walking
-  equivalent of one storey change, an assumption and not a measurement.
-- **Storeys are the canonical level ids** the rooms read already dedups across
-  linked models by name plus elevation, ordered by their elevation. A vertical
-  zone whose members share one storey joins nothing between storeys, and the
-  report says so (`storeys: 1`) and the editor refuses to save one.
-- **Routing:** a step has `kind: vertical`, its length is the stated cost, and the
-  polyline breaks into one segment per level, so each viewer zone draws its own
-  slice. Verified on the largest project: a lift-lobby stack across ten storeys, a
-  route from a ground-floor corridor to the Level 1 lobby ("0 doors, 1 level
-  change, about 40 ft"), the Ground slice showing the start and Level 1 the end,
-  the route kept when the zone's level changed.
-- **MCP:** no new tool. `get_connectivity`'s description now says how a route
-  crosses a level and what its cost is; `list_connections` describes both kinds.
-- **Known overstatement, recorded because it was found by driving it:** the chain
-  joins EVERY member of one storey to EVERY member of the next, so a corridor in
-  the zone on one level is joined straight to the lobby on the next, skipping the
-  walk to the lift. The cost of a lift is also charged per storey crossed, which
-  overstates it. Both are consequences of a zone being one flat list of rooms. The
-  fix, if it matters, is to tell a zone's stack members from its access members
-  (two lists), which is also the `group` edge this plan named for lifts.
-- **Not built:** suggestions of vertical candidates by plan overlap, and a
-  per-storey-skipping lift (reach any floor in one ride).
+**What it replaced, and why.** The first version of this step was a "vertical
+zone": a flat list of rooms, joined across storeys by a chain. It could not tell
+a lift room from the lobbies and corridors around it, so a corridor on one level
+was joined straight to the next level and skipped the walk to the lift. Fixing it
+needed roles inside a zone, which made the model heavier than the thing it
+described. Two rooms per link has no such ambiguity, so the zone kind was removed
+(a document that still names one fails to load loudly instead of being read as
+an open zone).
+
+- **The record:** `{ id, a, b, cost_ft?, note? }` with `a` and `b` model-qualified
+  rooms, in a `links` list beside `zones` in the same document. `cost_ft` is the
+  walking-equivalent feet for that hop (default 40, an assumption and not a
+  measurement); it is per link because a lift hop and a stair hop differ.
+- **Applied when it can be, reported when it cannot** (`connections.links[]`): a
+  room that is no longer in scope, both rooms on one storey, or a pair a door,
+  zone or earlier link already joins. It also reports `levels_between`, the number
+  of storeys with rooms lying strictly between the two rooms: above 0 means the
+  link skips storeys. That is reported, not refused, because the person drew it.
+  **On a project whose buildings interleave their levels** (the largest one has
+  car-park levels between hospital floors) a perfectly good floor-to-floor link can
+  report a skip, so read it as a prompt to look and not as an error.
+- **Routing:** the step has `kind: vertical` and a `link_id`, its length is the
+  stated cost, and the polyline breaks into one segment per level so each viewer
+  zone draws its own slice.
+- **Editor:** pick the lower room, change the zone's level picker, pick the other
+  room, Save link. A third pick replaces the second. Nothing is added in bulk.
+- **MCP:** no new tool. `list_connections` returns both lists, and
+  `get_connectivity` describes links and the `connections.links` block.
+
+**Proposed, not built: suggest the rooms stacked above and below a picked one.**
+The idea: pick a room and offer the rooms on the neighbouring storeys that sit over
+or under it, to confirm one at a time, instead of finding each by hand. It would
+be a suggestion and never a write, like every derived thing here.
+
+- **The signal is plan overlap, scored relative to the smaller room**, so a stair
+  whose outline shifts or turns between levels still scores well where its shaft
+  footprint overlaps. A lift shaft overlaps almost completely; a switchback stair
+  overlaps by the shaft it shares and misses by its landings.
+- **Boosts, not requirements:** a shared name stem (`LIFT 3 TRA003` and
+  `LIFT 3 TRA032` share `LIFT 3`), a shared room type.
+- **Floor to floor only:** only the next storey up and the next storey down are
+  searched, ranked, with the overlap shown, so the person confirms rather than
+  trusts. A room with no overlapping candidate (a stair that moved) is the case
+  that stays manual.
+- **Cost:** a new read (candidates for one room) and so a new MCP tool, and the
+  overlap machinery already exists (`service::surface_attribution`). **Measure
+  first:** on the largest project, how many lift and stair rooms have a candidate
+  on the adjacent storeys at a given overlap threshold, and how many do not.
 
 ## Critique of this plan
 
