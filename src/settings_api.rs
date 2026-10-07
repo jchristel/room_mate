@@ -409,7 +409,7 @@ pub fn save_project(
     // that cannot be written refuses the save, because an unrecoverable
     // overwrite is exactly what the backup exists to prevent.
     if previous.is_some()
-        && let Err(e) = backup_settings(&projects_dir, &id, &target)
+        && let Err(e) = crate::backups::back_up(&projects_dir, &id, "toml", &target).map_err(SettingsError::Internal)
     {
         std::fs::remove_file(&temp).ok();
         return Err(e);
@@ -420,68 +420,11 @@ pub fn save_project(
     // and swap it in.
     std::fs::rename(&temp, &target)
         .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not install settings file: {e}")))?;
-    prune_backups(&projects_dir, &id);
+    crate::backups::prune(&projects_dir, &id, "toml");
 
     reload_and_swap(state, &projects_dir)?;
     tracing::info!("settings saved and applied: {} ({})", id, file_name(&target));
     Ok(settings)
-}
-
-/// Directory under the projects dir holding prior versions of settings files.
-/// A subdirectory, so `settings_files` (which lists `*.toml` in the projects
-/// dir itself) can never mistake a backup for a live project.
-const BACKUP_DIR: &str = ".backups";
-
-/// Backups kept per project; older ones are pruned after a successful install.
-const BACKUPS_KEPT: usize = 20;
-
-/// Length of the timestamp in a backup name, `20260101T000000.000000Z`.
-const BACKUP_STAMP_LEN: usize = 23;
-
-/// Copy the settings file about to be replaced to
-/// `.backups/<id>.<utc-stamp>.toml`. A copy, never a move: the live file stays
-/// until the rename installs its replacement. The stamp is UTC and sorts
-/// lexically like a snapshot id, but is not RFC 3339 — a colon is not a legal
-/// file-name character on Windows. Never overwrites: a name collision is an
-/// error rather than a silent loss of the older backup.
-fn backup_settings(projects_dir: &Path, id: &str, target: &Path) -> Result<(), SettingsError> {
-    let dir = projects_dir.join(BACKUP_DIR);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not create {}: {e}", dir.display())))?;
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ");
-    let backup = dir.join(format!("{id}.{stamp}.toml"));
-    if backup.exists() {
-        return Err(SettingsError::Internal(anyhow::anyhow!("backup {} already exists", backup.display())));
-    }
-    std::fs::copy(target, &backup)
-        .map_err(|e| SettingsError::Internal(anyhow::anyhow!("could not back up {}: {e}", file_name(target))))?;
-    Ok(())
-}
-
-/// Keep the newest `BACKUPS_KEPT` backups of one project. Best effort and run
-/// after the install: failing to prune costs disk, never a save. A name only
-/// counts as this project's when what follows `<id>.` is exactly a stamp, so
-/// project `a` never prunes project `a.b`'s history.
-fn prune_backups(projects_dir: &Path, id: &str) {
-    let dir = projects_dir.join(BACKUP_DIR);
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
-    let prefix = format!("{id}.");
-    let mut mine: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            let name = file_name(p);
-            name.strip_prefix(&prefix)
-                .and_then(|rest| rest.strip_suffix(".toml"))
-                .is_some_and(|stamp| stamp.len() == BACKUP_STAMP_LEN && stamp.ends_with('Z'))
-        })
-        .collect();
-    mine.sort();
-    let excess = mine.len().saturating_sub(BACKUPS_KEPT);
-    for old in mine.into_iter().take(excess) {
-        if let Err(e) = std::fs::remove_file(&old) {
-            tracing::warn!("could not prune settings backup {}: {e}", old.display());
-        }
-    }
 }
 
 /// Rebuild the registry from the whole projects directory and swap it in —
@@ -687,6 +630,7 @@ pub async fn http_upload_reference(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backups::{BACKUPS_KEPT, BACKUP_DIR};
     use crate::settings::RoomResolution;
     use crate::storage::MemStore;
     use std::collections::HashMap;

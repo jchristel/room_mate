@@ -20,8 +20,8 @@ const path = (found: boolean): RoutePath => ({
   distance_ft: 41.6,
   rooms: [],
   steps: [
-    { door_id: "d1", point: { x: 1, y: 2 } },
-    { door_id: "d2", point: { x: 3, y: 4 } },
+    { kind: "door", door_id: "d1", point: { x: 1, y: 2 } },
+    { kind: "door", door_id: "d2", point: { x: 3, y: 4 } },
   ],
   segments: [
     { level_id: "L1", points: [{ x: 0, y: 0 }, { x: 5, y: 5 }] },
@@ -124,6 +124,9 @@ describe("describeResult", () => {
     expect(describeResult({ state: "loading" })).toBe("Finding route…");
     expect(describeResult({ state: "error", message: "nope" })).toBe("nope");
     expect(describeResult({ state: "done", path: path(true) })).toBe("2 doors, about 42 ft");
+    const mixed = path(true);
+    mixed.steps[1] = { kind: "zone", zone_id: "z1", point: { x: 3, y: 4 } };
+    expect(describeResult({ state: "done", path: mixed })).toBe("1 door, 1 open-zone hop, about 42 ft");
     expect(describeResult({ state: "done", path: path(false) })).toBe("no route through doors");
   });
 });

@@ -51,7 +51,10 @@ interface Summary {
 }
 
 export function RoutePanel({ zone }: { zone: ZoneRow }) {
-  const { scope, payload, search, routeFocus } = useViewer();
+  const { scope, payload, search, toolFocus, connections } = useViewer();
+  // A saved or deleted open zone changes which rooms a door-or-zone route can
+  // reach, so it is a reason to ask the server again.
+  const connectionsVersion = connections.projectId === scope.projectId ? (connections.doc?.taken_at ?? "") : "";
   const route = zone.route;
   const zoneId = zone.id;
   const patchRoute = (patch: Partial<RouteState>) => patchZoneRoute(zoneId, patch);
@@ -83,7 +86,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
     return () => ac.abort();
     // `scope` is spread into the key; the object itself changes identity freely.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, scopeKey, revision]);
+  }, [active, scopeKey, revision, connectionsVersion]);
 
   // The route, once both ends are placed.
   useEffect(() => {
@@ -100,17 +103,17 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
     });
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, start, end, scopeKey, revision]);
+  }, [active, start, end, scopeKey, revision, connectionsVersion]);
 
   // Escape leaves the tool, like every other transient thing on this page.
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && routeFocus === zoneId) setZoneRouteMode(zoneId, false);
+      if (e.key === "Escape" && toolFocus === zoneId) setZoneRouteMode(zoneId, false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, routeFocus, zoneId]);
+  }, [active, toolFocus, zoneId]);
 
   const rooms = useMemo(() => new Map((payload?.rooms ?? []).map((r) => [r.id, r])), [payload]);
   const levels = payload?.levels ?? [];

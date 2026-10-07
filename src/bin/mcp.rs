@@ -1,7 +1,7 @@
 //! roommate's MCP server: exposes the read side as MCP tools over stdio, one
 //! per existing HTTP read route -- `list_projects`, `list_buildings`,
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
-//! `get_connectivity`,
+//! `get_connectivity`, `list_connections`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
@@ -9,7 +9,7 @@
 //! `list_saved_reports`, `get_saved_report` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Twenty-eight in
+//! and the one forwarded mutation (`upload_reference`, below). Twenty-nine in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -357,6 +357,21 @@ fn reports_to_mcp_error(err: roommate::reports_api::ReportsError) -> McpError {
         ReportsError::NotFound(msg) | ReportsError::Invalid(msg) => McpError::invalid_params(msg, None),
         ReportsError::Internal(e) => {
             tracing::error!("saved reports error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn connections_to_mcp_error(err: roommate::connections::ConnectionsError) -> McpError {
+    use roommate::connections::ConnectionsError;
+    match err {
+        ConnectionsError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no connections to read".to_string(),
+            None,
+        ),
+        ConnectionsError::Invalid(msg) | ConnectionsError::Conflict(msg) => McpError::invalid_params(msg, None),
+        ConnectionsError::Internal(e) => {
+            tracing::error!("connections error: {e:#}");
             McpError::internal_error("internal error".to_string(), None)
         }
     }
@@ -1016,8 +1031,8 @@ impl RoommateMcp {
     /// `GET /projects/{id}/connectivity` uses, including the refusal to guess
     /// between models.
     #[tool(
-        description = "Build the DOOR connectivity graph for one project -- which rooms are joined by a door -- and, when `from` and `to` are given, the shortest route between two rooms. Optionally scoped by building key and milestone name, and by `door_filter` predicates over doors (a door that fails one is not in the graph, so \"Fire Rating!=FRL120\" asks for a route avoiding those doors). \
-                       THE GRAPH IS DOORS ONLY, and that is a limit of the method, not a fact about the building: a bay, an open-plan area, an archway modelled as a wall opening, or a shaft has no door, so it appears under `isolated` and no route reaches it. An isolated room is NOT a model fault and `isolated` is not a list of bays -- it is the list of rooms this method cannot reach, and some of them are simply rooms whose doors name no room. No route crosses a LEVEL either: until connections between levels are authored, a route from one storey to another is reported as not found. \
+        description = "Build the connectivity graph for one project -- which rooms are joined by a DOOR, or by an OPEN ZONE a user authored (see list_connections) -- and, when `from` and `to` are given, the shortest route between two rooms. Optionally scoped by building key and milestone name, and by `door_filter` predicates over doors (a door that fails one is not in the graph, so \"Fire Rating!=FRL120\" asks for a route avoiding those doors). \
+                       THE GRAPH IS DOORS PLUS WHATEVER OPEN ZONES SOMEBODY HAS AUTHORED, and that is a limit of the method, not a fact about the building: a bay, an open-plan area, an archway modelled as a wall opening, or a shaft has no door, so unless a zone covers it it appears under `isolated` and no route reaches it. An isolated room is NOT a model fault and `isolated` is not a list of bays -- it is the list of rooms this method cannot reach, and some of them are simply rooms whose doors name no room. Each edge and each route step says `kind`: `door` (from the model) or `zone` (user-stated: a hop across a wall two members of one zone share). Read the `connections` block before trusting a route that uses a zone: it lists each zone's stale members, members sharing no wall with another member (`unlinked`) and `reaches_doors`, and `pinned` is false because a milestone view applies TODAY'S connections. No route crosses a LEVEL either: connections between levels are not built yet, so a route from one storey to another is reported as not found. \
                        A route that does not exist is a FINDING, not an error: `path.found` is false and `path.reason` names the component each room is in. Do not report it as 'these rooms are not connected'; report it as 'no door route', and read `isolated` and `components` before concluding anything. An error means the request was wrong -- a room that is not in scope, or a bare room id that exists in several models (the message lists them; pass `from_model`/`to_model`). \
                        Other reported states: `exits` on a node counts doors with that room on one side and nothing on the other (the way outside, or into a model that holds no rooms) -- they are not edges; `counts` tallies doors that name no room (`unattached`), the same room twice (`same_room`) or a room outside the scope (`out_of_scope`); `doors_pushed` false means NO doors snapshot exists for the project, so every room is isolated for that reason alone. \
                        `path.distance_ft` is an APPROXIMATE walking distance (room centroid to door to room centroid): good for ranking routes, not a figure to quote as a measured distance. Each edge's `point_source` says whether its door point was the door's own insertion point, its footprint, or a midpoint between the rooms because the door had neither. Rooms are always named by `model_id` plus `room_id`. `path.segments` is the route as polylines, one per run on one level, in the project's local frame. THE DEFAULT RESPONSE OMITS `nodes` AND `edges` (a large project's graph is over a megabyte); it still carries components, isolated rooms, counts and the route. Pass detail=full only when you need the graph itself."
@@ -1051,6 +1066,16 @@ impl RoommateMcp {
             )])),
             Some(result) => json_result(&result),
         }
+    }
+
+    /// The authored connections for one project -- see `connections::load`.
+    #[tool(
+        description = "List the OPEN ZONES somebody authored for one project: each is a named set of rooms (model_id plus room_id) declared to be one open space, so every wall two of its members share is treated as open and the rooms connect as a door would connect them. These are USER-STATED, not read from the model, and they are applied by get_connectivity (its `connections` block reports what each zone did: edges added, pairs a door already joined, stale members, members sharing no wall with another member, and whether the zone reaches a door at all). `taken_at` is the version of the document; an empty list with an empty taken_at means nobody has authored anything, which is not the same as a model with no open spaces. A member naming a room that no longer exists is reported as stale by get_connectivity, never an error. Writing zones is HTTP-only (PUT /projects/{id}/connections)."
+    )]
+    fn list_connections(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let document = roommate::connections::load(&dir, &p.project_id).map_err(connections_to_mcp_error)?;
+        json_result(&document)
     }
 
     /// Lists every uploaded snapshot id for one project's reference source --

@@ -20,6 +20,8 @@ import { buildColourContext, colourForRoom } from "../colour.js";
 import { errorRoomIds } from "../validation.js";
 import { AreasOverlay } from "./AreasOverlay.js";
 import { RouteOverlay } from "./RouteOverlay.js";
+import { OpenZoneOverlay } from "./OpenZoneOverlay.js";
+import { OpenZonePanel } from "./OpenZonePanel.js";
 import { RoutePanel } from "./RoutePanel.js";
 import { LayerMenu } from "./LayerMenu.js";
 import { SelectionFilter } from "./SelectionFilter.js";
@@ -29,7 +31,7 @@ import { tierNames } from "../areas.js";
 import { elementsOnStorey, zoneAwaitsLayers, type ElementOf } from "./layers.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
-import { closePickList, setZoneAreas, setZoneColourPlan, setZoneLevel, setZoneRouteMode, type ZoneRow } from "./store.js";
+import { closePickList, setZoneAreas, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneRouteMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
@@ -321,6 +323,13 @@ export function Zone({ zone }: { zone: ZoneRow }) {
         >
           Route
         </button>
+        <button
+          className={`route-toggle${zone.edit ? " on" : ""}`}
+          title="Define open zones: rooms the model does not join with doors but that are one open space"
+          onClick={() => setZoneEditMode(zone.id, zone.edit === null)}
+        >
+          Open zones
+        </button>
         {zone.areasMode && areas ? (
           <select
             className="picker areasTier"
@@ -349,6 +358,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
         </span>
       </div>
       <RoutePanel zone={zone} />
+      <OpenZonePanel zone={zone} />
       <div className="zone-canvas">
         <canvas className="plan-gl" ref={canvasRef} />
         <svg className={`plan${zone.areasMode ? " areas-active" : ""}`} ref={svgRef} xmlns="http://www.w3.org/2000/svg">
@@ -363,6 +373,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
             active={zone.areasMode}
             selectedKey={selection?.kind === "area" ? selection.id : null}
           />
+          <OpenZoneOverlay levelId={levelId} edit={zone.edit} />
           {/* Above the footprints: a route is the thing being asked about. */}
           <RouteOverlay zoneId={zone.id} levelId={levelId} route={zone.route} />
         </svg>

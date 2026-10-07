@@ -21,6 +21,7 @@ import type { AreasData } from "../areas.js";
 import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
+import { newEdit, toggleMember, type ConnectionsDoc, type ZoneEdit } from "../connections.js";
 import { newRoute, pickEndpoint, type RouteState } from "../route.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
@@ -40,6 +41,9 @@ export interface ZoneRow {
    *  asked about its own start and end. The endpoints are room ids, so changing
    *  the zone's level mid-route cannot lose either. */
   route: RouteState | null;
+  /** This zone's open-zone editor, or `null` when it is off. Exclusive with
+   *  `route`: both claim a room pick. */
+  edit: ZoneEdit | null;
   /** This zone's footprint overlay: on/off and which tier. Per zone because
    *  both are presentation — two zones showing one level at two tiers is a
    *  comparison the overlay exists to make. */
@@ -249,10 +253,13 @@ export interface ViewerState {
    *  `appearance`. Every field absent is the ordinary state and means the
    *  tooltip keeps naming the element. */
   hoverProperties: HoverProperties;
-  /** The zone whose route most recently took a pick, so a pick that did not
-   *  come from a plan (a grid row, a search chip) knows which route it is for
-   *  when several zones have the tool on. */
-  routeFocus: string | null;
+  /** The zone whose tool most recently took a pick, so a pick that did not
+   *  come from a plan (a grid row, a search chip) knows which tool it is for
+   *  when several zones have one on. */
+  toolFocus: string | null;
+  /** The project's authored connections, as last read, for the open-zone editor
+   *  and for whatever reads that depend on them. `doc` is `null` until read. */
+  connections: { projectId: string | null; doc: ConnectionsDoc | null; error: string | null };
 }
 
 const initial: ViewerState = {
@@ -282,7 +289,8 @@ const initial: ViewerState = {
   colourPlans: [],
   hiddenProperties: {},
   hoverProperties: {},
-  routeFocus: null,
+  toolFocus: null,
+  connections: { projectId: null, doc: null, error: null },
 };
 
 let state: ViewerState = initial;
@@ -346,6 +354,7 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
     spacesModel: from?.spacesModel ?? "",
     // A copy of a zone does not copy an unfinished question.
     route: null,
+    edit: null,
   };
 }
 
@@ -458,41 +467,74 @@ export function setZoneColourPlan(id: string, plan: string | null): void {
 /** Select one element, or nothing. `zoneId` is where the click came from, and
  *  is null for a selection made anywhere else (the grid, a search result). */
 export function select(kind: SelectionKind, id: string, zoneId: string | null = null): void {
-  // While a zone's route tool is on, a ROOM pick fills one of its endpoints
-  // instead of selecting. This one choke point is what makes every way of
-  // reaching a room work as an endpoint -- a plan click, an entry in the pick
-  // list, a grid row, a search chip -- without any of them knowing the tool
-  // exists. Every other kind still selects, so a door can be inspected mid-route.
+  // While a zone has a room-picking tool on (the route tool, or the open-zone
+  // editor), a ROOM pick belongs to that tool instead of selecting. This one
+  // choke point is what makes every way of reaching a room work with either --
+  // a plan click, an entry in the pick list, a grid row, a search chip --
+  // without any of them knowing the tools exist. Every other kind still
+  // selects, so a door can be inspected mid-route.
   if (kind === "room") {
-    const target = routeTarget(zoneId);
+    const target = toolTarget(zoneId);
     if (target) {
       const zone = state.zones.find((z) => z.id === target)!;
-      setState({ routeFocus: target });
-      patchZoneRoute(target, pickEndpoint(zone.route!, id));
+      setState({ toolFocus: target });
+      if (zone.route) patchZoneRoute(target, pickEndpoint(zone.route, id));
+      else if (zone.edit) patchZoneEdit(target, toggleMember(zone.edit, id));
       return;
     }
   }
   setState({ selection: { kind, id, zoneId } });
 }
 
-/** Which zone's route a room pick is for, or `null` for none.
- *
- *  A click on a plan is for THAT zone's route, if it has one -- and if it does
- *  not, the click is an ordinary selection even while another zone is routing.
- *  A pick from anywhere else (the grid, search) has no zone, so it goes to the
- *  zone that last took one, else the first with the tool on. */
-function routeTarget(zoneId: string | null): string | null {
-  if (zoneId !== null) return state.zones.find((z) => z.id === zoneId)?.route ? zoneId : null;
-  const focused = state.zones.find((z) => z.id === state.routeFocus && z.route);
-  return (focused ?? state.zones.find((z) => z.route))?.id ?? null;
+/** Whether a zone has a room-picking tool on. */
+function hasTool(z: ZoneRow): boolean {
+  return z.route !== null || z.edit !== null;
 }
 
-/** Turn one zone's route tool on (fresh) or off. */
+/** Which zone's tool a room pick is for, or `null` for none.
+ *
+ *  A click on a plan is for THAT zone's tool, if it has one -- and if it does
+ *  not, the click is an ordinary selection even while another zone has a tool
+ *  on. A pick from anywhere else (the grid, search) has no zone, so it goes to
+ *  the zone that last took one, else the first with a tool on. */
+function toolTarget(zoneId: string | null): string | null {
+  if (zoneId !== null) {
+    const zone = state.zones.find((z) => z.id === zoneId);
+    return zone && hasTool(zone) ? zoneId : null;
+  }
+  const focused = state.zones.find((z) => z.id === state.toolFocus && hasTool(z));
+  return (focused ?? state.zones.find(hasTool))?.id ?? null;
+}
+
+/** Turn one zone's route tool on (fresh) or off. Turning it on turns that
+ *  zone's open-zone editor off: both claim the same click. */
 export function setZoneRouteMode(id: string, on: boolean): void {
   setState({
-    zones: state.zones.map((z) => (z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null } : z)),
-    routeFocus: on ? id : state.routeFocus,
+    zones: state.zones.map((z) =>
+      z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null, edit: on ? null : z.edit } : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
   });
+}
+
+/** Turn one zone's open-zone editor on (empty) or off, and the route tool off. */
+export function setZoneEditMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id ? { ...z, edit: on ? (z.edit ?? newEdit()) : null, route: on ? null : z.route } : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Replace one zone's working open zone; a no-op when its editor is off. */
+export function patchZoneEdit(id: string, next: ZoneEdit): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.edit ? { ...z, edit: next } : z)) });
+}
+
+/** The project's authored connections, as last read. */
+export function setConnections(connections: ViewerState["connections"]): void {
+  setState({ connections });
 }
 
 /** Patch one zone's route; a no-op when its tool is off. */

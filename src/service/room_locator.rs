@@ -90,7 +90,7 @@ pub enum Located {
 }
 
 /// A room, named unambiguously.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct RoomRef {
     pub model_id: String,
     pub room_id: String,

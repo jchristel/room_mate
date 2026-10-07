@@ -25,6 +25,7 @@ use tower_http::{
 };
 
 use roommate::bootstrap::build_state;
+use roommate::connections_api::{http_get_connections, http_put_connections};
 use roommate::handlers::{
     activate_model_pending_snapshot, build_project_report, compare_project_milestones, get_ceilings, get_doors,
     get_ffe, get_floors, get_model_latest_snapshot, get_model_pending_snapshot, get_project_adjacency,
@@ -368,6 +369,10 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // Door connectivity and the shortest route between two rooms: its own
         // trigger (a pair of clicks) and its own consumer, so not part of /rooms.
         .route("/projects/{id}/connectivity", get(get_project_connectivity))
+        // The authored half of connectivity: open zones. PUT replaces the whole
+        // list and names the version it read, so two editors cannot overwrite
+        // each other unseen. See `connections`.
+        .route("/projects/{id}/connections", get(http_get_connections).put(http_put_connections))
         // Milestone comparison: a baseline-vs-each-other diff of rooms and a
         // user-defined property set. POST (not GET) for its list body — see
         // `handlers::compare_project_milestones`.
