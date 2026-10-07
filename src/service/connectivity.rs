@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 
 use serde::Serialize;
 
-use crate::connections::{self, ZoneKind};
+use crate::connections;
 use crate::contract::{DoorPayload, Level, Point2D, Room};
 use crate::state::AppState;
 
@@ -201,6 +201,9 @@ pub struct Edge {
     /// The open zone, for a zone edge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zone_id: Option<String>,
+    /// The vertical link, for a level change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
     pub point: Point2D,
     pub point_source: PointSource,
     /// Approximate walking distance through the door, in feet.
@@ -270,6 +273,8 @@ pub struct Step {
     pub door_model_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zone_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
     pub point: Point2D,
     pub length: f64,
 }
@@ -339,6 +344,7 @@ fn link(mut nodes: Vec<Node>, doors: Vec<DoorFact>) -> Graph {
                     door_id: Some(door.door_id),
                     door_model_id: Some(door.door_model_id),
                     zone_id: None,
+                    link_id: None,
                     point,
                     point_source,
                     length: dist(ca, point) + dist(point, cb),
@@ -542,6 +548,7 @@ fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metric)
             door_id: e.door_id.clone(),
             door_model_id: e.door_model_id.clone(),
             zone_id: e.zone_id.clone(),
+            link_id: e.link_id.clone(),
             point: e.point,
             length: e.length,
         });
@@ -561,7 +568,7 @@ fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metric)
     }
 }
 
-// ============================== open zones ==============================
+// ============================== open zones and links ==============================
 
 /// One wall two members of an open zone share, ready to become an edge.
 struct ZoneEdgeFact {
@@ -569,8 +576,6 @@ struct ZoneEdgeFact {
     ia: usize,
     ib: usize,
     point: Point2D,
-    /// Set for a change of storey: its cost in feet, which stands in for a length.
-    level_cost: Option<f64>,
 }
 
 /// What the authored connections did to this read, so a person can see the
@@ -588,17 +593,14 @@ pub struct ConnectionsReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub zones: Vec<ZoneReport>,
+    pub links: Vec<LinkReport>,
 }
 
 #[derive(Serialize)]
 pub struct ZoneReport {
     pub id: String,
     pub name: String,
-    pub kind: ZoneKind,
     pub members: usize,
-    /// Distinct storeys the members are on. A vertical zone on one storey joins
-    /// nothing between storeys, and this is how that shows.
-    pub storeys: usize,
     /// Members that are no longer among the rooms in scope: renumbered, deleted,
     /// or in another building. A reported state, never an error.
     pub stale: Vec<RoomRef>,
@@ -611,6 +613,35 @@ pub struct ZoneReport {
     /// Whether any member has a door to somewhere. False means the whole zone is
     /// still an island, which is the thing a person most needs to be told.
     pub reaches_doors: bool,
+}
+
+/// What one vertical link did. A link is a person's statement, so it is applied
+/// whenever it can be and **reported when it cannot**, never silently dropped.
+#[derive(Serialize)]
+pub struct LinkReport {
+    pub id: String,
+    pub a: RoomRef,
+    pub b: RoomRef,
+    /// The walking-equivalent cost used for this hop.
+    pub cost_ft: f64,
+    /// Whether it became an edge.
+    pub applied: bool,
+    /// Why not, when it did not: a room no longer in scope, both rooms on one
+    /// storey, or a pair a door or earlier link already joined.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// How many storeys with rooms lie strictly between the two rooms. A link is
+    /// meant to be floor to floor, so anything above 0 is worth a second look; it
+    /// is reported, not refused, because the person drew it.
+    pub levels_between: usize,
+}
+
+/// One link, ready to become an edge.
+struct LinkFact {
+    link_id: String,
+    ia: usize,
+    ib: usize,
+    cost: f64,
 }
 
 /// Turn zone facts into edges, skipping any pair a door or an earlier zone
@@ -636,17 +667,14 @@ fn add_zone_edges(
         edges.push(Edge {
             a: nodes[fact.ia].room.clone(),
             b: nodes[fact.ib].room.clone(),
-            kind: if fact.level_cost.is_some() { EdgeKind::Vertical } else { EdgeKind::Zone },
+            kind: EdgeKind::Zone,
             door_id: None,
             door_model_id: None,
             zone_id: Some(fact.zone_id),
+            link_id: None,
             point: fact.point,
-            point_source: if fact.level_cost.is_some() {
-                PointSource::Vertical
-            } else {
-                PointSource::SharedWall
-            },
-            length: fact.level_cost.unwrap_or_else(|| dist(ca, fact.point) + dist(fact.point, cb)),
+            point_source: PointSource::SharedWall,
+            length: dist(ca, fact.point) + dist(fact.point, cb),
             ia: fact.ia,
             ib: fact.ib,
         });
@@ -654,20 +682,61 @@ fn add_zone_edges(
     tally
 }
 
-/// Read the project's open zones and turn each into the edges it implies, with
-/// a report of what each did.
+/// Turn link facts into edges. A change of storey has no plan distance, so the
+/// edge's length is the link's cost and its point is the first room's own centre
+/// (the route is drawn as a break there, not a line). Returns the ids that were
+/// redundant with an edge already in the graph.
+fn add_link_edges(
+    nodes: &mut [Node],
+    edges: &mut Vec<Edge>,
+    facts: Vec<LinkFact>,
+) -> std::collections::BTreeSet<String> {
+    let key = |a: usize, b: usize| (a.min(b), a.max(b));
+    let mut joined: std::collections::BTreeSet<(usize, usize)> = edges.iter().map(|e| key(e.ia, e.ib)).collect();
+    let mut redundant = std::collections::BTreeSet::new();
+    for fact in facts {
+        if !joined.insert(key(fact.ia, fact.ib)) {
+            redundant.insert(fact.link_id);
+            continue;
+        }
+        nodes[fact.ia].degree += 1;
+        nodes[fact.ib].degree += 1;
+        edges.push(Edge {
+            a: nodes[fact.ia].room.clone(),
+            b: nodes[fact.ib].room.clone(),
+            kind: EdgeKind::Vertical,
+            door_id: None,
+            door_model_id: None,
+            zone_id: None,
+            link_id: Some(fact.link_id),
+            point: nodes[fact.ia].centroid,
+            point_source: PointSource::Vertical,
+            length: fact.cost,
+            ia: fact.ia,
+            ib: fact.ib,
+        });
+    }
+    redundant
+}
+
+/// Read the project's authored connections and turn them into edges, with a
+/// report of what each did.
 ///
-/// For every zone, the members still in scope are run through the same
-/// wall-sharing algorithm `/adjacency` uses, **restricted to those members**, so
-/// a route through a zone follows its floor plan (room to room across the wall
-/// they share) and never cuts a straight line through whatever lies between.
-fn zone_edges(
+/// **Open zones:** for every zone, the members still in scope are run through the
+/// same wall-sharing algorithm `/adjacency` uses, **restricted to those
+/// members**, so a route through a zone follows its floor plan (room to room
+/// across the wall they share) and never cuts a straight line through whatever
+/// lies between.
+///
+/// **Vertical links:** each is one edge between its two rooms, charged its own
+/// cost, applied only when both rooms are in scope and on different storeys.
+fn authored_edges(
     state: &AppState,
     project: &str,
     rooms: &super::rooms::RoomsResult,
     nodes: &[Node],
     door_degree: &[usize],
-) -> (Vec<ZoneEdgeFact>, ConnectionsReport) {
+) -> (Vec<ZoneEdgeFact>, Vec<LinkFact>, ConnectionsReport) {
     let (document, error) = match state.projects_dir() {
         None => (connections::ConnectionsDocument::empty(), None),
         Some(dir) => match connections::load(dir, project) {
@@ -675,118 +744,105 @@ fn zone_edges(
             Err(e) => (connections::ConnectionsDocument::empty(), Some(format!("{e:?}"))),
         },
     };
-    let mut report = ConnectionsReport { taken_at: document.taken_at.clone(), pinned: false, error, zones: Vec::new() };
-    if document.zones.is_empty() {
-        return (Vec::new(), report);
+    let mut report = ConnectionsReport {
+        taken_at: document.taken_at.clone(),
+        pinned: false,
+        error,
+        zones: Vec::new(),
+        links: Vec::new(),
+    };
+    if document.zones.is_empty() && document.links.is_empty() {
+        return (Vec::new(), Vec::new(), report);
     }
 
-    let policy = state.settings().settings_for(project).map(|b| b.areas.clone()).unwrap_or_default();
-    let wall_max = default_wall_max(&policy, rooms);
-    let elevations: BTreeMap<&str, f64> = rooms.levels.iter().map(|l| (l.id.as_str(), l.elevation)).collect();
     let index: BTreeMap<&RoomRef, usize> = nodes.iter().enumerate().map(|(i, n)| (&n.room, i)).collect();
-    let room_of: BTreeMap<RoomRef, &Room> = rooms
-        .rooms
-        .iter()
-        .map(|r| (RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() }, &r.room))
-        .collect();
 
-    let mut facts = Vec::new();
-    for zone in &document.zones {
-        let mut present: Vec<(usize, &Room, &RoomRef)> = Vec::new();
-        let mut stale = Vec::new();
-        for member in &zone.rooms {
-            match (index.get(member), room_of.get(member)) {
-                (Some(&i), Some(&room)) => present.push((i, room, member)),
-                _ => stale.push(member.clone()),
+    let mut zone_facts = Vec::new();
+    if !document.zones.is_empty() {
+        let policy = state.settings().settings_for(project).map(|b| b.areas.clone()).unwrap_or_default();
+        let wall_max = default_wall_max(&policy, rooms);
+        let room_of: BTreeMap<RoomRef, &Room> = rooms
+            .rooms
+            .iter()
+            .map(|r| (RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() }, &r.room))
+            .collect();
+        for zone in &document.zones {
+            let mut present: Vec<(usize, &Room, &RoomRef)> = Vec::new();
+            let mut stale = Vec::new();
+            for member in &zone.rooms {
+                match (index.get(member), room_of.get(member)) {
+                    (Some(&i), Some(&room)) => present.push((i, room, member)),
+                    _ => stale.push(member.clone()),
+                }
             }
-        }
-        let slice: Vec<&Room> = present.iter().map(|(_, r, _)| *r).collect();
-        let mut linked = std::collections::BTreeSet::new();
-        for pair in compute_adjacency_indexed(&slice, wall_max) {
-            linked.insert(pair.ia);
-            linked.insert(pair.ib);
-            facts.push(ZoneEdgeFact {
-                zone_id: zone.id.clone(),
-                ia: present[pair.ia].0,
-                ib: present[pair.ib].0,
-                point: pair.midpoint,
-                level_cost: None,
-            });
-        }
-        // A stack also joins neighbouring storeys, at the zone's own cost.
-        let storeys: std::collections::BTreeSet<&str> =
-            present.iter().map(|(i, _, _)| nodes[*i].level_id.as_str()).collect();
-        if zone.kind == ZoneKind::Vertical {
-            let cost = zone.level_cost_ft.unwrap_or(connections::DEFAULT_LEVEL_COST_FT);
-            let at: Vec<(usize, &str)> = present.iter().map(|(i, _, _)| (*i, nodes[*i].level_id.as_str())).collect();
-            // A member the stack joins to another storey is linked, whether or not
-            // it also shares a wall on its own storey.
-            let position: BTreeMap<usize, usize> = present.iter().enumerate().map(|(k, (i, _, _))| (*i, k)).collect();
-            for (ia, ib) in vertical_pairs(&at, &elevations) {
-                linked.insert(position[&ia]);
-                linked.insert(position[&ib]);
-                facts.push(ZoneEdgeFact {
+            let slice: Vec<&Room> = present.iter().map(|(_, r, _)| *r).collect();
+            let mut linked = std::collections::BTreeSet::new();
+            for pair in compute_adjacency_indexed(&slice, wall_max) {
+                linked.insert(pair.ia);
+                linked.insert(pair.ib);
+                zone_facts.push(ZoneEdgeFact {
                     zone_id: zone.id.clone(),
-                    ia,
-                    ib,
-                    point: nodes[ia].centroid,
-                    level_cost: Some(cost),
+                    ia: present[pair.ia].0,
+                    ib: present[pair.ib].0,
+                    point: pair.midpoint,
                 });
             }
+            report.zones.push(ZoneReport {
+                id: zone.id.clone(),
+                name: zone.name.clone(),
+                members: zone.rooms.len(),
+                stale,
+                edges: 0,
+                redundant: 0,
+                unlinked: present
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, _)| !linked.contains(k))
+                    .map(|(_, (_, _, m))| (*m).clone())
+                    .collect(),
+                reaches_doors: present.iter().any(|(i, _, _)| door_degree[*i] > 0),
+            });
         }
-        report.zones.push(ZoneReport {
-            id: zone.id.clone(),
-            name: zone.name.clone(),
-            kind: zone.kind,
-            storeys: storeys.len(),
-            members: zone.rooms.len(),
-            stale,
-            edges: 0,
-            redundant: 0,
-            unlinked: present
-                .iter()
-                .enumerate()
-                .filter(|(k, _)| !linked.contains(k))
-                .map(|(_, (_, _, m))| (*m).clone())
-                .collect(),
-            reaches_doors: present.iter().any(|(i, _, _)| door_degree[*i] > 0),
-        });
     }
-    (facts, report)
+
+    // Storeys that hold rooms, by elevation, so "how many lie between" counts only
+    // storeys a person could have meant.
+    let used: std::collections::BTreeSet<&str> = nodes.iter().map(|n| n.level_id.as_str()).collect();
+    let elevation: BTreeMap<&str, f64> = rooms.levels.iter().map(|l| (l.id.as_str(), l.elevation)).collect();
+    let mut link_facts = Vec::new();
+    for link in &document.links {
+        let cost = link.cost_ft.unwrap_or(connections::DEFAULT_LEVEL_COST_FT);
+        let mut entry = LinkReport {
+            id: link.id.clone(),
+            a: link.a.clone(),
+            b: link.b.clone(),
+            cost_ft: cost,
+            applied: false,
+            reason: None,
+            levels_between: 0,
+        };
+        match (index.get(&link.a), index.get(&link.b)) {
+            (Some(&ia), Some(&ib)) if nodes[ia].level_id == nodes[ib].level_id => {
+                entry.reason = Some("both rooms are on the same storey, so it joins no storeys".to_string());
+            }
+            (Some(&ia), Some(&ib)) => {
+                let (ea, eb) = (
+                    elevation.get(nodes[ia].level_id.as_str()).copied().unwrap_or(0.0),
+                    elevation.get(nodes[ib].level_id.as_str()).copied().unwrap_or(0.0),
+                );
+                let (lo, hi) = (ea.min(eb), ea.max(eb));
+                entry.levels_between =
+                    used.iter().filter(|l| elevation.get(*l).is_some_and(|e| *e > lo && *e < hi)).count();
+                link_facts.push(LinkFact { link_id: link.id.clone(), ia, ib, cost });
+                entry.applied = true;
+            }
+            _ => entry.reason = Some("a room is no longer among the rooms in scope".to_string()),
+        }
+        report.links.push(entry);
+    }
+    (zone_facts, link_facts, report)
 }
 
-/// The room pairs a vertical zone joins between storeys.
-///
-/// Members are grouped by storey and the storeys ordered by elevation; every
-/// member of one storey is joined to every member of the NEXT storey the zone
-/// reaches. A chain and not a clique, so a stair cannot skip a floor, and a route
-/// across several storeys pays the cost once per storey it crosses. That
-/// overstates a lift, which reaches any floor in one ride; the zone's own cost is
-/// the lever, and a `group` edge is the fix if it ever matters
-/// (`docs/PLAN-connectivity.md`, step 3). Storeys the zone skips are skipped:
-/// a zone with rooms on levels 1 and 3 joins 1 to 3 directly.
-///
-/// Pure, so the chain is testable without rooms.
-fn vertical_pairs(members: &[(usize, &str)], elevation: &BTreeMap<&str, f64>) -> Vec<(usize, usize)> {
-    let mut by_storey: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (node, storey) in members {
-        by_storey.entry(storey).or_default().push(*node);
-    }
-    let mut storeys: Vec<(&str, Vec<usize>)> = by_storey.into_iter().collect();
-    storeys.sort_by(|a, b| {
-        let (ea, eb) = (elevation.get(a.0).copied().unwrap_or(0.0), elevation.get(b.0).copied().unwrap_or(0.0));
-        ea.total_cmp(&eb).then(a.0.cmp(b.0))
-    });
-    let mut out = Vec::new();
-    for pair in storeys.windows(2) {
-        for &lower in &pair[0].1 {
-            for &upper in &pair[1].1 {
-                out.push((lower, upper));
-            }
-        }
-    }
-    out
-}
 // ================================ the read ================================
 
 /// Both ends of a route or neither: a route needs two rooms, and one alone is a
@@ -886,12 +942,19 @@ pub fn assemble_connectivity(
     // Door degrees, taken before zones add theirs: a zone whose members have none
     // is an island, and the report says so.
     let door_degree: Vec<usize> = nodes.iter().map(|n| n.degree).collect();
-    let (zone_facts, mut connections_report) = zone_edges(state, project, &rooms, &nodes, &door_degree);
+    let (zone_facts, link_facts, mut connections_report) = authored_edges(state, project, &rooms, &nodes, &door_degree);
     let tally = add_zone_edges(&mut nodes, &mut edges, zone_facts);
     for zone in &mut connections_report.zones {
         let (added, redundant) = tally.get(&zone.id).copied().unwrap_or((0, 0));
         zone.edges = added;
         zone.redundant = redundant;
+    }
+    let redundant_links = add_link_edges(&mut nodes, &mut edges, link_facts);
+    for link in &mut connections_report.links {
+        if redundant_links.contains(&link.id) {
+            link.applied = false;
+            link.reason = Some("a door, open zone or earlier link already joins these two rooms".to_string());
+        }
     }
     let components = components(&mut nodes, &edges);
 
@@ -1242,6 +1305,7 @@ mod tests {
                 levels: vec![
                     Level { id: "lvl1".into(), name: "Level 1".into(), elevation: 0.0 },
                     Level { id: "lvl2".into(), name: "Level 2".into(), elevation: 12.0 },
+                    Level { id: "lvl3".into(), name: "Level 3".into(), elevation: 24.0 },
                 ],
                 rooms,
             }
@@ -1401,7 +1465,6 @@ mod tests {
                     .iter()
                     .map(|r| crate::connections::RoomInput { room_id: r.to_string(), model_id: Some("m1".to_string()) })
                     .collect(),
-                level_cost_ft: None,
                 note: None,
             }
         }
@@ -1416,7 +1479,7 @@ mod tests {
                 &state,
                 &dir,
                 "p1",
-                crate::connections::SaveRequest { base: String::new(), zones },
+                crate::connections::SaveRequest { base: String::new(), zones, links: vec![] },
             )
             .unwrap();
             (state, dir)
@@ -1491,26 +1554,29 @@ mod tests {
             assert!(result.connections.error.is_none());
         }
 
-        // ---------- vertical zones ----------
+        // ---------- vertical links ----------
 
-        fn vertical(id: &str, rooms: &[&str], cost: Option<f64>) -> crate::connections::ZoneInput {
-            crate::connections::ZoneInput {
-                kind: crate::connections::ZoneKind::Vertical,
-                level_cost_ft: cost,
-                ..zone_input(id, rooms)
+        fn link_input(id: &str, a: &str, b: &str, cost: Option<f64>) -> crate::connections::LinkInput {
+            crate::connections::LinkInput {
+                id: id.to_string(),
+                a: crate::connections::RoomInput { room_id: a.to_string(), model_id: Some("m1".to_string()) },
+                b: crate::connections::RoomInput { room_id: b.to_string(), model_id: Some("m1".to_string()) },
+                cost_ft: cost,
+                note: None,
             }
         }
 
-        /// Two storeys: `a | b` on level 1 and `e | f` on level 2, a door joining
-        /// each pair and nothing between the storeys.
-        fn two_storeys(tag: &str, zones: Vec<crate::connections::ZoneInput>) -> (AppState, std::path::PathBuf) {
-            let dir = std::env::temp_dir().join(format!("roommate-conn-vertical-{tag}-{}", std::process::id()));
+        /// Three storeys: `a | b` on level 1, `e | f` on level 2 and `g` on level
+        /// 3, a door joining each pair on one storey and nothing between storeys.
+        fn storeys(tag: &str, links: Vec<crate::connections::LinkInput>) -> (AppState, std::path::PathBuf) {
+            let dir = std::env::temp_dir().join(format!("roommate-conn-links-{tag}-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let rooms = vec![
                 rect_on("a", 0.0, 10.0, "lvl1"),
                 rect_on("b", 10.0, 20.0, "lvl1"),
                 rect_on("e", 10.0, 20.0, "lvl2"),
                 rect_on("f", 20.0, 30.0, "lvl2"),
+                rect_on("g", 20.0, 30.0, "lvl3"),
             ];
             let doors = vec![
                 door("ab", Some("a"), Some("b"), "none"),
@@ -1521,18 +1587,18 @@ mod tests {
                 &state,
                 &dir,
                 "p1",
-                crate::connections::SaveRequest { base: String::new(), zones },
+                crate::connections::SaveRequest { base: String::new(), zones: vec![], links },
             )
             .unwrap();
             (state, dir)
         }
 
-        /// A stair joins the storeys, the route says which hop was the level
-        /// change, charges the zone's own cost, and splits into one polyline per
-        /// level so each zone draws its own slice.
+        /// A link a person drew joins the storeys, the route says which hop was the
+        /// level change, charges the link's own cost, and splits into one polyline
+        /// per level so each viewer zone draws its own slice.
         #[test]
-        fn test_a_vertical_zone_joins_storeys_at_its_own_cost() {
-            let (s, dir) = two_storeys("joins", vec![vertical("stair", &["b", "e"], Some(25.0))]);
+        fn test_a_vertical_link_joins_two_storeys_at_its_own_cost() {
+            let (s, dir) = storeys("joins", vec![link_input("up1", "b", "e", Some(25.0))]);
             let (a, f) = (ep(None, "a"), ep(None, "f"));
             let result = read(&s, Some((&a, &f)));
 
@@ -1540,53 +1606,96 @@ mod tests {
             assert!(path.found, "{:?}", path.reason);
             let kinds: Vec<_> = path.steps.iter().map(|s| s.kind).collect();
             assert_eq!(kinds, vec![EdgeKind::Door, EdgeKind::Vertical, EdgeKind::Door]);
-            let vertical_step = &path.steps[1];
-            assert_eq!(vertical_step.zone_id.as_deref(), Some("stair"));
-            assert!((vertical_step.length - 25.0).abs() < 1e-9, "the stated cost, not a distance");
+            let hop = &path.steps[1];
+            assert_eq!(hop.link_id.as_deref(), Some("up1"));
+            assert!(hop.zone_id.is_none());
+            assert!((hop.length - 25.0).abs() < 1e-9, "the stated cost, not a distance");
             assert_eq!(
                 path.segments.iter().map(|s| s.level_id.as_str()).collect::<Vec<_>>(),
                 vec!["lvl1", "lvl2"]
             );
-            let zone = &result.connections.zones[0];
-            assert_eq!((zone.storeys, zone.edges), (2, 1));
-            assert!(zone.unlinked.is_empty(), "the stack links its members even with no shared wall");
-            assert!(zone.reaches_doors);
+            let report = &result.connections.links[0];
+            assert!(report.applied && report.reason.is_none());
+            assert_eq!(report.levels_between, 0, "floor to floor");
             std::fs::remove_dir_all(&dir).ok();
         }
 
         /// Without a stated cost the default applies.
         #[test]
-        fn test_a_vertical_zone_without_a_cost_uses_the_default() {
-            let (s, dir) = two_storeys("default", vec![vertical("stair", &["b", "e"], None)]);
+        fn test_a_link_without_a_cost_uses_the_default() {
+            let (s, dir) = storeys("default", vec![link_input("up1", "b", "e", None)]);
             let (a, f) = (ep(None, "a"), ep(None, "f"));
             let path = read(&s, Some((&a, &f))).path.unwrap();
             assert!((path.steps[1].length - crate::connections::DEFAULT_LEVEL_COST_FT).abs() < 1e-9);
             std::fs::remove_dir_all(&dir).ok();
         }
 
-        /// A vertical zone whose members all share one storey changes nothing
-        /// between storeys, and says so by its storey count.
+        /// Floor to floor is the person's job, one link per hop, so a route up two
+        /// storeys pays for two hops and passes through the middle storey.
         #[test]
-        fn test_a_vertical_zone_on_one_storey_joins_no_storeys() {
-            let (s, dir) = two_storeys("single", vec![vertical("oops", &["a", "b"], None)]);
-            let (a, f) = (ep(None, "a"), ep(None, "f"));
-            let result = read(&s, Some((&a, &f)));
-            assert!(!result.path.unwrap().found);
-            assert_eq!(result.connections.zones[0].storeys, 1);
+        fn test_a_route_up_two_storeys_takes_two_hops() {
+            let (s, dir) = storeys(
+                "two-hops",
+                vec![
+                    link_input("up1", "b", "e", Some(10.0)),
+                    link_input("up2", "f", "g", Some(10.0)),
+                ],
+            );
+            let (a, g) = (ep(None, "a"), ep(None, "g"));
+            let path = read(&s, Some((&a, &g))).path.unwrap();
+            assert!(path.found, "{:?}", path.reason);
+            let hops = path.steps.iter().filter(|s| s.kind == EdgeKind::Vertical).count();
+            assert_eq!(hops, 2);
+            assert_eq!(
+                path.segments.iter().map(|s| s.level_id.as_str()).collect::<Vec<_>>(),
+                vec!["lvl1", "lvl2", "lvl3"]
+            );
             std::fs::remove_dir_all(&dir).ok();
         }
 
-        /// The chain: members are joined to the NEXT storey the zone reaches,
-        /// never past it, and a skipped storey is skipped.
+        /// A link that jumps a storey is APPLIED (the person drew it) and REPORTED:
+        /// `levels_between` says it skipped one.
         #[test]
-        fn test_the_chain_joins_each_storey_to_the_next_only() {
-            let elevation: BTreeMap<&str, f64> = [("l1", 0.0), ("l2", 12.0), ("l3", 24.0), ("l5", 48.0)].into();
-            let members = [(10, "l3"), (11, "l1"), (12, "l2"), (13, "l2"), (14, "l5")];
-            let mut pairs = vertical_pairs(&members, &elevation);
-            pairs.sort();
-            // l1 to both l2 rooms, both l2 rooms to l3, l3 to l5 (l4 is skipped).
-            assert_eq!(pairs, vec![(10, 14), (11, 12), (11, 13), (12, 10), (13, 10)]);
-            assert!(vertical_pairs(&[(1, "l1"), (2, "l1")], &elevation).is_empty(), "one storey joins nothing");
+        fn test_a_link_that_skips_a_storey_is_applied_and_flagged() {
+            let (s, dir) = storeys("skips", vec![link_input("jump", "b", "g", None)]);
+            let report = &read(&s, None).connections.links[0];
+            assert!(report.applied);
+            assert_eq!(report.levels_between, 1);
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// Two rooms on one storey, a room that is gone, and a pair already joined
+        /// are each reported with a reason and never become an edge.
+        #[test]
+        fn test_a_link_that_cannot_apply_says_why() {
+            let (s, dir) = storeys(
+                "refused",
+                vec![
+                    link_input("same", "a", "b", None),
+                    link_input("gone", "b", "ghost", None),
+                    link_input("first", "b", "e", None),
+                    link_input("again", "e", "b", None),
+                ],
+            );
+            let result = read(&s, None);
+            let by_id = |id: &str| result.connections.links.iter().find(|l| l.id == id).unwrap();
+            assert!(!by_id("same").applied && by_id("same").reason.as_deref().unwrap().contains("same storey"));
+            assert!(!by_id("gone").applied && by_id("gone").reason.as_deref().unwrap().contains("no longer"));
+            assert!(by_id("first").applied);
+            assert!(!by_id("again").applied && by_id("again").reason.as_deref().unwrap().contains("already"));
+            assert_eq!(result.edges.as_ref().unwrap().iter().filter(|e| e.kind == EdgeKind::Vertical).count(), 1);
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// A linked room is no longer isolated: authored links lift the picker's
+        /// refusal exactly as zones do.
+        #[test]
+        fn test_a_linked_room_stops_being_isolated() {
+            let (s, dir) = storeys("isolated", vec![link_input("up1", "b", "g", None)]);
+            let result = read(&s, None);
+            let isolated: Vec<_> = result.isolated.iter().map(|r| r.room.room_id.as_str()).collect();
+            assert!(!isolated.contains(&"g"), "{isolated:?}");
+            std::fs::remove_dir_all(&dir).ok();
         }
 
         /// The summary leaves the graph out of the body; `full` puts it in.
