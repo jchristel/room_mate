@@ -92,6 +92,12 @@ describe("connectivityUrl", () => {
     expect(url).toBe("/projects/p%201/connectivity?building=B1&milestone=Freeze&from=a&to=b");
   });
 
+  it("carries the method only with a route, and omits it for the default", () => {
+    expect(connectivityUrl(scope, "a", "b", "centroid")).toBe("/projects/p%201/connectivity?from=a&to=b&method=centroid");
+    expect(connectivityUrl(scope, "a", "b", null)).toBe("/projects/p%201/connectivity?from=a&to=b");
+    expect(connectivityUrl(scope, null, null, "centroid")).toBe("/projects/p%201/connectivity");
+  });
+
   it("has no URL before a project is chosen", () => {
     expect(connectivityUrl({ projectId: null, building: null, milestone: null }, null, null)).toBeNull();
   });

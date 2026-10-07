@@ -15,6 +15,11 @@ import type { Scope } from "./scope.js";
 export interface RouteState {
   start: string | null;
   end: string | null;
+  /** The routing method asked for, or `null` for the server's default. */
+  method: string | null;
+  /** Every method the server offers, learned from its first answer, so the picker
+   *  is whatever the server supports and never a list kept here. */
+  methods: readonly RouteMethod[];
   /** Room ids no door reaches, from the server's `isolated` list; `null` until
    *  the first read for this scope lands.
    *
@@ -39,10 +44,21 @@ export type RouteResult =
   | { state: "error"; message: string }
   | { state: "done"; path: RoutePath };
 
+/** One routing method, as the server lists it. */
+export interface RouteMethod {
+  id: string;
+  name: string;
+  summary: string;
+  reference: string;
+}
+
 /** The part of the server's `path` the page reads. */
 export interface RoutePath {
   found: boolean;
   reason: string | null;
+  /** The method that produced it, and anything about how it was computed. */
+  method?: string;
+  note?: string | null;
   distance_ft: number;
   rooms: { model_id: string; room_id: string }[];
   steps: { kind: "door" | "zone" | "vertical"; door_id?: string; zone_id?: string; point: { x: number; y: number } }[];
@@ -50,7 +66,7 @@ export interface RoutePath {
 }
 
 export function newRoute(): RouteState {
-  return { start: null, end: null, unreachable: null, notice: null, result: { state: "idle" } };
+  return { start: null, end: null, method: null, methods: [], unreachable: null, notice: null, result: { state: "idle" } };
 }
 
 /**
@@ -78,7 +94,12 @@ export function pickEndpoint(route: RouteState, roomId: string): RouteState {
 /** The connectivity URL for a scope: the summary, and a route when both ends
  *  are placed. Rooms go by bare id, because the plan does not know a room's
  *  model; the server refuses an id two models share and says which. */
-export function connectivityUrl(scope: Scope, from: string | null, to: string | null): string | null {
+export function connectivityUrl(
+  scope: Scope,
+  from: string | null,
+  to: string | null,
+  method: string | null = null,
+): string | null {
   if (!scope.projectId) return null;
   const q = new URLSearchParams();
   if (scope.building) q.set("building", scope.building);
@@ -86,6 +107,7 @@ export function connectivityUrl(scope: Scope, from: string | null, to: string | 
   if (from && to) {
     q.set("from", from);
     q.set("to", to);
+    if (method) q.set("method", method);
   }
   const tail = q.toString();
   return `/projects/${encodeURIComponent(scope.projectId)}/connectivity${tail ? `?${tail}` : ""}`;

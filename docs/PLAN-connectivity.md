@@ -315,6 +315,85 @@ be a suggestion and never a write, like every derived thing here.
   first:** on the largest project, how many lift and stair rooms have a candidate
   on the adjacent storeys at a given overlap threshold, and how many do not.
 
+## Horizontal path: methods, sources and what is built
+
+**Status: built, with two methods and room to add more.** The route used to run
+from room centre to door to room centre, which is not a shortest path. It is now
+a parameter (`method`), chosen in the route bar, listed by the server with each
+method's source, and defaulting to the recommended one.
+
+### The problem, as the literature states it
+
+Liu and Zlatanova (2011) name the fault precisely: networks built on room centres
+(the dual-graph and cell-centre family: Lee 2001, Lorenz, Ohlbach and Stoffel
+2006) do not represent natural movement, which is "looking for the direct (always
+along with the shortest) way". A route through a centre-based network walks to the
+middle of rooms nobody needs to enter and takes unnecessarily tortuous paths. It
+also bends at every centre, so it overstates distances and draws detours.
+
+### Methods found, and where each stands
+
+| Method | Source | Gives the shortest path? | Status |
+|---|---|---|---|
+| **Door to door**, exact shortest walk inside each room | Liu and Zlatanova 2011 (ISPRS Gi4DM); visibility graph after Lozano-Perez and Wesley 1979, de Berg et al. ch. 15 | Yes, inside each room's outline | **Built, the default** |
+| Room centres | Lee 2001; Lorenz et al. 2006 | No | **Built, the baseline** |
+| Door to door with wall clearance (keep a margin off walls) | Motivated by the human-walking critique in the same literature | No, deliberately | Not built; the natural next option |
+| Medial axis / straight skeleton (S-MAT) | Eppstein and Erickson 1999; Lee 2004 (both as cited by Liu and Zlatanova) | No | Not built; good in narrow corridors, distorts open space |
+| Hybrid: straight skeleton plus visibility | Clementini and Pagliaro 2020; Mortari et al. 2019 (cited by D'Orazio and Clementini 2020) | No | Not built |
+| Funnel over a triangulated room | Lee and Preparata 1984 | Yes, for a room without holes | Not built; same lengths as the visibility graph, only a speed question |
+| Space subdivision (Delaunay) with obstacles | Xu, Wei and Zlatanova 2016 (ISPRS Archives XLI-B4) | Compatible with the visibility graph, per the authors | Not built; matters once furniture is modelled |
+| Theta*, any-angle on a grid | Daniel, Nash, Koenig and Felner 2010 (JAIR 39) | Approximate | Not built; for open, furnished space |
+
+**What was read and what was cited.** Liu and Zlatanova 2011 and Xu, Wei and
+Zlatanova 2016 were read (the first in full, the second its method, review and
+conclusions); the Theta* abstract was read. Lee and Preparata, Lozano-Perez and
+Wesley, de Berg et al., Eppstein and Erickson, and the two hybrid papers are cited
+through those papers and through search results and were not read here: check them
+before leaning on a detail.
+
+### Why door to door
+
+It is the one that answers the stated problem and uses what the data already has:
+door positions, and room outlines with their columns as holes. It is exact where it
+claims to be, simple (a visibility graph over each room's reflex corners), and
+two-level in the way the paper describes: the connection graph says WHICH rooms,
+the room outlines say WHERE. The others either are not shortest (medial axis,
+hybrids), need furniture or a grid this data does not have (Theta*, space
+subdivision), or give the same lengths for more machinery (the funnel).
+
+### How it is built
+
+- `service::geodesic`: the exact shortest walk between two points of one room,
+  around its corners and columns. The visibility test cuts a segment where it
+  meets any edge and checks each piece, because an exact "covers" predicate
+  rejected door points that sit on the outline to within rounding and turned most
+  real routes into straight-line fallbacks.
+- `service::routing`: the method registry (`Method`, `CATALOG`) and the search.
+  Doors, zone crossings and level links become ports (two per connection, one in
+  each room), joined inside a room by the exact walk and across a wall by the short
+  crossing; A* with a straight-line estimate, used only when no edge is cheaper
+  than the plan distance it spans (checked for level links).
+- **Adding a method** is a variant of `Method`, an entry in `CATALOG`, and a
+  function. The graph, the HTTP parameter (`method`), the MCP parameter and the
+  viewer's picker do not change shape: the picker is built from what the server
+  lists.
+- A route starts and ends at each room's centre when the centre is inside the room
+  (so the methods are compared on the walk and nothing else), else at a point
+  surely inside it.
+
+### Measured (the largest project, 24 random routes within the largest component)
+
+- Door to door was shorter at the median (5% to 39% by sample), up to 74% shorter
+  on a single route, and one route came out equal. **It can be longer than the
+  centre method**, legitimately: a straight line from a centre to a door can cut
+  through walls the walk has to go round.
+- No route fell back to a straight line; a request cost about 0.15 s more than the
+  centre method (a debug build, dominated by assembling the graph).
+- Limits worth stating: the walk is the geometric shortest inside the outline, not
+  where people walk; furniture is not modelled; a room whose outline is missing or
+  has more than 160 reflex corners is walked in a straight line and the answer says
+  so in `path.note`.
+
 ## Critique of this plan
 
 1. **"Doors only" is a bigger simplification than it sounds.** Open-plan
@@ -329,11 +408,13 @@ be a suggestion and never a write, like every derived thing here.
    connects the wrong pair. The QA report that reconciles authored against derived
    sides already exists; link to it from a route result that crosses a flagged
    door rather than re-checking.
-3. **Distance through centroids is a rough walking length.** A centroid can lie
-   outside an L-shaped room, and a straight line from centroid to door can cross
-   walls. For *ranking* routes it is fine; for quoting a distance to someone it is
-   not. Label the figure "approximate" and do not add visibility-graph routing
-   until someone needs a real distance.
+3. **Distance through centroids was a rough walking length, which is why routing
+   is now a method.** A centroid can lie outside an L-shaped room, and a straight
+   line from centroid to door can cross walls. It was a ranking figure, not
+   something to quote. The door-to-door method (see "Horizontal path") replaced it
+   as the default with the exact shortest walk inside each room's outline; the
+   figure is still an estimate, because people do not walk the geometric shortest
+   path and furniture is not modelled.
 4. **The viewer tool is most of the work and most of the risk.** The server part
    of step 1 is small; the two-click flow touches the store, the gesture layer,
    the grid, the search and the overlay, and CLAUDE.md records four bugs in this
