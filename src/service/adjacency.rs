@@ -187,8 +187,10 @@ struct Seg {
 
 /// A room prepared for pairing: its outer polygon (for the occlusion test), its
 /// bounding box (to reject candidates cheaply), and its boundary segments.
-struct Prepared<'a> {
-    room: &'a Room,
+struct Prepared {
+    /// Position in the slice the caller passed, so a result can name a room by
+    /// index as well as by id (two models may hold the same id).
+    orig: usize,
     poly: Option<Polygon<f64>>,
     bbox: (f64, f64, f64, f64), // minx, miny, maxx, maxy
     segs: Vec<Seg>,
@@ -256,7 +258,7 @@ fn outer_polygon(room: &Room) -> Option<Polygon<f64>> {
     Some(Polygon::new(LineString::from(ring), vec![]))
 }
 
-fn prepare(room: &Room) -> Prepared<'_> {
+fn prepare(room: &Room, orig: usize) -> Prepared {
     let segs = outer_segments(room);
     let mut bbox = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for s in &segs {
@@ -265,7 +267,7 @@ fn prepare(room: &Room) -> Prepared<'_> {
         bbox.2 = bbox.2.max(s.ax).max(s.bx);
         bbox.3 = bbox.3.max(s.ay).max(s.by);
     }
-    Prepared { room, poly: outer_polygon(room), bbox, segs }
+    Prepared { orig, poly: outer_polygon(room), bbox, segs }
 }
 
 /// Unit direction and length of a segment; `None` for a zero-length one.
@@ -348,7 +350,7 @@ impl SpatialGrid {
     /// spans about one cell — small enough that a cell holds few rooms, large
     /// enough that a room doesn't smear across dozens. Floored to a positive
     /// value so degenerate input can't divide by zero.
-    fn cell_size(prepared: &[Prepared<'_>]) -> f64 {
+    fn cell_size(prepared: &[Prepared]) -> f64 {
         let mut sum = 0.0;
         let mut n = 0.0;
         for p in prepared {
@@ -364,7 +366,7 @@ impl SpatialGrid {
         (sum / n).max(1e-3)
     }
 
-    fn build(prepared: &[Prepared<'_>], cell: f64) -> Self {
+    fn build(prepared: &[Prepared], cell: f64) -> Self {
         let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
         for (i, p) in prepared.iter().enumerate() {
             if p.segs.is_empty() {
@@ -410,7 +412,7 @@ impl SpatialGrid {
 /// Candidate occluders come from the grid cell at the gap midpoint, not a scan
 /// of every room — the two pair indices are excluded so a room is never treated
 /// as sitting between its own segments.
-fn is_occluded(s: &Seg, ov: &Overlap, grid: &SpatialGrid, prepared: &[Prepared<'_>], i: usize, j: usize) -> bool {
+fn is_occluded(s: &Seg, ov: &Overlap, grid: &SpatialGrid, prepared: &[Prepared], i: usize, j: usize) -> bool {
     if ov.gap.abs() <= COINCIDENT_EPS_FT {
         return false;
     }
@@ -457,29 +459,42 @@ fn record(runs: &mut Vec<WallRun>, s: &Seg, ov: &Overlap, wall_max: f64) {
     runs.push(WallRun { ux, uy, ox: sx, oy: sy, intervals: vec![(0.0, ov.hi - ov.lo)] });
 }
 
+/// One run's intervals, sorted and merged where they touch, so a wall split into
+/// several boundary segments is one stretch.
+fn merged_intervals(run: &WallRun) -> Vec<(f64, f64)> {
+    let mut iv = run.intervals.clone();
+    iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for (lo, hi) in iv {
+        match out.last_mut() {
+            Some((_, chi)) if lo <= *chi + COINCIDENT_EPS_FT => *chi = chi.max(hi),
+            _ => out.push((lo, hi)),
+        }
+    }
+    out
+}
+
+/// The centre of the longest single stretch of wall a pair shares, in plan.
+/// Where a route between the two rooms passes: not the middle of the pair's
+/// total shared length, which for an L-shaped junction can lie in neither wall.
+fn midpoint_of(runs: &[WallRun]) -> Point2D {
+    let mut best: Option<(f64, Point2D)> = None;
+    for run in runs {
+        for (lo, hi) in merged_intervals(run) {
+            let len = hi - lo;
+            if best.as_ref().is_none_or(|(l, _)| len > *l) {
+                let mid = (lo + hi) / 2.0;
+                best = Some((len, Point2D { x: run.ox + run.ux * mid, y: run.oy + run.uy * mid }));
+            }
+        }
+    }
+    best.map(|(_, p)| p).unwrap_or(Point2D { x: 0.0, y: 0.0 })
+}
+
 /// Total shared length across every run, with each run's intervals merged first
 /// so a wall split into several boundary segments is counted once.
 fn total_length(runs: &[WallRun]) -> f64 {
-    let mut total = 0.0;
-    for run in runs {
-        let mut iv = run.intervals.clone();
-        iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let mut cur: Option<(f64, f64)> = None;
-        for (lo, hi) in iv {
-            match cur {
-                Some((clo, chi)) if lo <= chi + COINCIDENT_EPS_FT => cur = Some((clo, chi.max(hi))),
-                Some((clo, chi)) => {
-                    total += chi - clo;
-                    cur = Some((lo, hi));
-                }
-                None => cur = Some((lo, hi)),
-            }
-        }
-        if let Some((clo, chi)) = cur {
-            total += chi - clo;
-        }
-    }
-    total
+    runs.iter().flat_map(merged_intervals).map(|(lo, hi)| hi - lo).sum()
 }
 
 /// Two rooms that are the *same* room, contributed twice by linked models.
@@ -494,7 +509,7 @@ fn total_length(runs: &[WallRun]) -> f64 {
 /// Identified by equal bounding boxes *and* equal area: two genuinely distinct
 /// neighbours always differ in bbox (they sit side by side), so this cannot
 /// swallow a real adjacency.
-fn is_same_room(a: &Prepared<'_>, b: &Prepared<'_>) -> bool {
+fn is_same_room(a: &Prepared, b: &Prepared) -> bool {
     let bbox_eq = (a.bbox.0 - b.bbox.0).abs() <= COINCIDENT_EPS_FT
         && (a.bbox.1 - b.bbox.1).abs() <= COINCIDENT_EPS_FT
         && (a.bbox.2 - b.bbox.2).abs() <= COINCIDENT_EPS_FT
@@ -522,21 +537,50 @@ fn is_same_room(a: &Prepared<'_>, b: &Prepared<'_>) -> bool {
 /// the quadratic term, so threading a now-near-linear pass would trade
 /// determinism for little (and a few hundred rooms can be slower threaded).
 pub fn compute_adjacency(rooms: &[&Room], wall_max: f64) -> Vec<AdjacencyEdge> {
-    let mut by_level: BTreeMap<&str, Vec<Prepared<'_>>> = BTreeMap::new();
-    for room in rooms {
-        by_level.entry(room.level_id.as_str()).or_default().push(prepare(room));
-    }
-
-    let mut edges = Vec::new();
-    for (level_id, prepared) in &by_level {
-        edges.extend(level_edges(level_id, prepared, wall_max));
-    }
+    let mut edges: Vec<AdjacencyEdge> = compute_adjacency_indexed(rooms, wall_max)
+        .into_iter()
+        .map(|e| {
+            // Stable `a < b` ordering by room id, so the pair has one
+            // representation regardless of iteration order.
+            let (ra, rb) = (&rooms[e.ia].id, &rooms[e.ib].id);
+            let (a, b) = if ra <= rb { (ra, rb) } else { (rb, ra) };
+            AdjacencyEdge { a: a.clone(), b: b.clone(), level_id: e.level_id, shared_length: e.shared_length }
+        })
+        .collect();
     // Deterministic order: the revision is only meaningful if the payload is.
     edges.sort_by(|x, y| (&x.level_id, &x.a, &x.b).cmp(&(&y.level_id, &y.a, &y.b)));
     edges
 }
 
-fn level_edges(level_id: &str, prepared: &[Prepared<'_>], wall_max: f64) -> Vec<AdjacencyEdge> {
+/// A shared wall between two rooms of the input slice, by index, with where it is.
+///
+/// **By index, because a room id is unique only within a model**: an edge keyed
+/// by id would silently merge two rooms of different models that share one.
+/// `midpoint` is the centre of the longest stretch of wall the pair shares, which
+/// is where a route between them would pass.
+pub(super) struct IndexedEdge {
+    pub ia: usize,
+    pub ib: usize,
+    pub level_id: String,
+    pub shared_length: f64,
+    pub midpoint: Point2D,
+}
+
+/// Every shared-wall pair among `rooms`, as indices into it. The one algorithm;
+/// `compute_adjacency` is this with ids.
+pub(super) fn compute_adjacency_indexed(rooms: &[&Room], wall_max: f64) -> Vec<IndexedEdge> {
+    let mut by_level: BTreeMap<&str, Vec<Prepared>> = BTreeMap::new();
+    for (i, room) in rooms.iter().enumerate() {
+        by_level.entry(room.level_id.as_str()).or_default().push(prepare(room, i));
+    }
+    let mut edges = Vec::new();
+    for (level_id, prepared) in &by_level {
+        edges.extend(level_edges(level_id, prepared, wall_max));
+    }
+    edges
+}
+
+fn level_edges(level_id: &str, prepared: &[Prepared], wall_max: f64) -> Vec<IndexedEdge> {
     // The gap can only be spanned within `wall_max` of a bbox, so grow each box
     // by the tolerance before testing for overlap — a cheap, correct rejection.
     let reach = wall_max + COINCIDENT_EPS_FT;
@@ -592,14 +636,13 @@ fn level_edges(level_id: &str, prepared: &[Prepared<'_>], wall_max: f64) -> Vec<
 
         let shared_length = total_length(&runs);
         if shared_length >= MIN_SHARED_FT {
-            // Stable `a < b` ordering by room id, so the pair has one
-            // representation regardless of iteration order.
-            let (ra, rb) = if a.room.id <= b.room.id {
-                (&a.room.id, &b.room.id)
-            } else {
-                (&b.room.id, &a.room.id)
-            };
-            edges.push(AdjacencyEdge { a: ra.clone(), b: rb.clone(), level_id: level_id.to_string(), shared_length });
+            edges.push(IndexedEdge {
+                ia: a.orig,
+                ib: b.orig,
+                level_id: level_id.to_string(),
+                shared_length,
+                midpoint: midpoint_of(&runs),
+            });
         }
     }
     edges
@@ -663,7 +706,7 @@ pub fn check_wall_max(requested: Option<f64>) -> Result<Option<f64>, ServiceErro
 /// worse than a graph that over-connects. A scope with no levels (nothing
 /// matched) falls to the declared thickness; there is no evidence for the
 /// narrower reading, so it is not taken.
-fn default_wall_max(policy: &AreaPolicy, rooms: &RoomsResult) -> f64 {
+pub(super) fn default_wall_max(policy: &AreaPolicy, rooms: &RoomsResult) -> f64 {
     let all_centreline =
         !rooms.boundary_by_level.is_empty() && rooms.boundary_by_level.values().all(|b| *b == RoomBoundary::Centreline);
     policy.wall_gap_ft(if all_centreline { RoomBoundary::Centreline } else { RoomBoundary::FinishFace })

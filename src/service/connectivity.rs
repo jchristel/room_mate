@@ -40,10 +40,11 @@ use std::collections::{BTreeMap, BinaryHeap};
 
 use serde::Serialize;
 
-use crate::contract::{DoorPayload, Level, Point2D};
+use crate::connections;
+use crate::contract::{DoorPayload, Level, Point2D, Room};
 use crate::state::AppState;
 
-use super::adjacency::centroid_of;
+use super::adjacency::{centroid_of, compute_adjacency_indexed, default_wall_max};
 use super::openings::{assemble_openings, OpeningKind, OpeningScope};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomFilter, RoomScope};
@@ -137,6 +138,8 @@ pub struct ConnectivityResult {
     /// them are bays.
     pub isolated: Vec<IsolatedRoom>,
     pub counts: Counts,
+    /// What the authored connections did to this graph.
+    pub connections: ConnectionsReport,
     /// Present only when both `from` and `to` were asked for.
     pub path: Option<PathResult>,
 }
@@ -166,14 +169,33 @@ pub enum PointSource {
     /// Neither existed, so the point is halfway between the two room centroids.
     /// The route through it is straight; say so rather than pretend otherwise.
     Midpoint,
+    /// The middle of the longest wall two members of an open zone share.
+    SharedWall,
+}
+
+/// What joins the two rooms of an edge.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind {
+    /// A door, from the model.
+    Door,
+    /// An open zone, from the user.
+    Zone,
 }
 
 #[derive(Serialize, Clone)]
 pub struct Edge {
     pub a: RoomRef,
     pub b: RoomRef,
-    pub door_id: String,
-    pub door_model_id: String,
+    pub kind: EdgeKind,
+    /// The door, for a door edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub door_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub door_model_id: Option<String>,
+    /// The open zone, for a zone edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone_id: Option<String>,
     pub point: Point2D,
     pub point_source: PointSource,
     /// Approximate walking distance through the door, in feet.
@@ -236,8 +258,13 @@ pub struct PathResult {
 pub struct Step {
     pub from: RoomRef,
     pub to: RoomRef,
-    pub door_id: String,
-    pub door_model_id: String,
+    pub kind: EdgeKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub door_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub door_model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone_id: Option<String>,
     pub point: Point2D,
     pub length: f64,
 }
@@ -303,8 +330,10 @@ fn link(mut nodes: Vec<Node>, doors: Vec<DoorFact>) -> Graph {
                 edges.push(Edge {
                     a,
                     b,
-                    door_id: door.door_id,
-                    door_model_id: door.door_model_id,
+                    kind: EdgeKind::Door,
+                    door_id: Some(door.door_id),
+                    door_model_id: Some(door.door_model_id),
+                    zone_id: None,
                     point,
                     point_source,
                     length: dist(ca, point) + dist(point, cb),
@@ -504,8 +533,10 @@ fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metric)
         steps.push(Step {
             from: nodes[at].room.clone(),
             to: nodes[next].room.clone(),
+            kind: e.kind,
             door_id: e.door_id.clone(),
             door_model_id: e.door_model_id.clone(),
+            zone_id: e.zone_id.clone(),
             point: e.point,
             length: e.length,
         });
@@ -525,6 +556,164 @@ fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metric)
     }
 }
 
+// ============================== open zones ==============================
+
+/// One wall two members of an open zone share, ready to become an edge.
+struct ZoneEdgeFact {
+    zone_id: String,
+    ia: usize,
+    ib: usize,
+    point: Point2D,
+}
+
+/// What the authored connections did to this read, so a person can see the
+/// effect of what they drew.
+#[derive(Serialize)]
+pub struct ConnectionsReport {
+    /// The version of the document applied; empty when nothing is authored.
+    pub taken_at: String,
+    /// Whether a milestone's own version was used. Always false for now: a
+    /// milestone view applies today's connections, and says so, so a historical
+    /// route is not read as historical.
+    pub pinned: bool,
+    /// Set when the document could not be read. The route still computes, from
+    /// doors alone, because an unreadable file must not take routing down.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub zones: Vec<ZoneReport>,
+}
+
+#[derive(Serialize)]
+pub struct ZoneReport {
+    pub id: String,
+    pub name: String,
+    pub members: usize,
+    /// Members that are no longer among the rooms in scope: renumbered, deleted,
+    /// or in another building. A reported state, never an error.
+    pub stale: Vec<RoomRef>,
+    /// Edges this zone added to the graph.
+    pub edges: usize,
+    /// Pairs the zone covers that a door (or an earlier zone) already joined.
+    pub redundant: usize,
+    /// Members sharing a wall with no other member: the zone cannot connect them.
+    pub unlinked: Vec<RoomRef>,
+    /// Whether any member has a door to somewhere. False means the whole zone is
+    /// still an island, which is the thing a person most needs to be told.
+    pub reaches_doors: bool,
+}
+
+/// Turn zone facts into edges, skipping any pair a door or an earlier zone
+/// already joined. Returns, per zone, `(added, redundant)`.
+fn add_zone_edges(
+    nodes: &mut [Node],
+    edges: &mut Vec<Edge>,
+    facts: Vec<ZoneEdgeFact>,
+) -> BTreeMap<String, (usize, usize)> {
+    let key = |a: usize, b: usize| (a.min(b), a.max(b));
+    let mut joined: std::collections::BTreeSet<(usize, usize)> = edges.iter().map(|e| key(e.ia, e.ib)).collect();
+    let mut tally: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for fact in facts {
+        let entry = tally.entry(fact.zone_id.clone()).or_default();
+        if !joined.insert(key(fact.ia, fact.ib)) {
+            entry.1 += 1;
+            continue;
+        }
+        entry.0 += 1;
+        let (ca, cb) = (nodes[fact.ia].centroid, nodes[fact.ib].centroid);
+        nodes[fact.ia].degree += 1;
+        nodes[fact.ib].degree += 1;
+        edges.push(Edge {
+            a: nodes[fact.ia].room.clone(),
+            b: nodes[fact.ib].room.clone(),
+            kind: EdgeKind::Zone,
+            door_id: None,
+            door_model_id: None,
+            zone_id: Some(fact.zone_id),
+            point: fact.point,
+            point_source: PointSource::SharedWall,
+            length: dist(ca, fact.point) + dist(fact.point, cb),
+            ia: fact.ia,
+            ib: fact.ib,
+        });
+    }
+    tally
+}
+
+/// Read the project's open zones and turn each into the edges it implies, with
+/// a report of what each did.
+///
+/// For every zone, the members still in scope are run through the same
+/// wall-sharing algorithm `/adjacency` uses, **restricted to those members**, so
+/// a route through a zone follows its floor plan (room to room across the wall
+/// they share) and never cuts a straight line through whatever lies between.
+fn zone_edges(
+    state: &AppState,
+    project: &str,
+    rooms: &super::rooms::RoomsResult,
+    nodes: &[Node],
+    door_degree: &[usize],
+) -> (Vec<ZoneEdgeFact>, ConnectionsReport) {
+    let (document, error) = match state.projects_dir() {
+        None => (connections::ConnectionsDocument::empty(), None),
+        Some(dir) => match connections::load(dir, project) {
+            Ok(doc) => (doc, None),
+            Err(e) => (connections::ConnectionsDocument::empty(), Some(format!("{e:?}"))),
+        },
+    };
+    let mut report = ConnectionsReport { taken_at: document.taken_at.clone(), pinned: false, error, zones: Vec::new() };
+    if document.zones.is_empty() {
+        return (Vec::new(), report);
+    }
+
+    let policy = state.settings().settings_for(project).map(|b| b.areas.clone()).unwrap_or_default();
+    let wall_max = default_wall_max(&policy, rooms);
+    let index: BTreeMap<&RoomRef, usize> = nodes.iter().enumerate().map(|(i, n)| (&n.room, i)).collect();
+    let room_of: BTreeMap<RoomRef, &Room> = rooms
+        .rooms
+        .iter()
+        .map(|r| (RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() }, &r.room))
+        .collect();
+
+    let mut facts = Vec::new();
+    for zone in &document.zones {
+        let mut present: Vec<(usize, &Room, &RoomRef)> = Vec::new();
+        let mut stale = Vec::new();
+        for member in &zone.rooms {
+            match (index.get(member), room_of.get(member)) {
+                (Some(&i), Some(&room)) => present.push((i, room, member)),
+                _ => stale.push(member.clone()),
+            }
+        }
+        let slice: Vec<&Room> = present.iter().map(|(_, r, _)| *r).collect();
+        let mut linked = std::collections::BTreeSet::new();
+        for pair in compute_adjacency_indexed(&slice, wall_max) {
+            linked.insert(pair.ia);
+            linked.insert(pair.ib);
+            facts.push(ZoneEdgeFact {
+                zone_id: zone.id.clone(),
+                ia: present[pair.ia].0,
+                ib: present[pair.ib].0,
+                point: pair.midpoint,
+            });
+        }
+        report.zones.push(ZoneReport {
+            id: zone.id.clone(),
+            name: zone.name.clone(),
+            members: zone.rooms.len(),
+            stale,
+            edges: 0,
+            redundant: 0,
+            unlinked: present
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| !linked.contains(k))
+                .map(|(_, (_, _, m))| (*m).clone())
+                .collect(),
+            reaches_doors: present.iter().any(|(i, _, _)| door_degree[*i] > 0),
+        });
+    }
+    (facts, report)
+}
 // ================================ the read ================================
 
 /// Both ends of a route or neither: a route needs two rooms, and one alone is a
@@ -620,7 +809,17 @@ pub fn assemble_connectivity(
         None => Vec::new(),
     };
 
-    let Graph { mut nodes, edges, counts } = link(nodes, facts);
+    let Graph { mut nodes, mut edges, counts } = link(nodes, facts);
+    // Door degrees, taken before zones add theirs: a zone whose members have none
+    // is an island, and the report says so.
+    let door_degree: Vec<usize> = nodes.iter().map(|n| n.degree).collect();
+    let (zone_facts, mut connections_report) = zone_edges(state, project, &rooms, &nodes, &door_degree);
+    let tally = add_zone_edges(&mut nodes, &mut edges, zone_facts);
+    for zone in &mut connections_report.zones {
+        let (added, redundant) = tally.get(&zone.id).copied().unwrap_or((0, 0));
+        zone.edges = added;
+        zone.redundant = redundant;
+    }
     let components = components(&mut nodes, &edges);
 
     let isolated: Vec<IsolatedRoom> = nodes
@@ -653,6 +852,7 @@ pub fn assemble_connectivity(
         components,
         isolated,
         counts,
+        connections: connections_report,
         path,
     }))
 }
@@ -788,7 +988,7 @@ mod tests {
         assert_eq!(by_distance.steps.len(), 3, "three doors on the line beat one door 100 ft away");
         let by_hops = route(&nodes, &edges, a, b, Metric::Hops);
         assert_eq!(by_hops.steps.len(), 1);
-        assert_eq!(by_hops.steps[0].door_id, "far");
+        assert_eq!(by_hops.steps[0].door_id.as_deref(), Some("far"));
     }
 
     /// One resolved side is an exit, no side is unattached, a room outside the
@@ -1025,7 +1225,13 @@ mod tests {
             assert!(result.path.is_none());
             // A door with no point sits between its rooms' centroids, so the walk
             // from a to b is the 10 ft between them.
-            let ab = result.edges.as_ref().unwrap().iter().find(|e| e.door_id == "ab").unwrap();
+            let ab = result
+                .edges
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|e| e.door_id.as_deref() == Some("ab"))
+                .unwrap();
             assert!((ab.length - 10.0).abs() < 1e-6, "{}", ab.length);
         }
 
@@ -1098,6 +1304,105 @@ mod tests {
             assert_eq!(result.isolated.len(), 1);
         }
 
+        // ---------- open zones ----------
+
+        fn zone_input(id: &str, rooms: &[&str]) -> crate::connections::ZoneInput {
+            crate::connections::ZoneInput {
+                id: id.to_string(),
+                name: format!("Zone {id}"),
+                kind: crate::connections::ZoneKind::Open,
+                rooms: rooms
+                    .iter()
+                    .map(|r| crate::connections::RoomInput { room_id: r.to_string(), model_id: Some("m1".to_string()) })
+                    .collect(),
+                note: None,
+            }
+        }
+
+        /// The standard rooms and doors, with `zones` authored for the project.
+        /// Rooms a|b|c share walls in a row, `d` stands apart; only a-b has a door.
+        fn zoned(tag: &str, zones: Vec<crate::connections::ZoneInput>) -> (AppState, std::path::PathBuf) {
+            let dir = std::env::temp_dir().join(format!("roommate-conn-zones-{tag}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let state = state(vec![door("ab", Some("a"), Some("b"), "none")]).with_projects_dir(dir.clone());
+            crate::connections::save(
+                &state,
+                &dir,
+                "p1",
+                crate::connections::SaveRequest { base: String::new(), zones },
+            )
+            .unwrap();
+            (state, dir)
+        }
+
+        fn read(state: &AppState, route: Option<(&Endpoint, &Endpoint)>) -> ConnectivityResult {
+            assemble_connectivity(state, "p1", &ConnectivityScope::default(), route, Metric::Distance, Detail::Full)
+                .unwrap()
+                .unwrap()
+        }
+
+        /// The point of the whole feature: a zone joins the rooms that share a
+        /// wall, so a room no door reaches becomes routable, and the route says
+        /// which hop was a door and which was the zone.
+        #[test]
+        fn test_a_zone_connects_rooms_that_share_a_wall() {
+            let (s, dir) = zoned("joins", vec![zone_input("z1", &["b", "c"])]);
+            let (a, c) = (ep(None, "a"), ep(None, "c"));
+            let result = read(&s, Some((&a, &c)));
+
+            let path = result.path.as_ref().unwrap();
+            assert!(path.found, "{:?}", path.reason);
+            let kinds: Vec<_> = path.steps.iter().map(|s| s.kind).collect();
+            assert_eq!(kinds, vec![EdgeKind::Door, EdgeKind::Zone]);
+            assert_eq!(path.steps[1].zone_id.as_deref(), Some("z1"));
+            // The zone hop runs through the middle of the b|c wall, x = 20.
+            assert!((path.steps[1].point.x - 20.0).abs() < 1e-6);
+            // c is no longer isolated; d still is.
+            assert_eq!(result.isolated.iter().map(|r| r.room.room_id.as_str()).collect::<Vec<_>>(), vec!["d"]);
+            assert_eq!(result.counts.edges, 1, "counts stay a count of DOORS");
+            let zone = &result.connections.zones[0];
+            assert_eq!((zone.edges, zone.redundant), (1, 0));
+            assert!(zone.reaches_doors && zone.unlinked.is_empty() && zone.stale.is_empty());
+            assert!(!result.connections.pinned);
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// Members that share no wall cannot be joined by a zone: they are
+        /// reported rather than connected by a made-up line.
+        #[test]
+        fn test_members_with_no_shared_wall_are_reported_unlinked() {
+            let (s, dir) = zoned("unlinked", vec![zone_input("z1", &["c", "d"])]);
+            let result = read(&s, None);
+            let zone = &result.connections.zones[0];
+            assert_eq!(zone.edges, 0);
+            assert_eq!(zone.unlinked.len(), 2);
+            assert!(!zone.reaches_doors, "neither c nor d has a door: the zone is an island");
+            assert_eq!(result.isolated.len(), 2, "c and d are still unreachable");
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// A pair a door already joins is not joined twice, and the zone says it
+        /// was redundant. A member that is not in the model is stale, not an error.
+        #[test]
+        fn test_a_zone_over_a_door_is_redundant_and_a_missing_member_is_stale() {
+            let (s, dir) = zoned("redundant", vec![zone_input("z1", &["a", "b", "ghost"])]);
+            let result = read(&s, None);
+            let zone = &result.connections.zones[0];
+            assert_eq!((zone.edges, zone.redundant), (0, 1));
+            assert_eq!(zone.stale.len(), 1);
+            assert_eq!(zone.stale[0].room_id, "ghost");
+            assert_eq!(result.edges.as_ref().unwrap().len(), 1, "still one door edge and nothing added");
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// With no authored document the read is exactly the doors-only graph.
+        #[test]
+        fn test_without_connections_nothing_changes() {
+            let result = read(&state(standard()), None);
+            assert!(result.connections.zones.is_empty());
+            assert_eq!(result.connections.taken_at, "");
+            assert!(result.connections.error.is_none());
+        }
         /// The summary leaves the graph out of the body; `full` puts it in.
         #[test]
         fn test_summary_omits_the_graph_and_full_includes_it() {
