@@ -1,7 +1,8 @@
 # Plan — shortest path between rooms, in three steps
 
-**Status: proposed, nothing built.** Moves to `Superseded/` when step 3 lands,
-and what survives goes into [Entities](STRATEGY-ENTITIES.md) (the door
+**Status: all three steps are built; one decision is left open: the storage type
+of the authored connections** (see "Storage inputs"). This moves to
+`Superseded/` when that is decided, and what survives goes into [Entities](STRATEGY-ENTITIES.md) (the door
 connectivity graph is already listed there as deferred) and
 [Authored](STRATEGY-AUTHORED.md) (connections are its first kind).
 
@@ -214,13 +215,19 @@ Recorded as the steps are built; this list is the input to the storage decision.
 **After step 2:**
 
 - A document per project: `schema_version`, `taken_at`, `zones[]`.
-- A zone: `id`, `name`, `kind`, `rooms[] {model_id, room_id}`, `note`.
+- A zone: `id`, `name`, `kind` (`open` or `vertical`), `rooms[] {model_id, room_id}`,
+  `note`, and for a vertical zone `level_cost_ft`.
 - A version stamp per save and a check against it (optimistic concurrency).
 - A copy of each replaced document (20 kept): history is recovery only, not
   pinned or queryable. Nothing has yet asked for either.
 - Rooms are referenced by model and id, so a renumbered room orphans a member
   and nothing re-links it.
 - Nothing stores anything derived.
+
+**After step 3:** one new field, `level_cost_ft`, and one new kind. Nothing asked
+for history, pinning, or per-room roles; the one pressure was a stack that needs
+its stack rooms and its access rooms told apart (see step 3), which would add a
+second room list to the record.
 
 ### Server and viewer
 
@@ -251,33 +258,42 @@ Recorded as the steps are built; this list is the input to the storage decision.
 - The route tool's description gains the authored half: connections are
   user-stated, not model-derived; `stale_connections` is a finding.
 
-## Step 3 — vertical connections
+## Step 3 — vertical connections (built)
 
-- **The same edge, `kind: "vertical"`, across levels.** Validator: the two rooms
-  must be on different storeys, judged by the storey rule in
-  `src-js/renderer/storey.ts` / `rooms::dedup_levels` (**name plus elevation, never
-  a level id**), because a level id is per document and a facade or services model
-  would otherwise be wrongly "on the same level".
-- **Cost.** A vertical edge has no plan distance. Use a setting,
-  `[connectivity] vertical_cost_ft`, with a sane default, and say what it means:
-  the walking-equivalent of a flight or a lift ride. It is a new settings field, so
-  it needs the generated TypeScript regenerated, a control on `/settings/`, and an
-  entry in [SETTINGS.md](SETTINGS.md).
-- **Stacks.** A stair is one room per level, so connecting four levels is three
-  edges. A lift reaches any level from any level; chained edges charge it per
-  floor, which overstates a lift. Accept that in v1 and state it. Revisit with a
-  `group` edge (one list of rooms, all mutually connected at the same cost) if it
-  matters; it is the only reason the edge type would grow.
-- **Viewer.** The "connect to…" flow must reach across levels, which the
-  multi-zone layout already supports (two zones, two levels) and the route panel's
-  off-screen endpoints already cover. The route drawing gains the cross-level
-  marker defined in step 1.
-- **Optional, cheap, after measuring:** suggest vertical candidates by plan
-  overlap between rooms on adjacent storeys with matching names (stair to stair,
-  lift to lift), using the existing overlap machinery. Only if step 2's
-  suggestions proved useful.
-- **MCP:** no new tool; the description drops the "no route crosses a level"
-  caveat and gains the cost explanation.
+**Status: built.** It is the same record as an open zone with `kind: "vertical"`
+(`src/connections.rs`, `service::connectivity`, the editor's kind select).
+
+- **A vertical zone is a stack.** Its members are open to each other across the
+  walls they share on one storey (exactly as an open zone), and each member of a
+  storey is joined to each member of the NEXT storey the zone reaches. A chain,
+  not a clique, so a stair cannot skip a floor and a route across several storeys
+  pays once per storey crossed. A storey the zone skips is skipped.
+- **Cost is per zone, not a setting** (a change from this plan's first version).
+  `level_cost_ft` is stored on the zone, default 40 ft, because a stair and a lift
+  do not cost the same and a per-zone value needs no settings field, regenerated
+  TypeScript, settings-page control or SETTINGS.md entry. It is the walking
+  equivalent of one storey change, an assumption and not a measurement.
+- **Storeys are the canonical level ids** the rooms read already dedups across
+  linked models by name plus elevation, ordered by their elevation. A vertical
+  zone whose members share one storey joins nothing between storeys, and the
+  report says so (`storeys: 1`) and the editor refuses to save one.
+- **Routing:** a step has `kind: vertical`, its length is the stated cost, and the
+  polyline breaks into one segment per level, so each viewer zone draws its own
+  slice. Verified on the largest project: a lift-lobby stack across ten storeys, a
+  route from a ground-floor corridor to the Level 1 lobby ("0 doors, 1 level
+  change, about 40 ft"), the Ground slice showing the start and Level 1 the end,
+  the route kept when the zone's level changed.
+- **MCP:** no new tool. `get_connectivity`'s description now says how a route
+  crosses a level and what its cost is; `list_connections` describes both kinds.
+- **Known overstatement, recorded because it was found by driving it:** the chain
+  joins EVERY member of one storey to EVERY member of the next, so a corridor in
+  the zone on one level is joined straight to the lobby on the next, skipping the
+  walk to the lift. The cost of a lift is also charged per storey crossed, which
+  overstates it. Both are consequences of a zone being one flat list of rooms. The
+  fix, if it matters, is to tell a zone's stack members from its access members
+  (two lists), which is also the `group` edge this plan named for lifts.
+- **Not built:** suggestions of vertical candidates by plan overlap, and a
+  per-storey-skipping lift (reach any floor in one ride).
 
 ## Critique of this plan
 

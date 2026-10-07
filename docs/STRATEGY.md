@@ -32,7 +32,7 @@ invariants that are expensive to rediscover.
   milestones, and served. Read it before building any of that.
 - **[Entities](STRATEGY-ENTITIES.md)** — what makes something a primary entity
   rather than a reference source, and what seven of them proved comes for free.
-  Open: the door connectivity graph, design options, the geometric space↔room
+  Open: design options, the geometric space↔room
   check, FF&E at scale.
 - **[Reports](STRATEGY-REPORTS.md)** — the `/reports/` page is built. Open: server debts
   (streamed CSV, report URLs) and the design of association reports — ceilings, spaces and FF&E by room —
