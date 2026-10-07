@@ -127,6 +127,9 @@ describe("describeResult", () => {
     const mixed = path(true);
     mixed.steps[1] = { kind: "zone", zone_id: "z1", point: { x: 3, y: 4 } };
     expect(describeResult({ state: "done", path: mixed })).toBe("1 door, 1 open-zone hop, about 42 ft");
+    const stacked = path(true);
+    stacked.steps[1] = { kind: "vertical", zone_id: "lift", point: { x: 3, y: 4 } };
+    expect(describeResult({ state: "done", path: stacked })).toBe("1 door, 1 level change, about 42 ft");
     expect(describeResult({ state: "done", path: path(false) })).toBe("no route through doors");
   });
 });

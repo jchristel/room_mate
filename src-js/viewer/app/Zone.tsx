@@ -325,10 +325,10 @@ export function Zone({ zone }: { zone: ZoneRow }) {
         </button>
         <button
           className={`route-toggle${zone.edit ? " on" : ""}`}
-          title="Define open zones: rooms the model does not join with doors but that are one open space"
+          title="Define open zones (rooms the model does not join with doors) and vertical zones (stairs and lifts)"
           onClick={() => setZoneEditMode(zone.id, zone.edit === null)}
         >
-          Open zones
+          Connections
         </button>
         {zone.areasMode && areas ? (
           <select

@@ -719,7 +719,12 @@ fn zone_edges(
         if zone.kind == ZoneKind::Vertical {
             let cost = zone.level_cost_ft.unwrap_or(connections::DEFAULT_LEVEL_COST_FT);
             let at: Vec<(usize, &str)> = present.iter().map(|(i, _, _)| (*i, nodes[*i].level_id.as_str())).collect();
+            // A member the stack joins to another storey is linked, whether or not
+            // it also shares a wall on its own storey.
+            let position: BTreeMap<usize, usize> = present.iter().enumerate().map(|(k, (i, _, _))| (*i, k)).collect();
             for (ia, ib) in vertical_pairs(&at, &elevations) {
+                linked.insert(position[&ia]);
+                linked.insert(position[&ib]);
                 facts.push(ZoneEdgeFact {
                     zone_id: zone.id.clone(),
                     ia,
@@ -1544,6 +1549,7 @@ mod tests {
             );
             let zone = &result.connections.zones[0];
             assert_eq!((zone.storeys, zone.edges), (2, 1));
+            assert!(zone.unlinked.is_empty(), "the stack links its members even with no shared wall");
             assert!(zone.reaches_doors);
             std::fs::remove_dir_all(&dir).ok();
         }

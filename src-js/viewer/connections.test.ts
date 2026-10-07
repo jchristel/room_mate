@@ -94,3 +94,46 @@ describe("connectionsUrl", () => {
     expect(connectionsUrl({ projectId: null, building: null, milestone: null })).toBeNull();
   });
 });
+
+describe("vertical zones", () => {
+  const vertical: ConnectionsDoc = {
+    schema_version: 1,
+    taken_at: "t",
+    zones: [
+      { id: "lift", name: "Lift 1", kind: "vertical", level_cost_ft: 20, rooms: [{ model_id: "m", room_id: "a" }, { model_id: "m", room_id: "b" }] },
+      doc.zones[0]!,
+    ],
+  };
+
+  it("loads a saved zone's kind and cost for editing", () => {
+    const e = editOf(vertical.zones[0]!);
+    expect(e.kind).toBe("vertical");
+    expect(e.levelCost).toBe("20");
+    expect(editOf(doc.zones[0]!).levelCost).toBe("");
+  });
+
+  it("sends a typed cost, blank as the default, and none at all for an open zone", () => {
+    const base = { ...addMembers(newEdit(), ["x", "y"]), name: "Stair B", kind: "vertical" as const };
+    const sent = (levelCost: string, kind: "open" | "vertical" = "vertical") =>
+      zonesAfterSave(doc, { ...base, kind, levelCost }).at(-1)!.level_cost_ft;
+    expect(sent("35")).toBe(35);
+    expect(sent("")).toBeNull();
+    expect(sent("35", "open")).toBeNull();
+  });
+
+  it("refuses a cost that is not a number above zero, in words, before the request", () => {
+    const base = { ...addMembers(newEdit(), ["x", "y"]), name: "Stair B", kind: "vertical" as const };
+    expect(whyNotSavable({ ...base, levelCost: "abc" })).toMatch(/level cost/);
+    expect(whyNotSavable({ ...base, levelCost: "0" })).toMatch(/level cost/);
+    expect(whyNotSavable({ ...base, levelCost: "-3" })).toMatch(/level cost/);
+    expect(whyNotSavable({ ...base, levelCost: "" })).toBeNull();
+    expect(whyNotSavable({ ...base, kind: "open", levelCost: "abc" })).toBeNull();
+  });
+
+  it("keeps every other zone's kind and cost when one is saved or deleted", () => {
+    const edit = { ...editOf(doc.zones[0]!), name: "East v2" };
+    const saved = zonesAfterSave(vertical, edit);
+    expect(saved.find((z) => z.id === "lift")).toMatchObject({ kind: "vertical", level_cost_ft: 20 });
+    expect(zonesAfterDelete(vertical, "east").find((z) => z.id === "lift")).toMatchObject({ kind: "vertical", level_cost_ft: 20 });
+  });
+});
