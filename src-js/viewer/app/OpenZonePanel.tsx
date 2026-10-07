@@ -17,6 +17,7 @@ import { useEffect, useMemo } from "react";
 import {
   addMembers,
   connectionsUrl,
+  DEFAULT_LEVEL_COST_FT,
   editOf,
   newEdit,
   removeMember,
@@ -25,6 +26,7 @@ import {
   zonesAfterSave,
   type ConnectionsDoc,
   type SavedZone,
+  type ZoneKind,
 } from "../connections.js";
 import { patchZoneEdit, setConnections, setZoneEditMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
@@ -82,7 +84,14 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
   const doc = connections.projectId === scope.projectId ? connections.doc : null;
 
   if (!edit) return null;
-  const reason = whyNotSavable(edit);
+  // A vertical zone is only a stair if it reaches two levels, which the pure rules
+  // cannot see (they hold room ids, not levels), so the panel adds it.
+  const levelsReached = new Set(edit.members.map((m) => rooms.get(m.room_id)?.level_id).filter(Boolean)).size;
+  const reason =
+    whyNotSavable(edit) ??
+    (edit.kind === "vertical" && levelsReached < 2
+      ? "A vertical zone needs rooms on at least two levels: change the level picker between picks."
+      : null);
 
   const send = async (zones: unknown[], afterOk: () => void) => {
     if (!url || !doc) return;
@@ -118,7 +127,17 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
 
   return (
     <div className="routeBar zoneBar">
-      <strong>Open zone</strong>
+      <strong>{edit.kind === "vertical" ? "Vertical zone" : "Open zone"}</strong>
+      <select
+        className="picker"
+        value={edit.kind}
+        title="Open: shared walls between the rooms are open. Vertical: a stair or lift, open within each level and joined between levels."
+        onChange={(e) => patchZoneEdit(zoneId, { ...edit, kind: e.target.value as ZoneKind, error: null })}
+        aria-label="Zone kind"
+      >
+        <option value="open">Open area</option>
+        <option value="vertical">Vertical (stair / lift)</option>
+      </select>
       <input
         className="zoneName"
         placeholder={edit.id ? "name" : "name this open zone"}
@@ -130,6 +149,21 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
         {edit.members.length} room{edit.members.length === 1 ? "" : "s"}
         {edit.members.length === 0 ? " — click rooms on the plan, or search and add every match" : ""}
       </span>
+      {edit.kind === "vertical" ? (
+        <input
+          className="zoneName zoneCost"
+          placeholder={`ft per level (${DEFAULT_LEVEL_COST_FT})`}
+          title="Walking-equivalent feet for each level change. Blank uses the default."
+          value={edit.levelCost}
+          onChange={(e) => patchZoneEdit(zoneId, { ...edit, levelCost: e.target.value, error: null })}
+          aria-label="Level cost in feet"
+        />
+      ) : null}
+      {edit.kind === "vertical" && edit.members.length > 0 ? (
+        <span className="routeLevel">
+          {levelsReached} level{levelsReached === 1 ? "" : "s"}
+        </span>
+      ) : null}
       {matchCount > 0 ? (
         <button
           className="ctl"
@@ -182,6 +216,7 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
                 title="Load this open zone to change it"
                 onClick={() => patchZoneEdit(zoneId, editOf(z))}
               >
+                {z.kind === "vertical" ? "↕ " : ""}
                 {z.name} ({z.rooms.length})
               </button>
               <button className="link" title="Delete this open zone" onClick={() => remove(z)}>

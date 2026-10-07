@@ -45,7 +45,7 @@ export interface RoutePath {
   reason: string | null;
   distance_ft: number;
   rooms: { model_id: string; room_id: string }[];
-  steps: { kind: "door" | "zone"; door_id?: string; zone_id?: string; point: { x: number; y: number } }[];
+  steps: { kind: "door" | "zone" | "vertical"; door_id?: string; zone_id?: string; point: { x: number; y: number } }[];
   segments: { level_id: string; points: { x: number; y: number }[] }[];
 }
 
@@ -125,12 +125,15 @@ export function describeResult(result: RouteResult): string {
       return result.message;
     case "done": {
       if (!result.path.found) return result.path.reason ?? "No route through doors.";
-      const doors = result.path.steps.filter((s) => s.kind === "door").length;
-      const zones = result.path.steps.length - doors;
+      const count = (kind: string) => result.path.steps.filter((s) => s.kind === kind).length;
+      const doors = count("door");
+      const zones = count("zone");
+      const levels = count("vertical");
       // Said apart, because a door is the model's word and an open-zone hop is a
       // person's, and a reader weighing a route should be able to tell which.
       const parts = [`${doors} door${doors === 1 ? "" : "s"}`];
       if (zones > 0) parts.push(`${zones} open-zone hop${zones === 1 ? "" : "s"}`);
+      if (levels > 0) parts.push(`${levels} level change${levels === 1 ? "" : "s"}`);
       return `${parts.join(", ")}, about ${Math.round(result.path.distance_ft)} ft`;
     }
   }

@@ -56,9 +56,22 @@ pub enum ZoneKind {
     /// Shared walls between members are open.
     #[default]
     Open,
+    /// A stack: members are open to each other across the walls they share on
+    /// one storey (as `Open`), and joined between neighbouring storeys at a
+    /// cost. A stair or a lift, with its landings or lobbies.
+    Vertical,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// What one storey change costs when a vertical zone does not say, in feet of
+/// walking: a flight of stairs with its landing. A lift charged per storey
+/// overstates its ride, which is why a zone can carry its own figure.
+pub const DEFAULT_LEVEL_COST_FT: f64 = 40.0;
+
+/// Upper bound on a stated level cost, so a typo cannot make a stair longer
+/// than the building.
+const MAX_LEVEL_COST_FT: f64 = 1_000.0;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenZone {
     /// Stable identity: survives a rename, and is what an edit addresses.
     pub id: String,
@@ -66,11 +79,16 @@ pub struct OpenZone {
     #[serde(default)]
     pub kind: ZoneKind,
     pub rooms: Vec<RoomRef>,
+    /// Walking-equivalent feet per storey change, for a vertical zone. Absent
+    /// means `DEFAULT_LEVEL_COST_FT`. Per zone and not a setting because a lift
+    /// and a stair do not cost the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_cost_ft: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionsDocument {
     pub schema_version: u32,
     /// When this version was saved. Empty for a project nobody has authored
@@ -103,6 +121,8 @@ pub struct ZoneInput {
     #[serde(default)]
     pub kind: ZoneKind,
     pub rooms: Vec<RoomInput>,
+    #[serde(default)]
+    pub level_cost_ft: Option<f64>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -197,6 +217,17 @@ pub fn validate(zones: &[OpenZone]) -> Result<(), ConnectionsError> {
                 return bad(format!("zone {:?} lists room {} of model {} twice", zone.name, r.room_id, r.model_id));
             }
         }
+        if let Some(cost) = zone.level_cost_ft {
+            if zone.kind != ZoneKind::Vertical {
+                return bad(format!("zone {:?} states a level cost but is not vertical", zone.name));
+            }
+            if !cost.is_finite() || cost <= 0.0 || cost > MAX_LEVEL_COST_FT {
+                return bad(format!(
+                    "zone {:?} level cost {cost} must be above 0 and at most {MAX_LEVEL_COST_FT} ft",
+                    zone.name
+                ));
+            }
+        }
         if zone.note.as_ref().is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS) {
             return bad(format!("the note on zone {:?} is longer than {MAX_NOTE_CHARS} characters", zone.name));
         }
@@ -240,7 +271,14 @@ pub fn resolve(state: &AppState, project: &str, input: Vec<ZoneInput>) -> Result
                     },
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(OpenZone { id: z.id, name: z.name.trim().to_string(), kind: z.kind, rooms, note: z.note })
+            Ok(OpenZone {
+                id: z.id,
+                name: z.name.trim().to_string(),
+                kind: z.kind,
+                rooms,
+                level_cost_ft: z.level_cost_ft,
+                note: z.note,
+            })
         })
         .collect()
 }
@@ -326,6 +364,7 @@ mod tests {
             name: format!("Zone {id}"),
             kind: ZoneKind::Open,
             rooms,
+            level_cost_ft: None,
             note: None,
         }
     }

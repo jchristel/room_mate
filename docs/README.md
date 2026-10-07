@@ -20,7 +20,7 @@ strategy doc documents what is not".
 | [Browser](STRATEGY-BROWSER.md) | Open: serving and consuming the placement transform, level-of-detail, generated TypeScript wire types — plus the framework decision (React, measured against Rust+WASM) and the hybrid renderer's coordinate/paint-order invariant |
 | [MCP](STRATEGY-MCP.md) | Open: resources and prompts, document tools |
 | [Authored](STRATEGY-AUTHORED.md) | User-authored data — connections, PDFs, hierarchy scopes. **Nothing here is built**; read it before building any of it |
-| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, and what seven of them proved comes for free. Open: door connectivity, design options, the geometric space↔room check, FF&E at scale, the ceilings and floors QA reports |
+| [Entities](STRATEGY-ENTITIES.md) | What makes something a primary entity, and what seven of them proved comes for free. Open: design options, the geometric space↔room check, FF&E at scale, the ceilings and floors QA reports |
 | [Reports](STRATEGY-REPORTS.md) | The `/reports/` page — built. Open: server-side debts (streamed CSV, a plain GET for saved rows), sharing and linking saved reports, and the design rationale for association reports (the join is chosen, never defined), the filter, why a node editor was rejected, and cardinality |
 | [Security](STRATEGY-SECURITY.md) | Threat model for a LAN-reachable deployment: trust boundary, invariants, and the one unbuilt bound (rate limiting; settings backups are built). **Read before widening the bind past `127.0.0.1`** |
 

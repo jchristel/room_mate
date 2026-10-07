@@ -157,17 +157,6 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
 
 ## Deferred
 
-- **Door connectivity graph.** Door connectivity is a genuinely different graph
-  from `/projects/{id}/adjacency`, not a refinement of it: two rooms can share a
-  wall with no door in it, and a door can connect two rooms sharing almost no
-  wall. It is a second edge set, so adjacency keeps its meaning and connectivity
-  gets its own endpoint.
-
-  **The simple question is already a read, not a computation** — every door on
-  `/doors` names both of its rooms, so "which rooms are connected by a door"
-  needs no endpoint. What a real connectivity endpoint adds is the *graph*:
-  traversal, components, path length. Worth building when something asks for one.
-
 - **Design options, as a second model-variant axis.** They cross phase the same
   way, and the same "one at a time, chosen at export" logic would apply. Still no
   varying sample data — all 26 House A doors sit in `{"option_name": "-",
