@@ -906,3 +906,15 @@
      answers; the id trails in the muted style the inspector uses for one. */
   .pick-list .pick-kind { text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); }
   .pick-list .pick-id { float: right; opacity: 0.55; margin-left: 0.75rem; }
+
+  /* Open zones: the editor bar shares the route bar's layout. */
+  .zoneBar input.zoneName {
+    font-family: var(--mono); font-size: 0.7rem; color: var(--ink);
+    background: var(--paper); border: 1px solid var(--ink); padding: 0.15rem 0.4rem; min-width: 10rem;
+  }
+  .zoneBar .savedZones { flex-basis: 100%; }
+  .zoneBar .savedZone { display: inline-flex; align-items: baseline; gap: 0.1rem; }
+  .zoneBar button.chip.on { border-color: var(--accent); color: var(--accent); }
+  /* Translucent, so the outline and label beneath stay readable. */
+  .open-zone-room { fill: var(--accent); fill-opacity: 0.3; stroke: var(--accent); stroke-width: 1.5;
+                    vector-effect: non-scaling-stroke; pointer-events: none; }

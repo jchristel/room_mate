@@ -67,6 +67,13 @@ stops a future route quietly voiding it.
   `/api/settings/*` and the reference upload, by design. So settings are the one
   thing a hostile user can harm, and therefore the one thing that must be
   **recoverable**.
+- **The authored connections are the second such thing**: `PUT
+  /projects/{id}/connections` replaces the whole document, so a hostile user can
+  delete every open zone in one request. It stays inside the invariant because
+  the data is authored metadata beside the settings, not the record, every
+  replaced document is copied under `.backups/` (20 kept), and a save must name
+  the version it read. Authored data that people cannot regenerate is exactly
+  what makes the unbuilt rate limit and, later, authentication matter more.
 - **A rejected settings save leaves the prior file untouched**, and **ingest can
   add snapshots but never overwrite one**. Both hold today. A hostile pusher can
   append history and can flood, but cannot rewrite or erase what is stored.

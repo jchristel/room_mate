@@ -141,19 +141,36 @@ UI and how much a list in a file would do.
 
 ## Step 2 — authored connections
 
-### The edge
+### The open zone (built; this replaced the pairwise edge)
+
+**Status: built** (`src/connections.rs`, `service::connectivity`, the viewer's
+"Open zones" editor). The first design was a pairwise edge; it was replaced by a
+**zone**, a named set of rooms the user declares to be one open space, because
+what a person knows is "this whole area is open", not which of 47 wall segments
+inside it are. The largest cluster of doorless rooms measured was 48.
 
 ```json
-{ "id": "c-…", "a": {"model_id": "…", "room_id": "…"},
-  "b": {"model_id": "…", "room_id": "…"},
-  "kind": "open", "note": "bay opens onto corridor" }
+{ "id": "east-bays", "name": "East bays", "kind": "open",
+  "rooms": [{"model_id": "…", "room_id": "…"}, …], "note": null }
 ```
 
-Undirected, `RoomRef` on both ends, `kind` a small closed set (`open`, `bay`,
-`other`; step 3 adds `vertical`). Stored as **edges, never as room edits**,
-exactly as [Authored](STRATEGY-AUTHORED.md) specifies. Design the shape for step 3
-now (cross-level allowed by the type, forbidden by the step-2 validator), so step
-3 is a validation change and a cost, not a migration.
+- **Meaning:** every wall two members share is open. The edges are derived at
+  read time by running the members through the wall-sharing algorithm
+  restricted to them, so a route follows the floor plan across the shared wall
+  and never cuts a straight line through whatever lies between. Nothing derived
+  is stored.
+- **Reported, never errors:** `stale` members (not in scope), `unlinked`
+  members (sharing a wall with no other member), `redundant` pairs a door
+  already joins, and `reaches_doors` (false means the whole zone is still an
+  island).
+- **Authored data is replaced whole with a version check:** a save names the
+  `taken_at` it read, and a mismatch is a 409, so two editors cannot overwrite
+  each other unseen.
+- **Not built:** suggestions from the adjacency graph, a "zone is mutually
+  reachable regardless of walls" variant, a "these two are blocked" override,
+  milestone pinning, and an MCP write tool (`list_connections` reads).
+- **Step 3** reuses the record: a `vertical` kind whose members need not touch,
+  with a per-level cost.
 
 ### Where it lives — decided for now, revisited at the end
 
@@ -192,9 +209,18 @@ installer notes if it ships before the decision.
 
 ### Storage inputs
 
-*(Filled in as steps 2 and 3 are built: every field, kind and per-project value
-that ended up needing to persist, and whether anything asked for history or
-milestone pinning.)*
+Recorded as the steps are built; this list is the input to the storage decision.
+
+**After step 2:**
+
+- A document per project: `schema_version`, `taken_at`, `zones[]`.
+- A zone: `id`, `name`, `kind`, `rooms[] {model_id, room_id}`, `note`.
+- A version stamp per save and a check against it (optimistic concurrency).
+- A copy of each replaced document (20 kept): history is recovery only, not
+  pinned or queryable. Nothing has yet asked for either.
+- Rooms are referenced by model and id, so a renumbered room orphans a member
+  and nothing re-links it.
+- Nothing stores anything derived.
 
 ### Server and viewer
 

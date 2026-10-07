@@ -17,6 +17,7 @@ import {
   select,
   setRoomContents,
   setZoneLayer,
+  setZoneEditMode,
   setZoneRouteMode,
 } from "./store.js";
 
@@ -116,5 +117,48 @@ describe("a zone's route tool", () => {
     expect(getState().zones[1]!.route).toBeNull();
     setZoneRouteMode(a, false);
     expect(route(a)).toBeNull();
+  });
+});
+
+describe("a zone's open-zone editor", () => {
+  beforeEach(() => resetState());
+
+  const edit = (zone: string) => getState().zones.find((z) => z.id === zone)!.edit;
+
+  it("takes room picks into its working set, toggling, instead of selecting", () => {
+    const a = getState().zones[0]!.id;
+    setZoneEditMode(a, true);
+    select("room", "r1", a);
+    select("room", "r2", a);
+    select("room", "r1", a);
+    expect(edit(a)!.members.map((m) => m.room_id)).toEqual(["r2"]);
+    expect(getState().selection).toBeNull();
+  });
+
+  it("is exclusive with the route tool in the same zone, in both directions", () => {
+    const a = getState().zones[0]!.id;
+    setZoneRouteMode(a, true);
+    setZoneEditMode(a, true);
+    expect(getState().zones[0]!.route).toBeNull();
+    expect(edit(a)).not.toBeNull();
+    setZoneRouteMode(a, true);
+    expect(edit(a)).toBeNull();
+  });
+
+  it("sends a pick with no zone to whichever zone has a tool on, whichever kind", () => {
+    addZone();
+    const [a, b] = getState().zones.map((z) => z.id) as [string, string];
+    setZoneEditMode(b, true);
+    select("room", "r1", null);
+    expect(edit(b)!.members).toHaveLength(1);
+    expect(edit(a)).toBeNull();
+  });
+
+  it("still lets a door be selected while editing", () => {
+    const a = getState().zones[0]!.id;
+    setZoneEditMode(a, true);
+    select("door", "d1", a);
+    expect(getState().selection).toMatchObject({ kind: "door", id: "d1" });
+    expect(edit(a)!.members).toHaveLength(0);
   });
 });
