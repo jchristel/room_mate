@@ -6,6 +6,60 @@ of the authored connections** (see "Storage inputs"). This moves to
 connectivity graph is already listed there as deferred) and
 [Authored](STRATEGY-AUTHORED.md) (connections are its first kind).
 
+## Where this stands (read this first in a new session)
+
+*As of 2026-10-08.*
+
+**Merged to `main`:** the doors-only graph and two-click route picker (#189), open
+zones and `/connections` (#190), vertical zones (#191, since removed), and manual
+vertical links replacing them (#192).
+
+**Open pull requests, in merge order:**
+
+1. #193, routing methods: door to door as the default, room centres kept, the method
+   registry, the picker, the research below. CI green.
+2. This branch (`route-endpoints`), stacked on #193: a start and end *point* inside
+   each room. Retarget it to `main` after #193 merges.
+
+**Decisions still open**
+
+- **Storage type of the authored connections.** A JSON document beside the settings
+  for now (see "Storage inputs"). Decide it from that list; the one module that
+  owns the file is `src/connections.rs`.
+- **Suggest the rooms stacked above and below a picked room** (proposed in step 3,
+  not built). Measure first: how many lift and stair rooms get an overlapping
+  candidate on the neighbouring storey at a given threshold.
+- **Wall clearance** as a third routing method (keep a margin off walls); the natural
+  next one in "Horizontal path".
+- **Dragging a start or end mark** to adjust it. Today a click sets the point.
+- **Milestone pinning of connections**, and an **MCP write tool** for them. Both
+  deferred on purpose; the Security doc explains why a write tool waits.
+- **Doorless corridors.** About 1,050 ordinary rooms on the largest project have no
+  door and are not lifts, stairs or risers. It is a data question (doors in models
+  never pushed, open-plan areas, openings that are not doors) and was deliberately
+  set aside.
+- **`levels_between` is advisory** on a project whose buildings interleave their
+  levels: a correct floor-to-floor link can report a skip.
+
+**Practical notes that cost time to find**
+
+- **Never test against the production store.** Copy the latest rooms and doors
+  snapshot of each model, plus `project.toml`, to a temp directory and point a second
+  instance at it with `--port`. Settings are not file-watched, and a server touches
+  the store at startup.
+- **Run a long-lived server from a copy of the exe** (`Copy-Item
+  target\debug\roommate.exe` somewhere, start it with the repo as the working
+  directory so `static/` is found). A running `roommate.exe` or `mcp.exe` locks the
+  file and makes the next `cargo build` fail with "Access is denied".
+- **Stop servers by process id** (find them with `Get-CimInstance Win32_Process`
+  and match the `--port`), never by image name: that can kill someone else's.
+- On this arm64 machine Python 3.12 and the GitHub CLI are installed per user (winget);
+  open a new shell if `python` still resolves to the Store alias.
+- The gates are in `CLAUDE.md`: `cargo test`, `cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, and for `src-js/`
+  `npm run typecheck && npm test && npm run build` (the built `static/` is committed).
+  Clippy's `too_many_lines` is 100: split a function rather than allow it.
+
 **The goal:** pick a start room and an end room on the plan and see the shortest
 route between them.
 
@@ -379,7 +433,34 @@ subdivision), or give the same lengths for more machinery (the funnel).
   lists.
 - A route starts and ends at each room's centre when the centre is inside the room
   (so the methods are compared on the walk and nothing else), else at a point
-  surely inside it.
+  surely inside it, **unless the caller gives a point** (next section).
+
+### Start and end points inside a room (built)
+
+A route no longer has to start and end at a room's centre. An endpoint takes an
+optional plan point (`from_x`/`from_y`, `to_x`/`to_y` over HTTP and MCP, both
+coordinates or neither, in the same project-local frame the route's `start`, `end`
+and polylines are answered in).
+
+- **Door to door** starts its walk at the point; the **room-centre method**
+  re-measures the legs that touch it, so both honour it and stay comparable. Two
+  points in one room are the straight line (centre method) or the exact walk
+  (door to door), and no door is crossed.
+- **A point outside its room is moved onto the room's outline and the answer says
+  so** (`path.note`), rather than refused: a click is imprecise by nature and a
+  refusal would be a poor answer to it.
+- **The answer carries `path.start` and `path.end`**, the points actually used, so
+  the viewer draws the marks where the route really began.
+- **In the viewer, a click on the plan sets the point; anything else (a grid row, a
+  search chip) has none and uses the centre.** The bar shows "at your click" with a
+  "centre" button to drop it. The renderer answers a click in its flipped world, so
+  the viewer negates Y before sending it; the click is carried through the pick list
+  too, so choosing among stacked elements keeps the spot.
+- **Why it matters:** between nearby rooms the walk inside the first and last room
+  dominates the distance, so the point changes the route (on the largest project a
+  clicked end point changed a 5-door route to an 8-door one one foot shorter). On
+  long routes it changes little.
+- **Not built:** dragging a mark to adjust a point after the click.
 
 ### Measured (the largest project, 24 random routes within the largest component)
 

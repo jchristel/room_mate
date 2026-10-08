@@ -22,7 +22,7 @@ import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
 import { newEdit, toggleMember, type ConnectionsDoc, type ZoneEdit } from "../connections.js";
-import { newRoute, pickEndpoint, type RouteState } from "../route.js";
+import { newRoute, pickEndpoint, type PlanPoint, type RouteState } from "../route.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
  *  enum of HTTP states: "waiting for data" (a 204 — the project exists and
@@ -199,6 +199,9 @@ export interface ViewerState {
   pickList: {
     zoneId: string;
     at: { x: number; y: number };
+    /** Where in the plan the click landed, so an entry picked from the list can
+     *  still start or end a route at that spot. */
+    world: PlanPoint | null;
     entries: readonly { kind: SelectionKind; id: string; label: string }[];
   } | null;
   /** The QA report for the scope, or null before one has been read. */
@@ -466,7 +469,12 @@ export function setZoneColourPlan(id: string, plan: string | null): void {
 
 /** Select one element, or nothing. `zoneId` is where the click came from, and
  *  is null for a selection made anywhere else (the grid, a search result). */
-export function select(kind: SelectionKind, id: string, zoneId: string | null = null): void {
+export function select(
+  kind: SelectionKind,
+  id: string,
+  zoneId: string | null = null,
+  at: PlanPoint | null = null,
+): void {
   // While a zone has a room-picking tool on (the route tool, or the open-zone
   // editor), a ROOM pick belongs to that tool instead of selecting. This one
   // choke point is what makes every way of reaching a room work with either --
@@ -478,7 +486,7 @@ export function select(kind: SelectionKind, id: string, zoneId: string | null = 
     if (target) {
       const zone = state.zones.find((z) => z.id === target)!;
       setState({ toolFocus: target });
-      if (zone.route) patchZoneRoute(target, pickEndpoint(zone.route, id));
+      if (zone.route) patchZoneRoute(target, pickEndpoint(zone.route, id, at));
       else if (zone.edit) patchZoneEdit(target, toggleMember(zone.edit, id));
       return;
     }
@@ -544,7 +552,7 @@ export function patchZoneRoute(id: string, patch: Partial<RouteState>): void {
 
 /** Forget both endpoints, keeping the tool on and what it knows about the scope. */
 export function clearZoneRoute(id: string): void {
-  patchZoneRoute(id, { start: null, end: null, notice: null, result: { state: "idle" } });
+  patchZoneRoute(id, { start: null, end: null, startAt: null, endAt: null, notice: null, result: { state: "idle" } });
 }
 
 export function clearSelection(): void {

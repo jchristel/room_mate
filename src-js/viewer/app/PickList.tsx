@@ -62,7 +62,7 @@ export function PickList() {
           onMouseLeave={() => hover(entry.kind, null)}
           onClick={() => {
             hover(entry.kind, null);
-            select(entry.kind, entry.id, pickList.zoneId);
+            select(entry.kind, entry.id, pickList.zoneId, pickList.world);
             closePickList();
           }}
         >

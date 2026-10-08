@@ -139,3 +139,34 @@ describe("describeResult", () => {
     expect(describeResult({ state: "done", path: path(false) })).toBe("no route through doors");
   });
 });
+
+describe("a point in the room", () => {
+  const at = { x: 3.5, y: -2 };
+
+  it("rides with the pick that set it, and the room's centre is no point at all", () => {
+    let r = pickEndpoint(ready(), "a", at);
+    expect(r.startAt).toEqual(at);
+    r = pickEndpoint(r, "b");
+    expect(r.endAt).toBeNull();
+    r = pickEndpoint(r, "c", { x: 1, y: 1 });
+    expect([r.end, r.endAt]).toEqual(["c", { x: 1, y: 1 }]);
+  });
+
+  it("is forgotten with the endpoint it belonged to", () => {
+    const placed = pickEndpoint(pickEndpoint(ready(), "a", at), "b", { x: 9, y: 9 });
+    const cleared = pickEndpoint(placed, "a");
+    expect([cleared.start, cleared.startAt]).toEqual([null, null]);
+    expect(cleared.endAt).toEqual({ x: 9, y: 9 });
+    const second = pickEndpoint(placed, "b");
+    expect([second.end, second.endAt]).toEqual([null, null]);
+  });
+
+  it("goes in the url only with a route, and only the coordinates that were set", () => {
+    const scope = { projectId: "p", building: null, milestone: null };
+    expect(connectivityUrl(scope, "a", "b", null, { from: at, to: null })).toBe(
+      "/projects/p/connectivity?from=a&to=b&from_x=3.5&from_y=-2",
+    );
+    expect(connectivityUrl(scope, "a", "b", null, { from: at, to: { x: 1, y: 2 } })).toContain("to_x=1&to_y=2");
+    expect(connectivityUrl(scope, "a", null, null, { from: at, to: null })).toBe("/projects/p/connectivity");
+  });
+});
