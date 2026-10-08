@@ -111,6 +111,15 @@ impl Method {
     }
 }
 
+/// What is being asked: the two rooms (as node indices) and, optionally, where in
+/// each the route starts and ends. A missing point is the room's centre.
+pub(super) struct Ask {
+    pub from: usize,
+    pub to: usize,
+    pub from_at: Option<Point2D>,
+    pub to_at: Option<Point2D>,
+}
+
 /// Compute the route with the chosen method.
 ///
 /// `rooms[i]` is node `i`'s room outline, when it has one. The hops metric has no
@@ -121,21 +130,59 @@ pub(super) fn route(
     nodes: &[Node],
     edges: &[Edge],
     rooms: &[Option<&Room>],
-    from: usize,
-    to: usize,
+    ask: &Ask,
     metric: Metric,
 ) -> PathResult {
     match (method, metric) {
-        (Method::DoorToDoor, Metric::Distance) => door_to_door(nodes, edges, rooms, from, to),
+        (Method::DoorToDoor, Metric::Distance) => door_to_door(nodes, edges, rooms, ask),
         (Method::DoorToDoor, Metric::Hops) => {
-            let mut result = centroid_route(nodes, edges, from, to, metric);
+            let mut result = centroid_at(nodes, edges, ask, metric);
             result.note = Some(
                 "the hops metric counts doors and has no geometry, so the room-centre drawing was used".to_string(),
             );
             result
         }
-        (Method::Centroid, _) => centroid_route(nodes, edges, from, to, metric),
+        (Method::Centroid, _) => centroid_at(nodes, edges, ask, metric),
     }
+}
+
+/// The room-centre route, from and to the given points when there are any.
+///
+/// A point replaces the room's centre as the place the route starts or ends, so
+/// the legs that touch it are re-measured and the search sees them. Both rooms
+/// being the same room has no door to cross, so the route is the straight line.
+fn centroid_at(nodes: &[Node], edges: &[Edge], ask: &Ask, metric: Metric) -> PathResult {
+    if ask.from_at.is_none() && ask.to_at.is_none() {
+        return centroid_route(nodes, edges, ask.from, ask.to, metric);
+    }
+    let mut ns = nodes.to_vec();
+    if let Some(p) = ask.from_at {
+        ns[ask.from].centroid = p;
+    }
+    if let Some(p) = ask.to_at {
+        ns[ask.to].centroid = p;
+    }
+    if ask.from == ask.to {
+        // Both points are in one room, so they are read from the request: `ns` holds
+        // one centre per room and the second would have overwritten the first.
+        let (a, b) = (
+            ask.from_at.unwrap_or(nodes[ask.from].centroid),
+            ask.to_at.unwrap_or(nodes[ask.to].centroid),
+        );
+        let mut result = centroid_route(&ns, edges, ask.from, ask.to, metric);
+        result.distance_ft = dist(a, b);
+        result.cost = if metric == Metric::Distance { dist(a, b) } else { 0.0 };
+        result.segments = vec![Segment { level_id: ns[ask.from].level_id.clone(), points: vec![a, b] }];
+        return result;
+    }
+    let mut es = edges.to_vec();
+    for e in es.iter_mut() {
+        let touches = [ask.from, ask.to].contains(&e.ia) || [ask.from, ask.to].contains(&e.ib);
+        if touches && e.kind != EdgeKind::Vertical {
+            e.length = dist(ns[e.ia].centroid, e.point) + dist(e.point, ns[e.ib].centroid);
+        }
+    }
+    centroid_route(&ns, &es, ask.from, ask.to, metric)
 }
 
 // =============================== door to door ===============================
@@ -250,9 +297,10 @@ struct Solved {
 /// when the search reaches the room (rooms with many doors are not paid for unless
 /// the route goes through them). A level change has no plan position, so its two
 /// ports sit at each room's inside point and are joined at the link's stated cost.
-fn door_to_door(nodes: &[Node], edges: &[Edge], rooms: &[Option<&Room>], from: usize, to: usize) -> PathResult {
+fn door_to_door(nodes: &[Node], edges: &[Edge], rooms: &[Option<&Room>], ask: &Ask) -> PathResult {
+    let (from, to) = (ask.from, ask.to);
     let mut shapes = Shapes::new(rooms);
-    let net = build_network(nodes, edges, &mut shapes, from, to);
+    let net = build_network(nodes, edges, &mut shapes, ask);
     let solved = solve(&net, edges, &mut shapes);
     if !solved.best[1].is_finite() {
         return PathResult {
@@ -267,6 +315,8 @@ fn door_to_door(nodes: &[Node], edges: &[Edge], rooms: &[Option<&Room>], from: u
             cost: 0.0,
             distance_ft: 0.0,
             arrival_ft: 0.0,
+            start: net.ports[0].at,
+            end: net.ports[1].at,
             method: Method::DoorToDoor.id(),
             note: None,
             rooms: vec![],
@@ -274,14 +324,32 @@ fn door_to_door(nodes: &[Node], edges: &[Edge], rooms: &[Option<&Room>], from: u
             segments: vec![],
         };
     }
-    assemble(nodes, edges, &net, &solved, from, to)
+    let mut notes = Vec::new();
+    for (given, port, which) in [(ask.from_at, 0, "start"), (ask.to_at, 1, "end")] {
+        if given.is_some_and(|p| dist(p, net.ports[port].at) > 1e-6) {
+            notes.push(format!("the {which} point was outside its room and was moved onto the room's outline"));
+        }
+    }
+    assemble(nodes, edges, &net, &solved, ask, notes)
 }
 
 /// Turn the graph's edges into ports. Port 0 is the start and port 1 the end.
-fn build_network(nodes: &[Node], edges: &[Edge], shapes: &mut Shapes<'_>, from: usize, to: usize) -> Network {
+fn build_network(nodes: &[Node], edges: &[Edge], shapes: &mut Shapes<'_>, ask: &Ask) -> Network {
+    let (from, to) = (ask.from, ask.to);
+    // A given point is brought into its room (a click lands inside it, but rounding
+    // and a door's wall are real); no point is the room's centre, or a point surely
+    // inside it where the centre is not.
+    let start = match ask.from_at {
+        Some(p) => shapes.snap(from, p),
+        None => shapes.inside(from, nodes[from].centroid),
+    };
+    let end = match ask.to_at {
+        Some(p) => shapes.snap(to, p),
+        None => shapes.inside(to, nodes[to].centroid),
+    };
     let mut ports: Vec<Port> = Vec::new();
-    ports.push(Port { room: from, at: shapes.inside(from, nodes[from].centroid), twin: None });
-    ports.push(Port { room: to, at: shapes.inside(to, nodes[to].centroid), twin: None });
+    ports.push(Port { room: from, at: start, twin: None });
+    ports.push(Port { room: to, at: end, twin: None });
     for (k, e) in edges.iter().enumerate() {
         let (at_a, at_b, crossing) = match e.kind {
             EdgeKind::Door | EdgeKind::Zone => {
@@ -363,7 +431,15 @@ fn solve(net: &Network, edges: &[Edge], shapes: &mut Shapes<'_>) -> Solved {
 /// Read the chain of hops back from the end port and build the route: the rooms
 /// passed, a step for each crossing (carrying the walk before it), and the drawn
 /// polyline grouped by level.
-fn assemble(nodes: &[Node], edges: &[Edge], net: &Network, solved: &Solved, from: usize, to: usize) -> PathResult {
+fn assemble(
+    nodes: &[Node],
+    edges: &[Edge],
+    net: &Network,
+    solved: &Solved,
+    ask: &Ask,
+    mut notes: Vec<String>,
+) -> PathResult {
+    let (from, to) = (ask.from, ask.to);
     let ports = &net.ports;
     let mut chain: Vec<(usize, Hop)> = Vec::new();
     let mut at = 1;
@@ -437,14 +513,19 @@ fn assemble(nodes: &[Node], edges: &[Edge], net: &Network, solved: &Solved, from
         cost: total,
         distance_ft: total,
         arrival_ft: pending,
+        start: ports[0].at,
+        end: ports[1].at,
         method: Method::DoorToDoor.id(),
-        note: (fallbacks > 0).then(|| {
-            format!(
-                "{fallbacks} walk{} inside rooms used a straight line because the room has no usable outline, \
-                 so those stretches are not shortest-path",
-                if fallbacks == 1 { "" } else { "s" }
-            )
-        }),
+        note: {
+            if fallbacks > 0 {
+                notes.push(format!(
+                    "{fallbacks} walk{} inside rooms used a straight line because the room has no usable outline, \
+                     so those stretches are not shortest-path",
+                    if fallbacks == 1 { "" } else { "s" }
+                ));
+            }
+            (!notes.is_empty()).then(|| notes.join("; "))
+        },
         rooms: room_path,
         steps,
         segments,

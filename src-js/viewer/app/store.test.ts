@@ -162,3 +162,18 @@ describe("a zone's open-zone editor", () => {
     expect(edit(a)!.members).toHaveLength(0);
   });
 });
+
+describe("a plan click's position", () => {
+  beforeEach(() => resetState());
+
+  it("reaches the route's endpoint, and a pick without one leaves the room's centre", () => {
+    const a = getState().zones[0]!.id;
+    setZoneRouteMode(a, true);
+    patchZoneRoute(a, { unreachable: new Set() });
+    select("room", "r1", a, { x: 4, y: 5 });
+    select("room", "r2", a);
+    const route = getState().zones[0]!.route!;
+    expect([route.start, route.startAt]).toEqual(["r1", { x: 4, y: 5 }]);
+    expect([route.end, route.endAt]).toEqual(["r2", null]);
+  });
+});

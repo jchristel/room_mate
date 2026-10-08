@@ -35,7 +35,11 @@ export function RouteOverlay({
   const mark = (roomId: string | null, which: "start" | "end") => {
     const room = roomId ? payload?.rooms?.find((x) => x.id === roomId) : null;
     if (!room || room.level_id !== levelId) return null;
-    const at = markerPoint(room);
+    // The spot the route really began or ended at (the server answers with it, moved
+    // onto the room if it lay outside), else the spot clicked, else the room's middle.
+    const asked = which === "start" ? route.startAt : route.endAt;
+    const answered = path ? (which === "start" ? path.start : path.end) : undefined;
+    const at = answered ?? asked ?? markerPoint(room);
     return at ? <circle key={which} className={`route-mark ${which}`} cx={at.x} cy={-at.y} r={r} /> : null;
   };
 

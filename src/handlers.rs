@@ -2981,6 +2981,17 @@ pub struct ConnectivityQuery {
     pub to: Option<String>,
     #[serde(default)]
     pub to_model: Option<String>,
+    /// Where in each room the route starts and ends, in the plan's own coordinates
+    /// (what a route's `start` and `end` answer in). Both coordinates or neither;
+    /// absent means the room's centre.
+    #[serde(default)]
+    pub from_x: Option<String>,
+    #[serde(default)]
+    pub from_y: Option<String>,
+    #[serde(default)]
+    pub to_x: Option<String>,
+    #[serde(default)]
+    pub to_y: Option<String>,
     /// `distance` (default) or `hops`.
     #[serde(default)]
     pub metric: Option<String>,
@@ -3013,11 +3024,31 @@ pub async fn get_project_connectivity(
     let metric = connectivity::Metric::parse(query.metric.as_deref()).map_err(map_service_error)?;
     let detail = connectivity::Detail::parse(query.detail.as_deref()).map_err(map_service_error)?;
     let method = routing::Method::parse(query.method.as_deref()).map_err(map_service_error)?;
-    let route = connectivity::endpoints(
+    let number = |raw: Option<&str>, name: &str| -> Result<Option<f64>, (StatusCode, String)> {
+        match raw.map(str::trim).filter(|s| !s.is_empty()) {
+            None => Ok(None),
+            Some(s) => s
+                .parse::<f64>()
+                .map(Some)
+                .map_err(|_| map_service_error(ServiceError::Invalid(format!("{name} {s:?} is not a number")))),
+        }
+    };
+    let from_at = connectivity::point(
+        number(query.from_x.as_deref(), "from_x")?,
+        number(query.from_y.as_deref(), "from_y")?,
+        "start",
+    )
+    .map_err(map_service_error)?;
+    let to_at =
+        connectivity::point(number(query.to_x.as_deref(), "to_x")?, number(query.to_y.as_deref(), "to_y")?, "end")
+            .map_err(map_service_error)?;
+    let route = connectivity::endpoints_at(
         query.from.as_deref(),
         query.from_model.as_deref(),
+        from_at,
         query.to.as_deref(),
         query.to_model.as_deref(),
+        to_at,
     )
     .map_err(map_service_error)?;
     let scope = connectivity::ConnectivityScope {
@@ -3923,6 +3954,10 @@ mod tests {
             from_model: None,
             to: to.map(str::to_string),
             to_model: None,
+            from_x: None,
+            from_y: None,
+            to_x: None,
+            to_y: None,
             metric: None,
             method: None,
             detail: None,

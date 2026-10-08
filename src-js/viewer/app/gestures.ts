@@ -235,13 +235,18 @@ export function wirePlanGestures(
       clearSelection();
       return;
     }
+    // Where in the plan the click landed. The renderer answers in its flipped world
+    // (Y down); the data, and the server, are Y up.
+    const w = handle.renderer.toWorld(downAt.x, downAt.y);
+    const world = w ? { x: w.x, y: -w.y } : null;
     if (hits.length === 1) {
-      select(hits[0]!.kind, idOf(hits[0]!), zoneId);
+      select(hits[0]!.kind, idOf(hits[0]!), zoneId, world);
       return;
     }
     openPickList({
       zoneId,
       at: { x: downAt.x, y: downAt.y },
+      world,
       entries: hits.map((p) => ({ kind: p.kind, id: idOf(p), label: labelOf(p) })),
     });
   };

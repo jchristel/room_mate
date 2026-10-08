@@ -317,6 +317,19 @@ struct ConnectivityParams {
     /// The model of the end room, only needed when `to` exists in several.
     #[serde(default)]
     to_model: Option<String>,
+    /// Where in the start room the route begins, in the plan's coordinates (a
+    /// route's `start` and `end` are in the same frame). Both `from_x` and `from_y`,
+    /// or neither for the room's centre. A point outside the room is moved onto
+    /// its outline and `path.note` says so.
+    #[serde(default)]
+    from_x: Option<f64>,
+    #[serde(default)]
+    from_y: Option<f64>,
+    /// Where in the end room the route finishes; same rules as `from_x` and `from_y`.
+    #[serde(default)]
+    to_x: Option<f64>,
+    #[serde(default)]
+    to_y: Option<f64>,
     /// `distance` (default, approximate walking distance in feet) or `hops`
     /// (fewest doors).
     #[serde(default)]
@@ -1041,7 +1054,7 @@ impl RoommateMcp {
                        THE GRAPH IS DOORS PLUS WHATEVER OPEN ZONES SOMEBODY HAS AUTHORED, and that is a limit of the method, not a fact about the building: a bay, an open-plan area, an archway modelled as a wall opening, or a shaft has no door, so unless a zone covers it it appears under `isolated` and no route reaches it. An isolated room is NOT a model fault and `isolated` is not a list of bays -- it is the list of rooms this method cannot reach, and some of them are simply rooms whose doors name no room. Each edge and each route step says `kind`: `door` (from the model) or `zone` (user-stated: a hop across a wall two members of one zone share). Read the `connections` block before trusting a route that uses a zone: it lists each zone's stale members, members sharing no wall with another member (`unlinked`) and `reaches_doors`, and `pinned` is false because a milestone view applies TODAY'S connections. A route crosses a LEVEL only through a VERTICAL LINK somebody drew by hand: one link joins exactly two rooms on different storeys (a lift or stair is a run of floor-to-floor links, never a jump from level 1 to 8). Its step has `kind: vertical` and a `link_id`, its `length` is the link's stated cost (default 40 ft, an assumption and not a measurement), and `path.segments` breaks there into one polyline per level. The `connections.links` block reports every link: whether it was `applied`, why not (a room no longer in scope, both rooms on one storey, or a pair already joined), and `levels_between`, which is above 0 when a link skips storeys. A route between storeys with no link is reported as not found, which is a finding about what has been authored, not about the building. \
                        A route that does not exist is a FINDING, not an error: `path.found` is false and `path.reason` names the component each room is in. Do not report it as 'these rooms are not connected'; report it as 'no door route', and read `isolated` and `components` before concluding anything. An error means the request was wrong -- a room that is not in scope, or a bare room id that exists in several models (the message lists them; pass `from_model`/`to_model`). \
                        Other reported states: `exits` on a node counts doors with that room on one side and nothing on the other (the way outside, or into a model that holds no rooms) -- they are not edges; `counts` tallies doors that name no room (`unattached`), the same room twice (`same_room`) or a room outside the scope (`out_of_scope`); `doors_pushed` false means NO doors snapshot exists for the project, so every room is isolated for that reason alone. \
-                       `path.distance_ft` is an ESTIMATED walking distance, not a measurement, and what it estimates depends on `method` (the answer lists every method under `methods`, each with its source). `door_to_door` (the default) walks from door to door by the exact shortest path inside each room's outline, around its corners and columns (Liu and Zlatanova 2011); it is the shortest the geometry allows but not where people walk (they keep off walls), and furniture is not modelled. `centroid` walks from each room's centre to its door to the next room's centre, which bends at every centre and can be longer, or shorter where its straight lines cut through walls. `path.method` says which ran and `path.note` says if any room's outline was too irregular to walk exactly (that stretch is a straight line). A route's `steps[].length` under door_to_door is the walk inside the room it leaves plus the crossing, and `path.arrival_ft` is the walk inside the last room. Each edge's `point_source` says whether its door point was the door's own insertion point, its footprint, or a midpoint between the rooms because the door had neither. Rooms are always named by `model_id` plus `room_id`. `path.segments` is the route as polylines, one per run on one level, in the project's local frame. THE DEFAULT RESPONSE OMITS `nodes` AND `edges` (a large project's graph is over a megabyte); it still carries components, isolated rooms, counts and the route. Pass detail=full only when you need the graph itself."
+                       `path.distance_ft` is an ESTIMATED walking distance, not a measurement, and what it estimates depends on `method` (the answer lists every method under `methods`, each with its source). `door_to_door` (the default) walks from door to door by the exact shortest path inside each room's outline, around its corners and columns (Liu and Zlatanova 2011); it is the shortest the geometry allows but not where people walk (they keep off walls), and furniture is not modelled. `centroid` walks from each room's centre to its door to the next room's centre, which bends at every centre and can be longer, or shorter where its straight lines cut through walls. `path.start` and `path.end` say where the route began and ended (a room's centre unless from_x/from_y or to_x/to_y gave a point inside it), `path.method` says which ran and `path.note` says if a point had to be moved onto its room's outline or if any room's outline was too irregular to walk exactly (that stretch is a straight line). A route's `steps[].length` under door_to_door is the walk inside the room it leaves plus the crossing, and `path.arrival_ft` is the walk inside the last room. Each edge's `point_source` says whether its door point was the door's own insertion point, its footprint, or a midpoint between the rooms because the door had neither. Rooms are always named by `model_id` plus `room_id`. `path.segments` is the route as polylines, one per run on one level, in the project's local frame. THE DEFAULT RESPONSE OMITS `nodes` AND `edges` (a large project's graph is over a megabyte); it still carries components, isolated rooms, counts and the route. Pass detail=full only when you need the graph itself."
     )]
     fn get_connectivity(&self, Parameters(p): Parameters<ConnectivityParams>) -> Result<CallToolResult, McpError> {
         let known = self.state.settings().known_reference_sources();
@@ -1050,9 +1063,17 @@ impl RoommateMcp {
         let metric = connectivity::Metric::parse(p.metric.as_deref()).map_err(to_mcp_error)?;
         let detail = connectivity::Detail::parse(p.detail.as_deref()).map_err(to_mcp_error)?;
         let method = roommate::service::routing::Method::parse(p.method.as_deref()).map_err(to_mcp_error)?;
-        let route =
-            connectivity::endpoints(p.from.as_deref(), p.from_model.as_deref(), p.to.as_deref(), p.to_model.as_deref())
-                .map_err(to_mcp_error)?;
+        let from_at = connectivity::point(p.from_x, p.from_y, "start").map_err(to_mcp_error)?;
+        let to_at = connectivity::point(p.to_x, p.to_y, "end").map_err(to_mcp_error)?;
+        let route = connectivity::endpoints_at(
+            p.from.as_deref(),
+            p.from_model.as_deref(),
+            from_at,
+            p.to.as_deref(),
+            p.to_model.as_deref(),
+            to_at,
+        )
+        .map_err(to_mcp_error)?;
         let scope = connectivity::ConnectivityScope {
             building: p.building.as_deref(),
             milestone: p.milestone.as_deref(),

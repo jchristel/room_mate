@@ -20,7 +20,14 @@
 import { useEffect, useMemo } from "react";
 
 import type { Level, Room } from "../../renderer/types.js";
-import { connectivityUrl, describeResult, type RouteMethod, type RoutePath, type RouteState } from "../route.js";
+import {
+  connectivityUrl,
+  describeResult,
+  type PlanPoint,
+  type RouteMethod,
+  type RoutePath,
+  type RouteState,
+} from "../route.js";
 import { clearZoneRoute, patchZoneRoute, select, setZoneLevel, setZoneRouteMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
@@ -65,11 +72,18 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   const start = route?.start ?? null;
   const method = route?.method ?? null;
   const end = route?.end ?? null;
+  const startAt = route?.startAt ?? null;
+  const endAt = route?.endAt ?? null;
+  // The points as text, so an effect depends on WHERE and not on the identity of a
+  // fresh object.
+  const pointsKey = `${startAt?.x},${startAt?.y}|${endAt?.x},${endAt?.y}`;
 
   // Leaving a scope forgets the endpoints: a room id means a room in THAT
   // project, building and milestone.
   useEffect(() => {
-    if (active) patchRoute({ start: null, end: null, unreachable: null, notice: null, result: { state: "idle" } });
+    if (active) {
+      patchRoute({ start: null, end: null, startAt: null, endAt: null, unreachable: null, notice: null, result: { state: "idle" } });
+    }
   }, [active, scopeKey]);
 
   // Which rooms no door reaches. Refreshed when the rooms change, but the
@@ -93,7 +107,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   // The route, once both ends are placed.
   useEffect(() => {
     if (!active || !start || !end) return;
-    const url = connectivityUrl(scope, start, end, method);
+    const url = connectivityUrl(scope, start, end, method, { from: startAt, to: endAt });
     if (!url) return;
     const ac = new AbortController();
     patchRoute({ result: { state: "loading" } });
@@ -105,7 +119,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
     });
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, start, end, method, scopeKey, revision, connectionsVersion]);
+  }, [active, start, end, method, pointsKey, scopeKey, revision, connectionsVersion]);
 
   // Escape leaves the tool, like every other transient thing on this page.
   useEffect(() => {
@@ -143,9 +157,9 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   return (
     <div className="routeBar">
       <strong>Route</strong>
-      <Slot label="Start" roomId={start} rooms={rooms} levels={levels} next={start === null} onShow={() => showOnPlan(start)} onClear={() => select("room", start ?? "", zoneId)} />
+      <Slot label="Start" roomId={start} at={startAt} onResetPoint={() => patchRoute({ startAt: null })} rooms={rooms} levels={levels} next={start === null} onShow={() => showOnPlan(start)} onClear={() => select("room", start ?? "", zoneId)} />
       <span aria-hidden="true">→</span>
-      <Slot label="End" roomId={end} rooms={rooms} levels={levels} next={start !== null && end === null} onShow={() => showOnPlan(end)} onClear={() => select("room", end ?? "", zoneId)} />
+      <Slot label="End" roomId={end} at={endAt} onResetPoint={() => patchRoute({ endAt: null })} rooms={rooms} levels={levels} next={start !== null && end === null} onShow={() => showOnPlan(end)} onClear={() => select("room", end ?? "", zoneId)} />
       <span className="routeResult">{describeResult(route.result)}</span>
       {route.result.state === "done" && route.result.path.note ? (
         <span className="routeNotice">{route.result.path.note}</span>
@@ -194,6 +208,8 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
 function Slot({
   label,
   roomId,
+  at,
+  onResetPoint,
   rooms,
   levels,
   next,
@@ -202,6 +218,8 @@ function Slot({
 }: {
   label: string;
   roomId: string | null;
+  at: PlanPoint | null;
+  onResetPoint: () => void;
   rooms: ReadonlyMap<string, Room>;
   levels: readonly Level[];
   next: boolean;
@@ -221,6 +239,14 @@ function Slot({
     <span className="routeSlot">
       {label}: <strong>{room?.name || roomId}</strong>
       {level ? <span className="routeLevel"> · {level}</span> : null}
+      {at ? (
+        <>
+          <span className="routeLevel"> · at your click</span>
+          <button className="link" onClick={onResetPoint} title="Use the room's centre instead of the spot you clicked">
+            centre
+          </button>
+        </>
+      ) : null}
       <button className="link" onClick={onShow} title="Show this room's level in this zone">
         show
       </button>

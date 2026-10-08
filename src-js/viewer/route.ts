@@ -12,9 +12,20 @@ import type { Room } from "../renderer/types.js";
 import type { Scope } from "./scope.js";
 
 /** Where a route stands. `null` in the store is the tool being OFF. */
+/** A position in the plan, in the same coordinates the server answers in. */
+export interface PlanPoint {
+  x: number;
+  y: number;
+}
+
 export interface RouteState {
   start: string | null;
   end: string | null;
+  /** Where in the start and end rooms the route begins and ends, when a plan
+   *  click set it; `null` is the room's centre, which is what a grid row or a
+   *  search chip (no position) gives. */
+  startAt: PlanPoint | null;
+  endAt: PlanPoint | null;
   /** The routing method asked for, or `null` for the server's default. */
   method: string | null;
   /** Every method the server offers, learned from its first answer, so the picker
@@ -59,6 +70,10 @@ export interface RoutePath {
   /** The method that produced it, and anything about how it was computed. */
   method?: string;
   note?: string | null;
+  /** Where the route actually began and ended (a point moved onto its room when it
+   *  lay outside it). */
+  start?: PlanPoint;
+  end?: PlanPoint;
   distance_ft: number;
   rooms: { model_id: string; room_id: string }[];
   steps: { kind: "door" | "zone" | "vertical"; door_id?: string; zone_id?: string; point: { x: number; y: number } }[];
@@ -66,7 +81,7 @@ export interface RoutePath {
 }
 
 export function newRoute(): RouteState {
-  return { start: null, end: null, method: null, methods: [], unreachable: null, notice: null, result: { state: "idle" } };
+  return { start: null, end: null, startAt: null, endAt: null, method: null, methods: [], unreachable: null, notice: null, result: { state: "idle" } };
 }
 
 /**
@@ -81,14 +96,14 @@ export function newRoute(): RouteState {
  *   END: the start is the one a reader fixed first and the end is the one they
  *   are still choosing.
  */
-export function pickEndpoint(route: RouteState, roomId: string): RouteState {
+export function pickEndpoint(route: RouteState, roomId: string, at: PlanPoint | null = null): RouteState {
   if (route.unreachable === null) return { ...route, notice: { kind: "loading" } };
   if (route.unreachable.has(roomId)) return { ...route, notice: { kind: "no-door", roomId } };
   const next = { ...route, notice: null };
-  if (roomId === route.start) return { ...next, start: null, result: { state: "idle" } };
-  if (roomId === route.end) return { ...next, end: null, result: { state: "idle" } };
-  if (route.start === null) return { ...next, start: roomId };
-  return { ...next, end: roomId };
+  if (roomId === route.start) return { ...next, start: null, startAt: null, result: { state: "idle" } };
+  if (roomId === route.end) return { ...next, end: null, endAt: null, result: { state: "idle" } };
+  if (route.start === null) return { ...next, start: roomId, startAt: at };
+  return { ...next, end: roomId, endAt: at };
 }
 
 /** The connectivity URL for a scope: the summary, and a route when both ends
@@ -99,6 +114,7 @@ export function connectivityUrl(
   from: string | null,
   to: string | null,
   method: string | null = null,
+  at: { from?: PlanPoint | null; to?: PlanPoint | null } = {},
 ): string | null {
   if (!scope.projectId) return null;
   const q = new URLSearchParams();
@@ -108,6 +124,16 @@ export function connectivityUrl(
     q.set("from", from);
     q.set("to", to);
     if (method) q.set("method", method);
+    // A position only means something with the room it is in, so it rides with the
+    // route and never alone.
+    if (at.from) {
+      q.set("from_x", String(at.from.x));
+      q.set("from_y", String(at.from.y));
+    }
+    if (at.to) {
+      q.set("to_x", String(at.to.x));
+      q.set("to_y", String(at.to.y));
+    }
   }
   const tail = q.toString();
   return `/projects/${encodeURIComponent(scope.projectId)}/connectivity${tail ? `?${tail}` : ""}`;
