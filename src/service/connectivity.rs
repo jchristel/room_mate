@@ -48,6 +48,7 @@ use super::adjacency::{centroid_of, compute_adjacency_indexed, default_wall_max}
 use super::openings::{assemble_openings, OpeningKind, OpeningScope};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomFilter, RoomScope};
+use super::routing::{self, Method};
 use super::ServiceError;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -121,6 +122,10 @@ pub struct ConnectivityResult {
     pub schema_version: u32,
     pub revision: String,
     pub metric: Metric,
+    /// The method the route was asked to use, and every method on offer, so a
+    /// picker needs no second request. See `service::routing`.
+    pub method: &'static str,
+    pub methods: &'static [routing::MethodInfo],
     /// False when no doors snapshot exists for the project at all. Every room is
     /// then isolated, which says "no doors were pushed", not "no doors exist".
     pub doors_pushed: bool,
@@ -209,9 +214,9 @@ pub struct Edge {
     /// Approximate walking distance through the door, in feet.
     pub length: f64,
     #[serde(skip)]
-    ia: usize,
+    pub(super) ia: usize,
     #[serde(skip)]
-    ib: usize,
+    pub(super) ib: usize,
 }
 
 #[derive(Serialize)]
@@ -255,6 +260,18 @@ pub struct PathResult {
     pub cost: f64,
     /// Approximate walking distance in feet, whatever the metric.
     pub distance_ft: f64,
+    /// The walk inside the LAST room, from its final door to the end point. Each
+    /// step's length already includes the walk inside the room it leaves, so the
+    /// steps plus this sum to `distance_ft` under the door-to-door method; it is 0
+    /// under room centres, whose step lengths are centre to door to centre.
+    pub arrival_ft: f64,
+    /// The method that produced this route: what was asked for, unless it could
+    /// not apply (see `note`).
+    pub method: &'static str,
+    /// Anything about how the route was computed that a reader should know, such as
+    /// rooms whose outline was too irregular to walk exactly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     pub rooms: Vec<RoomRef>,
     pub steps: Vec<Step>,
     /// The route as polylines, one per run of points on one level, so the
@@ -516,7 +533,7 @@ fn segments_of(nodes: &[Node], edges: &[Edge], start: usize, walked: &[usize]) -
     out
 }
 
-fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metric) -> PathResult {
+pub(super) fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metric) -> PathResult {
     let (from_ref, to_ref) = (nodes[from].room.clone(), nodes[to].room.clone());
     let Some(walked) = shortest(nodes, edges, from, to, metric) else {
         return PathResult {
@@ -530,6 +547,9 @@ fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metric)
             to: to_ref,
             cost: 0.0,
             distance_ft: 0.0,
+            arrival_ft: 0.0,
+            method: super::routing::Method::Centroid.id(),
+            note: None,
             rooms: vec![],
             steps: vec![],
             segments: vec![],
@@ -562,6 +582,9 @@ fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metric)
         to: to_ref,
         cost: walked.iter().map(|&k| weight(&edges[k], metric)).sum(),
         distance_ft: walked.iter().map(|&k| edges[k].length).sum(),
+        arrival_ft: 0.0,
+        method: super::routing::Method::Centroid.id(),
+        note: None,
         rooms,
         steps,
         segments: segments_of(nodes, edges, from, &walked),
@@ -885,6 +908,7 @@ pub fn assemble_connectivity(
     scope: &ConnectivityScope<'_>,
     route_between: Option<(&Endpoint, &Endpoint)>,
     metric: Metric,
+    method: Method,
     detail: Detail,
 ) -> Result<Option<ConnectivityResult>, ServiceError> {
     let room_scope = RoomScope {
@@ -973,7 +997,7 @@ pub fn assemble_connectivity(
         None => None,
         Some((from, to)) => {
             let (i, j) = (resolve(&nodes, from, "start")?, resolve(&nodes, to, "end")?);
-            Some(route(&nodes, &edges, i, j, metric))
+            Some(routing::route(method, &nodes, &edges, &outlines(&rooms, &nodes), i, j, metric))
         }
     };
 
@@ -981,6 +1005,8 @@ pub fn assemble_connectivity(
         schema_version: SCHEMA_VERSION,
         revision,
         metric,
+        method: method.id(),
+        methods: routing::CATALOG,
         doors_pushed,
         levels: rooms.levels,
         nodes: (detail == Detail::Full).then_some(nodes),
@@ -991,6 +1017,16 @@ pub fn assemble_connectivity(
         connections: connections_report,
         path,
     }))
+}
+
+/// Each node's room outline, for the methods that walk inside rooms.
+fn outlines<'a>(rooms: &'a super::rooms::RoomsResult, nodes: &[Node]) -> Vec<Option<&'a Room>> {
+    let by_ref: BTreeMap<RoomRef, &Room> = rooms
+        .rooms
+        .iter()
+        .map(|r| (RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() }, &r.room))
+        .collect();
+    nodes.iter().map(|n| by_ref.get(&n.room).copied()).collect()
 }
 
 /// A door's own position: its insertion point, else the middle of its
@@ -1363,10 +1399,17 @@ mod tests {
         #[test]
         fn test_the_read_builds_the_graph_and_lists_the_bay() {
             let s = state(standard());
-            let result =
-                assemble_connectivity(&s, "p1", &ConnectivityScope::default(), None, Metric::Distance, Detail::Full)
-                    .unwrap()
-                    .expect("rooms were pushed");
+            let result = assemble_connectivity(
+                &s,
+                "p1",
+                &ConnectivityScope::default(),
+                None,
+                Metric::Distance,
+                Method::Centroid,
+                Detail::Full,
+            )
+            .unwrap()
+            .expect("rooms were pushed");
             assert!(result.doors_pushed);
             assert_eq!(result.counts.edges, 2);
             assert_eq!(result.counts.exits, 1);
@@ -1395,6 +1438,7 @@ mod tests {
                 &ConnectivityScope::default(),
                 Some((&a, &c)),
                 Metric::Distance,
+                Method::Centroid,
                 Detail::Full,
             )
             .unwrap()
@@ -1410,6 +1454,7 @@ mod tests {
                 &ConnectivityScope::default(),
                 Some((&a, &d)),
                 Metric::Distance,
+                Method::Centroid,
                 Detail::Full,
             )
             .unwrap()
@@ -1425,10 +1470,17 @@ mod tests {
             let filter = RoomFilter::parse_query("Fire Rating=none", &known).unwrap();
             let scope = ConnectivityScope { door_filter: Some(&filter), ..Default::default() };
             let (a, c) = (ep(None, "a"), ep(None, "c"));
-            let result =
-                assemble_connectivity(&state(standard()), "p1", &scope, Some((&a, &c)), Metric::Distance, Detail::Full)
-                    .unwrap()
-                    .unwrap();
+            let result = assemble_connectivity(
+                &state(standard()),
+                "p1",
+                &scope,
+                Some((&a, &c)),
+                Metric::Distance,
+                Method::Centroid,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap();
             assert_eq!(result.counts.doors, 2, "the fire-rated door is not in the graph");
             assert!(!result.path.unwrap().found);
         }
@@ -1446,6 +1498,7 @@ mod tests {
                 &ConnectivityScope::default(),
                 None,
                 Metric::Distance,
+                Method::Centroid,
                 Detail::Full,
             )
             .unwrap()
@@ -1486,9 +1539,17 @@ mod tests {
         }
 
         fn read(state: &AppState, route: Option<(&Endpoint, &Endpoint)>) -> ConnectivityResult {
-            assemble_connectivity(state, "p1", &ConnectivityScope::default(), route, Metric::Distance, Detail::Full)
-                .unwrap()
-                .unwrap()
+            assemble_connectivity(
+                state,
+                "p1",
+                &ConnectivityScope::default(),
+                route,
+                Metric::Distance,
+                Method::Centroid,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap()
         }
 
         /// The point of the whole feature: a zone joins the rooms that share a
@@ -1698,14 +1759,163 @@ mod tests {
             std::fs::remove_dir_all(&dir).ok();
         }
 
+        // ---------- routing methods ----------
+
+        /// A room with its own rectangle, unlike `rect` which fixes y to 0..10.
+        fn rect_xy(id: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Room {
+            Room {
+                loops: vec![Loop {
+                    points: vec![
+                        Point2D { x: x0, y: y0 },
+                        Point2D { x: x1, y: y0 },
+                        Point2D { x: x1, y: y1 },
+                        Point2D { x: x0, y: y1 },
+                    ],
+                }],
+                ..rect(id, 0.0, 1.0)
+            }
+        }
+
+        fn door_at(id: &str, from: &str, to: &str, x: f64, y: f64) -> Opening {
+            Opening {
+                insertion_point: Some(Point2D { x, y }),
+                ..door(id, Some(from), Some(to), "none")
+            }
+        }
+
+        /// A big room `r` with two small rooms `a` and `b` below it, their doors a
+        /// metre apart on `r`'s south wall. Going a to b the sensible walk is door to
+        /// door; going via `r`'s centre is a detour into the middle of a room nobody
+        /// needs to enter, which is the fault Liu and Zlatanova name in room-centre
+        /// networks.
+        fn detour() -> AppState {
+            state_of(
+                vec![
+                    rect_xy("r", 0.0, 0.0, 10.0, 10.0),
+                    rect_xy("a", 0.0, -10.0, 5.0, 0.0),
+                    rect_xy("b", 5.0, -10.0, 10.0, 0.0),
+                ],
+                vec![door_at("ra", "r", "a", 4.5, 0.0), door_at("rb", "r", "b", 5.5, 0.0)],
+            )
+        }
+
+        fn run(s: &AppState, method: Method, metric: Metric) -> ConnectivityResult {
+            let (a, b) = (ep(None, "a"), ep(None, "b"));
+            assemble_connectivity(s, "p1", &ConnectivityScope::default(), Some((&a, &b)), metric, method, Detail::Full)
+                .unwrap()
+                .unwrap()
+        }
+
+        /// The point of the method: the same route, found door to door, is much
+        /// shorter than through the room's centre, passes the same doors in the same
+        /// order, and is drawn through the doors and not the centre.
+        #[test]
+        fn test_door_to_door_is_shorter_than_through_the_room_centre() {
+            let s = detour();
+            let centre = run(&s, Method::Centroid, Metric::Distance);
+            let direct = run(&s, Method::DoorToDoor, Metric::Distance);
+            let (c, d) = (centre.path.as_ref().unwrap(), direct.path.as_ref().unwrap());
+            assert!(c.found && d.found);
+
+            assert!(c.distance_ft > 20.0, "through the centre of r: {}", c.distance_ft);
+            assert!(d.distance_ft < 13.0 && d.distance_ft > 11.0, "door to door: {}", d.distance_ft);
+            assert!(d.distance_ft < c.distance_ft * 0.7);
+
+            let ids = |p: &PathResult| p.steps.iter().filter_map(|s| s.door_id.clone()).collect::<Vec<_>>();
+            assert_eq!(ids(c), ids(d), "the same doors in the same order");
+            assert_eq!((c.method, d.method), ("centroid", "door_to_door"));
+            assert!(d.note.is_none(), "every room had an outline");
+
+            // The polyline passes through both door points.
+            let pts: Vec<(f64, f64)> = d.segments.iter().flat_map(|s| s.points.iter().map(|p| (p.x, p.y))).collect();
+            assert!(pts.contains(&(4.5, 0.0)) && pts.contains(&(5.5, 0.0)), "{pts:?}");
+            assert!(!pts.contains(&(5.0, 5.0)), "it does not visit the middle of r");
+        }
+
+        /// Step lengths plus the last walk are the total, so a reader can attribute
+        /// every foot.
+        #[test]
+        fn test_door_to_door_step_lengths_account_for_the_whole_route() {
+            let d = run(&detour(), Method::DoorToDoor, Metric::Distance).path.unwrap();
+            let sum: f64 = d.steps.iter().map(|s| s.length).sum::<f64>() + d.arrival_ft;
+            assert!((sum - d.distance_ft).abs() < 1e-9, "{sum} vs {}", d.distance_ft);
+            assert_eq!(d.rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>(), vec!["a", "r", "b"]);
+        }
+
+        /// The answer says which methods exist and which ran, so a picker needs no
+        /// second request; the default is the recommended one.
+        #[test]
+        fn test_the_answer_lists_the_methods_and_the_one_used() {
+            let s = detour();
+            let result = run(&s, Method::Centroid, Metric::Distance);
+            assert_eq!(result.method, "centroid");
+            assert_eq!(result.methods.iter().map(|m| m.id).collect::<Vec<_>>(), vec!["door_to_door", "centroid"]);
+            assert_eq!(Method::default(), Method::DoorToDoor);
+        }
+
+        /// The hops metric counts doors and has no geometry for a method to improve,
+        /// so it takes the graph's own search and says why.
+        #[test]
+        fn test_the_hops_metric_ignores_the_method_and_says_so() {
+            let d = run(&detour(), Method::DoorToDoor, Metric::Hops).path.unwrap();
+            assert!(d.found);
+            assert_eq!(d.method, "centroid");
+            assert!(d.note.as_deref().unwrap().contains("hops"));
+        }
+
+        /// No route is the same finding under either method.
+        #[test]
+        fn test_door_to_door_reports_no_route_like_the_other_method() {
+            let s = state_of(vec![rect_xy("a", 0.0, 0.0, 5.0, 5.0), rect_xy("b", 20.0, 0.0, 25.0, 5.0)], vec![]);
+            let d = run(&s, Method::DoorToDoor, Metric::Distance).path.unwrap();
+            assert!(!d.found);
+            assert!(d.reason.as_deref().unwrap().contains("component"));
+        }
+
+        /// A route that uses an open zone and a vertical link works door to door
+        /// too: the zone hop crosses the shared wall and the link is a break.
+        #[test]
+        fn test_door_to_door_crosses_zones_and_levels() {
+            let (s, dir) = storeys("d2d", vec![link_input("up1", "b", "e", Some(25.0))]);
+            let (a, f) = (ep(None, "a"), ep(None, "f"));
+            let result = assemble_connectivity(
+                &s,
+                "p1",
+                &ConnectivityScope::default(),
+                Some((&a, &f)),
+                Metric::Distance,
+                Method::DoorToDoor,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap();
+            let path = result.path.unwrap();
+            assert!(path.found, "{:?}", path.reason);
+            let kinds: Vec<_> = path.steps.iter().map(|s| s.kind).collect();
+            assert_eq!(kinds, vec![EdgeKind::Door, EdgeKind::Vertical, EdgeKind::Door]);
+            assert!((path.steps[1].length - 25.0).abs() < 1e-6 || path.steps[1].length >= 25.0);
+            assert_eq!(
+                path.segments.iter().map(|s| s.level_id.as_str()).collect::<Vec<_>>(),
+                vec!["lvl1", "lvl2"]
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
         /// The summary leaves the graph out of the body; `full` puts it in.
         #[test]
         fn test_summary_omits_the_graph_and_full_includes_it() {
             let s = state(standard());
-            let summary =
-                assemble_connectivity(&s, "p1", &ConnectivityScope::default(), None, Metric::Distance, Detail::Summary)
-                    .unwrap()
-                    .unwrap();
+            let summary = assemble_connectivity(
+                &s,
+                "p1",
+                &ConnectivityScope::default(),
+                None,
+                Metric::Distance,
+                Method::Centroid,
+                Detail::Summary,
+            )
+            .unwrap()
+            .unwrap();
             let json = serde_json::to_value(&summary).unwrap();
             assert!(json.get("nodes").is_none() && json.get("edges").is_none());
             assert_eq!(json["isolated"].as_array().unwrap().len(), 1, "what a picker needs is still there");
@@ -1721,6 +1931,7 @@ mod tests {
                 &ConnectivityScope::default(),
                 None,
                 Metric::Distance,
+                Method::Centroid,
                 Detail::Full
             )
             .unwrap()

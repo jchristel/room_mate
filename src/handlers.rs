@@ -34,6 +34,7 @@ use crate::service::items;
 use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
 use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
+use crate::service::routing;
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
 use crate::service::spaces;
 use crate::service::surfaces::{SurfaceKind, SurfacePayloadKind};
@@ -2983,6 +2984,10 @@ pub struct ConnectivityQuery {
     /// `distance` (default) or `hops`.
     #[serde(default)]
     pub metric: Option<String>,
+    /// How a route runs inside rooms: `door_to_door` (default) or `centroid`; see
+    /// `service::routing`, and `methods` in the answer for what each is.
+    #[serde(default)]
+    pub method: Option<String>,
     /// `summary` (default: components, isolated rooms, counts and the route) or
     /// `full` (also every node and edge).
     #[serde(default)]
@@ -3007,6 +3012,7 @@ pub async fn get_project_connectivity(
         .filter(|f| !f.is_empty());
     let metric = connectivity::Metric::parse(query.metric.as_deref()).map_err(map_service_error)?;
     let detail = connectivity::Detail::parse(query.detail.as_deref()).map_err(map_service_error)?;
+    let method = routing::Method::parse(query.method.as_deref()).map_err(map_service_error)?;
     let route = connectivity::endpoints(
         query.from.as_deref(),
         query.from_model.as_deref(),
@@ -3026,6 +3032,7 @@ pub async fn get_project_connectivity(
         &scope,
         route.as_ref().map(|(a, b)| (a, b)),
         metric,
+        method,
         detail,
     )
     .map_err(map_service_error)?;
@@ -3917,6 +3924,7 @@ mod tests {
             to: to.map(str::to_string),
             to_model: None,
             metric: None,
+            method: None,
             detail: None,
         }
     }

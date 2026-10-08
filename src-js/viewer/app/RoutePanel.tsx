@@ -20,7 +20,7 @@
 import { useEffect, useMemo } from "react";
 
 import type { Level, Room } from "../../renderer/types.js";
-import { connectivityUrl, describeResult, type RoutePath, type RouteState } from "../route.js";
+import { connectivityUrl, describeResult, type RouteMethod, type RoutePath, type RouteState } from "../route.js";
 import { clearZoneRoute, patchZoneRoute, select, setZoneLevel, setZoneRouteMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
@@ -46,6 +46,7 @@ async function read(url: string, signal: AbortSignal): Promise<Read> {
 }
 
 interface Summary {
+  methods?: RouteMethod[];
   isolated?: { room_id: string }[];
   path?: RoutePath | null;
 }
@@ -62,6 +63,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   const revision = payload?.revision ?? "";
   const scopeKey = `${scope.projectId}|${scope.building}|${scope.milestone}`;
   const start = route?.start ?? null;
+  const method = route?.method ?? null;
   const end = route?.end ?? null;
 
   // Leaving a scope forgets the endpoints: a room id means a room in THAT
@@ -81,7 +83,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
       if (ac.signal.aborted) return;
       if (!r.ok) return patchRoute({ result: { state: "error", message: r.message } });
       const isolated = (r.body as Summary | null)?.isolated ?? [];
-      patchRoute({ unreachable: new Set(isolated.map((x) => x.room_id)) });
+      patchRoute({ unreachable: new Set(isolated.map((x) => x.room_id)), methods: (r.body as Summary | null)?.methods ?? [] });
     });
     return () => ac.abort();
     // `scope` is spread into the key; the object itself changes identity freely.
@@ -91,7 +93,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   // The route, once both ends are placed.
   useEffect(() => {
     if (!active || !start || !end) return;
-    const url = connectivityUrl(scope, start, end);
+    const url = connectivityUrl(scope, start, end, method);
     if (!url) return;
     const ac = new AbortController();
     patchRoute({ result: { state: "loading" } });
@@ -103,7 +105,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
     });
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, start, end, scopeKey, revision, connectionsVersion]);
+  }, [active, start, end, method, scopeKey, revision, connectionsVersion]);
 
   // Escape leaves the tool, like every other transient thing on this page.
   useEffect(() => {
@@ -145,6 +147,25 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
       <span aria-hidden="true">→</span>
       <Slot label="End" roomId={end} rooms={rooms} levels={levels} next={start !== null && end === null} onShow={() => showOnPlan(end)} onClear={() => select("room", end ?? "", zoneId)} />
       <span className="routeResult">{describeResult(route.result)}</span>
+      {route.result.state === "done" && route.result.path.note ? (
+        <span className="routeNotice">{route.result.path.note}</span>
+      ) : null}
+      {route.methods.length > 1 ? (
+        <select
+          className="picker"
+          value={method ?? ""}
+          title={methodTitle(route.methods, method)}
+          onChange={(e) => patchRoute({ method: e.target.value || null })}
+          aria-label="Routing method"
+        >
+          <option value="">Default ({route.methods[0]!.name})</option>
+          {route.methods.map((m) => (
+            <option key={m.id} value={m.id} title={m.summary}>
+              {m.name}
+            </option>
+          ))}
+        </select>
+      ) : null}
       <Notice route={route} rooms={rooms} />
       {matches ? (
         <span className="routeMatches" title="Rooms matching the search that can be used as an endpoint">
@@ -220,4 +241,12 @@ function Notice({ route, rooms }: { route: RouteState; rooms: ReadonlyMap<string
       {name} has no door connection, so it cannot be a start or an end. Pick a room a door leads to.
     </span>
   );
+}
+
+/** The tooltip for the method picker: what the chosen method is and where it
+ *  comes from, so a choice is never a bare label. The server lists its default
+ *  method first. */
+function methodTitle(methods: readonly RouteMethod[], chosen: string | null): string {
+  const m = methods.find((x) => x.id === chosen) ?? methods[0];
+  return m ? `${m.summary}\n\nSource: ${m.reference}` : "How the route is computed inside rooms";
 }
