@@ -101,6 +101,10 @@ impl Metric {
 pub struct Endpoint {
     pub model_id: Option<String>,
     pub room_id: String,
+    /// Where in the room the route starts or ends, in the project's local frame.
+    /// Absent means the room's centre. A point outside the room is moved onto its
+    /// outline and the answer says so.
+    pub at: Option<Point2D>,
 }
 
 /// What narrows a connectivity read.
@@ -265,6 +269,10 @@ pub struct PathResult {
     /// steps plus this sum to `distance_ft` under the door-to-door method; it is 0
     /// under room centres, whose step lengths are centre to door to centre.
     pub arrival_ft: f64,
+    /// Where the route starts and ends in the plan: each room's centre, or the
+    /// point asked for (moved onto the room if it lay outside it).
+    pub start: Point2D,
+    pub end: Point2D,
     /// The method that produced this route: what was asked for, unless it could
     /// not apply (see `note`).
     pub method: &'static str,
@@ -548,6 +556,8 @@ pub(super) fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metr
             cost: 0.0,
             distance_ft: 0.0,
             arrival_ft: 0.0,
+            start: nodes[from].centroid,
+            end: nodes[to].centroid,
             method: super::routing::Method::Centroid.id(),
             note: None,
             rooms: vec![],
@@ -583,6 +593,8 @@ pub(super) fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metr
         cost: walked.iter().map(|&k| weight(&edges[k], metric)).sum(),
         distance_ft: walked.iter().map(|&k| edges[k].length).sum(),
         arrival_ft: 0.0,
+        start: nodes[from].centroid,
+        end: nodes[to].centroid,
         method: super::routing::Method::Centroid.id(),
         note: None,
         rooms,
@@ -878,16 +890,45 @@ pub fn endpoints(
     to: Option<&str>,
     to_model: Option<&str>,
 ) -> Result<Option<(Endpoint, Endpoint)>, ServiceError> {
+    endpoints_at(from, from_model, None, to, to_model, None)
+}
+
+/// A point as two optional coordinates: both or neither, and finite. A half point
+/// is refused rather than guessed, as is a half route.
+pub fn point(x: Option<f64>, y: Option<f64>, which: &str) -> Result<Option<Point2D>, ServiceError> {
+    match (x, y) {
+        (None, None) => Ok(None),
+        (Some(x), Some(y)) if x.is_finite() && y.is_finite() => Ok(Some(Point2D { x, y })),
+        (Some(_), Some(_)) => Err(ServiceError::Invalid(format!("the {which} point must be finite numbers"))),
+        _ => Err(ServiceError::Invalid(format!("the {which} point needs both its x and its y"))),
+    }
+}
+
+/// `endpoints`, with an optional point inside each room.
+pub fn endpoints_at(
+    from: Option<&str>,
+    from_model: Option<&str>,
+    from_at: Option<Point2D>,
+    to: Option<&str>,
+    to_model: Option<&str>,
+    to_at: Option<Point2D>,
+) -> Result<Option<(Endpoint, Endpoint)>, ServiceError> {
     fn blank(s: Option<&str>) -> Option<&str> {
         s.map(str::trim).filter(|s| !s.is_empty())
     }
-    let endpoint = |room: &str, model: Option<&str>| Endpoint {
+    let endpoint = |room: &str, model: Option<&str>, at: Option<Point2D>| Endpoint {
         model_id: blank(model).map(str::to_string),
         room_id: room.to_string(),
+        at,
     };
     match (blank(from), blank(to)) {
-        (None, None) => Ok(None),
-        (Some(a), Some(b)) => Ok(Some((endpoint(a, from_model), endpoint(b, to_model)))),
+        (None, None) => {
+            if from_at.is_some() || to_at.is_some() {
+                return Err(ServiceError::Invalid("a point needs the room it is in: give `from` and `to`".to_string()));
+            }
+            Ok(None)
+        }
+        (Some(a), Some(b)) => Ok(Some((endpoint(a, from_model, from_at), endpoint(b, to_model, to_at)))),
         _ => Err(ServiceError::Invalid("a route needs both `from` and `to`".to_string())),
     }
 }
@@ -997,7 +1038,8 @@ pub fn assemble_connectivity(
         None => None,
         Some((from, to)) => {
             let (i, j) = (resolve(&nodes, from, "start")?, resolve(&nodes, to, "end")?);
-            Some(routing::route(method, &nodes, &edges, &outlines(&rooms, &nodes), i, j, metric))
+            let ask = routing::Ask { from: i, to: j, from_at: from.at, to_at: to.at };
+            Some(routing::route(method, &nodes, &edges, &outlines(&rooms, &nodes), &ask, metric))
         }
     };
 
@@ -1086,7 +1128,7 @@ mod tests {
     }
 
     fn ep(model: Option<&str>, id: &str) -> Endpoint {
-        Endpoint { model_id: model.map(str::to_string), room_id: id.to_string() }
+        Endpoint { model_id: model.map(str::to_string), room_id: id.to_string(), at: None }
     }
 
     /// A--B--C in a row, D alone: the doors decide connectivity, D is isolated,
@@ -1899,6 +1941,117 @@ mod tests {
                 vec!["lvl1", "lvl2"]
             );
             std::fs::remove_dir_all(&dir).ok();
+        }
+
+        // ---------- start and end points ----------
+
+        fn run_at(s: &AppState, method: Method, from_at: Option<Point2D>, to_at: Option<Point2D>) -> PathResult {
+            let a = Endpoint { at: from_at, ..ep(None, "a") };
+            let b = Endpoint { at: to_at, ..ep(None, "b") };
+            assemble_connectivity(
+                s,
+                "p1",
+                &ConnectivityScope::default(),
+                Some((&a, &b)),
+                Metric::Distance,
+                method,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap()
+            .path
+            .unwrap()
+        }
+
+        fn pt(x: f64, y: f64) -> Point2D {
+            Point2D { x, y }
+        }
+
+        /// A route that starts and ends beside its doors is much shorter than one
+        /// from the room centres, under both methods, and the answer says where it
+        /// started and ended. In `detour()` the doors are at (4.5, 0) and (5.5, 0).
+        #[test]
+        fn test_a_start_and_end_point_replace_the_room_centres() {
+            let s = detour();
+            for method in [Method::DoorToDoor, Method::Centroid] {
+                let from_centres = run_at(&s, method, None, None);
+                let near_doors = run_at(&s, method, Some(pt(4.0, -1.0)), Some(pt(6.0, -1.0)));
+                assert!(near_doors.found && from_centres.found);
+                // Door to door is only the walk from beside one door to beside the other;
+                // the centre method still goes via the middle of `r`, so it gains less.
+                let share = if method == Method::DoorToDoor { 0.5 } else { 0.7 };
+                assert!(
+                    near_doors.distance_ft < from_centres.distance_ft * share,
+                    "{method:?}: {} vs {}",
+                    near_doors.distance_ft,
+                    from_centres.distance_ft
+                );
+                assert_eq!((near_doors.start.x, near_doors.start.y), (4.0, -1.0), "{method:?}");
+                assert_eq!((near_doors.end.x, near_doors.end.y), (6.0, -1.0), "{method:?}");
+            }
+        }
+
+        /// Door to door from beside the doors is the plain geometry: a metre-ish to
+        /// the first door, a metre between doors, a metre-ish from the last.
+        #[test]
+        fn test_door_to_door_from_a_point_is_the_exact_walk() {
+            let d = run_at(&detour(), Method::DoorToDoor, Some(pt(4.5, -1.0)), Some(pt(5.5, -1.0)));
+            // (4.5,-1) -> door (4.5,0) -> door (5.5,0) -> (5.5,-1)
+            assert!((d.distance_ft - 3.0).abs() < 1e-6, "{}", d.distance_ft);
+            assert!(d.note.is_none());
+        }
+
+        /// A point outside its room is moved onto the room's outline, and the
+        /// answer says so; it is not refused.
+        #[test]
+        fn test_a_point_outside_its_room_is_moved_onto_it_and_said() {
+            // `a` is x 0..5, y -10..0; this point is far to its left.
+            let d = run_at(&detour(), Method::DoorToDoor, Some(pt(-3.0, -5.0)), None);
+            assert!(d.found);
+            assert!((d.start.x - 0.0).abs() < 1e-6 && (d.start.y + 5.0).abs() < 1e-6, "{:?}", d.start);
+            assert!(d.note.as_deref().unwrap().contains("start point was outside"), "{:?}", d.note);
+        }
+
+        /// Both ends in the same room: a straight line under the centre method, the
+        /// exact walk under door to door, and no door crossed either way.
+        #[test]
+        fn test_both_points_in_one_room_need_no_door() {
+            let s = detour();
+            let (r1, r2) = (ep(None, "r"), ep(None, "r"));
+            for method in [Method::DoorToDoor, Method::Centroid] {
+                let r1 = Endpoint { at: Some(pt(1.0, 1.0)), ..r1.clone() };
+                let r2 = Endpoint { at: Some(pt(4.0, 5.0)), ..r2.clone() };
+                let path = assemble_connectivity(
+                    &s,
+                    "p1",
+                    &ConnectivityScope::default(),
+                    Some((&r1, &r2)),
+                    Metric::Distance,
+                    method,
+                    Detail::Full,
+                )
+                .unwrap()
+                .unwrap()
+                .path
+                .unwrap();
+                assert!(path.found && path.steps.is_empty(), "{method:?}");
+                assert!((path.distance_ft - 5.0).abs() < 1e-6, "{method:?}: {}", path.distance_ft);
+            }
+        }
+
+        /// A point is two coordinates or none, finite, and needs a route to belong to.
+        #[test]
+        fn test_a_point_is_both_coordinates_or_neither() {
+            assert!(point(None, None, "start").unwrap().is_none());
+            assert_eq!(point(Some(1.0), Some(2.0), "start").unwrap().map(|p| (p.x, p.y)), Some((1.0, 2.0)));
+            assert!(point(Some(1.0), None, "start").is_err());
+            assert!(point(Some(f64::NAN), Some(2.0), "end").is_err());
+            assert!(
+                endpoints_at(None, None, Some(pt(1.0, 1.0)), None, None, None).is_err(),
+                "a point without a route"
+            );
+            let (a, b) = endpoints_at(Some("a"), None, Some(pt(1.0, 1.0)), Some("b"), None, None).unwrap().unwrap();
+            assert!(a.at.is_some() && b.at.is_none());
         }
 
         /// The summary leaves the graph out of the body; `full` puts it in.
