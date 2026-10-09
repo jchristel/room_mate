@@ -30,10 +30,10 @@ use roommate::handlers::{
     activate_model_pending_snapshot, build_project_report, compare_project_milestones, get_ceilings, get_doors,
     get_ffe, get_floors, get_model_latest_snapshot, get_model_pending_snapshot, get_project_adjacency,
     get_project_areas, get_project_buildings, get_project_connectivity, get_project_milestones, get_project_snapshots,
-    get_project_validation, get_projects, get_reference_latest, get_reference_snapshots, get_report_columns, get_rooms,
-    get_spaces, get_windows, ingest_ceilings, ingest_ceilings_stream, ingest_doors, ingest_doors_stream, ingest_ffe,
-    ingest_ffe_stream, ingest_floors, ingest_floors_stream, ingest_rooms, ingest_rooms_stream, ingest_spaces,
-    ingest_spaces_stream, ingest_windows, ingest_windows_stream,
+    get_project_stack, get_project_validation, get_projects, get_reference_latest, get_reference_snapshots,
+    get_report_columns, get_rooms, get_spaces, get_windows, ingest_ceilings, ingest_ceilings_stream, ingest_doors,
+    ingest_doors_stream, ingest_ffe, ingest_ffe_stream, ingest_floors, ingest_floors_stream, ingest_rooms,
+    ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows, ingest_windows_stream,
 };
 use roommate::reports_api::{http_delete_report, http_get_report, http_list_reports, http_save_report};
 use roommate::settings_api::{
@@ -369,6 +369,8 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // Door connectivity and the shortest route between two rooms: its own
         // trigger (a pair of clicks) and its own consumer, so not part of /rooms.
         .route("/projects/{id}/connectivity", get(get_project_connectivity))
+        // The rooms over and under one room, ranked: candidates for a vertical link.
+        .route("/projects/{id}/stack", get(get_project_stack))
         // The authored half of connectivity: open zones. PUT replaces the whole
         // list and names the version it read, so two editors cannot overwrite
         // each other unseen. See `connections`.

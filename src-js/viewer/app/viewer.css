@@ -932,6 +932,20 @@
   .zoneBar .savedZones { flex-basis: 100%; }
   .zoneBar .savedZone { display: inline-flex; align-items: baseline; gap: 0.1rem; }
   .zoneBar button.chip.on { border-color: var(--accent); color: var(--accent); }
+  /* The stack view: one row per level that holds a room of the stack. */
+  .stackView { flex-basis: 100%; display: flex; flex-direction: column; gap: 0.2rem; max-height: 16rem; overflow-y: auto; }
+  .stackView .muted { opacity: 0.6; }
+  .stackView ol.stackRows { list-style: none; margin: 0; padding: 0; }
+  .stackView .stackRow { display: flex; gap: 0.4rem; align-items: baseline; }
+  .stackView .stackLevel { min-width: 5.5rem; font-weight: 600; }
+  .stackView .stackJoin { margin-left: 2rem; border-left: 2px solid var(--accent); padding-left: 0.5rem; opacity: 0.85; }
+  .stackView .stackSuggest { display: flex; flex-wrap: wrap; gap: 0.2rem 0.6rem; align-items: baseline;
+                             border: 1px dashed var(--rule); padding: 0.15rem 0.4rem; }
+  .stackView .stackSuggest.clear { border-color: var(--accent); }
+  .stackView .stackCandidate { display: inline-flex; gap: 0.35rem; align-items: baseline; }
+  .stackView .hint { opacity: 0.7; }
+  .zoneBar button.chip { font-family: var(--mono); font-size: 0.68rem; cursor: pointer; background: var(--paper);
+                         color: var(--ink); border: 1px solid var(--rule); padding: 0.05rem 0.35rem; }
   /* Translucent, so the outline and label beneath stay readable. */
   .open-zone-room { fill: var(--accent); fill-opacity: 0.3; stroke: var(--accent); stroke-width: 1.5;
                     vector-effect: non-scaling-stroke; pointer-events: none; }

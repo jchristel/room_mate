@@ -39,6 +39,39 @@ deferred until the stacked-rooms measurement; vertical zones as stored data stay
   a reload shows none until they are switched on; the SVG export does not draw them;
   `get_connectivity` is unchanged and `list_connections` now carries `routes`.
 
+**The stack view (built 2026-10-10).** "Stack view" in the Connections editor: pick a
+room and see the rooms joined to it by vertical links as a column of levels, with the
+next hop above and below offered. **Only levels that hold a room of the stack are
+listed** (plus the one a suggestion points at), never the project's other levels: RHH has
+two buildings with distinct levels and a hospital lift must not list the car park's
+half-levels. A suggestion is never a write; **Link** saves one hop at a time and the
+column grows and asks again. The read is `GET /projects/{id}/stack` and the MCP tool
+`get_stack_candidates` (`service::stacking`). **A room may be in an open zone and in a
+vertical link at once**: the records are independent and a test pins it.
+
+**Measured on RHH 2026-10-10** (104 lift rooms, 63 stair rooms; latest rooms of the six
+architectural models, a copy of the store):
+
+- The next storey is **the nearest one with something over the room**, not the next level in
+  the list: by list order only 51 of 198 lift hops found any overlap, because the level above
+  a hospital lift is a car-park half-level; by "next storey with an overlapping room" 158 did.
+  No notion of a building is needed, which a project need not configure.
+- The room sharing the source's name stem (its name without the last word) was the top overlap
+  in 146 of 158 lift hops and 70 of 75 stair hops, and a stem-mate was **never missed** when one
+  existed. Lifts overlap fully or not at all, so the threshold barely matters for them; a
+  stair needs the score relative to the SMALLER room, and 0.9 loses real stairs where 0.7 does not.
+- 11 hops were ambiguous: several lifts under one plant room, a stair beside a pressurised
+  stairwell (`STAIR PRES`), a stair over a riser. Those are shown as a choice, never preselected.
+- Limits: no hand-drawn links exist on RHH to compare against, so the stem is a proxy; the probe
+  used each room's outer outline and the deduplicated `/rooms` read (3,043 of 3,112 rooms).
+
+**A route across levels was driven in the browser on RHH** (a copy, with two hand-made links
+between the clinical lift lobbies on LEVEL 1 to 3): the route found 2 level changes at 80 ft, the
+steps list marks both, a step switches the zone's level, and a saved route draws in every zone.
+A hop between rooms stacked at one position has no length on the plan and draws as a dot; the
+stack view is where it is read. `levels_between` on those links reported 3 skipped levels for a
+correct floor-to-floor link, the interleaving the advisory already warns about.
+
 **The editor draws its context.** While an open-zone editor is open, saved zones are
 tinted by index under the zone being drawn, and rooms no door reaches and no zone
 covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).
@@ -48,9 +81,9 @@ covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).
 - **Storage type of the authored connections.** A JSON document beside the settings
   for now (see "Storage inputs"). Decide it from that list; the one module that
   owns the file is `src/connections.rs`.
-- **Suggest the rooms stacked above and below a picked room** (proposed in step 3,
-  not built). Measure first: how many lift and stair rooms get an overlapping
-  candidate on the neighbouring storey at a given threshold.
+- **Stack view follow-ups.** Candidates ignore a room's type, so `STAIR PRES` and plant rooms
+  rank on name alone; a third signal (room type, `classification`) would help. A stack with
+  two rooms on its top level suggests from the first only.
 - **Wall clearance** as a third routing method (keep a margin off walls); the natural
   next one in "Horizontal path".
 - **Dragging a start or end mark** to adjust it. Today a click sets the point.
@@ -371,25 +404,12 @@ an open zone).
 - **MCP:** no new tool. `list_connections` returns both lists, and
   `get_connectivity` describes links and the `connections.links` block.
 
-**Proposed, not built: suggest the rooms stacked above and below a picked one.**
-The idea: pick a room and offer the rooms on the neighbouring storeys that sit over
-or under it, to confirm one at a time, instead of finding each by hand. It would
-be a suggestion and never a write, like every derived thing here.
-
-- **The signal is plan overlap, scored relative to the smaller room**, so a stair
-  whose outline shifts or turns between levels still scores well where its shaft
-  footprint overlaps. A lift shaft overlaps almost completely; a switchback stair
-  overlaps by the shaft it shares and misses by its landings.
-- **Boosts, not requirements:** a shared name stem (`LIFT 3 TRA003` and
-  `LIFT 3 TRA032` share `LIFT 3`), a shared room type.
-- **Floor to floor only:** only the next storey up and the next storey down are
-  searched, ranked, with the overlap shown, so the person confirms rather than
-  trusts. A room with no overlapping candidate (a stair that moved) is the case
-  that stays manual.
-- **Cost:** a new read (candidates for one room) and so a new MCP tool, and the
-  overlap machinery already exists (`service::surface_attribution`). **Measure
-  first:** on the largest project, how many lift and stair rooms have a candidate
-  on the adjacent storeys at a given overlap threshold, and how many do not.
+**Built: suggest the rooms stacked above and below a picked one** (the stack view, see
+"Where this stands"). The signal is plan overlap scored relative to the smaller room, boosted
+by a shared name stem, only the nearest storey with something over the room in each direction,
+ranked with the overlap shown, so the person confirms rather than trusts. A room with no
+overlapping candidate (a stair that moved) stays manual. `MIN_CANDIDATE_OVERLAP` is 0.3 and a
+candidate stands alone ("clear") from 0.7.
 
 ## Horizontal path: methods, sources and what is built
 

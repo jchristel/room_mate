@@ -1723,6 +1723,45 @@ mod tests {
             std::fs::remove_dir_all(&dir).ok();
         }
 
+        /// A room may be in an open zone AND at the end of a vertical link: the two
+        /// records are independent, and a lift lobby that is part of an open
+        /// landing is the ordinary case. Here `c` is in the zone `b | c` and is one
+        /// end of the link to `e`, so a route from `a` takes a door, a zone hop
+        /// and then the level change, in that order.
+        #[test]
+        fn test_a_room_can_be_in_an_open_zone_and_a_vertical_link() {
+            let dir = std::env::temp_dir().join(format!("roommate-conn-both-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let rooms = vec![
+                rect_on("a", 0.0, 10.0, "lvl1"),
+                rect_on("b", 10.0, 20.0, "lvl1"),
+                rect_on("c", 20.0, 30.0, "lvl1"),
+                rect_on("e", 20.0, 30.0, "lvl2"),
+            ];
+            let state = state_of(rooms, vec![door("ab", Some("a"), Some("b"), "none")]).with_projects_dir(dir.clone());
+            crate::connections::save(
+                &state,
+                &dir,
+                "p1",
+                crate::connections::SaveRequest {
+                    base: String::new(),
+                    zones: vec![zone_input("landing", &["b", "c"])],
+                    links: vec![link_input("up", "c", "e", Some(10.0))],
+                    routes: None,
+                },
+            )
+            .unwrap();
+            let (a, e) = (ep(None, "a"), ep(None, "e"));
+            let result = read(&state, Some((&a, &e)));
+            let path = result.path.as_ref().unwrap();
+            assert!(path.found, "{:?}", path.reason);
+            let kinds: Vec<_> = path.steps.iter().map(|s| s.kind).collect();
+            assert_eq!(kinds, vec![EdgeKind::Door, EdgeKind::Zone, EdgeKind::Vertical]);
+            assert!(result.connections.links[0].applied);
+            assert!(result.connections.zones[0].stale.is_empty());
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
         /// Without a stated cost the default applies.
         #[test]
         fn test_a_link_without_a_cost_uses_the_default() {
