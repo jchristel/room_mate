@@ -34,6 +34,7 @@ import {
 } from "../connections.js";
 import { connectivityUrl } from "../route.js";
 import { put, request } from "./connectionsApi.js";
+import { StackPanel } from "./StackPanel.js";
 import { patchZoneEdit, setConnections, setIsolated, setZoneEditMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
@@ -155,19 +156,38 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
   const shown = edit.members.slice(0, CHIPS);
   const changeKind = (kind: EditKind) => patchZoneEdit(zoneId, { ...newEdit(kind), name: edit.name });
 
+  const kindSelect = (
+    <select
+      className="picker"
+      value={edit.kind}
+      title="Open area: shared walls between the rooms are open. Vertical link: two rooms on different levels, joined floor to floor. Stack view: the rooms joined by vertical links as a column of levels, with the next hop suggested."
+      onChange={(e) => changeKind(e.target.value as EditKind)}
+      aria-label="What to draw"
+    >
+      <option value="open">Open area</option>
+      <option value="link">Vertical link</option>
+      <option value="stack">Stack view</option>
+    </select>
+  );
+
+  if (edit.kind === "stack") {
+    return (
+      <div className="routeBar zoneBar">
+        <strong>Stack view</strong>
+        {kindSelect}
+        <button className="ctl" onClick={() => setZoneEditMode(zoneId, false)} title="Leave the editor (Esc)">
+          Done
+        </button>
+        {connections.error ? <span className="routeNotice">Could not read the saved connections: {connections.error}</span> : null}
+        <StackPanel zone={zone} />
+      </div>
+    );
+  }
+
   return (
     <div className="routeBar zoneBar">
       <strong>{isLink ? "Vertical link" : "Open zone"}</strong>
-      <select
-        className="picker"
-        value={edit.kind}
-        title="Open area: shared walls between the rooms are open. Vertical link: two rooms on different levels, joined floor to floor."
-        onChange={(e) => changeKind(e.target.value as EditKind)}
-        aria-label="What to draw"
-      >
-        <option value="open">Open area</option>
-        <option value="link">Vertical link</option>
-      </select>
+      {kindSelect}
       {isLink ? (
         <>
           <span>

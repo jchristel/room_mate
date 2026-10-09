@@ -13,6 +13,7 @@ import {
   parseCost,
   removeMember,
   roomsInOtherZones,
+  bodyAfterAddLink,
   bodyAfterDeleteRoute,
   bodyAfterRecolourRoute,
   bodyAfterSaveRoute,
@@ -211,5 +212,31 @@ describe("saved routes", () => {
     expect(whyRouteNotSavable({ name: " ", from: "a", to: "b" })).toMatch(/name/);
     expect(whyRouteNotSavable({ name: "x", from: "a", to: "" })).toMatch(/start and an end/);
     expect(whyRouteNotSavable({ name: "x", from: "a", to: "b" })).toBeNull();
+  });
+});
+
+describe("the stack editor kind", () => {
+  it("holds one room: a pick replaces it, and picking it again clears it", () => {
+    const e1 = toggleMember(newEdit("stack"), "a");
+    const e2 = toggleMember(e1, "b");
+    expect(e2.members.map((m) => m.room_id)).toEqual(["b"]);
+    expect(toggleMember(e2, "b").members).toEqual([]);
+  });
+
+  it("takes nothing in bulk and saves nothing of its own", () => {
+    expect(addMembers(newEdit("stack"), ["a", "b"]).members).toEqual([]);
+    expect(whyNotSavable(newEdit("stack"))).toMatch(/each link/);
+    const body = bodyAfterSave(doc, toggleMember(newEdit("stack"), "a"));
+    expect(body.zones).toHaveLength(2);
+    expect(body.links).toHaveLength(1);
+  });
+
+  it("adds one link at the default cost, and keeps zones, links and routes", () => {
+    const body = bodyAfterAddLink(doc, { room_id: "x", model_id: "m" }, { room_id: "y", model_id: "m" });
+    expect(body.links).toHaveLength(2);
+    expect(body.links[1]).toMatchObject({ a: { room_id: "x" }, b: { room_id: "y" }, cost_ft: null });
+    expect(body.zones).toHaveLength(2);
+    expect(bodyAfterAddLink(doc, { room_id: "x", model_id: "m" }, { room_id: "y", model_id: "m" }).links.map((l) => l.id))
+      .toEqual(["lift-1-2", "link-x-y"]);
   });
 });

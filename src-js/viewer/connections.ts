@@ -66,8 +66,9 @@ export interface ConnectionsDoc {
 /** What the server assumes when a link states no cost. */
 export const DEFAULT_LEVEL_COST_FT = 40;
 
-/** What the editor is drawing. */
-export type EditKind = "open" | "link";
+/** What the editor is drawing. `stack` draws nothing of its own: it shows the rooms
+ *  joined by vertical links as a column, and each link it adds is saved at once. */
+export type EditKind = "open" | "link" | "stack";
 
 /** One record being drawn: a new one (`id` null) or an existing one being changed. */
 export interface ZoneEdit {
@@ -126,6 +127,11 @@ export function editOfLink(link: SavedLink): ZoneEdit {
  *  lower room and moving up a level, picking again swaps the upper room without a
  *  trip back to remove one. */
 export function toggleMember(edit: ZoneEdit, roomId: string): ZoneEdit {
+  // A stack is about ONE room: a pick replaces it, and picking it again clears it.
+  if (edit.kind === "stack") {
+    const same = edit.members.length === 1 && edit.members[0]!.room_id === roomId;
+    return { ...edit, members: same ? [] : [{ room_id: roomId, model_id: null }], error: null };
+  }
   const has = edit.members.some((m) => m.room_id === roomId);
   if (has) return { ...edit, members: edit.members.filter((m) => m.room_id !== roomId), error: null };
   const added: Member = { room_id: roomId, model_id: null };
@@ -138,7 +144,7 @@ export function toggleMember(edit: ZoneEdit, roomId: string): ZoneEdit {
  *  is the bulk gesture for an open zone: 48 rooms are one search and one click.
  *  A link takes two rooms by hand, so there is nothing to add in bulk. */
 export function addMembers(edit: ZoneEdit, roomIds: Iterable<string>): ZoneEdit {
-  if (edit.kind === "link") return edit;
+  if (edit.kind !== "open") return edit;
   const have = new Set(edit.members.map((m) => m.room_id));
   const added: Member[] = [];
   for (const id of roomIds) {
@@ -166,6 +172,7 @@ export function parseCost(typed: string): number | null | "bad" {
 /** Why a record cannot be saved yet, or `null` when it can. Said before the
  *  request, in the words the panel shows, so a button is never a guess. */
 export function whyNotSavable(edit: ZoneEdit): string | null {
+  if (edit.kind === "stack") return "The stack view saves each link as you add it.";
   if (edit.kind === "link") {
     if (edit.members.length < LINK_MEMBERS) {
       return "Pick two rooms on different levels: change the level picker between the picks.";
@@ -244,6 +251,9 @@ export function bodyAfterSave(doc: ConnectionsDoc, edit: ZoneEdit): DocBody {
   const zones = doc.zones.map(zoneBody);
   const links = doc.links.map(linkBody);
   const routes = doc.routes.map(routeBody);
+  // The stack view saves each link itself (`bodyAfterAddLink`); it has no working
+  // set to save, so a save from it changes nothing.
+  if (edit.kind === "stack") return { zones, links, routes };
   if (edit.kind === "link") {
     const [a, b] = edit.members as [Member, Member];
     const cost = parseCost(edit.costFt);
@@ -254,6 +264,18 @@ export function bodyAfterSave(doc: ConnectionsDoc, edit: ZoneEdit): DocBody {
   const id = edit.id ?? idFor(edit.name, new Set(zones.map((z) => z.id)));
   const next: ZoneBody = { id, name: edit.name.trim(), kind: "open", rooms: edit.members };
   return { links, routes, zones: edit.id === null ? [...zones, next] : zones.map((z) => (z.id === id ? next : z)) };
+}
+
+/** The lists after adding one vertical link between two rooms, at the default cost.
+ *  What the stack view's "Link" button saves: one hop, confirmed by a person. */
+export function bodyAfterAddLink(doc: ConnectionsDoc, a: Member, b: Member): DocBody {
+  const links = doc.links.map(linkBody);
+  const id = idFor(`link ${a.room_id} ${b.room_id}`, new Set(links.map((l) => l.id)));
+  return {
+    zones: doc.zones.map(zoneBody),
+    links: [...links, { id, a, b, cost_ft: null }],
+    routes: doc.routes.map(routeBody),
+  };
 }
 
 /** The lists after deleting one zone. */

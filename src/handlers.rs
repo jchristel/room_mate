@@ -37,6 +37,7 @@ use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::routing;
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
 use crate::service::spaces;
+use crate::service::stacking;
 use crate::service::surfaces::{SurfaceKind, SurfacePayloadKind};
 use crate::service::validation::ValidationResponse;
 use crate::service::{
@@ -3065,6 +3066,38 @@ pub async fn get_project_connectivity(
         metric,
         method,
         detail,
+    )
+    .map_err(map_service_error)?;
+    match result {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(Json(result).into_response()),
+    }
+}
+
+/// The room whose stack to read, for `GET /projects/{id}/stack`.
+#[derive(Deserialize)]
+pub struct StackQuery {
+    pub room: String,
+    /// Only needed when `room` exists in more than one model.
+    #[serde(default)]
+    pub room_model: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<String>,
+}
+
+/// The rooms over and under one room, ranked, as candidates for a vertical link
+/// -- see `service::stacking`. 204 when no rooms have ever been pushed.
+pub async fn get_project_stack(
+    State(state): State<Shared>,
+    Path(project_id): Path<String>,
+    Query(query): Query<StackQuery>,
+) -> Result<Response, (StatusCode, String)> {
+    let result = stacking::stack_candidates(
+        &state,
+        &project_id,
+        &query.room,
+        query.room_model.as_deref(),
+        query.milestone.as_deref(),
     )
     .map_err(map_service_error)?;
     match result {

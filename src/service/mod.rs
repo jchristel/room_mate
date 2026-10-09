@@ -26,6 +26,7 @@ pub mod rooms;
 pub mod routing;
 pub mod snapshots;
 pub mod spaces;
+pub mod stacking;
 pub mod surface_attribution;
 pub mod surfaces;
 pub mod type_table;

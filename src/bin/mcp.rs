@@ -1,7 +1,7 @@
 //! roommate's MCP server: exposes the read side as MCP tools over stdio, one
 //! per existing HTTP read route -- `list_projects`, `list_buildings`,
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
-//! `get_connectivity`, `list_connections`,
+//! `get_connectivity`, `list_connections`, `get_stack_candidates`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
@@ -9,7 +9,7 @@
 //! `list_saved_reports`, `get_saved_report` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Twenty-nine in
+//! and the one forwarded mutation (`upload_reference`, below). Thirty in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -283,6 +283,20 @@ struct AdjacencyParams {
     /// different tolerance than the project declares; must be between 0 and 5.
     #[serde(default)]
     wall_max: Option<f64>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct StackParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The room to find a stack for.
+    room: String,
+    /// The room's model, only needed when its id exists in several models.
+    #[serde(default)]
+    room_model: Option<String>,
+    /// Milestone name from `list_milestones`. Omit for the latest snapshots.
+    #[serde(default)]
+    milestone: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1087,6 +1101,28 @@ impl RoommateMcp {
             metric,
             method,
             detail,
+        )
+        .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// The rooms over and under one room, as candidates for a vertical link -- see
+    /// `service::stacking`. The same read as `GET /projects/{id}/stack`.
+    #[tool(
+        description = "Suggest vertical links for one room: the rooms on the storey above and the storey below that sit over or under it, ranked, for a person to confirm. A SUGGESTION and never a write -- nothing is stored, and a link is made by hand (PUT /projects/{id}/connections). `up` and `down` each name the NEAREST storey that has a room overlapping this one (not simply the next level in the project's list: a car park's half-levels stacked between hospital floors have nothing over a hospital lift, so they are passed, and `levels_passed` counts them), or are null when nothing overlaps (the top of a shaft, or a stair that moves between floors, which stays manual). Each candidate carries `overlap` (area as a fraction of the SMALLER of the two rooms, so a stair whose landings differ still scores), `fraction_of_room` and `same_stem` (the name shares the source's name without its last word: LIFT 3 TRA003 and LIFT 3 TRA032 share LIFT 3). Candidates start at 0.3 overlap and are ordered stem-mates first, then by overlap. `confidence` is `clear` when one candidate stands alone (the only overlap of 0.7 or more, or the only such stem-mate) and `ambiguous` when the reader must choose (several lifts sharing one plant room, a stair beside a pressurised stairwell). Measured on one large project the stem-mate was the top overlap in about 92% of lift and stair hops, and a stem-mate was never missed when one existed; the name is a boost and not a rule. A room id is unique only within its model: an id two models share is refused and the models are named, and `room_model` resolves it."
+    )]
+    fn get_stack_candidates(&self, Parameters(p): Parameters<StackParams>) -> Result<CallToolResult, McpError> {
+        let result = roommate::service::stacking::stack_candidates(
+            &self.state,
+            &p.project_id,
+            &p.room,
+            p.room_model.as_deref(),
+            p.milestone.as_deref(),
         )
         .map_err(to_mcp_error)?;
         match result {
