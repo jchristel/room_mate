@@ -1574,7 +1574,7 @@ mod tests {
                 &state,
                 &dir,
                 "p1",
-                crate::connections::SaveRequest { base: String::new(), zones, links: vec![] },
+                crate::connections::SaveRequest { base: String::new(), zones, links: vec![], routes: None },
             )
             .unwrap();
             (state, dir)
@@ -1690,7 +1690,7 @@ mod tests {
                 &state,
                 &dir,
                 "p1",
-                crate::connections::SaveRequest { base: String::new(), zones: vec![], links },
+                crate::connections::SaveRequest { base: String::new(), zones: vec![], links, routes: None },
             )
             .unwrap();
             (state, dir)

@@ -21,6 +21,7 @@ import { errorRoomIds } from "../validation.js";
 import { AreasOverlay } from "./AreasOverlay.js";
 import { RouteOverlay } from "./RouteOverlay.js";
 import { OpenZoneOverlay } from "./OpenZoneOverlay.js";
+import { SavedRoutesOverlay } from "./SavedRoutesOverlay.js";
 import { OpenZonePanel } from "./OpenZonePanel.js";
 import { RoutePanel } from "./RoutePanel.js";
 import { LayerMenu } from "./LayerMenu.js";
@@ -374,6 +375,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
             selectedKey={selection?.kind === "area" ? selection.id : null}
           />
           <OpenZoneOverlay levelId={levelId} edit={zone.edit} />
+          <SavedRoutesOverlay zoneId={zone.id} levelId={levelId} />
           {/* Above the footprints: a route is the thing being asked about. */}
           <RouteOverlay zoneId={zone.id} levelId={levelId} route={zone.route} />
         </svg>

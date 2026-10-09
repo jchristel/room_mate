@@ -14,12 +14,34 @@ connectivity graph is already listed there as deferred) and
 zones and `/connections` (#190), vertical zones (#191, since removed), and manual
 vertical links replacing them (#192).
 
-**Open pull requests, in merge order:**
+Routing methods (#193) and start/end points inside rooms (#194) merged 2026-10-07/08.
 
-1. #193, routing methods: door to door as the default, room centres kept, the method
-   registry, the picker, the research below. CI green.
-2. This branch (`route-endpoints`), stacked on #193: a start and end *point* inside
-   each room. Retarget it to `main` after #193 merges.
+**Built 2026-10-09, on branch `route-panel-saved-routes`:** a route panel, saved routes
+and several routes at once. A vertical *view* (a lift or stair as a stack of rooms) is
+deferred until the stacked-rooms measurement; vertical zones as stored data stay removed.
+
+- **Steps.** A route's rooms in order, each with the hop into it (door, open zone, level
+  change) and its length, and a rule where the level changes. A row takes the zone to
+  that room's level and pans to it. It is a list because a route across levels is mostly
+  off the level a zone shows.
+- **Saved routes are requests, never paths.** `routes` in the same connections document
+  as zones and links: the two rooms (model-qualified), where in them, the method and a
+  `#rrggbb` colour. The path is derived on every read, so a saved route follows the
+  doors, zones and links as they change, and one whose room has left the model reports
+  the server's message on its chip rather than drawing a stale line. They are shared by
+  the project, like zones. **A save with no `routes` key keeps the saved ones** (an
+  explicit empty list clears), so a client older than this cannot silently delete them.
+- **Several at once.** Which routes are shown is the viewer's own (page state, not
+  stored, not kept across a reload); each zone draws every shown route's slice for its
+  level, each in its colour on a paper halo so routes sharing a corridor stay readable.
+  They stay drawn after the route tool is closed, and are managed from the tool's bar.
+- **Not done:** routes sharing a corridor are drawn on top of each other, not offset;
+  a reload shows none until they are switched on; the SVG export does not draw them;
+  `get_connectivity` is unchanged and `list_connections` now carries `routes`.
+
+**The editor draws its context.** While an open-zone editor is open, saved zones are
+tinted by index under the zone being drawn, and rooms no door reaches and no zone
+covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).
 
 **Decisions still open**
 
