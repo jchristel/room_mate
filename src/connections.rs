@@ -56,7 +56,9 @@ pub const SCHEMA_VERSION: u32 = 1;
 const MAX_ZONES: usize = 5_000;
 const MAX_LINKS: usize = 20_000;
 const MAX_ROOMS_PER_ZONE: usize = 5_000;
+const MAX_ROUTES: usize = 5_000;
 const MAX_NOTE_CHARS: usize = 2_000;
+const MAX_NAME_CHARS: usize = 120;
 
 /// What one storey change costs when a link does not say, in feet of walking: a
 /// flight of stairs with its landing. A link can carry its own figure, because a
@@ -104,6 +106,41 @@ pub struct VerticalLink {
     pub note: Option<String>,
 }
 
+/// A position in the plan, in the frame `/connectivity` answers in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RoutePoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// A route somebody saved: the REQUEST, never the answer. It names the two rooms,
+/// where in them the route starts and ends, and the method, and nothing about the
+/// path, which is worked out at read time like every other derived thing here. So
+/// a saved route follows the doors, zones and links as they change, and one whose
+/// room has left the model reports that instead of drawing a stale line.
+///
+/// It lives beside the zones and links because it is the same kind of thing: a
+/// project-wide, shared, authored record. `colour` is part of the record, not of
+/// a viewer, so everyone sees a route in the colour it was saved with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedRoute {
+    pub id: String,
+    pub name: String,
+    pub from: RoomRef,
+    pub to: RoomRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_at: Option<RoutePoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_at: Option<RoutePoint>,
+    /// A routing method id; absent means the server's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// `#rrggbb`.
+    pub colour: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionsDocument {
     pub schema_version: u32,
@@ -115,6 +152,9 @@ pub struct ConnectionsDocument {
     pub zones: Vec<OpenZone>,
     #[serde(default)]
     pub links: Vec<VerticalLink>,
+    /// Absent in a file written before routes could be saved, which reads as none.
+    #[serde(default)]
+    pub routes: Vec<SavedRoute>,
 }
 
 impl ConnectionsDocument {
@@ -124,6 +164,7 @@ impl ConnectionsDocument {
             taken_at: String::new(),
             zones: Vec::new(),
             links: Vec::new(),
+            routes: Vec::new(),
         }
     }
 }
@@ -159,7 +200,24 @@ pub struct LinkInput {
     pub note: Option<String>,
 }
 
-/// The body of a save: the WHOLE document, both lists.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RouteInput {
+    pub id: String,
+    pub name: String,
+    pub from: RoomInput,
+    pub to: RoomInput,
+    #[serde(default)]
+    pub from_at: Option<RoutePoint>,
+    #[serde(default)]
+    pub to_at: Option<RoutePoint>,
+    #[serde(default)]
+    pub method: Option<String>,
+    pub colour: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// The body of a save: the WHOLE document, every list.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveRequest {
     /// The `taken_at` of the document the caller read; empty for "there was
@@ -170,6 +228,12 @@ pub struct SaveRequest {
     pub zones: Vec<ZoneInput>,
     #[serde(default)]
     pub links: Vec<LinkInput>,
+    /// **Absent means "keep the saved routes", not "there are none".** The other
+    /// two lists predate this one, so a caller written before routes existed sends
+    /// no `routes` at all, and reading that as an empty list would have it silently
+    /// delete every saved route on its next save. An explicit empty list clears.
+    #[serde(default)]
+    pub routes: Option<Vec<RouteInput>>,
 }
 
 #[derive(Debug)]
@@ -294,6 +358,56 @@ pub fn validate(zones: &[OpenZone], links: &[VerticalLink]) -> Result<(), Connec
     Ok(())
 }
 
+/// The rules for saved routes, apart from `validate` so the two older lists keep
+/// their signature.
+pub fn validate_routes(routes: &[SavedRoute]) -> Result<(), ConnectionsError> {
+    if routes.len() > MAX_ROUTES {
+        return bad(format!("{} routes is more than the {MAX_ROUTES} allowed", routes.len()));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for route in routes {
+        if !is_path_safe_component(&route.id) {
+            return bad(format!("route id {:?} must be a short name that is safe as a file name", route.id));
+        }
+        if !seen.insert(route.id.as_str()) {
+            return bad(format!("route id {:?} appears twice", route.id));
+        }
+        let name = route.name.trim();
+        if name.is_empty() {
+            return bad(format!("route {:?} needs a name", route.id));
+        }
+        if name.chars().count() > MAX_NAME_CHARS {
+            return bad(format!("the name of route {:?} is longer than {MAX_NAME_CHARS} characters", route.id));
+        }
+        for r in [&route.from, &route.to] {
+            if r.model_id.trim().is_empty() || r.room_id.trim().is_empty() {
+                return bad(format!("route {name:?} names a room with no model or no id"));
+            }
+        }
+        if route.from == route.to {
+            return bad(format!("route {name:?} starts and ends in the same room"));
+        }
+        if !is_hex_colour(&route.colour) {
+            return bad(format!("route {name:?} colour {:?} must look like #1a2b3c", route.colour));
+        }
+        for p in [route.from_at, route.to_at].into_iter().flatten() {
+            if !p.x.is_finite() || !p.y.is_finite() {
+                return bad(format!("route {name:?} has a start or end point that is not a number"));
+            }
+        }
+        if route.note.as_ref().is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS) {
+            return bad(format!("the note on route {name:?} is longer than {MAX_NOTE_CHARS} characters"));
+        }
+    }
+    Ok(())
+}
+
+/// `#rrggbb` and nothing else: the colour is drawn straight into an SVG stroke, so
+/// accepting any CSS value would let a saved record carry a `url(...)`.
+fn is_hex_colour(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// Resolves the rooms a caller named into full references. A room with a model
 /// is taken as given; a bare id is looked up among the project's rooms and
 /// refused when it names none or several.
@@ -302,6 +416,19 @@ struct Resolver {
 }
 
 impl Resolver {
+    /// Reads the project's rooms only when a bare id needs looking up.
+    fn for_project(state: &AppState, project: &str, needs_lookup: bool) -> Result<Self, ConnectionsError> {
+        let mut models_of: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        if needs_lookup
+            && let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })?
+        {
+            for r in &rooms.rooms {
+                models_of.entry(r.room.id.clone()).or_default().push(r.model_id.clone());
+            }
+        }
+        Ok(Self { models_of })
+    }
+
     fn room(&self, r: RoomInput) -> Result<RoomRef, ConnectionsError> {
         match r.model_id.filter(|m| !m.trim().is_empty()) {
             Some(model_id) => Ok(RoomRef { model_id, room_id: r.room_id }),
@@ -329,15 +456,7 @@ pub fn resolve(
 ) -> Result<(Vec<OpenZone>, Vec<VerticalLink>), ConnectionsError> {
     let needs_lookup = zones.iter().any(|z| z.rooms.iter().any(|r| r.model_id.is_none()))
         || links.iter().any(|l| l.a.model_id.is_none() || l.b.model_id.is_none());
-    let mut models_of: std::collections::BTreeMap<String, Vec<String>> = Default::default();
-    if needs_lookup
-        && let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })?
-    {
-        for r in &rooms.rooms {
-            models_of.entry(r.room.id.clone()).or_default().push(r.model_id.clone());
-        }
-    }
-    let resolver = Resolver { models_of };
+    let resolver = Resolver::for_project(state, project, needs_lookup)?;
 
     let zones = zones
         .into_iter()
@@ -361,6 +480,36 @@ pub fn resolve(
     Ok((zones, links))
 }
 
+/// Turns a save's routes into full records. `None` is the caller's "keep what is
+/// saved" and stays `None`, so the caller can tell it from an empty list.
+pub fn resolve_routes(
+    state: &AppState,
+    project: &str,
+    routes: Option<Vec<RouteInput>>,
+) -> Result<Option<Vec<SavedRoute>>, ConnectionsError> {
+    let Some(routes) = routes else { return Ok(None) };
+    let unnamed = |r: &RoomInput| r.model_id.as_deref().is_none_or(|m| m.trim().is_empty());
+    let needs_lookup = routes.iter().any(|r| unnamed(&r.from) || unnamed(&r.to));
+    let resolver = Resolver::for_project(state, project, needs_lookup)?;
+    routes
+        .into_iter()
+        .map(|r| {
+            Ok(SavedRoute {
+                id: r.id,
+                name: r.name.trim().to_string(),
+                from: resolver.room(r.from)?,
+                to: resolver.room(r.to)?,
+                from_at: r.from_at,
+                to_at: r.to_at,
+                method: r.method.filter(|m| !m.trim().is_empty()),
+                colour: r.colour.to_ascii_lowercase(),
+                note: r.note,
+            })
+        })
+        .collect::<Result<Vec<_>, ConnectionsError>>()
+        .map(Some)
+}
+
 /// Replace the project's document with `request`, if it still is the one the
 /// caller read.
 ///
@@ -379,6 +528,10 @@ pub fn save(
     // project, and nothing about it needs the file.
     let (zones, links) = resolve(state, project, request.zones, request.links)?;
     validate(&zones, &links)?;
+    let routes = resolve_routes(state, project, request.routes)?;
+    if let Some(routes) = &routes {
+        validate_routes(routes)?;
+    }
 
     let _guard = SAVE_LOCK.lock().unwrap();
     let current = load(projects_dir, project)?;
@@ -395,7 +548,8 @@ pub fn save(
         // before the one it replaces: the id is the version.
         taken_at = format!("{}~", current.taken_at);
     }
-    let document = ConnectionsDocument { schema_version: SCHEMA_VERSION, taken_at, zones, links };
+    let routes = routes.unwrap_or(current.routes);
+    let document = ConnectionsDocument { schema_version: SCHEMA_VERSION, taken_at, zones, links, routes };
 
     let dir = path.parent().expect("a connections path always has a parent");
     std::fs::create_dir_all(dir).map_err(|e| ConnectionsError::Internal(e.into()))?;
@@ -413,9 +567,10 @@ pub fn save(
     std::fs::rename(&temp, &path).map_err(|e| ConnectionsError::Internal(e.into()))?;
     crate::backups::prune(projects_dir, &stem, "json");
     tracing::info!(
-        "saved connections for project {project} ({} zones, {} links)",
+        "saved connections for project {project} ({} zones, {} links, {} routes)",
         document.zones.len(),
-        document.links.len()
+        document.links.len(),
+        document.routes.len()
     );
     Ok(document)
 }
@@ -455,7 +610,7 @@ mod tests {
     }
 
     fn request(base: &str, zones: Vec<ZoneInput>) -> SaveRequest {
-        SaveRequest { base: base.to_string(), zones, links: vec![] }
+        SaveRequest { base: base.to_string(), zones, links: vec![], routes: None }
     }
 
     #[test]
@@ -478,6 +633,7 @@ mod tests {
                 base: String::new(),
                 zones: vec![zone("z1", vec![room("m", "a"), room("m", "b")])],
                 links: vec![link("up", room("m", "b"), room("m", "e"))],
+                routes: None,
             },
         )
         .unwrap();
@@ -507,6 +663,78 @@ mod tests {
         .unwrap();
         assert!(second.taken_at > first.taken_at);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn route(id: &str, colour: &str) -> RouteInput {
+        RouteInput {
+            id: id.to_string(),
+            name: format!("Route {id}"),
+            from: room("m", "a"),
+            to: room("m", "b"),
+            from_at: Some(RoutePoint { x: 1.0, y: 2.0 }),
+            to_at: None,
+            method: Some(String::new()),
+            colour: colour.to_string(),
+            note: None,
+        }
+    }
+
+    fn with_routes(base: &str, routes: Option<Vec<RouteInput>>) -> SaveRequest {
+        SaveRequest { routes, ..request(base, vec![]) }
+    }
+
+    #[test]
+    fn test_routes_round_trip_and_an_absent_list_keeps_them() {
+        let dir = temp_dir("routes");
+        let first = save(&state(), &dir, "p1", with_routes("", Some(vec![route("r1", "#AA00cc")]))).unwrap();
+        assert_eq!(first.routes.len(), 1);
+        assert_eq!(first.routes[0].colour, "#aa00cc", "stored lower-case");
+        assert_eq!(first.routes[0].method, None, "a blank method is the default, not a method named \"\"");
+        // A caller that predates routes sends none; that must not delete them.
+        let second = save(&state(), &dir, "p1", with_routes(&first.taken_at, None)).unwrap();
+        assert_eq!(second.routes, first.routes);
+        // An explicit empty list is how they are cleared.
+        let third = save(&state(), &dir, "p1", with_routes(&second.taken_at, Some(vec![]))).unwrap();
+        assert!(third.routes.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_file_written_before_routes_existed_still_loads() {
+        let dir = temp_dir("old-routes");
+        std::fs::create_dir_all(dir.join("connections")).unwrap();
+        std::fs::write(
+            dir.join("connections").join("p1.json"),
+            r#"{"schema_version":1,"taken_at":"t","zones":[],"links":[]}"#,
+        )
+        .unwrap();
+        assert!(load(&dir, "p1").unwrap().routes.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_validation_refuses_what_could_not_be_a_route() {
+        let check = |r: RouteInput| {
+            let routes = resolve_routes(&state(), "p1", Some(vec![r])).unwrap().unwrap();
+            validate_routes(&routes)
+        };
+        assert!(check(route("ok", "#00ff00")).is_ok());
+        assert!(check(route("c", "red")).is_err(), "a name, not a hex colour");
+        assert!(check(route("c", "#12345")).is_err());
+        assert!(check(route("c", "#12345g")).is_err());
+        let mut same = route("s", "#000000");
+        same.to = room("m", "a");
+        assert!(check(same).is_err(), "a route to itself");
+        let mut nameless = route("n", "#000000");
+        nameless.name = "  ".to_string();
+        assert!(check(nameless).is_err());
+        let mut nan = route("p", "#000000");
+        nan.to_at = Some(RoutePoint { x: f64::NAN, y: 0.0 });
+        assert!(check(nan).is_err());
+        let twice = resolve_routes(&state(), "p1", Some(vec![route("d", "#000000"), route("d", "#111111")]))
+            .unwrap()
+            .unwrap();
+        assert!(validate_routes(&twice).is_err(), "a duplicate id");
     }
 
     #[test]

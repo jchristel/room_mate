@@ -18,6 +18,7 @@ import { BandDivide, BandSplit, RegionDrag } from "./DragHandles.js";
 import { AreasBand } from "./AreasBand.js";
 import { QaBand } from "./QaBand.js";
 import { Header } from "./Header.js";
+import { SavedRoutesLayer } from "./SavedRoutesLayer.js";
 import { Inspector } from "./inspector/Inspector.js";
 import { PickList } from "./PickList.js";
 import { startPolling } from "./poll.js";
@@ -37,6 +38,7 @@ export function App() {
 
   return (
     <>
+      <SavedRoutesLayer />
       <Header />
       <div id="mainRow">
         {/* The column count follows the zone count, capped at 3 — beyond that

@@ -32,23 +32,13 @@ import {
   type DocBody,
   type EditKind,
 } from "../connections.js";
-import { patchZoneEdit, setConnections, setZoneEditMode, type ZoneRow } from "./store.js";
+import { connectivityUrl } from "../route.js";
+import { put, request } from "./connectionsApi.js";
+import { patchZoneEdit, setConnections, setIsolated, setZoneEditMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
 /** Members shown as chips before "+N more". A zone can hold hundreds. */
 const CHIPS = 10;
-
-type Reply = { ok: true; body: ConnectionsDoc } | { ok: false; status: number; message: string };
-
-async function request(url: string, init?: RequestInit): Promise<Reply> {
-  try {
-    const res = await fetch(url, { cache: "no-store", ...init });
-    if (!res.ok) return { ok: false, status: res.status, message: (await res.text()).trim() || `${url} -> ${res.status}` };
-    return { ok: true, body: (await res.json()) as ConnectionsDoc };
-  } catch (err) {
-    return { ok: false, status: 0, message: `Could not reach ${url}: ${String(err)}` };
-  }
-}
 
 export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
   const { scope, payload, search, connections } = useViewer();
@@ -73,6 +63,26 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
     // `scope` is spread into the key; the object itself changes identity freely.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, url]);
+
+  // The rooms no door reaches: what a new zone is for. Asked again when the
+  // document changes, because a saved zone is exactly what removes a room from it.
+  const revision = payload?.revision ?? "";
+  const version = connections.doc?.taken_at ?? "";
+  useEffect(() => {
+    const connectivity = scope.projectId ? connectivityUrl(scope, null, null) : null;
+    if (!active || !connectivity) return;
+    const ac = new AbortController();
+    void fetch(connectivity, { cache: "no-store", signal: ac.signal })
+      .then((res) => (res.ok && res.status !== 204 ? res.json() : null))
+      .then((body: { isolated?: { room_id: string }[] } | null) => {
+        if (ac.signal.aborted || !body) return;
+        setIsolated(scope.projectId, new Set((body.isolated ?? []).map((x) => x.room_id)));
+      })
+      .catch(() => {});
+    return () => ac.abort();
+    // `scope` is spread into the key; the object itself changes identity freely.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, url, revision, version]);
 
   // Escape leaves the editor, like every other transient thing on this page.
   useEffect(() => {
@@ -111,11 +121,7 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
   const send = async (body: DocBody, afterOk: () => void) => {
     if (!url || !doc) return;
     patchZoneEdit(zoneId, { ...edit, saving: true, error: null });
-    const r = await request(url, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ base: doc.taken_at, ...body }),
-    });
+    const r = await put(url, doc.taken_at, body);
     if (r.ok) {
       setConnections({ projectId: scope.projectId, doc: r.body, error: null });
       afterOk();

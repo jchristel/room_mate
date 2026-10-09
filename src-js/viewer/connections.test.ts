@@ -12,6 +12,13 @@ import {
   newEdit,
   parseCost,
   removeMember,
+  roomsInOtherZones,
+  bodyAfterDeleteRoute,
+  bodyAfterRecolourRoute,
+  bodyAfterSaveRoute,
+  nextRouteColour,
+  ROUTE_COLOURS,
+  whyRouteNotSavable,
   toggleMember,
   whyNotSavable,
   type ConnectionsDoc,
@@ -25,7 +32,18 @@ const doc: ConnectionsDoc = {
     { id: "west", name: "West bays", kind: "open", rooms: [{ model_id: "m", room_id: "c" }, { model_id: "m", room_id: "d" }] },
   ],
   links: [{ id: "lift-1-2", a: { model_id: "m", room_id: "p" }, b: { model_id: "m", room_id: "q" }, cost_ft: 20 }],
+  routes: [],
 };
+
+describe("roomsInOtherZones", () => {
+  it("maps every saved room to the index of its zone", () => {
+    expect([...roomsInOtherZones(doc, null)]).toEqual([["a", 0], ["b", 0], ["c", 1], ["d", 1]]);
+  });
+  it("leaves out the zone being edited, and tolerates no document", () => {
+    expect([...roomsInOtherZones(doc, "east").keys()]).toEqual(["c", "d"]);
+    expect(roomsInOtherZones(null, null).size).toBe(0);
+  });
+});
 
 describe("an open zone's working set", () => {
   it("toggles a room in and out, so a click is its own undo", () => {
@@ -151,5 +169,47 @@ describe("connectionsUrl", () => {
   it("needs a project", () => {
     expect(connectionsUrl({ projectId: "p 1", building: null, milestone: null })).toBe("/projects/p%201/connections");
     expect(connectionsUrl({ projectId: null, building: null, milestone: null })).toBeNull();
+  });
+});
+
+describe("saved routes", () => {
+  const draft = { name: "Bed to lift", colour: "#1c7ed6", from: "a", to: "b", fromAt: { x: 1, y: 2 }, toAt: null, method: null };
+  const withRoute = bodyAfterSaveRoute(doc, draft);
+  const saved: ConnectionsDoc = { ...doc, routes: withRoute.routes };
+
+  it("saves the request with bare rooms for the server to resolve, and never a path", () => {
+    expect(withRoute.routes).toHaveLength(1);
+    const r = withRoute.routes[0]!;
+    expect(r).toMatchObject({ id: "bed-to-lift", from: { model_id: "", room_id: "a" }, colour: "#1c7ed6", from_at: { x: 1, y: 2 } });
+    expect(Object.keys(r)).not.toContain("path");
+  });
+
+  it("carries zones and links through untouched, and keeps an id unique", () => {
+    expect(withRoute.zones.map((z) => z.id)).toEqual(["east", "west"]);
+    expect(withRoute.links).toHaveLength(1);
+    expect(bodyAfterSaveRoute(saved, draft).routes.map((r) => r.id)).toEqual(["bed-to-lift", "bed-to-lift-2"]);
+  });
+
+  it("keeps routes through every other save, so a zone edit cannot drop them", () => {
+    expect(bodyAfterDeleteZone(saved, "east").routes).toHaveLength(1);
+    expect(bodyAfterDeleteLink(saved, "lift-1-2").routes).toHaveLength(1);
+    expect(bodyAfterSave(saved, newEdit("open")).routes).toHaveLength(1);
+  });
+
+  it("recolours and deletes one route", () => {
+    expect(bodyAfterRecolourRoute(saved, "bed-to-lift", "#000000").routes[0]!.colour).toBe("#000000");
+    expect(bodyAfterDeleteRoute(saved, "bed-to-lift").routes).toEqual([]);
+  });
+
+  it("gives each new route the least-used palette colour", () => {
+    expect(nextRouteColour(null)).toBe(ROUTE_COLOURS[0]);
+    const used = { ...doc, routes: [{ ...withRoute.routes[0]!, colour: ROUTE_COLOURS[0] }] };
+    expect(nextRouteColour(used)).toBe(ROUTE_COLOURS[1]);
+  });
+
+  it("says what is missing before a save", () => {
+    expect(whyRouteNotSavable({ name: " ", from: "a", to: "b" })).toMatch(/name/);
+    expect(whyRouteNotSavable({ name: "x", from: "a", to: "" })).toMatch(/start and an end/);
+    expect(whyRouteNotSavable({ name: "x", from: "a", to: "b" })).toBeNull();
   });
 });

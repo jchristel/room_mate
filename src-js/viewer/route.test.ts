@@ -7,6 +7,7 @@ import {
   newRoute,
   pickEndpoint,
   polylinePoints,
+  routeRows,
   segmentsOnLevel,
   type RoutePath,
   type RouteState,
@@ -168,5 +169,50 @@ describe("a point in the room", () => {
     );
     expect(connectivityUrl(scope, "a", "b", null, { from: at, to: { x: 1, y: 2 } })).toContain("to_x=1&to_y=2");
     expect(connectivityUrl(scope, "a", null, null, { from: at, to: null })).toBe("/projects/p/connectivity");
+  });
+});
+
+describe("routeRows", () => {
+  const ref = (id: string) => ({ model_id: "m", room_id: id });
+  const levels: Record<string, string> = { a: "L1", b: "L1", c: "L2" };
+  const full: RoutePath = {
+    found: true,
+    reason: null,
+    distance_ft: 90,
+    rooms: [ref("a"), ref("b"), ref("c")],
+    steps: [
+      { kind: "door", door_id: "d1", from: ref("a"), to: ref("b"), point: { x: 0, y: 0 }, length: 20 },
+      { kind: "vertical", link_id: "lift", from: ref("b"), to: ref("c"), point: { x: 0, y: 0 }, length: 40 },
+    ],
+    segments: [],
+  };
+
+  it("lists the start, then each hop with its kind and length", () => {
+    const rows = routeRows(full, (id) => levels[id]);
+    expect(rows.map((r) => [r.roomId, r.how, r.lengthFt])).toEqual([
+      ["a", "start", 0],
+      ["b", "door", 20],
+      ["c", "vertical", 40],
+    ]);
+    expect(rows[1]!.doorId).toBe("d1");
+  });
+
+  it("marks where the level changes, and only there", () => {
+    expect(routeRows(full, (id) => levels[id]).map((r) => r.levelChanged)).toEqual([false, false, true]);
+  });
+
+  it("is empty for no route, and does not need step ends on an older answer", () => {
+    expect(routeRows(null, () => null)).toEqual([]);
+    expect(routeRows({ ...full, found: false }, () => null)).toEqual([]);
+    const bare = { ...full, steps: full.steps.map(({ from: _f, to: _t, ...rest }) => rest) };
+    expect(routeRows(bare, (id) => levels[id]).map((r) => r.roomId)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("connectivityUrl with saved rooms", () => {
+  it("names each room's model so two models sharing an id cannot be confused", () => {
+    const url = connectivityUrl({ projectId: "p", building: null, milestone: null } as never, "1", "2", null, {}, { from: "m1", to: "m2" });
+    expect(url).toContain("from_model=m1");
+    expect(url).toContain("to_model=m2");
   });
 });

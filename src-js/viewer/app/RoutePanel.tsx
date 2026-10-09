@@ -19,6 +19,8 @@
 
 import { useEffect, useMemo } from "react";
 
+import { RouteExtras } from "./RouteExtras.js";
+
 import type { Level, Room } from "../../renderer/types.js";
 import {
   connectivityUrl,
@@ -195,6 +197,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
           {matches.total > matches.usable.length ? <em>+{matches.total - matches.usable.length} more</em> : null}
         </span>
       ) : null}
+      <RouteExtras zone={zone} route={route} />
       <button className="ctl" onClick={() => clearZoneRoute(zoneId)} disabled={start === null && end === null}>
         Clear
       </button>

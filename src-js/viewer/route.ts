@@ -76,8 +76,21 @@ export interface RoutePath {
   end?: PlanPoint;
   distance_ft: number;
   rooms: { model_id: string; room_id: string }[];
-  steps: { kind: "door" | "zone" | "vertical"; door_id?: string; zone_id?: string; point: { x: number; y: number } }[];
+  steps: RouteStep[];
   segments: { level_id: string; points: { x: number; y: number }[] }[];
+}
+
+/** One hop of a route, as the server answers it. */
+export interface RouteStep {
+  kind: "door" | "zone" | "vertical";
+  from?: { model_id: string; room_id: string };
+  to?: { model_id: string; room_id: string };
+  door_id?: string;
+  zone_id?: string;
+  link_id?: string;
+  point: { x: number; y: number };
+  /** Feet walked for this hop (the walk inside the room it leaves plus the crossing). */
+  length?: number;
 }
 
 export function newRoute(): RouteState {
@@ -115,6 +128,8 @@ export function connectivityUrl(
   to: string | null,
   method: string | null = null,
   at: { from?: PlanPoint | null; to?: PlanPoint | null } = {},
+  /** A saved route knows its rooms' models; a plan pick does not. */
+  models: { from?: string | null; to?: string | null } = {},
 ): string | null {
   if (!scope.projectId) return null;
   const q = new URLSearchParams();
@@ -124,6 +139,8 @@ export function connectivityUrl(
     q.set("from", from);
     q.set("to", to);
     if (method) q.set("method", method);
+    if (models.from) q.set("from_model", models.from);
+    if (models.to) q.set("to_model", models.to);
     // A position only means something with the room it is in, so it rides with the
     // route and never alone.
     if (at.from) {
@@ -160,6 +177,39 @@ export function markerPoint(room: Pick<Room, "loops">): { x: number; y: number }
   if (!ring?.length) return null;
   const n = ring.length;
   return { x: ring.reduce((s, p) => s + p.x, 0) / n, y: ring.reduce((s, p) => s + p.y, 0) / n };
+}
+
+/** One line of the route panel: a room the route passes through, and how it got
+ *  there. */
+export interface RouteRow {
+  roomId: string;
+  /** `start` for the first room, else what the hop into it was. */
+  how: "start" | RouteStep["kind"];
+  /** Feet walked for the hop into this room; 0 for the start. */
+  lengthFt: number;
+  /** The room's level changes here, which is where a reader loses their place on a
+   *  plan that shows one level. */
+  levelChanged: boolean;
+  doorId?: string;
+}
+
+/** The rooms of a route in order, with the hop into each. Built from `steps` and
+ *  not from `rooms`, because a step names both its ends and so carries the kind and
+ *  length; `rooms` alone would lose what joined them. */
+export function routeRows(path: RoutePath | null, levelOf: (roomId: string) => string | null | undefined): RouteRow[] {
+  if (!path?.found || path.rooms.length === 0) return [];
+  const rows: RouteRow[] = [{ roomId: path.rooms[0]!.room_id, how: "start", lengthFt: 0, levelChanged: false }];
+  let level = levelOf(path.rooms[0]!.room_id);
+  for (const [i, step] of path.steps.entries()) {
+    const roomId = (step.to ?? path.rooms[i + 1])?.room_id;
+    if (!roomId) continue;
+    const here = levelOf(roomId);
+    const row: RouteRow = { roomId, how: step.kind, lengthFt: step.length ?? 0, levelChanged: here !== level };
+    if (step.door_id) row.doorId = step.door_id;
+    rows.push(row);
+    level = here;
+  }
+  return rows;
 }
 
 /** The panel's one-line reading of a result. */

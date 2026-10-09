@@ -40,12 +40,27 @@ export interface SavedLink {
   note?: string | null;
 }
 
+/** A route somebody saved: the request, never the path (the server derives that). */
+export interface SavedRoute {
+  id: string;
+  name: string;
+  from: { model_id: string; room_id: string };
+  to: { model_id: string; room_id: string };
+  from_at?: { x: number; y: number } | null;
+  to_at?: { x: number; y: number } | null;
+  method?: string | null;
+  /** `#rrggbb`. Part of the record, so everyone sees the route in one colour. */
+  colour: string;
+  note?: string | null;
+}
+
 export interface ConnectionsDoc {
   schema_version: number;
   /** The version a save must name; empty when nothing has been authored. */
   taken_at: string;
   zones: SavedZone[];
   links: SavedLink[];
+  routes: SavedRoute[];
 }
 
 /** What the server assumes when a link states no cost. */
@@ -198,10 +213,25 @@ export interface LinkBody {
 export interface DocBody {
   zones: ZoneBody[];
   links: LinkBody[];
+  routes: SavedRoute[];
 }
 
 function zoneBody(z: SavedZone): ZoneBody {
   return { id: z.id, name: z.name, kind: "open", rooms: z.rooms, note: z.note ?? null };
+}
+
+function routeBody(r: SavedRoute): SavedRoute {
+  return {
+    id: r.id,
+    name: r.name,
+    from: r.from,
+    to: r.to,
+    from_at: r.from_at ?? null,
+    to_at: r.to_at ?? null,
+    method: r.method ?? null,
+    colour: r.colour,
+    note: r.note ?? null,
+  };
 }
 
 function linkBody(l: SavedLink): LinkBody {
@@ -213,26 +243,121 @@ function linkBody(l: SavedLink): LinkBody {
 export function bodyAfterSave(doc: ConnectionsDoc, edit: ZoneEdit): DocBody {
   const zones = doc.zones.map(zoneBody);
   const links = doc.links.map(linkBody);
+  const routes = doc.routes.map(routeBody);
   if (edit.kind === "link") {
     const [a, b] = edit.members as [Member, Member];
     const cost = parseCost(edit.costFt);
     const id = edit.id ?? idFor(`link ${a.room_id} ${b.room_id}`, new Set(links.map((l) => l.id)));
     const next: LinkBody = { id, a, b, cost_ft: cost === "bad" ? null : cost };
-    return { zones, links: edit.id === null ? [...links, next] : links.map((l) => (l.id === id ? next : l)) };
+    return { zones, routes, links: edit.id === null ? [...links, next] : links.map((l) => (l.id === id ? next : l)) };
   }
   const id = edit.id ?? idFor(edit.name, new Set(zones.map((z) => z.id)));
   const next: ZoneBody = { id, name: edit.name.trim(), kind: "open", rooms: edit.members };
-  return { links, zones: edit.id === null ? [...zones, next] : zones.map((z) => (z.id === id ? next : z)) };
+  return { links, routes, zones: edit.id === null ? [...zones, next] : zones.map((z) => (z.id === id ? next : z)) };
 }
 
 /** The lists after deleting one zone. */
 export function bodyAfterDeleteZone(doc: ConnectionsDoc, id: string): DocBody {
-  return { zones: doc.zones.filter((z) => z.id !== id).map(zoneBody), links: doc.links.map(linkBody) };
+  return {
+    zones: doc.zones.filter((z) => z.id !== id).map(zoneBody),
+    links: doc.links.map(linkBody),
+    routes: doc.routes.map(routeBody),
+  };
 }
 
 /** The lists after deleting one link. */
 export function bodyAfterDeleteLink(doc: ConnectionsDoc, id: string): DocBody {
-  return { zones: doc.zones.map(zoneBody), links: doc.links.filter((l) => l.id !== id).map(linkBody) };
+  return {
+    zones: doc.zones.map(zoneBody),
+    links: doc.links.filter((l) => l.id !== id).map(linkBody),
+    routes: doc.routes.map(routeBody),
+  };
+}
+
+/** Colours a saved route may be given, picked to be told apart on the plan's paper
+ *  and ink in both themes. A route takes the least-used one when saved, and the
+ *  reader can replace it with a colour of their own. */
+export const ROUTE_COLOURS = ["#d9480f", "#1c7ed6", "#2f9e44", "#ae3ec9", "#e8a50c", "#0b7285"] as const;
+
+/** The first palette colour no saved route uses, else the one used least. */
+export function nextRouteColour(doc: ConnectionsDoc | null): string {
+  const used = new Map<string, number>(ROUTE_COLOURS.map((c) => [c, 0]));
+  for (const r of doc?.routes ?? []) {
+    const c = r.colour.toLowerCase();
+    if (used.has(c)) used.set(c, used.get(c)! + 1);
+  }
+  let best: string = ROUTE_COLOURS[0];
+  for (const c of ROUTE_COLOURS) if (used.get(c)! < used.get(best)!) best = c;
+  return best;
+}
+
+/** What the route tool hands over to be saved. The rooms are bare ids because the
+ *  plan does not know models; the server resolves them and refuses an id two models
+ *  share. */
+export interface RouteDraft {
+  name: string;
+  colour: string;
+  from: string;
+  to: string;
+  fromAt: { x: number; y: number } | null;
+  toAt: { x: number; y: number } | null;
+  method: string | null;
+}
+
+/** Why a draft cannot be saved yet, or `null`. */
+export function whyRouteNotSavable(draft: Pick<RouteDraft, "name" | "from" | "to">): string | null {
+  if (draft.name.trim() === "") return "Give the route a name.";
+  if (!draft.from || !draft.to) return "Place a start and an end first.";
+  return null;
+}
+
+/** The lists after saving a new route. */
+export function bodyAfterSaveRoute(doc: ConnectionsDoc, draft: RouteDraft): DocBody {
+  const routes = doc.routes.map(routeBody);
+  const id = idFor(draft.name, new Set(routes.map((r) => r.id)));
+  // A bare room has no model yet: a blank one is the wire's "not named", which the
+  // server resolves.
+  const next: SavedRoute = {
+    id,
+    name: draft.name.trim(),
+    from: { model_id: "", room_id: draft.from },
+    to: { model_id: "", room_id: draft.to },
+    from_at: draft.fromAt,
+    to_at: draft.toAt,
+    method: draft.method,
+    colour: draft.colour,
+  };
+  return { zones: doc.zones.map(zoneBody), links: doc.links.map(linkBody), routes: [...routes, next] };
+}
+
+/** The lists after changing one saved route's colour. */
+export function bodyAfterRecolourRoute(doc: ConnectionsDoc, id: string, colour: string): DocBody {
+  return {
+    zones: doc.zones.map(zoneBody),
+    links: doc.links.map(linkBody),
+    routes: doc.routes.map((r) => routeBody(r.id === id ? { ...r, colour } : r)),
+  };
+}
+
+/** The lists after deleting one saved route. */
+export function bodyAfterDeleteRoute(doc: ConnectionsDoc, id: string): DocBody {
+  return {
+    zones: doc.zones.map(zoneBody),
+    links: doc.links.map(linkBody),
+    routes: doc.routes.filter((r) => r.id !== id).map(routeBody),
+  };
+}
+
+/** The rooms already in a saved open zone, by room id, with the index of the zone
+ *  they are in, so a neighbour can be tinted apart. The zone being edited is left
+ *  out: it is drawn from the working set, which may differ from what was saved. */
+export function roomsInOtherZones(doc: ConnectionsDoc | null, editingId: string | null): Map<string, number> {
+  const out = new Map<string, number>();
+  (doc?.zones ?? []).forEach((z, i) => {
+    if (z.id === editingId) return;
+    for (const r of z.rooms) if (!out.has(r.room_id)) out.set(r.room_id, i);
+  });
+  return out;
 }
 
 export function connectionsUrl(scope: Scope): string | null {

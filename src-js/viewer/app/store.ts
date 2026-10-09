@@ -22,7 +22,7 @@ import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
 import { newEdit, toggleMember, type ConnectionsDoc, type ZoneEdit } from "../connections.js";
-import { newRoute, pickEndpoint, type PlanPoint, type RouteState } from "../route.js";
+import { newRoute, pickEndpoint, type PlanPoint, type RouteResult, type RouteState } from "../route.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
  *  enum of HTTP states: "waiting for data" (a 204 — the project exists and
@@ -262,7 +262,20 @@ export interface ViewerState {
   toolFocus: string | null;
   /** The project's authored connections, as last read, for the open-zone editor
    *  and for whatever reads that depend on them. `doc` is `null` until read. */
-  connections: { projectId: string | null; doc: ConnectionsDoc | null; error: string | null };
+  connections: {
+    projectId: string | null;
+    doc: ConnectionsDoc | null;
+    error: string | null;
+    /** Room ids no door reaches, read while an editor is open: the worklist for
+     *  new zones. `null` until read. */
+    isolated?: ReadonlySet<string> | null;
+  };
+  /** Saved routes drawn on every zone at once, and what the server last answered
+   *  for each. Page state and not a zone's, because a route crosses levels and a
+   *  zone shows one: each zone draws the slice on its own level. Which are shown is
+   *  per viewer (a convenience, not the shared record); the routes themselves are
+   *  in `connections.doc`. */
+  savedRoutes: { shown: ReadonlySet<string>; results: Readonly<Record<string, RouteResult>> };
 }
 
 const initial: ViewerState = {
@@ -293,7 +306,8 @@ const initial: ViewerState = {
   hiddenProperties: {},
   hoverProperties: {},
   toolFocus: null,
-  connections: { projectId: null, doc: null, error: null },
+  connections: { projectId: null, doc: null, error: null, isolated: null },
+  savedRoutes: { shown: new Set(), results: {} },
 };
 
 let state: ViewerState = initial;
@@ -542,7 +556,39 @@ export function patchZoneEdit(id: string, next: ZoneEdit): void {
 
 /** The project's authored connections, as last read. */
 export function setConnections(connections: ViewerState["connections"]): void {
-  setState({ connections });
+  // `isolated` is read separately from the document, so a save or a re-read of
+  // the document must not wipe it.
+  setState({ connections: { isolated: state.connections.isolated ?? null, ...connections } });
+}
+
+/** The rooms no door reaches, as last read for an open editor. */
+export function setIsolated(projectId: string | null, isolated: ReadonlySet<string> | null): void {
+  setState({ connections: { ...state.connections, projectId, isolated } });
+}
+
+/** Show or hide one saved route on the plan. */
+export function setSavedRouteShown(id: string, on: boolean): void {
+  const shown = new Set(state.savedRoutes.shown);
+  if (on) shown.add(id);
+  else shown.delete(id);
+  setState({ savedRoutes: { ...state.savedRoutes, shown } });
+}
+
+/** Record what the server answered for one shown route. */
+export function setSavedRouteResult(id: string, result: RouteResult): void {
+  setState({ savedRoutes: { ...state.savedRoutes, results: { ...state.savedRoutes.results, [id]: result } } });
+}
+
+/** Forget routes that are no longer saved (deleted, or another project). */
+export function pruneSavedRoutes(keep: ReadonlySet<string>): void {
+  const { shown, results } = state.savedRoutes;
+  if ([...shown].every((id) => keep.has(id)) && Object.keys(results).every((id) => keep.has(id))) return;
+  setState({
+    savedRoutes: {
+      shown: new Set([...shown].filter((id) => keep.has(id))),
+      results: Object.fromEntries(Object.entries(results).filter(([id]) => keep.has(id))),
+    },
+  });
 }
 
 /** Patch one zone's route; a no-op when its tool is off. */
