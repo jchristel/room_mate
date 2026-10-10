@@ -2993,6 +2993,14 @@ pub struct ConnectivityQuery {
     pub to_x: Option<String>,
     #[serde(default)]
     pub to_y: Option<String>,
+    /// The width in mm of an object that has to make the trip. A door or open wall
+    /// narrower than this is not passable; 0 or absent checks nothing.
+    #[serde(default)]
+    pub width_mm: Option<String>,
+    /// What the frame takes off a door's footprint width to give its clear opening, in
+    /// mm. Absent means the default (150).
+    #[serde(default)]
+    pub frame_mm: Option<String>,
     /// `distance` (default) or `hops`.
     #[serde(default)]
     pub metric: Option<String>,
@@ -3052,10 +3060,17 @@ pub async fn get_project_connectivity(
         to_at,
     )
     .map_err(map_service_error)?;
+    let (clear_width_mm, frame_allowance_mm) = connectivity::width_params(
+        number(query.width_mm.as_deref(), "width_mm")?,
+        number(query.frame_mm.as_deref(), "frame_mm")?,
+    )
+    .map_err(map_service_error)?;
     let scope = connectivity::ConnectivityScope {
         building: query.building.as_deref(),
         milestone: query.milestone.as_deref(),
         door_filter: door_filter.as_ref(),
+        clear_width_mm,
+        frame_allowance_mm,
     };
 
     let result = connectivity::assemble_connectivity(
@@ -3980,6 +3995,8 @@ mod tests {
 
     fn connectivity_query(from: Option<&str>, to: Option<&str>) -> ConnectivityQuery {
         ConnectivityQuery {
+            width_mm: None,
+            frame_mm: None,
             building: None,
             milestone: None,
             door_filter: None,

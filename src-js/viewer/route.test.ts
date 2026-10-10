@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   connectivityUrl,
+  describeClearance,
   describeResult,
+  parseWidth,
   markerPoint,
   newRoute,
   pickEndpoint,
@@ -214,5 +216,55 @@ describe("connectivityUrl with saved rooms", () => {
     const url = connectivityUrl({ projectId: "p", building: null, milestone: null } as never, "1", "2", null, {}, { from: "m1", to: "m2" });
     expect(url).toContain("from_model=m1");
     expect(url).toContain("to_model=m2");
+  });
+});
+
+describe("the width of the object", () => {
+  it("reads what was typed: blank and 0 check nothing, a number is a width, anything else is refused", () => {
+    expect(parseWidth("")).toBeNull();
+    expect(parseWidth("  ")).toBeNull();
+    expect(parseWidth("0")).toBeNull();
+    expect(parseWidth("1200")).toBe(1200);
+    expect(parseWidth("900.5")).toBe(900.5);
+    expect(parseWidth("-5")).toBe("bad");
+    expect(parseWidth("wide")).toBe("bad");
+    expect(parseWidth("1e9")).toBe("bad");
+  });
+
+  it("asks the server for a width only when there is one, and only with a route", () => {
+    const scope = { projectId: "p", building: null, milestone: null };
+    expect(connectivityUrl(scope, "1", "2", null, {}, {}, 1200)).toContain("width_mm=1200");
+    expect(connectivityUrl(scope, "1", "2", null, {}, {}, null)).not.toContain("width_mm");
+    expect(connectivityUrl(scope, "1", "2", null, {}, {}, 0)).not.toContain("width_mm");
+    expect(connectivityUrl(scope, null, null, null, {}, {}, 1200)).not.toContain("width_mm");
+  });
+
+  it("says the tightest hop, a wider route if there is one, and what was not checked", () => {
+    const door = { width_mm: 912.4, kind: "door" as const, door_id: "d9" };
+    expect(describeClearance({ frame_allowance_mm: 150, narrowest: door, unchecked_hops: 0 })).toBe(
+      "narrowest door d9, about 912 mm",
+    );
+    expect(
+      describeClearance({
+        frame_allowance_mm: 150,
+        narrowest: door,
+        widest_possible: { width_mm: 1500, kind: "door", door_id: "d2" },
+        unchecked_hops: 2,
+      }),
+    ).toBe("narrowest door d9, about 912 mm · up to about 1500 mm fits by another route · 2 hops not checked");
+    expect(describeClearance({ frame_allowance_mm: 150, unchecked_hops: 1 })).toBe("1 hop not checked");
+    expect(describeClearance(undefined)).toBe("");
+  });
+
+  it("does not call the limit of a blocked trip 'another route': there is none", () => {
+    const limit = { width_mm: 905, kind: "door" as const, door_id: "d1" };
+    expect(describeClearance({ frame_allowance_mm: 150, widest_possible: limit, unchecked_hops: 0 })).toBe("");
+  });
+
+  it("does not offer a 'wider route' that is the one already taken", () => {
+    const door = { width_mm: 900, kind: "door" as const, door_id: "d1" };
+    expect(describeClearance({ frame_allowance_mm: 150, narrowest: door, widest_possible: door, unchecked_hops: 0 })).toBe(
+      "narrowest door d1, about 900 mm",
+    );
   });
 });

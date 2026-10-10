@@ -28,6 +28,9 @@ export interface RouteState {
   endAt: PlanPoint | null;
   /** The routing method asked for, or `null` for the server's default. */
   method: string | null;
+  /** The width in mm of the object that has to make the trip, as typed, so a
+   *  half-typed number is not lost. Blank or 0 checks nothing. */
+  width: string;
   /** Every method the server offers, learned from its first answer, so the picker
    *  is whatever the server supports and never a list kept here. */
   methods: readonly RouteMethod[];
@@ -53,7 +56,26 @@ export type RouteResult =
   | { state: "idle" }
   | { state: "loading" }
   | { state: "error"; message: string }
-  | { state: "done"; path: RoutePath };
+  | { state: "done"; path: RoutePath; clearance?: Clearance };
+
+/** One hop's width, as the server reports it. */
+export interface WidthLimit {
+  width_mm: number;
+  kind: "door" | "zone" | "vertical";
+  door_id?: string;
+  zone_id?: string;
+}
+
+/** What the route's widths say. A door's width is an ESTIMATE (footprint less a frame
+ *  allowance); a level change and a door with no footprint are not checked; the width
+ *  of a corridor inside a room is not checked at all. */
+export interface Clearance {
+  asked_mm?: number;
+  frame_allowance_mm: number;
+  narrowest?: WidthLimit;
+  unchecked_hops: number;
+  widest_possible?: WidthLimit;
+}
 
 /** One routing method, as the server lists it. */
 export interface RouteMethod {
@@ -94,7 +116,7 @@ export interface RouteStep {
 }
 
 export function newRoute(): RouteState {
-  return { start: null, end: null, startAt: null, endAt: null, method: null, methods: [], unreachable: null, notice: null, result: { state: "idle" } };
+  return { start: null, end: null, startAt: null, endAt: null, method: null, width: "", methods: [], unreachable: null, notice: null, result: { state: "idle" } };
 }
 
 /**
@@ -130,6 +152,8 @@ export function connectivityUrl(
   at: { from?: PlanPoint | null; to?: PlanPoint | null } = {},
   /** A saved route knows its rooms' models; a plan pick does not. */
   models: { from?: string | null; to?: string | null } = {},
+  /** The width of the object that has to make the trip, in mm; 0 or null checks nothing. */
+  widthMm: number | null = null,
 ): string | null {
   if (!scope.projectId) return null;
   const q = new URLSearchParams();
@@ -139,6 +163,7 @@ export function connectivityUrl(
     q.set("from", from);
     q.set("to", to);
     if (method) q.set("method", method);
+    if (widthMm !== null && widthMm > 0) q.set("width_mm", String(widthMm));
     if (models.from) q.set("from_model", models.from);
     if (models.to) q.set("to_model", models.to);
     // A position only means something with the room it is in, so it rides with the
@@ -210,6 +235,40 @@ export function routeRows(path: RoutePath | null, levelOf: (roomId: string) => s
     level = here;
   }
   return rows;
+}
+
+/** The width typed, in mm: `null` for blank or 0 (no check), the number when it is one
+ *  above zero, and `"bad"` for anything else, so the bar can say so instead of asking
+ *  the server a question it will refuse. */
+export function parseWidth(typed: string): number | null | "bad" {
+  if (typed.trim() === "") return null;
+  const n = Number(typed);
+  if (!Number.isFinite(n) || n < 0 || n > 100_000) return "bad";
+  return n === 0 ? null : n;
+}
+
+const widthOf = (l: WidthLimit) => `${Math.round(l.width_mm)} mm`;
+
+function limitName(l: WidthLimit): string {
+  return l.kind === "door" ? `door ${l.door_id ?? "?"}` : l.kind === "zone" ? "an open area's wall" : "a level change";
+}
+
+/** What a reader should know about the widths of a route: the tightest hop, how many
+ *  hops could not be checked, and whether a wider route exists. Empty when there is
+ *  nothing to say. Said in estimates, because a door's width is one. */
+export function describeClearance(c: Clearance | undefined): string {
+  if (!c) return "";
+  const parts: string[] = [];
+  if (c.narrowest) parts.push(`narrowest ${limitName(c.narrowest)}, about ${widthOf(c.narrowest)}`);
+  // Only against a route that WAS found: when none was, the reason already says what
+  // fits, and "another route" would be a route that does not exist.
+  if (c.narrowest && c.widest_possible && c.widest_possible.width_mm > c.narrowest.width_mm + 1) {
+    parts.push(`up to about ${widthOf(c.widest_possible)} fits by another route`);
+  }
+  if (c.unchecked_hops > 0) {
+    parts.push(`${c.unchecked_hops} hop${c.unchecked_hops === 1 ? "" : "s"} not checked`);
+  }
+  return parts.join(" · ");
 }
 
 /** The panel's one-line reading of a result. */

@@ -156,6 +156,9 @@ pub struct SavedRoute {
     /// A routing method id; absent means the server's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+    /// The width in mm of the object this route was saved for; absent checks nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_mm: Option<f64>,
     /// `#rrggbb`.
     pub colour: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -243,6 +246,8 @@ pub struct RouteInput {
     pub to_at: Option<RoutePoint>,
     #[serde(default)]
     pub method: Option<String>,
+    #[serde(default)]
+    pub width_mm: Option<f64>,
     pub colour: String,
     #[serde(default)]
     pub note: Option<String>,
@@ -450,6 +455,9 @@ pub fn validate_routes(routes: &[SavedRoute]) -> Result<(), ConnectionsError> {
         if !is_hex_colour(&route.colour) {
             return bad(format!("route {name:?} colour {:?} must look like #1a2b3c", route.colour));
         }
+        if route.width_mm.is_some_and(|w| !w.is_finite() || w <= 0.0 || w > 100_000.0) {
+            return bad(format!("route {name:?} width must be above 0 and at most 100000 mm"));
+        }
         for p in [route.from_at, route.to_at].into_iter().flatten() {
             if !p.x.is_finite() || !p.y.is_finite() {
                 return bad(format!("route {name:?} has a start or end point that is not a number"));
@@ -580,6 +588,7 @@ pub fn resolve_routes(
                 from_at: r.from_at,
                 to_at: r.to_at,
                 method: r.method.filter(|m| !m.trim().is_empty()),
+                width_mm: r.width_mm.filter(|w| *w != 0.0),
                 colour: r.colour.to_ascii_lowercase(),
                 note: r.note,
             })
@@ -798,6 +807,7 @@ mod tests {
             from_at: Some(RoutePoint { x: 1.0, y: 2.0 }),
             to_at: None,
             method: Some(String::new()),
+            width_mm: None,
             colour: colour.to_string(),
             note: None,
         }
@@ -833,6 +843,28 @@ mod tests {
         )
         .unwrap();
         assert!(load(&dir, "p1").unwrap().routes.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_routes_width_round_trips_and_a_nonsense_width_is_refused() {
+        let dir = temp_dir("route-width");
+        let mut r = route("r1", "#aa00cc");
+        r.width_mm = Some(1200.0);
+        let saved = save(&state(), &dir, "p1", with_routes("", Some(vec![r]))).unwrap();
+        assert_eq!(saved.routes[0].width_mm, Some(1200.0));
+        assert_eq!(load(&dir, "p1").unwrap().routes[0].width_mm, Some(1200.0));
+        // 0 is "no check", stored as absent rather than as a width of nothing.
+        let mut zero = route("r2", "#aa00cc");
+        zero.width_mm = Some(0.0);
+        let routes = resolve_routes(&state(), "p1", Some(vec![zero])).unwrap().unwrap();
+        assert_eq!(routes[0].width_mm, None);
+        for bad in [-5.0, f64::NAN, 200_000.0] {
+            let mut r = route("r3", "#aa00cc");
+            r.width_mm = Some(bad);
+            let routes = resolve_routes(&state(), "p1", Some(vec![r])).unwrap().unwrap();
+            assert!(validate_routes(&routes).is_err(), "{bad}");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

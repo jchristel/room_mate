@@ -14,7 +14,7 @@
 import { useEffect } from "react";
 
 import { connectionsUrl } from "../connections.js";
-import { connectivityUrl, type RoutePath, type RouteResult } from "../route.js";
+import { connectivityUrl, type Clearance, type RoutePath, type RouteResult } from "../route.js";
 import { request } from "./connectionsApi.js";
 import { pruneSavedRoutes, setConnections, setSavedRouteResult } from "./store.js";
 import { useViewer } from "./useViewer.js";
@@ -64,6 +64,7 @@ export function SavedRoutesLayer(): null {
         route.method ?? null,
         { from: route.from_at ?? null, to: route.to_at ?? null },
         { from: route.from.model_id, to: route.to.model_id },
+        route.width_mm ?? null,
       );
       if (!routeUrl) continue;
       setSavedRouteResult(route.id, { state: "loading" });
@@ -84,8 +85,10 @@ async function answer(url: string, signal: AbortSignal): Promise<RouteResult> {
     const res = await fetch(url, { cache: "no-store", signal });
     if (res.status === 204) return { state: "error", message: "Nothing has been pushed for this project." };
     if (!res.ok) return { state: "error", message: (await res.text()).trim() || `${url} -> ${res.status}` };
-    const path = ((await res.json()) as { path?: RoutePath | null }).path;
-    return path ? { state: "done", path } : { state: "error", message: "The server returned no route." };
+    const body = (await res.json()) as { path?: RoutePath | null; clearance?: Clearance };
+    return body.path
+      ? { state: "done", path: body.path, ...(body.clearance ? { clearance: body.clearance } : {}) }
+      : { state: "error", message: "The server returned no route." };
   } catch (err) {
     return { state: "error", message: signal.aborted ? "" : `Could not read ${url}: ${String(err)}` };
   }
