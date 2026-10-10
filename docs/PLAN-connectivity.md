@@ -72,6 +72,21 @@ A hop between rooms stacked at one position has no length on the plan and draws 
 stack view is where it is read. `levels_between` on those links reported 3 skipped levels for a
 correct floor-to-floor link, the interleaving the advisory already warns about.
 
+**Disconnects and a hub on an open area (built 2026-10-10).** An open area opens EVERY wall two
+of its members share, so three bays along a corridor, which touch each other as well as the
+corridor, let a route go through the bays. A zone now carries `disconnects` (pairs of its own
+members whose wall stays closed) and an optional `hub` (members connect only through it). In the
+editor: **Cut** (click a room, then the room next to it; the same pair again reopens it) and
+**Only through…** (click the corridor). Cuts are drawn as a red cross on the plan and listed as
+chips. The hub is stored as a room, not as the pairs it implies, so a member added later is held to
+it. Measured on RHH's `t2` (two corridors, three treatment bays): the route between the end bays
+went through the middle bay, and with the hub on `CORRIDOR REN060` it goes along the corridor.
+Rules worth knowing: a cut or hub must name a member (the editor drops them when the member
+leaves, the server refuses them otherwise); a hub that has left the model is reported
+(`hub_stale`) and NOT applied, because closing every wall would silently switch the zone off;
+`unlinked` is counted after the cuts, so a bay cut from every neighbour is listed.
+Every other save carries cuts through, and a test pins it.
+
 **The editor draws its context.** While an open-zone editor is open, saved zones are
 tinted by index under the zone being drawn, and rooms no door reaches and no zone
 covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).

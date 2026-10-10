@@ -15,6 +15,7 @@
 import type { CSSProperties } from "react";
 
 import { roomsInOtherZones, type ZoneEdit } from "../connections.js";
+import { markerPoint } from "../route.js";
 import { useViewer } from "./useViewer.js";
 
 /** Hues cycle past this many saved zones; two zones sharing one hue are still
@@ -55,8 +56,28 @@ export function OpenZoneOverlay({ levelId, edit }: { levelId: string | null; edi
         : null}
       {onLevel.map((r) => {
         const d = members.has(r.id) ? pathOf(r) : null;
-        return d ? <path key={r.id} className="open-zone-room" d={d} /> : null;
+        // The hub and a room held for a cut are told apart from the plain members.
+        const role = r.id === edit.hub ? " hub" : r.id === edit.cutFrom ? " held" : "";
+        return d ? <path key={r.id} className={`open-zone-room${role}`} d={d} /> : null;
       })}
+      {/* A closed wall: a line between the two rooms, crossed in the middle, so it
+          reads as "no way through here" on a plan where the rooms are filled. */}
+      {edit.kind === "open"
+        ? edit.cuts.map((c) => {
+            const [ra, rb] = [onLevel.find((r) => r.id === c.a), onLevel.find((r) => r.id === c.b)];
+            const [pa, pb] = [ra && markerPoint(ra), rb && markerPoint(rb)];
+            if (!pa || !pb) return null;
+            const [mx, my] = [(pa.x + pb.x) / 2, -(pa.y + pb.y) / 2];
+            const s = Math.max(Math.hypot(pa.x - pb.x, pa.y - pb.y) * 0.08, 0.4);
+            return (
+              <g key={`${c.a}|${c.b}`} className="open-zone-cut">
+                <line x1={pa.x} y1={-pa.y} x2={pb.x} y2={-pb.y} />
+                <line x1={mx - s} y1={my - s} x2={mx + s} y2={my + s} />
+                <line x1={mx - s} y1={my + s} x2={mx + s} y2={my - s} />
+              </g>
+            );
+          })
+        : null}
     </g>
   );
 }

@@ -17,7 +17,7 @@ export function SavedRoutesOverlay({ zoneId, levelId }: { zoneId: string; levelI
   if (!doc) return null;
 
   const fitted = handleOf(zoneId)?.fitted;
-  const r = fitted ? Math.max(fitted.w, fitted.h) * 0.008 : 1;
+  const r = fitted ? Math.max(fitted.w, fitted.h) * 0.004 : 0.5;
 
   return (
     <g className="saved-routes-overlay">

@@ -17,7 +17,9 @@ import { AdjacencyBand } from "./AdjacencyBand.js";
 import { BandDivide, BandSplit, RegionDrag } from "./DragHandles.js";
 import { AreasBand } from "./AreasBand.js";
 import { QaBand } from "./QaBand.js";
+import { ConnectionsPanel } from "./ConnectionsPanel.js";
 import { Header } from "./Header.js";
+import { RoutesPanel } from "./RoutesPanel.js";
 import { SavedRoutesLayer } from "./SavedRoutesLayer.js";
 import { Inspector } from "./inspector/Inspector.js";
 import { PickList } from "./PickList.js";
@@ -41,6 +43,12 @@ export function App() {
       <SavedRoutesLayer />
       <Header />
       <div id="mainRow">
+        {/* Left of the plan: the connections table while an editor is open and the
+            saved routes while a route tool is. Empty, it costs no width. */}
+        <div id="leftPanels">
+          <ConnectionsPanel />
+          <RoutesPanel />
+        </div>
         {/* The column count follows the zone count, capped at 3 — beyond that
             the zones wrap into rows rather than becoming slivers. The old page
             wrote this same rule onto the element from JS. */}

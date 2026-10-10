@@ -14,6 +14,13 @@ import {
   removeMember,
   roomsInOtherZones,
   bodyAfterAddLink,
+  clearHub,
+  connectionRows,
+  pickForEdit,
+  removeCut,
+  setTool,
+  routeTableRows,
+  levelsText,
   bodyAfterDeleteRoute,
   bodyAfterRecolourRoute,
   bodyAfterSaveRoute,
@@ -238,5 +245,186 @@ describe("the stack editor kind", () => {
     expect(body.zones).toHaveLength(2);
     expect(bodyAfterAddLink(doc, { room_id: "x", model_id: "m" }, { room_id: "y", model_id: "m" }).links.map((l) => l.id))
       .toEqual(["lift-1-2", "link-x-y"]);
+  });
+});
+
+describe("connectionRows", () => {
+  const name = (id: string) => ({ p: "LIFT P", q: "LIFT Q" })[id] ?? id;
+
+  it("lists open areas first and then vertical links, each with its type", () => {
+    expect(connectionRows(doc, name).map((r) => [r.kind, r.name, r.type])).toEqual([
+      ["open", "East bays", "Open area"],
+      ["open", "West bays", "Open area"],
+      ["link", "LIFT P ↔ LIFT Q", "Vertical"],
+    ]);
+  });
+
+  it("names a link by its two rooms, and keeps the id of one the page no longer holds", () => {
+    const stale = { ...doc, links: [{ id: "x", a: { model_id: "m", room_id: "gone" }, b: { model_id: "m", room_id: "q" } }] };
+    expect(connectionRows(stale, name).find((r) => r.kind === "link")!.name).toBe("gone ↔ LIFT Q");
+  });
+
+  it("sorts names the way a reader counts, and handles no document", () => {
+    const many = { ...doc, zones: ["Bay 10", "Bay 2", "Bay 1"].map((n) => ({ id: n, name: n, kind: "open" as const, rooms: [] })) };
+    expect(connectionRows(many, name).filter((r) => r.kind === "open").map((r) => r.name)).toEqual(["Bay 1", "Bay 2", "Bay 10"]);
+    expect(connectionRows(null, name)).toEqual([]);
+  });
+});
+
+describe("the level column", () => {
+  const level = (id: string) =>
+    ({ a: { name: "LEVEL 1", elevation: 0 }, b: { name: "LEVEL 1", elevation: 0 }, c: { name: "LEVEL 2", elevation: 3000 }, p: { name: "LEVEL 1", elevation: 0 }, q: { name: "LEVEL 2", elevation: 3000 } })[id as "a"] ?? null;
+
+  it("names the one level an open area lies on, and each level once", () => {
+    const rows = connectionRows(doc, (id) => id, level);
+    expect(rows.find((r) => r.id === "east")!.level).toBe("LEVEL 1");
+  });
+
+  it("lists the levels lowest first when an open area spans two", () => {
+    const spans = { ...doc, zones: [{ id: "s", name: "S", kind: "open" as const, rooms: [{ model_id: "m", room_id: "c" }, { model_id: "m", room_id: "a" }] }] };
+    expect(connectionRows(spans, (id) => id, level)[0]!.level).toBe("LEVEL 1, LEVEL 2");
+  });
+
+  it("shows the two levels a link joins, and nothing for rooms the page does not hold", () => {
+    expect(connectionRows(doc, (id) => id, level).find((r) => r.kind === "link")!.level).toBe("LEVEL 1 ↔ LEVEL 2");
+    expect(connectionRows(doc, (id) => id).every((r) => r.level === "")).toBe(true);
+  });
+
+  it("says a count rather than a long list", () => {
+    const l = (n: number) => ({ name: "L" + n, elevation: n });
+    expect(levelsText([l(1), l(2), l(3)])).toBe("L1, L2, L3");
+    expect(levelsText([l(1), l(2), l(3), l(4)])).toBe("4 levels");
+  });
+});
+
+describe("routeTableRows", () => {
+  const route = (id: string, name: string, from: string, to: string) => ({
+    id,
+    name,
+    from: { model_id: "m", room_id: from },
+    to: { model_id: "m", room_id: to },
+    colour: "#d9480f",
+  });
+  const docWith = { ...doc, routes: [route("r2", "Route 10", "a", "c"), route("r1", "Route 2", "a", "b")] };
+  const level = (id: string) =>
+    ({ a: { name: "LEVEL 1", elevation: 0 }, b: { name: "LEVEL 1", elevation: 0 }, c: { name: "LEVEL 3", elevation: 6000 } })[id as "a"] ?? null;
+
+  it("names where each route runs: one level, or from the start's to the end's", () => {
+    const rows = routeTableRows(docWith, level);
+    expect(rows.map((r) => [r.name, r.levels])).toEqual([
+      ["Route 2", "LEVEL 1"],
+      ["Route 10", "LEVEL 1 → LEVEL 3"],
+    ]);
+    expect(rows[0]!.colour).toBe("#d9480f");
+  });
+
+  it("keeps the order a route runs in, even downhill", () => {
+    const down = { ...doc, routes: [route("r", "Down", "c", "a")] };
+    expect(routeTableRows(down, level)[0]!.levels).toBe("LEVEL 3 → LEVEL 1");
+  });
+
+  it("is empty for no routes and says nothing for rooms the page does not hold", () => {
+    expect(routeTableRows(null, level)).toEqual([]);
+    expect(routeTableRows(docWith, () => null).every((r) => r.levels === "")).toBe(true);
+  });
+});
+
+describe("disconnects and the hub", () => {
+  const withMembers = (ids: string[]) => ids.reduce((e, id) => toggleMember(e, id), newEdit("open"));
+  const bays = withMembers(["b1", "b2", "b3", "cor"]);
+
+  it("closes the wall between two members with two picks in the cut tool, and keeps the tool on", () => {
+    const e1 = pickForEdit(setTool(bays, "cut"), "b1");
+    expect(e1.cutFrom).toBe("b1");
+    const e2 = pickForEdit(e1, "b2");
+    expect(e2.cuts).toEqual([{ a: "b1", b: "b2" }]);
+    expect(e2.cutFrom).toBeNull();
+    expect(e2.tool).toBe("cut");
+  });
+
+  it("opens a closed wall again when the same pair is cut twice, either way round", () => {
+    const cut = (e: typeof bays, a: string, b: string) => pickForEdit(pickForEdit(e, a), b);
+    const closed = cut(setTool(bays, "cut"), "b1", "b2");
+    expect(cut(closed, "b2", "b1").cuts).toEqual([]);
+  });
+
+  it("lets go of a half-drawn cut when its room is picked again, and ignores a non-member", () => {
+    const held = pickForEdit(setTool(bays, "cut"), "b1");
+    expect(pickForEdit(held, "b1").cutFrom).toBeNull();
+    const refused = pickForEdit(held, "elsewhere");
+    expect(refused.cuts).toEqual([]);
+    expect(refused.error).toMatch(/already in this open area/);
+  });
+
+  it("names a hub with one pick and goes back to picking; picking it again clears it", () => {
+    const named = pickForEdit(setTool(bays, "hub"), "cor");
+    expect(named.hub).toBe("cor");
+    expect(named.tool).toBe("pick");
+    expect(clearHub(named).hub).toBeNull();
+    expect(pickForEdit(setTool(named, "hub"), "cor").hub).toBeNull();
+  });
+
+  it("ignores the tools for a link, which is two rooms by hand", () => {
+    const link = pickForEdit({ ...newEdit("link"), tool: "cut" }, "x");
+    expect(link.members.map((m) => m.room_id)).toEqual(["x"]);
+    expect(link.cuts).toEqual([]);
+  });
+
+  it("drops the cuts and the hub of a room that leaves the zone", () => {
+    let e = pickForEdit(pickForEdit(setTool(bays, "cut"), "b1"), "b2");
+    e = pickForEdit(setTool(e, "hub"), "cor");
+    const without = toggleMember(e, "b1");
+    expect(without.cuts).toEqual([]);
+    expect(toggleMember(without, "cor").hub).toBeNull();
+    expect(removeMember(e, "b2").cuts).toEqual([]);
+  });
+
+  it("switches a tool off by choosing it again, and drops a half-drawn cut on a change", () => {
+    const cutting = setTool(bays, "cut");
+    expect(setTool(cutting, "cut").tool).toBe("pick");
+    expect(setTool(pickForEdit(cutting, "b1"), "hub").cutFrom).toBeNull();
+  });
+
+  it("saves the cuts and the hub with each room's own model", () => {
+    const saved = { id: "z", name: "Bays", kind: "open" as const, rooms: [{ model_id: "m1", room_id: "b1" }, { model_id: "m2", room_id: "b2" }] };
+    const e = { ...editOf(saved), cuts: [{ a: "b1", b: "b2" }], hub: "b2" };
+    const body = bodyAfterSave({ ...doc, zones: [saved] }, e).zones[0]!;
+    expect(body.disconnects).toEqual([{ a: { room_id: "b1", model_id: "m1" }, b: { room_id: "b2", model_id: "m2" } }]);
+    expect(body.hub).toEqual({ room_id: "b2", model_id: "m2" });
+  });
+
+  it("loads a saved zone's cuts and hub for editing", () => {
+    const saved = {
+      id: "z",
+      name: "Bays",
+      kind: "open" as const,
+      rooms: [{ model_id: "m", room_id: "b1" }, { model_id: "m", room_id: "b2" }],
+      disconnects: [{ a: { model_id: "m", room_id: "b1" }, b: { model_id: "m", room_id: "b2" } }],
+      hub: { model_id: "m", room_id: "b2" },
+    };
+    const e = editOf(saved);
+    expect(e.cuts).toEqual([{ a: "b1", b: "b2" }]);
+    expect(e.hub).toBe("b2");
+  });
+
+  it("carries every zone's cuts and hub through a save of something else", () => {
+    const cutDoc = {
+      ...doc,
+      zones: [
+        {
+          id: "z",
+          name: "Bays",
+          kind: "open" as const,
+          rooms: [{ model_id: "m", room_id: "b1" }, { model_id: "m", room_id: "b2" }],
+          disconnects: [{ a: { model_id: "m", room_id: "b1" }, b: { model_id: "m", room_id: "b2" } }],
+          hub: { model_id: "m", room_id: "b2" },
+        },
+      ],
+    };
+    const keeps = (b: { zones: { disconnects: unknown[]; hub: unknown }[] }) => b.zones[0]!.disconnects.length === 1 && b.zones[0]!.hub !== null;
+    expect(keeps(bodyAfterAddLink(cutDoc, { room_id: "x", model_id: "m" }, { room_id: "y", model_id: "m" }))).toBe(true);
+    expect(keeps(bodyAfterDeleteLink(cutDoc, "lift-1-2"))).toBe(true);
+    expect(keeps(bodyAfterSaveRoute(cutDoc, { name: "R", colour: "#000000", from: "a", to: "b", fromAt: null, toAt: null, method: null }))).toBe(true);
+    expect(keeps(bodyAfterDeleteRoute(cutDoc, "none"))).toBe(true);
   });
 });

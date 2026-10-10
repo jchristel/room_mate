@@ -21,7 +21,7 @@ import type { AreasData } from "../areas.js";
 import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
-import { newEdit, toggleMember, type ConnectionsDoc, type ZoneEdit } from "../connections.js";
+import { newEdit, pickForEdit, type ConnectionsDoc, type ZoneEdit } from "../connections.js";
 import { newRoute, pickEndpoint, type PlanPoint, type RouteResult, type RouteState } from "../route.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
@@ -501,7 +501,7 @@ export function select(
       const zone = state.zones.find((z) => z.id === target)!;
       setState({ toolFocus: target });
       if (zone.route) patchZoneRoute(target, pickEndpoint(zone.route, id, at));
-      else if (zone.edit) patchZoneEdit(target, toggleMember(zone.edit, id));
+      else if (zone.edit) patchZoneEdit(target, pickForEdit(zone.edit, id));
       return;
     }
   }

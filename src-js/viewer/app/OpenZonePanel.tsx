@@ -18,15 +18,14 @@ import { useEffect, useMemo } from "react";
 
 import {
   addMembers,
-  bodyAfterDeleteLink,
-  bodyAfterDeleteZone,
   bodyAfterSave,
   connectionsUrl,
   DEFAULT_LEVEL_COST_FT,
-  editOf,
-  editOfLink,
   newEdit,
+  clearHub,
+  removeCut,
   removeMember,
+  setTool,
   whyNotSavable,
   type ConnectionsDoc,
   type DocBody,
@@ -137,18 +136,6 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
   };
 
   const save = () => send(bodyAfterSave(doc!, edit), () => patchZoneEdit(zoneId, newEdit(edit.kind)));
-  const removeZone = (id: string, name: string) => {
-    if (!window.confirm(`Delete the open zone "${name}"? Routes that used it will stop using it.`)) return;
-    void send(bodyAfterDeleteZone(doc!, id), () =>
-      patchZoneEdit(zoneId, edit.id === id ? newEdit(edit.kind) : { ...edit, saving: false }),
-    );
-  };
-  const removeLink = (id: string) => {
-    if (!window.confirm("Delete this vertical link? Routes that used it will stop using it.")) return;
-    void send(bodyAfterDeleteLink(doc!, id), () =>
-      patchZoneEdit(zoneId, edit.id === id ? newEdit(edit.kind) : { ...edit, saving: false }),
-    );
-  };
   const nameOf = (id: string) => rooms.get(id)?.name || id;
   const levelName = (id: string) => levels.find((l) => l.id === levelOf(id))?.name;
 
@@ -229,6 +216,37 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
           </span>
         </>
       )}
+      {isLink ? null : (
+        <>
+          <button
+            className={`ctl${edit.tool === "cut" ? " on" : ""}`}
+            disabled={edit.members.length < 2}
+            aria-pressed={edit.tool === "cut"}
+            onClick={() => patchZoneEdit(zoneId, setTool(edit, "cut"))}
+            title="Keep the wall between two rooms of this area closed, so a route cannot go that way: click one room, then the room next to it. Click the same pair again to open it."
+          >
+            Cut
+          </button>
+          <button
+            className={`ctl${edit.tool === "hub" ? " on" : ""}`}
+            disabled={edit.members.length < 2}
+            aria-pressed={edit.tool === "hub"}
+            onClick={() => patchZoneEdit(zoneId, setTool(edit, "hub"))}
+            title="Make the other rooms connect only through one room, such as a corridor with bays along it, so a route cannot cut through the bays"
+          >
+            Only through…
+          </button>
+          {edit.tool === "cut" ? (
+            <span className="routeNotice">
+              {edit.cutFrom
+                ? `Now click the room next to ${nameOf(edit.cutFrom)}`
+                : "Click a room, then the room next to it, to close the wall between them"}
+            </span>
+          ) : edit.tool === "hub" ? (
+            <span className="routeNotice">Click the room the others connect through</span>
+          ) : null}
+        </>
+      )}
       {matchCount > 0 ? (
         <button
           className="ctl"
@@ -276,41 +294,27 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
             );
           })}
           {edit.members.length > shown.length ? <em>+{edit.members.length - shown.length} more</em> : null}
+          {edit.hub ? (
+            <button
+              className="chip hub"
+              title="Stop connecting through this room"
+              onClick={() => patchZoneEdit(zoneId, clearHub(edit))}
+            >
+              only through {nameOf(edit.hub)} ×
+            </button>
+          ) : null}
+          {edit.cuts.map((c) => (
+            <button
+              key={`${c.a}|${c.b}`}
+              className="chip cut"
+              title="Open this wall again"
+              onClick={() => patchZoneEdit(zoneId, removeCut(edit, c))}
+            >
+              {nameOf(c.a)} | {nameOf(c.b)} ×
+            </button>
+          ))}
         </span>
       )}
-      {doc && (doc.zones.length > 0 || doc.links.length > 0) ? (
-        <span className="routeMatches savedZones">
-          Saved:
-          {doc.zones.map((z) => (
-            <span key={z.id} className="savedZone">
-              <button
-                className={`chip${edit.kind === "open" && edit.id === z.id ? " on" : ""}`}
-                title="Load this open zone to change it"
-                onClick={() => patchZoneEdit(zoneId, editOf(z))}
-              >
-                {z.name} ({z.rooms.length})
-              </button>
-              <button className="link" title="Delete this open zone" onClick={() => removeZone(z.id, z.name)}>
-                delete
-              </button>
-            </span>
-          ))}
-          {doc.links.map((l) => (
-            <span key={l.id} className="savedZone">
-              <button
-                className={`chip${edit.kind === "link" && edit.id === l.id ? " on" : ""}`}
-                title="Load this vertical link to change it"
-                onClick={() => patchZoneEdit(zoneId, editOfLink(l))}
-              >
-                ↕ {nameOf(l.a.room_id)} ↔ {nameOf(l.b.room_id)}
-              </button>
-              <button className="link" title="Delete this vertical link" onClick={() => removeLink(l.id)}>
-                delete
-              </button>
-            </span>
-          ))}
-        </span>
-      ) : null}
     </div>
   );
 }

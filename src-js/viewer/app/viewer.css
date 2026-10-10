@@ -90,7 +90,9 @@
      once. The inspector column is `auto`, so a hidden inspector costs nothing. */
   #mainRow {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    /* The connections table on the left and the inspector on the right are both
+       `auto`, so either costs nothing while it is absent. */
+    grid-template-columns: auto minmax(0, 1fr) auto;
     min-height: 0;
     min-width: 0;
   }
@@ -694,7 +696,9 @@
      (the overlay rule), and non-scaling so it stays readable at any zoom. */
   .route-line { fill: none; stroke: var(--accent); stroke-width: 4; vector-effect: non-scaling-stroke;
                 stroke-linejoin: round; stroke-linecap: round; pointer-events: none; }
-  .route-mark { stroke: var(--paper); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+  /* Half the size they were, and see-through, so the room under a mark stays readable. */
+  .route-mark { stroke: var(--paper); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none;
+                fill-opacity: 0.55; stroke-opacity: 0.55; }
   .route-mark.start { fill: #2e9e4f; }
   .route-mark.end { fill: #d64545; }
   /* Saved routes: one colour each, on a paper halo so crossing routes stay legible. */
@@ -702,7 +706,8 @@
                       stroke-linejoin: round; stroke-linecap: round; opacity: 0.85; pointer-events: none; }
   .saved-route-line { fill: none; stroke-width: 3.5; vector-effect: non-scaling-stroke;
                       stroke-linejoin: round; stroke-linecap: round; pointer-events: none; }
-  .saved-route-end { stroke: var(--paper); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+  .saved-route-end { stroke: var(--paper); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none;
+                     fill-opacity: 0.55; stroke-opacity: 0.55; }
   /* Areas results table (band 1). Table shape shared with the old overlay
      panel; the note/total/swatch styling carried over. */
   .band-body .note { opacity: 0.6; margin: 0 0 0.6rem; }
@@ -932,6 +937,31 @@
   .zoneBar .savedZones { flex-basis: 100%; }
   .zoneBar .savedZone { display: inline-flex; align-items: baseline; gap: 0.1rem; }
   .zoneBar button.chip.on { border-color: var(--accent); color: var(--accent); }
+  /* The connections table, left of the plan while an editor is open. */
+  /* One column for whichever left tables are open; they stack. */
+  #leftPanels { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+  .leftPanel { flex: 0 1 auto; width: 26rem; max-width: 38vw; background: var(--paper); border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink);
+                      overflow: auto; min-height: 0; font-size: 0.7rem; }
+  .leftPanel .insp-head { position: sticky; top: 0; background: var(--paper); border-bottom: 1px solid var(--ink);
+                                 padding: 0.5rem 0.7rem; }
+  .leftPanel .insp-title { font-weight: 600; letter-spacing: 0.06em; }
+  .leftPanel .insp-sub { color: var(--accent); font-size: 0.64rem; letter-spacing: 0.06em; margin-top: 0.15rem; }
+  .leftPanel .insp-note { padding: 0.3rem 0.7rem 0.6rem; opacity: 0.7; font-style: italic; }
+  table.connTable { width: 100%; border-collapse: collapse; }
+  table.connTable th { text-align: left; font-weight: 600; letter-spacing: 0.06em; padding: 0.3rem 0.4rem;
+                       border-bottom: 1px solid var(--ink); }
+  table.connTable td { padding: 0.25rem 0.4rem; border-bottom: 1px solid var(--rule); vertical-align: baseline;
+                       word-break: break-word; }
+  /* The name takes the slack and wraps; the type and the delete never break mid-word. */
+  table.connTable td.fit, table.connTable th.fit { white-space: nowrap; width: 1%; }
+  /* The name is what wraps, but never to a few characters a line. */
+  table.connTable td:not(.fit) { min-width: 7rem; }
+  table.connTable input[type=checkbox] { margin: 0; cursor: pointer; }
+  table.connTable input.colourInput { width: 1.4rem; height: 1.1rem; padding: 0; border: 1px solid var(--rule); background: none; cursor: pointer; }
+  table.connTable tr.editing td { background: var(--fill); }
+  table.connTable button.link { font-family: var(--mono); font-size: 0.7rem; cursor: pointer; border: none;
+                                background: none; color: var(--accent); padding: 0; text-align: left; }
+  table.connTable button.link:disabled { opacity: 0.4; cursor: default; }
   /* The stack view: one row per level that holds a room of the stack. */
   .stackView { flex-basis: 100%; display: flex; flex-direction: column; gap: 0.2rem; max-height: 16rem; overflow-y: auto; }
   .stackView .muted { opacity: 0.6; }
@@ -952,6 +982,17 @@
   /* Zones already saved: a lighter fill in a per-zone hue, under the one being drawn. */
   .open-zone-saved { fill: hsl(var(--oz-hue) 60% 50% / 0.18); stroke: hsl(var(--oz-hue) 60% 45% / 0.7);
                      stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+  /* The hub is drawn heavier; a room held for a cut pulses its outline. */
+  .open-zone-room.hub { fill-opacity: 0.5; stroke-width: 3; }
+  .open-zone-room.held { stroke-dasharray: 6 3; stroke-width: 3; }
+  /* A closed wall: a line between the two rooms with a cross, in a warning red. */
+  .open-zone-cut line { stroke: #d64545; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none;
+                        stroke-linecap: round; }
+  .zoneBar button.ctl { font-family: var(--mono); font-size: 0.7rem; cursor: pointer; background: var(--paper);
+                        color: var(--ink); border: 1px solid var(--ink); padding: 0.15rem 0.4rem; }
+  .zoneBar button.ctl:disabled { opacity: 0.4; cursor: default; }
+  .zoneBar button.ctl.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .zoneBar button.chip.cut, .zoneBar button.chip.hub { border-color: #d64545; }
   /* Rooms no door reaches and no zone covers: the worklist. Dotted, no fill. */
   .open-zone-unreachable { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 1 4;
                            stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }

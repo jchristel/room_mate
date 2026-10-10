@@ -644,7 +644,17 @@ pub struct ZoneReport {
     /// Pairs the zone covers that a door (or an earlier zone) already joined.
     pub redundant: usize,
     /// Members sharing a wall with no other member: the zone cannot connect them.
+    /// Counted AFTER any disconnects, so a bay cut from every neighbour is listed.
     pub unlinked: Vec<RoomRef>,
+    /// Shared walls this zone left closed, by a disconnect or by its hub.
+    pub closed: usize,
+    /// The room members connect only through, when the zone has one that is in scope.
+    pub hub: Option<RoomRef>,
+    /// The zone names a hub that is no longer in scope, so the rule is NOT applied
+    /// (closing every wall would silently disable the zone).
+    pub hub_stale: bool,
+    /// Disconnects naming a room that is no longer in scope.
+    pub stale_disconnects: usize,
     /// Whether any member has a door to somewhere. False means the whole zone is
     /// still an island, which is the thing a person most needs to be told.
     pub reaches_doors: bool,
@@ -754,6 +764,82 @@ fn add_link_edges(
     redundant
 }
 
+/// One open zone's edges and its report: the members still in scope, run through the
+/// wall-sharing algorithm restricted to them, **less the walls the zone keeps
+/// closed**.
+///
+/// A wall is closed when its pair is one of the zone's `disconnects`, or when the zone
+/// has a `hub` and neither room is it. A hub that is no longer in scope is NOT
+/// applied and is reported (`hub_stale`): applying it would close every wall and turn
+/// the zone off without a word. `unlinked` is read after the closing, so a member cut
+/// from all its neighbours is listed as the island it now is.
+fn zone_edges(
+    zone: &connections::OpenZone,
+    index: &BTreeMap<&RoomRef, usize>,
+    room_of: &BTreeMap<RoomRef, &Room>,
+    wall_max: f64,
+    door_degree: &[usize],
+) -> (Vec<ZoneEdgeFact>, ZoneReport) {
+    let mut present: Vec<(usize, &Room, &RoomRef)> = Vec::new();
+    let mut stale = Vec::new();
+    for member in &zone.rooms {
+        match (index.get(member), room_of.get(member)) {
+            (Some(&i), Some(&room)) => present.push((i, room, member)),
+            _ => stale.push(member.clone()),
+        }
+    }
+    let slice: Vec<&Room> = present.iter().map(|(_, r, _)| *r).collect();
+    let in_scope = |r: &RoomRef| present.iter().any(|(_, _, m)| *m == r);
+    let hub = zone.hub.as_ref().filter(|h| in_scope(h));
+    let hub_stale = zone.hub.is_some() && hub.is_none();
+    let stale_disconnects = zone.disconnects.iter().filter(|d| !in_scope(&d.a) || !in_scope(&d.b)).count();
+    let cuts: std::collections::BTreeSet<(&RoomRef, &RoomRef)> = zone
+        .disconnects
+        .iter()
+        .map(|d| if d.a <= d.b { (&d.a, &d.b) } else { (&d.b, &d.a) })
+        .collect();
+
+    let mut facts = Vec::new();
+    let mut linked = std::collections::BTreeSet::new();
+    let mut closed = 0usize;
+    for pair in compute_adjacency_indexed(&slice, wall_max) {
+        let (ra, rb) = (present[pair.ia].2, present[pair.ib].2);
+        let key = if ra <= rb { (ra, rb) } else { (rb, ra) };
+        if cuts.contains(&key) || hub.is_some_and(|h| ra != h && rb != h) {
+            closed += 1;
+            continue;
+        }
+        linked.insert(pair.ia);
+        linked.insert(pair.ib);
+        facts.push(ZoneEdgeFact {
+            zone_id: zone.id.clone(),
+            ia: present[pair.ia].0,
+            ib: present[pair.ib].0,
+            point: pair.midpoint,
+        });
+    }
+    let report = ZoneReport {
+        id: zone.id.clone(),
+        name: zone.name.clone(),
+        members: zone.rooms.len(),
+        stale,
+        edges: 0,
+        redundant: 0,
+        unlinked: present
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !linked.contains(k))
+            .map(|(_, (_, _, m))| (*m).clone())
+            .collect(),
+        closed,
+        hub: hub.cloned(),
+        hub_stale,
+        stale_disconnects,
+        reaches_doors: present.iter().any(|(i, _, _)| door_degree[*i] > 0),
+    };
+    (facts, report)
+}
+
 /// Read the project's authored connections and turn them into edges, with a
 /// report of what each did.
 ///
@@ -802,41 +888,9 @@ fn authored_edges(
             .map(|r| (RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() }, &r.room))
             .collect();
         for zone in &document.zones {
-            let mut present: Vec<(usize, &Room, &RoomRef)> = Vec::new();
-            let mut stale = Vec::new();
-            for member in &zone.rooms {
-                match (index.get(member), room_of.get(member)) {
-                    (Some(&i), Some(&room)) => present.push((i, room, member)),
-                    _ => stale.push(member.clone()),
-                }
-            }
-            let slice: Vec<&Room> = present.iter().map(|(_, r, _)| *r).collect();
-            let mut linked = std::collections::BTreeSet::new();
-            for pair in compute_adjacency_indexed(&slice, wall_max) {
-                linked.insert(pair.ia);
-                linked.insert(pair.ib);
-                zone_facts.push(ZoneEdgeFact {
-                    zone_id: zone.id.clone(),
-                    ia: present[pair.ia].0,
-                    ib: present[pair.ib].0,
-                    point: pair.midpoint,
-                });
-            }
-            report.zones.push(ZoneReport {
-                id: zone.id.clone(),
-                name: zone.name.clone(),
-                members: zone.rooms.len(),
-                stale,
-                edges: 0,
-                redundant: 0,
-                unlinked: present
-                    .iter()
-                    .enumerate()
-                    .filter(|(k, _)| !linked.contains(k))
-                    .map(|(_, (_, _, m))| (*m).clone())
-                    .collect(),
-                reaches_doors: present.iter().any(|(i, _, _)| door_degree[*i] > 0),
-            });
+            let (facts, zone_report) = zone_edges(zone, &index, &room_of, wall_max, door_degree);
+            zone_facts.extend(facts);
+            report.zones.push(zone_report);
         }
     }
 
@@ -1560,6 +1614,8 @@ mod tests {
                     .iter()
                     .map(|r| crate::connections::RoomInput { room_id: r.to_string(), model_id: Some("m1".to_string()) })
                     .collect(),
+                disconnects: vec![],
+                hub: None,
                 note: None,
             }
         }
@@ -1759,6 +1815,120 @@ mod tests {
             assert_eq!(kinds, vec![EdgeKind::Door, EdgeKind::Zone, EdgeKind::Vertical]);
             assert!(result.connections.links[0].applied);
             assert!(result.connections.zones[0].stale.is_empty());
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        // ---------- disconnects and the hub ----------
+
+        /// Three bays side by side along a corridor: `b1 | b2 | b3` below `cor`. Every
+        /// bay touches the corridor AND its neighbours, which is the layout where an
+        /// open zone of all four lets a route go through the bays.
+        fn bays_state(tag: &str, zone: crate::connections::ZoneInput) -> (AppState, std::path::PathBuf) {
+            fn at(id: &str, x0: f64, x1: f64, y0: f64, y1: f64) -> Room {
+                Room {
+                    loops: vec![Loop {
+                        points: vec![
+                            Point2D { x: x0, y: y0 },
+                            Point2D { x: x1, y: y0 },
+                            Point2D { x: x1, y: y1 },
+                            Point2D { x: x0, y: y1 },
+                        ],
+                    }],
+                    ..rect(id, 0.0, 1.0)
+                }
+            }
+            let dir = std::env::temp_dir().join(format!("roommate-conn-bays-{tag}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let rooms = vec![
+                at("b1", 0.0, 10.0, 0.0, 10.0),
+                at("b2", 10.0, 20.0, 0.0, 10.0),
+                at("b3", 20.0, 30.0, 0.0, 10.0),
+                at("cor", 0.0, 30.0, 10.0, 20.0),
+            ];
+            let state = state_of(rooms, vec![]).with_projects_dir(dir.clone());
+            crate::connections::save(
+                &state,
+                &dir,
+                "p1",
+                crate::connections::SaveRequest { base: String::new(), zones: vec![zone], links: vec![], routes: None },
+            )
+            .unwrap();
+            (state, dir)
+        }
+
+        fn route_rooms(state: &AppState) -> Vec<String> {
+            let (a, b) = (ep(None, "b1"), ep(None, "b3"));
+            let path = read(state, Some((&a, &b))).path.unwrap();
+            assert!(path.found, "{:?}", path.reason);
+            path.rooms.iter().map(|r| r.room_id.clone()).collect()
+        }
+
+        fn cut(a: &str, b: &str) -> crate::connections::DisconnectInput {
+            let room =
+                |r: &str| crate::connections::RoomInput { room_id: r.to_string(), model_id: Some("m1".to_string()) };
+            crate::connections::DisconnectInput { a: room(a), b: room(b) }
+        }
+
+        /// The problem as reported: with all four rooms in one open zone the shortest
+        /// route from the first bay to the last goes THROUGH the middle bay.
+        #[test]
+        fn test_without_a_disconnect_a_route_goes_through_the_bays() {
+            let (s, dir) = bays_state("none", zone_input("bays", &["b1", "b2", "b3", "cor"]));
+            assert_eq!(route_rooms(&s), vec!["b1", "b2", "b3"]);
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// Closing the walls between neighbouring bays sends it along the corridor.
+        #[test]
+        fn test_disconnecting_the_bays_sends_the_route_along_the_corridor() {
+            let mut zone = zone_input("bays", &["b1", "b2", "b3", "cor"]);
+            zone.disconnects = vec![cut("b1", "b2"), cut("b3", "b2")];
+            let (s, dir) = bays_state("cuts", zone);
+            assert_eq!(route_rooms(&s), vec!["b1", "cor", "b3"]);
+            let report = &read(&s, None).connections.zones[0];
+            assert_eq!(report.closed, 2);
+            assert!(report.unlinked.is_empty(), "every bay still opens onto the corridor");
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// The hub shortcut closes every wall two NON-hub members share, in one field.
+        #[test]
+        fn test_a_hub_connects_members_only_through_itself() {
+            let mut zone = zone_input("bays", &["b1", "b2", "b3", "cor"]);
+            zone.hub =
+                Some(crate::connections::RoomInput { room_id: "cor".to_string(), model_id: Some("m1".to_string()) });
+            let (s, dir) = bays_state("hub", zone);
+            assert_eq!(route_rooms(&s), vec!["b1", "cor", "b3"]);
+            let report = &read(&s, None).connections.zones[0];
+            assert_eq!(report.closed, 2, "b1-b2 and b2-b3");
+            assert_eq!(report.hub.as_ref().map(|h| h.room_id.as_str()), Some("cor"));
+            assert!(!report.hub_stale);
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// A single cut still works beside a hub, to close the hub's own wall.
+        #[test]
+        fn test_a_member_cut_from_everything_is_reported_unlinked() {
+            let mut zone = zone_input("bays", &["b1", "b2", "b3", "cor"]);
+            zone.disconnects = vec![cut("b2", "b1"), cut("b2", "b3"), cut("b2", "cor")];
+            let (s, dir) = bays_state("island", zone);
+            let report = &read(&s, None).connections.zones[0];
+            assert_eq!(report.unlinked.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>(), vec!["b2"]);
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// A hub that has left the model must NOT be applied: closing every wall would
+        /// silently switch the zone off. It is said, and the zone works as if it had none.
+        #[test]
+        fn test_a_hub_that_left_the_model_is_reported_and_not_applied() {
+            let mut zone = zone_input("bays", &["b1", "b2", "b3", "cor", "gone"]);
+            zone.hub =
+                Some(crate::connections::RoomInput { room_id: "gone".to_string(), model_id: Some("m1".to_string()) });
+            let (s, dir) = bays_state("stale-hub", zone);
+            let report = &read(&s, None).connections.zones[0];
+            assert!(report.hub_stale && report.hub.is_none());
+            assert_eq!(report.closed, 0);
+            assert_eq!(route_rooms(&s), vec!["b1", "b2", "b3"]);
             std::fs::remove_dir_all(&dir).ok();
         }
 

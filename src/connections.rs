@@ -58,6 +58,7 @@ const MAX_LINKS: usize = 20_000;
 const MAX_ROOMS_PER_ZONE: usize = 5_000;
 const MAX_ROUTES: usize = 5_000;
 const MAX_NOTE_CHARS: usize = 2_000;
+const MAX_DISCONNECTS_PER_ZONE: usize = 50_000;
 const MAX_NAME_CHARS: usize = 120;
 
 /// What one storey change costs when a link does not say, in feet of walking: a
@@ -80,6 +81,16 @@ pub enum ZoneKind {
     Open,
 }
 
+/// Two rooms of one open zone whose shared wall stays CLOSED. A zone opens every
+/// wall two members share, which is wrong where members touch but do not connect:
+/// three bays along a corridor each open onto the corridor, and also onto each
+/// other, so a route may take the bays and not the corridor. Undirected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Disconnect {
+    pub a: RoomRef,
+    pub b: RoomRef,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenZone {
     /// Stable identity: survives a rename, and is what an edit addresses.
@@ -88,6 +99,16 @@ pub struct OpenZone {
     #[serde(default)]
     pub kind: ZoneKind,
     pub rooms: Vec<RoomRef>,
+    /// Pairs of members whose shared wall is NOT open. See [`Disconnect`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disconnects: Vec<Disconnect>,
+    /// When set, members connect ONLY through this room: a wall two other members
+    /// share stays closed. A shortcut for the corridor-and-bays layout, stored as a
+    /// room and not as the pairs it implies, so a member added later is held to it
+    /// and a zone of a hundred bays is not a list of five thousand cuts. A single
+    /// [`Disconnect`] can still close a wall between the hub and a member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub: Option<RoomRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -179,12 +200,22 @@ pub struct RoomInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct DisconnectInput {
+    pub a: RoomInput,
+    pub b: RoomInput,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ZoneInput {
     pub id: String,
     pub name: String,
     #[serde(default)]
     pub kind: ZoneKind,
     pub rooms: Vec<RoomInput>,
+    #[serde(default)]
+    pub disconnects: Vec<DisconnectInput>,
+    #[serde(default)]
+    pub hub: Option<RoomInput>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -318,6 +349,35 @@ pub fn validate(zones: &[OpenZone], links: &[VerticalLink]) -> Result<(), Connec
             if !members.insert(r) {
                 return bad(format!("zone {:?} lists room {} of model {} twice", zone.name, r.room_id, r.model_id));
             }
+        }
+        if zone.disconnects.len() > MAX_DISCONNECTS_PER_ZONE {
+            return bad(format!(
+                "zone {:?} has {} disconnects; the limit is {MAX_DISCONNECTS_PER_ZONE}",
+                zone.name,
+                zone.disconnects.len()
+            ));
+        }
+        let mut cut = std::collections::BTreeSet::new();
+        for d in &zone.disconnects {
+            // Held to the zone's own rooms: a cut names a wall the zone would
+            // otherwise open, so one naming a room outside it cuts nothing, and the
+            // editor drops a cut when its room leaves.
+            if !members.contains(&d.a) || !members.contains(&d.b) {
+                return bad(format!("zone {:?} disconnects a room that is not one of its members", zone.name));
+            }
+            if d.a == d.b {
+                return bad(format!("zone {:?} disconnects room {} from itself", zone.name, d.a.room_id));
+            }
+            let pair = if d.a <= d.b { (&d.a, &d.b) } else { (&d.b, &d.a) };
+            if !cut.insert(pair) {
+                return bad(format!(
+                    "zone {:?} disconnects rooms {} and {} twice",
+                    zone.name, d.a.room_id, d.b.room_id
+                ));
+            }
+        }
+        if zone.hub.as_ref().is_some_and(|h| !members.contains(h)) {
+            return bad(format!("the hub of zone {:?} is not one of its members", zone.name));
         }
         if zone.note.as_ref().is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS) {
             return bad(format!("the note on zone {:?} is longer than {MAX_NOTE_CHARS} characters", zone.name));
@@ -454,15 +514,33 @@ pub fn resolve(
     zones: Vec<ZoneInput>,
     links: Vec<LinkInput>,
 ) -> Result<(Vec<OpenZone>, Vec<VerticalLink>), ConnectionsError> {
-    let needs_lookup = zones.iter().any(|z| z.rooms.iter().any(|r| r.model_id.is_none()))
-        || links.iter().any(|l| l.a.model_id.is_none() || l.b.model_id.is_none());
+    let unnamed = |r: &RoomInput| r.model_id.is_none();
+    let needs_lookup = zones.iter().any(|z| {
+        z.rooms.iter().any(unnamed)
+            || z.disconnects.iter().any(|d| unnamed(&d.a) || unnamed(&d.b))
+            || z.hub.as_ref().is_some_and(unnamed)
+    }) || links.iter().any(|l| l.a.model_id.is_none() || l.b.model_id.is_none());
     let resolver = Resolver::for_project(state, project, needs_lookup)?;
 
     let zones = zones
         .into_iter()
         .map(|z| {
             let rooms = z.rooms.into_iter().map(|r| resolver.room(r)).collect::<Result<Vec<_>, _>>()?;
-            Ok(OpenZone { id: z.id, name: z.name.trim().to_string(), kind: z.kind, rooms, note: z.note })
+            let disconnects = z
+                .disconnects
+                .into_iter()
+                .map(|d| Ok(Disconnect { a: resolver.room(d.a)?, b: resolver.room(d.b)? }))
+                .collect::<Result<Vec<_>, ConnectionsError>>()?;
+            let hub = z.hub.map(|h| resolver.room(h)).transpose()?;
+            Ok(OpenZone {
+                id: z.id,
+                name: z.name.trim().to_string(),
+                kind: z.kind,
+                rooms,
+                disconnects,
+                hub,
+                note: z.note,
+            })
         })
         .collect::<Result<Vec<_>, ConnectionsError>>()?;
     let links = links
@@ -601,6 +679,8 @@ mod tests {
             name: format!("Zone {id}"),
             kind: ZoneKind::Open,
             rooms,
+            disconnects: vec![],
+            hub: None,
             note: None,
         }
     }
@@ -663,6 +743,50 @@ mod tests {
         .unwrap();
         assert!(second.taken_at > first.taken_at);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn cut(a: &str, b: &str) -> DisconnectInput {
+        DisconnectInput { a: room("m", a), b: room("m", b) }
+    }
+
+    #[test]
+    fn test_disconnects_and_a_hub_round_trip_and_an_old_zone_has_none() {
+        let dir = temp_dir("cuts");
+        let mut z = zone("z1", vec![room("m", "a"), room("m", "b"), room("m", "c")]);
+        z.disconnects = vec![cut("a", "b")];
+        z.hub = Some(room("m", "c"));
+        let saved = save(&state(), &dir, "p1", request("", vec![z])).unwrap();
+        assert_eq!(saved.zones[0].disconnects.len(), 1);
+        assert_eq!(saved.zones[0].hub.as_ref().map(|h| h.room_id.as_str()), Some("c"));
+        assert_eq!(load(&dir, "p1").unwrap(), saved);
+        // A file from before cuts existed reads as a zone with none.
+        std::fs::write(
+            dir.join("connections").join("p1.json"),
+            r#"{"schema_version":1,"taken_at":"t","zones":[{"id":"z","name":"Z","rooms":[{"model_id":"m","room_id":"a"},{"model_id":"m","room_id":"b"}]}],"links":[]}"#,
+        )
+        .unwrap();
+        let old = load(&dir, "p1").unwrap();
+        assert!(old.zones[0].disconnects.is_empty() && old.zones[0].hub.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_validation_refuses_a_cut_or_hub_that_is_not_the_zones_own() {
+        let check = |f: &dyn Fn(&mut ZoneInput)| {
+            let mut z = zone("z1", vec![room("m", "a"), room("m", "b"), room("m", "c")]);
+            f(&mut z);
+            let (zones, links) = resolve(&state(), "p1", vec![z], vec![]).unwrap();
+            validate(&zones, &links)
+        };
+        assert!(check(&|z| z.disconnects = vec![cut("a", "b")]).is_ok());
+        assert!(check(&|z| z.disconnects = vec![cut("a", "zz")]).is_err(), "not a member");
+        assert!(check(&|z| z.disconnects = vec![cut("a", "a")]).is_err(), "from itself");
+        assert!(
+            check(&|z| z.disconnects = vec![cut("a", "b"), cut("b", "a")]).is_err(),
+            "twice, either way round"
+        );
+        assert!(check(&|z| z.hub = Some(room("m", "zz"))).is_err(), "hub not a member");
+        assert!(check(&|z| z.hub = Some(room("m", "a"))).is_ok());
     }
 
     fn route(id: &str, colour: &str) -> RouteInput {
