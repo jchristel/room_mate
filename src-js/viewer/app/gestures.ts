@@ -15,6 +15,7 @@
 
 import { commitView, handleOf } from "./zoneRegistry.js";
 import { clearSelection, closePickList, getState, openPickList, select } from "./store.js";
+import { planPointOf } from "../route.js";
 import { tieredValue } from "../properties.js";
 import { layerPayload, typePropertiesOf } from "./layers.js";
 import type { Pick as PlanPick } from "../../renderer/seam.js";
@@ -237,8 +238,7 @@ export function wirePlanGestures(
     }
     // Where in the plan the click landed. The renderer answers in its flipped world
     // (Y down); the data, and the server, are Y up.
-    const w = handle.renderer.toWorld(downAt.x, downAt.y);
-    const world = w ? { x: w.x, y: -w.y } : null;
+    const world = planPointOf(handle.renderer.toWorld(downAt.x, downAt.y));
     if (hits.length === 1) {
       select(hits[0]!.kind, idOf(hits[0]!), zoneId, world);
       return;

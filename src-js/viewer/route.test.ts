@@ -8,7 +8,9 @@ import {
   markerPoint,
   newRoute,
   pickEndpoint,
+  planPointOf,
   polylinePoints,
+  routeDrawingsOnLevel,
   routeRows,
   segmentsOnLevel,
   type RoutePath,
@@ -266,5 +268,61 @@ describe("the width of the object", () => {
     expect(describeClearance({ frame_allowance_mm: 150, narrowest: door, widest_possible: door, unchecked_hops: 0 })).toBe(
       "narrowest door d1, about 900 mm",
     );
+  });
+});
+
+describe("routeDrawingsOnLevel", () => {
+  const seg = (level_id: string, ...pts: [number, number][]) => ({ level_id, points: pts.map(([x, y]) => ({ x, y })) });
+  const climbing: RoutePath = {
+    found: true,
+    reason: null,
+    distance_ft: 80,
+    rooms: [],
+    steps: [],
+    segments: [seg("L1", [0, 0], [10, 0]), seg("L2", [10, 0], [10, 0]), seg("L3", [10, 0], [30, 5])],
+  };
+  const routes = [{ id: "r", name: "Up", colour: "#d9480f", path: climbing }];
+
+  it("draws a route's line on each level it passes through, and its ends only on the levels they are on", () => {
+    const l1 = routeDrawingsOnLevel(routes, "L1")[0]!;
+    expect(l1.lines).toEqual([[{ x: 0, y: 0 }, { x: 10, y: 0 }]]);
+    expect(l1.start).toEqual({ x: 0, y: 0 });
+    expect(l1.end).toBeNull();
+    const l2 = routeDrawingsOnLevel(routes, "L2")[0]!;
+    expect(l2.start).toBeNull();
+    expect(l2.end).toBeNull();
+    const l3 = routeDrawingsOnLevel(routes, "L3")[0]!;
+    expect(l3.start).toBeNull();
+    expect(l3.end).toEqual({ x: 30, y: 5 });
+  });
+
+  it("leaves out a level the route never touches, a route with no path, and no level at all", () => {
+    expect(routeDrawingsOnLevel(routes, "L9")).toEqual([]);
+    expect(routeDrawingsOnLevel([{ ...routes[0]!, path: path(false) }], "L1")).toEqual([]);
+    expect(routeDrawingsOnLevel([{ ...routes[0]!, path: null }], "L1")).toEqual([]);
+    expect(routeDrawingsOnLevel(routes, null)).toEqual([]);
+  });
+
+  it("keeps a one-point stretch out of the lines (nothing to stroke) but still draws the route there", () => {
+    const stacked: RoutePath = { ...climbing, segments: [seg("L1", [1, 1]), seg("L2", [1, 1])] };
+    const d = routeDrawingsOnLevel([{ ...routes[0]!, path: stacked }], "L1")[0]!;
+    expect(d.lines).toEqual([]);
+    expect(d.start).toEqual({ x: 1, y: 1 });
+  });
+
+  it("returns routes in the order given, so the legend and the paint order are stable", () => {
+    const two = [routes[0]!, { ...routes[0]!, id: "s", name: "Second" }];
+    expect(routeDrawingsOnLevel(two, "L1").map((d) => d.id)).toEqual(["r", "s"]);
+  });
+});
+
+describe("planPointOf", () => {
+  it("flips the renderer's Y, so a position from the screen is in the plan's frame", () => {
+    expect(planPointOf({ x: 12, y: -30 })).toEqual({ x: 12, y: 30 });
+    expect(planPointOf({ x: 0, y: 0 })).toEqual({ x: 0, y: -0 });
+  });
+  it("is null when the pointer is off the plan", () => {
+    expect(planPointOf(null)).toBeNull();
+    expect(planPointOf(undefined)).toBeNull();
   });
 });

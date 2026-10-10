@@ -189,6 +189,65 @@ export function segmentsOnLevel(path: RoutePath | null, levelId: string | null):
   return path.segments.filter((s) => s.level_id === levelId);
 }
 
+/** A saved route as the painters need it: who it is, its colour and its path. */
+export interface DrawableRoute {
+  id: string;
+  name: string;
+  colour: string;
+  path: RoutePath | null;
+}
+
+/** What one route draws on one level. */
+export interface RouteDrawing {
+  id: string;
+  name: string;
+  colour: string;
+  /** The polylines on this level, two points or more. */
+  lines: PlanPoint[][];
+  /** Where the route begins and ends, only when that is ON this level. */
+  start: PlanPoint | null;
+  end: PlanPoint | null;
+}
+
+/**
+ * What each route draws on `levelId`: its polylines, and its two ends when they are
+ * there. **One rule for the plan and for the SVG export**, so a file shows the routes
+ * the screen shows and not a second reading of them. A route with nothing on the level
+ * is left out, and so is one whose path was not found.
+ *
+ * The ends are the first point of the first segment and the last point of the last,
+ * drawn only on the level they are on: a route that climbs three storeys has its start
+ * on the bottom one and its end on the top one, and the storeys between have neither.
+ */
+export function routeDrawingsOnLevel(routes: readonly DrawableRoute[], levelId: string | null): RouteDrawing[] {
+  if (levelId === null) return [];
+  const out: RouteDrawing[] = [];
+  for (const route of routes) {
+    const path = route.path;
+    const here = segmentsOnLevel(path, levelId);
+    if (!path || here.length === 0) continue;
+    const first = path.segments[0];
+    const last = path.segments[path.segments.length - 1];
+    out.push({
+      id: route.id,
+      name: route.name,
+      colour: route.colour,
+      lines: here.filter((s) => s.points.length >= 2).map((s) => s.points),
+      start: first && first.level_id === levelId ? (first.points[0] ?? null) : null,
+      end: last && last.level_id === levelId ? (last.points[last.points.length - 1] ?? null) : null,
+    });
+  }
+  return out;
+}
+
+/** A point the renderer answers with, as the plan's own coordinates. The renderer's
+ *  world has Y down; the data, and the server, have it up. `null` for no answer (the
+ *  pointer is off the plan). The one place that flip is written for a position taken
+ *  from the screen, so a click and a drag cannot disagree about it. */
+export function planPointOf(world: { x: number; y: number } | null | undefined): PlanPoint | null {
+  return world ? { x: world.x, y: -world.y } : null;
+}
+
 /** An SVG `points` string in the overlay's frame (world Y is flipped, like
  *  every drawn shape). */
 export function polylinePoints(points: readonly { x: number; y: number }[]): string {
