@@ -5,8 +5,9 @@ entities** — rooms, doors, windows, ceilings, floors, FF&E and spaces — are
 extracted from Revit, pushed as a versioned JSON contract, joined against
 external reference data (dRofus is the common one; the pipeline is keyed on N
 sources), classified into a project's own hierarchy, and served to a viewer that
-draws plans, aggregates areas, reconciles each entity against the model and
-graphs which rooms share a wall — plus a reports page that tabulates any of it.
+draws plans, aggregates areas, reconciles each entity against the model,
+graphs which rooms share a wall and finds the shortest route between two rooms
+— plus a reports page that tabulates any of it.
 
 ![Screen Shot](images/Room_Mate_Splash.PNG)
 
@@ -76,9 +77,39 @@ Serves the three pages and the API on `http://127.0.0.1:5151` (`--port`, or
 
 | | |
 |---|---|
-| **`/`** — the viewer | The plan: rooms drawn per storey with the door, window, FF&E, space and ceiling/floor layers over them, the hierarchy-area rollups, the adjacency graph, and the QA band that says whether the project reconciles. Each zone chooses what it draws and what a click can reach; a click on stacked elements lists them rather than guessing; every one of the seven kinds has a panel, and a grid row selects its room and brings it into view. |
+| **`/`** — the viewer | The plan: rooms drawn per storey with the door, window, FF&E, space and ceiling/floor layers over them, the hierarchy-area rollups, the adjacency graph, and the QA band that says whether the project reconciles. Each zone chooses what it draws and what a click can reach; a click on stacked elements lists them rather than guessing; every one of the seven kinds has a panel, and a grid row selects its room and brings it into view. It is also where routes are found and connections are drawn: see [Routes and connections](#routes-and-connections). |
 | **`/settings/`** — settings | Every project setting, including the ones that only ever existed in TOML: the coordinate anchor, the area policy, the door/window/FF&E/space policies, the hierarchy exclusions. It holds the settings object as it read it and sends it back, so it cannot silently drop what it does not show — the bug its hand-written predecessor shipped. |
 | **`/reports/`** — reports | Tabular reports: a **schedule** of any entity, any entity **by room**, the **QA checks** (reference data, unresolved openings, unmatched spaces and rooms), and **milestone comparison**, which used to be its own page. Rows and CSV are rendered by the server, so a download and an MCP host get the same bytes. |
+
+## Routes and connections
+
+The viewer can find the shortest route between two rooms, and lets people state
+the connections the model does not hold. All of it is in each zone's toolbar
+(**Route**, **Connections**) and behind the endpoints above; the reasoning,
+measurements and open questions are in [the plan](docs/PLAN-connectivity.md).
+
+- **Routes.** Pick a start and an end room anywhere (the plan, the grid, a search
+  chip). The route runs door to door by the exact shortest walk inside each room,
+  or room centre to room centre. It can start and end at a point inside each room,
+  and the start and end marks can be **dragged**. A **steps** list reads the whole
+  route in order and marks where it changes level.
+- **Width.** Give the width of the object (a bed, a trolley) and a door or open wall
+  narrower than that is not a way through. The answer says the narrowest hop and the
+  widest object that fits. Door widths are **estimates** (the footprint less a frame
+  allowance); the width of a corridor *inside* a room is not checked.
+- **Open areas.** Rooms the model does not join by a door (bays, open-plan areas)
+  can be declared one open space. Where members touch but do not connect, such as
+  bays along a corridor, **Cut** closes a wall between two of them and **Only
+  through…** makes the others connect only through one room.
+- **Vertical links.** A lift or stair is a run of floor-to-floor links drawn by
+  hand. The **stack view** shows only the levels that hold a room of the stack and
+  suggests the next room above and below by plan overlap, for a person to confirm.
+- **Saved routes.** Name a route, give it a colour and keep it for the whole
+  project. Several can be shown at once, in their colours, and they appear in
+  **Export SVGs** on every level they pass through, with a legend.
+- **The tables.** While a connections editor or a route tool is open, the open
+  areas, vertical links and saved routes are listed on the left of the plan, each
+  with its levels and a delete.
 
 ## The API, in one screen
 
@@ -94,8 +125,9 @@ Reads, all GET unless noted:
 | `/projects`, `/projects/{id}/buildings`, `/projects/{id}/snapshots`, `/projects/{id}/milestones` | What exists. |
 | `/projects/{id}/validation` | The QA reconciliation: rooms against reference data, openings and items against rooms, spaces against rooms, and whether the models agree on a phase. |
 | `/projects/{id}/areas`, `/projects/{id}/adjacency` | Hierarchy-area rollups, and which rooms share a wall. |
-| `/projects/{id}/connections` | The authored open zones and vertical links: GET reads, PUT replaces the whole list and names the version it read (409 if it moved). See [the plan](docs/PLAN-connectivity.md). |
-| `/projects/{id}/connectivity` | Which rooms a door joins, the rooms no door reaches, and (with `from` and `to`) the shortest route between two rooms, by a chosen `method` (door to door by default; the answer lists them with their sources), optionally from and to a point inside each room (`from_x`/`from_y`, `to_x`/`to_y`). Doors only; see [the plan](docs/PLAN-connectivity.md). |
+| `/projects/{id}/connections` | What people have authored: **open areas** (with the walls they keep closed), **vertical links** and **saved routes**. GET reads, PUT replaces the whole document and names the version it read (409 if it moved). A save that leaves out `routes` keeps the saved ones. See [the plan](docs/PLAN-connectivity.md). |
+| `/projects/{id}/connectivity` | Which rooms a door joins, the rooms no door reaches, and (with `from` and `to`) the shortest route between two rooms, by a chosen `method` (door to door by default; the answer lists them with their sources), optionally from and to a point inside each room (`from_x`/`from_y`, `to_x`/`to_y`), and optionally for an object of a given `width_mm`: the answer's `clearance` says the narrowest hop, what could not be checked and the widest object that fits. Doors, the open areas people drew and the vertical links they drew; see [the plan](docs/PLAN-connectivity.md). |
+| `/projects/{id}/stack` | For one room, the rooms over and under it, ranked, as candidates for a vertical link. A suggestion only; nothing is stored. |
 | `/projects/{id}/reports/columns` | What a report over one entity may name: the property names this project's snapshots carry with Revit's own value type, the record's `$intrinsics`, joined reference labels, and the join's measures. Read from each snapshot's property dictionary — a tail read, not a parse. |
 | `/projects/{id}/reports` (**POST**) | Build one report — a schedule or a by-room table — projected to the columns asked for. `?format=csv` renders the same rows as CSV. A POST that reads, because the definition does not fit a query string. |
 | `/projects/{id}/comparison` (**POST**) | Diff a baseline milestone against others. Same shape, same reason. |
