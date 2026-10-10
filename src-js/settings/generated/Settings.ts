@@ -9,6 +9,7 @@ import type { HierarchyTier } from "./HierarchyTier";
 import type { HoverProperties } from "./HoverProperties";
 import type { Milestone } from "./Milestone";
 import type { OpeningPolicy } from "./OpeningPolicy";
+import type { RoutingPolicy } from "./RoutingPolicy";
 import type { Sources } from "./Sources";
 import type { SpacePolicy } from "./SpacePolicy";
 
@@ -174,6 +175,12 @@ ffe?: FfePolicy,
  * not have reused `comparison_properties` however similar it looks.
  */
 spaces?: SpacePolicy, 
+/**
+ * Where a route's size checks read their data from (see `RoutingPolicy`).
+ * Defaulted and skipped when untouched, so a project file predating it is
+ * unchanged on disk and unchanged in meaning.
+ */
+routing?: RoutingPolicy, 
 /**
  * Ordered classification tiers, outermost first. Empty if the section is
  * omitted (a project with no classification defined).

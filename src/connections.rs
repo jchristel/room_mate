@@ -159,6 +159,9 @@ pub struct SavedRoute {
     /// The width in mm of the object this route was saved for; absent checks nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width_mm: Option<f64>,
+    /// Its height in mm; absent checks nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_mm: Option<f64>,
     /// `#rrggbb`.
     pub colour: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -248,6 +251,8 @@ pub struct RouteInput {
     pub method: Option<String>,
     #[serde(default)]
     pub width_mm: Option<f64>,
+    #[serde(default)]
+    pub height_mm: Option<f64>,
     pub colour: String,
     #[serde(default)]
     pub note: Option<String>,
@@ -458,6 +463,9 @@ pub fn validate_routes(routes: &[SavedRoute]) -> Result<(), ConnectionsError> {
         if route.width_mm.is_some_and(|w| !w.is_finite() || w <= 0.0 || w > 100_000.0) {
             return bad(format!("route {name:?} width must be above 0 and at most 100000 mm"));
         }
+        if route.height_mm.is_some_and(|h| !h.is_finite() || h <= 0.0 || h > 50_000.0) {
+            return bad(format!("route {name:?} height must be above 0 and at most 50000 mm"));
+        }
         for p in [route.from_at, route.to_at].into_iter().flatten() {
             if !p.x.is_finite() || !p.y.is_finite() {
                 return bad(format!("route {name:?} has a start or end point that is not a number"));
@@ -589,6 +597,7 @@ pub fn resolve_routes(
                 to_at: r.to_at,
                 method: r.method.filter(|m| !m.trim().is_empty()),
                 width_mm: r.width_mm.filter(|w| *w != 0.0),
+                height_mm: r.height_mm.filter(|h| *h != 0.0),
                 colour: r.colour.to_ascii_lowercase(),
                 note: r.note,
             })
@@ -670,6 +679,7 @@ mod tests {
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("roommate-connections-{tag}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok(); // a stale one from a run with the same process id would read as saved data
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -808,6 +818,7 @@ mod tests {
             to_at: None,
             method: Some(String::new()),
             width_mm: None,
+            height_mm: None,
             colour: colour.to_string(),
             note: None,
         }
@@ -859,6 +870,17 @@ mod tests {
         zero.width_mm = Some(0.0);
         let routes = resolve_routes(&state(), "p1", Some(vec![zero])).unwrap().unwrap();
         assert_eq!(routes[0].width_mm, None);
+        let mut tall = route("r4", "#aa00cc");
+        tall.height_mm = Some(2100.0);
+        let saved =
+            save(&state(), &dir, "p1", with_routes(&load(&dir, "p1").unwrap().taken_at, Some(vec![tall]))).unwrap();
+        assert_eq!(saved.routes[0].height_mm, Some(2100.0));
+        for bad in [-5.0, f64::NAN, 200_000.0] {
+            let mut r = route("r5", "#aa00cc");
+            r.height_mm = Some(bad);
+            let routes = resolve_routes(&state(), "p1", Some(vec![r])).unwrap().unwrap();
+            assert!(validate_routes(&routes).is_err(), "height {bad}");
+        }
         for bad in [-5.0, f64::NAN, 200_000.0] {
             let mut r = route("r3", "#aa00cc");
             r.width_mm = Some(bad);

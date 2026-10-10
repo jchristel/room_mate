@@ -24,7 +24,15 @@ export function SavedRoutesOverlay({ zoneId, levelId }: { zoneId: string; levelI
       .filter((route) => savedRoutes.shown.has(route.id))
       .map((route) => {
         const result = savedRoutes.results[route.id];
-        return { id: route.id, name: route.name, colour: route.colour, path: result?.state === "done" ? result.path : null };
+        const done = result?.state === "done" ? result : null;
+        // The width the server applied, so the band is what was checked.
+        return {
+          id: route.id,
+          name: route.name,
+          colour: route.colour,
+          path: done ? done.path : null,
+          widthMm: done?.clearance?.asked_mm ?? null,
+        };
       }),
     levelId,
   );
@@ -35,6 +43,9 @@ export function SavedRoutesOverlay({ zoneId, levelId }: { zoneId: string; levelI
         <g key={d.id} className="saved-route" data-route={d.id}>
           {d.lines.map((points, i) => (
             <g key={i}>
+              {d.bandFt !== null ? (
+                <polyline className="route-band" style={{ stroke: d.colour, strokeWidth: d.bandFt }} points={polylinePoints(points)} />
+              ) : null}
               <polyline className="saved-route-halo" points={polylinePoints(points)} />
               <polyline className="saved-route-line" style={{ stroke: d.colour }} points={polylinePoints(points)} />
             </g>

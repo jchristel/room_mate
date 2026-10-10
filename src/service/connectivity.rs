@@ -42,6 +42,7 @@ use serde::Serialize;
 
 use crate::connections;
 use crate::contract::{DoorPayload, Level, Point2D, Room};
+use crate::settings::RoutingPolicy;
 use crate::state::AppState;
 
 use super::adjacency::{centroid_of, compute_adjacency_indexed, default_wall_max};
@@ -122,8 +123,142 @@ pub struct ConnectivityScope<'a> {
     /// [`Clearance`].
     pub clear_width_mm: Option<f64>,
     /// What the frame takes off a door's footprint width to give its clear opening.
-    /// Absent means [`DEFAULT_FRAME_ALLOWANCE_MM`].
+    /// Absent means the project's `[routing] door_frame_allowance_mm`.
     pub frame_allowance_mm: Option<f64>,
+    /// The height, in mm, of an object that has to make the trip. A door or a ROOM lower
+    /// than this is not passable; absent or 0 checks nothing. See [`Clearance`].
+    pub clear_height_mm: Option<f64>,
+    /// The room property that holds a room's clear height, matched ignoring case and
+    /// runs of spaces (RHH's is `Ceiling  Height`, with two). Absent means the project's
+    /// `[routing] room_height_property`.
+    pub height_property: Option<&'a str>,
+}
+
+/// A height in millimetres is never below this; a smaller number is another unit (metres,
+/// feet) and is NOT guessed at, so the room or door goes unchecked and is counted.
+const MIN_PLAUSIBLE_HEIGHT_MM: f64 = 100.0;
+
+/// The height asked for, from the optional number a caller sends. 0 is "no check".
+pub fn height_param(height_mm: Option<f64>) -> Result<Option<f64>, ServiceError> {
+    match height_mm {
+        None => Ok(None),
+        Some(h) if h.is_finite() && (0.0..=50_000.0).contains(&h) => Ok(Some(h).filter(|h| *h > 0.0)),
+        Some(h) => Err(ServiceError::Invalid(format!("height_mm must be between 0 and 50000 mm, not {h}"))),
+    }
+}
+
+/// A property name with case and runs of spaces ignored, for matching.
+fn norm(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// A numeric property in millimetres, found by normalised name. `None` when absent,
+/// not a number, or too small to be millimetres.
+fn property_mm(map: &crate::contract::PropertyMap, names: &[&str]) -> Option<f64> {
+    map.iter()
+        .find(|(k, _)| names.contains(&norm(k).as_str()))
+        .and_then(|(_, v)| v.value.trim().parse::<f64>().ok())
+        .filter(|h| h.is_finite() && *h >= MIN_PLAUSIBLE_HEIGHT_MM)
+}
+
+/// The height in a door's type name, for the convention that puts the size in it:
+/// "970 x 2040 TD01", "DWWH-003 820W x 2100H". The first `A x B` wins, so a later size
+/// inside the name (a vision panel, "200Wx800H") is not taken for the door. An
+/// ESTIMATE, from a naming habit and not from the model's geometry; `None` for a name
+/// with no size, and for a number no door could be.
+fn height_from_type_name(name: &str) -> Option<f64> {
+    let cs: Vec<char> = name.chars().collect();
+    for (p, &c) in cs.iter().enumerate() {
+        if !matches!(c, 'x' | 'X' | '×') {
+            continue;
+        }
+        let left = cs[..p].iter().rev().find(|ch| !ch.is_whitespace() && !matches!(ch, 'W' | 'w'));
+        if !left.is_some_and(|ch| ch.is_ascii_digit()) {
+            continue;
+        }
+        let digits: String = cs[p + 1..]
+            .iter()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if let Ok(h) = digits.parse::<f64>() {
+            return (300.0..=10_000.0).contains(&h).then_some(h);
+        }
+    }
+    None
+}
+
+/// A ceiling covering less than this fraction of a room is not what the room's height is.
+/// The attribution lists every real overlap, including a strip of a neighbour's ceiling
+/// reaching under a shared wall, and measured on RHH the answer hardly moves between 0 and
+/// 0.5 (87% agree with the room property throughout), so the middle of the range, stated.
+const MIN_CEILING_COVERAGE_OF_ROOM: f64 = 0.25;
+
+/// Each room's height from the CEILINGS over it, in mm: the lowest ceiling that covers at
+/// least [`MIN_CEILING_COVERAGE_OF_ROOM`] of the room. A ceiling whose offset is not at
+/// least a plausible millimetre height (a roof, a ceiling below its level) is not a
+/// ceiling over a room and is ignored. Empty when no ceilings were ever pushed.
+fn ceiling_heights(
+    state: &AppState,
+    project: &str,
+    milestone: Option<&str>,
+) -> Result<BTreeMap<RoomRef, f64>, ServiceError> {
+    use super::surfaces::{assemble_surfaces, SurfaceScope};
+    let scope = SurfaceScope { project: Some(project), milestone, storeys: None };
+    let Some(assembled) = assemble_surfaces::<crate::contract::CeilingPayload>(state, &scope)? else {
+        return Ok(BTreeMap::new());
+    };
+    let mut heights: BTreeMap<RoomRef, f64> = BTreeMap::new();
+    for ceiling in &assembled.surfaces {
+        let Some(mm) = ceiling.surface.height_offset.map(|ft| ft * MM_PER_FT) else {
+            continue;
+        };
+        if !mm.is_finite() || mm < MIN_PLAUSIBLE_HEIGHT_MM {
+            continue;
+        }
+        for r in ceiling.rooms.iter().filter(|r| r.fraction_of_room >= MIN_CEILING_COVERAGE_OF_ROOM) {
+            let room = RoomRef { model_id: r.model_id.clone(), room_id: r.room_id.clone() };
+            heights.entry(room).and_modify(|h| *h = h.min(mm)).or_insert(mm);
+        }
+    }
+    Ok(heights)
+}
+
+/// One node per room, each carrying its clear height: from a ceiling when one covers it,
+/// else from the room's height property.
+fn room_nodes(
+    rooms: &super::rooms::RoomsResult,
+    from_ceilings: &BTreeMap<RoomRef, f64>,
+    height_key: &str,
+) -> Vec<Node> {
+    rooms
+        .rooms
+        .iter()
+        .map(|r| {
+            let room = RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() };
+            let ceiling = from_ceilings.get(&room).copied();
+            Node {
+                name: r.room.name.clone(),
+                level_id: r.room.level_id.clone(),
+                centroid: centroid_of(&r.room),
+                degree: 0,
+                exits: 0,
+                component: 0,
+                height_mm: ceiling.or_else(|| property_mm(&r.room.properties, &[height_key])),
+                height_from_ceiling: ceiling.is_some(),
+                room,
+            }
+        })
+        .collect()
+}
+
+/// A door's estimated height from the project's sources, in the order they name: its
+/// own properties (instance, then type), then -- when the policy allows -- its type name.
+fn door_height_mm(door: &crate::contract::Opening, properties: &[String], from_type_name: bool) -> Option<f64> {
+    let names: Vec<&str> = properties.iter().map(String::as_str).collect();
+    property_mm(&door.properties, &names)
+        .or_else(|| property_mm(&door.type_properties, &names))
+        .or_else(|| from_type_name.then(|| height_from_type_name(&door.type_name)).flatten())
 }
 
 /// What a door's frame and stops take off the width its footprint measures, in mm.
@@ -133,7 +268,7 @@ pub struct ConnectivityScope<'a> {
 /// 150 is a rule of thumb for a standard single door, **an estimate and not a
 /// measurement**, which is why a caller can state their own and why every width here
 /// is reported as an estimate. No door on RHH carries a width property to use instead.
-pub const DEFAULT_FRAME_ALLOWANCE_MM: f64 = 150.0;
+pub const DEFAULT_FRAME_ALLOWANCE_MM: f64 = RoutingPolicy::DEFAULT_DOOR_FRAME_ALLOWANCE_MM;
 
 const MM_PER_FT: f64 = 304.8;
 
@@ -230,6 +365,43 @@ pub struct Clearance {
     /// it. Absent when no checked hop limits it, or when no route exists at all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub widest_possible: Option<WidthLimit>,
+    /// The height asked for, or absent when none was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked_height_mm: Option<f64>,
+    /// The lowest checked door or room on the route found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lowest: Option<HeightLimit>,
+    /// The tallest object that could make the trip by SOME route, and the door or room
+    /// that limits it. Absent when nothing checked limits it, or no route exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tallest_possible: Option<HeightLimit>,
+    /// Doors and rooms of the route found whose height is unknown, so were not checked.
+    pub unchecked_height: usize,
+}
+
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum HeightKind {
+    Door,
+    Room,
+}
+
+/// One door's or room's height, and which it is.
+#[derive(Serialize, Clone)]
+pub struct HeightLimit {
+    /// An ESTIMATE for a door (its property, else its type name) and the room's
+    /// height property for a room.
+    pub height_mm: f64,
+    pub kind: HeightKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub door_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub door_model_id: Option<String>,
+    /// The room, or the two rooms a door joins.
+    pub rooms: Vec<RoomRef>,
+    /// For a room: the height is a ceiling's and not the room's own property.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub from_ceiling: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -245,6 +417,13 @@ pub struct Node {
     /// way out of the building, or into a model that holds no rooms.
     pub exits: usize,
     pub component: usize,
+    /// The room's clear height in mm: the lowest ceiling over it, else its height
+    /// property; absent when neither is readable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_mm: Option<f64>,
+    /// `height_mm` came from a ceiling and not from the room's property.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub height_from_ceiling: bool,
 }
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -299,6 +478,10 @@ pub struct Edge {
     /// no footprint), which is passable and counted as unchecked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width_mm: Option<f64>,
+    /// A door's estimated height in mm. `None` for an open zone (its rooms carry the
+    /// height), a level change, and a door whose height is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height_mm: Option<f64>,
     /// Approximate walking distance through the door, in feet.
     pub length: f64,
     #[serde(skip)]
@@ -406,6 +589,8 @@ struct DoorFact {
     point: Option<(Point2D, PointSource)>,
     /// The estimated clear opening, from the footprint. `None` when there is none.
     width_mm: Option<f64>,
+    /// The estimated height, from a property or the type name. `None` when unknown.
+    height_mm: Option<f64>,
 }
 
 struct Graph {
@@ -459,6 +644,7 @@ fn link(mut nodes: Vec<Node>, doors: Vec<DoorFact>) -> Graph {
                     point,
                     point_source,
                     width_mm: door.width_mm,
+                    height_mm: door.height_mm,
                     length: dist(ca, point) + dist(point, cb),
                     ia,
                     ib,
@@ -809,6 +995,7 @@ fn add_zone_edges(
             point: fact.point,
             point_source: PointSource::SharedWall,
             width_mm: Some(fact.width_mm),
+            height_mm: None,
             length: dist(ca, fact.point) + dist(fact.point, cb),
             ia: fact.ia,
             ib: fact.ib,
@@ -847,6 +1034,7 @@ fn add_link_edges(
             point: nodes[fact.ia].centroid,
             point_source: PointSource::Vertical,
             width_mm: None,
+            height_mm: None,
             length: fact.cost,
             ia: fact.ia,
             ib: fact.ib,
@@ -1116,21 +1304,21 @@ pub fn assemble_connectivity(
     };
     let assembled = assemble_openings::<DoorPayload>(state, OpeningKind::Doors, &door_scope)?;
     let doors_pushed = assembled.is_some();
-    let frame_allowance_mm = scope.frame_allowance_mm.unwrap_or(DEFAULT_FRAME_ALLOWANCE_MM);
+    // Where the size checks read their data from is the project's to name; a request may
+    // override the two it can name itself.
+    let policy = state.settings().settings_for(project).map(|b| b.routing.clone()).unwrap_or_default();
+    let frame_allowance_mm = scope.frame_allowance_mm.unwrap_or_else(|| policy.frame_allowance_mm());
+    let height_key = norm(scope.height_property.unwrap_or_else(|| policy.room_height_property()));
+    let door_height_properties: Vec<String> = policy.door_height_properties().iter().map(|p| norm(p)).collect();
 
-    let nodes: Vec<Node> = rooms
-        .rooms
-        .iter()
-        .map(|r| Node {
-            room: RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() },
-            name: r.room.name.clone(),
-            level_id: r.room.level_id.clone(),
-            centroid: centroid_of(&r.room),
-            degree: 0,
-            exits: 0,
-            component: 0,
-        })
-        .collect();
+    // A room's height is read from the ceilings over it first, and only when a height was
+    // asked: reading them is a whole extra pass over the project and nothing else needs it.
+    let from_ceilings = if scope.clear_height_mm.is_some() && policy.room_height_from_ceilings {
+        ceiling_heights(state, project, scope.milestone)?
+    } else {
+        BTreeMap::new()
+    };
+    let nodes = room_nodes(&rooms, &from_ceilings, &height_key);
 
     let mut revision = rooms.revision.clone();
     let facts: Vec<DoorFact> = match &assembled {
@@ -1145,6 +1333,7 @@ pub fn assemble_connectivity(
                     to: d.room_origin.to_room.room().cloned(),
                     point: door_point(&d.door),
                     width_mm: door_clear_width_mm(&d.door, frame_allowance_mm),
+                    height_mm: door_height_mm(&d.door, &door_height_properties, policy.door_height_from_type_name),
                 })
                 .collect()
         }
@@ -1167,16 +1356,12 @@ pub fn assemble_connectivity(
         Some((from, to)) => {
             let (i, j) = (resolve(&nodes, from, "start")?, resolve(&nodes, to, "end")?);
             let ask = routing::Ask { from: i, to: j, from_at: from.at, to_at: to.at };
-            let (path, clearance) = route_asked(
-                &nodes,
-                &edges,
-                &outlines(&rooms, &nodes),
-                &ask,
-                scope.clear_width_mm,
+            let fit = Fit {
+                width_mm: scope.clear_width_mm,
+                height_mm: scope.clear_height_mm,
                 frame_allowance_mm,
-                method,
-                metric,
-            );
+            };
+            let (path, clearance) = route_asked(&nodes, &edges, &outlines(&rooms, &nodes), &ask, &fit, method, metric);
             (Some(path), Some(clearance))
         }
     };
@@ -1198,118 +1383,6 @@ pub fn assemble_connectivity(
         path,
         clearance,
     }))
-}
-
-/// The width readout for a route, and the sentence a width-blocked route gets.
-///
-/// `edges` is the WHOLE graph, so the narrowest hop of the route found and the widest
-/// object that could make the trip by any route are read against everything there is,
-/// not just what the asked width left. A route that failed only because of the width has
-/// its `reason` rewritten to say what would fit and what limits it: "no route" with no
-/// way to see why is the answer this readout exists to avoid.
-fn clearance_of(
-    nodes: &[Node],
-    edges: &[Edge],
-    path: &mut PathResult,
-    from: usize,
-    to: usize,
-    asked_mm: Option<f64>,
-    frame_allowance_mm: f64,
-) -> Clearance {
-    let limit_of = |e: &Edge| WidthLimit {
-        width_mm: e.width_mm.unwrap_or(0.0),
-        kind: e.kind,
-        door_id: e.door_id.clone(),
-        door_model_id: e.door_model_id.clone(),
-        zone_id: e.zone_id.clone(),
-        from: e.a.clone(),
-        to: e.b.clone(),
-    };
-
-    // The hops the route took, matched back to their edges.
-    let mut narrowest: Option<WidthLimit> = None;
-    let mut unchecked_hops = 0;
-    if path.found {
-        for step in &path.steps {
-            let edge = edges.iter().find(|e| {
-                e.kind == step.kind
-                    && match e.kind {
-                        EdgeKind::Door => e.door_id == step.door_id && e.door_model_id == step.door_model_id,
-                        EdgeKind::Zone => {
-                            e.zone_id == step.zone_id
-                                && ((e.a == step.from && e.b == step.to) || (e.a == step.to && e.b == step.from))
-                        }
-                        EdgeKind::Vertical => e.link_id == step.link_id,
-                    }
-            });
-            match edge {
-                Some(e) if e.width_mm.is_some() => {
-                    if narrowest.as_ref().is_none_or(|n| e.width_mm.unwrap_or(f64::MAX) < n.width_mm) {
-                        narrowest = Some(limit_of(e));
-                    }
-                }
-                _ => unchecked_hops += 1,
-            }
-        }
-    }
-
-    let widest_possible = widest_between(nodes, edges, from, to).map(|k| limit_of(&edges[k]));
-
-    if let (false, Some(asked), Some(widest)) = (path.found, asked_mm, widest_possible.as_ref()) {
-        let name = |r: &RoomRef| nodes.iter().find(|n| n.room == *r).map_or(r.room_id.clone(), |n| n.name.clone());
-        let what = match widest.kind {
-            EdgeKind::Door => format!("door {}", widest.door_id.as_deref().unwrap_or("?")),
-            EdgeKind::Zone => "an open area's shared wall".to_string(),
-            EdgeKind::Vertical => "a level change".to_string(),
-        };
-        path.reason = Some(format!(
-            "no route for an object {asked:.0} mm wide: the widest that fits is about {:.0} mm, limited by {what} \
-             between {} and {}. Door widths are estimates (footprint less {frame_allowance_mm:.0} mm for the frame)",
-            widest.width_mm,
-            name(&widest.from),
-            name(&widest.to)
-        ));
-    }
-
-    Clearance { asked_mm, frame_allowance_mm, narrowest, unchecked_hops, widest_possible }
-}
-
-/// The widest object that can get from `from` to `to`: the largest width such that the
-/// rooms are still joined using only hops at least that wide. Returns the index of the
-/// hop that limits it, or `None` when no hop limits it (the rooms are joined by hops of
-/// unknown width alone) or the rooms are not joined at all.
-///
-/// Edges are added widest first (those of unknown width first of all, since they never
-/// block) until the two rooms meet; the edge that joins them is the bottleneck.
-fn widest_between(nodes: &[Node], edges: &[Edge], from: usize, to: usize) -> Option<usize> {
-    if from == to {
-        return None;
-    }
-    fn find(parent: &mut [usize], mut x: usize) -> usize {
-        while parent[x] != x {
-            parent[x] = parent[parent[x]];
-            x = parent[x];
-        }
-        x
-    }
-    let mut order: Vec<usize> = (0..edges.len()).collect();
-    order.sort_by(|&a, &b| match (edges[a].width_mm, edges[b].width_mm) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (Some(x), Some(y)) => y.total_cmp(&x),
-    });
-    let mut parent: Vec<usize> = (0..nodes.len()).collect();
-    for k in order {
-        let (ra, rb) = (find(&mut parent, edges[k].ia), find(&mut parent, edges[k].ib));
-        if ra != rb {
-            parent[ra] = rb;
-        }
-        if find(&mut parent, from) == find(&mut parent, to) {
-            return edges[k].width_mm.map(|_| k);
-        }
-    }
-    None
 }
 
 /// What the zones and links did to the graph, written into the report a person reads: the
@@ -1347,33 +1420,348 @@ fn isolated_rooms(nodes: &[Node], components: &[Component]) -> Vec<IsolatedRoom>
         .collect()
 }
 
-/// The route between two rooms, and what its widths say.
+/// What an object has to get through: its width and height, and how much of a door's
+/// footprint is frame. A dimension that is absent is not checked.
+#[derive(Clone, Copy)]
+struct Fit {
+    width_mm: Option<f64>,
+    height_mm: Option<f64>,
+    frame_allowance_mm: f64,
+}
+
+/// Whether the object gets through this hop: the way through is wide enough, its door
+/// (if any) is tall enough, and BOTH rooms it joins are tall enough. A room too low to
+/// stand the object in closes every hop into it, the start and the end included: an
+/// object that does not fit its end room has not arrived.
+fn passable(e: &Edge, nodes: &[Node], fit: &Fit) -> bool {
+    let wide = fit.width_mm.is_none_or(|w| e.width_mm.is_none_or(|ew| ew >= w));
+    let tall = fit.height_mm.is_none_or(|h| {
+        e.height_mm.is_none_or(|eh| eh >= h)
+            && nodes[e.ia].height_mm.is_none_or(|nh| nh >= h)
+            && nodes[e.ib].height_mm.is_none_or(|nh| nh >= h)
+    });
+    wide && tall
+}
+
+/// The route between two rooms, and what its sizes say.
 ///
-/// With a width asked the route is searched over the edges wide enough, which is what
-/// keeps both methods unchanged: they take an edge list and a node list, and a shorter
-/// edge list is just a smaller building. The readout is read against the WHOLE graph.
-#[allow(clippy::too_many_arguments)]
+/// With a size asked the route is searched over the edges the object fits through, which
+/// is what keeps both methods unchanged: they take an edge list and a node list, and a
+/// shorter edge list is just a smaller building. The readout is read against the WHOLE
+/// graph.
 fn route_asked(
     nodes: &[Node],
     edges: &[Edge],
     outlines: &[Option<&Room>],
     ask: &routing::Ask,
-    clear_width_mm: Option<f64>,
-    frame_allowance_mm: f64,
+    fit: &Fit,
     method: Method,
     metric: Metric,
 ) -> (PathResult, Clearance) {
     let routable: Vec<Edge>;
-    let searched: &[Edge] = match clear_width_mm {
-        Some(w) => {
-            routable = edges.iter().filter(|e| e.width_mm.is_none_or(|ew| ew >= w)).cloned().collect();
-            &routable
-        }
-        None => edges,
+    let searched: &[Edge] = if fit.width_mm.is_some() || fit.height_mm.is_some() {
+        routable = edges.iter().filter(|e| passable(e, nodes, fit)).cloned().collect();
+        &routable
+    } else {
+        edges
     };
     let mut path = routing::route(method, nodes, searched, outlines, ask, metric);
-    let clearance = clearance_of(nodes, edges, &mut path, ask.from, ask.to, clear_width_mm, frame_allowance_mm);
+    let clearance = clearance_of(nodes, edges, &mut path, ask.from, ask.to, fit);
     (path, clearance)
+}
+
+/// The edge a route step took, matched back by what identifies it.
+fn edge_for_step<'a>(edges: &'a [Edge], step: &Step) -> Option<&'a Edge> {
+    edges.iter().find(|e| {
+        e.kind == step.kind
+            && match e.kind {
+                EdgeKind::Door => e.door_id == step.door_id && e.door_model_id == step.door_model_id,
+                EdgeKind::Zone => {
+                    e.zone_id == step.zone_id
+                        && ((e.a == step.from && e.b == step.to) || (e.a == step.to && e.b == step.from))
+                }
+                EdgeKind::Vertical => e.link_id == step.link_id,
+            }
+    })
+}
+
+fn width_limit(e: &Edge) -> WidthLimit {
+    WidthLimit {
+        width_mm: e.width_mm.unwrap_or(0.0),
+        kind: e.kind,
+        door_id: e.door_id.clone(),
+        door_model_id: e.door_model_id.clone(),
+        zone_id: e.zone_id.clone(),
+        from: e.a.clone(),
+        to: e.b.clone(),
+    }
+}
+
+fn door_height_limit(e: &Edge) -> HeightLimit {
+    HeightLimit {
+        height_mm: e.height_mm.unwrap_or(0.0),
+        kind: HeightKind::Door,
+        door_id: e.door_id.clone(),
+        door_model_id: e.door_model_id.clone(),
+        rooms: vec![e.a.clone(), e.b.clone()],
+        from_ceiling: false,
+    }
+}
+
+fn room_height_limit(n: &Node) -> HeightLimit {
+    HeightLimit {
+        height_mm: n.height_mm.unwrap_or(0.0),
+        kind: HeightKind::Room,
+        door_id: None,
+        door_model_id: None,
+        rooms: vec![n.room.clone()],
+        from_ceiling: n.height_from_ceiling,
+    }
+}
+
+/// The size readout for a route, and the sentence a blocked route gets.
+///
+/// \`edges\` is the WHOLE graph, so the narrowest and lowest points of the route found and
+/// the widest and tallest object that could make the trip by any route are read against
+/// everything there is, not just what the asked size left. A route that failed only
+/// because of the size has its \`reason\` rewritten to say what would fit and what limits
+/// it: "no route" with no way to see why is the answer this readout exists to avoid.
+fn clearance_of(nodes: &[Node], edges: &[Edge], path: &mut PathResult, from: usize, to: usize, fit: &Fit) -> Clearance {
+    let mut narrowest: Option<WidthLimit> = None;
+    let mut unchecked_hops = 0;
+    let mut lowest: Option<HeightLimit> = None;
+    let mut unchecked_height = 0;
+    let mut lower = |candidate: HeightLimit| {
+        if lowest.as_ref().is_none_or(|l| candidate.height_mm < l.height_mm) {
+            lowest = Some(candidate);
+        }
+    };
+    if path.found {
+        for step in &path.steps {
+            let edge = edge_for_step(edges, step);
+            match edge {
+                Some(e) if e.width_mm.is_some() => {
+                    if narrowest.as_ref().is_none_or(|n| e.width_mm.unwrap_or(f64::MAX) < n.width_mm) {
+                        narrowest = Some(width_limit(e));
+                    }
+                }
+                _ => unchecked_hops += 1,
+            }
+            // Only a DOOR has a height of its own: an open area's walls carry none, the
+            // rooms on either side do, and a level change has none to check.
+            if let Some(e) = edge.filter(|e| e.kind == EdgeKind::Door && fit.height_mm.is_some()) {
+                if e.height_mm.is_some() {
+                    lower(door_height_limit(e));
+                } else {
+                    unchecked_height += 1;
+                }
+            }
+        }
+        for r in path.rooms.iter().filter(|_| fit.height_mm.is_some()) {
+            if let Some(n) = nodes.iter().find(|n| n.room == *r) {
+                if n.height_mm.is_some() {
+                    lower(room_height_limit(n));
+                } else {
+                    unchecked_height += 1;
+                }
+            }
+        }
+    }
+
+    let widest_possible = widest_between(nodes, edges, from, to).map(|k| width_limit(&edges[k]));
+    // Heights are read (from ceilings, which is a whole extra read) only when one is asked,
+    // so without one there is nothing to report and nothing was paid for.
+    let tallest_possible = fit.height_mm.and_then(|_| tallest_between(nodes, edges, from, to));
+
+    // Blocked by size, not by the building: the rooms ARE joined, so say what limits it.
+    let asked = fit.width_mm.is_some() || fit.height_mm.is_some();
+    if !path.found && asked && nodes[from].component == nodes[to].component {
+        path.reason = Some(blocked_reason(nodes, fit, widest_possible.as_ref(), tallest_possible.as_ref()));
+    }
+
+    Clearance {
+        asked_mm: fit.width_mm,
+        frame_allowance_mm: fit.frame_allowance_mm,
+        narrowest,
+        unchecked_hops,
+        widest_possible,
+        asked_height_mm: fit.height_mm,
+        lowest,
+        tallest_possible,
+        unchecked_height,
+    }
+}
+
+/// The sentence for a trip no route of the asked size makes: what the widest and tallest
+/// that would fit are, and what limits each. When each dimension fits SOME route but no
+/// single route fits both, it says that, which is a different finding.
+fn blocked_reason(nodes: &[Node], fit: &Fit, widest: Option<&WidthLimit>, tallest: Option<&HeightLimit>) -> String {
+    let name = |r: &RoomRef| nodes.iter().find(|n| n.room == *r).map_or(r.room_id.clone(), |n| n.name.clone());
+    let mut asked = Vec::new();
+    let mut clauses = Vec::new();
+    if let Some(w) = fit.width_mm {
+        asked.push(format!("{w:.0} mm wide"));
+        if let Some(l) = widest.filter(|l| l.width_mm < w) {
+            let what = match l.kind {
+                EdgeKind::Door => format!("door {}", l.door_id.as_deref().unwrap_or("?")),
+                EdgeKind::Zone => "an open area's shared wall".to_string(),
+                EdgeKind::Vertical => "a level change".to_string(),
+            };
+            clauses.push(format!(
+                "the widest that fits is about {:.0} mm, limited by {what} between {} and {}",
+                l.width_mm,
+                name(&l.from),
+                name(&l.to)
+            ));
+        }
+    }
+    if let Some(h) = fit.height_mm {
+        asked.push(format!("{h:.0} mm tall"));
+        if let Some(l) = tallest.filter(|l| l.height_mm < h) {
+            let what = match l.kind {
+                HeightKind::Door => format!(
+                    "door {} between {} and {}",
+                    l.door_id.as_deref().unwrap_or("?"),
+                    name(&l.rooms[0]),
+                    name(&l.rooms[1])
+                ),
+                HeightKind::Room => {
+                    format!("room {}{}", name(&l.rooms[0]), if l.from_ceiling { " (from its ceiling)" } else { "" })
+                }
+            };
+            clauses.push(format!("the tallest that fits is about {:.0} mm, limited by {what}", l.height_mm));
+        }
+    }
+    if clauses.is_empty() {
+        clauses.push("each size fits some route, but no single route fits both".to_string());
+    }
+    format!(
+        "no route for an object {}: {}. Door widths are estimates (footprint less {:.0} mm for the frame), door heights \
+         are read from a height property or the type name, and room heights from the room's height property",
+        asked.join(" and "),
+        clauses.join("; "),
+        fit.frame_allowance_mm
+    )
+}
+
+/// The widest object that can get from \`from\` to \`to\`: the largest width such that the
+/// rooms are still joined using only hops at least that wide. Returns the index of the
+/// hop that limits it, or \`None\` when no hop limits it (the rooms are joined by hops of
+/// unknown width alone) or the rooms are not joined at all.
+///
+/// Edges are added widest first (those of unknown width first of all, since they never
+/// block) until the two rooms meet; the edge that joins them is the bottleneck.
+fn widest_between(nodes: &[Node], edges: &[Edge], from: usize, to: usize) -> Option<usize> {
+    if from == to {
+        return None;
+    }
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let mut order: Vec<usize> = (0..edges.len()).collect();
+    order.sort_by(|&a, &b| match (edges[a].width_mm, edges[b].width_mm) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(x), Some(y)) => y.total_cmp(&x),
+    });
+    let mut parent: Vec<usize> = (0..nodes.len()).collect();
+    for k in order {
+        let (ra, rb) = (find(&mut parent, edges[k].ia), find(&mut parent, edges[k].ib));
+        if ra != rb {
+            parent[ra] = rb;
+        }
+        if find(&mut parent, from) == find(&mut parent, to) {
+            return edges[k].width_mm.map(|_| k);
+        }
+    }
+    None
+}
+
+/// The nodes and edges of a route from \`from\` to \`to\` using only doors and rooms at least
+/// \`t\` mm tall (an unknown height never blocks), or \`None\` when there is none.
+fn route_at_height(nodes: &[Node], edges: &[Edge], from: usize, to: usize, t: f64) -> Option<(Vec<usize>, Vec<usize>)> {
+    let ok = |h: Option<f64>| h.is_none_or(|h| h >= t);
+    if !ok(nodes[from].height_mm) {
+        return None;
+    }
+    let mut via: Vec<Option<usize>> = vec![None; nodes.len()];
+    let mut seen = vec![false; nodes.len()];
+    let mut queue = std::collections::VecDeque::from([from]);
+    seen[from] = true;
+    while let Some(n) = queue.pop_front() {
+        if n == to {
+            break;
+        }
+        for (k, e) in edges.iter().enumerate() {
+            let next = if e.ia == n {
+                e.ib
+            } else if e.ib == n {
+                e.ia
+            } else {
+                continue;
+            };
+            if !seen[next] && ok(e.height_mm) && ok(nodes[next].height_mm) {
+                seen[next] = true;
+                via[next] = Some(k);
+                queue.push_back(next);
+            }
+        }
+    }
+    if !seen[to] {
+        return None;
+    }
+    let (mut ns, mut es, mut at) = (vec![to], Vec::new(), to);
+    while at != from {
+        let k = via[at].expect("a reached node has a predecessor");
+        es.push(k);
+        at = if edges[k].ia == at { edges[k].ib } else { edges[k].ia };
+        ns.push(at);
+    }
+    Some((ns, es))
+}
+
+/// The tallest object that can get from \`from\` to \`to\`, and the door or room that limits
+/// it. Tries each height that exists in the building from the top down; the first at which
+/// the rooms are joined is the answer, and the lowest checked element of that route is the
+/// limit. \`None\` when no height limits it (nothing on the way has a known height) or when
+/// the rooms are not joined at all.
+fn tallest_between(nodes: &[Node], edges: &[Edge], from: usize, to: usize) -> Option<HeightLimit> {
+    if from == to {
+        return None;
+    }
+    let mut heights: Vec<f64> = nodes
+        .iter()
+        .filter_map(|n| n.height_mm)
+        .chain(edges.iter().filter_map(|e| e.height_mm))
+        .collect();
+    heights.sort_by(|a, b| b.total_cmp(a));
+    heights.dedup();
+    for t in heights {
+        let Some((ns, es)) = route_at_height(nodes, edges, from, to, t) else {
+            continue;
+        };
+        let door = es
+            .iter()
+            .filter(|&&k| edges[k].kind == EdgeKind::Door && edges[k].height_mm.is_some())
+            .min_by(|&&a, &&b| {
+                edges[a].height_mm.unwrap_or(f64::MAX).total_cmp(&edges[b].height_mm.unwrap_or(f64::MAX))
+            });
+        let room = ns.iter().filter(|&&i| nodes[i].height_mm.is_some()).min_by(|&&a, &&b| {
+            nodes[a].height_mm.unwrap_or(f64::MAX).total_cmp(&nodes[b].height_mm.unwrap_or(f64::MAX))
+        });
+        return match (door, room) {
+            (Some(&d), Some(&r)) if edges[d].height_mm <= nodes[r].height_mm => Some(door_height_limit(&edges[d])),
+            (_, Some(&r)) => Some(room_height_limit(&nodes[r])),
+            (Some(&d), None) => Some(door_height_limit(&edges[d])),
+            (None, None) => None,
+        };
+    }
+    None
 }
 
 /// Each node's room outline, for the methods that walk inside rooms.
@@ -1432,6 +1820,8 @@ mod tests {
             degree: 0,
             exits: 0,
             component: 0,
+            height_mm: None,
+            height_from_ceiling: false,
         }
     }
 
@@ -1447,6 +1837,7 @@ mod tests {
             to,
             point: at.map(|(x, y)| (Point2D { x, y }, PointSource::Insertion)),
             width_mm: None,
+            height_mm: None,
         }
     }
 
@@ -1661,6 +2052,7 @@ mod tests {
                 windows: Default::default(),
                 ffe: Default::default(),
                 hierarchy_exclusions: vec![],
+                routing: Default::default(),
             }
         }
 
@@ -1899,6 +2291,7 @@ mod tests {
         /// Rooms a|b|c share walls in a row, `d` stands apart; only a-b has a door.
         fn zoned(tag: &str, zones: Vec<crate::connections::ZoneInput>) -> (AppState, std::path::PathBuf) {
             let dir = std::env::temp_dir().join(format!("roommate-conn-zones-{tag}-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok(); // a stale one from a run with the same process id would read as saved data
             std::fs::create_dir_all(&dir).unwrap();
             let state = state(vec![door("ab", Some("a"), Some("b"), "none")]).with_projects_dir(dir.clone());
             crate::connections::save(
@@ -2004,6 +2397,7 @@ mod tests {
         /// 3, a door joining each pair on one storey and nothing between storeys.
         fn storeys(tag: &str, links: Vec<crate::connections::LinkInput>) -> (AppState, std::path::PathBuf) {
             let dir = std::env::temp_dir().join(format!("roommate-conn-links-{tag}-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok(); // a stale one from a run with the same process id would read as saved data
             std::fs::create_dir_all(&dir).unwrap();
             let rooms = vec![
                 rect_on("a", 0.0, 10.0, "lvl1"),
@@ -2062,6 +2456,7 @@ mod tests {
         #[test]
         fn test_a_room_can_be_in_an_open_zone_and_a_vertical_link() {
             let dir = std::env::temp_dir().join(format!("roommate-conn-both-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok(); // a stale one from a run with the same process id would read as saved data
             std::fs::create_dir_all(&dir).unwrap();
             let rooms = vec![
                 rect_on("a", 0.0, 10.0, "lvl1"),
@@ -2241,6 +2636,415 @@ mod tests {
             assert!(width_params(None, Some(5000.0)).is_err());
         }
 
+        // ---------- heights ----------
+
+        /// A door whose type name states `height_mm` the way RHH's do ("970 x 2040").
+        fn sized_tall(id: &str, from: &str, to: &str, clear_mm: f64, height_mm: f64) -> Opening {
+            let mut o = sized(id, from, to, clear_mm);
+            o.type_name = format!("{} x {} TD01", clear_mm as u32, height_mm as u32);
+            o
+        }
+
+        /// A room with a ceiling height in the property RHH uses, TWO SPACES and all.
+        fn with_height(mut room: Room, mm: &str) -> Room {
+            room.properties.insert(
+                "Ceiling  Height".into(),
+                CustomValue { value: mm.to_string(), storage_type: Some("String".into()) },
+            );
+            room
+        }
+
+        fn read_size(
+            state: &AppState,
+            from: &str,
+            to: &str,
+            width: Option<f64>,
+            height: Option<f64>,
+        ) -> ConnectivityResult {
+            let (a, b) = (ep(None, from), ep(None, to));
+            assemble_connectivity(
+                state,
+                "p1",
+                &ConnectivityScope { clear_width_mm: width, clear_height_mm: height, ..Default::default() },
+                Some((&a, &b)),
+                Metric::Distance,
+                Method::Centroid,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap()
+        }
+
+        fn rooms_abc(heights: [Option<&str>; 3]) -> Vec<Room> {
+            ["a", "b", "c"]
+                .iter()
+                .zip([(0.0, 10.0), (10.0, 20.0), (20.0, 30.0)])
+                .zip(heights)
+                .map(|((id, (x0, x1)), h)| {
+                    let r = rect(id, x0, x1);
+                    match h {
+                        Some(h) => with_height(r, h),
+                        None => r,
+                    }
+                })
+                .collect()
+        }
+
+        #[test]
+        fn test_the_height_in_a_door_type_name_is_read_and_a_low_door_blocks() {
+            let s = state_of(
+                rooms_abc([None, None, None]),
+                vec![
+                    sized_tall("ab", "a", "b", 900.0, 2040.0),
+                    sized_tall("bc", "b", "c", 900.0, 1900.0),
+                ],
+            );
+            let ok = read_size(&s, "a", "c", None, Some(1800.0));
+            assert!(ok.path.as_ref().unwrap().found);
+            let lowest = ok.clearance.as_ref().unwrap().lowest.as_ref().unwrap();
+            assert_eq!((lowest.kind, lowest.door_id.as_deref()), (HeightKind::Door, Some("bc")));
+            assert!((lowest.height_mm - 1900.0).abs() < 1e-9);
+
+            let blocked = read_size(&s, "a", "c", None, Some(2000.0));
+            let path = blocked.path.as_ref().unwrap();
+            assert!(!path.found);
+            let reason = path.reason.as_deref().unwrap();
+            assert!(
+                reason.contains("2000 mm tall") && reason.contains("1900 mm") && reason.contains("door bc"),
+                "{reason}"
+            );
+            assert_eq!(blocked.clearance.unwrap().tallest_possible.unwrap().door_id.as_deref(), Some("bc"));
+        }
+
+        /// The point of checking rooms too: a doorway can be tall enough and the room
+        /// behind it still too low (a plant room, a undercroft).
+        #[test]
+        fn test_a_room_too_low_blocks_the_route_and_is_named() {
+            let s = state_of(
+                rooms_abc([Some("2700"), Some("2100"), Some("2700")]),
+                vec![
+                    sized_tall("ab", "a", "b", 900.0, 2400.0),
+                    sized_tall("bc", "b", "c", 900.0, 2400.0),
+                ],
+            );
+            assert!(read_size(&s, "a", "c", None, Some(2000.0)).path.as_ref().unwrap().found);
+            let blocked = read_size(&s, "a", "c", None, Some(2400.0));
+            let reason = blocked.path.as_ref().unwrap().reason.clone().unwrap();
+            assert!(reason.contains("room b") && reason.contains("2100 mm"), "{reason}");
+            let tallest = blocked.clearance.unwrap().tallest_possible.unwrap();
+            assert_eq!((tallest.kind, tallest.height_mm), (HeightKind::Room, 2100.0));
+        }
+
+        /// A detour with enough headroom is taken, so height shapes the route and not only
+        /// whether one exists.
+        #[test]
+        fn test_a_height_sends_the_route_round_a_low_door() {
+            let s = state_of(
+                rooms_abc([None, None, None]),
+                vec![
+                    sized_tall("ab", "a", "b", 900.0, 1900.0),
+                    sized_tall("ac", "a", "c", 900.0, 2400.0),
+                    sized_tall("cb", "c", "b", 900.0, 2400.0),
+                ],
+            );
+            let via: Vec<_> = read_size(&s, "a", "b", None, Some(2100.0))
+                .path
+                .unwrap()
+                .rooms
+                .iter()
+                .map(|r| r.room_id.clone())
+                .collect();
+            assert_eq!(via, vec!["a", "c", "b"]);
+        }
+
+        /// A door or room with no height is passable and counted, never blocked.
+        #[test]
+        fn test_an_unknown_height_does_not_block_and_is_counted() {
+            let s = state_of(rooms_abc([None, None, None]), vec![sized("ab", "a", "b", 900.0)]);
+            let r = read_size(&s, "a", "b", None, Some(9000.0));
+            assert!(r.path.as_ref().unwrap().found);
+            let c = r.clearance.unwrap();
+            assert!(c.lowest.is_none());
+            assert_eq!(c.unchecked_height, 3, "the door and both rooms");
+        }
+
+        /// Each size fits SOME route and no single route fits both: said as that.
+        #[test]
+        fn test_each_size_fitting_some_route_but_not_together_is_said() {
+            let s = state_of(
+                rooms_abc([None, None, None]),
+                vec![
+                    sized_tall("ab", "a", "b", 600.0, 2400.0),
+                    sized_tall("ac", "a", "c", 1200.0, 1900.0),
+                    sized_tall("cb", "c", "b", 1200.0, 1900.0),
+                ],
+            );
+            let r = read_size(&s, "a", "b", Some(1000.0), Some(2200.0));
+            let path = r.path.as_ref().unwrap();
+            assert!(!path.found);
+            assert!(path.reason.as_deref().unwrap().contains("no single route fits both"), "{:?}", path.reason);
+        }
+
+        #[test]
+        fn test_a_type_name_is_read_for_its_first_size_only() {
+            assert_eq!(height_from_type_name("970 x 2040 TD01 (default single)"), Some(2040.0));
+            assert_eq!(height_from_type_name("970/570 x 2040 TD56 200Wx800H VP"), Some(2040.0));
+            assert_eq!(height_from_type_name("DWWH-003 820W x 2100H"), Some(2100.0));
+            assert_eq!(height_from_type_name("820 X 2100"), Some(2100.0));
+            assert_eq!(height_from_type_name("Mesh - Single"), None);
+            assert_eq!(height_from_type_name("3500W (Placeholder)"), None);
+            assert_eq!(height_from_type_name("Max 3"), None, "an x inside a word is not a size");
+            assert_eq!(height_from_type_name("900 x 12"), None, "no door is 12 mm tall");
+        }
+
+        #[test]
+        fn test_a_property_is_matched_ignoring_case_and_spacing_and_units_are_not_guessed() {
+            let mut p = crate::contract::PropertyMap::new();
+            p.insert("Ceiling  Height".into(), CustomValue { value: " 2700 ".into(), storage_type: None });
+            assert_eq!(property_mm(&p, &["ceiling height"]), Some(2700.0));
+            p.insert("Room Height".into(), CustomValue { value: "2.7".into(), storage_type: None });
+            assert_eq!(
+                property_mm(&p, &["room height"]),
+                None,
+                "2.7 is metres, not millimetres: unchecked, not guessed"
+            );
+            assert_eq!(property_mm(&p, &["no such"]), None);
+        }
+
+        /// A project whose bundle states its own sources.
+        fn state_routing(rooms: Vec<Room>, doors: Vec<Opening>, routing: RoutingPolicy) -> AppState {
+            let state = AppState::new(
+                Box::new(MemStore::new()),
+                HashMap::from([("p1".to_string(), ProjectSettings { routing, ..bundle() })]),
+                None,
+            );
+            state.set_snapshot(rooms_payload(rooms)).unwrap();
+            state
+                .set_door_snapshot(DoorPayload {
+                    schema_version: SUPPORTED_DOOR_SCHEMA,
+                    project: Project { id: "p1".into(), name: "P".into() },
+                    model: Model { id: "m1".into(), name: "M".into(), source: "revit".into() },
+                    snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                    phase: Some("New Construction".into()),
+                    model_to_shared: None,
+                    levels: vec![],
+                    doors,
+                })
+                .unwrap();
+            state
+        }
+
+        /// The room height comes from the property the PROJECT names, not a built-in one.
+        #[test]
+        fn test_the_room_height_property_is_the_projects_to_name() {
+            let mut a = rect("a", 0.0, 10.0);
+            a.properties
+                .insert("Clear Height".into(), CustomValue { value: "1800".into(), storage_type: None });
+            let mut b = rect("b", 10.0, 20.0);
+            b.properties
+                .insert("Clear Height".into(), CustomValue { value: "3000".into(), storage_type: None });
+            let doors = vec![sized_tall("ab", "a", "b", 900.0, 2400.0)];
+
+            // Default property: neither room has a "Ceiling Height", so nothing is checked.
+            let by_default = state_routing(vec![a.clone(), b.clone()], doors.clone(), RoutingPolicy::default());
+            assert!(read_size(&by_default, "a", "b", None, Some(2200.0)).path.as_ref().unwrap().found);
+
+            // Named: room a is only 1800 mm tall, so a 2200 mm object cannot be in it.
+            let named = RoutingPolicy { room_height_property: Some("clear height".into()), ..Default::default() };
+            let s = state_routing(vec![a, b], doors, named);
+            let r = read_size(&s, "a", "b", None, Some(2200.0));
+            assert!(!r.path.as_ref().unwrap().found);
+            assert!(r.path.unwrap().reason.unwrap().contains("room a"));
+        }
+
+        /// The door height properties are the project's, tried in order, before the name.
+        #[test]
+        fn test_door_height_properties_come_from_the_policy_and_beat_the_type_name() {
+            let mut door = sized_tall("ab", "a", "b", 900.0, 2400.0);
+            door.properties
+                .insert("Rough Height".into(), CustomValue { value: "1950".into(), storage_type: None });
+            let policy = RoutingPolicy { door_height_properties: vec!["rough height".into()], ..Default::default() };
+            let s = state_routing(rooms_abc([None, None, None]), vec![door.clone()], policy);
+            let r = read_size(&s, "a", "b", None, Some(2100.0));
+            assert!(!r.path.as_ref().unwrap().found, "the property (1950) wins over the name (2400)");
+            // Without the policy naming it, the property is not read and the name's 2400 passes.
+            let plain = state_routing(rooms_abc([None, None, None]), vec![door], RoutingPolicy::default());
+            assert!(read_size(&plain, "a", "b", None, Some(2100.0)).path.as_ref().unwrap().found);
+        }
+
+        #[test]
+        fn test_reading_a_height_from_the_type_name_can_be_switched_off() {
+            let doors = vec![sized_tall("ab", "a", "b", 900.0, 1900.0)];
+            let on = state_routing(rooms_abc([None, None, None]), doors.clone(), RoutingPolicy::default());
+            assert!(!read_size(&on, "a", "b", None, Some(2100.0)).path.as_ref().unwrap().found);
+            let off = RoutingPolicy { door_height_from_type_name: false, ..Default::default() };
+            let s = state_routing(rooms_abc([None, None, None]), doors, off);
+            let r = read_size(&s, "a", "b", None, Some(2100.0));
+            assert!(r.path.as_ref().unwrap().found, "no source left to say the door is low");
+            assert_eq!(r.clearance.unwrap().unchecked_height, 3);
+        }
+
+        #[test]
+        fn test_the_frame_allowance_comes_from_the_policy_and_a_request_overrides_it() {
+            // A footprint of 1050 mm: 900 clear at the default 150 allowance, 950 at 100.
+            let doors = vec![sized("ab", "a", "b", 900.0)];
+            let policy = RoutingPolicy { door_frame_allowance_mm: Some(100.0), ..Default::default() };
+            let s = state_routing(rooms_abc([None, None, None]), doors.clone(), policy);
+            assert!(read_size(&s, "a", "b", Some(940.0), None).path.as_ref().unwrap().found);
+            let default = state_routing(rooms_abc([None, None, None]), doors, RoutingPolicy::default());
+            assert!(!read_size(&default, "a", "b", Some(940.0), None).path.as_ref().unwrap().found);
+        }
+
+        // ---------- heights from ceilings ----------
+
+        /// A ceiling over `x0..x1` (the rooms are 10 ft deep) at `mm` above its level.
+        fn ceiling(id: &str, x0: f64, x1: f64, mm: f64) -> crate::contract::Surface {
+            crate::contract::Surface {
+                id: id.to_string(),
+                level_id: "lvl1".to_string(),
+                height_offset: Some(mm / MM_PER_FT),
+                polygons: vec![crate::contract::SurfacePolygon {
+                    loops: vec![Loop {
+                        points: vec![
+                            Point2D { x: x0, y: 0.0 },
+                            Point2D { x: x1, y: 0.0 },
+                            Point2D { x: x1, y: 10.0 },
+                            Point2D { x: x0, y: 10.0 },
+                        ],
+                    }],
+                }],
+                properties: Default::default(),
+                type_properties: Default::default(),
+                type_id: None,
+                type_name: None,
+            }
+        }
+
+        fn with_ceilings(state: AppState, ceilings: Vec<crate::contract::Surface>) -> AppState {
+            state
+                .set_element_snapshot(
+                    crate::storage::SnapshotKind::Ceilings,
+                    &crate::contract::CeilingPayload {
+                        schema_version: crate::contract::SUPPORTED_CEILING_SCHEMA,
+                        project: Project { id: "p1".into(), name: "P".into() },
+                        model: Model { id: "m1".into(), name: "M".into(), source: "revit".into() },
+                        snapshot: Snapshot { taken_at: "2026-01-01T00:00:00Z".into() },
+                        phase: Some("New Construction".into()),
+                        model_to_shared: None,
+                        levels: vec![Level { id: "lvl1".into(), name: "Level 1".into(), elevation: 0.0 }],
+                        ceilings,
+                    },
+                )
+                .unwrap();
+            state
+        }
+
+        fn doors_abc() -> Vec<Opening> {
+            vec![
+                sized_tall("ab", "a", "b", 900.0, 2400.0),
+                sized_tall("bc", "b", "c", 900.0, 2400.0),
+            ]
+        }
+
+        /// A ceiling is where the ceiling really is: it beats the room's property, and the
+        /// answer says the height came from it.
+        #[test]
+        fn test_a_ceiling_over_a_room_beats_the_rooms_property() {
+            let s = with_ceilings(
+                state_of(rooms_abc([Some("2700"), Some("2700"), Some("2700")]), doors_abc()),
+                vec![ceiling("c1", 10.0, 20.0, 2100.0)],
+            );
+            let r = read_size(&s, "a", "c", None, Some(2400.0));
+            let path = r.path.as_ref().unwrap();
+            assert!(!path.found, "room b has a 2100 mm ceiling although its property says 2700");
+            let reason = path.reason.as_deref().unwrap();
+            assert!(reason.contains("room b (from its ceiling)") && reason.contains("2100 mm"), "{reason}");
+            let tallest = r.clearance.unwrap().tallest_possible.unwrap();
+            assert!(tallest.from_ceiling);
+        }
+
+        /// No ceiling over a room: the property is the fallback, and says so by not saying
+        /// "from its ceiling".
+        #[test]
+        fn test_a_room_no_ceiling_covers_falls_back_to_its_property() {
+            let s = with_ceilings(
+                state_of(rooms_abc([Some("2700"), Some("2300"), Some("2000")]), doors_abc()),
+                vec![ceiling("c1", 10.0, 20.0, 3000.0)],
+            );
+            // Room b's 3000 mm ceiling is what it reads, not its 2300 property, so 2400 fits it.
+            assert!(read_size(&s, "a", "b", None, Some(2400.0)).path.as_ref().unwrap().found);
+            // Room c has no ceiling over it, so its property (2000) answers, and says so by not
+            // claiming a ceiling.
+            let r = read_size(&s, "a", "c", None, Some(2400.0));
+            let reason = r.path.as_ref().unwrap().reason.clone().unwrap();
+            assert!(reason.contains("room c") && !reason.contains("from its ceiling"), "{reason}");
+        }
+
+        #[test]
+        fn test_ceilings_can_be_switched_off_for_a_project() {
+            let rooms = rooms_abc([Some("2700"), Some("2700"), Some("2700")]);
+            let policy = RoutingPolicy { room_height_from_ceilings: false, ..Default::default() };
+            let s = with_ceilings(state_routing(rooms, doors_abc(), policy), vec![ceiling("c1", 10.0, 20.0, 2100.0)]);
+            assert!(
+                read_size(&s, "a", "c", None, Some(2400.0)).path.as_ref().unwrap().found,
+                "only the property is read"
+            );
+        }
+
+        /// A strip of a neighbour's ceiling and a ceiling at or below its level are not what a
+        /// room's height is.
+        #[test]
+        fn test_a_sliver_and_a_non_positive_offset_are_not_a_rooms_height() {
+            let s = with_ceilings(
+                state_of(rooms_abc([None, None, None]), doors_abc()),
+                vec![
+                    // 2 of room b's 10 ft: 20%, under the quarter that counts.
+                    ceiling("sliver", 10.0, 12.0, 1500.0),
+                    // a roof: below its level.
+                    ceiling("roof", 10.0, 20.0, -800.0),
+                ],
+            );
+            let r = read_size(&s, "a", "c", None, Some(2400.0));
+            assert!(r.path.as_ref().unwrap().found);
+            // The doors' heights come from their type names; the three rooms have no property and no
+            // ceiling that counts.
+            assert_eq!(r.clearance.unwrap().unchecked_height, 3);
+        }
+
+        #[test]
+        fn test_the_lowest_ceiling_that_covers_the_room_is_its_height() {
+            let s = with_ceilings(
+                state_of(rooms_abc([None, None, None]), doors_abc()),
+                vec![ceiling("high", 10.0, 20.0, 3000.0), ceiling("drop", 10.0, 15.0, 2200.0)],
+            );
+            let blocked = read_size(&s, "a", "c", None, Some(2400.0));
+            assert!(!blocked.path.as_ref().unwrap().found);
+            assert!((blocked.clearance.unwrap().tallest_possible.unwrap().height_mm - 2200.0).abs() < 1.0);
+        }
+
+        /// The height facts are only worked out when a height is asked, so a route without one
+        /// reports none and the ceilings were not read for it.
+        #[test]
+        fn test_without_a_height_there_are_no_height_facts() {
+            let s = with_ceilings(
+                state_of(rooms_abc([Some("2700"), Some("2700"), Some("2700")]), doors_abc()),
+                vec![ceiling("c1", 10.0, 20.0, 2100.0)],
+            );
+            let c = read_size(&s, "a", "c", None, None).clearance.unwrap();
+            assert!(c.lowest.is_none() && c.tallest_possible.is_none());
+            assert_eq!(c.unchecked_height, 0);
+        }
+
+        #[test]
+        fn test_the_height_asked_is_validated() {
+            assert_eq!(height_param(None).unwrap(), None);
+            assert_eq!(height_param(Some(0.0)).unwrap(), None);
+            assert_eq!(height_param(Some(2100.0)).unwrap(), Some(2100.0));
+            assert!(height_param(Some(-1.0)).is_err());
+            assert!(height_param(Some(f64::NAN)).is_err());
+            assert!(height_param(Some(60_000.0)).is_err());
+        }
+
         // ---------- disconnects and the hub ----------
 
         /// Three bays side by side along a corridor: `b1 | b2 | b3` below `cor`. Every
@@ -2261,6 +3065,7 @@ mod tests {
                 }
             }
             let dir = std::env::temp_dir().join(format!("roommate-conn-bays-{tag}-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok(); // a stale one from a run with the same process id would read as saved data
             std::fs::create_dir_all(&dir).unwrap();
             let rooms = vec![
                 at("b1", 0.0, 10.0, 0.0, 10.0),

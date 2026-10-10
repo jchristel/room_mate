@@ -22,7 +22,15 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { markerPoint, planPointOf, polylinePoints, segmentsOnLevel, type PlanPoint, type RouteState } from "../route.js";
+import {
+  markerPoint,
+  MM_PER_FT,
+  planPointOf,
+  polylinePoints,
+  segmentsOnLevel,
+  type PlanPoint,
+  type RouteState,
+} from "../route.js";
 import { patchZoneRoute } from "./store.js";
 import { handleOf } from "./zoneRegistry.js";
 import { useViewer } from "./useViewer.js";
@@ -48,6 +56,9 @@ export function RouteOverlay({
   const segments = segmentsOnLevel(path, levelId);
   const fitted = handleOf(zoneId)?.fitted;
   const r = fitted ? Math.max(fitted.w, fitted.h) * 0.0055 : 0.5;
+  // The width the server applied, not the one typed: a half-typed number draws nothing.
+  const askedMm = route.result.state === "done" ? route.result.clearance?.asked_mm : undefined;
+  const bandFt = askedMm && askedMm > 0 ? askedMm / MM_PER_FT : null;
 
   const place = (roomId: string | null, which: Which) => {
     const room = roomId ? payload?.rooms?.find((x) => x.id === roomId) : null;
@@ -82,6 +93,15 @@ export function RouteOverlay({
 
   return (
     <g className="route-overlay">
+      {/* The object's own width, at true size, under the line: a corridor narrower than
+          it shows as a band wider than the rooms around it. Absent for no width. */}
+      {bandFt !== null
+        ? segments.map((s, i) =>
+            s.points.length >= 2 ? (
+              <polyline key={`band${i}`} className="route-band" style={{ strokeWidth: bandFt }} points={polylinePoints(s.points)} />
+            ) : null,
+          )
+        : null}
       {segments.map((s, i) =>
         s.points.length >= 2 ? <polyline key={i} className="route-line" points={polylinePoints(s.points)} /> : null,
       )}

@@ -2471,6 +2471,7 @@ mod tests {
             windows: Default::default(),
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
+            routing: Default::default(),
         };
         let state = AppState::new(
             Box::new(crate::storage::MemStore::new()),
@@ -2640,6 +2641,7 @@ mod tests {
             windows: Default::default(),
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
+            routing: Default::default(),
         };
         let state = AppState::new(
             Box::new(crate::storage::MemStore::new()),
@@ -3579,6 +3581,7 @@ mod tests {
             windows: Default::default(),
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
+            routing: Default::default(),
         };
         let state = AppState::new(
             Box::new(crate::storage::MemStore::new()),

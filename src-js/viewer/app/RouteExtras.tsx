@@ -22,7 +22,7 @@ import {
   whyRouteNotSavable,
   type DocBody,
 } from "../connections.js";
-import { parseWidth, routeRows, type RouteState } from "../route.js";
+import { parseHeight, parseWidth, routeRows, type RouteState } from "../route.js";
 import { ColourInput } from "./ColourInput.js";
 import { put, request } from "./connectionsApi.js";
 import { panToRoom } from "./zoneRegistry.js";
@@ -53,6 +53,7 @@ export function RouteExtras({ zone, route }: { zone: ZoneRow; route: RouteState 
     toAt: route.endAt,
     method: route.method,
     widthMm: parseWidth(route.width) === "bad" ? null : (parseWidth(route.width) as number | null),
+    heightMm: parseHeight(route.height) === "bad" ? null : (parseHeight(route.height) as number | null),
   };
   const reason = whyRouteNotSavable(draft) ?? (path ? null : "Only a route that was found can be saved.");
 

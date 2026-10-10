@@ -69,7 +69,10 @@ export function ExportMenu({
   const undrawn: string[] = [];
   for (const r of shownRoutes) {
     const result = savedRoutes.results[r.id];
-    if (result?.state === "done" && result.path.found) drawable.push({ id: r.id, name: r.name, colour: r.colour, path: result.path });
+    if (result?.state === "done" && result.path.found) {
+      // The width the server applied, so the band in the file is what was checked.
+      drawable.push({ id: r.id, name: r.name, colour: r.colour, path: result.path, widthMm: result.clearance?.asked_mm ?? null });
+    }
     else undrawn.push(r.name);
   }
 

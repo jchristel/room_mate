@@ -125,6 +125,37 @@ the room's outline and the route bar says so. Moving a mark into a DIFFERENT roo
 what the route joins) is not built; pick the other room instead. Only the draft route's marks drag,
 not a saved route's: open the saved route first.
 
+**Height check, and the width drawn (built 2026-10-10).** `height_mm` joins `width_mm` on the route
+read, in the route bar and on a saved route (shown as "W × H" in the routes table). A door lower than the
+object, or a **room** whose clear height is lower, is not passable (rooms count at the start and the end too:
+an object that does not fit its end room has not arrived). The answer's `clearance` gains `lowest` (the
+lowest checked door or room on the route found), `tallest_possible` (the tallest object that fits by ANY
+route, and the door or room that limits it) and `unchecked_height`. When a size blocks every route the
+reason names the limit, or says "each size fits some route, but no single route fits both".
+
+- **Sources are the project's to name, in settings** (`[routing]`, a Routing block on the settings page):
+  the room height property, the door height properties, whether to read a door's height from its type name,
+  and the frame allowance. A request may override the room property and the frame allowance.
+- **Room heights come from the ceilings first** (`room_height_from_ceilings`, on by default), the property
+  as the fallback. A ceiling's `height_offset` (decimal feet, to its underside) is where the ceiling really
+  is; the lowest one covering at least a quarter of the room is its height, and an offset at or below zero (a
+  roof) is not a ceiling over a room. Measured on RHH: ceilings cover 2,291 rooms and the property 2,538, and
+  using both reaches 2,630. Where both exist they agree within 50 mm on 87% of rooms; the ceiling is lower in
+  about 30 (median 300 mm: drop ceilings, bulkheads) and higher in about 250, which is the case where the
+  ceiling-first choice is the LESS cautious one, so a project that prefers the property turns it off. The
+  coverage threshold barely moves this (0 to 0.5 all give 87%). Ceilings are read only when a height is
+  asked, and the height facts in the answer (`lowest`, `tallest_possible`, `unchecked_height`) are only
+  worked out then too. A room's height reads "(from its ceiling)" when it came from one.
+- **Measured on RHH:** 1,610 of 1,627 doors get a height (97% of door types carry "970 x 2040"; no door has a
+  height property) and 2,538 of 3,043 rooms have a numeric `Ceiling  Height` (min 2,400, median 2,700,
+  max 7,800 mm). A door's height from its type name is the NOMINAL size, an estimate.
+- **Not checked:** level changes (no height for a lift or stair), a door or room with no readable height
+  (counted in `unchecked_height`), headroom under stairs and bulkheads, and a corridor's width inside a room.
+- **The width is drawn.** With a width set, the route is drawn with a translucent band as wide as the object,
+  in the plan's own units, so it scales with the plan and a corridor narrower than the object shows as a band
+  wider than the room around it. That is how corridor width is judged for now, by eye, in place of a check.
+  Saved routes draw their band in their colour, the SVG export draws it and the legend says how wide.
+
 **The editor draws its context.** While an open-zone editor is open, saved zones are
 tinted by index under the zone being drawn, and rooms no door reaches and no zone
 covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).

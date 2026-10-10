@@ -27,6 +27,7 @@ import {
   connectivityUrl,
   describeClearance,
   describeResult,
+  parseHeight,
   parseWidth,
   type PlanPoint,
   type RouteMethod,
@@ -78,6 +79,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   const start = route?.start ?? null;
   const method = route?.method ?? null;
   const width = parseWidth(route?.width ?? "");
+  const height = parseHeight(route?.height ?? "");
   const end = route?.end ?? null;
   const startAt = route?.startAt ?? null;
   const endAt = route?.endAt ?? null;
@@ -115,7 +117,16 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   useEffect(() => {
     if (!active || !start || !end) return;
     // A width that is not a number is not sent; the bar says so beside the field.
-    const url = connectivityUrl(scope, start, end, method, { from: startAt, to: endAt }, {}, width === "bad" ? null : width);
+    const url = connectivityUrl(
+      scope,
+      start,
+      end,
+      method,
+      { from: startAt, to: endAt },
+      {},
+      width === "bad" ? null : width,
+      height === "bad" ? null : height,
+    );
     if (!url) return;
     const ac = new AbortController();
     patchRoute({ result: { state: "loading" } });
@@ -132,7 +143,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
     });
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, start, end, method, width, pointsKey, scopeKey, revision, connectionsVersion]);
+  }, [active, start, end, method, width, height, pointsKey, scopeKey, revision, connectionsVersion]);
 
   // Escape leaves the tool, like every other transient thing on this page.
   useEffect(() => {
@@ -183,10 +194,20 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
         aria-label="Width of the object that has to make the trip, in millimetres"
         title="The width in mm of what has to make the trip (a bed, a trolley, plant). A door or open wall narrower than this is not passable. Door widths are estimates: the footprint less 150 mm for the frame. Corridors inside rooms are not checked."
       />
+      <input
+        className="zoneName widthInput"
+        inputMode="numeric"
+        placeholder="height mm (0 = none)"
+        value={route.height}
+        onChange={(e) => patchRoute({ height: e.target.value })}
+        aria-label="Height of the object that has to make the trip, in millimetres"
+        title="The height in mm of what has to make the trip. A door lower than this, or a ROOM whose clear height is lower, is not passable. Door heights are estimates (a height property, else the size in the type name); room heights come from the project's room height property (Settings, Routing). Anything unreadable is let through and counted."
+      />
       {width === "bad" ? <span className="routeNotice">Width must be a number of millimetres.</span> : null}
-      {route.result.state === "done" && describeClearance(route.result.clearance) ? (
+      {height === "bad" ? <span className="routeNotice">Height must be a number of millimetres.</span> : null}
+      {route.result.state === "done" && describeClearance(route.result.clearance, (id) => rooms.get(id)?.name || id) ? (
         <span className="routeLevel" title="Door widths are estimates; level changes and doors with no footprint are not checked">
-          {describeClearance(route.result.clearance)}
+          {describeClearance(route.result.clearance, (id) => rooms.get(id)?.name || id)}
         </span>
       ) : null}
       {route.result.state === "done" && route.result.path.note ? (

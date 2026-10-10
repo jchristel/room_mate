@@ -65,6 +65,7 @@ export function SavedRoutesLayer(): null {
         { from: route.from_at ?? null, to: route.to_at ?? null },
         { from: route.from.model_id, to: route.to.model_id },
         route.width_mm ?? null,
+        route.height_mm ?? null,
       );
       if (!routeUrl) continue;
       setSavedRouteResult(route.id, { state: "loading" });

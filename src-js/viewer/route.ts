@@ -31,6 +31,8 @@ export interface RouteState {
   /** The width in mm of the object that has to make the trip, as typed, so a
    *  half-typed number is not lost. Blank or 0 checks nothing. */
   width: string;
+  /** Its height in mm, as typed. Blank or 0 checks nothing. */
+  height: string;
   /** Every method the server offers, learned from its first answer, so the picker
    *  is whatever the server supports and never a list kept here. */
   methods: readonly RouteMethod[];
@@ -75,6 +77,24 @@ export interface Clearance {
   narrowest?: WidthLimit;
   unchecked_hops: number;
   widest_possible?: WidthLimit;
+  asked_height_mm?: number;
+  /** The lowest checked door or room on the route found. */
+  lowest?: HeightLimit;
+  /** The tallest object that fits by ANY route, and what limits it. */
+  tallest_possible?: HeightLimit;
+  /** Doors and rooms of the route whose height is unknown, so were not checked. */
+  unchecked_height: number;
+}
+
+/** One door's or room's height, as the server reports it. */
+export interface HeightLimit {
+  height_mm: number;
+  kind: "door" | "room";
+  door_id?: string;
+  /** The room, or the two rooms a door joins. */
+  rooms: { model_id: string; room_id: string }[];
+  /** For a room: the height is a ceiling's and not the room's own property. */
+  from_ceiling?: boolean;
 }
 
 /** One routing method, as the server lists it. */
@@ -116,7 +136,7 @@ export interface RouteStep {
 }
 
 export function newRoute(): RouteState {
-  return { start: null, end: null, startAt: null, endAt: null, method: null, width: "", methods: [], unreachable: null, notice: null, result: { state: "idle" } };
+  return { start: null, end: null, startAt: null, endAt: null, method: null, width: "", height: "", methods: [], unreachable: null, notice: null, result: { state: "idle" } };
 }
 
 /**
@@ -154,6 +174,8 @@ export function connectivityUrl(
   models: { from?: string | null; to?: string | null } = {},
   /** The width of the object that has to make the trip, in mm; 0 or null checks nothing. */
   widthMm: number | null = null,
+  /** Its height, in mm; 0 or null checks nothing. */
+  heightMm: number | null = null,
 ): string | null {
   if (!scope.projectId) return null;
   const q = new URLSearchParams();
@@ -164,6 +186,7 @@ export function connectivityUrl(
     q.set("to", to);
     if (method) q.set("method", method);
     if (widthMm !== null && widthMm > 0) q.set("width_mm", String(widthMm));
+    if (heightMm !== null && heightMm > 0) q.set("height_mm", String(heightMm));
     if (models.from) q.set("from_model", models.from);
     if (models.to) q.set("to_model", models.to);
     // A position only means something with the room it is in, so it rides with the
@@ -189,12 +212,17 @@ export function segmentsOnLevel(path: RoutePath | null, levelId: string | null):
   return path.segments.filter((s) => s.level_id === levelId);
 }
 
+/** Millimetres to the plan's unit: coordinates on the wire are decimal feet. */
+export const MM_PER_FT = 304.8;
+
 /** A saved route as the painters need it: who it is, its colour and its path. */
 export interface DrawableRoute {
   id: string;
   name: string;
   colour: string;
   path: RoutePath | null;
+  /** The width in mm the route was found for; absent or 0 draws the plain line. */
+  widthMm?: number | null | undefined;
 }
 
 /** What one route draws on one level. */
@@ -204,6 +232,9 @@ export interface RouteDrawing {
   colour: string;
   /** The polylines on this level, two points or more. */
   lines: PlanPoint[][];
+  /** The width of the object, in the plan's own unit (feet) so a band of it is drawn at
+   *  true size; `null` for no width, which draws the plain line as it always was. */
+  bandFt: number | null;
   /** Where the route begins and ends, only when that is ON this level. */
   start: PlanPoint | null;
   end: PlanPoint | null;
@@ -233,6 +264,7 @@ export function routeDrawingsOnLevel(routes: readonly DrawableRoute[], levelId: 
       name: route.name,
       colour: route.colour,
       lines: here.filter((s) => s.points.length >= 2).map((s) => s.points),
+      bandFt: route.widthMm && route.widthMm > 0 ? route.widthMm / MM_PER_FT : null,
       start: first && first.level_id === levelId ? (first.points[0] ?? null) : null,
       end: last && last.level_id === levelId ? (last.points[last.points.length - 1] ?? null) : null,
     });
@@ -306,7 +338,17 @@ export function parseWidth(typed: string): number | null | "bad" {
   return n === 0 ? null : n;
 }
 
+/** A height typed, by the same rule as a width (blank or 0 checks nothing). */
+export const parseHeight = parseWidth;
+
+const heightOf = (l: HeightLimit) => `${Math.round(l.height_mm)} mm`;
+
 const widthOf = (l: WidthLimit) => `${Math.round(l.width_mm)} mm`;
+
+function heightLimitName(l: HeightLimit, nameOf: (roomId: string) => string): string {
+  if (l.kind === "door") return `door ${l.door_id ?? "?"}`;
+  return `room ${nameOf(l.rooms[0]?.room_id ?? "?")}${l.from_ceiling ? " (from its ceiling)" : ""}`;
+}
 
 function limitName(l: WidthLimit): string {
   return l.kind === "door" ? `door ${l.door_id ?? "?"}` : l.kind === "zone" ? "an open area's wall" : "a level change";
@@ -315,7 +357,7 @@ function limitName(l: WidthLimit): string {
 /** What a reader should know about the widths of a route: the tightest hop, how many
  *  hops could not be checked, and whether a wider route exists. Empty when there is
  *  nothing to say. Said in estimates, because a door's width is one. */
-export function describeClearance(c: Clearance | undefined): string {
+export function describeClearance(c: Clearance | undefined, nameOf: (roomId: string) => string = (id) => id): string {
   if (!c) return "";
   const parts: string[] = [];
   if (c.narrowest) parts.push(`narrowest ${limitName(c.narrowest)}, about ${widthOf(c.narrowest)}`);
@@ -326,6 +368,15 @@ export function describeClearance(c: Clearance | undefined): string {
   }
   if (c.unchecked_hops > 0) {
     parts.push(`${c.unchecked_hops} hop${c.unchecked_hops === 1 ? "" : "s"} not checked`);
+  }
+  // The same for height: the lowest point, a taller alternative if there is one, and
+  // how many doors and rooms had no height to check.
+  if (c.lowest) parts.push(`lowest ${heightLimitName(c.lowest, nameOf)}, about ${heightOf(c.lowest)}`);
+  if (c.lowest && c.tallest_possible && c.tallest_possible.height_mm > c.lowest.height_mm + 1) {
+    parts.push(`up to about ${heightOf(c.tallest_possible)} tall fits by another route`);
+  }
+  if (c.unchecked_height > 0) {
+    parts.push(`${c.unchecked_height} door${c.unchecked_height === 1 ? "" : "s"} or room${c.unchecked_height === 1 ? "" : "s"} not checked for height`);
   }
   return parts.join(" · ");
 }

@@ -49,6 +49,7 @@ export function RoutesPanel() {
       endAt: r.to_at ?? null,
       method: r.method ?? null,
       width: r.width_mm ? String(r.width_mm) : "",
+      height: r.height_mm ? String(r.height_mm) : "",
       notice: null,
       result: { state: "idle" },
     });
@@ -87,7 +88,7 @@ export function RoutesPanel() {
               <th>Name</th>
               <th className="fit">Colour</th>
               <th className="fit">Levels</th>
-              <th className="fit">Width</th>
+              <th className="fit">Size</th>
               <th className="fit" aria-label="Open and delete" colSpan={2} />
             </tr>
           </thead>
@@ -120,7 +121,9 @@ export function RoutesPanel() {
                     />
                   </td>
                   <td className="fit">{row.levels || "—"}</td>
-                  <td className="fit">{route?.width_mm ? `${route.width_mm} mm` : "—"}</td>
+                  <td className="fit" title="Width × height in mm of the object this route was saved for">
+                    {sizeText(route?.width_mm, route?.height_mm)}
+                  </td>
                   <td className="fit">
                     <button className="link" disabled={!route} onClick={() => route && open(route)} title="Put this route in the tool, to see its steps">
                       open
@@ -139,4 +142,12 @@ export function RoutesPanel() {
       )}
     </aside>
   );
+}
+
+/** The object a route was saved for, as "1200 × 2000 mm" with whichever of the two it has. */
+function sizeText(width: number | null | undefined, height: number | null | undefined): string {
+  if (width && height) return `${width} × ${height} mm`;
+  if (width) return `${width} wide`;
+  if (height) return `${height} tall`;
+  return "—";
 }

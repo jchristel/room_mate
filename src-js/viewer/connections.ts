@@ -55,6 +55,8 @@ export interface SavedRoute {
   method?: string | null;
   /** The width in mm of the object this route was saved for; absent checks nothing. */
   width_mm?: number | null;
+  /** Its height in mm; absent checks nothing. */
+  height_mm?: number | null;
   /** `#rrggbb`. Part of the record, so everyone sees the route in one colour. */
   colour: string;
   note?: string | null;
@@ -339,6 +341,7 @@ function routeBody(r: SavedRoute): SavedRoute {
     to_at: r.to_at ?? null,
     method: r.method ?? null,
     width_mm: r.width_mm ?? null,
+    height_mm: r.height_mm ?? null,
     colour: r.colour,
     note: r.note ?? null,
   };
@@ -521,6 +524,8 @@ export interface RouteDraft {
   method: string | null;
   /** The width in mm to check, or `null` for none. */
   widthMm: number | null;
+  /** The height in mm to check, or `null` for none. */
+  heightMm: number | null;
 }
 
 /** Why a draft cannot be saved yet, or `null`. */
@@ -545,6 +550,7 @@ export function bodyAfterSaveRoute(doc: ConnectionsDoc, draft: RouteDraft): DocB
     to_at: draft.toAt,
     method: draft.method,
     width_mm: draft.widthMm,
+    height_mm: draft.heightMm,
     colour: draft.colour,
   };
   return { zones: doc.zones.map(zoneBody), links: doc.links.map(linkBody), routes: [...routes, next] };

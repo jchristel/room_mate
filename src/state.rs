@@ -331,6 +331,9 @@ pub struct ProjectSettings {
     /// here in the resolved bundle alongside `hierarchy` — resolved via
     /// `settings_for` like every other classification input.
     pub hierarchy_exclusions: Vec<HierarchyExclusion>,
+
+    /// Where a route's size checks read their data from. Read by `service::connectivity`.
+    pub routing: roommate_shared::settings::RoutingPolicy,
 }
 
 /// One immutable snapshot of every project's settings. Swapped wholesale

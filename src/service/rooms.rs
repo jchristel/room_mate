@@ -1549,6 +1549,7 @@ mod tests {
                 windows: Default::default(),
                 ffe: Default::default(),
                 hierarchy_exclusions: vec![],
+                routing: Default::default(),
             },
             Some(make_drofus(link_property)),
         )
