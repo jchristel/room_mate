@@ -2998,9 +2998,16 @@ pub struct ConnectivityQuery {
     #[serde(default)]
     pub width_mm: Option<String>,
     /// What the frame takes off a door's footprint width to give its clear opening, in
-    /// mm. Absent means the default (150).
+    /// mm. Absent means the project's setting.
     #[serde(default)]
     pub frame_mm: Option<String>,
+    /// The height in mm of an object that has to make the trip. A door or a ROOM lower
+    /// than this is not passable; 0 or absent checks nothing.
+    #[serde(default)]
+    pub height_mm: Option<String>,
+    /// The room property holding a room's clear height, overriding the project's setting.
+    #[serde(default)]
+    pub height_property: Option<String>,
     /// `distance` (default) or `hops`.
     #[serde(default)]
     pub metric: Option<String>,
@@ -3071,6 +3078,9 @@ pub async fn get_project_connectivity(
         door_filter: door_filter.as_ref(),
         clear_width_mm,
         frame_allowance_mm,
+        clear_height_mm: connectivity::height_param(number(query.height_mm.as_deref(), "height_mm")?)
+            .map_err(map_service_error)?,
+        height_property: query.height_property.as_deref().filter(|p| !p.trim().is_empty()),
     };
 
     let result = connectivity::assemble_connectivity(
@@ -3384,6 +3394,7 @@ mod tests {
             windows: Default::default(),
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
+            routing: Default::default(),
         }
     }
 
@@ -3995,6 +4006,8 @@ mod tests {
 
     fn connectivity_query(from: Option<&str>, to: Option<&str>) -> ConnectivityQuery {
         ConnectivityQuery {
+            height_mm: None,
+            height_property: None,
             width_mm: None,
             frame_mm: None,
             building: None,

@@ -93,10 +93,14 @@ measurements and open questions are in [the plan](docs/PLAN-connectivity.md).
   or room centre to room centre. It can start and end at a point inside each room,
   and the start and end marks can be **dragged**. A **steps** list reads the whole
   route in order and marks where it changes level.
-- **Width.** Give the width of the object (a bed, a trolley) and a door or open wall
-  narrower than that is not a way through. The answer says the narrowest hop and the
-  widest object that fits. Door widths are **estimates** (the footprint less a frame
-  allowance); the width of a corridor *inside* a room is not checked.
+- **Width and height.** Give the size of the object (a bed, a trolley) and a door or
+  open wall narrower than that, a door lower than it, or a **room** lower than it, is
+  not a way through. The answer says the narrowest and lowest points and the largest
+  object that fits. The route is drawn as wide as the object, so a corridor too narrow
+  for it is visible. Door sizes are **estimates**; a room's height comes from the
+  ceilings over it, else a room property, and where each is read from is named per
+  project under **Routing** in the settings ([reference](docs/SETTINGS.md)); the width of a corridor *inside* a room is not
+  checked.
 - **Open areas.** Rooms the model does not join by a door (bays, open-plan areas)
   can be declared one open space. Where members touch but do not connect, such as
   bays along a corridor, **Cut** closes a wall between two of them and **Only
@@ -126,7 +130,7 @@ Reads, all GET unless noted:
 | `/projects/{id}/validation` | The QA reconciliation: rooms against reference data, openings and items against rooms, spaces against rooms, and whether the models agree on a phase. |
 | `/projects/{id}/areas`, `/projects/{id}/adjacency` | Hierarchy-area rollups, and which rooms share a wall. |
 | `/projects/{id}/connections` | What people have authored: **open areas** (with the walls they keep closed), **vertical links** and **saved routes**. GET reads, PUT replaces the whole document and names the version it read (409 if it moved). A save that leaves out `routes` keeps the saved ones. See [the plan](docs/PLAN-connectivity.md). |
-| `/projects/{id}/connectivity` | Which rooms a door joins, the rooms no door reaches, and (with `from` and `to`) the shortest route between two rooms, by a chosen `method` (door to door by default; the answer lists them with their sources), optionally from and to a point inside each room (`from_x`/`from_y`, `to_x`/`to_y`), and optionally for an object of a given `width_mm`: the answer's `clearance` says the narrowest hop, what could not be checked and the widest object that fits. Doors, the open areas people drew and the vertical links they drew; see [the plan](docs/PLAN-connectivity.md). |
+| `/projects/{id}/connectivity` | Which rooms a door joins, the rooms no door reaches, and (with `from` and `to`) the shortest route between two rooms, by a chosen `method` (door to door by default; the answer lists them with their sources), optionally from and to a point inside each room (`from_x`/`from_y`, `to_x`/`to_y`), and optionally for an object of a given `width_mm` and `height_mm`: the answer's `clearance` says the narrowest and lowest points, what could not be checked and the largest object that fits. Doors, the open areas people drew and the vertical links they drew; see [the plan](docs/PLAN-connectivity.md). |
 | `/projects/{id}/stack` | For one room, the rooms over and under it, ranked, as candidates for a vertical link. A suggestion only; nothing is stored. |
 | `/projects/{id}/reports/columns` | What a report over one entity may name: the property names this project's snapshots carry with Revit's own value type, the record's `$intrinsics`, joined reference labels, and the join's measures. Read from each snapshot's property dictionary — a tail read, not a parse. |
 | `/projects/{id}/reports` (**POST**) | Build one report — a schedule or a by-room table — projected to the columns asked for. `?format=csv` renders the same rows as CSV. A POST that reads, because the definition does not fit a query string. |

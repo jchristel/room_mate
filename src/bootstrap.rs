@@ -213,6 +213,7 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
         ffe: settings.ffe,
         spaces: settings.spaces,
         hierarchy_exclusions: settings.hierarchy_exclusions,
+        routing: settings.routing,
     };
     Ok((settings.project_id, settings.is_default, bundle))
 }

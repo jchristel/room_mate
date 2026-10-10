@@ -10,7 +10,7 @@
 // legend names every route drawn on the level**, because colour alone says nothing on
 // paper. Open zones are not drawn: they are authoring, not the drawing.
 
-import type { RouteDrawing } from "../route.js";
+import { MM_PER_FT, type RouteDrawing } from "../route.js";
 import type { Rect } from "../../renderer/types.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -53,6 +53,10 @@ export function appendRoutes(
     for (const line of d.lines) {
       const points = line.map((p) => `${p.x},${-p.y}`).join(" ");
       const common = { points, fill: "none", "stroke-linejoin": "round", "stroke-linecap": "round" };
+      // The object's width at true size, under everything else of the route.
+      if (d.bandFt !== null) {
+        route.appendChild(el("polyline", { ...common, stroke: d.colour, "stroke-width": d.bandFt, "stroke-opacity": 0.28 }));
+      }
       route.appendChild(el("polyline", { ...common, stroke: pal.paper, "stroke-width": HALO_PX * px, "stroke-opacity": 0.85 }));
       route.appendChild(el("polyline", { ...common, stroke: d.colour, "stroke-width": LINE_PX * px }));
     }
@@ -65,7 +69,9 @@ export function appendRoutes(
   // The legend, top left, on a paper plate so it reads over the plan.
   const pad = 8 * px;
   const row = ROW_PX * px;
-  const longest = Math.max(...drawings.map((d) => d.name.length));
+  // A route drawn for an object says how wide: the band's size means nothing otherwise.
+  const label = (d: RouteDrawing) => (d.bandFt !== null ? `${d.name} (${Math.round(d.bandFt * MM_PER_FT)} mm wide)` : d.name);
+  const longest = Math.max(...drawings.map((d) => label(d).length));
   const plateW = pad * 2 + 22 * px + longest * FONT_PX * 0.62 * px;
   const plateH = pad * 2 + row * drawings.length - (row - FONT_PX * px);
   const x0 = fitted.x + 12 * px;
@@ -76,7 +82,7 @@ export function appendRoutes(
     const y = y0 + pad + i * row;
     legend.appendChild(el("line", { x1: x0 + pad, y1: y + (FONT_PX * px) / 2, x2: x0 + pad + 16 * px, y2: y + (FONT_PX * px) / 2, stroke: d.colour, "stroke-width": LINE_PX * px, "stroke-linecap": "round" }));
     const text = el("text", { x: x0 + pad + 22 * px, y: y + FONT_PX * px * 0.85, "font-size": FONT_PX * px, "font-family": "monospace", fill: pal.ink });
-    text.textContent = d.name;
+    text.textContent = label(d);
     legend.appendChild(text);
   });
   group.appendChild(legend);

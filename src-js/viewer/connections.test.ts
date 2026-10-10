@@ -181,7 +181,7 @@ describe("connectionsUrl", () => {
 });
 
 describe("saved routes", () => {
-  const draft = { name: "Bed to lift", colour: "#1c7ed6", from: "a", to: "b", fromAt: { x: 1, y: 2 }, toAt: null, method: null, widthMm: null };
+  const draft = { name: "Bed to lift", colour: "#1c7ed6", from: "a", to: "b", fromAt: { x: 1, y: 2 }, toAt: null, method: null, widthMm: null, heightMm: null };
   const withRoute = bodyAfterSaveRoute(doc, draft);
   const saved: ConnectionsDoc = { ...doc, routes: withRoute.routes };
 
@@ -424,7 +424,7 @@ describe("disconnects and the hub", () => {
     const keeps = (b: { zones: { disconnects: unknown[]; hub: unknown }[] }) => b.zones[0]!.disconnects.length === 1 && b.zones[0]!.hub !== null;
     expect(keeps(bodyAfterAddLink(cutDoc, { room_id: "x", model_id: "m" }, { room_id: "y", model_id: "m" }))).toBe(true);
     expect(keeps(bodyAfterDeleteLink(cutDoc, "lift-1-2"))).toBe(true);
-    expect(keeps(bodyAfterSaveRoute(cutDoc, { name: "R", colour: "#000000", from: "a", to: "b", fromAt: null, toAt: null, method: null, widthMm: null }))).toBe(true);
+    expect(keeps(bodyAfterSaveRoute(cutDoc, { name: "R", colour: "#000000", from: "a", to: "b", fromAt: null, toAt: null, method: null, widthMm: null, heightMm: null }))).toBe(true);
     expect(keeps(bodyAfterDeleteRoute(cutDoc, "none"))).toBe(true);
   });
 });
@@ -433,15 +433,17 @@ describe("a saved route's width", () => {
   const base = { name: "Trolley", colour: "#1c7ed6", from: "a", to: "b", fromAt: null, toAt: null, method: null };
 
   it("is saved with the route and carried through every other save", () => {
-    const withWidth = bodyAfterSaveRoute(doc, { ...base, widthMm: 1200 });
+    const withWidth = bodyAfterSaveRoute(doc, { ...base, widthMm: 1200, heightMm: 2000 });
     expect(withWidth.routes[0]!.width_mm).toBe(1200);
+    expect(withWidth.routes[0]!.height_mm).toBe(2000);
     const saved: ConnectionsDoc = { ...doc, routes: withWidth.routes };
     expect(bodyAfterRecolourRoute(saved, "trolley", "#000000").routes[0]!.width_mm).toBe(1200);
     expect(bodyAfterDeleteLink(saved, "lift-1-2").routes[0]!.width_mm).toBe(1200);
+    expect(bodyAfterDeleteLink(saved, "lift-1-2").routes[0]!.height_mm).toBe(2000);
     expect(bodyAfterAddLink(saved, { room_id: "x", model_id: "m" }, { room_id: "y", model_id: "m" }).routes[0]!.width_mm).toBe(1200);
   });
 
   it("is null when none was asked", () => {
-    expect(bodyAfterSaveRoute(doc, { ...base, widthMm: null }).routes[0]!.width_mm).toBeNull();
+    expect(bodyAfterSaveRoute(doc, { ...base, widthMm: null, heightMm: null }).routes[0]!.width_mm).toBeNull();
   });
 });

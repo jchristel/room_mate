@@ -521,6 +521,7 @@ mod tests {
             windows: Default::default(),
             ffe,
             hierarchy_exclusions: vec![],
+            routing: Default::default(),
         }
     }
 

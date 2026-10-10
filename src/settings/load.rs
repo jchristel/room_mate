@@ -111,6 +111,10 @@ pub fn load_settings(path: &Path) -> anyhow::Result<Settings> {
         .areas
         .validate()
         .with_context(|| format!("bad [areas] policy in {}", path.display()))?;
+    settings
+        .routing
+        .validate()
+        .with_context(|| format!("bad [routing] policy in {}", path.display()))?;
     Ok(settings)
 }
 

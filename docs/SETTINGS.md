@@ -327,6 +327,38 @@ space = "Room Name"
 room = "Name"
 ```
 
+### `[routing]`
+
+Where the route tool's **width and height checks** read their data from. A route can be
+asked whether an object of a given size can make the trip, and the model states little of
+what that needs: no door carries a width or a height this server can rely on, and a room's
+clear height is whatever parameter the project's template calls it. So the sources are
+named here, and **everything they yield is an estimate** which the route answer says so
+about. A door or room a source cannot read is let through and counted as unchecked; it is
+never guessed. Unknown keys are rejected.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `room_height_from_ceilings` | read a room's height from the **ceilings** over it first (the lowest ceiling covering at least a quarter of the room; an offset at or below zero is ignored), falling back on the property for a room none covers | `true` |
+| `room_height_property` | room property holding the clear height, in **millimetres**, used when no ceiling covers the room; matched ignoring case and runs of spaces (RHH's `Ceiling  Height` has two) | `Ceiling Height` |
+| `door_height_properties` | door properties tried in order, instance before type, for a door's height in mm | `["Height", "Door Height"]` |
+| `door_height_from_type_name` | when none of those is present, read the size in the type name: "970 x 2040 TD01", "DWWH-003 820W x 2100H" (the first `A x B` wins) | `true` |
+| `door_frame_allowance_mm` | taken off a door's footprint width to give the clear opening; the footprint is overall width, frame included (a 970 mm leaf measures about 1,055 mm) | `150` (0 to 2000) |
+
+A number under 100 is taken to be another unit (metres, feet) and is **not** used: that
+room or door goes unchecked. A request can override the room property (`height_property`)
+and the frame allowance (`frame_mm`). The width of a corridor *inside* a room is not
+checked at all.
+
+```toml
+[routing]
+room_height_from_ceilings = true
+room_height_property = "Room Height"
+door_height_from_type_name = false
+door_frame_allowance_mm = 120.0
+door_height_properties = ["Rough Height", "Height"]
+```
+
 ### `[[milestones]]`
 
 A named date with the snapshots pinned to it. Pins are separate maps per entity

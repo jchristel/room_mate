@@ -1959,6 +1959,7 @@ mod tests {
                 windows: Default::default(),
                 ffe: Default::default(),
                 hierarchy_exclusions: exclusions,
+                routing: Default::default(),
             }
         }
 

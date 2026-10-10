@@ -191,6 +191,12 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "SpacePolicy::is_default")]
     pub spaces: SpacePolicy,
 
+    /// Where a route's size checks read their data from (see `RoutingPolicy`).
+    /// Defaulted and skipped when untouched, so a project file predating it is
+    /// unchanged on disk and unchanged in meaning.
+    #[serde(default, skip_serializing_if = "RoutingPolicy::is_default")]
+    pub routing: RoutingPolicy,
+
     /// Ordered classification tiers, outermost first. Empty if the section is
     /// omitted (a project with no classification defined).
     #[serde(default)]
@@ -704,6 +710,136 @@ impl RoomAttribution {
             RoomAttribution::Both => [to_room, from_room].into_iter().flatten().collect(),
             RoomAttribution::None => vec![],
         }
+    }
+}
+
+/// Where a route's size checks read their data from.
+///
+/// **A route can be asked whether an object of a given width and height can make the
+/// trip, and the model does not state most of what that needs.** No door carries a
+/// width or a height in a form this server can rely on, and a room's clear height is
+/// whatever parameter a project's template calls it. So the sources are a project's to
+/// name, and everything they yield is reported as an ESTIMATE:
+///
+/// - a **door's width** is its footprint (overall, frame included) less
+///   `door_frame_allowance_mm`;
+/// - a **door's height** is the first of `door_height_properties` it carries, else, when
+///   `door_height_from_type_name` is on, the size in its type name ("970 x 2040");
+/// - a **room's height** is the lowest ceiling over it (`room_height_from_ceilings`),
+///   else its `room_height_property`, read as millimetres.
+///
+/// Nothing is guessed when a source is silent: a door or room it cannot read is let
+/// through and counted as unchecked, which the answer says.
+///
+/// Scalars first and the list last, for the TOML ordering rule in
+/// CODING-CONVENTIONS.md.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct RoutingPolicy {
+    /// The room property holding a room's clear height, in millimetres. Matched
+    /// ignoring case and runs of spaces, because Revit parameter names are typed by
+    /// people (RHH's is `Ceiling  Height`, with two). `None` means
+    /// `RoutingPolicy::DEFAULT_ROOM_HEIGHT_PROPERTY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_height_property: Option<String>,
+
+    /// Whether a room's height is read from the CEILINGS over it, with the property as
+    /// the fallback for a room none covers. On by default: a ceiling's offset is where the
+    /// ceiling really is (a drop ceiling, a bulkhead) and the property is whatever a
+    /// template says. The lowest ceiling covering at least a quarter of the room wins, and
+    /// an offset at or below zero (a roof, a ceiling below its level) is not a ceiling over a
+    /// room and is ignored. Measured on RHH: ceilings cover 2,291 rooms and the property
+    /// 2,538, and using both reaches 2,630.
+    #[serde(default = "RoutingPolicy::yes")]
+    pub room_height_from_ceilings: bool,
+
+    /// Whether a door's height may be read from its type name when none of
+    /// `door_height_properties` is present: the convention that puts the size in the
+    /// name ("970 x 2040 TD01", "DWWH-003 820W x 2100H"). On by default, because on
+    /// RHH 97% of door types follow it and no door has a height property at all. Off
+    /// for a project whose names say something else that happens to look like a size.
+    #[serde(default = "RoutingPolicy::yes")]
+    pub door_height_from_type_name: bool,
+
+    /// What a door's frame and stops take off the width its footprint measures, in
+    /// millimetres, to give the clear opening. `None` means
+    /// `RoutingPolicy::DEFAULT_DOOR_FRAME_ALLOWANCE_MM`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub door_frame_allowance_mm: Option<f64>,
+
+    /// Door properties tried, in order, for a door's height in millimetres (instance
+    /// before type). Empty means `RoutingPolicy::DEFAULT_DOOR_HEIGHT_PROPERTIES`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub door_height_properties: Vec<String>,
+}
+
+impl Default for RoutingPolicy {
+    fn default() -> Self {
+        Self {
+            room_height_property: None,
+            room_height_from_ceilings: true,
+            door_height_from_type_name: true,
+            door_frame_allowance_mm: None,
+            door_height_properties: Vec::new(),
+        }
+    }
+}
+
+impl RoutingPolicy {
+    pub const DEFAULT_ROOM_HEIGHT_PROPERTY: &'static str = "Ceiling Height";
+    pub const DEFAULT_DOOR_HEIGHT_PROPERTIES: &'static [&'static str] = &["Height", "Door Height"];
+    /// The footprint is overall width, frame included: on RHH a "970 x 2040" leaf
+    /// measures 1,055 mm and its clear opening is nearer 900. 150 is a rule of thumb
+    /// for a standard single door, an estimate and not a measurement.
+    pub const DEFAULT_DOOR_FRAME_ALLOWANCE_MM: f64 = 150.0;
+    /// The most a frame allowance may be: beyond it no door has a clear opening.
+    pub const MAX_DOOR_FRAME_ALLOWANCE_MM: f64 = 2_000.0;
+
+    fn yes() -> bool {
+        true
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The room height property in force.
+    pub fn room_height_property(&self) -> &str {
+        self.room_height_property.as_deref().unwrap_or(Self::DEFAULT_ROOM_HEIGHT_PROPERTY)
+    }
+
+    /// The door height properties in force, in the order they are tried.
+    pub fn door_height_properties(&self) -> Vec<String> {
+        if self.door_height_properties.is_empty() {
+            Self::DEFAULT_DOOR_HEIGHT_PROPERTIES.iter().map(|s| s.to_string()).collect()
+        } else {
+            self.door_height_properties.clone()
+        }
+    }
+
+    /// The frame allowance in force, in millimetres.
+    pub fn frame_allowance_mm(&self) -> f64 {
+        self.door_frame_allowance_mm.unwrap_or(Self::DEFAULT_DOOR_FRAME_ALLOWANCE_MM)
+    }
+
+    /// Startup-loud checks: a blank property name can never match, and an allowance
+    /// that is not a number or is absurd would silently zero every door.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.room_height_property.as_deref().is_some_and(|p| p.trim().is_empty()) {
+            anyhow::bail!("[routing] room_height_property must not be blank; leave it out for the default");
+        }
+        if self.door_height_properties.iter().any(|p| p.trim().is_empty()) {
+            anyhow::bail!("[routing] door_height_properties must not hold a blank name");
+        }
+        if let Some(a) = self.door_frame_allowance_mm
+            && (!a.is_finite() || !(0.0..=Self::MAX_DOOR_FRAME_ALLOWANCE_MM).contains(&a))
+        {
+            anyhow::bail!(
+                "[routing] door_frame_allowance_mm must be between 0 and {} mm (got {a})",
+                Self::MAX_DOOR_FRAME_ALLOWANCE_MM
+            );
+        }
+        Ok(())
     }
 }
 
@@ -2066,5 +2202,57 @@ entity = \"spaces\"
     #[test]
     fn test_components_are_excluded_by_default() {
         assert_eq!(FfePolicy::default().nested_components, NestedComponents::Exclude);
+    }
+
+    #[test]
+    fn test_an_untouched_routing_policy_is_default_and_stays_out_of_the_file() {
+        let policy = RoutingPolicy::default();
+        assert!(policy.is_default());
+        assert_eq!(policy.room_height_property(), "Ceiling Height");
+        assert_eq!(policy.door_height_properties(), vec!["Height".to_string(), "Door Height".to_string()]);
+        assert_eq!(policy.frame_allowance_mm(), 150.0);
+        assert!(
+            policy.door_height_from_type_name,
+            "on by default: 97% of RHH's door types follow the convention"
+        );
+        assert!(
+            policy.room_height_from_ceilings,
+            "on by default: a ceiling is where the ceiling really is"
+        );
+        let settings: Settings = toml::from_str("project_id = \"p1\"\n").expect("parses");
+        assert!(settings.routing.is_default());
+        assert!(!toml::to_string(&settings).unwrap().contains("[routing]"));
+    }
+
+    #[test]
+    fn test_a_routing_policy_round_trips_through_toml() {
+        let settings: Settings = toml::from_str(
+            "project_id = \"p1\"\n\n[routing]\nroom_height_property = \"Room Height\"\ndoor_height_from_type_name = false\n\
+             door_frame_allowance_mm = 120.0\ndoor_height_properties = [\"Rough Height\", \"Height\"]\n",
+        )
+        .expect("parses");
+        let r = &settings.routing;
+        assert_eq!(r.room_height_property(), "Room Height");
+        assert!(!r.door_height_from_type_name);
+        assert_eq!(r.frame_allowance_mm(), 120.0);
+        assert_eq!(r.door_height_properties(), vec!["Rough Height".to_string(), "Height".to_string()]);
+        let again: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).expect("re-parses");
+        assert_eq!(again.routing, settings.routing);
+    }
+
+    #[test]
+    fn test_a_routing_policy_that_could_never_match_or_fit_fails_validation() {
+        assert!(RoutingPolicy::default().validate().is_ok());
+        let blank = RoutingPolicy { room_height_property: Some("  ".into()), ..Default::default() };
+        assert!(blank.validate().is_err());
+        let blank_door =
+            RoutingPolicy { door_height_properties: vec!["Height".into(), "".into()], ..Default::default() };
+        assert!(blank_door.validate().is_err());
+        for bad in [-1.0, f64::NAN, 5_000.0] {
+            let p = RoutingPolicy { door_frame_allowance_mm: Some(bad), ..Default::default() };
+            assert!(p.validate().is_err(), "{bad}");
+        }
+        let ok = RoutingPolicy { door_frame_allowance_mm: Some(0.0), ..Default::default() };
+        assert!(ok.validate().is_ok(), "no frame at all is a legitimate answer");
     }
 }

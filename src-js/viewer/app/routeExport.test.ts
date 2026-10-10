@@ -17,6 +17,7 @@ const route = (over: Partial<RouteDrawing> = {}): RouteDrawing => ({
   id: "r1",
   name: "Kitchen to study",
   colour: "#d9480f",
+  bandFt: null,
   lines: [
     [
       { x: 10, y: 20 },
@@ -41,6 +42,16 @@ describe("appendRoutes", () => {
     expect(lines[1]!.getAttribute("stroke")).toBe("#d9480f");
     expect(svg.querySelectorAll("g.route circle")).toHaveLength(1);
     expect(svg.querySelectorAll("g.route rect")).toHaveLength(1);
+  });
+
+  it("draws the object's width at true size under the line, and nothing extra for no width", () => {
+    const plain = draw([route()]).querySelectorAll("g.route polyline");
+    expect(plain).toHaveLength(2);
+    const banded = draw([route({ bandFt: 4 })]).querySelectorAll("g.route polyline");
+    expect(banded).toHaveLength(3);
+    expect(banded[0]!.getAttribute("stroke-width")).toBe("4");
+    expect(banded[0]!.getAttribute("stroke")).toBe("#d9480f");
+    expect(banded[0]!.getAttribute("stroke-opacity")).toBe("0.28");
   });
 
   it("flips Y like every drawn shape", () => {
@@ -71,6 +82,11 @@ describe("appendRoutes", () => {
     expect(names).toEqual(["Kitchen to study", "Bed to lift"]);
     const swatches = [...svg.querySelectorAll("g.routes-legend line")].map((l) => l.getAttribute("stroke"));
     expect(swatches).toEqual(["#d9480f", "#1c7ed6"]);
+  });
+
+  it("says in the legend how wide a route's object is", () => {
+    const names = [...draw([route({ bandFt: 3.937 })]).querySelectorAll("g.routes-legend text")].map((t) => t.textContent);
+    expect(names).toEqual(["Kitchen to study (1200 mm wide)"]);
   });
 
   it("serialises to a standalone document with no script or external reference", () => {

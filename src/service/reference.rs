@@ -110,6 +110,7 @@ mod tests {
             windows: Default::default(),
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
+            routing: Default::default(),
         };
         let registry = std::collections::HashMap::from([("p1".to_string(), bundle)]);
         AppState::new(Box::new(MemStore::new()), registry, None)

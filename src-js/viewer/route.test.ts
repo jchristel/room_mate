@@ -4,6 +4,7 @@ import {
   connectivityUrl,
   describeClearance,
   describeResult,
+  parseHeight,
   parseWidth,
   markerPoint,
   newRoute,
@@ -243,7 +244,7 @@ describe("the width of the object", () => {
 
   it("says the tightest hop, a wider route if there is one, and what was not checked", () => {
     const door = { width_mm: 912.4, kind: "door" as const, door_id: "d9" };
-    expect(describeClearance({ frame_allowance_mm: 150, narrowest: door, unchecked_hops: 0 })).toBe(
+    expect(describeClearance({ frame_allowance_mm: 150, narrowest: door, unchecked_hops: 0, unchecked_height: 0 })).toBe(
       "narrowest door d9, about 912 mm",
     );
     expect(
@@ -251,21 +252,21 @@ describe("the width of the object", () => {
         frame_allowance_mm: 150,
         narrowest: door,
         widest_possible: { width_mm: 1500, kind: "door", door_id: "d2" },
-        unchecked_hops: 2,
+        unchecked_hops: 2, unchecked_height: 0,
       }),
     ).toBe("narrowest door d9, about 912 mm · up to about 1500 mm fits by another route · 2 hops not checked");
-    expect(describeClearance({ frame_allowance_mm: 150, unchecked_hops: 1 })).toBe("1 hop not checked");
+    expect(describeClearance({ frame_allowance_mm: 150, unchecked_hops: 1, unchecked_height: 0 })).toBe("1 hop not checked");
     expect(describeClearance(undefined)).toBe("");
   });
 
   it("does not call the limit of a blocked trip 'another route': there is none", () => {
     const limit = { width_mm: 905, kind: "door" as const, door_id: "d1" };
-    expect(describeClearance({ frame_allowance_mm: 150, widest_possible: limit, unchecked_hops: 0 })).toBe("");
+    expect(describeClearance({ frame_allowance_mm: 150, widest_possible: limit, unchecked_hops: 0, unchecked_height: 0 })).toBe("");
   });
 
   it("does not offer a 'wider route' that is the one already taken", () => {
     const door = { width_mm: 900, kind: "door" as const, door_id: "d1" };
-    expect(describeClearance({ frame_allowance_mm: 150, narrowest: door, widest_possible: door, unchecked_hops: 0 })).toBe(
+    expect(describeClearance({ frame_allowance_mm: 150, narrowest: door, widest_possible: door, unchecked_hops: 0, unchecked_height: 0 })).toBe(
       "narrowest door d1, about 900 mm",
     );
   });
@@ -324,5 +325,55 @@ describe("planPointOf", () => {
   it("is null when the pointer is off the plan", () => {
     expect(planPointOf(null)).toBeNull();
     expect(planPointOf(undefined)).toBeNull();
+  });
+});
+
+describe("the height readout and the drawn width", () => {
+  const clear = { frame_allowance_mm: 150, unchecked_hops: 0, unchecked_height: 0 };
+  const door = { height_mm: 1900, kind: "door" as const, door_id: "d4", rooms: [] };
+  const room = { height_mm: 2100, kind: "room" as const, rooms: [{ model_id: "m", room_id: "r7" }] };
+
+  it("names the lowest door or room and what was not checked", () => {
+    expect(describeClearance({ ...clear, lowest: door })).toBe("lowest door d4, about 1900 mm");
+    expect(describeClearance({ ...clear, lowest: room }, (id) => (id === "r7" ? "PLANT 07" : id))).toBe(
+      "lowest room PLANT 07, about 2100 mm",
+    );
+    expect(describeClearance({ ...clear, unchecked_height: 3 })).toBe("3 doors or rooms not checked for height");
+    expect(describeClearance({ ...clear, unchecked_height: 1 })).toBe("1 door or room not checked for height");
+  });
+
+  it("says when a room's height is a ceiling's and not its own property", () => {
+    const low = { ...room, from_ceiling: true };
+    expect(describeClearance({ ...clear, lowest: low }, (id) => (id === "r7" ? "PLANT 07" : id))).toBe(
+      "lowest room PLANT 07 (from its ceiling), about 2100 mm",
+    );
+  });
+
+  it("offers a taller alternative only when there is a taller one", () => {
+    const taller = { ...room, height_mm: 2400 };
+    expect(describeClearance({ ...clear, lowest: door, tallest_possible: taller })).toBe(
+      "lowest door d4, about 1900 mm · up to about 2400 mm tall fits by another route",
+    );
+    expect(describeClearance({ ...clear, lowest: door, tallest_possible: door })).toBe("lowest door d4, about 1900 mm");
+    expect(describeClearance({ ...clear, tallest_possible: taller })).toBe("");
+  });
+
+  it("asks the server for a height only when there is one", () => {
+    const scope = { projectId: "p", building: null, milestone: null };
+    expect(connectivityUrl(scope, "1", "2", null, {}, {}, null, 2100)).toContain("height_mm=2100");
+    expect(connectivityUrl(scope, "1", "2", null, {}, {}, 900, null)).not.toContain("height_mm");
+    expect(connectivityUrl(scope, "1", "2", null, {}, {}, null, 0)).not.toContain("height_mm");
+    expect(parseHeight("2100")).toBe(2100);
+    expect(parseHeight("tall")).toBe("bad");
+  });
+
+  it("draws a route as wide as its object, in the plan's own units, and the plain line for none", () => {
+    const seg = { level_id: "L1", points: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
+    const path: RoutePath = { found: true, reason: null, distance_ft: 10, rooms: [], steps: [], segments: [seg] };
+    const wide = routeDrawingsOnLevel([{ id: "r", name: "R", colour: "#000", path, widthMm: 609.6 }], "L1")[0]!;
+    expect(wide.bandFt).toBeCloseTo(2, 9);
+    for (const none of [0, null, undefined]) {
+      expect(routeDrawingsOnLevel([{ id: "r", name: "R", colour: "#000", path, widthMm: none }], "L1")[0]!.bandFt).toBeNull();
+    }
   });
 });

@@ -38,6 +38,7 @@ import { HoverSection } from "./sections/hover.js";
 import { IdentitySection } from "./sections/identity.js";
 import { MilestonesSection } from "./sections/milestones.js";
 import { PoliciesSection } from "./sections/policies.js";
+import { RoutingSection } from "./sections/routing.js";
 import { ReferenceSourcesSection } from "./sections/referenceSources.js";
 import type { SourceStatus } from "./sections/referenceSources.js";
 import { RoomLabelSection } from "./sections/roomLabel.js";
@@ -382,6 +383,7 @@ function Sections({
       />
       <AreasSection settings={settings} edit={edit} />
       <PoliciesSection settings={settings} edit={edit} propertyListId={PROPERTY_LIST_ID} />
+      <RoutingSection settings={settings} edit={edit} propertyListId={PROPERTY_LIST_ID} />
       <ReferenceSourcesSection
         settings={settings}
         edit={edit}
