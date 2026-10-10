@@ -87,6 +87,31 @@ leaves, the server refuses them otherwise); a hub that has left the model is rep
 `unlinked` is counted after the cuts, so a bay cut from every neighbour is listed.
 Every other save carries cuts through, and a test pins it.
 
+**Width check (built 2026-10-10).** A **Width (mm)** field in the route bar, `width_mm` on
+`GET /connectivity` and `get_connectivity`, and `width_mm` on a saved route. A door or an
+open-area wall narrower than the object is not passable, so the route is the shortest among those
+it fits through, with either routing method (the search is over the edges wide enough, so the
+methods are untouched). The answer carries `clearance`: the `narrowest` checked hop on the route
+found, `unchecked_hops`, and `widest_possible` (the widest object that could make the trip by ANY
+route and the hop that limits it, so there is no need to guess a width); when a width blocks every
+route `path.reason` names that limit.
+
+What is and is not checked, because a route that reads "clear" must not be read as more than it is:
+
+- **A door's width is an ESTIMATE**: its footprint's longer side less a frame allowance
+  (`frame_mm`, default 150). The footprint is overall width, frame included: on RHH a "970 x 2040"
+  leaf measures 1,055 mm and its clear opening is nearer 900. No RHH door carries a width property
+  to use instead. Across RHH's 1,627 doors with a footprint the estimate has min 555, median 910,
+  max 6,070 mm.
+- **An open area's opening is the length of the wall two of its rooms share.**
+- **Not checked, and counted in `unchecked_hops`:** a level change (a lift or stair has no width
+  here) and a door with no four-point footprint.
+- **Not checked at all: the width of a corridor INSIDE a room.** Routes hug walls, so a corridor
+  narrower than the object still passes. That needs rooms shrunk by half the width (a polygon
+  offset) and belongs with the wall-clearance routing method listed above.
+- Where a door and an open area join the same pair of rooms the pair keeps one edge (the door's),
+  so a narrow door can block a pair whose open wall is wide enough.
+
 **The editor draws its context.** While an open-zone editor is open, saved zones are
 tinted by index under the zone being drawn, and rooms no door reaches and no zone
 covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).

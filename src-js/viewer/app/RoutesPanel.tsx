@@ -48,6 +48,7 @@ export function RoutesPanel() {
       startAt: r.from_at ?? null,
       endAt: r.to_at ?? null,
       method: r.method ?? null,
+      width: r.width_mm ? String(r.width_mm) : "",
       notice: null,
       result: { state: "idle" },
     });
@@ -86,6 +87,7 @@ export function RoutesPanel() {
               <th>Name</th>
               <th className="fit">Colour</th>
               <th className="fit">Levels</th>
+              <th className="fit">Width</th>
               <th className="fit" aria-label="Open and delete" colSpan={2} />
             </tr>
           </thead>
@@ -118,6 +120,7 @@ export function RoutesPanel() {
                     />
                   </td>
                   <td className="fit">{row.levels || "—"}</td>
+                  <td className="fit">{route?.width_mm ? `${route.width_mm} mm` : "—"}</td>
                   <td className="fit">
                     <button className="link" disabled={!route} onClick={() => route && open(route)} title="Put this route in the tool, to see its steps">
                       open

@@ -681,6 +681,7 @@
   }
   .routeBar button.link { border: none; color: var(--accent); background: none; padding: 0 0.2rem; }
   .routeBar button.chip:hover { background: var(--fill); }
+  .routeBar input.widthInput { min-width: 0; width: 9.5rem; }
   .routeBar .savedRoutes { flex-basis: 100%; }
   .routeBar .savedRoute { display: inline-flex; align-items: center; gap: 0.15rem; }
   .routeBar button.chip.on { border-color: var(--accent); color: var(--accent); }

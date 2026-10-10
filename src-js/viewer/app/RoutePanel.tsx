@@ -23,8 +23,11 @@ import { RouteExtras } from "./RouteExtras.js";
 
 import type { Level, Room } from "../../renderer/types.js";
 import {
+  type Clearance,
   connectivityUrl,
+  describeClearance,
   describeResult,
+  parseWidth,
   type PlanPoint,
   type RouteMethod,
   type RoutePath,
@@ -58,6 +61,7 @@ interface Summary {
   methods?: RouteMethod[];
   isolated?: { room_id: string }[];
   path?: RoutePath | null;
+  clearance?: Clearance;
 }
 
 export function RoutePanel({ zone }: { zone: ZoneRow }) {
@@ -73,6 +77,7 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   const scopeKey = `${scope.projectId}|${scope.building}|${scope.milestone}`;
   const start = route?.start ?? null;
   const method = route?.method ?? null;
+  const width = parseWidth(route?.width ?? "");
   const end = route?.end ?? null;
   const startAt = route?.startAt ?? null;
   const endAt = route?.endAt ?? null;
@@ -109,19 +114,25 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
   // The route, once both ends are placed.
   useEffect(() => {
     if (!active || !start || !end) return;
-    const url = connectivityUrl(scope, start, end, method, { from: startAt, to: endAt });
+    // A width that is not a number is not sent; the bar says so beside the field.
+    const url = connectivityUrl(scope, start, end, method, { from: startAt, to: endAt }, {}, width === "bad" ? null : width);
     if (!url) return;
     const ac = new AbortController();
     patchRoute({ result: { state: "loading" } });
     void read(url, ac.signal).then((r) => {
       if (ac.signal.aborted) return;
       if (!r.ok) return patchRoute({ result: { state: "error", message: r.message } });
-      const path = (r.body as Summary | null)?.path;
-      patchRoute({ result: path ? { state: "done", path } : { state: "error", message: "The server returned no route." } });
+      const body = r.body as Summary | null;
+      const path = body?.path;
+      patchRoute({
+        result: path
+          ? { state: "done", path, ...(body?.clearance ? { clearance: body.clearance } : {}) }
+          : { state: "error", message: "The server returned no route." },
+      });
     });
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, start, end, method, pointsKey, scopeKey, revision, connectionsVersion]);
+  }, [active, start, end, method, width, pointsKey, scopeKey, revision, connectionsVersion]);
 
   // Escape leaves the tool, like every other transient thing on this page.
   useEffect(() => {
@@ -163,6 +174,21 @@ export function RoutePanel({ zone }: { zone: ZoneRow }) {
       <span aria-hidden="true">→</span>
       <Slot label="End" roomId={end} at={endAt} onResetPoint={() => patchRoute({ endAt: null })} rooms={rooms} levels={levels} next={start !== null && end === null} onShow={() => showOnPlan(end)} onClear={() => select("room", end ?? "", zoneId)} />
       <span className="routeResult">{describeResult(route.result)}</span>
+      <input
+        className="zoneName widthInput"
+        inputMode="numeric"
+        placeholder="width mm (0 = none)"
+        value={route.width}
+        onChange={(e) => patchRoute({ width: e.target.value })}
+        aria-label="Width of the object that has to make the trip, in millimetres"
+        title="The width in mm of what has to make the trip (a bed, a trolley, plant). A door or open wall narrower than this is not passable. Door widths are estimates: the footprint less 150 mm for the frame. Corridors inside rooms are not checked."
+      />
+      {width === "bad" ? <span className="routeNotice">Width must be a number of millimetres.</span> : null}
+      {route.result.state === "done" && describeClearance(route.result.clearance) ? (
+        <span className="routeLevel" title="Door widths are estimates; level changes and doors with no footprint are not checked">
+          {describeClearance(route.result.clearance)}
+        </span>
+      ) : null}
       {route.result.state === "done" && route.result.path.note ? (
         <span className="routeNotice">{route.result.path.note}</span>
       ) : null}

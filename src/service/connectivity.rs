@@ -117,6 +117,40 @@ pub struct ConnectivityScope<'a> {
     /// deliberately not filtered: a graph missing the rooms a door leads to is
     /// worse than no graph (the rule `/adjacency` states for `?filter=`).
     pub door_filter: Option<&'a RoomFilter>,
+    /// The width, in mm, of an object that has to make the trip. A door or an open wall
+    /// narrower than this is not passable; absent or 0 checks nothing, as before. See
+    /// [`Clearance`].
+    pub clear_width_mm: Option<f64>,
+    /// What the frame takes off a door's footprint width to give its clear opening.
+    /// Absent means [`DEFAULT_FRAME_ALLOWANCE_MM`].
+    pub frame_allowance_mm: Option<f64>,
+}
+
+/// What a door's frame and stops take off the width its footprint measures, in mm.
+///
+/// The footprint is the door's overall width in plan, frame included: on RHH a
+/// "970 x 2040" leaf has a 1,055 mm footprint, and its clear opening is nearer 900.
+/// 150 is a rule of thumb for a standard single door, **an estimate and not a
+/// measurement**, which is why a caller can state their own and why every width here
+/// is reported as an estimate. No door on RHH carries a width property to use instead.
+pub const DEFAULT_FRAME_ALLOWANCE_MM: f64 = 150.0;
+
+const MM_PER_FT: f64 = 304.8;
+
+/// The asked width and frame allowance, from the two optional numbers a caller sends.
+/// A width of 0 is "no check". Shared by the HTTP handler and the MCP tool so the two
+/// cannot disagree on what is valid.
+pub fn width_params(width_mm: Option<f64>, frame_mm: Option<f64>) -> Result<(Option<f64>, Option<f64>), ServiceError> {
+    let ok = |v: f64, name: &str, max: f64| {
+        if v.is_finite() && (0.0..=max).contains(&v) {
+            Ok(v)
+        } else {
+            Err(ServiceError::Invalid(format!("{name} must be between 0 and {max} mm, not {v}")))
+        }
+    };
+    let width = width_mm.map(|w| ok(w, "width_mm", 100_000.0)).transpose()?.filter(|w| *w > 0.0);
+    let frame = frame_mm.map(|f| ok(f, "frame_mm", 2_000.0)).transpose()?;
+    Ok((width, frame))
 }
 
 // ================================ wire shape ================================
@@ -151,6 +185,51 @@ pub struct ConnectivityResult {
     pub connections: ConnectionsReport,
     /// Present only when both `from` and `to` were asked for.
     pub path: Option<PathResult>,
+    /// What the route's widths say, present whenever a route was asked for.
+    pub clearance: Option<Clearance>,
+}
+
+/// One hop's width, and what it is.
+#[derive(Serialize, Clone)]
+pub struct WidthLimit {
+    /// An ESTIMATE for a door (footprint less the frame allowance) and the shared wall's
+    /// length for an open zone.
+    pub width_mm: f64,
+    pub kind: EdgeKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub door_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub door_model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone_id: Option<String>,
+    pub from: RoomRef,
+    pub to: RoomRef,
+}
+
+/// Whether an object of a given width can make the trip, and what limits it.
+///
+/// Widths are checked for **doors** (the footprint less a frame allowance) and **open
+/// zones** (the length of the wall the two rooms share). **Not checked, and counted in
+/// `unchecked_hops`:** a level change (a lift or stair has no width here) and a door with no
+/// usable footprint. **Not checked at all:** the width of a corridor INSIDE a room; the
+/// route hugs walls, so a corridor narrower than the object still passes. A route that
+/// reports itself clear has cleared the doors and openings only.
+#[derive(Serialize)]
+pub struct Clearance {
+    /// The width asked for, or absent when none was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked_mm: Option<f64>,
+    /// The frame allowance the door widths were reduced by.
+    pub frame_allowance_mm: f64,
+    /// The narrowest checked hop on the route found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub narrowest: Option<WidthLimit>,
+    /// Hops of the route found that could not be checked.
+    pub unchecked_hops: usize,
+    /// The widest object that could make the trip by SOME route, and the hop that limits
+    /// it. Absent when no checked hop limits it, or when no route exists at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub widest_possible: Option<WidthLimit>,
 }
 
 #[derive(Serialize, Clone)]
@@ -215,6 +294,11 @@ pub struct Edge {
     pub link_id: Option<String>,
     pub point: Point2D,
     pub point_source: PointSource,
+    /// How wide the way through is, in mm: a door's estimated clear opening, or an open
+    /// zone's shared wall. `None` when it cannot be known (a level change, a door with
+    /// no footprint), which is passable and counted as unchecked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_mm: Option<f64>,
     /// Approximate walking distance through the door, in feet.
     pub length: f64,
     #[serde(skip)]
@@ -320,6 +404,8 @@ struct DoorFact {
     to: Option<RoomRef>,
     /// The door's own point, when it has one.
     point: Option<(Point2D, PointSource)>,
+    /// The estimated clear opening, from the footprint. `None` when there is none.
+    width_mm: Option<f64>,
 }
 
 struct Graph {
@@ -372,6 +458,7 @@ fn link(mut nodes: Vec<Node>, doors: Vec<DoorFact>) -> Graph {
                     link_id: None,
                     point,
                     point_source,
+                    width_mm: door.width_mm,
                     length: dist(ca, point) + dist(point, cb),
                     ia,
                     ib,
@@ -611,6 +698,8 @@ struct ZoneEdgeFact {
     ia: usize,
     ib: usize,
     point: Point2D,
+    /// The shared wall's length in mm: how wide the opening is.
+    width_mm: f64,
 }
 
 /// What the authored connections did to this read, so a person can see the
@@ -719,6 +808,7 @@ fn add_zone_edges(
             link_id: None,
             point: fact.point,
             point_source: PointSource::SharedWall,
+            width_mm: Some(fact.width_mm),
             length: dist(ca, fact.point) + dist(fact.point, cb),
             ia: fact.ia,
             ib: fact.ib,
@@ -756,6 +846,7 @@ fn add_link_edges(
             link_id: Some(fact.link_id),
             point: nodes[fact.ia].centroid,
             point_source: PointSource::Vertical,
+            width_mm: None,
             length: fact.cost,
             ia: fact.ia,
             ib: fact.ib,
@@ -816,6 +907,7 @@ fn zone_edges(
             ia: present[pair.ia].0,
             ib: present[pair.ib].0,
             point: pair.midpoint,
+            width_mm: pair.shared_length * MM_PER_FT,
         });
     }
     let report = ZoneReport {
@@ -1024,6 +1116,7 @@ pub fn assemble_connectivity(
     };
     let assembled = assemble_openings::<DoorPayload>(state, OpeningKind::Doors, &door_scope)?;
     let doors_pushed = assembled.is_some();
+    let frame_allowance_mm = scope.frame_allowance_mm.unwrap_or(DEFAULT_FRAME_ALLOWANCE_MM);
 
     let nodes: Vec<Node> = rooms
         .rooms
@@ -1051,6 +1144,7 @@ pub fn assemble_connectivity(
                     from: d.room_origin.from_room.room().cloned(),
                     to: d.room_origin.to_room.room().cloned(),
                     point: door_point(&d.door),
+                    width_mm: door_clear_width_mm(&d.door, frame_allowance_mm),
                 })
                 .collect()
         }
@@ -1063,37 +1157,27 @@ pub fn assemble_connectivity(
     let door_degree: Vec<usize> = nodes.iter().map(|n| n.degree).collect();
     let (zone_facts, link_facts, mut connections_report) = authored_edges(state, project, &rooms, &nodes, &door_degree);
     let tally = add_zone_edges(&mut nodes, &mut edges, zone_facts);
-    for zone in &mut connections_report.zones {
-        let (added, redundant) = tally.get(&zone.id).copied().unwrap_or((0, 0));
-        zone.edges = added;
-        zone.redundant = redundant;
-    }
     let redundant_links = add_link_edges(&mut nodes, &mut edges, link_facts);
-    for link in &mut connections_report.links {
-        if redundant_links.contains(&link.id) {
-            link.applied = false;
-            link.reason = Some("a door, open zone or earlier link already joins these two rooms".to_string());
-        }
-    }
+    record_what_applied(&mut connections_report, &tally, &redundant_links);
     let components = components(&mut nodes, &edges);
+    let isolated = isolated_rooms(&nodes, &components);
 
-    let isolated: Vec<IsolatedRoom> = nodes
-        .iter()
-        .filter(|n| components[n.component].size == 1)
-        .map(|n| IsolatedRoom {
-            room: n.room.clone(),
-            name: n.name.clone(),
-            level_id: n.level_id.clone(),
-            exits: n.exits,
-        })
-        .collect();
-
-    let path = match route_between {
-        None => None,
+    let (path, clearance) = match route_between {
+        None => (None, None),
         Some((from, to)) => {
             let (i, j) = (resolve(&nodes, from, "start")?, resolve(&nodes, to, "end")?);
             let ask = routing::Ask { from: i, to: j, from_at: from.at, to_at: to.at };
-            Some(routing::route(method, &nodes, &edges, &outlines(&rooms, &nodes), &ask, metric))
+            let (path, clearance) = route_asked(
+                &nodes,
+                &edges,
+                &outlines(&rooms, &nodes),
+                &ask,
+                scope.clear_width_mm,
+                frame_allowance_mm,
+                method,
+                metric,
+            );
+            (Some(path), Some(clearance))
         }
     };
 
@@ -1112,7 +1196,184 @@ pub fn assemble_connectivity(
         counts,
         connections: connections_report,
         path,
+        clearance,
     }))
+}
+
+/// The width readout for a route, and the sentence a width-blocked route gets.
+///
+/// `edges` is the WHOLE graph, so the narrowest hop of the route found and the widest
+/// object that could make the trip by any route are read against everything there is,
+/// not just what the asked width left. A route that failed only because of the width has
+/// its `reason` rewritten to say what would fit and what limits it: "no route" with no
+/// way to see why is the answer this readout exists to avoid.
+fn clearance_of(
+    nodes: &[Node],
+    edges: &[Edge],
+    path: &mut PathResult,
+    from: usize,
+    to: usize,
+    asked_mm: Option<f64>,
+    frame_allowance_mm: f64,
+) -> Clearance {
+    let limit_of = |e: &Edge| WidthLimit {
+        width_mm: e.width_mm.unwrap_or(0.0),
+        kind: e.kind,
+        door_id: e.door_id.clone(),
+        door_model_id: e.door_model_id.clone(),
+        zone_id: e.zone_id.clone(),
+        from: e.a.clone(),
+        to: e.b.clone(),
+    };
+
+    // The hops the route took, matched back to their edges.
+    let mut narrowest: Option<WidthLimit> = None;
+    let mut unchecked_hops = 0;
+    if path.found {
+        for step in &path.steps {
+            let edge = edges.iter().find(|e| {
+                e.kind == step.kind
+                    && match e.kind {
+                        EdgeKind::Door => e.door_id == step.door_id && e.door_model_id == step.door_model_id,
+                        EdgeKind::Zone => {
+                            e.zone_id == step.zone_id
+                                && ((e.a == step.from && e.b == step.to) || (e.a == step.to && e.b == step.from))
+                        }
+                        EdgeKind::Vertical => e.link_id == step.link_id,
+                    }
+            });
+            match edge {
+                Some(e) if e.width_mm.is_some() => {
+                    if narrowest.as_ref().is_none_or(|n| e.width_mm.unwrap_or(f64::MAX) < n.width_mm) {
+                        narrowest = Some(limit_of(e));
+                    }
+                }
+                _ => unchecked_hops += 1,
+            }
+        }
+    }
+
+    let widest_possible = widest_between(nodes, edges, from, to).map(|k| limit_of(&edges[k]));
+
+    if let (false, Some(asked), Some(widest)) = (path.found, asked_mm, widest_possible.as_ref()) {
+        let name = |r: &RoomRef| nodes.iter().find(|n| n.room == *r).map_or(r.room_id.clone(), |n| n.name.clone());
+        let what = match widest.kind {
+            EdgeKind::Door => format!("door {}", widest.door_id.as_deref().unwrap_or("?")),
+            EdgeKind::Zone => "an open area's shared wall".to_string(),
+            EdgeKind::Vertical => "a level change".to_string(),
+        };
+        path.reason = Some(format!(
+            "no route for an object {asked:.0} mm wide: the widest that fits is about {:.0} mm, limited by {what} \
+             between {} and {}. Door widths are estimates (footprint less {frame_allowance_mm:.0} mm for the frame)",
+            widest.width_mm,
+            name(&widest.from),
+            name(&widest.to)
+        ));
+    }
+
+    Clearance { asked_mm, frame_allowance_mm, narrowest, unchecked_hops, widest_possible }
+}
+
+/// The widest object that can get from `from` to `to`: the largest width such that the
+/// rooms are still joined using only hops at least that wide. Returns the index of the
+/// hop that limits it, or `None` when no hop limits it (the rooms are joined by hops of
+/// unknown width alone) or the rooms are not joined at all.
+///
+/// Edges are added widest first (those of unknown width first of all, since they never
+/// block) until the two rooms meet; the edge that joins them is the bottleneck.
+fn widest_between(nodes: &[Node], edges: &[Edge], from: usize, to: usize) -> Option<usize> {
+    if from == to {
+        return None;
+    }
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let mut order: Vec<usize> = (0..edges.len()).collect();
+    order.sort_by(|&a, &b| match (edges[a].width_mm, edges[b].width_mm) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(x), Some(y)) => y.total_cmp(&x),
+    });
+    let mut parent: Vec<usize> = (0..nodes.len()).collect();
+    for k in order {
+        let (ra, rb) = (find(&mut parent, edges[k].ia), find(&mut parent, edges[k].ib));
+        if ra != rb {
+            parent[ra] = rb;
+        }
+        if find(&mut parent, from) == find(&mut parent, to) {
+            return edges[k].width_mm.map(|_| k);
+        }
+    }
+    None
+}
+
+/// What the zones and links did to the graph, written into the report a person reads: the
+/// edges each zone added, the pairs a door already joined, and the links that were
+/// redundant and so not applied.
+fn record_what_applied(
+    report: &mut ConnectionsReport,
+    tally: &BTreeMap<String, (usize, usize)>,
+    redundant_links: &std::collections::BTreeSet<String>,
+) {
+    for zone in &mut report.zones {
+        let (added, redundant) = tally.get(&zone.id).copied().unwrap_or((0, 0));
+        zone.edges = added;
+        zone.redundant = redundant;
+    }
+    for link in &mut report.links {
+        if redundant_links.contains(&link.id) {
+            link.applied = false;
+            link.reason = Some("a door, open zone or earlier link already joins these two rooms".to_string());
+        }
+    }
+}
+
+/// Rooms nothing reaches: those alone in their component.
+fn isolated_rooms(nodes: &[Node], components: &[Component]) -> Vec<IsolatedRoom> {
+    nodes
+        .iter()
+        .filter(|n| components[n.component].size == 1)
+        .map(|n| IsolatedRoom {
+            room: n.room.clone(),
+            name: n.name.clone(),
+            level_id: n.level_id.clone(),
+            exits: n.exits,
+        })
+        .collect()
+}
+
+/// The route between two rooms, and what its widths say.
+///
+/// With a width asked the route is searched over the edges wide enough, which is what
+/// keeps both methods unchanged: they take an edge list and a node list, and a shorter
+/// edge list is just a smaller building. The readout is read against the WHOLE graph.
+#[allow(clippy::too_many_arguments)]
+fn route_asked(
+    nodes: &[Node],
+    edges: &[Edge],
+    outlines: &[Option<&Room>],
+    ask: &routing::Ask,
+    clear_width_mm: Option<f64>,
+    frame_allowance_mm: f64,
+    method: Method,
+    metric: Metric,
+) -> (PathResult, Clearance) {
+    let routable: Vec<Edge>;
+    let searched: &[Edge] = match clear_width_mm {
+        Some(w) => {
+            routable = edges.iter().filter(|e| e.width_mm.is_none_or(|ew| ew >= w)).cloned().collect();
+            &routable
+        }
+        None => edges,
+    };
+    let mut path = routing::route(method, nodes, searched, outlines, ask, metric);
+    let clearance = clearance_of(nodes, edges, &mut path, ask.from, ask.to, clear_width_mm, frame_allowance_mm);
+    (path, clearance)
 }
 
 /// Each node's room outline, for the methods that walk inside rooms.
@@ -1123,6 +1384,19 @@ fn outlines<'a>(rooms: &'a super::rooms::RoomsResult, nodes: &[Node]) -> Vec<Opt
         .map(|r| (RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() }, &r.room))
         .collect();
     nodes.iter().map(|n| by_ref.get(&n.room).copied()).collect()
+}
+
+/// A door's estimated clear opening, in mm: the longer side of its footprint (an oriented
+/// rectangle, so its width along the wall) less the frame allowance. `None` for a footprint
+/// that is not a four-point rectangle, because guessing a width from anything else would
+/// turn "not known" into a number.
+fn door_clear_width_mm(door: &crate::contract::Opening, frame_allowance_mm: f64) -> Option<f64> {
+    let pts = &door.loops.first()?.points;
+    if pts.len() != 4 {
+        return None;
+    }
+    let overall = dist(pts[0], pts[1]).max(dist(pts[1], pts[2])) * MM_PER_FT;
+    (overall > 0.0).then_some((overall - frame_allowance_mm).max(0.0))
 }
 
 /// A door's own position: its insertion point, else the middle of its
@@ -1172,6 +1446,7 @@ mod tests {
             from,
             to,
             point: at.map(|(x, y)| (Point2D { x, y }, PointSource::Insertion)),
+            width_mm: None,
         }
     }
 
@@ -1816,6 +2091,154 @@ mod tests {
             assert!(result.connections.links[0].applied);
             assert!(result.connections.zones[0].stale.is_empty());
             std::fs::remove_dir_all(&dir).ok();
+        }
+
+        // ---------- widths ----------
+
+        /// A door whose footprint is `width_mm + frame` wide, so its estimated clear
+        /// opening is exactly `width_mm` at the default 150 mm allowance. Placed at the
+        /// middle of the wall the two rooms share.
+        fn sized(id: &str, from: &str, to: &str, clear_mm: f64) -> Opening {
+            let w = (clear_mm + DEFAULT_FRAME_ALLOWANCE_MM) / MM_PER_FT;
+            let mut o = door(id, Some(from), Some(to), "none");
+            o.insertion_point = Some(Point2D { x: 10.0, y: 5.0 });
+            o.loops = vec![Loop {
+                points: vec![
+                    Point2D { x: 10.0 - w / 2.0, y: 4.8 },
+                    Point2D { x: 10.0 + w / 2.0, y: 4.8 },
+                    Point2D { x: 10.0 + w / 2.0, y: 5.2 },
+                    Point2D { x: 10.0 - w / 2.0, y: 5.2 },
+                ],
+            }];
+            o
+        }
+
+        fn read_width(state: &AppState, from: &str, to: &str, width_mm: Option<f64>) -> ConnectivityResult {
+            let (a, b) = (ep(None, from), ep(None, to));
+            assemble_connectivity(
+                state,
+                "p1",
+                &ConnectivityScope { clear_width_mm: width_mm, ..Default::default() },
+                Some((&a, &b)),
+                Metric::Distance,
+                Method::Centroid,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap()
+        }
+
+        /// A door narrower than the object is not a way through, and the answer says what
+        /// WOULD fit and what limits it, instead of a bare "no route".
+        #[test]
+        fn test_a_door_too_narrow_blocks_the_route_and_the_answer_names_it() {
+            let s = state(vec![sized("ab", "a", "b", 900.0), sized("bc", "b", "c", 600.0)]);
+            let fits = read_width(&s, "a", "c", Some(550.0));
+            assert!(fits.path.as_ref().unwrap().found);
+            assert!((fits.clearance.as_ref().unwrap().narrowest.as_ref().unwrap().width_mm - 600.0).abs() < 1.0);
+
+            let blocked = read_width(&s, "a", "c", Some(700.0));
+            let path = blocked.path.as_ref().unwrap();
+            assert!(!path.found);
+            let reason = path.reason.as_deref().unwrap();
+            assert!(
+                reason.contains("700 mm") && reason.contains("600 mm") && reason.contains("door bc"),
+                "{reason}"
+            );
+            let widest = blocked.clearance.as_ref().unwrap().widest_possible.as_ref().unwrap();
+            assert_eq!(widest.door_id.as_deref(), Some("bc"));
+        }
+
+        /// With no width asked nothing changes, but the readout is still there: the widest
+        /// object that could make the trip is worth knowing before guessing a width.
+        #[test]
+        fn test_without_a_width_the_route_is_unchanged_and_the_readout_says_what_fits() {
+            let s = state(vec![sized("ab", "a", "b", 900.0), sized("bc", "b", "c", 600.0)]);
+            let r = read_width(&s, "a", "c", None);
+            assert!(r.path.as_ref().unwrap().found);
+            let c = r.clearance.as_ref().unwrap();
+            assert!(c.asked_mm.is_none());
+            assert!((c.widest_possible.as_ref().unwrap().width_mm - 600.0).abs() < 1.0);
+            assert_eq!(c.unchecked_hops, 0);
+        }
+
+        /// A wide enough alternative is taken, so the width shapes the route and not only
+        /// whether one exists.
+        #[test]
+        fn test_a_width_sends_the_route_the_wide_way_round() {
+            let s = state(vec![
+                sized("ab", "a", "b", 600.0),
+                sized("ac", "a", "c", 1200.0),
+                sized("cb", "c", "b", 1200.0),
+            ]);
+            let direct: Vec<_> = read_width(&s, "a", "b", None)
+                .path
+                .unwrap()
+                .rooms
+                .iter()
+                .map(|r| r.room_id.clone())
+                .collect();
+            assert_eq!(direct, vec!["a", "b"]);
+            let wide = read_width(&s, "a", "b", Some(1000.0)).path.unwrap();
+            assert_eq!(wide.rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>(), vec!["a", "c", "b"]);
+        }
+
+        /// A door with no footprint has no width to check, so it passes and is counted.
+        #[test]
+        fn test_a_door_with_no_footprint_is_passable_and_counted_unchecked() {
+            let s = state(vec![door("ab", Some("a"), Some("b"), "none")]);
+            let r = read_width(&s, "a", "b", Some(5000.0));
+            assert!(r.path.as_ref().unwrap().found);
+            let c = r.clearance.unwrap();
+            assert_eq!(c.unchecked_hops, 1);
+            assert!(c.narrowest.is_none());
+        }
+
+        /// An open zone's opening is the wall its two rooms share: 10 ft is 3,048 mm.
+        #[test]
+        fn test_an_open_areas_wall_is_as_wide_as_the_wall_the_rooms_share() {
+            let (s, dir) = zoned("width", vec![zone_input("z", &["b", "c"])]);
+            assert!(read_width(&s, "b", "c", Some(3000.0)).path.unwrap().found);
+            let blocked = read_width(&s, "b", "c", Some(3100.0));
+            assert!(!blocked.path.as_ref().unwrap().found);
+            let widest = blocked.clearance.unwrap().widest_possible.unwrap();
+            assert_eq!(widest.kind, EdgeKind::Zone);
+            assert!((widest.width_mm - 3048.0).abs() < 1.0, "{}", widest.width_mm);
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        /// A lift or stair has no width here, so a level change is passable and counted.
+        #[test]
+        fn test_a_level_change_is_not_checked_and_says_so() {
+            let (s, dir) = storeys("width", vec![link_input("up", "b", "e", Some(10.0))]);
+            let (a, f) = (ep(None, "a"), ep(None, "f"));
+            let r = assemble_connectivity(
+                &s,
+                "p1",
+                &ConnectivityScope { clear_width_mm: Some(1500.0), ..Default::default() },
+                Some((&a, &f)),
+                Metric::Distance,
+                Method::Centroid,
+                Detail::Full,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(r.path.as_ref().unwrap().found, "{:?}", r.path.as_ref().unwrap().reason);
+            assert_eq!(
+                r.clearance.unwrap().unchecked_hops,
+                3,
+                "two doors without a footprint and the level change"
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
+
+        #[test]
+        fn test_width_parameters_are_validated() {
+            assert_eq!(width_params(Some(0.0), None).unwrap(), (None, None), "0 is no check");
+            assert_eq!(width_params(Some(900.0), Some(100.0)).unwrap(), (Some(900.0), Some(100.0)));
+            assert!(width_params(Some(-1.0), None).is_err());
+            assert!(width_params(Some(f64::NAN), None).is_err());
+            assert!(width_params(None, Some(5000.0)).is_err());
         }
 
         // ---------- disconnects and the hub ----------
