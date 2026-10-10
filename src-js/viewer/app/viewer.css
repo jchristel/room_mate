@@ -700,6 +700,10 @@
   /* Half the size they were, and see-through, so the room under a mark stays readable. */
   .route-mark { stroke: var(--paper); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none;
                 fill-opacity: 0.55; stroke-opacity: 0.55; }
+  /* The grab target of a mark: nothing to see, 22 px to hit. */
+  .route-mark-grab { fill: none; stroke: transparent; stroke-width: 22px; stroke-linecap: round; vector-effect: non-scaling-stroke;
+                     pointer-events: stroke; cursor: grab; touch-action: none; }
+  .route-mark-grab:active { cursor: grabbing; }
   .route-mark.start { fill: #2e9e4f; }
   .route-mark.end { fill: #d64545; }
   /* Saved routes: one colour each, on a paper halo so crossing routes stay legible. */

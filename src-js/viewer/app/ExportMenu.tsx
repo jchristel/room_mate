@@ -25,6 +25,7 @@ import { DropMenu } from "./DropMenu.js";
 import { exportLevels, type ExportResult } from "./svgExport.js";
 import type { ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
+import type { DrawableRoute } from "../route.js";
 import type { Level } from "../../renderer/types.js";
 
 export function ExportMenu({
@@ -38,7 +39,7 @@ export function ExportMenu({
   plan: ColourPlan | null;
   errorRooms: ReadonlySet<string>;
 }) {
-  const { payload, scope, showErrors, appearance } = useViewer();
+  const { payload, scope, showErrors, appearance, connections, savedRoutes } = useViewer();
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set());
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [report, setReport] = useState<string | null>(null);
@@ -58,6 +59,19 @@ export function ExportMenu({
     else next.add(id);
     setExcluded(next);
   };
+
+  // The routes switched on in the saved-routes table that have a path to draw. One a
+  // person ticked but that has none (not found, or still being asked) is named in the
+  // report, not dropped without a word.
+  const doc = connections.projectId === scope.projectId ? connections.doc : null;
+  const shownRoutes = (doc?.routes ?? []).filter((r) => savedRoutes.shown.has(r.id));
+  const drawable: DrawableRoute[] = [];
+  const undrawn: string[] = [];
+  for (const r of shownRoutes) {
+    const result = savedRoutes.results[r.id];
+    if (result?.state === "done" && result.path.found) drawable.push({ id: r.id, name: r.name, colour: r.colour, path: result.path });
+    else undrawn.push(r.name);
+  }
 
   const run = async () => {
     if (!payload || !chosen.length) return;
@@ -79,10 +93,11 @@ export function ExportMenu({
           layers: zone.layers,
           spacesModel: zone.spacesModel,
           appearance,
+          routes: drawable,
         },
         (done, total) => setProgress({ done, total }),
       );
-      setReport(summary(result));
+      setReport(summary(result, drawable.length, undrawn));
     } finally {
       setProgress(null);
     }
@@ -127,8 +142,10 @@ export function ExportMenu({
 
 /** One line on what happened. Every shortfall is named: a level quietly
  *  missing from the downloads reads as a picker that did not work. */
-function summary(r: ExportResult): string {
+function summary(r: ExportResult, routes: number, undrawn: readonly string[]): string {
   const parts = [`Exported ${r.exported} file${r.exported === 1 ? "" : "s"}.`];
+  if (routes > 0) parts.push(`${routes} saved route${routes === 1 ? "" : "s"} drawn.`);
+  if (undrawn.length) parts.push(`Not drawn, no route found: ${undrawn.join(", ")}.`);
   if (r.empty.length) parts.push(`No rooms, skipped: ${r.empty.join(", ")}.`);
   if (r.partial.length) parts.push(`A layer read failed on: ${r.partial.join(", ")} (named in each file).`);
   return parts.join(" ");

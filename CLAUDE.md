@@ -222,7 +222,12 @@ store's RHH ceilings for the four `HOS-INT_*` models were re-exported
   every overlay on every level nobody is looking at. How a layer LOOKS --
   dashes, footprint alpha, theme fallback, the override test -- is
   `renderer/style.ts`, read by both painters: change a ceiling's dash anywhere
-  else and the file and the screen disagree.
+  else and the file and the screen disagree. **Saved routes are the one layer that
+  is NOT fetched at export**: a route's path already covers every level it passes
+  through and sits in the page store (`savedRoutes`), so the export reads it from
+  there. What a route draws on a level is `routeDrawingsOnLevel` in `route.ts`,
+  read by the screen overlay and by `routeExport.ts` alike -- change it there, not
+  in either painter. Open zones are deliberately not exported.
 - **`/ceilings`' ETag cursor covers ROOMS as well as ceilings**, which no other
   entity read needs. Attribution derives from the rooms in scope, so a rooms
   push alone changes every answer and a ceilings-only cursor would serve a stale

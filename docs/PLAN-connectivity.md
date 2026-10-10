@@ -35,9 +35,12 @@ deferred until the stacked-rooms measurement; vertical zones as stored data stay
   stored, not kept across a reload); each zone draws every shown route's slice for its
   level, each in its colour on a paper halo so routes sharing a corridor stay readable.
   They stay drawn after the route tool is closed, and are managed from the tool's bar.
-- **Not done:** routes sharing a corridor are drawn on top of each other, not offset;
-  a reload shows none until they are switched on; the SVG export does not draw them;
-  `get_connectivity` is unchanged and `list_connections` now carries `routes`.
+- **In the SVG export.** The routes switched on in the table are drawn on every exported
+  level they pass through, over everything else, with a legend naming each in its colour
+  (top left). Open zones are not exported: they are authoring, not the drawing. A route that
+  was switched on but has no path is named in the export report, not dropped silently.
+- **Not done:** routes sharing a corridor are drawn on top of each other, on a paper halo,
+  not offset (decided not needed); a reload shows none until they are switched on.
 
 **The stack view (built 2026-10-10).** "Stack view" in the Connections editor: pick a
 room and see the rooms joined to it by vertical links as a column of levels, with the
@@ -112,6 +115,16 @@ What is and is not checked, because a route that reads "clear" must not be read 
 - Where a door and an open area join the same pair of rooms the pair keeps one edge (the door's),
   so a narrow door can block a pair whose open wall is wide enough.
 
+**Dragging a start or end mark (built 2026-10-10).** The marks of the route being drawn can be
+dragged: the mark follows the pointer and the route is asked again ONCE, on release (a request per
+pixel would be the alternative). The mark owns its pointer and stops the press at itself, because the
+plan's pan and pick gestures sit on the same `<svg>`. The grab target is a short line with a wide,
+invisible, round-capped, non-scaling stroke: 22 px on screen at any zoom (a circle of no radius has no
+stroke to hit). **A drag stays in its own room**: dropped outside it, the server moves the point onto
+the room's outline and the route bar says so. Moving a mark into a DIFFERENT room (which would change
+what the route joins) is not built; pick the other room instead. Only the draft route's marks drag,
+not a saved route's: open the saved route first.
+
 **The editor draws its context.** While an open-zone editor is open, saved zones are
 tinted by index under the zone being drawn, and rooms no door reaches and no zone
 covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).
@@ -126,7 +139,6 @@ covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).
   two rooms on its top level suggests from the first only.
 - **Wall clearance** as a third routing method (keep a margin off walls); the natural
   next one in "Horizontal path".
-- **Dragging a start or end mark** to adjust it. Today a click sets the point.
 - **Milestone pinning of connections**, and an **MCP write tool** for them. Both
   deferred on purpose; the Security doc explains why a write tool waits.
 - **Doorless corridors.** About 1,050 ordinary rooms on the largest project have no
