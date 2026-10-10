@@ -4,6 +4,7 @@
 // which is worth showing as it is (a stale base, an id two models share).
 
 import type { ConnectionsDoc, DocBody } from "../connections.js";
+import { setConnections } from "./store.js";
 
 export type Reply = { ok: true; body: ConnectionsDoc } | { ok: false; status: number; message: string };
 
@@ -25,4 +26,25 @@ export function put(url: string, base: string, body: DocBody): Promise<Reply> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ base, ...body }),
   });
+}
+
+/** Write `body` over the document `doc` was read from, and put the answer in the
+ *  store; on a conflict show the server's current document instead and say so.
+ *  Returns the server's refusal in its own words, or `null` when it was saved. */
+export async function saveConnections(
+  url: string,
+  projectId: string | null,
+  doc: ConnectionsDoc,
+  body: DocBody,
+): Promise<string | null> {
+  const r = await put(url, doc.taken_at, body);
+  if (r.ok) {
+    setConnections({ projectId, doc: r.body, error: null });
+    return null;
+  }
+  if (r.status === 409) {
+    const fresh = await request(url);
+    if (fresh.ok) setConnections({ projectId, doc: fresh.body, error: null });
+  }
+  return r.message;
 }

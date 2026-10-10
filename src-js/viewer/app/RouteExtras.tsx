@@ -11,28 +11,26 @@
 // connections document, so routes are shared like zones and links are. Which routes
 // are drawn is the reader's own and lives in the page store.
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import type { Level, Room } from "../../renderer/types.js";
 import {
-  bodyAfterDeleteRoute,
-  bodyAfterRecolourRoute,
   bodyAfterSaveRoute,
   type ConnectionsDoc,
   connectionsUrl,
   nextRouteColour,
   whyRouteNotSavable,
   type DocBody,
-  type SavedRoute,
 } from "../connections.js";
 import { routeRows, type RouteState } from "../route.js";
+import { ColourInput } from "./ColourInput.js";
 import { put, request } from "./connectionsApi.js";
 import { panToRoom } from "./zoneRegistry.js";
-import { patchZoneRoute, setConnections, setSavedRouteShown, setZoneLevel, type ZoneRow } from "./store.js";
+import { setConnections, setSavedRouteShown, setZoneLevel, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
 export function RouteExtras({ zone, route }: { zone: ZoneRow; route: RouteState }) {
-  const { scope, payload, connections, savedRoutes } = useViewer();
+  const { scope, payload, connections } = useViewer();
   const url = connectionsUrl(scope);
   const doc = connections.projectId === scope.projectId ? connections.doc : null;
   const [name, setName] = useState("");
@@ -87,22 +85,6 @@ export function RouteExtras({ zone, route }: { zone: ZoneRow; route: RouteState 
       setColour(null);
     });
 
-  const remove = (r: SavedRoute) => {
-    if (!window.confirm(`Delete the saved route "${r.name}"?`)) return;
-    void send(doc ? bodyAfterDeleteRoute(doc, r.id) : null, () => {});
-  };
-
-  const load = (r: SavedRoute) =>
-    patchZoneRoute(zone.id, {
-      start: r.from.room_id,
-      end: r.to.room_id,
-      startAt: r.from_at ?? null,
-      endAt: r.to_at ?? null,
-      method: r.method ?? null,
-      notice: null,
-      result: { state: "idle" },
-    });
-
   const showRoom = (roomId: string) => {
     const room = rooms.get(roomId);
     if (!room) return;
@@ -133,41 +115,6 @@ export function RouteExtras({ zone, route }: { zone: ZoneRow; route: RouteState 
       ) : null}
       {error ? <span className="routeNotice">{error}</span> : null}
       {stepsOpen && path ? <Steps rows={rows} rooms={rooms} levels={levels} onShow={showRoom} /> : null}
-      {doc && doc.routes.length > 0 ? (
-        <span className="routeMatches savedRoutes">
-          Saved routes:
-          {doc.routes.map((r) => {
-            const on = savedRoutes.shown.has(r.id);
-            const result = savedRoutes.results[r.id];
-            const problem = on && result?.state === "error" ? result.message : null;
-            return (
-              <span key={r.id} className="savedRoute">
-                <button
-                  className={`chip${on ? " on" : ""}`}
-                  onClick={() => setSavedRouteShown(r.id, !on)}
-                  title={on ? "Hide this route on the plan" : "Show this route on the plan"}
-                  aria-pressed={on}
-                >
-                  <span className="swatch" style={{ background: r.colour }} />
-                  {r.name}
-                </button>
-                <ColourInput
-                  value={r.colour}
-                  label={`Colour of ${r.name}`}
-                  onCommit={(c) => void send(bodyAfterRecolourRoute(doc, r.id, c), () => {})}
-                />
-                <button className="link" onClick={() => load(r)} title="Put this route in the tool, to see its steps">
-                  open
-                </button>
-                <button className="link" onClick={() => remove(r)} title="Delete this saved route">
-                  delete
-                </button>
-                {problem ? <span className="routeNotice">{problem}</span> : null}
-              </span>
-            );
-          })}
-        </span>
-      ) : null}
     </>
   );
 }
@@ -212,21 +159,4 @@ function Steps({
       })}
     </ol>
   );
-}
-
-/** A colour picker that reports once, when the picker closes. A colour input fires
- *  `input` continuously while dragging, and each report of this one is a save. */
-function ColourInput({ value, onCommit, label }: { value: string; onCommit: (colour: string) => void; label: string }) {
-  const ref = useRef<HTMLInputElement>(null);
-  const latest = useRef(onCommit);
-  latest.current = onCommit;
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const done = () => latest.current(el.value);
-    el.addEventListener("change", done);
-    return () => el.removeEventListener("change", done);
-  }, []);
-  // Uncontrolled between commits, re-keyed when the saved value moves.
-  return <input key={value} ref={ref} className="colourInput" type="color" defaultValue={value} aria-label={label} title={label} />;
 }

@@ -28,6 +28,10 @@ export interface SavedZone {
   name: string;
   kind: "open";
   rooms: { model_id: string; room_id: string }[];
+  /** Pairs of members whose shared wall stays CLOSED. */
+  disconnects?: { a: { model_id: string; room_id: string }; b: { model_id: string; room_id: string } }[];
+  /** When set, members connect only through this room. */
+  hub?: { model_id: string; room_id: string } | null;
   note?: string | null;
 }
 
@@ -80,17 +84,35 @@ export interface ZoneEdit {
    *  default. */
   costFt: string;
   members: Member[];
+  /** Walls between two members that stay closed: an open area opens EVERY wall two
+   *  members share, which is wrong for bays along a corridor (they touch each other
+   *  as well as the corridor). Room ids; the models come from `members`. */
+  cuts: Cut[];
+  /** The member the others connect only through, or `null`. */
+  hub: string | null;
+  /** What a room pick does in an open area: add or remove a member, close the wall
+   *  between two members, or name the hub. */
+  tool: EditTool;
+  /** The first room of a cut being drawn, waiting for the second. */
+  cutFrom: string | null;
   /** Why the last save did not happen, in the server's words. */
   error: string | null;
   saving: boolean;
 }
+
+export interface Cut {
+  a: string;
+  b: string;
+}
+
+export type EditTool = "pick" | "cut" | "hub";
 
 export const MIN_MEMBERS = 2;
 /** A link joins exactly two rooms. */
 export const LINK_MEMBERS = 2;
 
 export function newEdit(kind: EditKind = "open"): ZoneEdit {
-  return { id: null, kind, name: "", costFt: "", members: [], error: null, saving: false };
+  return { id: null, kind, name: "", costFt: "", members: [], cuts: [], hub: null, tool: "pick", cutFrom: null, error: null, saving: false };
 }
 
 /** Load a saved zone for editing. */
@@ -101,6 +123,10 @@ export function editOf(zone: SavedZone): ZoneEdit {
     name: zone.name,
     costFt: "",
     members: zone.rooms.map((r) => ({ room_id: r.room_id, model_id: r.model_id })),
+    cuts: (zone.disconnects ?? []).map((d) => ({ a: d.a.room_id, b: d.b.room_id })),
+    hub: zone.hub?.room_id ?? null,
+    tool: "pick",
+    cutFrom: null,
     error: null,
     saving: false,
   };
@@ -114,6 +140,10 @@ export function editOfLink(link: SavedLink): ZoneEdit {
     name: "",
     costFt: link.cost_ft == null ? "" : String(link.cost_ft),
     members: [link.a, link.b].map((r) => ({ room_id: r.room_id, model_id: r.model_id })),
+    cuts: [],
+    hub: null,
+    tool: "pick",
+    cutFrom: null,
     error: null,
     saving: false,
   };
@@ -133,7 +163,7 @@ export function toggleMember(edit: ZoneEdit, roomId: string): ZoneEdit {
     return { ...edit, members: same ? [] : [{ room_id: roomId, model_id: null }], error: null };
   }
   const has = edit.members.some((m) => m.room_id === roomId);
-  if (has) return { ...edit, members: edit.members.filter((m) => m.room_id !== roomId), error: null };
+  if (has) return withoutMember(edit, roomId);
   const added: Member = { room_id: roomId, model_id: null };
   const members =
     edit.kind === "link" && edit.members.length >= LINK_MEMBERS ? [edit.members[0]!, added] : [...edit.members, added];
@@ -157,7 +187,64 @@ export function addMembers(edit: ZoneEdit, roomIds: Iterable<string>): ZoneEdit 
 }
 
 export function removeMember(edit: ZoneEdit, roomId: string): ZoneEdit {
-  return { ...edit, members: edit.members.filter((m) => m.room_id !== roomId), error: null };
+  return withoutMember(edit, roomId);
+}
+
+/** `edit` without one member, and without the cuts and hub that named it: the server
+ *  refuses a cut or a hub that is not one of the zone's own rooms, and a cut with
+ *  nothing to cut is not something to keep. */
+function withoutMember(edit: ZoneEdit, roomId: string): ZoneEdit {
+  return {
+    ...edit,
+    members: edit.members.filter((m) => m.room_id !== roomId),
+    cuts: edit.cuts.filter((c) => c.a !== roomId && c.b !== roomId),
+    hub: edit.hub === roomId ? null : edit.hub,
+    cutFrom: edit.cutFrom === roomId ? null : edit.cutFrom,
+    error: null,
+  };
+}
+
+const sameCut = (c: Cut, a: string, b: string) => (c.a === a && c.b === b) || (c.a === b && c.b === a);
+
+/** What a room pick does to an open area, by the tool in use.
+ *
+ *  - `pick`: toggle membership, as always.
+ *  - `cut`: the first member picked is held, the second closes the wall between them
+ *    (or opens it again if it was closed), and the tool stays on for the next cut.
+ *    Picking the held room again lets go of it. A room that is not a member is
+ *    ignored: a cut is between two of the zone's own rooms.
+ *  - `hub`: the member picked becomes the hub (picked again, it stops being one),
+ *    and the tool goes back to `pick`, because naming a hub is one act. */
+export function pickForEdit(edit: ZoneEdit, roomId: string): ZoneEdit {
+  if (edit.kind !== "open" || edit.tool === "pick") return toggleMember(edit, roomId);
+  if (!edit.members.some((m) => m.room_id === roomId)) {
+    return { ...edit, error: "Pick a room that is already in this open area." };
+  }
+  if (edit.tool === "hub") {
+    return { ...edit, hub: edit.hub === roomId ? null : roomId, tool: "pick", cutFrom: null, error: null };
+  }
+  if (edit.cutFrom === null) return { ...edit, cutFrom: roomId, error: null };
+  if (edit.cutFrom === roomId) return { ...edit, cutFrom: null, error: null };
+  const from = edit.cutFrom;
+  const cuts = edit.cuts.some((c) => sameCut(c, from, roomId))
+    ? edit.cuts.filter((c) => !sameCut(c, from, roomId))
+    : [...edit.cuts, { a: from, b: roomId }];
+  return { ...edit, cuts, cutFrom: null, error: null };
+}
+
+/** Change the tool; any half-drawn cut is dropped, because it belonged to the old one. */
+export function setTool(edit: ZoneEdit, tool: EditTool): ZoneEdit {
+  return { ...edit, tool: edit.tool === tool ? "pick" : tool, cutFrom: null, error: null };
+}
+
+/** Take one cut out. */
+export function removeCut(edit: ZoneEdit, cut: Cut): ZoneEdit {
+  return { ...edit, cuts: edit.cuts.filter((c) => !sameCut(c, cut.a, cut.b)), error: null };
+}
+
+/** Stop connecting through a hub. */
+export function clearHub(edit: ZoneEdit): ZoneEdit {
+  return { ...edit, hub: null, error: null };
 }
 
 /** The cost a link sends: `null` for blank (the server's default), the number
@@ -204,6 +291,8 @@ export interface ZoneBody {
   name: string;
   kind: "open";
   rooms: Member[];
+  disconnects: { a: Member; b: Member }[];
+  hub: Member | null;
   note?: string | null;
 }
 
@@ -223,8 +312,19 @@ export interface DocBody {
   routes: SavedRoute[];
 }
 
+/** A saved zone as a body: **cuts and hub included**, so a save of anything else (a
+ *  link, a route, another zone) carries them through. Leaving them out would delete
+ *  every cut in the project on the next unrelated save. */
 function zoneBody(z: SavedZone): ZoneBody {
-  return { id: z.id, name: z.name, kind: "open", rooms: z.rooms, note: z.note ?? null };
+  return {
+    id: z.id,
+    name: z.name,
+    kind: "open",
+    rooms: z.rooms,
+    disconnects: z.disconnects ?? [],
+    hub: z.hub ?? null,
+    note: z.note ?? null,
+  };
 }
 
 function routeBody(r: SavedRoute): SavedRoute {
@@ -262,8 +362,100 @@ export function bodyAfterSave(doc: ConnectionsDoc, edit: ZoneEdit): DocBody {
     return { zones, routes, links: edit.id === null ? [...links, next] : links.map((l) => (l.id === id ? next : l)) };
   }
   const id = edit.id ?? idFor(edit.name, new Set(zones.map((z) => z.id)));
-  const next: ZoneBody = { id, name: edit.name.trim(), kind: "open", rooms: edit.members };
+  // A cut names rooms by id; the model of each is its member's.
+  const member = (roomId: string): Member => edit.members.find((m) => m.room_id === roomId) ?? { room_id: roomId, model_id: null };
+  const next: ZoneBody = {
+    id,
+    name: edit.name.trim(),
+    kind: "open",
+    rooms: edit.members,
+    disconnects: edit.cuts.map((c) => ({ a: member(c.a), b: member(c.b) })),
+    hub: edit.hub === null ? null : member(edit.hub),
+  };
   return { links, routes, zones: edit.id === null ? [...zones, next] : zones.map((z) => (z.id === id ? next : z)) };
+}
+
+/** One line of the connections table: a saved open zone or vertical link. */
+export interface ConnectionRow {
+  kind: "open" | "link";
+  id: string;
+  /** A zone's name; a link has none, so it is named by its two rooms. */
+  name: string;
+  /** What the second column says. */
+  type: "Open area" | "Vertical";
+  /** The levels the record lies on: an open area's rooms' levels, or the two
+   *  levels a link joins. Empty when the page holds none of its rooms. */
+  level: string;
+}
+
+/** A level as the table needs it. */
+export interface LevelOfRoom {
+  name: string;
+  elevation: number;
+}
+
+/** The levels a set of rooms lies on, lowest first and each once, as text. More
+ *  than three is said as a count, because an open area that spans that many is a
+ *  question of its own and a long list would only widen the column. */
+export function levelsText(levels: readonly (LevelOfRoom | null)[], joiner = ", "): string {
+  const seen = new Map<string, LevelOfRoom>();
+  for (const l of levels) if (l && !seen.has(l.name)) seen.set(l.name, l);
+  const sorted = [...seen.values()].sort((a, b) => a.elevation - b.elevation);
+  if (sorted.length > 3) return `${sorted.length} levels`;
+  return sorted.map((l) => l.name).join(joiner);
+}
+
+/** Every saved zone and link as table rows: open areas first, then vertical links,
+ *  each group by name. `roomName` turns a room id into the name a reader knows and
+ *  `levelOf` into its level; an id the page does not hold stays as the id and has
+ *  no level, so a stale link is still listed and can be deleted. */
+export function connectionRows(
+  doc: ConnectionsDoc | null,
+  roomName: (id: string) => string,
+  levelOf: (id: string) => LevelOfRoom | null = () => null,
+): ConnectionRow[] {
+  const byName = (a: ConnectionRow, b: ConnectionRow) => a.name.localeCompare(b.name, undefined, { numeric: true });
+  const zones: ConnectionRow[] = (doc?.zones ?? []).map((z) => ({
+    kind: "open",
+    id: z.id,
+    name: z.name,
+    type: "Open area",
+    level: levelsText(z.rooms.map((r) => levelOf(r.room_id))),
+  }));
+  const links: ConnectionRow[] = (doc?.links ?? []).map((l) => ({
+    kind: "link",
+    id: l.id,
+    name: `${roomName(l.a.room_id)} ↔ ${roomName(l.b.room_id)}`,
+    type: "Vertical",
+    level: levelsText([levelOf(l.a.room_id), levelOf(l.b.room_id)], " ↔ "),
+  }));
+  return [...zones.sort(byName), ...links.sort(byName)];
+}
+
+/** One line of the saved-routes table. */
+export interface RouteTableRow {
+  id: string;
+  name: string;
+  colour: string;
+  /** Where it runs: the start room's level to the end room's, or the one level
+   *  when they are the same. Empty when the page holds neither room. */
+  levels: string;
+}
+
+/** Every saved route as table rows, by name. The levels are the two ends' and not
+ *  every level the path crosses: a path is derived and a route that is not shown
+ *  has none to read, while its two rooms are always in the record. */
+export function routeTableRows(
+  doc: ConnectionsDoc | null,
+  levelOf: (roomId: string) => LevelOfRoom | null,
+): RouteTableRow[] {
+  return (doc?.routes ?? [])
+    .map((r) => {
+      const [from, to] = [levelOf(r.from.room_id), levelOf(r.to.room_id)];
+      const levels = from && to && from.name !== to.name ? `${from.name} → ${to.name}` : (from ?? to)?.name ?? "";
+      return { id: r.id, name: r.name, colour: r.colour, levels };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 }
 
 /** The lists after adding one vertical link between two rooms, at the default cost.

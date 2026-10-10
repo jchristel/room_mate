@@ -30,7 +30,7 @@ export function RouteOverlay({
   const path = route.result.state === "done" ? route.result.path : null;
   const segments = segmentsOnLevel(path, levelId);
   const fitted = handleOf(zoneId)?.fitted;
-  const r = fitted ? Math.max(fitted.w, fitted.h) * 0.011 : 1;
+  const r = fitted ? Math.max(fitted.w, fitted.h) * 0.0055 : 0.5;
 
   const mark = (roomId: string | null, which: "start" | "end") => {
     const room = roomId ? payload?.rooms?.find((x) => x.id === roomId) : null;
