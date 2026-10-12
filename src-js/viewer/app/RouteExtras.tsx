@@ -144,7 +144,9 @@ function Steps({
               ? `door${row.doorId ? ` ${row.doorId}` : ""}`
               : row.how === "zone"
                 ? "open zone"
-                : "level change";
+                : row.how === "passage"
+                  ? `passage${row.passageId ? ` ${row.passageId}` : ""}`
+                  : "level change";
         return (
           <li key={`${i}-${row.roomId}`} className={row.levelChanged ? "levelChanged" : undefined}>
             <button className="link" onClick={() => onShow(row.roomId)} title="Show this room">

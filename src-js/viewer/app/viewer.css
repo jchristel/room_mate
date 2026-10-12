@@ -997,6 +997,16 @@
   /* A closed wall: a line between the two rooms with a cross, in a warning red. */
   .open-zone-cut line { stroke: #d64545; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none;
                         stroke-linecap: round; }
+  /* Passages: a saved one is a solid accent line between the two points where it crosses
+     the rooms' outlines; one the server could not apply is dashed between its own two
+     clicks, so it is seen to be unapplied and not missing. The one being drawn has a
+     dot at each click. */
+  .open-zone-passage { stroke: var(--accent); stroke-width: 3; stroke-linecap: round; fill: none;
+                       vector-effect: non-scaling-stroke; pointer-events: none; }
+  .open-zone-passage.unapplied { stroke: #d64545; stroke-width: 2; stroke-dasharray: 6 4; }
+  .open-zone-passage.draft { stroke-width: 2; stroke-dasharray: 2 4; }
+  .open-zone-passage-end { stroke: var(--accent); stroke-width: 9; stroke-linecap: round;
+                           vector-effect: non-scaling-stroke; pointer-events: none; }
   .zoneBar button.ctl { font-family: var(--mono); font-size: 0.7rem; cursor: pointer; background: var(--paper);
                         color: var(--ink); border: 1px solid var(--ink); padding: 0.15rem 0.4rem; }
   .zoneBar button.ctl:disabled { opacity: 0.4; cursor: default; }

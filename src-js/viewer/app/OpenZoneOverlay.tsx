@@ -6,6 +6,10 @@
 // outline or its label beneath it. World coordinates, Y flipped, inside the
 // viewBox the renderer keeps in step with the projection.
 //
+// A PASSAGE is a line, not a fill: saved ones are drawn between the points where the
+// server found they cross their rooms' outlines, and the one being drawn shows its two
+// clicks.
+//
 // The other two layers exist to answer "what still needs adding, and where":
 // saved zones are tinted apart by index so two neighbours read as two, and a
 // room nobody can walk to is ringed dotted, which is step 1's worklist drawn
@@ -14,7 +18,7 @@
 
 import type { CSSProperties } from "react";
 
-import { roomsInOtherZones, type ZoneEdit } from "../connections.js";
+import { passagesOf, roomsInOtherZones, type ZoneEdit } from "../connections.js";
 import { markerPoint } from "../route.js";
 import { useViewer } from "./useViewer.js";
 
@@ -32,6 +36,16 @@ export function OpenZoneOverlay({ levelId, edit }: { levelId: string | null; edi
   // A link has no zone to compare against; its overlay is the two picked rooms.
   const others = edit.kind === "open" ? roomsInOtherZones(doc, edit.id) : roomsInOtherZones(doc, null);
   const onLevel = (payload?.rooms ?? []).filter((r) => r.level_id === levelId);
+
+  const levelOfRoom = new Map((payload?.rooms ?? []).map((r) => [r.id, r.level_id]));
+  const reports = connections.projectId === scope.projectId ? connections.passages : null;
+  const savedPassages = passagesOf(doc).filter(
+    (p) => levelOfRoom.get(p.a.room_id) === levelId && !(edit.kind === "passage" && edit.id === p.id),
+  );
+  const draft =
+    edit.kind === "passage" && edit.points.length > 0 && levelOfRoom.get(edit.members[0]!.room_id) === levelId
+      ? edit.points
+      : null;
 
   const pathOf = (r: (typeof onLevel)[number]) => {
     const ring = r.loops?.[0]?.points;
@@ -60,6 +74,35 @@ export function OpenZoneOverlay({ levelId, edit }: { levelId: string | null; edi
         const role = r.id === edit.hub ? " hub" : r.id === edit.cutFrom ? " held" : "";
         return d ? <path key={r.id} className={`open-zone-room${role}`} d={d} /> : null;
       })}
+      {savedPassages.map((p) => {
+        const report = reports?.get(p.id);
+        // Applied: between the crossings the server found. Otherwise between the clicks,
+        // dashed and red, so a passage that joined nothing is visible as such.
+        const [a, b] = report?.applied && report.from && report.to ? [report.from, report.to] : [p.from, p.to];
+        return (
+          <line
+            key={`p${p.id}`}
+            className={`open-zone-passage${report?.applied === false ? " unapplied" : ""}`}
+            x1={a.x}
+            y1={-a.y}
+            x2={b.x}
+            y2={-b.y}
+          />
+        );
+      })}
+      {draft ? (
+        <g className="open-zone-passage-draft">
+          {draft.length === 2 ? (
+            <line className="open-zone-passage draft" x1={draft[0]!.x} y1={-draft[0]!.y} x2={draft[1]!.x} y2={-draft[1]!.y} />
+          ) : null}
+          {draft.map((pt, i) => (
+            // A dot that stays the same size on screen at any zoom: a very short line with a
+            // wide non-scaling stroke and round caps (a circle of fixed radius would vanish
+            // when the plan is zoomed out).
+            <line key={i} className="open-zone-passage-end" x1={pt.x} y1={-pt.y} x2={pt.x + 0.001} y2={-pt.y} />
+          ))}
+        </g>
+      ) : null}
       {/* A closed wall: a line between the two rooms, crossed in the middle, so it
           reads as "no way through here" on a plan where the rooms are filled. */}
       {edit.kind === "open"

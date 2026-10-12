@@ -1,9 +1,12 @@
 // The connections editor's bar: what is being drawn, and what is already saved.
 //
 // One bar per zone, mounted inside the zone like the route bar, and exclusive
-// with it: both claim a room pick. It draws two kinds of record. An OPEN ZONE is
+// with it: both claim a room pick. It draws three kinds of record. An OPEN ZONE is
 // a set of rooms declared to be one open space. A VERTICAL LINK is exactly two
-// rooms on different levels, joined by hand, one floor-to-floor hop per link.
+// rooms on different levels, joined by hand, one floor-to-floor hop per link. A
+// PASSAGE is a straight line between two clicks, one in each of two rooms on the
+// SAME level, with a stated width and height: the way through where no door and no
+// shared wall shows one.
 // The bar owns the reads and writes of the project's connections document, which
 // exist only while an editor is open.
 //
@@ -30,11 +33,19 @@ import {
   type ConnectionsDoc,
   type DocBody,
   type EditKind,
+  type PassageReport,
 } from "../connections.js";
 import { connectivityUrl } from "../route.js";
 import { put, request } from "./connectionsApi.js";
 import { StackPanel } from "./StackPanel.js";
-import { patchZoneEdit, setConnections, setIsolated, setZoneEditMode, type ZoneRow } from "./store.js";
+import {
+  patchZoneEdit,
+  setConnections,
+  setIsolated,
+  setPassageReports,
+  setZoneEditMode,
+  type ZoneRow,
+} from "./store.js";
 import { useViewer } from "./useViewer.js";
 
 /** Members shown as chips before "+N more". A zone can hold hundreds. */
@@ -74,9 +85,10 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
     const ac = new AbortController();
     void fetch(connectivity, { cache: "no-store", signal: ac.signal })
       .then((res) => (res.ok && res.status !== 204 ? res.json() : null))
-      .then((body: { isolated?: { room_id: string }[] } | null) => {
+      .then((body: { isolated?: { room_id: string }[]; connections?: { passages?: PassageReport[] } } | null) => {
         if (ac.signal.aborted || !body) return;
         setIsolated(scope.projectId, new Set((body.isolated ?? []).map((x) => x.room_id)));
+        setPassageReports(scope.projectId, new Map((body.connections?.passages ?? []).map((p) => [p.id, p])));
       })
       .catch(() => {});
     return () => ac.abort();
@@ -100,13 +112,14 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
 
   if (!edit) return null;
   const isLink = edit.kind === "link";
+  const isPassage = edit.kind === "passage";
 
   // What the pure rules cannot see, because they hold room ids and not levels: a
   // link's two rooms must be on different levels, and a link that skips a level
   // is allowed but worth saying (a lift is a run of floor-to-floor hops).
   const levelOf = (id: string) => rooms.get(id)?.level_id;
   const [first, second] = edit.members;
-  const sameLevel = isLink && first && second && levelOf(first.room_id) === levelOf(second.room_id);
+  const sameLevel = (isLink || isPassage) && first && second && levelOf(first.room_id) === levelOf(second.room_id);
   const skipped = (() => {
     if (!isLink || !first || !second || sameLevel) return 0;
     const elev = new Map(levels.map((l) => [l.id, l.elevation ?? 0]));
@@ -115,8 +128,15 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
     const [lo, hi] = [Math.min(ea, eb), Math.max(ea, eb)];
     return levels.filter((l) => used.has(l.id) && (l.elevation ?? 0) > lo && (l.elevation ?? 0) < hi).length;
   })();
+  // A link joins two LEVELS and a passage one, so the same fact is a fault for one and
+  // the point of the other.
   const reason =
-    whyNotSavable(edit) ?? (sameLevel ? "Both rooms are on one level: change the level picker before the second pick." : null);
+    whyNotSavable(edit) ??
+    (isLink && sameLevel
+      ? "Both rooms are on one level: change the level picker before the second pick."
+      : isPassage && first && second && !sameLevel
+        ? "These rooms are on different levels: join them with a vertical link."
+        : null);
 
   const send = async (body: DocBody, afterOk: () => void) => {
     if (!url || !doc) return;
@@ -139,7 +159,7 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
   const nameOf = (id: string) => rooms.get(id)?.name || id;
   const levelName = (id: string) => levels.find((l) => l.id === levelOf(id))?.name;
 
-  const matchCount = !isLink && search.active && search.matches ? search.matches.size : 0;
+  const matchCount = edit.kind === "open" && search.active && search.matches ? search.matches.size : 0;
   const shown = edit.members.slice(0, CHIPS);
   const changeKind = (kind: EditKind) => patchZoneEdit(zoneId, { ...newEdit(kind), name: edit.name });
 
@@ -147,12 +167,13 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
     <select
       className="picker"
       value={edit.kind}
-      title="Open area: shared walls between the rooms are open. Vertical link: two rooms on different levels, joined floor to floor. Stack view: the rooms joined by vertical links as a column of levels, with the next hop suggested."
+      title="Open area: shared walls between the rooms are open. Vertical link: two rooms on different levels, joined floor to floor. Passage: a straight line between two rooms on one level, for a way through no door or shared wall shows. Stack view: the rooms joined by vertical links as a column of levels, with the next hop suggested."
       onChange={(e) => changeKind(e.target.value as EditKind)}
       aria-label="What to draw"
     >
       <option value="open">Open area</option>
       <option value="link">Vertical link</option>
+      <option value="passage">Passage</option>
       <option value="stack">Stack view</option>
     </select>
   );
@@ -173,9 +194,37 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
 
   return (
     <div className="routeBar zoneBar">
-      <strong>{isLink ? "Vertical link" : "Open zone"}</strong>
+      <strong>{isLink ? "Vertical link" : isPassage ? "Passage" : "Open zone"}</strong>
       {kindSelect}
-      {isLink ? (
+      {isPassage ? (
+        <>
+          <span>
+            From: <strong>{first ? nameOf(first.room_id) : "click inside a room…"}</strong>
+            {first && levelName(first.room_id) ? <span className="routeLevel"> · {levelName(first.room_id)}</span> : null}
+          </span>
+          <span aria-hidden="true">→</span>
+          <span>
+            To: <strong>{second ? nameOf(second.room_id) : first ? "click inside the room to reach…" : "—"}</strong>
+            {second && levelName(second.room_id) ? <span className="routeLevel"> · {levelName(second.room_id)}</span> : null}
+          </span>
+          <input
+            className="zoneName zoneCost"
+            placeholder="width mm"
+            title="How wide the way through is, in mm. Blank means unknown: a width check lets it through and counts it as unchecked."
+            value={edit.widthMm}
+            onChange={(e) => patchZoneEdit(zoneId, { ...edit, widthMm: e.target.value, error: null })}
+            aria-label="Width of the passage in millimetres"
+          />
+          <input
+            className="zoneName zoneCost"
+            placeholder="height mm"
+            title="How high the way through is, in mm. Blank means unknown: a height check lets it through and counts it as unchecked."
+            value={edit.heightMm}
+            onChange={(e) => patchZoneEdit(zoneId, { ...edit, heightMm: e.target.value, error: null })}
+            aria-label="Height of the passage in millimetres"
+          />
+        </>
+      ) : isLink ? (
         <>
           <span>
             From:{" "}
@@ -216,7 +265,7 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
           </span>
         </>
       )}
-      {isLink ? null : (
+      {isLink || isPassage ? null : (
         <>
           <button
             className={`ctl${edit.tool === "cut" ? " on" : ""}`}
@@ -260,9 +309,17 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
         className="ctl"
         onClick={() => void save()}
         disabled={reason !== null || !doc || edit.saving}
-        title={reason ?? (isLink ? "Save this link" : "Save this open zone")}
+        title={reason ?? (isLink ? "Save this link" : isPassage ? "Save this passage" : "Save this open zone")}
       >
-        {edit.saving ? "Saving…" : edit.id ? "Save changes" : isLink ? "Save link" : "Save zone"}
+        {edit.saving
+          ? "Saving…"
+          : edit.id
+            ? "Save changes"
+            : isLink
+              ? "Save link"
+              : isPassage
+                ? "Save passage"
+                : "Save zone"}
       </button>
       <button
         className="ctl"
@@ -277,7 +334,7 @@ export function OpenZonePanel({ zone }: { zone: ZoneRow }) {
       {edit.error ? <span className="routeNotice">{edit.error}</span> : null}
       {connections.error ? <span className="routeNotice">Could not read the saved connections: {connections.error}</span> : null}
       {reason && edit.members.length > 0 ? <span className="routeLevel">{reason}</span> : null}
-      {isLink ? null : (
+      {isLink || isPassage ? null : (
         <span className="routeMatches">
           {shown.map((m) => {
             const room = rooms.get(m.room_id);

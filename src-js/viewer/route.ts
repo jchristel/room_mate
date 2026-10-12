@@ -63,9 +63,10 @@ export type RouteResult =
 /** One hop's width, as the server reports it. */
 export interface WidthLimit {
   width_mm: number;
-  kind: "door" | "zone" | "vertical";
+  kind: "door" | "zone" | "vertical" | "passage";
   door_id?: string;
   zone_id?: string;
+  passage_id?: string;
 }
 
 /** What the route's widths say. A door's width is an ESTIMATE (footprint less a frame
@@ -89,8 +90,9 @@ export interface Clearance {
 /** One door's or room's height, as the server reports it. */
 export interface HeightLimit {
   height_mm: number;
-  kind: "door" | "room";
+  kind: "door" | "room" | "passage";
   door_id?: string;
+  passage_id?: string;
   /** The room, or the two rooms a door joins. */
   rooms: { model_id: string; room_id: string }[];
   /** For a room: the height is a ceiling's and not the room's own property. */
@@ -124,12 +126,13 @@ export interface RoutePath {
 
 /** One hop of a route, as the server answers it. */
 export interface RouteStep {
-  kind: "door" | "zone" | "vertical";
+  kind: "door" | "zone" | "vertical" | "passage";
   from?: { model_id: string; room_id: string };
   to?: { model_id: string; room_id: string };
   door_id?: string;
   zone_id?: string;
   link_id?: string;
+  passage_id?: string;
   point: { x: number; y: number };
   /** Feet walked for this hop (the walk inside the room it leaves plus the crossing). */
   length?: number;
@@ -307,6 +310,7 @@ export interface RouteRow {
    *  plan that shows one level. */
   levelChanged: boolean;
   doorId?: string;
+  passageId?: string;
 }
 
 /** The rooms of a route in order, with the hop into each. Built from `steps` and
@@ -322,6 +326,7 @@ export function routeRows(path: RoutePath | null, levelOf: (roomId: string) => s
     const here = levelOf(roomId);
     const row: RouteRow = { roomId, how: step.kind, lengthFt: step.length ?? 0, levelChanged: here !== level };
     if (step.door_id) row.doorId = step.door_id;
+    if (step.passage_id) row.passageId = step.passage_id;
     rows.push(row);
     level = here;
   }
@@ -347,11 +352,15 @@ const widthOf = (l: WidthLimit) => `${Math.round(l.width_mm)} mm`;
 
 function heightLimitName(l: HeightLimit, nameOf: (roomId: string) => string): string {
   if (l.kind === "door") return `door ${l.door_id ?? "?"}`;
+  if (l.kind === "passage") return `passage ${l.passage_id ?? "?"}`;
   return `room ${nameOf(l.rooms[0]?.room_id ?? "?")}${l.from_ceiling ? " (from its ceiling)" : ""}`;
 }
 
 function limitName(l: WidthLimit): string {
-  return l.kind === "door" ? `door ${l.door_id ?? "?"}` : l.kind === "zone" ? "an open area's wall" : "a level change";
+  if (l.kind === "door") return `door ${l.door_id ?? "?"}`;
+  if (l.kind === "zone") return "an open area's wall";
+  if (l.kind === "passage") return `passage ${l.passage_id ?? "?"}`;
+  return "a level change";
 }
 
 /** What a reader should know about the widths of a route: the tightest hop, how many
@@ -396,10 +405,12 @@ export function describeResult(result: RouteResult): string {
       const doors = count("door");
       const zones = count("zone");
       const levels = count("vertical");
+      const passages = count("passage");
       // Said apart, because a door is the model's word and an open-zone hop is a
       // person's, and a reader weighing a route should be able to tell which.
       const parts = [`${doors} door${doors === 1 ? "" : "s"}`];
       if (zones > 0) parts.push(`${zones} open-zone hop${zones === 1 ? "" : "s"}`);
+      if (passages > 0) parts.push(`${passages} passage${passages === 1 ? "" : "s"}`);
       if (levels > 0) parts.push(`${levels} level change${levels === 1 ? "" : "s"}`);
       return `${parts.join(", ")}, about ${Math.round(result.path.distance_ft)} ft`;
     }

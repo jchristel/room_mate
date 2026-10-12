@@ -16,6 +16,15 @@
 //! corridor on one level straight to the next level. Two rooms per link has no
 //! such ambiguity, and nothing here guesses what a stack is.
 //!
+//! **A passage joins two rooms on ONE storey by a straight line a person drew.**
+//! It is the way to say "there is a way through here" where the geometry shows
+//! no shared wall (two lifts off a lobby, a room across a gap) and no door was
+//! modelled. The record is the line AS DRAWN, two clicks, each inside the room it
+//! names; the points where the line leaves one room and enters the other are
+//! derived at read time from the outlines, never stored, so a passage follows the
+//! rooms when they move. Its width and height are stated, because nothing in the
+//! model can supply them, and are what the route's size checks read.
+//!
 //! **Beside the project settings, as one JSON document per project**, under
 //! `<projects_dir>/connections/<project>.json`, written the way settings are:
 //! temp then rename, a copy of the replaced file under `.backups/`, one lock.
@@ -57,6 +66,7 @@ const MAX_ZONES: usize = 5_000;
 const MAX_LINKS: usize = 20_000;
 const MAX_ROOMS_PER_ZONE: usize = 5_000;
 const MAX_ROUTES: usize = 5_000;
+const MAX_PASSAGES: usize = 20_000;
 const MAX_NOTE_CHARS: usize = 2_000;
 const MAX_DISCONNECTS_PER_ZONE: usize = 50_000;
 const MAX_NAME_CHARS: usize = 120;
@@ -168,6 +178,27 @@ pub struct SavedRoute {
     pub note: Option<String>,
 }
 
+/// One straight passage between two rooms on one storey. See the module header:
+/// `from` and `to` are the two clicks, and the room-boundary crossings are derived.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Passage {
+    pub id: String,
+    pub a: RoomRef,
+    pub b: RoomRef,
+    /// Where the line starts, inside `a`, in the frame `/connectivity` answers in.
+    pub from: RoutePoint,
+    /// Where it ends, inside `b`.
+    pub to: RoutePoint,
+    /// How wide the way through is, in mm; absent means unknown, so it is not checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_mm: Option<f64>,
+    /// How high, in mm; absent means unknown, so it is not checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionsDocument {
     pub schema_version: u32,
@@ -182,6 +213,9 @@ pub struct ConnectionsDocument {
     /// Absent in a file written before routes could be saved, which reads as none.
     #[serde(default)]
     pub routes: Vec<SavedRoute>,
+    /// Absent in a file written before passages existed, which reads as none.
+    #[serde(default)]
+    pub passages: Vec<Passage>,
 }
 
 impl ConnectionsDocument {
@@ -192,6 +226,7 @@ impl ConnectionsDocument {
             zones: Vec::new(),
             links: Vec::new(),
             routes: Vec::new(),
+            passages: Vec::new(),
         }
     }
 }
@@ -258,6 +293,21 @@ pub struct RouteInput {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct PassageInput {
+    pub id: String,
+    pub a: RoomInput,
+    pub b: RoomInput,
+    pub from: RoutePoint,
+    pub to: RoutePoint,
+    #[serde(default)]
+    pub width_mm: Option<f64>,
+    #[serde(default)]
+    pub height_mm: Option<f64>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// The body of a save: the WHOLE document, every list.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveRequest {
@@ -275,6 +325,11 @@ pub struct SaveRequest {
     /// delete every saved route on its next save. An explicit empty list clears.
     #[serde(default)]
     pub routes: Option<Vec<RouteInput>>,
+    /// **Absent means "keep the saved passages"**, for the reason `routes` says: a
+    /// caller written before passages existed sends none, and reading that as an
+    /// empty list would delete them all on its next save.
+    #[serde(default)]
+    pub passages: Option<Vec<PassageInput>>,
 }
 
 #[derive(Debug)]
@@ -478,6 +533,50 @@ pub fn validate_routes(routes: &[SavedRoute]) -> Result<(), ConnectionsError> {
     Ok(())
 }
 
+/// The rules for passages, apart from `validate` for the reason `validate_routes` is.
+/// Whether the two rooms share a storey, and whether each point lies in its room, are
+/// read-time findings: they need the model.
+pub fn validate_passages(passages: &[Passage]) -> Result<(), ConnectionsError> {
+    if passages.len() > MAX_PASSAGES {
+        return bad(format!("{} passages is more than the {MAX_PASSAGES} allowed", passages.len()));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for p in passages {
+        if !is_path_safe_component(&p.id) {
+            return bad(format!("passage id {:?} must be a short name that is safe as a file name", p.id));
+        }
+        if !seen.insert(p.id.as_str()) {
+            return bad(format!("passage id {:?} appears twice", p.id));
+        }
+        for r in [&p.a, &p.b] {
+            if r.model_id.trim().is_empty() || r.room_id.trim().is_empty() {
+                return bad(format!("passage {:?} names a room with no model or no id", p.id));
+            }
+        }
+        if p.a == p.b {
+            return bad(format!("passage {:?} joins a room to itself", p.id));
+        }
+        for pt in [p.from, p.to] {
+            if !pt.x.is_finite() || !pt.y.is_finite() {
+                return bad(format!("passage {:?} has an end that is not a number", p.id));
+            }
+        }
+        if p.from == p.to {
+            return bad(format!("passage {:?} starts and ends at the same point", p.id));
+        }
+        if p.width_mm.is_some_and(|w| !w.is_finite() || w <= 0.0 || w > 100_000.0) {
+            return bad(format!("passage {:?} width must be above 0 and at most 100000 mm", p.id));
+        }
+        if p.height_mm.is_some_and(|h| !h.is_finite() || h <= 0.0 || h > 50_000.0) {
+            return bad(format!("passage {:?} height must be above 0 and at most 50000 mm", p.id));
+        }
+        if p.note.as_ref().is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS) {
+            return bad(format!("the note on passage {:?} is longer than {MAX_NOTE_CHARS} characters", p.id));
+        }
+    }
+    Ok(())
+}
+
 /// `#rrggbb` and nothing else: the colour is drawn straight into an SVG stroke, so
 /// accepting any CSS value would let a saved record carry a `url(...)`.
 fn is_hex_colour(s: &str) -> bool {
@@ -606,6 +705,35 @@ pub fn resolve_routes(
         .map(Some)
 }
 
+/// Turns a save's passages into full records. `None` is "keep what is saved" and
+/// stays `None`. A zero width or height is the form's blank and reads as unknown.
+pub fn resolve_passages(
+    state: &AppState,
+    project: &str,
+    passages: Option<Vec<PassageInput>>,
+) -> Result<Option<Vec<Passage>>, ConnectionsError> {
+    let Some(passages) = passages else { return Ok(None) };
+    let unnamed = |r: &RoomInput| r.model_id.as_deref().is_none_or(|m| m.trim().is_empty());
+    let needs_lookup = passages.iter().any(|p| unnamed(&p.a) || unnamed(&p.b));
+    let resolver = Resolver::for_project(state, project, needs_lookup)?;
+    passages
+        .into_iter()
+        .map(|p| {
+            Ok(Passage {
+                id: p.id,
+                a: resolver.room(p.a)?,
+                b: resolver.room(p.b)?,
+                from: p.from,
+                to: p.to,
+                width_mm: p.width_mm.filter(|w| *w != 0.0),
+                height_mm: p.height_mm.filter(|h| *h != 0.0),
+                note: p.note,
+            })
+        })
+        .collect::<Result<Vec<_>, ConnectionsError>>()
+        .map(Some)
+}
+
 /// Replace the project's document with `request`, if it still is the one the
 /// caller read.
 ///
@@ -628,6 +756,10 @@ pub fn save(
     if let Some(routes) = &routes {
         validate_routes(routes)?;
     }
+    let passages = resolve_passages(state, project, request.passages)?;
+    if let Some(passages) = &passages {
+        validate_passages(passages)?;
+    }
 
     let _guard = SAVE_LOCK.lock().unwrap();
     let current = load(projects_dir, project)?;
@@ -645,7 +777,8 @@ pub fn save(
         taken_at = format!("{}~", current.taken_at);
     }
     let routes = routes.unwrap_or(current.routes);
-    let document = ConnectionsDocument { schema_version: SCHEMA_VERSION, taken_at, zones, links, routes };
+    let passages = passages.unwrap_or(current.passages);
+    let document = ConnectionsDocument { schema_version: SCHEMA_VERSION, taken_at, zones, links, routes, passages };
 
     let dir = path.parent().expect("a connections path always has a parent");
     std::fs::create_dir_all(dir).map_err(|e| ConnectionsError::Internal(e.into()))?;
@@ -663,10 +796,11 @@ pub fn save(
     std::fs::rename(&temp, &path).map_err(|e| ConnectionsError::Internal(e.into()))?;
     crate::backups::prune(projects_dir, &stem, "json");
     tracing::info!(
-        "saved connections for project {project} ({} zones, {} links, {} routes)",
+        "saved connections for project {project} ({} zones, {} links, {} routes, {} passages)",
         document.zones.len(),
         document.links.len(),
-        document.routes.len()
+        document.routes.len(),
+        document.passages.len()
     );
     Ok(document)
 }
@@ -709,7 +843,7 @@ mod tests {
     }
 
     fn request(base: &str, zones: Vec<ZoneInput>) -> SaveRequest {
-        SaveRequest { base: base.to_string(), zones, links: vec![], routes: None }
+        SaveRequest { base: base.to_string(), zones, links: vec![], routes: None, passages: None }
     }
 
     #[test]
@@ -733,6 +867,7 @@ mod tests {
                 zones: vec![zone("z1", vec![room("m", "a"), room("m", "b")])],
                 links: vec![link("up", room("m", "b"), room("m", "e"))],
                 routes: None,
+                passages: None,
             },
         )
         .unwrap();
@@ -842,6 +977,98 @@ mod tests {
         let third = save(&state(), &dir, "p1", with_routes(&second.taken_at, Some(vec![]))).unwrap();
         assert!(third.routes.is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn passage(id: &str) -> PassageInput {
+        PassageInput {
+            id: id.to_string(),
+            a: room("m", "a"),
+            b: room("m", "b"),
+            from: RoutePoint { x: 1.0, y: 2.0 },
+            to: RoutePoint { x: 9.0, y: 2.0 },
+            width_mm: Some(900.0),
+            height_mm: Some(2100.0),
+            note: None,
+        }
+    }
+
+    fn with_passages(base: &str, passages: Option<Vec<PassageInput>>) -> SaveRequest {
+        SaveRequest { passages, ..request(base, vec![]) }
+    }
+
+    /// The same shape as routes, for the same reason: a caller written before passages
+    /// existed sends none, and that must not delete them.
+    #[test]
+    fn test_passages_round_trip_and_an_absent_list_keeps_them() {
+        let dir = temp_dir("passages");
+        let first = save(&state(), &dir, "p1", with_passages("", Some(vec![passage("p")]))).unwrap();
+        assert_eq!(first.passages.len(), 1);
+        assert_eq!((first.passages[0].width_mm, first.passages[0].height_mm), (Some(900.0), Some(2100.0)));
+        let second = save(&state(), &dir, "p1", with_passages(&first.taken_at, None)).unwrap();
+        assert_eq!(second.passages, first.passages);
+        assert_eq!(load(&dir, "p1").unwrap().passages, first.passages);
+        let third = save(&state(), &dir, "p1", with_passages(&second.taken_at, Some(vec![]))).unwrap();
+        assert!(third.passages.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A save that touches only the other lists must not drop the passages, and a save
+    /// of passages must not drop routes.
+    #[test]
+    fn test_saving_other_lists_keeps_passages() {
+        let dir = temp_dir("passages-kept");
+        let first = save(&state(), &dir, "p1", with_passages("", Some(vec![passage("p")]))).unwrap();
+        let second =
+            save(&state(), &dir, "p1", with_routes(&first.taken_at, Some(vec![route("r1", "#aa00cc")]))).unwrap();
+        assert_eq!((second.passages.len(), second.routes.len()), (1, 1));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_file_written_before_passages_existed_still_loads() {
+        let dir = temp_dir("old-passages");
+        std::fs::create_dir_all(dir.join("connections")).unwrap();
+        std::fs::write(
+            dir.join("connections").join("p1.json"),
+            r#"{"schema_version":1,"taken_at":"t","zones":[],"links":[],"routes":[]}"#,
+        )
+        .unwrap();
+        assert!(load(&dir, "p1").unwrap().passages.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_validation_refuses_what_could_not_be_a_passage() {
+        let check = |p: PassageInput| {
+            let passages = resolve_passages(&state(), "p1", Some(vec![p])).unwrap().unwrap();
+            validate_passages(&passages)
+        };
+        assert!(check(passage("ok")).is_ok());
+        assert!(check(passage("../x")).is_err(), "an id that is not a name");
+        let mut same = passage("same");
+        same.b = same.a.clone();
+        assert!(check(same).is_err(), "a room to itself");
+        let mut point = passage("point");
+        point.to = point.from;
+        assert!(check(point).is_err(), "no line at all");
+        let mut nan = passage("nan");
+        nan.from.x = f64::NAN;
+        assert!(check(nan).is_err());
+        for bad in [-1.0, f64::NAN, 200_000.0] {
+            let mut w = passage("w");
+            w.width_mm = Some(bad);
+            assert!(check(w).is_err(), "width {bad}");
+            let mut h = passage("h");
+            h.height_mm = Some(bad);
+            assert!(check(h).is_err(), "height {bad}");
+        }
+        // 0 is the form's blank: unknown, stored as absent.
+        let mut blank = passage("blank");
+        blank.width_mm = Some(0.0);
+        let stored = resolve_passages(&state(), "p1", Some(vec![blank])).unwrap().unwrap();
+        assert_eq!(stored[0].width_mm, None);
+        let twice = resolve_passages(&state(), "p1", Some(vec![passage("p"), passage("p")])).unwrap().unwrap();
+        assert!(validate_passages(&twice).is_err(), "a duplicate id");
     }
 
     #[test]
