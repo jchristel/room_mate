@@ -352,6 +352,28 @@ the sliver rules since removed, and again after).
   whatever duHast sends, which is exactly how a correct duHast fix produced a
   byte-identical bad export.
 
+## Passages: a drawn line is the record, the crossings are derived
+
+A passage joins two rooms on ONE storey by a straight line a person drew
+(2026-10-12), for a way through that no door and no shared wall shows.
+
+- **Stored: the two clicks and the two rooms. Never the crossing points.** The
+  points where the line leaves the first room and enters the second come from the
+  outlines at read time (`connectivity::passage_fact`), so a passage follows its
+  rooms when they move, and a click that no longer lies inside its room is a
+  reported `reason`, not a stale edge.
+- **A save that leaves out `passages` KEEPS them**, as `routes` does and for the
+  same reason: a client written before the list existed sends none, and reading
+  that as "empty" would delete them all. Only an explicit `[]` clears. Every body
+  builder in `viewer/connections.ts` carries the list for the same reason.
+- **It is not deduplicated against a door.** A zone or link is skipped when a door
+  already joins the pair; a passage is drawn on purpose, and the stated width
+  beside a door's estimated one is exactly when both should stay. Width and height
+  are the author's; absent is unknown, so a size check lets it through and counts it.
+- **Two ports, not one.** An `Edge` has `point` (on room `a`) and `far_point` (on
+  `b`); anything that walks an edge in either direction goes through
+  `Edge::length_between` / `crossing_from`, never `e.point` alone.
+
 ## Linked models: one frame, one storey rule
 
 Both were reported as five separate viewer bugs on RHH and are one cause each.

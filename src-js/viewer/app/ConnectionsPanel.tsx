@@ -1,7 +1,7 @@
-// The connections table: every saved open area and vertical link in one list, on
+// The connections table: every saved open area, vertical link and passage in one list, on
 // the LEFT of the plan while a connections editor is open.
 //
-// Three columns: the name, the type (open area or vertical) and a delete. A row
+// Four columns: the name, the type (open area, vertical or passage), the level and a delete. A row
 // loads that record into the open editor for changing, as the chips in the editor
 // bar used to, and the one being edited is marked. It is its own column and not the
 // properties panel, so the two can be open together: picking a room to see its
@@ -13,11 +13,14 @@ import { useState } from "react";
 
 import {
   bodyAfterDeleteLink,
+  bodyAfterDeletePassage,
   bodyAfterDeleteZone,
   connectionRows,
   connectionsUrl,
   editOf,
   editOfLink,
+  editOfPassage,
+  passagesOf,
   type ConnectionRow,
 } from "../connections.js";
 import { saveConnections } from "./connectionsApi.js";
@@ -57,6 +60,11 @@ export function ConnectionsPanel() {
       if (z) patchZoneEdit(editing.id, editOf(z));
       return;
     }
+    if (row.kind === "passage") {
+      const p = passagesOf(doc).find((x) => x.id === row.id);
+      if (p) patchZoneEdit(editing.id, editOfPassage(p));
+      return;
+    }
     const l = doc.links.find((x) => x.id === row.id);
     if (!l) return;
     // A stack is read from one room, so a link opens it at the link's first room.
@@ -70,17 +78,27 @@ export function ConnectionsPanel() {
 
   const remove = async (row: ConnectionRow) => {
     if (!doc || !url) return;
-    const what = row.kind === "open" ? `the open area "${row.name}"` : `the vertical link ${row.name}`;
+    const what =
+      row.kind === "open"
+        ? `the open area "${row.name}"`
+        : row.kind === "passage"
+          ? `the passage ${row.name}`
+          : `the vertical link ${row.name}`;
     if (!window.confirm(`Delete ${what}? Routes that used it will stop using it.`)) return;
     setBusy(true);
     setError(null);
-    const body = row.kind === "open" ? bodyAfterDeleteZone(doc, row.id) : bodyAfterDeleteLink(doc, row.id);
+    const body =
+      row.kind === "open"
+        ? bodyAfterDeleteZone(doc, row.id)
+        : row.kind === "passage"
+          ? bodyAfterDeletePassage(doc, row.id)
+          : bodyAfterDeleteLink(doc, row.id);
     const refused = await saveConnections(url, scope.projectId, doc, body);
     setBusy(false);
     if (refused) setError(refused);
     // Deleting the record being edited leaves the editor with nothing to change.
     else if (edit.id === row.id && edit.kind === row.kind) {
-      patchZoneEdit(editing.id, { ...edit, id: null, members: [], name: "", error: null });
+      patchZoneEdit(editing.id, { ...edit, id: null, members: [], points: [], name: "", error: null });
     }
   };
 
@@ -89,7 +107,7 @@ export function ConnectionsPanel() {
       <div className="insp-head">
         <div className="insp-title">Connections</div>
         <div className="insp-sub">
-          {doc?.zones.length ?? 0} open · {doc?.links.length ?? 0} vertical
+          {doc?.zones.length ?? 0} open · {doc?.links.length ?? 0} vertical · {passagesOf(doc).length} passage{passagesOf(doc).length === 1 ? "" : "s"}
         </div>
       </div>
       {connections.error ? <div className="insp-note">Could not read the saved connections: {connections.error}</div> : null}
@@ -97,7 +115,7 @@ export function ConnectionsPanel() {
       {!doc ? (
         <div className="insp-note">Reading the saved connections…</div>
       ) : rows.length === 0 ? (
-        <div className="insp-note">Nothing saved yet. Draw an open area or a vertical link and save it.</div>
+        <div className="insp-note">Nothing saved yet. Draw an open area, a vertical link or a passage and save it.</div>
       ) : (
         <table className="connTable">
           <thead>
@@ -119,7 +137,17 @@ export function ConnectionsPanel() {
                     {row.name}
                   </button>
                 </td>
-                <td className="fit">{row.type}</td>
+                <td className="fit">
+                  {row.type}
+                  {/* A passage the server could not apply says why: a drawn line that
+                      silently joined nothing is the failure this column is for. */}
+                  {row.kind === "passage" && connections.passages?.get(row.id)?.applied === false ? (
+                    <span className="routeNotice" title={connections.passages.get(row.id)?.reason ?? undefined}>
+                      {" "}
+                      not applied
+                    </span>
+                  ) : null}
+                </td>
                 <td className="fit">{row.level || "—"}</td>
                 <td className="fit">
                   <button className="link" disabled={busy} onClick={() => void remove(row)} title="Delete this">

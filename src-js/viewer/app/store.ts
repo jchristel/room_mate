@@ -21,7 +21,7 @@ import type { AreasData } from "../areas.js";
 import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
-import { newEdit, pickForEdit, type ConnectionsDoc, type ZoneEdit } from "../connections.js";
+import { newEdit, pickForEdit, type ConnectionsDoc, type PassageReport, type ZoneEdit } from "../connections.js";
 import { newRoute, pickEndpoint, type PlanPoint, type RouteResult, type RouteState } from "../route.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
@@ -269,6 +269,9 @@ export interface ViewerState {
     /** Room ids no door reaches, read while an editor is open: the worklist for
      *  new zones. `null` until read. */
     isolated?: ReadonlySet<string> | null;
+    /** What the server made of each saved passage, read with `isolated`: where it
+     *  crossed the rooms' outlines, or why it did not apply. `null` until read. */
+    passages?: ReadonlyMap<string, PassageReport> | null;
   };
   /** Saved routes drawn on every zone at once, and what the server last answered
    *  for each. Page state and not a zone's, because a route crosses levels and a
@@ -501,7 +504,7 @@ export function select(
       const zone = state.zones.find((z) => z.id === target)!;
       setState({ toolFocus: target });
       if (zone.route) patchZoneRoute(target, pickEndpoint(zone.route, id, at));
-      else if (zone.edit) patchZoneEdit(target, pickForEdit(zone.edit, id));
+      else if (zone.edit) patchZoneEdit(target, pickForEdit(zone.edit, id, at));
       return;
     }
   }
@@ -558,12 +561,23 @@ export function patchZoneEdit(id: string, next: ZoneEdit): void {
 export function setConnections(connections: ViewerState["connections"]): void {
   // `isolated` is read separately from the document, so a save or a re-read of
   // the document must not wipe it.
-  setState({ connections: { isolated: state.connections.isolated ?? null, ...connections } });
+  setState({
+    connections: {
+      isolated: state.connections.isolated ?? null,
+      passages: state.connections.passages ?? null,
+      ...connections,
+    },
+  });
 }
 
 /** The rooms no door reaches, as last read for an open editor. */
 export function setIsolated(projectId: string | null, isolated: ReadonlySet<string> | null): void {
   setState({ connections: { ...state.connections, projectId, isolated } });
+}
+
+/** What the server made of each saved passage, as last read for an open editor. */
+export function setPassageReports(projectId: string | null, passages: ReadonlyMap<string, PassageReport> | null): void {
+  setState({ connections: { ...state.connections, projectId, passages } });
 }
 
 /** Show or hide one saved route on the plan. */

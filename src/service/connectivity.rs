@@ -18,6 +18,13 @@
 //! already applied the project's resolution policy (authored first, geometry
 //! only to fill an absent side), so this module resolves nothing itself.
 //!
+//! **Edges are doors, open-zone walls, vertical links and passages.** A passage is
+//! a straight line a person drew between two rooms on one storey, for a way through
+//! that no door and no shared wall shows. Its edge carries TWO points, where the
+//! line leaves the first room and where it enters the second, so the route is
+//! centre, first crossing, second crossing, centre, and its width and height are
+//! the ones the person stated.
+//!
 //! **Signal, not error, throughout.** A door naming one room is an *exit* on
 //! that room, not an edge to an invented "outside". A door naming none is
 //! counted. A door whose rooms fall outside the requested scope (another
@@ -47,7 +54,7 @@ use crate::state::AppState;
 
 use super::adjacency::{centroid_of, compute_adjacency_indexed, default_wall_max};
 use super::openings::{assemble_openings, OpeningKind, OpeningScope};
-use super::room_locator::RoomRef;
+use super::room_locator::{outline_of, RoomRef};
 use super::rooms::{assemble_rooms, RoomFilter, RoomScope};
 use super::routing::{self, Method};
 use super::ServiceError;
@@ -337,6 +344,8 @@ pub struct WidthLimit {
     pub door_model_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zone_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passage_id: Option<String>,
     pub from: RoomRef,
     pub to: RoomRef,
 }
@@ -384,6 +393,7 @@ pub struct Clearance {
 pub enum HeightKind {
     Door,
     Room,
+    Passage,
 }
 
 /// One door's or room's height, and which it is.
@@ -397,7 +407,9 @@ pub struct HeightLimit {
     pub door_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub door_model_id: Option<String>,
-    /// The room, or the two rooms a door joins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passage_id: Option<String>,
+    /// The room, or the two rooms a door or passage joins.
     pub rooms: Vec<RoomRef>,
     /// For a room: the height is a ceiling's and not the room's own property.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -441,6 +453,9 @@ pub enum PointSource {
     /// A change of storey has no plan position, so the point is the lower
     /// room's own centre and the route is drawn as a break, not a line.
     Vertical,
+    /// Where a passage's line leaves its first room; `Edge::far_point` is where it
+    /// enters the second.
+    Passage,
 }
 
 /// What joins the two rooms of an edge.
@@ -453,6 +468,8 @@ pub enum EdgeKind {
     Zone,
     /// A change of storey inside a vertical zone, from the user.
     Vertical,
+    /// A straight line a person drew between two rooms on one storey.
+    Passage,
 }
 
 #[derive(Serialize, Clone)]
@@ -471,7 +488,15 @@ pub struct Edge {
     /// The vertical link, for a level change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_id: Option<String>,
+    /// The passage, for a drawn line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passage_id: Option<String>,
+    /// Where the route crosses. For a passage this is the point on room `a`'s
+    /// outline, and `far_point` the one on room `b`'s.
     pub point: Point2D,
+    /// The second crossing, for a passage only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub far_point: Option<Point2D>,
     pub point_source: PointSource,
     /// How wide the way through is, in mm: a door's estimated clear opening, or an open
     /// zone's shared wall. `None` when it cannot be known (a level change, a door with
@@ -488,6 +513,27 @@ pub struct Edge {
     pub(super) ia: usize,
     #[serde(skip)]
     pub(super) ib: usize,
+}
+
+impl Edge {
+    /// The walk through this edge between two room centres, in feet. The two-point
+    /// shape of a passage is why this is not `dist(ca, point) + dist(point, cb)` at
+    /// every call site.
+    pub(super) fn length_between(&self, ca: Point2D, cb: Point2D) -> f64 {
+        match self.far_point {
+            Some(far) => dist(ca, self.point) + dist(self.point, far) + dist(far, cb),
+            None => dist(ca, self.point) + dist(self.point, cb),
+        }
+    }
+
+    /// The crossing points in the order a walker leaving `from_a` meets them.
+    pub(super) fn crossing_from(&self, from_a: bool) -> Vec<Point2D> {
+        match (self.far_point, from_a) {
+            (Some(far), true) => vec![self.point, far],
+            (Some(far), false) => vec![far, self.point],
+            (None, _) => vec![self.point],
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -567,6 +613,8 @@ pub struct Step {
     pub zone_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passage_id: Option<String>,
     pub point: Point2D,
     pub length: f64,
 }
@@ -641,7 +689,9 @@ fn link(mut nodes: Vec<Node>, doors: Vec<DoorFact>) -> Graph {
                     door_model_id: Some(door.door_model_id),
                     zone_id: None,
                     link_id: None,
+                    passage_id: None,
                     point,
+                    far_point: None,
                     point_source,
                     width_mm: door.width_mm,
                     height_mm: door.height_mm,
@@ -799,8 +849,11 @@ fn segments_of(nodes: &[Node], edges: &[Edge], start: usize, walked: &[usize]) -
         let e = &edges[k];
         let next = if e.ia == at { e.ib } else { e.ia };
         // The door sits with the room we are leaving; the next room's own
-        // centroid starts the next run if it is on another level.
-        points.push((nodes[at].level_id.clone(), e.point));
+        // centroid starts the next run if it is on another level. A passage has
+        // two crossings, met in the order of travel, both on this storey.
+        for p in e.crossing_from(e.ia == at) {
+            points.push((nodes[at].level_id.clone(), p));
+        }
         points.push((nodes[next].level_id.clone(), nodes[next].centroid));
         at = next;
     }
@@ -852,6 +905,7 @@ pub(super) fn route(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metr
             door_model_id: e.door_model_id.clone(),
             zone_id: e.zone_id.clone(),
             link_id: e.link_id.clone(),
+            passage_id: e.passage_id.clone(),
             point: e.point,
             length: e.length,
         });
@@ -904,6 +958,29 @@ pub struct ConnectionsReport {
     pub error: Option<String>,
     pub zones: Vec<ZoneReport>,
     pub links: Vec<LinkReport>,
+    pub passages: Vec<PassageReport>,
+}
+
+/// What one passage did. Applied whenever it can be and **reported when it cannot**,
+/// never silently dropped, like a link.
+#[derive(Serialize)]
+pub struct PassageReport {
+    pub id: String,
+    pub a: RoomRef,
+    pub b: RoomRef,
+    pub applied: bool,
+    /// Why not, when it did not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Where the line leaves the first room and enters the second, when it did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<Point2D>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<Point2D>,
+    /// The length of the line between the two crossings, in mm: what the opening
+    /// measures along its own direction, which is not its width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span_mm: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -992,7 +1069,9 @@ fn add_zone_edges(
             door_model_id: None,
             zone_id: Some(fact.zone_id),
             link_id: None,
+            passage_id: None,
             point: fact.point,
+            far_point: None,
             point_source: PointSource::SharedWall,
             width_mm: Some(fact.width_mm),
             height_mm: None,
@@ -1002,6 +1081,49 @@ fn add_zone_edges(
         });
     }
     tally
+}
+
+/// One passage, ready to become an edge: both crossings already found.
+struct PassageFact {
+    passage_id: String,
+    ia: usize,
+    ib: usize,
+    at_a: Point2D,
+    at_b: Point2D,
+    width_mm: Option<f64>,
+    height_mm: Option<f64>,
+}
+
+/// Turn passage facts into edges. **No pair is skipped for being joined already**,
+/// unlike a zone or a link: a passage is drawn on purpose, and a door's estimated
+/// width beside the one a person stated is exactly the case where both should stay
+/// in the graph, the size check choosing between them.
+fn add_passage_edges(nodes: &mut [Node], edges: &mut Vec<Edge>, facts: Vec<PassageFact>) {
+    for fact in facts {
+        let (ca, cb) = (nodes[fact.ia].centroid, nodes[fact.ib].centroid);
+        nodes[fact.ia].degree += 1;
+        nodes[fact.ib].degree += 1;
+        let mut edge = Edge {
+            a: nodes[fact.ia].room.clone(),
+            b: nodes[fact.ib].room.clone(),
+            kind: EdgeKind::Passage,
+            door_id: None,
+            door_model_id: None,
+            zone_id: None,
+            link_id: None,
+            passage_id: Some(fact.passage_id),
+            point: fact.at_a,
+            far_point: Some(fact.at_b),
+            point_source: PointSource::Passage,
+            width_mm: fact.width_mm,
+            height_mm: fact.height_mm,
+            length: 0.0,
+            ia: fact.ia,
+            ib: fact.ib,
+        };
+        edge.length = edge.length_between(ca, cb);
+        edges.push(edge);
+    }
 }
 
 /// Turn link facts into edges. A change of storey has no plan distance, so the
@@ -1031,7 +1153,9 @@ fn add_link_edges(
             door_model_id: None,
             zone_id: None,
             link_id: Some(fact.link_id),
+            passage_id: None,
             point: nodes[fact.ia].centroid,
+            far_point: None,
             point_source: PointSource::Vertical,
             width_mm: None,
             height_mm: None,
@@ -1137,7 +1261,7 @@ fn authored_edges(
     rooms: &super::rooms::RoomsResult,
     nodes: &[Node],
     door_degree: &[usize],
-) -> (Vec<ZoneEdgeFact>, Vec<LinkFact>, ConnectionsReport) {
+) -> (Vec<ZoneEdgeFact>, Vec<LinkFact>, Vec<PassageFact>, ConnectionsReport) {
     let (document, error) = match state.projects_dir() {
         None => (connections::ConnectionsDocument::empty(), None),
         Some(dir) => match connections::load(dir, project) {
@@ -1151,9 +1275,10 @@ fn authored_edges(
         error,
         zones: Vec::new(),
         links: Vec::new(),
+        passages: Vec::new(),
     };
-    if document.zones.is_empty() && document.links.is_empty() {
-        return (Vec::new(), Vec::new(), report);
+    if document.zones.is_empty() && document.links.is_empty() && document.passages.is_empty() {
+        return (Vec::new(), Vec::new(), Vec::new(), report);
     }
 
     let index: BTreeMap<&RoomRef, usize> = nodes.iter().enumerate().map(|(i, n)| (&n.room, i)).collect();
@@ -1209,7 +1334,126 @@ fn authored_edges(
         }
         report.links.push(entry);
     }
-    (zone_facts, link_facts, report)
+
+    let mut passage_facts = Vec::new();
+    if !document.passages.is_empty() {
+        let room_of: BTreeMap<RoomRef, &Room> = rooms
+            .rooms
+            .iter()
+            .map(|r| (RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() }, &r.room))
+            .collect();
+        for passage in &document.passages {
+            let mut entry = PassageReport {
+                id: passage.id.clone(),
+                a: passage.a.clone(),
+                b: passage.b.clone(),
+                applied: false,
+                reason: None,
+                from: None,
+                to: None,
+                span_mm: None,
+            };
+            match passage_fact(passage, &index, &room_of, nodes) {
+                Ok(fact) => {
+                    entry.applied = true;
+                    entry.from = Some(fact.at_a);
+                    entry.to = Some(fact.at_b);
+                    entry.span_mm = Some(dist(fact.at_a, fact.at_b) * MM_PER_FT);
+                    passage_facts.push(fact);
+                }
+                Err(reason) => entry.reason = Some(reason),
+            }
+            report.passages.push(entry);
+        }
+    }
+    (zone_facts, link_facts, passage_facts, report)
+}
+
+/// The two points where a straight line leaves its first room and enters its second.
+/// Distances below this along the line are one point, not two.
+const PASSAGE_EPS: f64 = 1e-9;
+
+/// Where the segment `p`→`q` crosses the segment `c`→`d`, as the fraction of `p`→`q`.
+/// `None` for parallel lines (a line running along a wall crosses nothing) and for
+/// segments that do not meet.
+fn crossing_t(p: Point2D, q: Point2D, c: Point2D, d: Point2D) -> Option<f64> {
+    let (rx, ry) = (q.x - p.x, q.y - p.y);
+    let (sx, sy) = (d.x - c.x, d.y - c.y);
+    let denom = rx * sy - ry * sx;
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    let t = ((c.x - p.x) * sy - (c.y - p.y) * sx) / denom;
+    let u = ((c.x - p.x) * ry - (c.y - p.y) * rx) / denom;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
+}
+
+/// Every fraction along `p`→`q` at which the line crosses a room's outer ring.
+fn ring_crossings(poly: &geo::Polygon<f64>, p: Point2D, q: Point2D) -> Vec<f64> {
+    poly.exterior()
+        .lines()
+        .filter_map(|l| crossing_t(p, q, Point2D { x: l.start.x, y: l.start.y }, Point2D { x: l.end.x, y: l.end.y }))
+        .collect()
+}
+
+/// A passage turned into the edge's facts, or the sentence that says why it is not one.
+///
+/// The line starts inside room `a` and ends inside `b`. It leaves `a` at the FIRST
+/// crossing of `a`'s outline and enters `b` at the LAST crossing of `b`'s, so a line
+/// that passes through other rooms in between, or across a gap, still joins the two it
+/// names. Holes are ignored, as for a room's outline everywhere here: a column does not
+/// close a passage.
+fn passage_fact(
+    passage: &connections::Passage,
+    index: &BTreeMap<&RoomRef, usize>,
+    room_of: &BTreeMap<RoomRef, &Room>,
+    nodes: &[Node],
+) -> Result<PassageFact, String> {
+    use geo::Intersects;
+    let (Some(&ia), Some(&ib)) = (index.get(&passage.a), index.get(&passage.b)) else {
+        return Err("a room is no longer among the rooms in scope".to_string());
+    };
+    if nodes[ia].level_id != nodes[ib].level_id {
+        return Err("the rooms are on different storeys: join them with a vertical link".to_string());
+    }
+    let (Some(oa), Some(ob)) = (
+        room_of.get(&passage.a).and_then(|r| outline_of(r)),
+        room_of.get(&passage.b).and_then(|r| outline_of(r)),
+    ) else {
+        return Err("a room has no outline to cross".to_string());
+    };
+    let (p, q) = (
+        Point2D { x: passage.from.x, y: passage.from.y },
+        Point2D { x: passage.to.x, y: passage.to.y },
+    );
+    let at = |t: f64| Point2D { x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t };
+    let inside = |poly: &geo::Polygon<f64>, pt: Point2D| poly.intersects(&geo::Point::new(pt.x, pt.y));
+    if !inside(&oa, p) {
+        return Err("the line starts outside the first room: the room has moved, or was drawn from another".to_string());
+    }
+    if !inside(&ob, q) {
+        return Err("the line ends outside the second room: the room has moved, or was drawn from another".to_string());
+    }
+    let Some(leave) = ring_crossings(&oa, p, q).into_iter().filter(|t| *t > PASSAGE_EPS).reduce(f64::min) else {
+        return Err("the line never leaves the first room".to_string());
+    };
+    let Some(enter) = ring_crossings(&ob, p, q).into_iter().filter(|t| *t < 1.0 - PASSAGE_EPS).reduce(f64::max) else {
+        return Err("the line never enters the second room".to_string());
+    };
+    if enter + PASSAGE_EPS < leave {
+        return Err(
+            "the line enters the second room before it leaves the first: the rooms overlap along it".to_string()
+        );
+    }
+    Ok(PassageFact {
+        passage_id: passage.id.clone(),
+        ia,
+        ib,
+        at_a: at(leave),
+        at_b: at(enter),
+        width_mm: passage.width_mm,
+        height_mm: passage.height_mm,
+    })
 }
 
 // ================================ the read ================================
@@ -1344,9 +1588,11 @@ pub fn assemble_connectivity(
     // Door degrees, taken before zones add theirs: a zone whose members have none
     // is an island, and the report says so.
     let door_degree: Vec<usize> = nodes.iter().map(|n| n.degree).collect();
-    let (zone_facts, link_facts, mut connections_report) = authored_edges(state, project, &rooms, &nodes, &door_degree);
+    let (zone_facts, link_facts, passage_facts, mut connections_report) =
+        authored_edges(state, project, &rooms, &nodes, &door_degree);
     let tally = add_zone_edges(&mut nodes, &mut edges, zone_facts);
     let redundant_links = add_link_edges(&mut nodes, &mut edges, link_facts);
+    add_passage_edges(&mut nodes, &mut edges, passage_facts);
     record_what_applied(&mut connections_report, &tally, &redundant_links);
     let components = components(&mut nodes, &edges);
     let isolated = isolated_rooms(&nodes, &components);
@@ -1481,6 +1727,7 @@ fn edge_for_step<'a>(edges: &'a [Edge], step: &Step) -> Option<&'a Edge> {
                         && ((e.a == step.from && e.b == step.to) || (e.a == step.to && e.b == step.from))
                 }
                 EdgeKind::Vertical => e.link_id == step.link_id,
+                EdgeKind::Passage => e.passage_id == step.passage_id,
             }
     })
 }
@@ -1492,17 +1739,25 @@ fn width_limit(e: &Edge) -> WidthLimit {
         door_id: e.door_id.clone(),
         door_model_id: e.door_model_id.clone(),
         zone_id: e.zone_id.clone(),
+        passage_id: e.passage_id.clone(),
         from: e.a.clone(),
         to: e.b.clone(),
     }
 }
 
+/// Whether an edge has a height of its own to check: a door's, or a passage's as stated.
+/// An open area's walls carry none (the rooms either side do) and nor does a level change.
+fn carries_height(kind: EdgeKind) -> bool {
+    matches!(kind, EdgeKind::Door | EdgeKind::Passage)
+}
+
 fn door_height_limit(e: &Edge) -> HeightLimit {
     HeightLimit {
         height_mm: e.height_mm.unwrap_or(0.0),
-        kind: HeightKind::Door,
+        kind: if e.kind == EdgeKind::Passage { HeightKind::Passage } else { HeightKind::Door },
         door_id: e.door_id.clone(),
         door_model_id: e.door_model_id.clone(),
+        passage_id: e.passage_id.clone(),
         rooms: vec![e.a.clone(), e.b.clone()],
         from_ceiling: false,
     }
@@ -1514,6 +1769,7 @@ fn room_height_limit(n: &Node) -> HeightLimit {
         kind: HeightKind::Room,
         door_id: None,
         door_model_id: None,
+        passage_id: None,
         rooms: vec![n.room.clone()],
         from_ceiling: n.height_from_ceiling,
     }
@@ -1547,9 +1803,9 @@ fn clearance_of(nodes: &[Node], edges: &[Edge], path: &mut PathResult, from: usi
                 }
                 _ => unchecked_hops += 1,
             }
-            // Only a DOOR has a height of its own: an open area's walls carry none, the
-            // rooms on either side do, and a level change has none to check.
-            if let Some(e) = edge.filter(|e| e.kind == EdgeKind::Door && fit.height_mm.is_some()) {
+            // Only a DOOR or a PASSAGE has a height of its own: an open area's walls carry
+            // none, the rooms on either side do, and a level change has none to check.
+            if let Some(e) = edge.filter(|e| carries_height(e.kind) && fit.height_mm.is_some()) {
                 if e.height_mm.is_some() {
                     lower(door_height_limit(e));
                 } else {
@@ -1606,6 +1862,7 @@ fn blocked_reason(nodes: &[Node], fit: &Fit, widest: Option<&WidthLimit>, talles
                 EdgeKind::Door => format!("door {}", l.door_id.as_deref().unwrap_or("?")),
                 EdgeKind::Zone => "an open area's shared wall".to_string(),
                 EdgeKind::Vertical => "a level change".to_string(),
+                EdgeKind::Passage => format!("a passage {}", l.passage_id.as_deref().unwrap_or("?")),
             };
             clauses.push(format!(
                 "the widest that fits is about {:.0} mm, limited by {what} between {} and {}",
@@ -1622,6 +1879,12 @@ fn blocked_reason(nodes: &[Node], fit: &Fit, widest: Option<&WidthLimit>, talles
                 HeightKind::Door => format!(
                     "door {} between {} and {}",
                     l.door_id.as_deref().unwrap_or("?"),
+                    name(&l.rooms[0]),
+                    name(&l.rooms[1])
+                ),
+                HeightKind::Passage => format!(
+                    "passage {} between {} and {}",
+                    l.passage_id.as_deref().unwrap_or("?"),
                     name(&l.rooms[0]),
                     name(&l.rooms[1])
                 ),
@@ -1747,7 +2010,7 @@ fn tallest_between(nodes: &[Node], edges: &[Edge], from: usize, to: usize) -> Op
         };
         let door = es
             .iter()
-            .filter(|&&k| edges[k].kind == EdgeKind::Door && edges[k].height_mm.is_some())
+            .filter(|&&k| carries_height(edges[k].kind) && edges[k].height_mm.is_some())
             .min_by(|&&a, &&b| {
                 edges[a].height_mm.unwrap_or(f64::MAX).total_cmp(&edges[b].height_mm.unwrap_or(f64::MAX))
             });
@@ -2298,7 +2561,13 @@ mod tests {
                 &state,
                 &dir,
                 "p1",
-                crate::connections::SaveRequest { base: String::new(), zones, links: vec![], routes: None },
+                crate::connections::SaveRequest {
+                    base: String::new(),
+                    zones,
+                    links: vec![],
+                    routes: None,
+                    passages: None,
+                },
             )
             .unwrap();
             (state, dir)
@@ -2415,7 +2684,13 @@ mod tests {
                 &state,
                 &dir,
                 "p1",
-                crate::connections::SaveRequest { base: String::new(), zones: vec![], links, routes: None },
+                crate::connections::SaveRequest {
+                    base: String::new(),
+                    zones: vec![],
+                    links,
+                    routes: None,
+                    passages: None,
+                },
             )
             .unwrap();
             (state, dir)
@@ -2474,6 +2749,7 @@ mod tests {
                     zones: vec![zone_input("landing", &["b", "c"])],
                     links: vec![link_input("up", "c", "e", Some(10.0))],
                     routes: None,
+                    passages: None,
                 },
             )
             .unwrap();
@@ -3078,7 +3354,13 @@ mod tests {
                 &state,
                 &dir,
                 "p1",
-                crate::connections::SaveRequest { base: String::new(), zones: vec![zone], links: vec![], routes: None },
+                crate::connections::SaveRequest {
+                    base: String::new(),
+                    zones: vec![zone],
+                    links: vec![],
+                    routes: None,
+                    passages: None,
+                },
             )
             .unwrap();
             (state, dir)
@@ -3526,6 +3808,181 @@ mod tests {
             )
             .unwrap()
             .is_none());
+        }
+
+        // ---------- passages ----------
+
+        fn passage_input(
+            id: &str,
+            a: &str,
+            b: &str,
+            from: (f64, f64),
+            to: (f64, f64),
+        ) -> crate::connections::PassageInput {
+            let room =
+                |r: &str| crate::connections::RoomInput { room_id: r.to_string(), model_id: Some("m1".to_string()) };
+            crate::connections::PassageInput {
+                id: id.to_string(),
+                a: room(a),
+                b: room(b),
+                from: crate::connections::RoutePoint { x: from.0, y: from.1 },
+                to: crate::connections::RoutePoint { x: to.0, y: to.1 },
+                width_mm: None,
+                height_mm: None,
+                note: None,
+            }
+        }
+
+        /// The standard rooms (`a | b | c`, a gap, `d`) and doors, with passages authored.
+        fn passaged(tag: &str, rooms: Option<Vec<Room>>, passages: Vec<crate::connections::PassageInput>) -> AppState {
+            let dir = std::env::temp_dir().join(format!("roommate-conn-passages-{tag}-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok(); // a stale one from a run with the same process id would read as saved data
+            std::fs::create_dir_all(&dir).unwrap();
+            let doors = standard();
+            let state = match rooms {
+                Some(rooms) => state_of(rooms, doors),
+                None => state(doors),
+            }
+            .with_projects_dir(dir.clone());
+            crate::connections::save(
+                &state,
+                &dir,
+                "p1",
+                crate::connections::SaveRequest {
+                    base: String::new(),
+                    zones: vec![],
+                    links: vec![],
+                    routes: None,
+                    passages: Some(passages),
+                },
+            )
+            .unwrap();
+            state
+        }
+
+        fn read_sized(
+            state: &AppState,
+            from: &str,
+            to: &str,
+            width: Option<f64>,
+            height: Option<f64>,
+            method: Method,
+        ) -> ConnectivityResult {
+            let (f, t) = (ep(None, from), ep(None, to));
+            let scope = ConnectivityScope { clear_width_mm: width, clear_height_mm: height, ..Default::default() };
+            assemble_connectivity(state, "p1", &scope, Some((&f, &t)), Metric::Distance, method, Detail::Full)
+                .unwrap()
+                .unwrap()
+        }
+
+        /// The point of the feature: `d` has no door and shares no wall with anything, and a
+        /// line drawn across the gap makes it routable. The edge runs from where the line
+        /// leaves `c` (x = 30) to where it enters `d` (x = 40), and its length is the walk
+        /// from centre to crossing to crossing to centre: 5 + 10 + 5.
+        #[test]
+        fn test_a_passage_joins_rooms_that_share_no_wall() {
+            let s = passaged("joins", None, vec![passage_input("gap", "c", "d", (25.0, 5.0), (45.0, 5.0))]);
+            let result = read_sized(&s, "a", "d", None, None, Method::Centroid);
+            let path = result.path.as_ref().unwrap();
+            assert!(path.found, "{:?}", path.reason);
+            let last = path.steps.last().unwrap();
+            assert_eq!(last.kind, EdgeKind::Passage);
+            assert_eq!(last.passage_id.as_deref(), Some("gap"));
+            assert!((last.length - 20.0).abs() < 1e-6, "{}", last.length);
+            // a -> b -> c is 20 ft of doors, then the passage.
+            assert!((path.distance_ft - 40.0).abs() < 1e-6, "{}", path.distance_ft);
+            let report = &result.connections.passages[0];
+            assert!(report.applied, "{:?}", report.reason);
+            assert!((report.from.unwrap().x - 30.0).abs() < 1e-6 && (report.to.unwrap().x - 40.0).abs() < 1e-6);
+            assert!((report.span_mm.unwrap() - 10.0 * MM_PER_FT).abs() < 1e-6);
+            assert!(result.isolated.is_empty(), "d is reachable now");
+            // Drawn as one polyline through both crossings.
+            let xs: Vec<f64> = path.segments.iter().flat_map(|s| s.points.iter().map(|p| p.x)).collect();
+            assert!(xs.windows(2).any(|w| (w[0] - 30.0).abs() < 1e-6 && (w[1] - 40.0).abs() < 1e-6), "{xs:?}");
+        }
+
+        /// Walking the passage the other way draws the crossings in the other order.
+        #[test]
+        fn test_a_passage_is_walked_both_ways() {
+            let s = passaged("both", None, vec![passage_input("gap", "c", "d", (25.0, 5.0), (45.0, 5.0))]);
+            for method in [Method::Centroid, Method::DoorToDoor] {
+                let path = read_sized(&s, "d", "c", None, None, method).path.unwrap();
+                assert!(path.found, "{:?}", path.reason);
+                let xs: Vec<f64> = path.segments.iter().flat_map(|s| s.points.iter().map(|p| p.x)).collect();
+                let at = |x: f64| xs.iter().position(|v| (v - x).abs() < 1e-6);
+                assert!(at(40.0).unwrap() < at(30.0).unwrap(), "{method:?} {xs:?}");
+            }
+        }
+
+        /// The stated width and height are what the size checks read, and the blocked
+        /// route's sentence names the passage.
+        #[test]
+        fn test_a_passages_width_and_height_are_checked() {
+            let mut gap = passage_input("gap", "c", "d", (25.0, 5.0), (45.0, 5.0));
+            gap.width_mm = Some(700.0);
+            gap.height_mm = Some(2000.0);
+            let s = passaged("sized", None, vec![gap]);
+            assert!(read_sized(&s, "a", "d", Some(700.0), Some(2000.0), Method::Centroid).path.unwrap().found);
+            let wide = read_sized(&s, "a", "d", Some(800.0), None, Method::Centroid);
+            assert!(!wide.path.as_ref().unwrap().found);
+            let limit = wide.clearance.as_ref().unwrap().widest_possible.as_ref().unwrap();
+            assert_eq!((limit.kind, limit.passage_id.as_deref()), (EdgeKind::Passage, Some("gap")));
+            assert!(wide.path.unwrap().reason.unwrap().contains("a passage gap"));
+            let tall = read_sized(&s, "a", "d", None, Some(2100.0), Method::Centroid);
+            assert!(!tall.path.as_ref().unwrap().found);
+            assert_eq!(tall.clearance.unwrap().tallest_possible.unwrap().kind, HeightKind::Passage);
+        }
+
+        /// A passage with no width or height is not a barrier: it passes and is counted.
+        #[test]
+        fn test_a_passage_with_no_size_is_passable_and_counted_unchecked() {
+            let s = passaged("unsized", None, vec![passage_input("gap", "c", "d", (25.0, 5.0), (45.0, 5.0))]);
+            let r = read_sized(&s, "c", "d", Some(5000.0), Some(5000.0), Method::Centroid);
+            assert!(r.path.as_ref().unwrap().found);
+            let c = r.clearance.unwrap();
+            assert_eq!(c.unchecked_hops, 1);
+            assert!(c.narrowest.is_none());
+        }
+
+        /// A passage that cannot apply is reported with its reason, never dropped silently.
+        #[test]
+        fn test_a_passage_that_cannot_apply_says_why() {
+            let rooms = vec![
+                rect("a", 0.0, 10.0),
+                rect_on("up", 0.0, 10.0, "lvl2"),
+                rect("c", 20.0, 30.0),
+                rect("d", 40.0, 50.0),
+            ];
+            let s = passaged(
+                "reasons",
+                Some(rooms),
+                vec![
+                    passage_input("storeys", "a", "up", (5.0, 5.0), (5.0, 6.0)),
+                    passage_input("outside", "c", "d", (15.0, 5.0), (45.0, 5.0)),
+                    passage_input("gone", "c", "missing", (25.0, 5.0), (45.0, 5.0)),
+                ],
+            );
+            let result = read(&s, None);
+            let by = |id: &str| result.connections.passages.iter().find(|p| p.id == id).unwrap();
+            assert!(by("storeys").reason.as_deref().unwrap().contains("vertical link"));
+            assert!(by("outside").reason.as_deref().unwrap().contains("starts outside"));
+            assert!(by("gone").reason.as_deref().unwrap().contains("no longer among"));
+            assert!(result.connections.passages.iter().all(|p| !p.applied));
+            assert_eq!(result.edges.unwrap().iter().filter(|e| e.kind == EdgeKind::Passage).count(), 0);
+        }
+
+        /// A door and a passage between the same rooms both stay: the size check chooses.
+        #[test]
+        fn test_a_passage_beside_a_door_is_not_dropped_as_redundant() {
+            let mut wide = passage_input("wide", "a", "b", (5.0, 5.0), (15.0, 5.0));
+            wide.width_mm = Some(3000.0);
+            let s = passaged("beside", None, vec![wide]);
+            let result = read(&s, None);
+            assert!(result.connections.passages[0].applied);
+            assert_eq!(
+                result.edges.unwrap().iter().filter(|e| e.a.room_id == "a" && e.b.room_id == "b").count(),
+                2
+            );
         }
     }
 }

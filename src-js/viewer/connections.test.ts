@@ -31,6 +31,14 @@ import {
   whyNotSavable,
   type ConnectionsDoc,
 } from "./connections.js";
+import {
+  bodyAfterDeletePassage,
+  editOfPassage,
+  parseSizeMm,
+  passagesOf,
+  pickPassageEnd,
+  type SavedPassage,
+} from "./connections.js";
 
 const doc: ConnectionsDoc = {
   schema_version: 1,
@@ -445,5 +453,104 @@ describe("a saved route's width", () => {
 
   it("is null when none was asked", () => {
     expect(bodyAfterSaveRoute(doc, { ...base, widthMm: null, heightMm: null }).routes[0]!.width_mm).toBeNull();
+  });
+});
+
+describe("passages", () => {
+  const passage: SavedPassage = {
+    id: "gap",
+    a: { model_id: "m", room_id: "c" },
+    b: { model_id: "m", room_id: "d" },
+    from: { x: 25, y: 5 },
+    to: { x: 45, y: 5 },
+    width_mm: 700,
+    height_mm: null,
+  };
+  const withPassage: ConnectionsDoc = { ...doc, passages: [passage] };
+
+  it("takes the first click as the start, the second as the end, and a third starts again", () => {
+    let e = pickPassageEnd(newEdit("passage"), "c", { x: 25, y: 5 });
+    expect(e.members.map((m) => m.room_id)).toEqual(["c"]);
+    e = pickPassageEnd(e, "d", { x: 45, y: 5 });
+    expect(e.members.map((m) => m.room_id)).toEqual(["c", "d"]);
+    expect(e.points).toEqual([{ x: 25, y: 5 }, { x: 45, y: 5 }]);
+    e = pickPassageEnd(e, "a", { x: 5, y: 5 });
+    expect(e.members.map((m) => m.room_id)).toEqual(["a"]);
+    expect(e.points).toEqual([{ x: 5, y: 5 }]);
+  });
+
+  it("refuses a pick with no point, and the same room twice, and says so", () => {
+    const start = pickPassageEnd(newEdit("passage"), "c", { x: 25, y: 5 });
+    expect(pickPassageEnd(start, "d", null).error).toMatch(/Click the room on the plan/);
+    expect(pickPassageEnd(start, "d", null).members).toHaveLength(1);
+    expect(pickPassageEnd(start, "c", { x: 26, y: 5 }).error).toMatch(/different room/);
+    // A pick routed through the editor's own entry point lands in the same place.
+    expect(pickForEdit(newEdit("passage"), "c", { x: 1, y: 1 }).points).toEqual([{ x: 1, y: 1 }]);
+  });
+
+  it("is savable only with two ends and sizes the server would accept", () => {
+    const drawn = pickPassageEnd(pickPassageEnd(newEdit("passage"), "c", { x: 25, y: 5 }), "d", { x: 45, y: 5 });
+    expect(whyNotSavable(newEdit("passage"))).toMatch(/Click inside one room/);
+    expect(whyNotSavable(drawn)).toBeNull();
+    expect(whyNotSavable({ ...drawn, widthMm: "wide" })).toMatch(/width/);
+    expect(whyNotSavable({ ...drawn, heightMm: "-3" })).toMatch(/height/);
+    expect(whyNotSavable({ ...drawn, widthMm: "900", heightMm: "2100" })).toBeNull();
+  });
+
+  it("parses a size: blank is unknown, a number in range is itself, anything else is bad", () => {
+    expect(parseSizeMm("", 100)).toBeNull();
+    expect(parseSizeMm(" 90 ", 100)).toBe(90);
+    for (const bad of ["0", "-1", "abc", "101", "NaN"]) expect(parseSizeMm(bad, 100)).toBe("bad");
+  });
+
+  it("saves a new passage with its points and sizes, and keeps everything else", () => {
+    const drawn = {
+      ...pickPassageEnd(pickPassageEnd(newEdit("passage"), "c", { x: 25, y: 5 }), "d", { x: 45, y: 5 }),
+      widthMm: "900",
+      heightMm: "",
+    };
+    const body = bodyAfterSave(withPassage, drawn);
+    expect(body.passages).toHaveLength(2);
+    expect(body.passages[1]).toMatchObject({
+      a: { room_id: "c", model_id: null },
+      b: { room_id: "d", model_id: null },
+      from: { x: 25, y: 5 },
+      to: { x: 45, y: 5 },
+      width_mm: 900,
+      height_mm: null,
+    });
+    expect(body.zones).toHaveLength(2);
+    expect(body.links).toHaveLength(1);
+    expect(body.passages[0]!.id).toBe("gap");
+  });
+
+  it("changes a saved passage in place, sizes included", () => {
+    const edit = { ...editOfPassage(passage), widthMm: "1200", heightMm: "2000" };
+    expect(edit.points).toEqual([passage.from, passage.to]);
+    const body = bodyAfterSave(withPassage, edit);
+    expect(body.passages).toHaveLength(1);
+    expect(body.passages[0]).toMatchObject({ id: "gap", width_mm: 1200, height_mm: 2000 });
+  });
+
+  it("every other save carries the passages through, so none is lost", () => {
+    const n = (b: { passages: unknown[] }) => b.passages.length;
+    expect(n(bodyAfterDeleteZone(withPassage, "east"))).toBe(1);
+    expect(n(bodyAfterDeleteLink(withPassage, "lift-1-2"))).toBe(1);
+    expect(n(bodyAfterAddLink(withPassage, { room_id: "x", model_id: "m" }, { room_id: "y", model_id: "m" }))).toBe(1);
+    expect(n(bodyAfterDeleteRoute(withPassage, "none"))).toBe(1);
+    expect(n(bodyAfterSave(withPassage, newEdit("open")))).toBe(1);
+    expect(bodyAfterDeletePassage(withPassage, "gap").passages).toEqual([]);
+    expect(bodyAfterDeletePassage(withPassage, "gap").zones).toHaveLength(2);
+  });
+
+  it("reads a document from a server that predates passages", () => {
+    expect(passagesOf(doc)).toEqual([]);
+    expect(passagesOf(null)).toEqual([]);
+    expect(bodyAfterSave(doc, newEdit("open")).passages).toEqual([]);
+  });
+
+  it("lists a passage in the table, named by its two rooms", () => {
+    const rows = connectionRows(withPassage, (id) => id.toUpperCase());
+    expect(rows.at(-1)).toMatchObject({ kind: "passage", id: "gap", name: "C ↔ D", type: "Passage" });
   });
 });

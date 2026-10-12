@@ -179,7 +179,7 @@ fn centroid_at(nodes: &[Node], edges: &[Edge], ask: &Ask, metric: Metric) -> Pat
     for e in es.iter_mut() {
         let touches = [ask.from, ask.to].contains(&e.ia) || [ask.from, ask.to].contains(&e.ib);
         if touches && e.kind != EdgeKind::Vertical {
-            e.length = dist(ns[e.ia].centroid, e.point) + dist(e.point, ns[e.ib].centroid);
+            e.length = e.length_between(ns[e.ia].centroid, ns[e.ib].centroid);
         }
     }
     centroid_route(&ns, &es, ask.from, ask.to, metric)
@@ -356,6 +356,12 @@ fn build_network(nodes: &[Node], edges: &[Edge], shapes: &mut Shapes<'_>, ask: &
                 let (a, b) = (shapes.snap(e.ia, e.point), shapes.snap(e.ib, e.point));
                 (a, b, dist(a, e.point) + dist(e.point, b))
             }
+            // A passage is crossed between its own two points, each moved onto the
+            // outline of the room it belongs to; `point` is on `a`'s, `far_point` on `b`'s.
+            EdgeKind::Passage => {
+                let (a, b) = (shapes.snap(e.ia, e.point), shapes.snap(e.ib, e.far_point.unwrap_or(e.point)));
+                (a, b, dist(a, b))
+            }
             EdgeKind::Vertical => (
                 shapes.inside(e.ia, nodes[e.ia].centroid),
                 shapes.inside(e.ib, nodes[e.ib].centroid),
@@ -476,7 +482,11 @@ fn assemble(
                 let (twin, crossing, k) = ports[x].twin.expect("a crossing has a twin");
                 let e = &edges[k];
                 let (here, there) = (ports[x].room, ports[twin].room);
-                if e.kind != EdgeKind::Vertical {
+                if e.kind == EdgeKind::Passage {
+                    // The point the walker leaves from is the port itself, which depends
+                    // on which room it is in; `e.point` is always `a`'s.
+                    drawn.push((nodes[here].level_id.clone(), ports[x].at));
+                } else if e.kind != EdgeKind::Vertical {
                     drawn.push((nodes[here].level_id.clone(), e.point));
                 }
                 drawn.push((nodes[there].level_id.clone(), ports[twin].at));
@@ -488,6 +498,7 @@ fn assemble(
                     door_model_id: e.door_model_id.clone(),
                     zone_id: e.zone_id.clone(),
                     link_id: e.link_id.clone(),
+                    passage_id: e.passage_id.clone(),
                     point: e.point,
                     length: pending + crossing,
                 });

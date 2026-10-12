@@ -1,18 +1,24 @@
 // The connections editor's rules, with no store and no DOM.
 //
-// Two things are authored, and they are different records on purpose:
+// Three things are authored, and they are different records on purpose:
 //
 //   - an OPEN ZONE: a set of rooms the user declares to be one open space; the
 //     server treats every wall two members share as open;
 //   - a VERTICAL LINK: exactly two rooms on different levels, joined by hand, one
 //     floor-to-floor hop per link (a lift or stair is a run of them, never a jump
 //     from level 1 to 8). It is two rooms and not a list because a list could not
-//     tell the lift rooms from the lobbies around them.
+//     tell the lift rooms from the lobbies around them;
+//   - a PASSAGE: two rooms on ONE level joined by a straight line a person drew,
+//     for a way through that no door and no shared wall shows. The record is the
+//     two clicks, each inside the room it names; the server derives where the line
+//     leaves one room and enters the other. Its width and height are the author's,
+//     because nothing in the model can supply them.
 //
 // What lives here is the part that is a RULE rather than plumbing: what a click
 // does to the working set, what a save may contain, and the body that carries it.
 // Pure and out of the components for the reason `route.ts` is.
 
+import type { PlanPoint } from "./route.js";
 import type { Scope } from "./scope.js";
 
 /** A room as the plan names it. The model is `null` for a room the plan picked
@@ -44,6 +50,19 @@ export interface SavedLink {
   note?: string | null;
 }
 
+export interface SavedPassage {
+  id: string;
+  a: { model_id: string; room_id: string };
+  b: { model_id: string; room_id: string };
+  /** Where the line starts, inside `a`, and where it ends, inside `b`. */
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  /** In mm; absent means unknown, which the server's size checks let through. */
+  width_mm?: number | null;
+  height_mm?: number | null;
+  note?: string | null;
+}
+
 /** A route somebody saved: the request, never the path (the server derives that). */
 export interface SavedRoute {
   id: string;
@@ -69,14 +88,30 @@ export interface ConnectionsDoc {
   zones: SavedZone[];
   links: SavedLink[];
   routes: SavedRoute[];
+  /** Absent from a server older than passages; read through `passagesOf`. */
+  passages?: SavedPassage[];
 }
+
+/** What the server said one passage did, from `/connectivity`'s `connections.passages`:
+ *  the points where the line crossed each room's outline, or why it applied nowhere. */
+export interface PassageReport {
+  id: string;
+  applied: boolean;
+  reason?: string | null;
+  from?: { x: number; y: number } | null;
+  to?: { x: number; y: number } | null;
+  span_mm?: number | null;
+}
+
+/** The passages of a document, none for one that predates them. */
+export const passagesOf = (doc: ConnectionsDoc | null): SavedPassage[] => doc?.passages ?? [];
 
 /** What the server assumes when a link states no cost. */
 export const DEFAULT_LEVEL_COST_FT = 40;
 
 /** What the editor is drawing. `stack` draws nothing of its own: it shows the rooms
  *  joined by vertical links as a column, and each link it adds is saved at once. */
-export type EditKind = "open" | "link" | "stack";
+export type EditKind = "open" | "link" | "stack" | "passage";
 
 /** One record being drawn: a new one (`id` null) or an existing one being changed. */
 export interface ZoneEdit {
@@ -87,7 +122,13 @@ export interface ZoneEdit {
   /** A link's cost as typed, so a half-typed number is not lost; blank means the
    *  default. */
   costFt: string;
+  /** A passage's width and height in mm as typed; blank means unknown. */
+  widthMm: string;
+  heightMm: string;
   members: Member[];
+  /** A passage's two clicks, parallel to `members`: where the line starts (in the
+   *  first room) and ends (in the second). Empty for every other kind. */
+  points: PlanPoint[];
   /** Walls between two members that stay closed: an open area opens EVERY wall two
    *  members share, which is wrong for bays along a corridor (they touch each other
    *  as well as the corridor). Room ids; the models come from `members`. */
@@ -116,34 +157,15 @@ export const MIN_MEMBERS = 2;
 export const LINK_MEMBERS = 2;
 
 export function newEdit(kind: EditKind = "open"): ZoneEdit {
-  return { id: null, kind, name: "", costFt: "", members: [], cuts: [], hub: null, tool: "pick", cutFrom: null, error: null, saving: false };
-}
-
-/** Load a saved zone for editing. */
-export function editOf(zone: SavedZone): ZoneEdit {
   return {
-    id: zone.id,
-    kind: "open",
-    name: zone.name,
-    costFt: "",
-    members: zone.rooms.map((r) => ({ room_id: r.room_id, model_id: r.model_id })),
-    cuts: (zone.disconnects ?? []).map((d) => ({ a: d.a.room_id, b: d.b.room_id })),
-    hub: zone.hub?.room_id ?? null,
-    tool: "pick",
-    cutFrom: null,
-    error: null,
-    saving: false,
-  };
-}
-
-/** Load a saved link for editing. */
-export function editOfLink(link: SavedLink): ZoneEdit {
-  return {
-    id: link.id,
-    kind: "link",
+    id: null,
+    kind,
     name: "",
-    costFt: link.cost_ft == null ? "" : String(link.cost_ft),
-    members: [link.a, link.b].map((r) => ({ room_id: r.room_id, model_id: r.model_id })),
+    costFt: "",
+    widthMm: "",
+    heightMm: "",
+    members: [],
+    points: [],
     cuts: [],
     hub: null,
     tool: "pick",
@@ -152,6 +174,70 @@ export function editOfLink(link: SavedLink): ZoneEdit {
     saving: false,
   };
 }
+
+/** Load a saved zone for editing. */
+export function editOf(zone: SavedZone): ZoneEdit {
+  return {
+    ...newEdit("open"),
+    id: zone.id,
+    name: zone.name,
+    members: zone.rooms.map((r) => ({ room_id: r.room_id, model_id: r.model_id })),
+    cuts: (zone.disconnects ?? []).map((d) => ({ a: d.a.room_id, b: d.b.room_id })),
+    hub: zone.hub?.room_id ?? null,
+  };
+}
+
+/** Load a saved link for editing. */
+export function editOfLink(link: SavedLink): ZoneEdit {
+  return {
+    ...newEdit("link"),
+    id: link.id,
+    costFt: link.cost_ft == null ? "" : String(link.cost_ft),
+    members: [link.a, link.b].map((r) => ({ room_id: r.room_id, model_id: r.model_id })),
+  };
+}
+
+/** Load a saved passage for editing. */
+export function editOfPassage(p: SavedPassage): ZoneEdit {
+  return {
+    ...newEdit("passage"),
+    id: p.id,
+    widthMm: p.width_mm == null ? "" : String(p.width_mm),
+    heightMm: p.height_mm == null ? "" : String(p.height_mm),
+    members: [p.a, p.b].map((r) => ({ room_id: r.room_id, model_id: r.model_id })),
+    points: [p.from, p.to],
+  };
+}
+
+/** What a click on a room does to a passage being drawn. The first click is where the
+ *  line starts, the second where it ends, and a third starts a new line from there, so
+ *  a wrong pair is redone without a trip to Clear.
+ *
+ *  A click needs the point it landed on, which a pick from the grid or the search does
+ *  not have: that is said rather than guessed, because the point is the whole record. */
+export function pickPassageEnd(edit: ZoneEdit, roomId: string, at: PlanPoint | null): ZoneEdit {
+  if (!at) return { ...edit, error: "Click the room on the plan: a passage is drawn between two points." };
+  const here: Member = { room_id: roomId, model_id: null };
+  if (edit.members.length === 1 && edit.members[0]!.room_id === roomId) {
+    return { ...edit, error: "Click a different room for the other end of the line." };
+  }
+  if (edit.members.length === 1) {
+    return { ...edit, members: [...edit.members, here], points: [...edit.points, at], error: null };
+  }
+  return { ...edit, members: [here], points: [at], error: null };
+}
+
+/** A width or height as typed: `null` for blank (unknown), the number when it is above
+ *  0 and within `max`, and `"bad"` otherwise, so the bar can say so before sending. */
+export function parseSizeMm(typed: string, max: number): number | null | "bad" {
+  if (typed.trim() === "") return null;
+  const n = Number(typed);
+  return Number.isFinite(n) && n > 0 && n <= max ? n : "bad";
+}
+
+/** The server's limits on a stated size, so the bar refuses what it would. */
+export const MAX_PASSAGE_WIDTH_MM = 100_000;
+export const MAX_PASSAGE_HEIGHT_MM = 50_000;
 
 /** What a click on a room does to the working set: in, if it is out, and out if
  *  it is in. A toggle rather than "add", because the only way to take a room
@@ -219,7 +305,8 @@ const sameCut = (c: Cut, a: string, b: string) => (c.a === a && c.b === b) || (c
  *    ignored: a cut is between two of the zone's own rooms.
  *  - `hub`: the member picked becomes the hub (picked again, it stops being one),
  *    and the tool goes back to `pick`, because naming a hub is one act. */
-export function pickForEdit(edit: ZoneEdit, roomId: string): ZoneEdit {
+export function pickForEdit(edit: ZoneEdit, roomId: string, at: PlanPoint | null = null): ZoneEdit {
+  if (edit.kind === "passage") return pickPassageEnd(edit, roomId, at);
   if (edit.kind !== "open" || edit.tool === "pick") return toggleMember(edit, roomId);
   if (!edit.members.some((m) => m.room_id === roomId)) {
     return { ...edit, error: "Pick a room that is already in this open area." };
@@ -271,6 +358,14 @@ export function whyNotSavable(edit: ZoneEdit): string | null {
     if (parseCost(edit.costFt) === "bad") return "The cost must be a number above 0.";
     return null;
   }
+  if (edit.kind === "passage") {
+    if (edit.members.length < LINK_MEMBERS || edit.points.length < LINK_MEMBERS) {
+      return "Click inside one room, then inside the room it should reach: the line between the clicks is the passage.";
+    }
+    if (parseSizeMm(edit.widthMm, MAX_PASSAGE_WIDTH_MM) === "bad") return `The width must be a number of mm above 0 and at most ${MAX_PASSAGE_WIDTH_MM}.`;
+    if (parseSizeMm(edit.heightMm, MAX_PASSAGE_HEIGHT_MM) === "bad") return `The height must be a number of mm above 0 and at most ${MAX_PASSAGE_HEIGHT_MM}.`;
+    return null;
+  }
   if (edit.name.trim() === "") return "Give the zone a name.";
   if (edit.members.length < MIN_MEMBERS) return `Pick at least ${MIN_MEMBERS} rooms: one room alone connects nothing.`;
   return null;
@@ -300,6 +395,17 @@ export interface ZoneBody {
   note?: string | null;
 }
 
+export interface PassageBody {
+  id: string;
+  a: Member;
+  b: Member;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  width_mm?: number | null;
+  height_mm?: number | null;
+  note?: string | null;
+}
+
 export interface LinkBody {
   id: string;
   a: Member;
@@ -314,6 +420,7 @@ export interface DocBody {
   zones: ZoneBody[];
   links: LinkBody[];
   routes: SavedRoute[];
+  passages: PassageBody[];
 }
 
 /** A saved zone as a body: **cuts and hub included**, so a save of anything else (a
@@ -347,6 +454,19 @@ function routeBody(r: SavedRoute): SavedRoute {
   };
 }
 
+function passageBody(p: SavedPassage): PassageBody {
+  return {
+    id: p.id,
+    a: p.a,
+    b: p.b,
+    from: p.from,
+    to: p.to,
+    width_mm: p.width_mm ?? null,
+    height_mm: p.height_mm ?? null,
+    note: p.note ?? null,
+  };
+}
+
 function linkBody(l: SavedLink): LinkBody {
   return { id: l.id, a: l.a, b: l.b, cost_ft: l.cost_ft ?? null, note: l.note ?? null };
 }
@@ -357,15 +477,43 @@ export function bodyAfterSave(doc: ConnectionsDoc, edit: ZoneEdit): DocBody {
   const zones = doc.zones.map(zoneBody);
   const links = doc.links.map(linkBody);
   const routes = doc.routes.map(routeBody);
+  const passages = passagesOf(doc).map(passageBody);
   // The stack view saves each link itself (`bodyAfterAddLink`); it has no working
   // set to save, so a save from it changes nothing.
-  if (edit.kind === "stack") return { zones, links, routes };
+  if (edit.kind === "stack") return { zones, links, routes, passages };
+  if (edit.kind === "passage") {
+    const [a, b] = edit.members as [Member, Member];
+    const [from, to] = edit.points as [PlanPoint, PlanPoint];
+    const width = parseSizeMm(edit.widthMm, MAX_PASSAGE_WIDTH_MM);
+    const height = parseSizeMm(edit.heightMm, MAX_PASSAGE_HEIGHT_MM);
+    const id = edit.id ?? idFor(`passage ${a.room_id} ${b.room_id}`, new Set(passages.map((p) => p.id)));
+    const next: PassageBody = {
+      id,
+      a,
+      b,
+      from,
+      to,
+      width_mm: width === "bad" ? null : width,
+      height_mm: height === "bad" ? null : height,
+    };
+    return {
+      zones,
+      links,
+      routes,
+      passages: edit.id === null ? [...passages, next] : passages.map((p) => (p.id === id ? next : p)),
+    };
+  }
   if (edit.kind === "link") {
     const [a, b] = edit.members as [Member, Member];
     const cost = parseCost(edit.costFt);
     const id = edit.id ?? idFor(`link ${a.room_id} ${b.room_id}`, new Set(links.map((l) => l.id)));
     const next: LinkBody = { id, a, b, cost_ft: cost === "bad" ? null : cost };
-    return { zones, routes, links: edit.id === null ? [...links, next] : links.map((l) => (l.id === id ? next : l)) };
+    return {
+      zones,
+      routes,
+      passages,
+      links: edit.id === null ? [...links, next] : links.map((l) => (l.id === id ? next : l)),
+    };
   }
   const id = edit.id ?? idFor(edit.name, new Set(zones.map((z) => z.id)));
   // A cut names rooms by id; the model of each is its member's.
@@ -378,17 +526,22 @@ export function bodyAfterSave(doc: ConnectionsDoc, edit: ZoneEdit): DocBody {
     disconnects: edit.cuts.map((c) => ({ a: member(c.a), b: member(c.b) })),
     hub: edit.hub === null ? null : member(edit.hub),
   };
-  return { links, routes, zones: edit.id === null ? [...zones, next] : zones.map((z) => (z.id === id ? next : z)) };
+  return {
+    links,
+    routes,
+    passages,
+    zones: edit.id === null ? [...zones, next] : zones.map((z) => (z.id === id ? next : z)),
+  };
 }
 
 /** One line of the connections table: a saved open zone or vertical link. */
 export interface ConnectionRow {
-  kind: "open" | "link";
+  kind: "open" | "link" | "passage";
   id: string;
   /** A zone's name; a link has none, so it is named by its two rooms. */
   name: string;
   /** What the second column says. */
-  type: "Open area" | "Vertical";
+  type: "Open area" | "Vertical" | "Passage";
   /** The levels the record lies on: an open area's rooms' levels, or the two
    *  levels a link joins. Empty when the page holds none of its rooms. */
   level: string;
@@ -411,8 +564,8 @@ export function levelsText(levels: readonly (LevelOfRoom | null)[], joiner = ", 
   return sorted.map((l) => l.name).join(joiner);
 }
 
-/** Every saved zone and link as table rows: open areas first, then vertical links,
- *  each group by name. `roomName` turns a room id into the name a reader knows and
+/** Every saved zone, link and passage as table rows: open areas first, then vertical
+ *  links, then passages, each group by name. `roomName` turns a room id into the name a reader knows and
  *  `levelOf` into its level; an id the page does not hold stays as the id and has
  *  no level, so a stale link is still listed and can be deleted. */
 export function connectionRows(
@@ -435,7 +588,14 @@ export function connectionRows(
     type: "Vertical",
     level: levelsText([levelOf(l.a.room_id), levelOf(l.b.room_id)], " ↔ "),
   }));
-  return [...zones.sort(byName), ...links.sort(byName)];
+  const passages: ConnectionRow[] = passagesOf(doc).map((p) => ({
+    kind: "passage",
+    id: p.id,
+    name: `${roomName(p.a.room_id)} ↔ ${roomName(p.b.room_id)}`,
+    type: "Passage",
+    level: levelsText([levelOf(p.a.room_id), levelOf(p.b.room_id)], " ↔ "),
+  }));
+  return [...zones.sort(byName), ...links.sort(byName), ...passages.sort(byName)];
 }
 
 /** One line of the saved-routes table. */
@@ -473,6 +633,7 @@ export function bodyAfterAddLink(doc: ConnectionsDoc, a: Member, b: Member): Doc
     zones: doc.zones.map(zoneBody),
     links: [...links, { id, a, b, cost_ft: null }],
     routes: doc.routes.map(routeBody),
+    passages: passagesOf(doc).map(passageBody),
   };
 }
 
@@ -482,6 +643,7 @@ export function bodyAfterDeleteZone(doc: ConnectionsDoc, id: string): DocBody {
     zones: doc.zones.filter((z) => z.id !== id).map(zoneBody),
     links: doc.links.map(linkBody),
     routes: doc.routes.map(routeBody),
+    passages: passagesOf(doc).map(passageBody),
   };
 }
 
@@ -491,6 +653,17 @@ export function bodyAfterDeleteLink(doc: ConnectionsDoc, id: string): DocBody {
     zones: doc.zones.map(zoneBody),
     links: doc.links.filter((l) => l.id !== id).map(linkBody),
     routes: doc.routes.map(routeBody),
+    passages: passagesOf(doc).map(passageBody),
+  };
+}
+
+/** The lists after deleting one passage. */
+export function bodyAfterDeletePassage(doc: ConnectionsDoc, id: string): DocBody {
+  return {
+    zones: doc.zones.map(zoneBody),
+    links: doc.links.map(linkBody),
+    routes: doc.routes.map(routeBody),
+    passages: passagesOf(doc).filter((p) => p.id !== id).map(passageBody),
   };
 }
 
@@ -553,7 +726,12 @@ export function bodyAfterSaveRoute(doc: ConnectionsDoc, draft: RouteDraft): DocB
     height_mm: draft.heightMm,
     colour: draft.colour,
   };
-  return { zones: doc.zones.map(zoneBody), links: doc.links.map(linkBody), routes: [...routes, next] };
+  return {
+    zones: doc.zones.map(zoneBody),
+    links: doc.links.map(linkBody),
+    routes: [...routes, next],
+    passages: passagesOf(doc).map(passageBody),
+  };
 }
 
 /** The lists after changing one saved route's colour. */
@@ -562,6 +740,7 @@ export function bodyAfterRecolourRoute(doc: ConnectionsDoc, id: string, colour: 
     zones: doc.zones.map(zoneBody),
     links: doc.links.map(linkBody),
     routes: doc.routes.map((r) => routeBody(r.id === id ? { ...r, colour } : r)),
+    passages: passagesOf(doc).map(passageBody),
   };
 }
 
@@ -571,6 +750,7 @@ export function bodyAfterDeleteRoute(doc: ConnectionsDoc, id: string): DocBody {
     zones: doc.zones.map(zoneBody),
     links: doc.links.map(linkBody),
     routes: doc.routes.filter((r) => r.id !== id).map(routeBody),
+    passages: passagesOf(doc).map(passageBody),
   };
 }
 
