@@ -395,8 +395,8 @@ Server side only so far; the viewer layer is not built.
   (`ConnectivityScope::ignore_cuts`). A cut says where a person routes; a coverage question is not
   bound by it. The routes read never sets it.
 - **Two methods, `exact` (default) and `grid`.** `grid` is Dijkstra over each room's
-  cells seeded from the same port distances: the lattice approximation (up to ~8% long,
-  changes with spacing), offered to compare against. Only `exact` agrees with a route.
+  cells seeded from the same port distances: the lattice approximation (RHH GROUND: median +0.2%, worst +14%
+  long; changes with spacing), offered to compare against. Only `exact` agrees with a route.
 - **One storey at a time.** Vertical edges are skipped: a walk on one plate does not continue by lift.
 - **A room too small for a cell is judged on its inside point**, so a cupboard
   still gets a verdict. The grid's origin is a whole multiple of the spacing, so

@@ -40,7 +40,9 @@
 //! port distances: the lattice approximation grid methods use, kept as a choice
 //! because it is the method a reader may know and compare against. It is
 //! never shorter than `exact` inside a room (a lattice path cannot beat the straight
-//! line) and runs up to about 8% longer between cells, so it can leave a cell at the
+//! line) and runs longer between cells (the lattice's own error is up to about 8%, and
+//! a port seeds its nearest cell, not its exact point; on RHH's GROUND the median was
+//! 0.2% and the worst 14%), so it can leave a cell at the
 //! limit's edge uncovered that `exact` covers, and its values change with the spacing.
 //! Only `exact` is a distance a route would also measure.
 //!
