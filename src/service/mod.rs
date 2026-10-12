@@ -19,6 +19,7 @@ pub mod milestones;
 pub mod openings;
 pub mod placement;
 pub mod projects;
+pub mod reach;
 pub mod reference;
 pub mod reports;
 pub mod room_locator;
