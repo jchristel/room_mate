@@ -371,7 +371,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // trigger (a pair of clicks) and its own consumer, so not part of /rooms.
         .route("/projects/{id}/connectivity", get(get_project_connectivity))
         // How far a walk of a given length reaches from some start points, as a
-        // grid over the plan (a hose reel's coverage). POST for its list body, like
+        // grid over the plan (coverage from start points). POST for its list body, like
         // /comparison; it reads and writes nothing. See service::reach.
         .route("/projects/{id}/reach", post(post_project_reach))
         // The rooms over and under one room, ranked: candidates for a vertical link.

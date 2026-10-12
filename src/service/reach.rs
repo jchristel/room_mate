@@ -4,9 +4,9 @@
 //! Transport-agnostic like every `service` module: the HTTP handler and the MCP tool
 //! are thin adapters over `assemble_reach`.
 //!
-//! **The question is a hose reel's**: from these reels, which parts of the floor
-//! plate can a 30 m hose reach, going round walls and through doors the way a hose
-//! must, and which cannot? So the distance is the walk of `service::routing`'s
+//! **The question is "within a walk of L from these points, what is covered?"** A hose
+//! reel's 30 m, a travel-distance limit from an exit, a walk to the nearest extinguisher
+//! and a catchment are all the same read with different sources and limit. So the distance is the walk of `service::routing`'s
 //! door-to-door method run from every source at once (`routing::field`), over the
 //! very graph a route is searched over (`connectivity::build_graph`): doors, open
 //! zones and passages. A cell's distance is the cheapest of "the walk to one of its
@@ -14,8 +14,8 @@
 //! Where the port sees the cell that is a straight line, which is almost every cell,
 //! and where it does not (an L, a column) it is the visibility-graph walk.
 //!
-//! **One floor plate at a time.** A vertical link is not crossed: a hose does not
-//! ride a lift. The levels in the answer are the sources' own plus any a door joins
+//! **One floor plate at a time.** A vertical link is not crossed: a walk
+//! measured on a plate does not continue by lift. The levels in the answer are the sources' own plus any a door joins
 //! to them, so a stair door that opens onto another storey's room is followed.
 //!
 //! **Cells are decided by their centre being inside a room's outline.** The outline is
@@ -31,12 +31,30 @@
 //! the search stops at the limit, so a distance past it was never measured.
 //!
 //! **`ignore_cuts`** treats every open zone's closed walls as open. A cut is a
-//! statement about where a person routes, and a hose is not bound by it. The
+//! statement about where a person routes, and a coverage question may not be bound by it. The
 //! building's own walls, and the doors, are unchanged.
 //!
-//! **Not modelled, and stated:** furniture, the bend a hose takes at a corner (the
-//! geometric shortest path hugs corners, so this is a lower bound on the length needed),
-//! and the reach of the jet beyond the hose, which is the caller's to add to the limit.
+//! **Not modelled, and stated:** furniture, and any allowance beyond the walk itself,
+//! which is the caller's to add to the limit. The geometric shortest path hugs corners,
+//! so a distance is the least walk that can reach the cell.
+//!
+//! **Prior art.** Nothing here is copied from a paper or a package; each piece is a
+//! standard technique, named so a reader can find the source:
+//! - The door-to-door distance model (distances held per room, the search run over
+//!   doors) is the indoor-space model compared in Liu et al., "Indoor Spatial Queries:
+//!   Modeling, Indexing, and Processing" (arXiv 2010.03910) and used by Shao et al.,
+//!   "VIP-Tree: An Effective Index for Indoor Spatial Queries" (PVLDB vol. 10).
+//!   Cutting the search off at the limit is their indoor range query.
+//! - The walk inside a room is the visibility-graph shortest path among polygonal
+//!   obstacles (Lozano-Perez and Wesley, CACM 1979; surveyed in Mitchell, "Geometric
+//!   Shortest Paths and Network Optimization", Handbook of Computational Geometry).
+//! - Starting the search from every source at once is Dijkstra (1959) with a
+//!   multi-source frontier.
+//! - The per-cell field is the distance map that grid methods approximate with the
+//!   Fast Marching Method (Sethian, PNAS 1996); this evaluates the exact in-room walk
+//!   instead, so a cell's value does not depend on the spacing.
+//!
+//! Ideas only; no text or code from those works is reproduced.
 
 use std::collections::BTreeSet;
 
@@ -59,7 +77,7 @@ pub const NO_ROOM: i32 = -1;
 /// A cell's distance when it is in a room the walk does not reach within the limit.
 pub const BEYOND: i32 = -2;
 
-/// The largest walk asked for, in mm. A kilometre is far past any hose and keeps a
+/// The largest walk asked for, in mm. A kilometre is far past any walk asked of a floor plate and keeps a
 /// typo from asking the search to cover a campus.
 const MAX_LIMIT_MM: f64 = 1_000_000.0;
 /// The smallest and largest grid spacing, in mm. Finer than this is a cell smaller than
@@ -102,7 +120,7 @@ pub fn params(limit_mm: Option<f64>, spacing_mm: Option<f64>) -> Result<(f64, f6
 }
 
 /// One source as a caller names it: a room, the model when the id exists in several, and
-/// where in the room the reel is (both coordinates or neither; neither is the room's
+/// where in the room the start point is (both coordinates or neither; neither is the room's
 /// inside point). Shared by the HTTP handler and the MCP tool so they cannot disagree.
 pub fn source(room_id: &str, model_id: Option<&str>, x: Option<f64>, y: Option<f64>) -> Result<Endpoint, ServiceError> {
     let room_id = room_id.trim();

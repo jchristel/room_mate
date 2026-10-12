@@ -377,7 +377,7 @@ A passage joins two rooms on ONE storey by a straight line a person drew
 ## Reach: a distance field, not a route
 
 `POST /projects/{id}/reach` / `get_reach` lays a grid over the plan and gives each
-cell the walk from the nearest of several start points (a hose reel's coverage).
+cell the walk from the nearest of several start points (a hose reel's coverage is one use, an exit's travel distance another).
 Server side only so far; the viewer layer is not built.
 
 - **It is the router's own graph and walk, never a second one.**
@@ -389,12 +389,12 @@ Server side only so far; the viewer layer is not built.
   not a number: the search stops at the limit, so a longer distance was never
   measured. A room no door, zone or passage reaches is `reached: false`, a finding
   about what is connected (RHH's GROUND has 1,378 rooms in no multi-room component,
-  so a reel there covers little until zones and passages are authored).
+  so a source there covers little until zones and passages are authored).
 - **`ignore_cuts` is a scope switch on the graph, not a filter on the answer.** It
   empties each open zone's `disconnects` and `hub` before the zone edges are made
-  (`ConnectivityScope::ignore_cuts`). A cut says where a person routes; a hose is not
+  (`ConnectivityScope::ignore_cuts`). A cut says where a person routes; a coverage question is not
   bound by it. The routes read never sets it.
-- **One storey at a time.** Vertical edges are skipped: a hose does not ride a lift.
+- **One storey at a time.** Vertical edges are skipped: a walk on one plate does not continue by lift.
 - **A room too small for a cell is judged on its inside point**, so a cupboard
   still gets a verdict. The grid's origin is a whole multiple of the spacing, so
   two reads at one spacing share cell edges.

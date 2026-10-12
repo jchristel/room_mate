@@ -301,13 +301,13 @@ struct StackParams {
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct ReachSourceParams {
-    /// The room the reel is in. A room id is unique only within its model: if two models
+    /// The room the start point is in. A room id is unique only within its model: if two models
     /// hold it the call is refused and names them, and `model_id` resolves it.
     room_id: String,
     /// The model of the room, only needed when `room_id` exists in several.
     #[serde(default)]
     model_id: Option<String>,
-    /// Where in the room the reel is, in the plan's coordinates (feet, y up, the frame
+    /// Where in the room the start point is, in the plan's coordinates (feet, y up, the frame
     /// `get_connectivity`'s route points are in): both `x` and `y`, or neither for a point
     /// inside the room. A point outside the room is moved onto it.
     #[serde(default)]
@@ -322,14 +322,14 @@ struct ReachParams {
     project_id: String,
     /// The start points: every cell takes the walk to its NEAREST source.
     sources: Vec<ReachSourceParams>,
-    /// The length of walk to measure, in mm: a hose's length (30 m is 30000). Required.
+    /// The length of walk to measure, in mm (30 m is 30000). Required.
     limit_mm: f64,
     /// Grid spacing in mm; 1000 when omitted. Finer is slower and larger: a request that
     /// would hold more than 600000 cells is refused with the count.
     #[serde(default)]
     spacing_mm: Option<f64>,
     /// Treat every open zone's closed walls (its `disconnects` and its `hub`) as open. A
-    /// cut says where a person routes; a hose is not bound by it.
+    /// cut says where a person routes; a coverage question is not bound by it.
     #[serde(default)]
     ignore_cuts: bool,
     /// Opaque building key from `list_buildings`. Omit for no building filter.
@@ -1120,11 +1120,11 @@ impl RoommateMcp {
     /// How far a walk reaches from some start points -- see `service::reach`. The same
     /// read as `POST /projects/{id}/reach`.
     #[tool(
-        description = "How far a walk of a given length reaches from one or more start points, laid out as a grid over the floor plan: a heat map of walking distance, for questions such as whether a 30 m hose from these reels covers the whole floor plate. \
-                       The distance is the door-to-door walk `get_connectivity` computes -- around walls and columns inside rooms, through doors, open-zone walls and passages -- measured from the NEAREST source. A hose does not ride a lift, so vertical links are not crossed. \
-                       Pass `sources` (a room, and optionally the point in it where the reel is) and `limit_mm` (30 m is 30000); `spacing_mm` sets the grid (default 1000), and `ignore_cuts` treats the closed walls inside open zones as open. \
+        description = "How far a walk of a given length reaches from one or more start points, laid out as a grid over the floor plan: a heat map of walking distance, for questions such as whether everything on a floor plate lies within 30 m of these points (a hose reel, an exit, an extinguisher). \
+                       The distance is the door-to-door walk `get_connectivity` computes -- around walls and columns inside rooms, through doors, open-zone walls and passages -- measured from the NEAREST source. One storey at a time: vertical links are not crossed. \
+                       Pass `sources` (a room, and optionally the point in it) and `limit_mm` (30 m is 30000); `spacing_mm` sets the grid (default 1000), and `ignore_cuts` treats the closed walls inside open zones as open. \
                        THE ANSWER: `levels` holds one grid per storey reached, row by row from the lowest y; cell (col, row) has its centre at origin + ((col+0.5), (row+0.5)) * spacing_ft (feet, y up) and its value at distance_mm[row * cols + col]: -1 means no room there, -2 means a room but beyond the limit (the search stops at the limit, so a distance past it is not measured), otherwise the walk in whole mm. `rooms` gives each room's coverage -- `cells`, `covered`, `fraction`, `reached` (false means no door, zone or passage lets the walk in at all, a finding about what is connected and not an error), `nearest_mm` and `farthest_mm` -- and a room too small to hold a cell is judged on one point so a cupboard is not left out. `summary` counts rooms fully, partly and not covered, with area in square metres. \
-                       LIMITS: a walk is the geometric shortest path, which hugs corners, so it is a lower bound on the hose needed; furniture is not modelled; the reach of the jet beyond the hose is yours to add to `limit_mm`. A grid over 600000 cells is refused."
+                       LIMITS: a walk is the geometric shortest path, which hugs corners, so it is the least walk that reaches a cell; furniture is not modelled; any allowance beyond the walk is yours to add to `limit_mm`. A grid over 600000 cells is refused."
     )]
     fn get_reach(&self, Parameters(p): Parameters<ReachParams>) -> Result<CallToolResult, McpError> {
         let sources = p

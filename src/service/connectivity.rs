@@ -140,9 +140,9 @@ pub struct ConnectivityScope<'a> {
     /// `[routing] room_height_property`.
     pub height_property: Option<&'a str>,
     /// Treat every open zone's closed walls as open: ignore its `disconnects` and its
-    /// `hub`. For a question about the building ("how far does a hose reach?") and not
+    /// `hub`. For a question about the building ("how far does a walk of L reach?") and not
     /// about how somebody drew their routes, where a cut is a statement about what a
-    /// person walks through and a hose is not bound by it.
+    /// person walks through and a coverage question is not bound by it.
     pub ignore_cuts: bool,
 }
 

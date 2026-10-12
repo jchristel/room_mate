@@ -563,10 +563,10 @@ pub(super) struct Source {
 /// edge becomes two ports joined by its crossing and every pair of a room's ports by
 /// the exact walk inside it (`crossing_ports`, `Shapes::walk`), so a distance here and
 /// a route's length agree. The search is plain Dijkstra, not A*: there is no single goal
-/// to aim at. It stops expanding at `limit_ft`, so a room the hose cannot reach costs
+/// to aim at. It stops expanding at `limit_ft`, so a room the limit cannot reach costs
 /// nothing but its ports.
 ///
-/// **Level changes are not crossed.** A hose does not ride a lift, and a field is about
+/// **Level changes are not crossed.** A walk measured on one plate does not continue by lift, and a field is about
 /// one floor plate; a vertical link is skipped, which is a statement about the question
 /// and not a limit of the data.
 pub(super) struct Field<'a> {
