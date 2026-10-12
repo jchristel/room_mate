@@ -34,6 +34,16 @@
 //! statement about where a person routes, and a coverage question may not be bound by it. The
 //! building's own walls, and the doors, are unchanged.
 //!
+//! **Two methods, chosen per read.** `exact` (the default) evaluates each cell by the
+//! exact in-room walk from the room's ports. `grid` runs Dijkstra over the cells
+//! themselves, eight neighbours a step, inside each room and seeded from the same
+//! port distances: the lattice approximation grid methods use, kept as a choice
+//! because it is the method a reader may know and compare against. It is
+//! never shorter than `exact` inside a room (a lattice path cannot beat the straight
+//! line) and runs up to about 8% longer between cells, so it can leave a cell at the
+//! limit's edge uncovered that `exact` covers, and its values change with the spacing.
+//! Only `exact` is a distance a route would also measure.
+//!
 //! **Not modelled, and stated:** furniture, and any allowance beyond the walk itself,
 //! which is the caller's to add to the limit. The geometric shortest path hugs corners,
 //! so a distance is the least walk that can reach the cell.
@@ -56,7 +66,8 @@
 //!
 //! Ideas only; no text or code from those works is reproduced.
 
-use std::collections::BTreeSet;
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, BinaryHeap, HashMap};
 
 use serde::Serialize;
 
@@ -91,9 +102,33 @@ const MAX_CELLS: usize = 600_000;
 /// The most sources one request may name.
 const MAX_SOURCES: usize = 500;
 
+/// How a cell's walk is measured. See the module header.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Method {
+    /// The exact walk from the room's ports to the cell.
+    #[default]
+    Exact,
+    /// Dijkstra over the cells of each room, seeded from the room's ports.
+    Grid,
+}
+
+impl Method {
+    /// The caller's word for it; absent is `exact`.
+    pub fn parse(s: Option<&str>) -> Result<Self, ServiceError> {
+        match s.map(str::trim).filter(|s| !s.is_empty()) {
+            None | Some("exact") => Ok(Self::Exact),
+            Some("grid") => Ok(Self::Grid),
+            Some(other) => Err(ServiceError::Invalid(format!("method must be `exact` or `grid`, not `{other}`"))),
+        }
+    }
+}
+
 /// What narrows a reach read.
 #[derive(Default)]
 pub struct ReachScope<'a> {
+    /// How each cell's walk is measured.
+    pub method: Method,
     pub building: Option<&'a str>,
     pub milestone: Option<&'a str>,
     /// Treat closed walls inside open zones as open. See the module header.
@@ -144,6 +179,7 @@ pub struct ReachResult {
     pub limit_mm: f64,
     pub spacing_mm: f64,
     pub ignore_cuts: bool,
+    pub method: Method,
     /// Where each source started: the room, and the point inside it the walk began from.
     pub sources: Vec<ReachSource>,
     /// One grid per storey the walk can reach. See `ReachLevel`.
@@ -221,6 +257,111 @@ pub struct Summary {
 }
 
 // ================================ the read ================================
+
+/// A cell waiting in the grid search, cheapest first.
+#[derive(PartialEq)]
+struct Pending {
+    cost: f64,
+    cell: usize,
+}
+impl Eq for Pending {}
+impl Ord for Pending {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.cost.total_cmp(&self.cost).then(other.cell.cmp(&self.cell))
+    }
+}
+impl PartialOrd for Pending {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// The `grid` method for one room: Dijkstra over its cells, eight neighbours a step,
+/// seeded from the room's ports (`(point, walk to it)`, as `routing::field` leaves them).
+///
+/// `cells` are the room's `(col, row, centre)`. A diagonal step needs both of the cells it
+/// squeezes between, so a walk cannot cut a wall's corner. A port lies on the outline and
+/// seeds the cells in the 3 by 3 around it; a port with none (a room thinner than a cell)
+/// seeds the nearest cell. Returns each cell's walk in feet, or `None` past the limit.
+fn grid_walks(
+    ports: &[(Point2D, f64)],
+    cells: &[(usize, usize, Point2D)],
+    origin: Point2D,
+    spacing_ft: f64,
+    limit_ft: f64,
+) -> Vec<Option<f64>> {
+    if cells.is_empty() || ports.is_empty() {
+        return vec![None; cells.len()];
+    }
+    let at: HashMap<(usize, usize), usize> = cells.iter().enumerate().map(|(k, c)| ((c.0, c.1), k)).collect();
+    let mut best = vec![f64::INFINITY; cells.len()];
+    let mut heap = BinaryHeap::new();
+    let offer = |best: &mut [f64], heap: &mut BinaryHeap<Pending>, k: usize, cost: f64| {
+        if cost <= limit_ft && cost < best[k] {
+            best[k] = cost;
+            heap.push(Pending { cost, cell: k });
+        }
+    };
+    for &(p, d0) in ports {
+        let (pc, pr) = (
+            ((p.x - origin.x) / spacing_ft).floor() as i64,
+            ((p.y - origin.y) / spacing_ft).floor() as i64,
+        );
+        let mut seeded = false;
+        for dr in -1..=1i64 {
+            for dc in -1..=1i64 {
+                let (Ok(c), Ok(r)) = (usize::try_from(pc + dc), usize::try_from(pr + dr)) else {
+                    continue;
+                };
+                if let Some(&k) = at.get(&(c, r)) {
+                    seeded = true;
+                    offer(&mut best, &mut heap, k, d0 + (cells[k].2.x - p.x).hypot(cells[k].2.y - p.y));
+                }
+            }
+        }
+        if !seeded {
+            let nearest = (0..cells.len()).min_by(|&a, &b| {
+                let da = (cells[a].2.x - p.x).hypot(cells[a].2.y - p.y);
+                let db = (cells[b].2.x - p.x).hypot(cells[b].2.y - p.y);
+                da.total_cmp(&db)
+            });
+            if let Some(k) = nearest {
+                offer(&mut best, &mut heap, k, d0 + (cells[k].2.x - p.x).hypot(cells[k].2.y - p.y));
+            }
+        }
+    }
+    while let Some(Pending { cost, cell }) = heap.pop() {
+        if cost > best[cell] {
+            continue;
+        }
+        let (col, row) = (cells[cell].0, cells[cell].1);
+        for (dc, dr) in [
+            (-1i64, -1i64),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ] {
+            let (Ok(c), Ok(r)) = (usize::try_from(col as i64 + dc), usize::try_from(row as i64 + dr)) else {
+                continue;
+            };
+            let Some(&k) = at.get(&(c, r)) else { continue };
+            if dc != 0 && dr != 0 && !(at.contains_key(&(c, row)) && at.contains_key(&(col, r))) {
+                continue;
+            }
+            let step = if dc != 0 && dr != 0 {
+                spacing_ft * std::f64::consts::SQRT_2
+            } else {
+                spacing_ft
+            };
+            offer(&mut best, &mut heap, k, cost + step);
+        }
+    }
+    best.into_iter().map(|d| d.is_finite().then_some(d)).collect()
+}
 
 /// What the samples of one room add up to.
 #[derive(Default)]
@@ -326,6 +467,7 @@ fn cover_rooms(
     grids: &mut [Grid],
     limit_ft: f64,
     spacing_ft: f64,
+    method: Method,
 ) -> Vec<RoomCoverage> {
     let to_mm = |ft: f64| (ft * MM_PER_FT).round() as i32;
     let mut out: Vec<RoomCoverage> = Vec::new();
@@ -365,20 +507,26 @@ fn cover_rooms(
         let col1 = ((((rx1 - grid.origin.x) / spacing_ft).ceil()) as usize).min(grid.cols);
         let row0 = (((ry0 - grid.origin.y) / spacing_ft).floor().max(0.0)) as usize;
         let row1 = ((((ry1 - grid.origin.y) / spacing_ft).ceil()) as usize).min(grid.rows);
+        let mut inside: Vec<(usize, usize, Point2D)> = Vec::new();
         for row in row0..row1 {
             for col in col0..col1 {
                 let centre = Point2D {
                     x: grid.origin.x + (col as f64 + 0.5) * spacing_ft,
                     y: grid.origin.y + (row as f64 + 0.5) * spacing_ft,
                 };
-                if !field.contains(i, centre) {
-                    continue;
+                if field.contains(i, centre) {
+                    inside.push((col, row, centre));
                 }
-                let found = walk_to(field, centre);
-                tally.add(found.map(to_mm));
-                let at = row * grid.cols + col;
-                grid.cells[at] = better(grid.cells[at], found.map_or(BEYOND, to_mm));
             }
+        }
+        let founds: Vec<Option<f64>> = match method {
+            Method::Exact => inside.iter().map(|&(_, _, centre)| walk_to(field, centre)).collect(),
+            Method::Grid => grid_walks(&ports, &inside, grid.origin, spacing_ft, limit_ft),
+        };
+        for (&(col, row, _), found) in inside.iter().zip(founds) {
+            tally.add(found.map(to_mm));
+            let at = row * grid.cols + col;
+            grid.cells[at] = better(grid.cells[at], found.map_or(BEYOND, to_mm));
         }
         if tally.cells == 0 {
             // Too small to hold a cell centre: one sample at its inside point, so a
@@ -483,7 +631,7 @@ pub fn assemble_reach(
     }
 
     let mut grids = grids_for(&level_ids, nodes, &room_outlines, spacing_ft, spacing_mm)?;
-    let rooms = cover_rooms(nodes, &room_outlines, &mut field, &mut grids, limit_ft, spacing_ft);
+    let rooms = cover_rooms(nodes, &room_outlines, &mut field, &mut grids, limit_ft, spacing_ft, scope.method);
     let summary = summarise(&rooms, spacing_mm);
 
     let level_info: Vec<&Level> = graph.rooms.levels.iter().collect();
@@ -526,6 +674,7 @@ pub fn assemble_reach(
         limit_mm,
         spacing_mm,
         ignore_cuts: scope.ignore_cuts,
+        method: scope.method,
         sources: sources_out,
         levels,
         rooms,
@@ -676,6 +825,38 @@ mod tests {
         // Inside the source's own room it is the straight line from the source.
         let own = ((0.5f64 - 5.0).hypot(5.5 - 5.0)) * FT_MM;
         assert!((at(&r, 0.5, 5.5) as f64 - own).abs() < 2.0);
+    }
+
+    /// The `grid` method answers the same question by a different route: the same cells are
+    /// in a room or not, nothing is nearer than the exact walk allows, and nothing is much
+    /// further than the lattice's own error (8% in the room, a cell's width at the port).
+    #[test]
+    fn test_the_grid_method_agrees_with_the_exact_one_within_the_lattice_error() {
+        let src = [source("a", Some((5.0, 5.0)))];
+        let exact = read(&standard(), &src, 30.0, &ReachScope::default());
+        let grid = read(&standard(), &src, 30.0, &ReachScope { method: Method::Grid, ..Default::default() });
+        assert_eq!(grid.method, Method::Grid);
+        let (e, g) = (&exact.levels[0].distance_mm, &grid.levels[0].distance_mm);
+        assert_eq!(e.len(), g.len());
+        let mut compared = 0;
+        for (e, g) in e.iter().zip(g) {
+            if *e == NO_ROOM || *g == NO_ROOM {
+                assert_eq!(e, g, "which cells are in a room does not depend on the method");
+            } else if *e >= 0 && *g >= 0 {
+                compared += 1;
+                let (e, g) = (*e as f64, *g as f64);
+                assert!(g >= e - 1.5 * FT_MM, "a lattice walk cannot be shorter: {g} vs {e}");
+                assert!(g <= e * 1.09 + 2.0 * FT_MM, "lattice error is bounded: {g} vs {e}");
+            }
+        }
+        assert!(compared > 100, "most cells were compared, not {compared}");
+    }
+
+    #[test]
+    fn test_the_method_is_parsed_and_an_unknown_one_refused() {
+        assert_eq!(Method::parse(None).unwrap(), Method::Exact);
+        assert_eq!(Method::parse(Some(" grid ")).unwrap(), Method::Grid);
+        assert!(Method::parse(Some("fast")).is_err());
     }
 
     /// Past the limit is `-2`, a state and not a number, and a cell in no room is `-1`.

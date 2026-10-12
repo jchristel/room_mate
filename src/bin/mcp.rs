@@ -332,6 +332,11 @@ struct ReachParams {
     /// cut says where a person routes; a coverage question is not bound by it.
     #[serde(default)]
     ignore_cuts: bool,
+    /// `exact` (default): the exact walk to each cell. `grid`: Dijkstra over the cells of each
+    /// room, the lattice approximation, up to about 8% longer between cells and dependent on
+    /// `spacing_mm`.
+    #[serde(default)]
+    method: Option<String>,
     /// Opaque building key from `list_buildings`. Omit for no building filter.
     #[serde(default)]
     building: Option<String>,
@@ -1122,7 +1127,7 @@ impl RoommateMcp {
     #[tool(
         description = "How far a walk of a given length reaches from one or more start points, laid out as a grid over the floor plan: a heat map of walking distance, for questions such as whether everything on a floor plate lies within 30 m of these points (a hose reel, an exit, an extinguisher). \
                        The distance is the door-to-door walk `get_connectivity` computes -- around walls and columns inside rooms, through doors, open-zone walls and passages -- measured from the NEAREST source. One storey at a time: vertical links are not crossed. \
-                       Pass `sources` (a room, and optionally the point in it) and `limit_mm` (30 m is 30000); `spacing_mm` sets the grid (default 1000), and `ignore_cuts` treats the closed walls inside open zones as open. \
+                       Pass `sources` (a room, and optionally the point in it) and `limit_mm` (30 m is 30000); `spacing_mm` sets the grid (default 1000), and `ignore_cuts` treats the closed walls inside open zones as open; `method` is `exact` (default) or `grid`, the lattice approximation that can run up to about 8% longer between cells. \
                        THE ANSWER: `levels` holds one grid per storey reached, row by row from the lowest y; cell (col, row) has its centre at origin + ((col+0.5), (row+0.5)) * spacing_ft (feet, y up) and its value at distance_mm[row * cols + col]: -1 means no room there, -2 means a room but beyond the limit (the search stops at the limit, so a distance past it is not measured), otherwise the walk in whole mm. `rooms` gives each room's coverage -- `cells`, `covered`, `fraction`, `reached` (false means no door, zone or passage lets the walk in at all, a finding about what is connected and not an error), `nearest_mm` and `farthest_mm` -- and a room too small to hold a cell is judged on one point so a cupboard is not left out. `summary` counts rooms fully, partly and not covered, with area in square metres. \
                        LIMITS: a walk is the geometric shortest path, which hugs corners, so it is the least walk that reaches a cell; furniture is not modelled; any allowance beyond the walk is yours to add to `limit_mm`. A grid over 600000 cells is refused."
     )]
@@ -1134,7 +1139,9 @@ impl RoommateMcp {
             .collect::<Result<Vec<_>, _>>()
             .map_err(to_mcp_error)?;
         let (limit_mm, spacing_mm) = reach::params(Some(p.limit_mm), p.spacing_mm).map_err(to_mcp_error)?;
+        let method = reach::Method::parse(p.method.as_deref()).map_err(to_mcp_error)?;
         let scope = reach::ReachScope {
+            method,
             building: p.building.as_deref(),
             milestone: p.milestone.as_deref(),
             ignore_cuts: p.ignore_cuts,

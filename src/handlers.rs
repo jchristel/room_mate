@@ -3127,6 +3127,9 @@ pub struct ReachBody {
     /// Treat the closed walls inside open zones as open.
     #[serde(default)]
     pub ignore_cuts: bool,
+    /// `exact` (default) or `grid`: how each cell's walk is measured.
+    #[serde(default)]
+    pub method: Option<String>,
     #[serde(default)]
     pub building: Option<String>,
     #[serde(default)]
@@ -3148,7 +3151,9 @@ pub async fn post_project_reach(
         .collect::<Result<Vec<_>, _>>()
         .map_err(map_service_error)?;
     let (limit_mm, spacing_mm) = reach::params(body.limit_mm, body.spacing_mm).map_err(map_service_error)?;
+    let method = reach::Method::parse(body.method.as_deref()).map_err(map_service_error)?;
     let scope = reach::ReachScope {
+        method,
         building: body.building.as_deref(),
         milestone: body.milestone.as_deref(),
         ignore_cuts: body.ignore_cuts,
