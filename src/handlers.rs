@@ -33,6 +33,7 @@ use crate::service::connectivity;
 use crate::service::items;
 use crate::service::milestones::MilestonesResponse;
 use crate::service::projects::{BuildingsResponse, ProjectSummary};
+use crate::service::reach;
 use crate::service::reference::{ReferenceSnapshotInfo, ReferenceSnapshotList};
 use crate::service::routing;
 use crate::service::snapshots::{LatestSnapshot, PendingSnapshot, ProjectSnapshotsResponse};
@@ -3081,6 +3082,7 @@ pub async fn get_project_connectivity(
         clear_height_mm: connectivity::height_param(number(query.height_mm.as_deref(), "height_mm")?)
             .map_err(map_service_error)?,
         height_property: query.height_property.as_deref().filter(|p| !p.trim().is_empty()),
+        ignore_cuts: false,
     };
 
     let result = connectivity::assemble_connectivity(
@@ -3093,6 +3095,71 @@ pub async fn get_project_connectivity(
         detail,
     )
     .map_err(map_service_error)?;
+    match result {
+        None => Ok(StatusCode::NO_CONTENT.into_response()),
+        Some(result) => Ok(Json(result).into_response()),
+    }
+}
+
+/// One start point of a reach: a room, and where in it.
+#[derive(Deserialize)]
+pub struct ReachSourceBody {
+    pub room_id: String,
+    /// Only needed when `room_id` exists in more than one model.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Where in the room, in the plan's coordinates: both or neither.
+    #[serde(default)]
+    pub x: Option<f64>,
+    #[serde(default)]
+    pub y: Option<f64>,
+}
+
+/// What to measure: a walk of `limit_mm` from these sources, on a grid. A POST body for
+/// the reason `ComparisonRequest` is one: the sources are a list.
+#[derive(Deserialize)]
+pub struct ReachBody {
+    pub sources: Vec<ReachSourceBody>,
+    pub limit_mm: Option<f64>,
+    /// Grid spacing in mm; 1000 when absent.
+    #[serde(default)]
+    pub spacing_mm: Option<f64>,
+    /// Treat the closed walls inside open zones as open.
+    #[serde(default)]
+    pub ignore_cuts: bool,
+    /// `exact` (default) or `grid`: how each cell's walk is measured.
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub building: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<String>,
+}
+
+/// How far a walk reaches from some start points, as a grid over the plan -- see
+/// `service::reach`. 204 when no rooms have ever been pushed; a room nothing reaches is
+/// a 200 that says so.
+pub async fn post_project_reach(
+    State(state): State<Shared>,
+    Path(project_id): Path<String>,
+    Json(body): Json<ReachBody>,
+) -> Result<Response, (StatusCode, String)> {
+    let sources = body
+        .sources
+        .iter()
+        .map(|s| reach::source(&s.room_id, s.model_id.as_deref(), s.x, s.y))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_service_error)?;
+    let (limit_mm, spacing_mm) = reach::params(body.limit_mm, body.spacing_mm).map_err(map_service_error)?;
+    let method = reach::Method::parse(body.method.as_deref()).map_err(map_service_error)?;
+    let scope = reach::ReachScope {
+        method,
+        building: body.building.as_deref(),
+        milestone: body.milestone.as_deref(),
+        ignore_cuts: body.ignore_cuts,
+    };
+    let result = reach::assemble_reach(&state, &project_id, &scope, &sources, limit_mm, spacing_mm)
+        .map_err(map_service_error)?;
     match result {
         None => Ok(StatusCode::NO_CONTENT.into_response()),
         Some(result) => Ok(Json(result).into_response()),

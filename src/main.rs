@@ -34,6 +34,7 @@ use roommate::handlers::{
     get_report_columns, get_rooms, get_spaces, get_windows, ingest_ceilings, ingest_ceilings_stream, ingest_doors,
     ingest_doors_stream, ingest_ffe, ingest_ffe_stream, ingest_floors, ingest_floors_stream, ingest_rooms,
     ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows, ingest_windows_stream,
+    post_project_reach,
 };
 use roommate::reports_api::{http_delete_report, http_get_report, http_list_reports, http_save_report};
 use roommate::settings_api::{
@@ -369,6 +370,10 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // Door connectivity and the shortest route between two rooms: its own
         // trigger (a pair of clicks) and its own consumer, so not part of /rooms.
         .route("/projects/{id}/connectivity", get(get_project_connectivity))
+        // How far a walk of a given length reaches from some start points, as a
+        // grid over the plan (coverage from start points). POST for its list body, like
+        // /comparison; it reads and writes nothing. See service::reach.
+        .route("/projects/{id}/reach", post(post_project_reach))
         // The rooms over and under one room, ranked: candidates for a vertical link.
         .route("/projects/{id}/stack", get(get_project_stack))
         // The authored half of connectivity: open zones. PUT replaces the whole

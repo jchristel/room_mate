@@ -1,7 +1,7 @@
 //! roommate's MCP server: exposes the read side as MCP tools over stdio, one
 //! per existing HTTP read route -- `list_projects`, `list_buildings`,
 //! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
-//! `get_connectivity`, `list_connections`, `get_stack_candidates`,
+//! `get_connectivity`, `get_reach`, `list_connections`, `get_stack_candidates`,
 //! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
@@ -9,7 +9,7 @@
 //! `list_saved_reports`, `get_saved_report` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Thirty in
+//! and the one forwarded mutation (`upload_reference`, below). Thirty-one in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -53,8 +53,8 @@ use roommate::contract::{CeilingPayload, FloorPayload};
 use roommate::default_http_addr;
 use roommate::reports_api;
 use roommate::service::{
-    adjacency, areas, comparison, connectivity, items, milestones, openings, projects, reference, reports, rooms,
-    snapshots, spaces, surfaces, validation, ServiceError,
+    adjacency, areas, comparison, connectivity, items, milestones, openings, projects, reach, reference, reports,
+    rooms, snapshots, spaces, surfaces, validation, ServiceError,
 };
 use roommate::settings_api::{self, SettingsError};
 use roommate::state::Shared;
@@ -294,6 +294,52 @@ struct StackParams {
     /// The room's model, only needed when its id exists in several models.
     #[serde(default)]
     room_model: Option<String>,
+    /// Milestone name from `list_milestones`. Omit for the latest snapshots.
+    #[serde(default)]
+    milestone: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ReachSourceParams {
+    /// The room the start point is in. A room id is unique only within its model: if two models
+    /// hold it the call is refused and names them, and `model_id` resolves it.
+    room_id: String,
+    /// The model of the room, only needed when `room_id` exists in several.
+    #[serde(default)]
+    model_id: Option<String>,
+    /// Where in the room the start point is, in the plan's coordinates (feet, y up, the frame
+    /// `get_connectivity`'s route points are in): both `x` and `y`, or neither for a point
+    /// inside the room. A point outside the room is moved onto it.
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ReachParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The start points: every cell takes the walk to its NEAREST source.
+    sources: Vec<ReachSourceParams>,
+    /// The length of walk to measure, in mm (30 m is 30000). Required.
+    limit_mm: f64,
+    /// Grid spacing in mm; 1000 when omitted. Finer is slower and larger: a request that
+    /// would hold more than 600000 cells is refused with the count.
+    #[serde(default)]
+    spacing_mm: Option<f64>,
+    /// Treat every open zone's closed walls (its `disconnects` and its `hub`) as open. A
+    /// cut says where a person routes; a coverage question is not bound by it.
+    #[serde(default)]
+    ignore_cuts: bool,
+    /// `exact` (default): the exact walk to each cell. `grid`: Dijkstra over the cells of each
+    /// room, the lattice approximation, a little longer between cells (median 0.2%, worst seen 14%) and
+    /// dependent on `spacing_mm`.
+    #[serde(default)]
+    method: Option<String>,
+    /// Opaque building key from `list_buildings`. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
     /// Milestone name from `list_milestones`. Omit for the latest snapshots.
     #[serde(default)]
     milestone: Option<String>,
@@ -1076,6 +1122,40 @@ impl RoommateMcp {
         }
     }
 
+    /// How far a walk reaches from some start points -- see `service::reach`. The same
+    /// read as `POST /projects/{id}/reach`.
+    #[tool(
+        description = "How far a walk of a given length reaches from one or more start points, laid out as a grid over the floor plan: a heat map of walking distance, for questions such as whether everything on a floor plate lies within 30 m of these points (a hose reel, an exit, an extinguisher). \
+                       The distance is the door-to-door walk `get_connectivity` computes -- around walls and columns inside rooms, through doors, open-zone walls and passages -- measured from the NEAREST source. One storey at a time: vertical links are not crossed. \
+                       Pass `sources` (a room, and optionally the point in it) and `limit_mm` (30 m is 30000); `spacing_mm` sets the grid (default 1000), and `ignore_cuts` treats the closed walls inside open zones as open; `method` is `exact` (default) or `grid`, the lattice approximation that can run longer between cells (median 0.2%, worst seen 14%). \
+                       THE ANSWER: `levels` holds one grid per storey reached, row by row from the lowest y; cell (col, row) has its centre at origin + ((col+0.5), (row+0.5)) * spacing_ft (feet, y up) and its value at distance_mm[row * cols + col]: -1 means no room there, -2 means a room but beyond the limit (the search stops at the limit, so a distance past it is not measured), otherwise the walk in whole mm. `rooms` gives each room's coverage -- `cells`, `covered`, `fraction`, `reached` (false means no door, zone or passage lets the walk in at all, a finding about what is connected and not an error), `nearest_mm` and `farthest_mm` -- and a room too small to hold a cell is judged on one point so a cupboard is not left out. `summary` counts rooms fully, partly and not covered, with area in square metres. \
+                       LIMITS: a walk is the geometric shortest path, which hugs corners, so it is the least walk that reaches a cell; furniture is not modelled; any allowance beyond the walk is yours to add to `limit_mm`. A grid over 600000 cells is refused."
+    )]
+    fn get_reach(&self, Parameters(p): Parameters<ReachParams>) -> Result<CallToolResult, McpError> {
+        let sources = p
+            .sources
+            .iter()
+            .map(|s| reach::source(&s.room_id, s.model_id.as_deref(), s.x, s.y))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_mcp_error)?;
+        let (limit_mm, spacing_mm) = reach::params(Some(p.limit_mm), p.spacing_mm).map_err(to_mcp_error)?;
+        let method = reach::Method::parse(p.method.as_deref()).map_err(to_mcp_error)?;
+        let scope = reach::ReachScope {
+            method,
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            ignore_cuts: p.ignore_cuts,
+        };
+        let result = reach::assemble_reach(&self.state, &p.project_id, &scope, &sources, limit_mm, spacing_mm)
+            .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
     /// Door connectivity and the shortest route between two rooms -- see
     /// `service::connectivity::assemble_connectivity`. The same read the HTTP
     /// `GET /projects/{id}/connectivity` uses, including the refusal to guess
@@ -1115,6 +1195,7 @@ impl RoommateMcp {
             frame_allowance_mm,
             clear_height_mm: connectivity::height_param(p.height_mm).map_err(to_mcp_error)?,
             height_property: p.height_property.as_deref().filter(|n| !n.trim().is_empty()),
+            ignore_cuts: false,
         };
         let result = connectivity::assemble_connectivity(
             &self.state,

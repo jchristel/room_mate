@@ -139,6 +139,11 @@ pub struct ConnectivityScope<'a> {
     /// runs of spaces (RHH's is `Ceiling  Height`, with two). Absent means the project's
     /// `[routing] room_height_property`.
     pub height_property: Option<&'a str>,
+    /// Treat every open zone's closed walls as open: ignore its `disconnects` and its
+    /// `hub`. For a question about the building ("how far does a walk of L reach?") and not
+    /// about how somebody drew their routes, where a cut is a statement about what a
+    /// person walks through and a coverage question is not bound by it.
+    pub ignore_cuts: bool,
 }
 
 /// A height in millimetres is never below this; a smaller number is another unit (metres,
@@ -814,7 +819,7 @@ fn shortest(nodes: &[Node], edges: &[Edge], from: usize, to: usize, metric: Metr
 }
 
 /// Resolve a caller's room to a node, refusing to guess between models.
-fn resolve(nodes: &[Node], endpoint: &Endpoint, which: &str) -> Result<usize, ServiceError> {
+pub(super) fn resolve(nodes: &[Node], endpoint: &Endpoint, which: &str) -> Result<usize, ServiceError> {
     let hits: Vec<usize> = nodes
         .iter()
         .enumerate()
@@ -1182,6 +1187,7 @@ fn zone_edges(
     room_of: &BTreeMap<RoomRef, &Room>,
     wall_max: f64,
     door_degree: &[usize],
+    ignore_cuts: bool,
 ) -> (Vec<ZoneEdgeFact>, ZoneReport) {
     let mut present: Vec<(usize, &Room, &RoomRef)> = Vec::new();
     let mut stale = Vec::new();
@@ -1193,14 +1199,14 @@ fn zone_edges(
     }
     let slice: Vec<&Room> = present.iter().map(|(_, r, _)| *r).collect();
     let in_scope = |r: &RoomRef| present.iter().any(|(_, _, m)| *m == r);
-    let hub = zone.hub.as_ref().filter(|h| in_scope(h));
-    let hub_stale = zone.hub.is_some() && hub.is_none();
-    let stale_disconnects = zone.disconnects.iter().filter(|d| !in_scope(&d.a) || !in_scope(&d.b)).count();
-    let cuts: std::collections::BTreeSet<(&RoomRef, &RoomRef)> = zone
-        .disconnects
-        .iter()
-        .map(|d| if d.a <= d.b { (&d.a, &d.b) } else { (&d.b, &d.a) })
-        .collect();
+    // Ignoring cuts is "this zone has none", so the report says the hub and the cuts are
+    // not in play, rather than reporting a hub that was not applied as stale.
+    let hub = zone.hub.as_ref().filter(|h| !ignore_cuts && in_scope(h));
+    let hub_stale = !ignore_cuts && zone.hub.is_some() && hub.is_none();
+    let disconnects: &[connections::Disconnect] = if ignore_cuts { &[] } else { &zone.disconnects };
+    let stale_disconnects = disconnects.iter().filter(|d| !in_scope(&d.a) || !in_scope(&d.b)).count();
+    let cuts: std::collections::BTreeSet<(&RoomRef, &RoomRef)> =
+        disconnects.iter().map(|d| if d.a <= d.b { (&d.a, &d.b) } else { (&d.b, &d.a) }).collect();
 
     let mut facts = Vec::new();
     let mut linked = std::collections::BTreeSet::new();
@@ -1261,6 +1267,7 @@ fn authored_edges(
     rooms: &super::rooms::RoomsResult,
     nodes: &[Node],
     door_degree: &[usize],
+    ignore_cuts: bool,
 ) -> (Vec<ZoneEdgeFact>, Vec<LinkFact>, Vec<PassageFact>, ConnectionsReport) {
     let (document, error) = match state.projects_dir() {
         None => (connections::ConnectionsDocument::empty(), None),
@@ -1293,7 +1300,7 @@ fn authored_edges(
             .map(|r| (RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() }, &r.room))
             .collect();
         for zone in &document.zones {
-            let (facts, zone_report) = zone_edges(zone, &index, &room_of, wall_max, door_degree);
+            let (facts, zone_report) = zone_edges(zone, &index, &room_of, wall_max, door_degree, ignore_cuts);
             zone_facts.extend(facts);
             report.zones.push(zone_report);
         }
@@ -1511,25 +1518,27 @@ pub fn endpoints_at(
     }
 }
 
-/// Assemble the connectivity graph for one project, scoped like `/rooms`, and
-/// the shortest route between two rooms when asked for one.
-///
-/// Reuses `assemble_rooms` and `assemble_openings` rather than reading storage,
-/// so milestone pins, building scope, level dedup, the placement frame and the
-/// door resolution policy all arrive as they do everywhere else. `building`
-/// scopes the ROOMS only: a door is kept or dropped by whether its rooms are in
-/// that set, which is what "a building's doors" means for a graph.
-///
-/// `Ok(None)` when no rooms have ever been pushed (the adapter's 204).
-pub fn assemble_connectivity(
+/// The graph a read is made from: rooms, doors, and whatever somebody authored, joined
+/// into nodes and edges. Shared by the route read and `service::reach`, so a distance
+/// field is measured over exactly the graph a route is.
+pub(super) struct GraphParts {
+    pub rooms: super::rooms::RoomsResult,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+    pub counts: Counts,
+    pub revision: String,
+    pub doors_pushed: bool,
+    pub connections: ConnectionsReport,
+    pub frame_allowance_mm: f64,
+}
+
+/// Build the graph for one project, scoped like `/rooms`. `Ok(None)` when no rooms have
+/// ever been pushed.
+pub(super) fn build_graph(
     state: &AppState,
     project: &str,
     scope: &ConnectivityScope<'_>,
-    route_between: Option<(&Endpoint, &Endpoint)>,
-    metric: Metric,
-    method: Method,
-    detail: Detail,
-) -> Result<Option<ConnectivityResult>, ServiceError> {
+) -> Result<Option<GraphParts>, ServiceError> {
     let room_scope = RoomScope {
         project: Some(project),
         building: scope.building,
@@ -1589,11 +1598,56 @@ pub fn assemble_connectivity(
     // is an island, and the report says so.
     let door_degree: Vec<usize> = nodes.iter().map(|n| n.degree).collect();
     let (zone_facts, link_facts, passage_facts, mut connections_report) =
-        authored_edges(state, project, &rooms, &nodes, &door_degree);
+        authored_edges(state, project, &rooms, &nodes, &door_degree, scope.ignore_cuts);
     let tally = add_zone_edges(&mut nodes, &mut edges, zone_facts);
     let redundant_links = add_link_edges(&mut nodes, &mut edges, link_facts);
     add_passage_edges(&mut nodes, &mut edges, passage_facts);
     record_what_applied(&mut connections_report, &tally, &redundant_links);
+
+    Ok(Some(GraphParts {
+        rooms,
+        nodes,
+        edges,
+        counts,
+        revision,
+        doors_pushed,
+        connections: connections_report,
+        frame_allowance_mm,
+    }))
+}
+
+/// Assemble the connectivity graph for one project, scoped like `/rooms`, and
+/// the shortest route between two rooms when asked for one.
+///
+/// Reuses `assemble_rooms` and `assemble_openings` rather than reading storage,
+/// so milestone pins, building scope, level dedup, the placement frame and the
+/// door resolution policy all arrive as they do everywhere else. `building`
+/// scopes the ROOMS only: a door is kept or dropped by whether its rooms are in
+/// that set, which is what "a building's doors" means for a graph.
+///
+/// `Ok(None)` when no rooms have ever been pushed (the adapter's 204).
+pub fn assemble_connectivity(
+    state: &AppState,
+    project: &str,
+    scope: &ConnectivityScope<'_>,
+    route_between: Option<(&Endpoint, &Endpoint)>,
+    metric: Metric,
+    method: Method,
+    detail: Detail,
+) -> Result<Option<ConnectivityResult>, ServiceError> {
+    let Some(GraphParts {
+        rooms,
+        mut nodes,
+        edges,
+        counts,
+        revision,
+        doors_pushed,
+        connections: connections_report,
+        frame_allowance_mm,
+    }) = build_graph(state, project, scope)?
+    else {
+        return Ok(None);
+    };
     let components = components(&mut nodes, &edges);
     let isolated = isolated_rooms(&nodes, &components);
 
@@ -2028,7 +2082,7 @@ fn tallest_between(nodes: &[Node], edges: &[Edge], from: usize, to: usize) -> Op
 }
 
 /// Each node's room outline, for the methods that walk inside rooms.
-fn outlines<'a>(rooms: &'a super::rooms::RoomsResult, nodes: &[Node]) -> Vec<Option<&'a Room>> {
+pub(super) fn outlines<'a>(rooms: &'a super::rooms::RoomsResult, nodes: &[Node]) -> Vec<Option<&'a Room>> {
     let by_ref: BTreeMap<RoomRef, &Room> = rooms
         .rooms
         .iter()
