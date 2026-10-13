@@ -24,6 +24,8 @@ import { OpenZoneOverlay } from "./OpenZoneOverlay.js";
 import { SavedRoutesOverlay } from "./SavedRoutesOverlay.js";
 import { OpenZonePanel } from "./OpenZonePanel.js";
 import { RoutePanel } from "./RoutePanel.js";
+import { ReachPanel } from "./ReachPanel.js";
+import { layerFor } from "../reach.js";
 import { LayerMenu } from "./LayerMenu.js";
 import { SelectionFilter } from "./SelectionFilter.js";
 import { ExportMenu } from "./ExportMenu.js";
@@ -32,7 +34,7 @@ import { tierNames } from "../areas.js";
 import { elementsOnStorey, zoneAwaitsLayers, type ElementOf } from "./layers.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
-import { closePickList, setZoneAreas, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneRouteMode, type ZoneRow } from "./store.js";
+import { closePickList, setZoneAreas, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneReachMode, setZoneRouteMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
@@ -107,6 +109,15 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   // back to the store when it moves, so the picker and (later) the storey scope
   // of every element read agree with what was drawn.
   const levelId = resolveLevel(levels, zone.levelId);
+  // The heat map of THIS zone's storey, only while the tool is on. Memoised so a
+  // quiet page does not repaint: its identity changes with the answer, the
+  // storey and the opacity slider, and with nothing else.
+  const reachResult = zone.reach?.result;
+  const reachOpacity = zone.reach?.opacity ?? 55;
+  const reachLayer = useMemo(
+    () => (reachResult ? layerFor(reachResult, levelId, reachOpacity) : null),
+    [reachResult, levelId, reachOpacity],
+  );
   useEffect(() => {
     if (levelId !== zone.levelId) setZoneLevel(zone.id, levelId);
   }, [levelId, zone.id, zone.levelId]);
@@ -197,6 +208,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           showCeilings: layers.ceilings,
           floors: on("floors"),
           showFloors: layers.floors,
+          reach: reachLayer ?? undefined,
         });
       // Below the threshold the build runs INLINE: deferring every level by a
       // frame would make the common case worse to save a flash nobody sees.
@@ -223,7 +235,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms, layers, showRooms, showLabels, appearance, spacesModel, layersRevision, plan, sources, errorRooms, showErrors]);
+  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, layersRevision, plan, sources, errorRooms, showErrors]);
 
   // Search is applied to what is ALREADY drawn -- never by re-rendering. A
   // search can match thousands of rooms, and a keystroke must not re-upload a
@@ -325,6 +337,13 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           Route
         </button>
         <button
+          className={`route-toggle${zone.reach ? " on" : ""}`}
+          title="Colour the plan by how far a walk reaches from chosen rooms (a hose reel, an exit)"
+          onClick={() => setZoneReachMode(zone.id, zone.reach === null)}
+        >
+          Reach
+        </button>
+        <button
           className={`route-toggle${zone.edit ? " on" : ""}`}
           title="Define open zones (rooms the model does not join with doors) and vertical links (floor-to-floor hops for lifts and stairs)"
           onClick={() => setZoneEditMode(zone.id, zone.edit === null)}
@@ -359,6 +378,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
         </span>
       </div>
       <RoutePanel zone={zone} />
+      <ReachPanel zone={zone} />
       <OpenZonePanel zone={zone} />
       <div className="zone-canvas">
         <canvas className="plan-gl" ref={canvasRef} />

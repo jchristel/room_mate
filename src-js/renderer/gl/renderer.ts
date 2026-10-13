@@ -33,6 +33,7 @@ import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js
 import { buildDoorGlyph } from "./doorGlyph.js";
 import { buildWindowGlyph } from "./windowGlyph.js";
 import { buildItemGlyph } from "./itemGlyph.js";
+import { reachCells } from "../reach.js";
 import { DoorIndex, RoomIndex, SurfaceIndex, pickStack, type PickableDoor } from "./spatial.js";
 import { fitViewToAspect, labelTransform } from "./viewport.js";
 
@@ -130,6 +131,7 @@ export class GlPlanRenderer implements PlanRenderer {
   #doorMesh: FillMesh | null = null;
   #windowMesh: FillMesh | null = null;
   #ffeMesh: FillMesh | null = null;
+  #reachMesh: FillMesh | null = null;
   #holeLines: LineMesh | null = null;
   #outlines: LineMesh | null = null;
   #spaceLines: LineMesh | null = null;
@@ -397,6 +399,7 @@ export class GlPlanRenderer implements PlanRenderer {
         doors: !!this.#doorMesh,
         windows: !!this.#windowMesh,
         ffe: !!this.#ffeMesh,
+        reach: !!this.#reachMesh,
       },
       // PAINT ORDER, bottom-first — the answer to "what is covering what",
       // which is otherwise invisible from outside and cost a real bug once:
@@ -593,6 +596,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#doorMesh?.destroy();
     this.#windowMesh?.destroy();
     this.#ffeMesh?.destroy();
+    this.#reachMesh?.destroy();
     this.#holeLines?.destroy();
     this.#outlines?.destroy();
     this.#spaceLines?.destroy();
@@ -605,6 +609,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#doorMesh = null;
     this.#windowMesh = null;
     this.#ffeMesh = null;
+    this.#reachMesh = null;
     this.#holeLines = null;
     this.#outlines = null;
     this.#spaceLines = null;
@@ -817,6 +822,15 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#ffeIndex = new DoorIndex(pickableFfe);
     this.#ffeMesh = ffeBatch.isEmpty ? null : ffeBatch.build();
 
+    // The reach heat map: one translucent quad per covered cell, in one mesh.
+    // Built from the layer the caller already scoped to this storey, and not
+    // gated on the rooms: the walk is the answer, and a reader may hide the
+    // rooms to see it plainly.
+    const reachBatch = new FillBatch();
+    const reach = this.#lastPaint.reach;
+    if (reach) for (const cell of reachCells(reach)) reachBatch.pushTriangles(cell.triangles, cell.colour);
+    this.#reachMesh = reachBatch.isEmpty ? null : reachBatch.build();
+
     this.#grid = gridBatch.build();
     this.#fills = fillBatch.isEmpty ? null : fillBatch.build();
     // The dash is the whole reason holes get their own batch: `stroke-dasharray:
@@ -948,6 +962,11 @@ export class GlPlanRenderer implements PlanRenderer {
     // world, and drawing it behind would read as the door being on top of the
     // furniture. Below the labels, on the rule every element layer follows.
     if (this.#ffeMesh) { this.#ffeMesh.mesh.label = "ffe"; this.#root.addChild(this.#ffeMesh.mesh); }
+    // The heat map is above EVERY element layer and directly below the labels:
+    // a stain over the whole plan, with each room's name still readable on top
+    // of it. Its translucency (see `ReachLayer.alpha`) is what lets the layout
+    // beneath show; order alone would hide it.
+    if (this.#reachMesh) { this.#reachMesh.mesh.label = "reach"; this.#root.addChild(this.#reachMesh.mesh); }
 
     // Labels follow the rooms as well as their own toggle. A label is the room's
     // name written on the room; with the room gone it is a caption floating over
@@ -1175,7 +1194,7 @@ export class GlPlanRenderer implements PlanRenderer {
    * element layer.
    */
   #worldMeshes(): FillMesh[] {
-    return [this.#fills, this.#hoverMesh, this.#doorMesh, this.#windowMesh, this.#ffeMesh].filter(
+    return [this.#fills, this.#hoverMesh, this.#doorMesh, this.#windowMesh, this.#ffeMesh, this.#reachMesh].filter(
       (m): m is FillMesh => m !== null,
     );
   }

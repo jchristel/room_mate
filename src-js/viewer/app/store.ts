@@ -22,6 +22,7 @@ import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { Scope } from "../scope.js";
 import { newEdit, pickForEdit, type ConnectionsDoc, type PassageReport, type ZoneEdit } from "../connections.js";
+import { newReach, pickSource, type ReachState } from "../reach.js";
 import { newRoute, pickEndpoint, type PlanPoint, type RouteResult, type RouteState } from "../route.js";
 
 /** What the page is doing, in the words the old page's zone meta used. Not an
@@ -44,6 +45,10 @@ export interface ZoneRow {
   /** This zone's open-zone editor, or `null` when it is off. Exclusive with
    *  `route`: both claim a room pick. */
   edit: ZoneEdit | null;
+  /** This zone's reach tool, or `null` when it is off. Exclusive with `route` and
+   *  `edit`: all three claim a room pick. While it is on and has an answer, the
+   *  zone draws the heat map. */
+  reach: ReachState | null;
   /** This zone's footprint overlay: on/off and which tier. Per zone because
    *  both are presentation — two zones showing one level at two tiers is a
    *  comparison the overlay exists to make. */
@@ -375,6 +380,7 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
     // A copy of a zone does not copy an unfinished question.
     route: null,
     edit: null,
+    reach: null,
   };
 }
 
@@ -505,6 +511,7 @@ export function select(
       setState({ toolFocus: target });
       if (zone.route) patchZoneRoute(target, pickEndpoint(zone.route, id, at));
       else if (zone.edit) patchZoneEdit(target, pickForEdit(zone.edit, id, at));
+      else if (zone.reach) patchZoneReach(target, pickSource(zone.reach, id, at));
       return;
     }
   }
@@ -513,7 +520,7 @@ export function select(
 
 /** Whether a zone has a room-picking tool on. */
 function hasTool(z: ZoneRow): boolean {
-  return z.route !== null || z.edit !== null;
+  return z.route !== null || z.edit !== null || z.reach !== null;
 }
 
 /** Which zone's tool a room pick is for, or `null` for none.
@@ -536,7 +543,7 @@ function toolTarget(zoneId: string | null): string | null {
 export function setZoneRouteMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
-      z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null, edit: on ? null : z.edit } : z,
+      z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null, edit: on ? null : z.edit, reach: on ? null : z.reach } : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
@@ -546,10 +553,25 @@ export function setZoneRouteMode(id: string, on: boolean): void {
 export function setZoneEditMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
-      z.id === id ? { ...z, edit: on ? (z.edit ?? newEdit()) : null, route: on ? null : z.route } : z,
+      z.id === id ? { ...z, edit: on ? (z.edit ?? newEdit()) : null, route: on ? null : z.route, reach: on ? null : z.reach } : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
+}
+
+/** Turn one zone's reach tool on (fresh) or off, and the other two tools off. */
+export function setZoneReachMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id ? { ...z, reach: on ? (z.reach ?? newReach()) : null, route: on ? null : z.route, edit: on ? null : z.edit } : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Replace one zone's reach state; a no-op when its tool is off. */
+export function patchZoneReach(id: string, next: ReachState): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.reach ? { ...z, reach: next } : z)) });
 }
 
 /** Replace one zone's working open zone; a no-op when its editor is off. */

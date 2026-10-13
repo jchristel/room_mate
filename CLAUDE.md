@@ -378,7 +378,7 @@ A passage joins two rooms on ONE storey by a straight line a person drew
 
 `POST /projects/{id}/reach` / `get_reach` lays a grid over the plan and gives each
 cell the walk from the nearest of several start points (a hose reel's coverage is one use, an exit's travel distance another).
-Server side only so far; the viewer layer is not built.
+The viewer draws it as a heat map (below).
 
 - **It is the router's own graph and walk, never a second one.**
   `connectivity::build_graph` is shared with the route read and `routing::field` is
@@ -397,6 +397,14 @@ Server side only so far; the viewer layer is not built.
 - **Two methods, `exact` (default) and `grid`.** `grid` is Dijkstra over each room's
   cells seeded from the same port distances: the lattice approximation (RHH GROUND: median +0.2%, worst +14%
   long; changes with spacing), offered to compare against. Only `exact` agrees with a route.
+- **The heat map is a GL mesh between the element layers and the labels.** One
+  translucent quad per COVERED cell (`renderer/reach.ts`; `-1` and `-2` are left
+  bare so the plan shows), painted above doors/windows/FF&E and directly below the
+  labels, with the reader's opacity in the vertex alpha. It is not pickable. The
+  tool is per zone (`ZoneRow.reach`), exclusive with route and open-zone editing
+  because all three claim a room pick; it is measured on a button, never on a
+  keystroke, and any change to what is asked clears the answer so a stale map never
+  shows.
 - **One storey at a time.** Vertical edges are skipped: a walk on one plate does not continue by lift.
 - **A room too small for a cell is judged on its inside point**, so a cupboard
   still gets a verdict. The grid's origin is a whole multiple of the spacing, so
