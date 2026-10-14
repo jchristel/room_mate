@@ -669,6 +669,8 @@
     border: 1px solid var(--ink); padding: 0.2rem 0.4rem; cursor: pointer;
   }
   .zone-toolbar button.route-toggle.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .routeBar input[type=range] { width: 5rem; vertical-align: middle; }
+  .routeBar button.chip:disabled { opacity: 0.45; cursor: default; }
   .routeBar .routeSlot.empty { opacity: 0.55; }
   .routeBar .routeSlot.empty.next { opacity: 1; color: var(--accent); font-weight: 600; }
   .routeBar .routeLevel { opacity: 0.65; }

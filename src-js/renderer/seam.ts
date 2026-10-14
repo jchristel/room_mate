@@ -175,6 +175,37 @@ export interface PaintRequest {
   floors?: readonly Floor[] | undefined;
   /** Whether to draw them. Absent means yes when `floors` is non-empty. */
   showFloors?: boolean | undefined;
+
+  /**
+   * A reach heat map for this level: the walk from some start points, as a
+   * translucent colour per grid cell.
+   *
+   * Painted above every element layer and directly BELOW the labels, so a room's
+   * name stays legible over its own coverage, and translucent so the plan under
+   * it still reads. A layer of cells rather than rooms, so it is neither
+   * pickable nor in the pick index: it answers a question about the plan and is
+   * not a thing on it.
+   */
+  reach?: ReachLayer | undefined;
+}
+
+/**
+ * One storey's reach grid, as the server answers it (`service::reach::ReachLevel`).
+ *
+ * `distance_mm[row * cols + col]` is `-1` for no room, `-2` for a room beyond the
+ * limit or unreached, else the walk in whole mm. Cell `(col, row)` starts at
+ * `origin + (col, row) * spacing_ft`, in the plan's frame (feet, y up).
+ */
+export interface ReachLayer {
+  origin: { x: number; y: number };
+  spacing_ft: number;
+  cols: number;
+  rows: number;
+  distance_mm: readonly number[];
+  /** The walk the colours are scaled against, in mm: the far end of the ramp. */
+  limit_mm: number;
+  /** Opacity of the cells, 0 to 1. Absent is `REACH_ALPHA`. */
+  alpha?: number | undefined;
 }
 
 /**
