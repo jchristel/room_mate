@@ -405,6 +405,12 @@ The viewer draws it as a heat map (below).
   because all three claim a room pick; it is measured on a button, never on a
   keystroke, and any change to what is asked clears the answer so a stale map never
   shows.
+- **The SVG export draws it too, from the answer already in hand.** `renderer/svg/reach.ts`
+  paints it between the element layers and the labels, as the screen does, and the
+  export reads `zone.reach.result` rather than asking again: the answer holds every
+  storey the walk touched, so each exported level takes its own grid and a level the
+  walk missed draws none. The walk is cut into 24 bands, one path each (a file with
+  one element per cell would be tens of thousands), and a legend states the scale.
 - **One storey at a time.** Vertical edges are skipped: a walk on one plate does not continue by lift.
 - **A room too small for a cell is judged on its inside point**, so a cupboard
   still gets a verdict. The grid's origin is a whole multiple of the spacing, so

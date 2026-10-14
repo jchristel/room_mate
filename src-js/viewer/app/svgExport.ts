@@ -28,6 +28,7 @@ import type { Scope } from "../scope.js";
 import { LAYERS, storeyElements, type ElementPayload, type StoreyMatch } from "./layers.js";
 import { fittedBounds } from "./planRenderer.js";
 import { appendRoutes } from "./routeExport.js";
+import { layerFor, type ReachResult } from "../reach.js";
 import { routeDrawingsOnLevel, type DrawableRoute } from "../route.js";
 import type { RoomsPayload } from "./api.js";
 import type { PlanAppearance } from "../../renderer/seam.js";
@@ -73,6 +74,10 @@ export interface ExportOptions {
   /** The saved routes that are switched on and have a path to draw. Drawn on every
    *  level they pass through, over everything else. Open zones are not drawn. */
   routes?: readonly DrawableRoute[];
+  /** The zone's reach answer, if it has one, and its opacity. Read from the answer
+   *  already in hand, never re-asked: it holds every storey the walk touched, so a
+   *  level it did not reach simply draws none. */
+  reach?: { result: ReachResult; opacityPct: number } | undefined;
 }
 
 /** One level's element layers, and how each one's storey match resolved. */
@@ -91,7 +96,13 @@ export interface LevelOverlays {
  * doors layer that is empty because the read failed and one that is empty
  * because the storey has none must not look alike.
  */
-function describe(level: string, opts: ExportOptions, overlays: LevelOverlays, routeNames: readonly string[]): string {
+function describe(
+  level: string,
+  opts: ExportOptions,
+  overlays: LevelOverlays,
+  routeNames: readonly string[],
+  reachLimitMm: number | null,
+): string {
   const drawn: string[] = [];
   if (opts.showRooms) drawn.push("Rooms");
   if (opts.showRooms && opts.showLabels) drawn.push("Labels");
@@ -103,7 +114,9 @@ function describe(level: string, opts: ExportOptions, overlays: LevelOverlays, r
     drawn.push(name);
   }
   const routes = routeNames.length ? ` Routes: ${routeNames.join(", ")}.` : "";
-  return `Level ${level}. Layers: ${drawn.join(", ") || "none"}.${routes}`;
+  // The scale is stated because the colours alone say nothing on paper.
+  const reach = reachLimitMm === null ? "" : ` Reach: walking distance to ${reachLimitMm / 1000} m.`;
+  return `Level ${level}. Layers: ${drawn.join(", ") || "none"}.${routes}${reach}`;
 }
 
 /** One level as a standalone SVG document, or null when it has no rooms to
@@ -129,7 +142,8 @@ export function buildLevelSvg(
 
   const routes = routeDrawingsOnLevel(opts.routes ?? [], level.id);
   const desc = document.createElementNS(SVG_NS, "desc");
-  desc.textContent = describe(level.name, opts, overlays, routes.map((r) => r.name));
+  const reach = opts.reach ? layerFor(opts.reach.result, level.id, opts.reach.opacityPct) : null;
+  desc.textContent = describe(level.name, opts, overlays, routes.map((r) => r.name), reach?.limit_mm ?? null);
   svg.appendChild(desc);
 
   const style = document.createElementNS(SVG_NS, "style");
@@ -156,6 +170,7 @@ export function buildLevelSvg(
     showLabels: opts.showLabels,
     showRooms: opts.showRooms,
     ...overlays.layers,
+    ...(reach ? { reach } : {}),
   });
   // Last, so a route is over the rooms and every layer, as it is on screen.
   appendRoutes(svg, routes, fitted, { paper: pal.paper, ink: pal.ink }, EXPORT_WIDTH_PX);
