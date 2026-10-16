@@ -20,6 +20,8 @@ import { holeClassName, resolveRoomAppearance, roomClassName } from "../appearan
 import { centroid, loopBox, pointsAttr } from "../geometry.js";
 import type { AppearanceContext, Rect, Room, RoomAppearance } from "../types.js";
 import { paintGlyphs, paintSurfaces, type OverlayLayers } from "./overlays.js";
+import { paintReach } from "./reach.js";
+import type { ReachLayer } from "../seam.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -30,6 +32,9 @@ export interface PaintOptions extends AppearanceContext, OverlayLayers {
    *  they are what `fitted` came from, so an overlay-only file keeps the same
    *  frame as the full one. */
   showRooms?: boolean | undefined;
+  /** The reach heat map for this level, painted over the element layers and
+   *  under the labels, as on screen. */
+  reach?: ReachLayer | undefined;
 }
 
 function line(doc: Document, x1: number, y1: number, x2: number, y2: number): SVGElement {
@@ -157,6 +162,7 @@ export function paintLevel(
   // export is byte-identical to what it was before they existed.
   paintSurfaces(svg, opts);
   paintGlyphs(svg, opts);
+  paintReach(svg, opts.reach, fitted);
 
   // Labels off skips the pass entirely. Omitting elements beats styling them
   // away: an exported file then simply has no `<text>` nodes. Labels follow the
