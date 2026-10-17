@@ -1020,3 +1020,6 @@
   /* Rooms no door reaches and no zone covers: the worklist. Dotted, no fill. */
   .open-zone-unreachable { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 1 4;
                            stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+
+  /* One model's checkbox under the FF&E entry in the Layers menu. */
+  label.sub { display: block; margin-left: 1.3rem; font-size: 0.66rem; white-space: nowrap; }

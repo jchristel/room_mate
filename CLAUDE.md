@@ -506,6 +506,12 @@ Both were reported as five separate viewer bugs on RHH and are one cause each.
   before and none do. Never drops a label (a circle of radius `d` always fits), and
   caches per room so a repaint does not search again. The SVG goldens moved with it;
   change the rule there and nowhere else, or the file and the screen disagree.
+- **FF&E's model choice is a set of checkboxes, as exclusions** (`ZoneRow.ffeModelsOff`,
+  under the FF&E entry of the Layers menu once there is more than one model). Spaces
+  pick one model; FF&E comes from several fit-out packages at once, so a zone draws
+  every model unless it is unticked, a model pushed later is drawn by default, and
+  unticking all draws none. Like spaces it is presentation: the read stays unscoped
+  and the filter is applied at paint and in the SVG export (which names what is left out).
 - **A layer that could not resolve exactly says so on its own toggle.** The
   "(all levels)" / "(by elevation)" suffixes are the point: a fallback nobody
   can see is the failure mode this area keeps producing.

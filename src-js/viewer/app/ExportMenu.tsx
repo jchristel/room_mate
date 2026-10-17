@@ -95,6 +95,7 @@ export function ExportMenu({
           showRooms: zone.showRooms,
           layers: zone.layers,
           spacesModel: zone.spacesModel,
+          ffeModelsOff: zone.ffeModelsOff,
           appearance,
           routes: drawable,
           routeTags: zone.showRouteTags,

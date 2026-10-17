@@ -16,6 +16,7 @@ import {
   resetState,
   select,
   setRoomContents,
+  setZoneFfeModel,
   setZoneLayer,
   setZoneEditMode,
   setZoneRouteMode,
@@ -175,5 +176,29 @@ describe("a plan click's position", () => {
     const route = getState().zones[0]!.route!;
     expect([route.start, route.startAt]).toEqual(["r1", { x: 4, y: 5 }]);
     expect([route.end, route.endAt]).toEqual(["r2", null]);
+  });
+});
+
+describe("setZoneFfeModel", () => {
+  beforeEach(() => resetState());
+
+  it("draws every model until one is unticked, and a re-tick restores it", () => {
+    const zone = getState().zones[0]!.id;
+    expect(getState().zones[0]!.ffeModelsOff).toEqual([]);
+    setZoneFfeModel(zone, "A", false);
+    setZoneFfeModel(zone, "B", false);
+    expect(getState().zones[0]!.ffeModelsOff).toEqual(["A", "B"]);
+    setZoneFfeModel(zone, "A", true);
+    expect(getState().zones[0]!.ffeModelsOff).toEqual(["B"]);
+  });
+
+  it("is per zone, and a copied zone starts from the same choice", () => {
+    const first = getState().zones[0]!.id;
+    setZoneFfeModel(first, "A", false);
+    addZone();
+    const [a, b] = getState().zones;
+    expect(b!.ffeModelsOff).toEqual(["A"]);
+    setZoneFfeModel(b!.id, "A", true);
+    expect(a!.ffeModelsOff).toEqual(["A"]);
   });
 });

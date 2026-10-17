@@ -70,6 +70,8 @@ export interface ExportOptions {
   /** The zone's services model, `""` for every model -- applied as the screen
    *  applies it, after the fetch. */
   spacesModel: string;
+  /** FF&E from these models is left out, as on screen. */
+  ffeModelsOff: readonly string[];
   appearance: PlanAppearance;
   /** The saved routes that are switched on and have a path to draw. Drawn on every
    *  level they pass through, over everything else. Open zones are not drawn. */
@@ -115,6 +117,7 @@ function describe(
     if (!match) continue;
     let name = match === "failed" ? `${layer.label} (read failed)` : layer.label + matchSuffix(match);
     if (layer.entity === "spaces" && opts.spacesModel) name += ` [${opts.spacesModel}]`;
+    if (layer.entity === "ffe" && opts.ffeModelsOff.length) name += ` [without ${opts.ffeModelsOff.join(", ")}]`;
     drawn.push(name);
   }
   const routes = routeNames.length ? ` Routes: ${routeNames.join(", ")}.` : "";
@@ -230,7 +233,11 @@ export async function fetchLevelOverlays(
       entity === "spaces" && opts.spacesModel
         ? (kept as readonly { model_id?: string }[]).filter((s) => s.model_id === opts.spacesModel)
         : kept;
-    (overlays.layers as Record<string, unknown>)[entity] = list;
+    const shown =
+      entity === "ffe" && opts.ffeModelsOff.length
+        ? (list as readonly { model_id?: string }[]).filter((i) => !opts.ffeModelsOff.includes(i.model_id ?? ""))
+        : list;
+    (overlays.layers as Record<string, unknown>)[entity] = shown;
   }
   return overlays;
 }
