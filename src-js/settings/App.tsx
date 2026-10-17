@@ -36,6 +36,7 @@ import { AreasSection } from "./sections/areas.js";
 import { ColourPlansSection } from "./sections/colourPlans.js";
 import { HierarchySection } from "./sections/hierarchy.js";
 import { HoverSection } from "./sections/hover.js";
+import { TagsSection } from "./sections/tags.js";
 import { IdentitySection } from "./sections/identity.js";
 import { MilestonesSection } from "./sections/milestones.js";
 import { PoliciesSection } from "./sections/policies.js";
@@ -411,6 +412,7 @@ function Sections({
           layer by what it is. Where both answer, the plan wins. */}
       <AppearanceSection settings={settings} edit={edit} />
       <HoverSection settings={settings} edit={edit} />
+      <TagsSection settings={settings} edit={edit} />
     </>
   );
 }

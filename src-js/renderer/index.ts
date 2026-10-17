@@ -29,6 +29,7 @@ export {
   roomBBox,
 } from "./geometry.js";
 export { addLabel, paintLevel } from "./svg/paint.js";
+export { placeElementTags } from "./elementTags.js";
 export { exportStyle } from "./svg/style.js";
 export { LEVEL_EPS_MM, onStorey, sameStorey } from "./storey.js";
 export { REACH_ALPHA, formatReachMetres, reachCells, reachColour, reachTags } from "./reach.js";
@@ -40,6 +41,7 @@ export { buildItemGlyph, MARKER_SIZE } from "./gl/itemGlyph.js";
 export { parseColour, readPalette, withAlpha } from "./gl/colour.js";
 export { EntityPoll, conditionalHeaders, pollInOrder, repaints } from "../viewer/entityPoll.js";
 
+export type { PlacedTag, TagEntity, TagRequest, TagsRequest } from "./elementTags.js";
 export type { PaintOptions } from "./svg/paint.js";
 export type { ExportPalette } from "./svg/style.js";
 export type { OverlayLayers } from "./svg/overlays.js";

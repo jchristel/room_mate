@@ -68,4 +68,10 @@ export const defaultSettings = (): Required<Omit<Settings, NoDefault>> & Pick<Se
   hierarchy_exclusions: [],
   appearance: {},
   hover: {},
+  tags: {
+    ffe: { fields: ["$type_name"] },
+    spaces: { fields: ["$name"] },
+    ceilings: { fields: ["$type_name"] },
+    floors: { fields: ["$type_name"] },
+  },
 });

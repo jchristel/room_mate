@@ -302,6 +302,12 @@ pub struct Settings {
     /// reason `comparison_key` documents.
     #[serde(default)]
     pub hover: HoverProperties,
+
+    /// What the text written ON an element says, and in which colours (see
+    /// `ElementTags`). A table, so it is declared after every scalar for the
+    /// TOML ordering reason `comparison_key` documents.
+    #[serde(default)]
+    pub tags: ElementTags,
 }
 
 fn default_room_label() -> Vec<String> {
@@ -536,6 +542,78 @@ impl HoverProperties {
             && self.spaces.is_none()
             && self.ceilings.is_none()
             && self.floors.is_none()
+    }
+}
+
+/// What the tag written on each FF&E item, space, ceiling and floor says.
+///
+/// **Rooms keep `room_label`**, which the server resolves; an element's tag is
+/// resolved by the page, from the same two property tiers the hover reads, because
+/// an element response carries its properties and the page already does that lookup.
+/// Every entity has the same two questions, so one shape serves all four.
+#[derive(Debug, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct ElementTags {
+    #[serde(default = "TagSettings::ffe")]
+    pub ffe: TagSettings,
+    #[serde(default = "TagSettings::spaces")]
+    pub spaces: TagSettings,
+    #[serde(default = "TagSettings::surface")]
+    pub ceilings: TagSettings,
+    #[serde(default = "TagSettings::surface")]
+    pub floors: TagSettings,
+}
+
+impl Default for ElementTags {
+    fn default() -> Self {
+        Self {
+            ffe: TagSettings::ffe(),
+            spaces: TagSettings::spaces(),
+            ceilings: TagSettings::surface(),
+            floors: TagSettings::surface(),
+        }
+    }
+}
+
+/// One entity's tag: the ordered fields and the two colours.
+///
+/// **Fields** are `$id`, `$name` and `$type_name` (an element's own, which a property
+/// lookup cannot reach) or a property name, read instance first, then type, a tier
+/// winning only when it holds something. An element with none of them prints no tag,
+/// and an empty list prints no tag on the entity: a tag the settings withheld is not
+/// one to invent.
+///
+/// **Colours** are CSS strings stored verbatim, like `Appearance`. Absent follows the
+/// layer's own line colour, so a tag reads as part of the layer it labels and follows
+/// the theme; `secondary` is the stacked lines under the first and falls back to
+/// `primary`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct TagSettings {
+    #[serde(default)]
+    pub fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary: Option<String>,
+}
+
+impl TagSettings {
+    fn with(fields: &[&str]) -> Self {
+        Self {
+            fields: fields.iter().map(|f| f.to_string()).collect(),
+            primary: None,
+            secondary: None,
+        }
+    }
+    fn ffe() -> Self {
+        Self::with(&["$type_name"])
+    }
+    fn spaces() -> Self {
+        Self::with(&["$name"])
+    }
+    fn surface() -> Self {
+        Self::with(&["$type_name"])
     }
 }
 

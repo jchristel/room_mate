@@ -20,6 +20,8 @@ import type { FilterState } from "../properties.js";
 import type { AreasData } from "../areas.js";
 import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
+import type { TagEntity } from "../../renderer/elementTags.js";
+import { DEFAULT_TAG_SETTINGS, type TagSettings } from "../elementTags.js";
 import type { Scope } from "../scope.js";
 import { newEdit, pickForEdit, type ConnectionsDoc, type PassageReport, type ZoneEdit } from "../connections.js";
 import { newReach, pickSource, type ReachState } from "../reach.js";
@@ -81,6 +83,10 @@ export interface ZoneRow {
    *  export reads them like every other toggle. */
   showRouteTags: boolean;
   showReachTags: boolean;
+  /** The text written on each FF&E item, space, ceiling and floor. **Default OFF**, for
+   *  the reason the other tags are: text over the plan is asked for. What it says and
+   *  its colours are the project's (`tagSettings`). */
+  tags: Readonly<Record<TagEntity, boolean>>;
   /** What this zone lets a click and a hover reach.
    *
    *  **A filter, not an order.** The stack under a pointer is whatever is
@@ -274,6 +280,8 @@ export interface ViewerState {
    *  `appearance`. Every field absent is the ordinary state and means the
    *  tooltip keeps naming the element. */
   hoverProperties: HoverProperties;
+  /** What an element's tag says and its colours, from the same settings read. */
+  tagSettings: TagSettings;
   /** The zone whose tool most recently took a pick, so a pick that did not
    *  come from a plan (a grid row, a search chip) knows which tool it is for
    *  when several zones have one on. */
@@ -327,6 +335,7 @@ const initial: ViewerState = {
   colourPlans: [],
   hiddenProperties: {},
   hoverProperties: {},
+  tagSettings: DEFAULT_TAG_SETTINGS,
   toolFocus: null,
   connections: { projectId: null, doc: null, error: null, isolated: null },
   savedRoutes: { shown: new Set(), results: {} },
@@ -389,6 +398,7 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
     showLabels: from?.showLabels ?? true,
     showRouteTags: from?.showRouteTags ?? false,
     showReachTags: from?.showReachTags ?? false,
+    tags: from ? { ...from.tags } : { ffe: false, spaces: false, ceilings: false, floors: false },
     pickable: from
       ? { ...from.pickable }
       : { room: true, door: true, window: true, item: true, space: false, ceiling: false, floor: false, area: true },
@@ -439,6 +449,7 @@ export function setZoneLayer(
     showLabels?: boolean;
     showRouteTags?: boolean;
     showReachTags?: boolean;
+    tags?: Partial<Record<TagEntity, boolean>>;
   },
 ): void {
   setState({
@@ -450,6 +461,7 @@ export function setZoneLayer(
             ...(patch.showLabels === undefined ? {} : { showLabels: patch.showLabels }),
             ...(patch.showRouteTags === undefined ? {} : { showRouteTags: patch.showRouteTags }),
             ...(patch.showReachTags === undefined ? {} : { showReachTags: patch.showReachTags }),
+            ...(patch.tags ? { tags: { ...z.tags, ...patch.tags } } : {}),
             ...(patch.layers ? { layers: { ...z.layers, ...patch.layers } } : {}),
           }
         : z,

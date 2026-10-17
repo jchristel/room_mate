@@ -3,6 +3,7 @@ import type { Appearance } from "./Appearance";
 import type { AreaPolicy } from "./AreaPolicy";
 import type { BuiltinPropertyDef } from "./BuiltinPropertyDef";
 import type { ColourPlan } from "./ColourPlan";
+import type { ElementTags } from "./ElementTags";
 import type { FfePolicy } from "./FfePolicy";
 import type { HierarchyExclusion } from "./HierarchyExclusion";
 import type { HierarchyTier } from "./HierarchyTier";
@@ -286,4 +287,10 @@ appearance: Appearance,
  * A table, so it is declared after every scalar for the TOML ordering
  * reason `comparison_key` documents.
  */
-hover: HoverProperties, };
+hover: HoverProperties, 
+/**
+ * What the text written ON an element says, and in which colours (see
+ * `ElementTags`). A table, so it is declared after every scalar for the
+ * TOML ordering reason `comparison_key` documents.
+ */
+tags: ElementTags, };

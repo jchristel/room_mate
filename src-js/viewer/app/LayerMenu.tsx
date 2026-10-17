@@ -15,12 +15,18 @@
 import { DropMenu } from "./DropMenu.js";
 import { LAYERS, layerToggleLabel } from "./layers.js";
 import { setZoneFfeModel, setZoneLayer, setZoneSpacesModel, type ZoneRow } from "./store.js";
+import type { TagEntity } from "../../renderer/elementTags.js";
+import { TAG_ENTITIES } from "../elementTags.js";
 import { useViewer } from "./useViewer.js";
+
+function isTagEntity(entity: string): entity is TagEntity {
+  return (TAG_ENTITIES as readonly string[]).includes(entity);
+}
 
 export function LayerMenu({ zone }: { zone: ZoneRow }) {
   const { spacesModels, ffeModels } = useViewer();
 
-  const on = LAYERS.filter((l) => zone.layers[l.entity]).length + (zone.showRooms ? 1 : 0) + (zone.showLabels ? 1 : 0) + (zone.showRouteTags ? 1 : 0) + (zone.showReachTags ? 1 : 0);
+  const on = LAYERS.filter((l) => zone.layers[l.entity]).length + (zone.showRooms ? 1 : 0) + (zone.showLabels ? 1 : 0) + (zone.showRouteTags ? 1 : 0) + (zone.showReachTags ? 1 : 0) + TAG_ENTITIES.filter((e) => zone.tags[e]).length;
   // A layer whose storey match was a GUESS, surfaced on the closed button:
   // the suffix inside the menu says which, this says that.
   const fellBack = LAYERS.some((l) => zone.layers[l.entity] && layerToggleLabel(l, zone.levelId).includes("("));
@@ -53,6 +59,19 @@ export function LayerMenu({ zone }: { zone: ZoneRow }) {
             />{" "}
             {layerToggleLabel(layer, zone.levelId)}
           </label>
+          {/* A layer's tag: the text written on each element, sized to it. Offered for
+              the four layers that have a settings entry for it, and only while the
+              layer is on, since text on an element nobody can see is a floating caption. */}
+          {isTagEntity(layer.entity) && zone.layers[layer.entity] ? (
+            <label className="sub" title="Write each element's tag on it, as set in the project's Element tags">
+              <input
+                type="checkbox"
+                checked={zone.tags[layer.entity]}
+                onChange={(e) => setZoneLayer(zone.id, { tags: { [layer.entity]: e.target.checked } })}
+              />{" "}
+              Tags
+            </label>
+          ) : null}
           {/* The services-model picker belongs to the Spaces entry, and only
               appears when there is a choice: it exists because RHH keeps one
               services file per service, so "all models" stacks four

@@ -512,6 +512,15 @@ Both were reported as five separate viewer bugs on RHH and are one cause each.
   every model unless it is unticked, a model pushed later is drawn by default, and
   unticking all draws none. Like spaces it is presentation: the read stays unscoped
   and the filter is applied at paint and in the SVG export (which names what is left out).
+- **Element tags are the room label's placement on the element's own outline**
+  (`renderer/elementTags.ts`, `[tags]` in settings, one entry per FF&E / spaces / ceilings /
+  floors; toggled per zone in the Layers menu, default OFF). Text is resolved by the page
+  (`viewer/elementTags.ts`: `$id`, `$name`, `$type_name`, else a property, instance then type),
+  and placed by `placeLabel` on the footprint: a space's rings, the LARGEST piece of a
+  ceiling or floor, an item's footprint or else the marker it is drawn as (so such a tag is
+  tiny, because the object is). GL and SVG share `placeElementTags`. RHH's ceilings and
+  floors carry no `type_name`, so the default `$type_name` prints nothing there until a
+  property is named.
 - **A layer that could not resolve exactly says so on its own toggle.** The
   "(all levels)" / "(by elevation)" suffixes are the point: a fallback nobody
   can see is the failure mode this area keeps producing.

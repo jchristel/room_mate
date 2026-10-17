@@ -39,7 +39,7 @@ export function ExportMenu({
   plan: ColourPlan | null;
   errorRooms: ReadonlySet<string>;
 }) {
-  const { payload, scope, showErrors, appearance, connections, savedRoutes } = useViewer();
+  const { payload, scope, showErrors, appearance, connections, savedRoutes, tagSettings } = useViewer();
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set());
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [report, setReport] = useState<string | null>(null);
@@ -100,6 +100,7 @@ export function ExportMenu({
           routes: drawable,
           routeTags: zone.showRouteTags,
           reachTags: zone.showReachTags,
+          tags: { settings: tagSettings, on: zone.tags },
           reach: zone.reach ? { result: zone.reach.result, opacityPct: zone.reach.opacity } : undefined,
         },
         (done, total) => setProgress({ done, total }),

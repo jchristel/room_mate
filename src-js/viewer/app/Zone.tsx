@@ -31,7 +31,8 @@ import { SelectionFilter } from "./SelectionFilter.js";
 import { ExportMenu } from "./ExportMenu.js";
 import { loadAreas } from "./areasData.js";
 import { tierNames } from "../areas.js";
-import { elementsOnStorey, zoneAwaitsLayers, type ElementOf } from "./layers.js";
+import { elementsOnStorey, layerPayload, typePropertiesOf, zoneAwaitsLayers, type ElementOf } from "./layers.js";
+import { tagsRequest } from "../elementTags.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
 import { closePickList, setZoneAreas, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneReachMode, setZoneRouteMode, type ZoneRow } from "./store.js";
@@ -64,6 +65,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     areas,
     scope,
     roomsLoading,
+    tagSettings,
   } = useViewer();
   // This zone's own visibility, since C1 — see `ZoneRow.layers`.
   const { layers, showRooms, showLabels, spacesModel, ffeModelsOff } = zone;
@@ -213,6 +215,9 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           floors: on("floors"),
           showFloors: layers.floors,
           reach: reachLayer ?? undefined,
+          tags: tagsRequest(tagSettings, zone.tags, (entity, el) =>
+            typePropertiesOf(layerPayload(entity) as Parameters<typeof typePropertiesOf>[0], el as { type_properties_ref?: number | null }),
+          ),
         });
       // Below the threshold the build runs INLINE: deferring every level by a
       // frame would make the common case worse to save a flash nobody sees.
@@ -239,7 +244,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, ffeModelsOff, layersRevision, plan, sources, errorRooms, showErrors]);
+  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, ffeModelsOff, layersRevision, plan, sources, errorRooms, showErrors, zone.tags, tagSettings]);
 
   // Search is applied to what is ALREADY drawn -- never by re-rendering. A
   // search can match thousands of rooms, and a keystroke must not re-upload a

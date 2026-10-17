@@ -19,6 +19,7 @@
 
 import { BitmapText, Container } from "pixi.js";
 import { placeLabel } from "../labelPlacement.js";
+import type { PlacedTag } from "../elementTags.js";
 import type { Room } from "../types.js";
 import type { Rgba } from "./colour.js";
 
@@ -137,6 +138,38 @@ export function buildReachTags(
     t.position.set(tag.x, tag.y);
     t.scale.set(scale, scale);
     container.addChild(t);
+  }
+  return container;
+}
+
+/**
+ * The tags on one entity's elements: the room label's stacking (first line full size,
+ * the rest 0.7 under it) at each tag's own placement, in two colours.
+ */
+export function buildElementTags(
+  tags: readonly PlacedTag[],
+  colours: { primary: Rgba; secondary: Rgba },
+  fontFamily: string,
+): Container {
+  const container = new Container();
+  for (const tag of tags) {
+    const node = new Container();
+    node.position.set(tag.x, tag.y);
+    const scale = tag.fontSize / ATLAS_PX;
+    node.scale.set(scale, scale);
+    const heights = tag.lines.map((_, i) => (i === 0 ? ATLAS_PX : ATLAS_PX * 0.7) * 1.2);
+    let y = -heights.reduce((s, h) => s + h, 0) / 2;
+    tag.lines.forEach((text, i) => {
+      const t = new BitmapText({
+        text,
+        style: { fontFamily, fontSize: i === 0 ? ATLAS_PX : ATLAS_PX * 0.7, fill: rgbaToHex(i === 0 ? colours.primary : colours.secondary) },
+      });
+      t.anchor.set(0.5, 0);
+      t.position.set(0, y);
+      y += heights[i]!;
+      node.addChild(t);
+    });
+    container.addChild(node);
   }
   return container;
 }

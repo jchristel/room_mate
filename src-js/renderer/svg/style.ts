@@ -32,6 +32,10 @@ export function exportStyle(pal: ExportPalette, appearance: PlanAppearance = {})
   const theme = (layer: keyof typeof LAYER_THEME_COLOUR) => pal[LAYER_THEME_COLOUR[layer]];
   const roomLine = or(appearance.rooms?.line, pal.ink);
   const roomFill = or(appearance.rooms?.fill, pal.fill);
+  // A tag follows its layer's line colour unless the project names one (inline).
+  const tagStyle = (layer: "ffe" | "spaces" | "ceilings" | "floors") =>
+    `
+    .etag-${layer}, .etag2-${layer} { fill: ${or(appearance[layer]?.line, theme(layer))}; }`;
   const glyph = (layer: "doors" | "windows" | "ffe", cls: string) => {
     const line = or(appearance[layer]?.line, theme(layer));
     const fill = or(appearance[layer]?.fill, theme(layer));
@@ -48,7 +52,8 @@ export function exportStyle(pal: ExportPalette, appearance: PlanAppearance = {})
     .room.error { fill: ${pal.error}; }
     .hole { fill: ${pal.paper}; stroke: ${roomLine}; stroke-width: 1; stroke-dasharray: ${HOLE_DASH[0]} ${HOLE_DASH[1]}; vector-effect: non-scaling-stroke; }
     .label { fill: ${pal.ink}; text-anchor: middle; dominant-baseline: middle; }
-    .label .tag { fill: ${pal.accent}; letter-spacing: 0.05em; }${outline("floors", "floor", FLOOR_DASH)}${outline(
+    .label .tag { fill: ${pal.accent}; letter-spacing: 0.05em; }
+    .etag, .etags tspan { text-anchor: middle; dominant-baseline: middle; }${tagStyle("ffe")}${tagStyle("spaces")}${tagStyle("ceilings")}${tagStyle("floors")}${outline("floors", "floor", FLOOR_DASH)}${outline(
       "ceilings",
       "ceiling",
       CEILING_DASH,

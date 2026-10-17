@@ -25,7 +25,9 @@ import { elementUrl, matchSuffix, type ElementEntity } from "../elementUrls.js";
 import { levelsForPayload, roomsOnLevel } from "../levels.js";
 import { detectReferenceSources } from "../properties.js";
 import type { Scope } from "../scope.js";
-import { LAYERS, storeyElements, type ElementPayload, type StoreyMatch } from "./layers.js";
+import { LAYERS, storeyElements, typePropertiesOf, type ElementPayload, type StoreyMatch } from "./layers.js";
+import { tagsRequest, type TagSettings } from "../elementTags.js";
+import type { TagEntity } from "../../renderer/elementTags.js";
 import { fittedBounds } from "./planRenderer.js";
 import { appendRouteTags, appendRoutes } from "./routeExport.js";
 import { layerFor, type ReachResult } from "../reach.js";
@@ -83,6 +85,8 @@ export interface ExportOptions {
   /** The zone's tag toggles: each route hop's length, and each reach cell's walk. */
   routeTags?: boolean;
   reachTags?: boolean;
+  /** The zone's element tags: what they say (the project's) and which are on. */
+  tags?: { settings: TagSettings; on: Readonly<Record<TagEntity, boolean>> } | undefined;
 }
 
 /** One level's element layers, and how each one's storey match resolved. */
@@ -90,6 +94,9 @@ export interface LevelOverlays {
   layers: OverlayLayers;
   /** Per layer that is ON: its match, or `"failed"` when the read did. */
   matches: Partial<Record<ElementEntity, StoreyMatch | "failed">>;
+  /** The payload each layer was read from: a tag resolves an element's type
+   *  properties against the response the element came from. */
+  payloads?: Partial<Record<ElementEntity, ElementPayload>>;
 }
 
 /**
@@ -179,6 +186,14 @@ export function buildLevelSvg(
     showRooms: opts.showRooms,
     ...overlays.layers,
     ...(reach ? { reach } : {}),
+    ...(opts.tags
+      ? {
+          tags: tagsRequest(opts.tags.settings, opts.tags.on, (entity, el) => {
+            const body = overlays.payloads?.[entity];
+            return body ? typePropertiesOf(body, el as { type_properties_ref?: number | null }) : undefined;
+          }),
+        }
+      : {}),
   });
   // Last, so a route is over the rooms and every layer, as it is on screen.
   appendRoutes(svg, routes, fitted, { paper: pal.paper, ink: pal.ink }, EXPORT_WIDTH_PX);
@@ -218,12 +233,13 @@ export async function fetchLevelOverlays(
     }),
   );
 
-  const overlays: LevelOverlays = { layers: {}, matches: {} };
+  const overlays: LevelOverlays = { layers: {}, matches: {}, payloads: {} };
   for (const { entity, body } of results) {
     if (body === "failed") {
       overlays.matches[entity] = "failed";
       continue;
     }
+    if (body) overlays.payloads![entity] = body;
     const { kept, match } = storeyElements(entity, body, level.id);
     // A 204 is "this scope holds none", which is an exact answer, not a guess.
     overlays.matches[entity] = body === null ? "exact" : match;

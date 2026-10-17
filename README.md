@@ -127,6 +127,11 @@ measurements and open questions are in [the plan](docs/PLAN-connectivity.md).
   each hop's length and, in brackets, the walk from the start; **Reach tags** show the
   distance to the start in each grid cell. The heat map, the legend and any switched-on
   tags are included in **Export SVGs**.
+- **Element tags.** Under FF&E, Spaces, Ceilings and Floors in the **Layers** menu, a
+  **Tags** checkbox (off by default) writes text on each element, sized to fit its own
+  outline like the room labels. What it says and its colours are set per entity in the
+  settings page's **Element tags** section (`$id`, `$name`, `$type_name` or any property
+  name). Included in **Export SVGs**.
 
 ## The API, in one screen
 
