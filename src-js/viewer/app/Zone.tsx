@@ -66,7 +66,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     roomsLoading,
   } = useViewer();
   // This zone's own visibility, since C1 — see `ZoneRow.layers`.
-  const { layers, showRooms, showLabels, spacesModel } = zone;
+  const { layers, showRooms, showLabels, spacesModel, ffeModelsOff } = zone;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const handleRef = useRef<ZoneHandle | null>(null);
@@ -181,6 +181,10 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       const spaces = spacesModel
         ? on("spaces").filter((s) => s.model_id === spacesModel)
         : on("spaces");
+      // The FF&E model checkboxes work the same way, as a set of models left out.
+      const ffe = ffeModelsOff.length
+        ? on("ffe").filter((i) => !ffeModelsOff.includes(i.model_id ?? ""))
+        : on("ffe");
       // The plan resolves to a `colourFor` callback here rather than being
       // handed to the renderer: the palette lives in `common.js`, which the
       // renderer bundle cannot import, so the precedence rule stays in the
@@ -200,7 +204,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           showDoors: layers.doors,
           windows: on("windows"),
           showWindows: layers.windows,
-          ffe: on("ffe"),
+          ffe,
           showFfe: layers.ffe,
           spaces,
           showSpaces: layers.spaces,
@@ -235,7 +239,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, layersRevision, plan, sources, errorRooms, showErrors]);
+  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, ffeModelsOff, layersRevision, plan, sources, errorRooms, showErrors]);
 
   // Search is applied to what is ALREADY drawn -- never by re-rendering. A
   // search can match thousands of rooms, and a keystroke must not re-upload a
