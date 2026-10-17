@@ -12,41 +12,47 @@
 // the same choke point as the route tool (`store.select`), so a plan click, a grid
 // row and a search chip all work without knowing this tool exists.
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { describeReach, problem, reachRequest, scopeKey, type ReachBody, type ReachMethod, type ReachState } from "../reach.js";
-import { getState, patchZoneReach, select, setZoneReachMode, type ZoneRow } from "./store.js";
+import { bodyAfterSaveReach, connectionsUrl, whyReachNotSavable } from "../connections.js";
+import { describeReach, draftOf, problem, scopeKey, type ReachMethod, type ReachState } from "../reach.js";
+import { saveConnections } from "./connectionsApi.js";
+import { abortReach, currentReach, measureReach } from "./reachMeasure.js";
+import { patchZoneReach, select, setZoneReachMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
 export function ReachPanel({ zone }: { zone: ZoneRow }) {
-  const { scope, payload, toolFocus } = useViewer();
+  const { scope, payload, toolFocus, connections } = useViewer();
   const reach = zone.reach;
   const zoneId = zone.id;
   const active = reach !== null;
-  const abort = useRef<AbortController | null>(null);
+  const [name, setName] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const key = scopeKey(scope);
 
   /** The zone's CURRENT reach state: an answer lands after the reader may have
    *  clicked again, so it is patched into what is there now and not what the
    *  closure saw. */
-  const current = (): ReachState | null => getState().zones.find((z) => z.id === zoneId)?.reach ?? null;
+  const current = (): ReachState | null => currentReach(zoneId);
   const edit = (patch: Partial<ReachState>, keepAnswer = false) => {
     const now = current();
     if (!now) return;
-    abort.current?.abort();
+    abortReach(zoneId);
+    setNotice(null);
     patchZoneReach(zoneId, { ...now, ...patch, ...(keepAnswer ? {} : { result: { state: "idle" } }) });
   };
 
   // Leaving a scope forgets the start rooms: a room id means a room in THAT project.
   useEffect(() => {
     if (!active) return;
-    abort.current?.abort();
+    abortReach(zoneId);
     const now = current();
     if (now) patchZoneReach(zoneId, { ...now, sources: [], result: { state: "idle" } });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, key]);
 
-  useEffect(() => () => abort.current?.abort(), []);
+  useEffect(() => () => abortReach(zoneId), [zoneId]);
 
   // Escape leaves the tool, like every other transient thing on this page.
   useEffect(() => {
@@ -63,32 +69,18 @@ export function ReachPanel({ zone }: { zone: ZoneRow }) {
   if (!reach) return null;
   const why = problem(reach);
 
-  const measure = async () => {
+  const doc = connections.projectId === scope.projectId ? connections.doc : null;
+  const url = connectionsUrl(scope);
+  const notSavable = whyReachNotSavable(name, reach.sources.length) ?? (why ? why : null);
+  const save = async () => {
     const now = current();
-    const req = now ? reachRequest(scope, now) : null;
-    if (!now || !req) return;
-    abort.current?.abort();
-    const ac = new AbortController();
-    abort.current = ac;
-    patchZoneReach(zoneId, { ...now, result: { state: "loading" } });
-    let next: ReachState["result"];
-    try {
-      const res = await fetch(req.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: req.body,
-        cache: "no-store",
-        signal: ac.signal,
-      });
-      if (res.status === 204) next = { state: "error", message: "No rooms have been pushed to this project yet." };
-      else if (!res.ok) next = { state: "error", message: (await res.text()).trim() || `${req.url} -> ${res.status}` };
-      else next = { state: "done", body: (await res.json()) as ReachBody };
-    } catch (err) {
-      if (ac.signal.aborted) return;
-      next = { state: "error", message: `Could not read ${req.url}: ${String(err)}` };
-    }
-    const after = current();
-    if (after && !ac.signal.aborted) patchZoneReach(zoneId, { ...after, result: next });
+    const draft = now ? draftOf(now, name.trim()) : null;
+    if (!doc || !url || !draft) return;
+    setSaving(true);
+    const refused = await saveConnections(url, scope.projectId, doc, bodyAfterSaveReach(doc, draft));
+    setSaving(false);
+    setNotice(refused ?? `Saved "${draft.name}".`);
+    if (!refused) setName("");
   };
 
   const running = reach.result.state === "loading";
@@ -150,9 +142,25 @@ export function ReachPanel({ zone }: { zone: ZoneRow }) {
           aria-label="Heat map opacity"
         />
       </label>
-      <button className="chip on" disabled={why !== null || running} title={why ?? "Measure the walk from these rooms"} onClick={() => void measure()}>
+      <button className="chip on" disabled={why !== null || running} title={why ?? "Measure the walk from these rooms"} onClick={() => void measureReach(zoneId, scope)}>
         {running ? "Measuring…" : "Measure"}
       </button>
+      <input
+        className="zoneName"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        aria-label="Name to save this reach under"
+        placeholder="name to save"
+      />
+      <button
+        className="chip"
+        disabled={notSavable !== null || !doc || saving}
+        title={notSavable ?? (doc ? "Save this reach for the project (the request, not the map)" : "Reading the saved reaches…")}
+        onClick={() => void save()}
+      >
+        {saving ? "Saving…" : "Save reach"}
+      </button>
+      {notice ? <span className="meta">{notice}</span> : null}
       <span className="routeResult">{describeReach(reach.result)}</span>
       {reach.result.state === "done" && reach.result.body.note ? <span className="meta">{reach.result.body.note}</span> : null}
       <button className="chip" title="Leave the reach tool (Esc)" onClick={() => setZoneReachMode(zoneId, false)}>

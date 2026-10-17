@@ -19,6 +19,7 @@ import { AreasBand } from "./AreasBand.js";
 import { QaBand } from "./QaBand.js";
 import { ConnectionsPanel } from "./ConnectionsPanel.js";
 import { Header } from "./Header.js";
+import { ReachesPanel } from "./ReachesPanel.js";
 import { RoutesPanel } from "./RoutesPanel.js";
 import { SavedRoutesLayer } from "./SavedRoutesLayer.js";
 import { Inspector } from "./inspector/Inspector.js";
@@ -44,10 +45,12 @@ export function App() {
       <Header />
       <div id="mainRow">
         {/* Left of the plan: the connections table while an editor is open and the
-            saved routes while a route tool is. Empty, it costs no width. */}
+            saved routes while a route tool is and
+            the saved reaches while a reach tool is. Empty, it costs no width. */}
         <div id="leftPanels">
           <ConnectionsPanel />
           <RoutesPanel />
+          <ReachesPanel />
         </div>
         {/* The column count follows the zone count, capped at 3 — beyond that
             the zones wrap into rows rather than becoming slivers. The old page

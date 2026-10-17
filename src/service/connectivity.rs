@@ -2621,6 +2621,7 @@ mod tests {
                     links: vec![],
                     routes: None,
                     passages: None,
+                    reaches: None,
                 },
             )
             .unwrap();
@@ -2744,6 +2745,7 @@ mod tests {
                     links,
                     routes: None,
                     passages: None,
+                    reaches: None,
                 },
             )
             .unwrap();
@@ -2804,6 +2806,7 @@ mod tests {
                     links: vec![link_input("up", "c", "e", Some(10.0))],
                     routes: None,
                     passages: None,
+                    reaches: None,
                 },
             )
             .unwrap();
@@ -3414,6 +3417,7 @@ mod tests {
                     links: vec![],
                     routes: None,
                     passages: None,
+                    reaches: None,
                 },
             )
             .unwrap();
@@ -3908,6 +3912,7 @@ mod tests {
                     links: vec![],
                     routes: None,
                     passages: Some(passages),
+                    reaches: None,
                 },
             )
             .unwrap();
