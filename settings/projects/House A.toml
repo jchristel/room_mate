@@ -7,8 +7,12 @@ room_label = [
     "$id",
 ]
 colour_plans = []
+hierarchy_exclusions = []
 
 [sources]
+
+[areas]
+max_wall_thickness = 1.5
 
 # Doors, the project's second primary entity. This project is the doors sample:
 # its rooms and its doors come from the same Revit model, so every door's
@@ -34,6 +38,30 @@ comparison_properties = [
     "$to_room",
     "$from_room",
     "Mark",
+]
+
+[windows]
+room_attribution = "to_room_then_from_room"
+room_resolution = "off"
+comparison_properties = []
+
+[ffe]
+nested_components = "exclude"
+room_resolution = "off"
+comparison_properties = []
+
+[spaces]
+room_models = []
+compared_properties = []
+
+[routing]
+room_height_property = "Ceiling Height"
+room_height_from_ceilings = true
+door_height_from_type_name = true
+door_frame_allowance_mm = 150.0
+door_height_properties = [
+    "Height",
+    "Door Height",
 ]
 
 [[hierarchy]]
@@ -68,6 +96,8 @@ date = "2026-07-15"
 
 [milestones.ceiling_attachments]
 
+[milestones.floor_attachments]
+
 [[milestones]]
 name = "Rooms and doors"
 date = "2026-07-29"
@@ -88,7 +118,11 @@ date = "2026-07-29"
 
 [milestones.ceiling_attachments]
 
+[milestones.floor_attachments]
+
 [appearance.rooms]
 line = "#f0c800"
 fill = "#f60404"
 hover = "#3649d3"
+
+[hover]

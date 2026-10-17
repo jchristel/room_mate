@@ -58,7 +58,7 @@ export const defaultSettings = (): Required<Omit<Settings, NoDefault>> & Pick<Se
   doors: { ...OPENING_DEFAULT, comparison_properties: [] },
   windows: { ...OPENING_DEFAULT, comparison_properties: [] },
   ffe: { ...FFE_DEFAULT, comparison_properties: [] },
-  spaces: {},
+  spaces: { room_models: [], compared_properties: [] },
   routing: { ...ROUTING_DEFAULT, door_height_properties: [...DEFAULT_DOOR_HEIGHT_PROPERTIES] },
   hierarchy: [],
   builtin_properties: [],

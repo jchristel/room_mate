@@ -58,4 +58,4 @@ door_frame_allowance_mm?: number | null,
  * Door properties tried, in order, for a door's height in millimetres (instance
  * before type). Empty means `RoutingPolicy::DEFAULT_DOOR_HEIGHT_PROPERTIES`.
  */
-door_height_properties?: Array<string>, };
+door_height_properties: Array<string>, };

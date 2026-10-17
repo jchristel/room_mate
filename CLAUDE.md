@@ -594,8 +594,10 @@ point: the page could not silently stop exposing a setting.
 **The settings page's defaults are `src-js/settings/defaults.ts`, once.** A new project
 starts from every setting at its Rust default, and the sections import the same
 constants as their fallback; a second copy in a section is how page and server drift.
-The server still leaves an all-default section out of the written TOML, so a saved
-file stays short while the page shows everything. Each section is a `<details>`
+A save WRITES every section, defaults included (`Settings::fill_defaults`, in
+`save_project`), so a file lists what the project runs on; the cost is that a later
+change to a default does not reach a project already written. Only a setting whose
+default is *none* stays absent, since TOML has no null. Each section is a `<details>`
 expander (`Block`), closed except Identity, and stays mounted while closed.
 
 **The UI framework is React, and that was measured, not preferred.** Rust+WASM

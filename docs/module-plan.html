@@ -872,7 +872,7 @@
     },
     {
       id: "settings_api", name: "settings_api.rs", path: "src/settings_api.rs", zone: "transport", lang: "Rust",
-      blurb: "The machinery behind the settings UI, laid out as the codebase's handler/service split inside one module: transport-agnostic core at the top, Axum adapters at the bottom. The TOML files stay the single source of truth — reads parse fresh, a save validates before it lands.",
+      blurb: "The machinery behind the settings UI, laid out as the codebase's handler/service split inside one module: transport-agnostic core at the top, Axum adapters at the bottom. The TOML files stay the single source of truth — reads parse fresh, a save validates before it lands, and writes every setting that has a default (<code>Settings::fill_defaults</code>) so a saved file lists what the project runs on.",
       deps: ["bootstrap", "contract", "reference", "settings", "state", "storage"]
     },
 
@@ -1042,7 +1042,7 @@
     },
     {
       id: "settings", name: "shared settings/mod.rs", path: "crates/roommate-shared/src/settings/mod.rs", zone: "config", lang: "Rust",
-      blurb: "Config a human hand-edits (hence TOML, with comments); the data it points at stays JSON. Everything resolves once at startup and fails fast — better a loud startup error than a surprise on the first request. In roommate-shared, away from the server's runtime; the server's settings/mod.rs is a glob re-export plus the loaders.",
+      blurb: "Config a human hand-edits (hence TOML, with comments); the data it points at stays JSON. Everything resolves once at startup and fails fast — better a loud startup error than a surprise on the first request. In roommate-shared, away from the server's runtime; the server's settings/mod.rs is a glob re-export plus the loaders. Every section is written, defaults included: only a setting whose default is <em>none</em> is left out, and the loader still fills an absent one, so older files load unchanged.",
       deps: ["shared"]
     },
     {
@@ -1151,12 +1151,12 @@
     // ---- browser: pages
     {
       id: "p_index", name: "viewer/ (React)", path: "src-js/viewer/", zone: "pages", lang: "TypeScript + React",
-      blurb: "The viewer, served at /: zones, levels, layers, colour plans, selection and its seven inspectors, search, the grid, the QA/areas/adjacency bands and the SVG export. React since 2026-09-20, ported slice by slice against the hand-written page it replaced (docs/Superseded/PLAN-viewer-react.md). Its rules — scope, levels, element URLs, colour, properties, grid, search, validation, areas, pan-to-room — are tested modules beside the components; the state is one store, with a zone's view rect deliberately outside it because it changes per pointer move. Selection grew to the whole plan on 2026-09-20 (docs/Superseded/PLAN-viewer-selection.md): a left click lists what is stacked under it, filtered per zone; visibility, pickability and the room panel's contents are menus over one DropMenu; every panel and the grid choose which properties they show; a grid row selects its room and pans to it; and the outline layers' selection colour and every entity's hover property come from project settings.",
+      blurb: "The viewer, served at /: zones, levels, layers, colour plans, selection and its seven inspectors, search, the grid, the QA/areas/adjacency bands, the routes and reach tools (heat map, saved reaches, tags) and the SVG export. React since 2026-09-20, ported slice by slice against the hand-written page it replaced (docs/Superseded/PLAN-viewer-react.md). Its rules — scope, levels, element URLs, colour, properties, grid, search, validation, areas, pan-to-room — are tested modules beside the components; the state is one store, with a zone's view rect deliberately outside it because it changes per pointer move. Selection grew to the whole plan on 2026-09-20 (docs/Superseded/PLAN-viewer-selection.md): a left click lists what is stacked under it, filtered per zone; visibility, pickability and the room panel's contents are menus over one DropMenu; every panel and the grid choose which properties they show; a grid row selects its room and pans to it; and the outline layers' selection colour and every entity's hover property come from project settings.",
       deps: ["p_common", "p_tokens", "p_bundle", "p_graph"]
     },
     {
       id: "p_settings", name: "settings/ (React)", path: "src-js/settings/", zone: "pages", lang: "TypeScript + React",
-      blurb: "The settings page, served at /settings/. It replaced a hand-written settings.html on 2026-09-12 and edits every setting — including the seven that page never showed: the coordinate anchor, the area policy, the door/window/FF&E/space policies and the hierarchy exclusions. It holds the whole settings object as read and sends it back, which is why it cannot silently empty a milestone's door/window/FF&E/space/ceiling pins the way its predecessor did. Mutation lives here and only here, which is what keeps the MCP server's read-only contract honest.",
+      blurb: "The settings page, served at /settings/. It replaced a hand-written settings.html on 2026-09-12 and edits every setting — including the seven that page never showed: the coordinate anchor, the area policy, the door/window/FF&E/space policies and the hierarchy exclusions. It holds the whole settings object as read and sends it back, which is why it cannot silently empty a milestone's door/window/FF&E/space/ceiling pins the way its predecessor did. Mutation lives here and only here, which is what keeps the MCP server's read-only contract honest. Every section is a collapsible expander (<code>Block</code>, Identity open), and a new project starts from every setting at its default, spelled once in <code>defaults.ts</code> and shared with the sections' own fallbacks.",
       deps: ["p_generated", "p_common", "p_tokens"]
     },
     {

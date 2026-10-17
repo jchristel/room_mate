@@ -42,9 +42,9 @@ room_key?: string | null,
  * A value array, declared before `compared_properties` for the TOML
  * ordering reason `comparison_key` documents.
  */
-room_models?: Array<string>, 
+room_models: Array<string>, 
 /**
  * Properties compared on a matched space/room pair. Empty (the default)
  * means the pair is only reported as matched, never as disagreeing.
  */
-compared_properties?: Array<SpaceFieldConfig>, };
+compared_properties: Array<SpaceFieldConfig>, };

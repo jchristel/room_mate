@@ -119,14 +119,14 @@ pub struct Settings {
     /// Defaulted, so a project file predating it behaves exactly as before.
     /// `skip_serializing_if` keeps an all-default policy out of the written
     /// file — nothing is gained by stamping the defaults into every project.
-    #[serde(default, skip_serializing_if = "AreaPolicy::is_default")]
+    #[serde(default)]
     pub areas: AreaPolicy,
 
     /// Door policy for this project (see `OpeningPolicy`). Defaulted and skipped
     /// when empty, so a project file predating doors is unchanged on disk and
     /// unchanged in meaning. A table, so it is declared after the scalars for
     /// the TOML ordering reason `comparison_key` documents.
-    #[serde(default, skip_serializing_if = "OpeningPolicy::is_default")]
+    #[serde(default)]
     pub doors: OpeningPolicy,
 
     /// Window policy for this project — the same `OpeningPolicy` under a second
@@ -155,7 +155,7 @@ pub struct Settings {
     /// every opening in such a model is unattributable from authored data alone.
     /// Left `Off`, a windows read of that project returns 158 homeless windows
     /// and no way to tell that from a modelling failure.
-    #[serde(default, skip_serializing_if = "OpeningPolicy::is_default")]
+    #[serde(default)]
     pub windows: OpeningPolicy,
 
     /// FF&E policy for this project (see `FfePolicy`). Defaulted and skipped
@@ -176,7 +176,7 @@ pub struct Settings {
     /// spelling the fields the same way and documenting them against the same
     /// rules, not by sharing a struct that would then have to carry both
     /// entities' exceptions.
-    #[serde(default, skip_serializing_if = "FfePolicy::is_default")]
+    #[serde(default)]
     pub ffe: FfePolicy,
 
     /// One project's SPACES policy: how a space is matched to a room, and which
@@ -188,13 +188,13 @@ pub struct Settings {
     /// vocabularies -- a space's and a room's -- which is why
     /// `compared_properties` holds pairs rather than names, and why it could
     /// not have reused `comparison_properties` however similar it looks.
-    #[serde(default, skip_serializing_if = "SpacePolicy::is_default")]
+    #[serde(default)]
     pub spaces: SpacePolicy,
 
     /// Where a route's size checks read their data from (see `RoutingPolicy`).
     /// Defaulted and skipped when untouched, so a project file predating it is
     /// unchanged on disk and unchanged in meaning.
-    #[serde(default, skip_serializing_if = "RoutingPolicy::is_default")]
+    #[serde(default)]
     pub routing: RoutingPolicy,
 
     /// Ordered classification tiers, outermost first. Empty if the section is
@@ -261,7 +261,7 @@ pub struct Settings {
     /// `skip_serializing_if` so an empty list emits nothing — a trailing
     /// `hierarchy_exclusions = []` after the colour-plan tables would trip the
     /// TOML "value-after-table" ordering footgun (CODING-CONVENTIONS.md).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub hierarchy_exclusions: Vec<HierarchyExclusion>,
 
     /// Which model's coordinate space this project's plans are drawn in — the
@@ -294,13 +294,13 @@ pub struct Settings {
     /// unchanged on disk and unchanged in meaning. A table, so it is declared
     /// after every scalar for the TOML ordering reason `comparison_key`
     /// documents.
-    #[serde(default, skip_serializing_if = "Appearance::is_default")]
+    #[serde(default)]
     pub appearance: Appearance,
 
     /// What a hover over the plan shows, per entity (see `HoverProperties`).
     /// A table, so it is declared after every scalar for the TOML ordering
     /// reason `comparison_key` documents.
-    #[serde(default, skip_serializing_if = "HoverProperties::is_default")]
+    #[serde(default)]
     pub hover: HoverProperties,
 }
 
@@ -769,8 +769,30 @@ pub struct RoutingPolicy {
 
     /// Door properties tried, in order, for a door's height in millimetres (instance
     /// before type). Empty means `RoutingPolicy::DEFAULT_DOOR_HEIGHT_PROPERTIES`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub door_height_properties: Vec<String>,
+}
+
+impl Settings {
+    /// Every setting that has a default, set to it where the file leaves it unset, so
+    /// a written project file lists everything it is running on.
+    ///
+    /// **Written, not just read.** An absent key means "the default" only for as long
+    /// as the code's default never changes, and a person reading the file cannot tell
+    /// what that is. The cost is knowing it: a project written by this holds the
+    /// default of the day, and a later change to a default does not reach it. Settings
+    /// whose default is *none* (a comparison key, the anchor, a hover property) stay
+    /// absent, because absent is their value -- TOML has no null to write.
+    pub fn fill_defaults(&mut self) {
+        let r = &mut self.routing;
+        r.room_height_property
+            .get_or_insert_with(|| RoutingPolicy::DEFAULT_ROOM_HEIGHT_PROPERTY.to_string());
+        r.door_frame_allowance_mm.get_or_insert(RoutingPolicy::DEFAULT_DOOR_FRAME_ALLOWANCE_MM);
+        if r.door_height_properties.is_empty() {
+            r.door_height_properties =
+                RoutingPolicy::DEFAULT_DOOR_HEIGHT_PROPERTIES.iter().map(|p| p.to_string()).collect();
+        }
+    }
 }
 
 impl Default for RoutingPolicy {
@@ -1504,12 +1526,12 @@ pub struct SpacePolicy {
     ///
     /// A value array, declared before `compared_properties` for the TOML
     /// ordering reason `comparison_key` documents.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub room_models: Vec<String>,
 
     /// Properties compared on a matched space/room pair. Empty (the default)
     /// means the pair is only reported as matched, never as disagreeing.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub compared_properties: Vec<SpaceFieldConfig>,
 }
 
@@ -2170,16 +2192,15 @@ entity = \"spaces\"
         assert_eq!(ReferenceEntity::Ffe.as_str(), "ffe");
     }
 
-    /// `[ffe]` is defaulted and skipped when untouched, so a project file
-    /// written before FF&E existed round-trips unchanged. The same guarantee
-    /// `[doors]` and `[windows]` carry, asserted rather than assumed because it
-    /// is what lets a fourth entity land without rewriting anyone's settings.
+    /// `[ffe]` is defaulted on READ, so a project file written before FF&E existed
+    /// still loads; and it is WRITTEN too, like every section, so a saved file
+    /// lists what it runs on.
     #[test]
-    fn test_an_untouched_ffe_section_stays_out_of_a_written_file() {
+    fn test_an_untouched_ffe_section_is_still_written() {
         let settings: Settings = toml::from_str("project_id = \"p1\"\n").expect("parses with no [ffe]");
         assert!(settings.ffe.is_default());
         let text = toml::to_string_pretty(&settings).expect("serializes");
-        assert!(!text.contains("[ffe]"), "an all-default policy is not written: {text}");
+        assert!(text.contains("[ffe]"), "a default section is written: {text}");
     }
 
     /// A configured `[ffe]` round-trips, including the one field no opening has.
@@ -2205,7 +2226,7 @@ entity = \"spaces\"
     }
 
     #[test]
-    fn test_an_untouched_routing_policy_is_default_and_stays_out_of_the_file() {
+    fn test_an_untouched_routing_policy_is_default_and_fills_on_write() {
         let policy = RoutingPolicy::default();
         assert!(policy.is_default());
         assert_eq!(policy.room_height_property(), "Ceiling Height");
@@ -2221,7 +2242,16 @@ entity = \"spaces\"
         );
         let settings: Settings = toml::from_str("project_id = \"p1\"\n").expect("parses");
         assert!(settings.routing.is_default());
-        assert!(!toml::to_string(&settings).unwrap().contains("[routing]"));
+        assert!(toml::to_string(&settings).unwrap().contains("[routing]"));
+        let mut filled = settings;
+        filled.fill_defaults();
+        assert_eq!(filled.routing.room_height_property.as_deref(), Some("Ceiling Height"));
+        assert_eq!(filled.routing.door_frame_allowance_mm, Some(150.0));
+        assert_eq!(
+            filled.routing.door_height_properties,
+            vec!["Height".to_string(), "Door Height".to_string()]
+        );
+        assert_eq!(filled.routing.room_height_property(), "Ceiling Height", "filling changes no answer");
     }
 
     #[test]

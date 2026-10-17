@@ -105,14 +105,14 @@ sources: Sources,
  * `skip_serializing_if` keeps an all-default policy out of the written
  * file — nothing is gained by stamping the defaults into every project.
  */
-areas?: AreaPolicy, 
+areas: AreaPolicy, 
 /**
  * Door policy for this project (see `OpeningPolicy`). Defaulted and skipped
  * when empty, so a project file predating doors is unchanged on disk and
  * unchanged in meaning. A table, so it is declared after the scalars for
  * the TOML ordering reason `comparison_key` documents.
  */
-doors?: OpeningPolicy, 
+doors: OpeningPolicy, 
 /**
  * Window policy for this project — the same `OpeningPolicy` under a second
  * key, defaulted and skipped when empty so a project file predating windows
@@ -141,7 +141,7 @@ doors?: OpeningPolicy,
  * Left `Off`, a windows read of that project returns 158 homeless windows
  * and no way to tell that from a modelling failure.
  */
-windows?: OpeningPolicy, 
+windows: OpeningPolicy, 
 /**
  * FF&E policy for this project (see `FfePolicy`). Defaulted and skipped
  * when empty, so a project file predating FF&E is unchanged on disk and
@@ -162,7 +162,7 @@ windows?: OpeningPolicy,
  * rules, not by sharing a struct that would then have to carry both
  * entities' exceptions.
  */
-ffe?: FfePolicy, 
+ffe: FfePolicy, 
 /**
  * One project's SPACES policy: how a space is matched to a room, and which
  * properties are compared once it is.
@@ -174,13 +174,13 @@ ffe?: FfePolicy,
  * `compared_properties` holds pairs rather than names, and why it could
  * not have reused `comparison_properties` however similar it looks.
  */
-spaces?: SpacePolicy, 
+spaces: SpacePolicy, 
 /**
  * Where a route's size checks read their data from (see `RoutingPolicy`).
  * Defaulted and skipped when untouched, so a project file predating it is
  * unchanged on disk and unchanged in meaning.
  */
-routing?: RoutingPolicy, 
+routing: RoutingPolicy, 
 /**
  * Ordered classification tiers, outermost first. Empty if the section is
  * omitted (a project with no classification defined).
@@ -247,7 +247,7 @@ colour_plans: Array<ColourPlan>,
  * `hierarchy_exclusions = []` after the colour-plan tables would trip the
  * TOML "value-after-table" ordering footgun (CODING-CONVENTIONS.md).
  */
-hierarchy_exclusions?: Array<HierarchyExclusion>, 
+hierarchy_exclusions: Array<HierarchyExclusion>, 
 /**
  * Which model's coordinate space this project's plans are drawn in — the
  * anchor every linked model is placed against (`service::placement`).
@@ -280,10 +280,10 @@ anchor_model?: string | null,
  * after every scalar for the TOML ordering reason `comparison_key`
  * documents.
  */
-appearance?: Appearance, 
+appearance: Appearance, 
 /**
  * What a hover over the plan shows, per entity (see `HoverProperties`).
  * A table, so it is declared after every scalar for the TOML ordering
  * reason `comparison_key` documents.
  */
-hover?: HoverProperties, };
+hover: HoverProperties, };

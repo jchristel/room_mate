@@ -321,8 +321,10 @@ fn merge_over_stored(
 pub fn save_project(
     state: &AppState,
     existing_id: Option<&str>,
-    settings: Settings,
+    mut settings: Settings,
 ) -> Result<Settings, SettingsError> {
+    // A written file lists every default it runs on (`Settings::fill_defaults`).
+    settings.fill_defaults();
     let projects_dir = state.projects_dir().ok_or(SettingsError::NotFileBacked)?.clone();
     let _guard = SAVE_LOCK.lock().unwrap();
 
@@ -1242,11 +1244,11 @@ name_property = "Department"
     #[test]
     fn test_render_drops_comments_for_removed_sections_and_skips_a_create() {
         let mut settings: Settings = toml::from_str(COMMENTED_TOML).unwrap();
-        settings.doors = Default::default();
         settings.hierarchy.clear();
 
         let rendered = render_settings(&settings, Some(COMMENTED_TOML)).unwrap();
-        assert!(!rendered.contains("# Doors are pushed"), "comment left without its section:\n{rendered}");
+        // A default section is now always written, so its comment has a home to stay in.
+        assert!(rendered.contains("# Doors are pushed"), "a section's comment stays with it:\n{rendered}");
         assert!(!rendered.contains("# The top tier."));
         assert!(rendered.contains("# Room identity across milestones."), "surviving keys keep theirs");
 
