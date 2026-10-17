@@ -18,7 +18,9 @@
 
 import { holeClassName, resolveRoomAppearance, roomClassName } from "../appearance.js";
 import { pointsAttr } from "../geometry.js";
+import { placeElementTags, type TagEntity, type TagsRequest } from "../elementTags.js";
 import { placeLabel } from "../labelPlacement.js";
+import { usableColour } from "../style.js";
 import type { AppearanceContext, Rect, Room, RoomAppearance } from "../types.js";
 import { paintGlyphs, paintSurfaces, type OverlayLayers } from "./overlays.js";
 import { paintReach } from "./reach.js";
@@ -36,6 +38,48 @@ export interface PaintOptions extends AppearanceContext, OverlayLayers {
   /** The reach heat map for this level, painted over the element layers and
    *  under the labels, as on screen. */
   reach?: ReachLayer | undefined;
+  /** The text written on FF&E, spaces, ceilings and floors, over the labels as on
+   *  screen. An entity with no list in the layers draws none. */
+  tags?: TagsRequest | undefined;
+}
+
+/** One entity's tags: the room label's stacked text at each element's own placement.
+ *  The colours are classes (`etag-<entity>`, `etag2-<entity>`) the stylesheet resolves
+ *  from the layer's line colour; a project's override rides inline. */
+function addElementTags(
+  svg: SVGElement,
+  entity: TagEntity,
+  placed: ReturnType<typeof placeElementTags>,
+  req: { primary?: string | null | undefined; secondary?: string | null | undefined },
+): void {
+  if (placed.length === 0) return;
+  const doc = svg.ownerDocument;
+  const g = doc.createElementNS(SVG_NS, "g");
+  g.setAttribute("class", `etags ${entity}-tags`);
+  const primary = usableColour(req.primary);
+  const secondary = usableColour(req.secondary) ?? primary;
+  for (const tag of placed) {
+    const text = doc.createElementNS(SVG_NS, "text");
+    text.setAttribute("class", `etag etag-${entity}`);
+    text.setAttribute("x", String(tag.x));
+    text.setAttribute("y", String(tag.y));
+    text.setAttribute("font-size", String(tag.fontSize));
+    if (primary) text.setAttribute("style", `fill: ${primary}`);
+    tag.lines.forEach((line, i) => {
+      const span = doc.createElementNS(SVG_NS, "tspan");
+      span.setAttribute("x", String(tag.x));
+      span.textContent = line;
+      if (i > 0) {
+        span.setAttribute("class", `etag2-${entity}`);
+        span.setAttribute("dy", "1.2em");
+        span.setAttribute("font-size", String(tag.fontSize * 0.7));
+        if (secondary) span.setAttribute("style", `fill: ${secondary}`);
+      }
+      text.appendChild(span);
+    });
+    g.appendChild(text);
+  }
+  svg.appendChild(g);
 }
 
 function line(doc: Document, x1: number, y1: number, x2: number, y2: number): SVGElement {
@@ -173,4 +217,11 @@ export function paintLevel(
       if (appearances.get(room)?.dim) label.classList.add("dim");
     }
   }
+
+  // The element tags go over everything, as on screen. Same order as the GL layers.
+  const t = opts.tags;
+  if (t?.ffe && opts.ffe) addElementTags(svg, "ffe", placeElementTags("ffe", opts.ffe, t.ffe, baseFont), t.ffe);
+  if (t?.spaces && opts.spaces) addElementTags(svg, "spaces", placeElementTags("spaces", opts.spaces, t.spaces, baseFont), t.spaces);
+  if (t?.floors && opts.floors) addElementTags(svg, "floors", placeElementTags("floors", opts.floors, t.floors, baseFont), t.floors);
+  if (t?.ceilings && opts.ceilings) addElementTags(svg, "ceilings", placeElementTags("ceilings", opts.ceilings, t.ceilings, baseFont), t.ceilings);
 }

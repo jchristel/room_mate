@@ -24,11 +24,13 @@ import { Application, Container } from "pixi.js";
 import { resolveRoomAppearance } from "../appearance.js";
 import { CEILING_DASH, FLOOR_DASH, FOOTPRINT_ALPHA, HOLE_DASH, LAYER_THEME_COLOUR, W_OUTLINE } from "../style.js";
 import { flip, pointsAttr } from "../geometry.js";
-import type { ElementRef, HighlightState, PaintRequest, Pick, PlanRenderer } from "../seam.js";
+import type { ElementRef, HighlightState, PaintRequest, Pick, PlanAppearance, PlanRenderer } from "../seam.js";
 import type { Ceiling, Door, Floor, Item, Loop, Rect, Room, Space, WindowOpening } from "../types.js";
 import { overrideOr, parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
-import { buildLabels, buildReachTags, type RoomLabel } from "./labels.js";
+import { buildElementTags, buildLabels, buildReachTags, type RoomLabel } from "./labels.js";
+import { placeElementTags, type PlacedTag, type TagEntity } from "../elementTags.js";
+import { usableColour } from "../style.js";
 import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js";
 import { buildDoorGlyph } from "./doorGlyph.js";
 import { buildWindowGlyph } from "./windowGlyph.js";
@@ -135,6 +137,8 @@ export class GlPlanRenderer implements PlanRenderer {
   #ffeMesh: FillMesh | null = null;
   #reachMesh: FillMesh | null = null;
   #reachTags: Container | null = null;
+  /** One container per entity whose tags are on. */
+  #elementTags: Container[] = [];
   #holeLines: LineMesh | null = null;
   #outlines: LineMesh | null = null;
   #spaceLines: LineMesh | null = null;
@@ -601,6 +605,8 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#ffeMesh?.destroy();
     this.#reachMesh?.destroy();
     this.#reachTags?.destroy({ children: true });
+    for (const c of this.#elementTags) c.destroy({ children: true });
+    this.#elementTags = [];
     this.#holeLines?.destroy();
     this.#outlines?.destroy();
     this.#spaceLines?.destroy();
@@ -1015,6 +1021,10 @@ export class GlPlanRenderer implements PlanRenderer {
       this.#labels = [];
     }
 
+    // The element tags: text written on FF&E, spaces, ceilings and floors, sized to each
+    // element's own outline (`placeElementTags`). With the labels, above every layer.
+    this.#buildElementTags(opts, app, pal, fitted);
+
     // ORDER MATTERS, and getting it wrong is not subtle: the projection uniforms
     // must be pushed BEFORE anything renders. `setAreasActive` renders, and
     // `cull` renders only when a visibility flag actually changed — so with
@@ -1268,12 +1278,40 @@ export class GlPlanRenderer implements PlanRenderer {
       this.#labelContainer.scale.set(t.scale, t.scale);
       this.#labelContainer.position.set(t.x, t.y);
     }
+    for (const c of this.#elementTags) {
+      const t = labelTransform(eff, cssW);
+      c.scale.set(t.scale, t.scale);
+      c.position.set(t.x, t.y);
+    }
     // The reach tags are world-space text like the labels and ride the same transform.
     if (this.#reachTags) {
       const t = labelTransform(eff, cssW);
       this.#reachTags.scale.set(t.scale, t.scale);
       this.#reachTags.position.set(t.x, t.y);
     }
+  }
+
+  /** Build the tag layer of each entity the zone asked for. A layer that is off draws
+   *  no tags: text on an element nobody can see is a caption floating over the plan. */
+  #buildElementTags(opts: PaintRequest, app: PlanAppearance, pal: PlanPalette, fitted: { w: number; h: number }): void {
+    const request = opts.tags;
+    if (!request) return;
+    const baseFont = Math.max(fitted.w, fitted.h) * 0.02;
+    const fontFamily = getComputedStyle(this.#themeRoot).getPropertyValue("--mono").trim() || "monospace";
+    const one = (entity: TagEntity, placed: PlacedTag[], req: { primary?: string | null | undefined; secondary?: string | null | undefined }) => {
+      if (placed.length === 0) return;
+      const primary = overrideOr(req.primary, overrideOr(app[entity]?.line, pal[LAYER_THEME_COLOUR[entity]]));
+      const secondary = usableColour(req.secondary) ? overrideOr(req.secondary, primary) : primary;
+      const container = buildElementTags(placed, { primary, secondary }, fontFamily);
+      container.label = `${entity}Tags`;
+      container.enableRenderGroup();
+      this.#root.addChild(container);
+      this.#elementTags.push(container);
+    };
+    if (request.ffe) one("ffe", placeElementTags("ffe", this.#activeFfe(), request.ffe, baseFont), request.ffe);
+    if (request.spaces) one("spaces", placeElementTags("spaces", this.#activeSpaces(), request.spaces, baseFont), request.spaces);
+    if (request.floors) one("floors", placeElementTags("floors", this.#activeFloors(), request.floors, baseFont), request.floors);
+    if (request.ceilings) one("ceilings", placeElementTags("ceilings", this.#activeCeilings(), request.ceilings, baseFont), request.ceilings);
   }
 
   #render(): void {

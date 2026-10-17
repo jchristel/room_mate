@@ -34,6 +34,7 @@
 // Same call site, two implementations — which is the entire point of having a
 // seam.
 
+import type { TagsRequest } from "./elementTags.js";
 import type { Ceiling, Door, Floor, Item, Rect, Room, Space, WindowOpening } from "./types.js";
 
 /** Search state, applied WITHOUT a re-render. Preserving that property is an
@@ -187,6 +188,14 @@ export interface PaintRequest {
    * not a thing on it.
    */
   reach?: ReachLayer | undefined;
+
+  /**
+   * The text written on FF&E items, spaces, ceilings and floors, per entity. Absent for
+   * an entity means no tags on it. Placed on each element's own outline and sized to
+   * it (`elementTags.ts`), above the element layers with the room labels; an entity
+   * whose layer is off draws none.
+   */
+  tags?: TagsRequest | undefined;
 }
 
 /**

@@ -9,6 +9,7 @@
 
 import { fetchJson } from "./api.js";
 import { getState, setState } from "./store.js";
+import { DEFAULT_TAG_SETTINGS, TAG_ENTITIES, type TagSettings } from "../elementTags.js";
 import type { PlanAppearance } from "../../renderer/seam.js";
 import type { ColourPlan } from "../colour.js";
 
@@ -58,6 +59,7 @@ interface ResolvedSettings {
     appearance?: ViewerAppearance;
     colour_plans?: ColourPlan[];
     hover?: HoverProperties;
+    tags?: Partial<TagSettings>;
   };
 }
 
@@ -100,13 +102,14 @@ export function applySelectionColours(appearance: ViewerAppearance): void {
  */
 export async function loadAppearance(projectId: string | null): Promise<void> {
   if (!projectId) {
-    setState({ appearance: {}, colourPlans: [], hoverProperties: {} });
+    setState({ appearance: {}, colourPlans: [], hoverProperties: {}, tagSettings: DEFAULT_TAG_SETTINGS });
     applySelectionColours({});
     return;
   }
   let appearance: ViewerAppearance = {};
   let colourPlans: ColourPlan[] = [];
   let hoverProperties: HoverProperties = {};
+  let tagSettings: TagSettings = DEFAULT_TAG_SETTINGS;
   try {
     // Both fields from ONE read, deliberately: they are two fields of one
     // settings file fetched on one trigger, and a second request would be a
@@ -115,10 +118,12 @@ export async function loadAppearance(projectId: string | null): Promise<void> {
     appearance = data.settings?.appearance ?? {};
     colourPlans = data.settings?.colour_plans ?? [];
     hoverProperties = data.settings?.hover ?? {};
+    tagSettings = tagSettingsOf(data.settings?.tags);
   } catch {
     appearance = {};
     colourPlans = [];
     hoverProperties = {};
+    tagSettings = DEFAULT_TAG_SETTINGS;
   }
   // Only if the project is still the one asked for: two project changes in
   // quick succession would otherwise let the slower response win.
@@ -130,7 +135,16 @@ export async function loadAppearance(projectId: string | null): Promise<void> {
     appearance,
     colourPlans,
     hoverProperties,
+    tagSettings,
     zones: getState().zones.map((z) => ({ ...z, colourPlan: active })),
   });
   applySelectionColours(appearance);
+}
+
+/** The project's tag settings, with the default for any entity the file leaves out
+ *  (a project written before they existed). */
+function tagSettingsOf(read: Partial<TagSettings> | undefined): TagSettings {
+  const out = { ...DEFAULT_TAG_SETTINGS };
+  for (const entity of TAG_ENTITIES) if (read?.[entity]) out[entity] = read[entity]!;
+  return out;
 }
