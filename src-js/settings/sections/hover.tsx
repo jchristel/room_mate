@@ -13,7 +13,7 @@
 // every row is typed, and a name nothing carries costs the reader the feature
 // rather than the tooltip.
 
-import { Block, Field, TextInput } from "../fields.js";
+import { Block, Field, TextInput, Warn } from "../fields.js";
 import type { HoverProperties, Settings } from "../types.js";
 
 const EMPTY: HoverProperties = {};
@@ -44,6 +44,7 @@ export function HoverSection({
   return (
     <Block
       title="Hover"
+      section="hover"
       hint={
         <>
           Which property the viewer shows in the tooltip when the pointer rests on each kind of element. Left blank, it
@@ -56,7 +57,7 @@ export function HoverSection({
     >
       <div className="hover-grid">
         {ENTITIES.map((e) => (
-          <Field key={e.key} label={e.label}>
+          <Field key={e.key} label={<>{e.label} <Warn setting={`hover.${e.key}`} /></>}>
             <TextInput
               value={hover[e.key] ?? ""}
               size={24}

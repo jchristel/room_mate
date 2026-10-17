@@ -46,6 +46,7 @@ export type { RoomAppearance } from "./generated/RoomAppearance";
 export type { ElementAppearance } from "./generated/ElementAppearance";
 export type { OutlineAppearance } from "./generated/OutlineAppearance";
 export type { HoverProperties } from "./generated/HoverProperties";
+export type { SettingFinding } from "./generated/SettingFinding";
 export type { ElementTags } from "./generated/ElementTags";
 export type { TagSettings } from "./generated/TagSettings";
 export type { ProjectFileSummary } from "./generated/ProjectFileSummary";

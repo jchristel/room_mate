@@ -9,7 +9,7 @@
 // The colours default to the layer's own line colour, so a tag reads as part of the
 // layer it labels; the swatch shows that colour while the setting is unset.
 
-import { Block, Field, OptionalColour } from "../fields.js";
+import { Block, Field, OptionalColour, Warn } from "../fields.js";
 import { StringList } from "../stringList.js";
 import type { ElementTags, Settings, TagSettings } from "../types.js";
 
@@ -36,6 +36,7 @@ export function TagsSection({
   return (
     <Block
       title="Element tags"
+      section="tags"
       hint={
         <>
           The text the viewer writes on each FF&amp;E item, space, ceiling and floor when its <strong>tags</strong> are
@@ -50,7 +51,7 @@ export function TagsSection({
       {ENTITIES.map((e) => {
         const tag = settings.tags[e.key];
         return (
-          <Field key={e.key} label={e.label}>
+          <Field key={e.key} label={<>{e.label} <Warn setting={`tags.${e.key}`} /></>}>
             <StringList
               values={tag.fields}
               placeholder={e.placeholder}

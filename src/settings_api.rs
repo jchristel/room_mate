@@ -563,7 +563,10 @@ pub async fn http_get_project(
 ) -> Result<Json<ProjectSettingsResponse>, (StatusCode, String)> {
     let dir = require_dir(&state)?;
     let (file, settings) = get_project_file(&dir, &project_id).map_err(to_http)?;
-    Ok(Json(ProjectSettingsResponse { file, settings }))
+    // Checked against the data as it is NOW, on every read of the editor: a push since
+    // startup can change the answer, and the page is where it is acted on.
+    let findings = crate::settings_check::check(&state, &settings);
+    Ok(Json(ProjectSettingsResponse { file, settings, findings }))
 }
 
 /// `GET /api/settings/resolve/{id}` — the viewer's read-only, default-falling-
@@ -577,7 +580,7 @@ pub async fn http_get_project_resolved(
 ) -> Result<Json<ProjectSettingsResponse>, (StatusCode, String)> {
     let dir = require_dir(&state)?;
     let (file, settings) = resolve_project_file(&dir, &project_id).map_err(to_http)?;
-    Ok(Json(ProjectSettingsResponse { file, settings }))
+    Ok(Json(ProjectSettingsResponse { file, settings, findings: Vec::new() }))
 }
 
 /// `POST /api/settings/projects` (create)
