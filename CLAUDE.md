@@ -591,6 +591,15 @@ stale. So a Rust field added without re-running the tests is a red PR — and a
 field added without a control on the page is a type error there, which is the
 point: the page could not silently stop exposing a setting.
 
+**The settings page's defaults are `src-js/settings/defaults.ts`, once.** A new project
+starts from every setting at its Rust default, and the sections import the same
+constants as their fallback; a second copy in a section is how page and server drift.
+A save WRITES every section, defaults included (`Settings::fill_defaults`, in
+`save_project`), so a file lists what the project runs on; the cost is that a later
+change to a default does not reach a project already written. Only a setting whose
+default is *none* stays absent, since TOML has no null. Each section is a `<details>`
+expander (`Block`), closed except Identity, and stays mounted while closed.
+
 **The UI framework is React, and that was measured, not preferred.** Rust+WASM
 (Leptos) was built against the same slice and lost, chiefly because a committed
 wasm cannot be reproduced across Windows and Linux. The numbers and what would

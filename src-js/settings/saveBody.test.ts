@@ -1,22 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { defaultSettings } from "./defaults.js";
 import { saveBody } from "./saveBody.js";
 import type { Settings } from "./types.js";
 
 /** A settings object as `GET /api/settings/projects/{id}` returns one.
  *  Duplicated rather than shared, per the house rule on per-module helpers. */
-const settings = (extra: Partial<Settings> = {}): Settings => ({
-  project_id: "p1",
-  is_default: false,
-  comparison_properties: [],
-  sources: {},
-  hierarchy: [],
-  builtin_properties: [],
-  room_label: ["$name", "$id"],
-  milestones: [],
-  colour_plans: [],
-  ...extra,
-});
+const settings = (extra: Partial<Settings> = {}): Settings => ({ ...defaultSettings(), project_id: "p1", ...extra });
 
 /** What actually goes over the wire, which is where an `undefined` disappears. */
 const wire = (s: Settings): Record<string, unknown> => JSON.parse(JSON.stringify(saveBody(s))) as Record<string, unknown>;

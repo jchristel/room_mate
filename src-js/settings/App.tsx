@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiGet, apiSend, persistSelection, seedProjectId } from "./common.js";
+import { defaultSettings } from "./defaults.js";
 import { saveBody } from "./saveBody.js";
 import { AppearanceSection } from "./sections/appearance.js";
 import { AreasSection } from "./sections/areas.js";
@@ -65,20 +66,12 @@ interface Editing {
 
 type Message = { ok: boolean; text: string } | null;
 
-const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+/** Open or close every section's expander. They are plain `<details>`, so this
+ *  is the DOM's own state and nothing the settings object has to carry. */
+const setAllSections = (open: boolean) =>
+  document.querySelectorAll<HTMLDetailsElement>("details.block").forEach((d) => (d.open = open));
 
-/** A project that does not exist yet: the Rust defaults, spelled once. */
-const blankSettings = (): Settings => ({
-  project_id: "",
-  is_default: false,
-  comparison_properties: [],
-  sources: {},
-  hierarchy: [],
-  builtin_properties: [],
-  room_label: ["$name", "$id"],
-  milestones: [],
-  colour_plans: [],
-});
+const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 export function App() {
   const [projects, setProjects] = useState<ProjectFileSummary[] | null>(null);
@@ -207,7 +200,7 @@ export function App() {
   const newProject = () => {
     persistSelection(null);
     setActiveId(null);
-    setEditing({ file: null, settings: blankSettings(), isNew: true });
+    setEditing({ file: null, settings: defaultSettings(), isNew: true });
     setMessage(null);
     // A project that does not exist yet has nothing stored against it.
     setModels([]);
@@ -315,6 +308,15 @@ export function App() {
                   <option key={format} value={format} />
                 ))}
               </datalist>
+
+              <div className="expand-bar">
+                <button type="button" className="action" onClick={() => setAllSections(true)}>
+                  expand all
+                </button>
+                <button type="button" className="action" onClick={() => setAllSections(false)}>
+                  collapse all
+                </button>
+              </div>
 
               {/* Keyed by project, so a section's local text state (a
                   half-typed number, an unadded chip) cannot survive a switch

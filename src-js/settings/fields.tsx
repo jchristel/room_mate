@@ -293,13 +293,33 @@ export function ListControls<T>({
   );
 }
 
-/** A section of the editor: heading, the "why this exists" hint, and its rows. */
-export function Block({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
+/**
+ * A section of the editor: heading, the "why this exists" hint, and its rows --
+ * an expander, so the page is a list of headings to open rather than one long
+ * scroll. Closed by default except where `open` says otherwise.
+ *
+ * Its content stays MOUNTED while closed (a `<details>` only hides it), so a
+ * half-typed number or an unadded chip in a closed section is not lost, and a
+ * save sends the same settings whichever sections are open.
+ */
+export function Block({
+  title,
+  hint,
+  open = false,
+  children,
+}: {
+  title: string;
+  hint?: ReactNode;
+  open?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <section className="block">
-      <h2>{title}</h2>
+    <details className="block" open={open}>
+      <summary>
+        <h2>{title}</h2>
+      </summary>
       {hint !== undefined && <p className="hint">{hint}</p>}
       {children}
-    </section>
+    </details>
   );
 }

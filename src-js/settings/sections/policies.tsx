@@ -10,6 +10,7 @@
 // Doors and windows share `OpeningPolicy`, and the editor is shared with them;
 // FF&E and spaces have their own shapes for reasons their Rust docs give.
 
+import { FFE_DEFAULT, OPENING_DEFAULT } from "../defaults.js";
 import { Block, Field, NumberInput, OptionalSelect, OptionalText, Row, RowHead, Select } from "../fields.js";
 import { StringList } from "../stringList.js";
 import type {
@@ -26,17 +27,6 @@ import type {
 } from "../types.js";
 
 /** Rust defaults, for a project whose section is absent. */
-const OPENING_DEFAULT: OpeningPolicy = {
-  room_attribution: "to_room_then_from_room",
-  room_resolution: "off",
-  comparison_properties: [],
-};
-const FFE_DEFAULT: FfePolicy = {
-  nested_components: "exclude",
-  room_resolution: "off",
-  comparison_properties: [],
-};
-
 const ATTRIBUTION: readonly (readonly [RoomAttribution, string])[] = [
   ["to_room_then_from_room", "to room, else from room (default)"],
   ["to_room", "to room only"],
