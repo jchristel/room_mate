@@ -17,7 +17,8 @@
 // element and get a self-contained document back.
 
 import { holeClassName, resolveRoomAppearance, roomClassName } from "../appearance.js";
-import { centroid, loopBox, pointsAttr } from "../geometry.js";
+import { pointsAttr } from "../geometry.js";
+import { placeLabel } from "../labelPlacement.js";
 import type { AppearanceContext, Rect, Room, RoomAppearance } from "../types.js";
 import { paintGlyphs, paintSurfaces, type OverlayLayers } from "./overlays.js";
 import { paintReach } from "./reach.js";
@@ -59,10 +60,8 @@ function titleEl(doc: Document, text: string): SVGElement {
  * The three-state `label` rule lives here (see `Room.label`): absent falls back
  * to name then id; present-but-empty renders nothing at all.
  *
- * The font size is fitted to the room's OWN bbox, with `baseFont` as a ceiling.
- * 0.6 is the mono glyph aspect ratio; 0.9/0.8 are margins. Note for P3: a
- * bitmap font scales differently, so re-derive this rather than porting the
- * arithmetic across.
+ * Position and font size come from `placeLabel`: the room's real outline, not its
+ * bounding box, with `baseFont` as a ceiling -- the same call the GL labels make.
  */
 export function addLabel(svg: SVGElement, room: Room, baseFont: number): SVGElement | null {
   const fields =
@@ -72,16 +71,14 @@ export function addLabel(svg: SVGElement, room: Room, baseFont: number): SVGElem
   const outer = room.loops?.[0];
   if (!outer) return null;
 
-  const box = loopBox(outer);
   const longest = fields.reduce((n, f) => Math.max(n, String(f).length), 1);
-  const widthLimited = (box.w * 0.9) / longest / 0.6;
-  const heightLimited = (box.h * 0.8) / (1 + 0.7 * (fields.length - 1));
-  const fontSize = Math.min(baseFont, widthLimited, heightLimited);
+  const placed = placeLabel(room, longest, fields.length, baseFont);
   // `!(x > 0)` rather than `x <= 0` so NaN is rejected too.
-  if (!(fontSize > 0)) return null;
+  if (!placed || !(placed.fontSize > 0)) return null;
+  const fontSize = placed.fontSize;
 
   const doc = svg.ownerDocument;
-  const c = centroid(outer);
+  const c = placed;
   const label = doc.createElementNS(SVG_NS, "text");
   label.setAttribute("class", "label");
   label.setAttribute("x", String(c.x));
