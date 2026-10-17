@@ -35,6 +35,7 @@ import { AppearanceSection } from "./sections/appearance.js";
 import { AreasSection } from "./sections/areas.js";
 import { ColourPlansSection } from "./sections/colourPlans.js";
 import { HierarchySection } from "./sections/hierarchy.js";
+import { FindingsContext } from "./fields.js";
 import { HoverSection } from "./sections/hover.js";
 import { TagsSection } from "./sections/tags.js";
 import { IdentitySection } from "./sections/identity.js";
@@ -51,6 +52,7 @@ import type {
   ProjectSnapshotsResponse,
   ReferenceSnapshotInfo,
   ReferenceSnapshotList,
+  SettingFinding,
   ReferenceUploadResult,
   SaveResponse,
   Settings,
@@ -63,6 +65,8 @@ interface Editing {
   file: string | null;
   settings: Settings;
   isNew: boolean;
+  /** Property names the settings use that the data lacks (see `Warn`). */
+  findings: SettingFinding[];
 }
 
 type Message = { ok: boolean; text: string } | null;
@@ -164,7 +168,7 @@ export function App() {
         const data = await apiGet<ProjectSettingsResponse>(`/api/settings/projects/${encodeURIComponent(projectId)}`);
         persistSelection(projectId);
         setActiveId(projectId);
-        setEditing({ file: data.file, settings: data.settings, isNew: false });
+        setEditing({ file: data.file, settings: data.settings, isNew: false, findings: data.findings ?? [] });
         setMessage(null);
         setLabelsBySource({});
         setStatusBySource({});
@@ -198,10 +202,20 @@ export function App() {
     [],
   );
 
+  // Re-asked after a save: what the data lacks depends on the settings just written.
+  const refreshFindings = useCallback(async (projectId: string) => {
+    try {
+      const data = await apiGet<ProjectSettingsResponse>(`/api/settings/projects/${encodeURIComponent(projectId)}`);
+      setEditing((current) => (current ? { ...current, findings: data.findings ?? [] } : current));
+    } catch {
+      /* the triangles are a courtesy; a failed read leaves the last answer */
+    }
+  }, []);
+
   const newProject = () => {
     persistSelection(null);
     setActiveId(null);
-    setEditing({ file: null, settings: defaultSettings(), isNew: true });
+    setEditing({ file: null, settings: defaultSettings(), isNew: true, findings: [] });
     setMessage(null);
     // A project that does not exist yet has nothing stored against it.
     setModels([]);
@@ -224,7 +238,8 @@ export function App() {
         const projectId = saved.project_id;
         persistSelection(projectId);
         setActiveId(projectId);
-        setEditing({ file: `${projectId}.toml`, settings: saved, isNew: false });
+        setEditing({ file: `${projectId}.toml`, settings: saved, isNew: false, findings: [] });
+        void refreshFindings(projectId);
         setMessage({ ok: true, text: "✓ saved & applied live" });
         void loadProjects();
         void loadProjectData(projectId, saved);
@@ -291,6 +306,7 @@ export function App() {
           {editing === null ? (
             <div className="placeholder">Select a project on the left, or create a new one.</div>
           ) : (
+            <FindingsContext.Provider value={editing.findings}>
             <form
               className="editor"
               autoComplete="off"
@@ -345,6 +361,7 @@ export function App() {
                 <span className={`save-message${message ? (message.ok ? " ok" : " bad") : ""}`}>{message?.text}</span>
               </div>
             </form>
+            </FindingsContext.Provider>
           )}
         </div>
       </main>

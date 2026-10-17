@@ -12,7 +12,7 @@
 // into one object with fields for every mode, and rebuilt the wire shape on
 // save.
 
-import { Block, Field, ListControls, NumberInput, OptionalText, Row, RowHead, Select, TextInput } from "../fields.js";
+import { Block, Field, ListControls, NumberInput, OptionalText, Row, RowHead, Select, TextInput, Warn } from "../fields.js";
 import { StringList } from "../stringList.js";
 import type { Band, Colouring, ColourMode, ColourPlan, CompareOp, Settings } from "../types.js";
 
@@ -100,6 +100,7 @@ export function ColourPlansSection({
   return (
     <Block
       title="Colour plans"
+      section="colour_plans"
       hint="Named room-colouring configs the viewer's colour picker offers. At most one may be active (the picker's default; “No colour” always overrides). All colouring is computed in the browser — the server just stores these."
     >
       <div className="rows">
@@ -120,6 +121,7 @@ export function ColourPlansSection({
               </label>
               <span>name</span>
               <TextInput value={plan.name} size={18} placeholder="Area check" onChange={(name) => setPlan(index, { ...plan, name })} />
+              <Warn setting={`colour_plans.${plan.name}`} />
               <span>mode</span>
               <Select
                 value={plan.mode.kind}
