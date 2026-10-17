@@ -10,7 +10,7 @@
 // legend names every route drawn on the level**, because colour alone says nothing on
 // paper. Open zones are not drawn: they are authoring, not the drawing.
 
-import { MM_PER_FT, type RouteDrawing } from "../route.js";
+import { MM_PER_FT, routeTagFont, type RouteDrawing, type RouteTag } from "../route.js";
 import type { Rect } from "../../renderer/types.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -86,5 +86,34 @@ export function appendRoutes(
     legend.appendChild(text);
   });
   group.appendChild(legend);
+  svg.appendChild(group);
+}
+
+/**
+ * The route tags, over the routes: each hop's length and the walk so far in brackets.
+ * The ink, on a paper halo (`paint-order: stroke`), so a tag reads over the route's own
+ * colour and the plan under it. Its own group, `route-tags`, after `routes`, so a
+ * viewer of the file can hide it; nothing is emitted for no tags.
+ */
+export function appendRouteTags(svg: SVGElement, tags: readonly RouteTag[], fitted: Rect, pal: RoutePalette): void {
+  if (tags.length === 0) return;
+  const font = routeTagFont(fitted);
+  const group = el("g", {
+    class: "route-tags",
+    "font-size": font,
+    "font-family": "monospace",
+    "text-anchor": "middle",
+    "dominant-baseline": "central",
+    fill: pal.ink,
+    stroke: pal.paper,
+    "stroke-opacity": 0.85,
+    "stroke-width": font * 0.22,
+    "paint-order": "stroke",
+  });
+  for (const tag of tags) {
+    const t = el("text", { x: tag.at.x, y: -tag.at.y, "data-route": tag.routeId });
+    t.textContent = tag.text;
+    group.appendChild(t);
+  }
   svg.appendChild(group);
 }

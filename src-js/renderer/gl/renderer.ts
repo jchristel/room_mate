@@ -28,12 +28,12 @@ import type { ElementRef, HighlightState, PaintRequest, Pick, PlanRenderer } fro
 import type { Ceiling, Door, Floor, Item, Loop, Rect, Room, Space, WindowOpening } from "../types.js";
 import { overrideOr, parseColour, readPalette, withAlpha, type PlanPalette, type Rgba } from "./colour.js";
 import { FillBatch, type FillMesh, type VertexRange } from "./fills.js";
-import { buildLabels, type RoomLabel } from "./labels.js";
+import { buildLabels, buildReachTags, type RoomLabel } from "./labels.js";
 import { LineBatch, ringSegments, type LineMesh, type Segment } from "./lines.js";
 import { buildDoorGlyph } from "./doorGlyph.js";
 import { buildWindowGlyph } from "./windowGlyph.js";
 import { buildItemGlyph } from "./itemGlyph.js";
-import { reachCells } from "../reach.js";
+import { reachCells, reachTags } from "../reach.js";
 import { DoorIndex, RoomIndex, SurfaceIndex, pickStack, type PickableDoor } from "./spatial.js";
 import { fitViewToAspect, labelTransform } from "./viewport.js";
 
@@ -47,6 +47,8 @@ const W_HOLE = 1;
 /** `.dim { opacity: 0.15 }`. */
 const DIM_ALPHA = 0.15;
 /** `svg.plan.areas-active` ghosting. */
+/** The most reach distance tags drawn at once; a finer grid is thinned to this. */
+const MAX_REACH_TAGS = 4000;
 const GHOST_ROOMS = 0.16;
 const GHOST_LABELS = 0.22;
 /** Grid spacing in world units, as `paintLevel` uses. */
@@ -132,6 +134,7 @@ export class GlPlanRenderer implements PlanRenderer {
   #windowMesh: FillMesh | null = null;
   #ffeMesh: FillMesh | null = null;
   #reachMesh: FillMesh | null = null;
+  #reachTags: Container | null = null;
   #holeLines: LineMesh | null = null;
   #outlines: LineMesh | null = null;
   #spaceLines: LineMesh | null = null;
@@ -597,6 +600,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#windowMesh?.destroy();
     this.#ffeMesh?.destroy();
     this.#reachMesh?.destroy();
+    this.#reachTags?.destroy({ children: true });
     this.#holeLines?.destroy();
     this.#outlines?.destroy();
     this.#spaceLines?.destroy();
@@ -610,6 +614,7 @@ export class GlPlanRenderer implements PlanRenderer {
     this.#windowMesh = null;
     this.#ffeMesh = null;
     this.#reachMesh = null;
+    this.#reachTags = null;
     this.#holeLines = null;
     this.#outlines = null;
     this.#spaceLines = null;
@@ -967,6 +972,22 @@ export class GlPlanRenderer implements PlanRenderer {
     // of it. Its translucency (see `ReachLayer.alpha`) is what lets the layout
     // beneath show; order alone would hide it.
     if (this.#reachMesh) { this.#reachMesh.mesh.label = "reach"; this.#root.addChild(this.#reachMesh.mesh); }
+    // The distance tags sit on the heat map and under the room labels. A render
+    // group for the reason the labels have one: pan and zoom move the container,
+    // not every tag in it. Thinned to a budget (`reachTags`), never unbounded.
+    const tagged = this.#lastPaint.reach;
+    if (tagged?.tags) {
+      const { tags, font } = reachTags(tagged, MAX_REACH_TAGS);
+      if (tags.length > 0) {
+        this.#reachTags = buildReachTags(tags, font, {
+          ink: pal.ink,
+          fontFamily: getComputedStyle(this.#themeRoot).getPropertyValue("--mono").trim() || "monospace",
+        });
+        this.#reachTags.label = "reachTags";
+        this.#reachTags.enableRenderGroup();
+        this.#root.addChild(this.#reachTags);
+      }
+    }
 
     // Labels follow the rooms as well as their own toggle. A label is the room's
     // name written on the room; with the room gone it is a caption floating over
@@ -1246,6 +1267,12 @@ export class GlPlanRenderer implements PlanRenderer {
       const t = labelTransform(eff, cssW);
       this.#labelContainer.scale.set(t.scale, t.scale);
       this.#labelContainer.position.set(t.x, t.y);
+    }
+    // The reach tags are world-space text like the labels and ride the same transform.
+    if (this.#reachTags) {
+      const t = labelTransform(eff, cssW);
+      this.#reachTags.scale.set(t.scale, t.scale);
+      this.#reachTags.position.set(t.x, t.y);
     }
   }
 

@@ -206,6 +206,8 @@ export interface ReachLayer {
   limit_mm: number;
   /** Opacity of the cells, 0 to 1. Absent is `REACH_ALPHA`. */
   alpha?: number | undefined;
+  /** Write each covered cell's walk on it, in metres. Off when absent. */
+  tags?: boolean | undefined;
 }
 
 /**

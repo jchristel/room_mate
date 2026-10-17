@@ -411,6 +411,17 @@ The viewer draws it as a heat map (below).
   storey the walk touched, so each exported level takes its own grid and a level the
   walk missed draws none. The walk is cut into 24 bands, one path each (a file with
   one element per cell would be tens of thousands), and a legend states the scale.
+- **Tags: route hops and reach cells, each its own zone toggle, both default OFF**
+  (`ZoneRow.showRouteTags` / `showReachTags`, in the Layers menu; the SVG export reads
+  them like every other toggle). A route tag is a hop's length and, in brackets, the
+  walk from the start to the END of that hop (`routeHops`): the lengths are the
+  server's (`step.length`, and what is left of `distance_ft` for the last leg), never
+  re-measured from the polyline, which only says where on the plan a hop lies. A
+  reach tag is the cell's walk in metres (`reachTags`), thinned by whole rows and
+  columns only past a budget (4,000 on screen, 20,000 in a file) so a fine grid cannot
+  build an unbounded number of text objects. The GL tag container is NOT moved by the
+  scene: like the labels it needs the view transform set in `#pushView`, and without
+  it the tags exist, report in `debugState().order` and draw nowhere.
 - **One storey at a time.** Vertical edges are skipped: a walk on one plate does not continue by lift.
 - **A room too small for a cell is judged on its inside point**, so a cupboard
   still gets a verdict. The grid's origin is a whole multiple of the spacing, so

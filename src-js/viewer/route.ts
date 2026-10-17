@@ -275,6 +275,101 @@ export function routeDrawingsOnLevel(routes: readonly DrawableRoute[], levelId: 
   return out;
 }
 
+/** One route tag: where it sits and what it says. */
+export interface RouteTag {
+  routeId: string;
+  colour: string;
+  at: PlanPoint;
+  /** "7.1 m (19.0 m)": this hop, then the whole walk so far from the start. */
+  text: string;
+}
+
+/** The font size of a route tag in the plan's own unit, from the level's fitted frame:
+ *  the screen overlay and the SVG export both use it, so a file's tags are as large
+ *  against the drawing as the screen's. */
+export const routeTagFont = (fitted: { w: number; h: number }): number => Math.max(fitted.w, fitted.h) * 0.005;
+
+const M_PER_FT = 0.3048;
+const metresText = (ft: number) => `${(ft * M_PER_FT).toFixed(1)} m`;
+
+/** Two plan points that are one point to within a tenth of a millimetre. A route's
+ *  polyline repeats a door's point (in, through, out), exactly. */
+const samePoint = (a: PlanPoint, b: PlanPoint) => Math.abs(a.x - b.x) < 3e-4 && Math.abs(a.y - b.y) < 3e-4;
+
+/** The point half way along a polyline, by length. */
+function midpoint(points: readonly PlanPoint[]): PlanPoint {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) total += Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y);
+  let left = total / 2;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (left <= len && len > 0) return { x: a.x + ((b.x - a.x) * left) / len, y: a.y + ((b.y - a.y) * left) / len };
+    left -= len;
+  }
+  return points[points.length - 1] ?? { x: 0, y: 0 };
+}
+
+/**
+ * The tags of one route path: for each hop (start to the first crossing, crossing to
+ * crossing, last crossing to the end) the length of the hop and, in brackets, the
+ * length from the start to the END of that hop. One rule for the plan and the SVG
+ * export, like `routeDrawingsOnLevel`; the level of a tag is the level its hop starts
+ * on, and the last bracket is the route's own `distance_ft`.
+ *
+ * Lengths are the server's (`step.length`, and what is left of `distance_ft` for the
+ * final leg), never re-measured from the polyline, so a tag says what the route
+ * answer says. The polyline is used only to find where on the plan a hop lies.
+ */
+export function routeHops(path: RoutePath | null): { levelId: string; at: PlanPoint; segmentFt: number; totalFt: number }[] {
+  if (!path?.found) return [];
+  const flat = path.segments.flatMap((s) => s.points.map((p) => ({ levelId: s.level_id, p })));
+  if (flat.length === 0) return [];
+  const out: { levelId: string; at: PlanPoint; segmentFt: number; totalFt: number }[] = [];
+  let cursor = 0;
+  let total = 0;
+  const place = (from: number, to: number) => {
+    const first = flat[from]!;
+    const run: PlanPoint[] = [];
+    for (let i = from; i <= to && flat[i]!.levelId === first.levelId; i++) run.push(flat[i]!.p);
+    return { levelId: first.levelId, at: midpoint(run) };
+  };
+  for (const step of path.steps) {
+    const len = step.length ?? 0;
+    let idx = -1;
+    for (let i = cursor; i < flat.length; i++) {
+      if (samePoint(flat[i]!.p, step.point)) {
+        idx = i;
+        // The door's point is repeated; the hop ends at the last of the run.
+        while (idx + 1 < flat.length && samePoint(flat[idx + 1]!.p, step.point)) idx++;
+        break;
+      }
+    }
+    total += len;
+    // A crossing the polyline does not pass through still gets its tag, at the point.
+    const where = idx >= 0 ? place(cursor, idx) : { levelId: flat[cursor]!.levelId, at: step.point };
+    out.push({ ...where, segmentFt: len, totalFt: total });
+    if (idx >= 0) cursor = idx;
+  }
+  const rest = path.distance_ft - total;
+  if (rest > 0.05 && cursor < flat.length - 1) out.push({ ...place(cursor, flat.length - 1), segmentFt: rest, totalFt: path.distance_ft });
+  return out;
+}
+
+/** What each route's hops say on `levelId`: the tags of every route on the level. */
+export function routeTagsOnLevel(routes: readonly DrawableRoute[], levelId: string | null): RouteTag[] {
+  if (levelId === null) return [];
+  const out: RouteTag[] = [];
+  for (const route of routes) {
+    for (const hop of routeHops(route.path)) {
+      if (hop.levelId !== levelId) continue;
+      out.push({ routeId: route.id, colour: route.colour, at: hop.at, text: `${metresText(hop.segmentFt)} (${metresText(hop.totalFt)})` });
+    }
+  }
+  return out;
+}
+
 /** A point the renderer answers with, as the plan's own coordinates. The renderer's
  *  world has Y down; the data, and the server, have it up. `null` for no answer (the
  *  pointer is off the plan). The one place that flip is written for a position taken

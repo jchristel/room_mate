@@ -115,8 +115,8 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   const reachResult = zone.reach?.result;
   const reachOpacity = zone.reach?.opacity ?? 55;
   const reachLayer = useMemo(
-    () => (reachResult ? layerFor(reachResult, levelId, reachOpacity) : null),
-    [reachResult, levelId, reachOpacity],
+    () => (reachResult ? layerFor(reachResult, levelId, reachOpacity, zone.showReachTags) : null),
+    [reachResult, levelId, reachOpacity, zone.showReachTags],
   );
   useEffect(() => {
     if (levelId !== zone.levelId) setZoneLevel(zone.id, levelId);
