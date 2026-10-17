@@ -27,10 +27,12 @@ import {
   MM_PER_FT,
   planPointOf,
   polylinePoints,
+  routeTagsOnLevel,
   segmentsOnLevel,
   type PlanPoint,
   type RouteState,
 } from "../route.js";
+import { RouteTags } from "./RouteTags.js";
 import { patchZoneRoute } from "./store.js";
 import { handleOf } from "./zoneRegistry.js";
 import { useViewer } from "./useViewer.js";
@@ -46,7 +48,7 @@ export function RouteOverlay({
   levelId: string | null;
   route: RouteState | null;
 }) {
-  const { payload } = useViewer();
+  const { payload, zones } = useViewer();
   // Where a mark is while it is held, so it follows the pointer between the press and
   // the release. Null otherwise.
   const [held, setHeld] = useState<{ which: Which; at: PlanPoint } | null>(null);
@@ -105,6 +107,15 @@ export function RouteOverlay({
       {segments.map((s, i) =>
         s.points.length >= 2 ? <polyline key={i} className="route-line" points={polylinePoints(s.points)} /> : null,
       )}
+      {/* The draft route's own hops, in the zone's route-tag toggle. */}
+      <RouteTags
+        zoneId={zoneId}
+        tags={
+          zones.find((z) => z.id === zoneId)?.showRouteTags
+            ? routeTagsOnLevel([{ id: "draft", name: "", colour: "", path }], levelId)
+            : []
+        }
+      />
       {mark(route.start, "start")}
       {mark(route.end, "end")}
     </g>

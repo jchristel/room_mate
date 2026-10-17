@@ -74,6 +74,13 @@ export interface ZoneRow {
    *  in the way. */
   showRooms: boolean;
   showLabels: boolean;
+  /** The tags written on the routes (each hop's length, then the walk so far in
+   *  brackets) and on the reach heat map (each cell's walk). **Default OFF**: both
+   *  put text over the plan, and a reader who wants the line or the colour alone
+   *  should not have to switch anything off. They are the zone's, and the SVG
+   *  export reads them like every other toggle. */
+  showRouteTags: boolean;
+  showReachTags: boolean;
   /** What this zone lets a click and a hover reach.
    *
    *  **A filter, not an order.** The stack under a pointer is whatever is
@@ -373,6 +380,8 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
       : { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
     showRooms: from?.showRooms ?? true,
     showLabels: from?.showLabels ?? true,
+    showRouteTags: from?.showRouteTags ?? false,
+    showReachTags: from?.showReachTags ?? false,
     pickable: from
       ? { ...from.pickable }
       : { room: true, door: true, window: true, item: true, space: false, ceiling: false, floor: false, area: true },
@@ -416,7 +425,13 @@ export function setLinkViews(on: boolean): void {
  *  entity it is toggling. */
 export function setZoneLayer(
   id: string,
-  patch: { layers?: Partial<Record<ElementEntity, boolean>>; showRooms?: boolean; showLabels?: boolean },
+  patch: {
+    layers?: Partial<Record<ElementEntity, boolean>>;
+    showRooms?: boolean;
+    showLabels?: boolean;
+    showRouteTags?: boolean;
+    showReachTags?: boolean;
+  },
 ): void {
   setState({
     zones: state.zones.map((z) =>
@@ -425,6 +440,8 @@ export function setZoneLayer(
             ...z,
             ...(patch.showRooms === undefined ? {} : { showRooms: patch.showRooms }),
             ...(patch.showLabels === undefined ? {} : { showLabels: patch.showLabels }),
+            ...(patch.showRouteTags === undefined ? {} : { showRouteTags: patch.showRouteTags }),
+            ...(patch.showReachTags === undefined ? {} : { showReachTags: patch.showReachTags }),
             ...(patch.layers ? { layers: { ...z.layers, ...patch.layers } } : {}),
           }
         : z,

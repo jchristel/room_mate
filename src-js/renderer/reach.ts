@@ -78,3 +78,42 @@ export function reachCells(layer: ReachLayer): ReachCell[] {
   }
   return out;
 }
+
+/** One distance tag: the cell's centre in the renderer's flipped space, and its text. */
+export interface ReachTag {
+  x: number;
+  y: number;
+  text: string;
+}
+
+/** The walk as a tag reads it: metres to a decimal, whole above 100 where the
+ *  decimal is noise and would not fit the cell. */
+export function formatReachMetres(mm: number): string {
+  const m = mm / 1000;
+  return m >= 100 ? String(Math.round(m)) : m.toFixed(1);
+}
+
+/**
+ * The distance tags of a layer: one per covered cell, thinned only when there are
+ * more than `maxTags`, so the number of text objects stays a budget a renderer can
+ * meet whatever the grid. Thinning keeps every `stride`-th column and row, and the
+ * `font` grows with it so a thinned tag still fits the span it stands for.
+ *
+ * `font` is in the plan's own unit (feet): the widest tag is five characters of a
+ * 0.6-aspect glyph, which fits one cell span at 0.3 of its width.
+ */
+export function reachTags(layer: ReachLayer, maxTags: number): { tags: ReachTag[]; font: number; stride: number } {
+  const { origin, spacing_ft: s, cols, rows, distance_mm: d } = layer;
+  let covered = 0;
+  for (const mm of d) if (mm >= 0) covered++;
+  const stride = Math.max(1, Math.ceil(Math.sqrt(covered / Math.max(1, maxTags))));
+  const tags: ReachTag[] = [];
+  for (let row = 0; row < rows; row += stride) {
+    for (let col = 0; col < cols; col += stride) {
+      const mm = d[row * cols + col];
+      if (mm === undefined || mm < 0) continue;
+      tags.push({ x: origin.x + (col + 0.5) * s, y: -(origin.y + (row + 0.5) * s), text: formatReachMetres(mm) });
+    }
+  }
+  return { tags, font: 0.3 * s * stride, stride };
+}

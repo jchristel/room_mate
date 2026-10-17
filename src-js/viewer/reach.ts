@@ -138,10 +138,10 @@ export function reachRequest(scope: Scope, state: ReachState): { url: string; bo
 
 /**
  * The layer one zone draws, from the answer: the grid of the zone's storey, at the
- * reader's opacity. `null` when there is no answer or the walk never reached this
+ * reader's opacity, with the distance tags when asked. `null` when there is no answer or the walk never reached this
  * storey, so a zone on another level draws nothing rather than a wrong grid.
  */
-export function layerFor(result: ReachResult, levelId: string | null, opacityPct: number): ReachLayer | null {
+export function layerFor(result: ReachResult, levelId: string | null, opacityPct: number, tags = false): ReachLayer | null {
   if (result.state !== "done" || levelId === null) return null;
   const level = result.body.levels.find((l) => l.level_id === levelId);
   if (!level) return null;
@@ -153,6 +153,7 @@ export function layerFor(result: ReachResult, levelId: string | null, opacityPct
     distance_mm: level.distance_mm,
     limit_mm: result.body.limit_mm,
     alpha: Math.min(Math.max(opacityPct, 5), 100) / 100,
+    ...(tags ? { tags: true } : {}),
   };
 }
 

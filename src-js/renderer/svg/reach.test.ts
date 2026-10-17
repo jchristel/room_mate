@@ -68,4 +68,18 @@ describe("paintReach", () => {
     expect(order.indexOf("reach")).toBeGreaterThan(order.indexOf("grid"));
     expect(order.indexOf("reach")).toBeLessThan(order.indexOf("label"));
   });
+
+  it("writes the walk on each cell only when asked, thin ink on a pale halo", () => {
+    const s = svg();
+    paintReach(s, layer([5000, 12000, -1, -2]), fitted);
+    expect(s.querySelector("g.reach-tags")).toBeNull();
+    const t = svg();
+    paintReach(t, { ...layer([5000, 12000, -1, -2]), tags: true }, fitted);
+    const g = t.querySelector("g.reach-tags")!;
+    expect([...g.querySelectorAll("text")].map((x) => x.textContent)).toEqual(["5.0", "12.0"]);
+    expect(g.getAttribute("paint-order")).toBe("stroke");
+    // The tags are over the cells and under the legend.
+    const order = [...t.children].map((c) => c.getAttribute("class"));
+    expect(order).toEqual(["reach", "reach-tags", "reach-legend"]);
+  });
 });

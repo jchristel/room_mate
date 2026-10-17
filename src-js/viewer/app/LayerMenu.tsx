@@ -20,7 +20,7 @@ import { useViewer } from "./useViewer.js";
 export function LayerMenu({ zone }: { zone: ZoneRow }) {
   const { spacesModels } = useViewer();
 
-  const on = LAYERS.filter((l) => zone.layers[l.entity]).length + (zone.showRooms ? 1 : 0) + (zone.showLabels ? 1 : 0);
+  const on = LAYERS.filter((l) => zone.layers[l.entity]).length + (zone.showRooms ? 1 : 0) + (zone.showLabels ? 1 : 0) + (zone.showRouteTags ? 1 : 0) + (zone.showReachTags ? 1 : 0);
   // A layer whose storey match was a GUESS, surfaced on the closed button:
   // the suffix inside the menu says which, this says that.
   const fellBack = LAYERS.some((l) => zone.layers[l.entity] && layerToggleLabel(l, zone.levelId).includes("("));
@@ -34,6 +34,14 @@ export function LayerMenu({ zone }: { zone: ZoneRow }) {
       <label>
         <input type="checkbox" checked={zone.showLabels} onChange={(e) => setZoneLayer(zone.id, { showLabels: e.target.checked })} />{" "}
         Labels
+      </label>
+      <label title="Write each hop's length on the routes, and the walk so far in brackets">
+        <input type="checkbox" checked={zone.showRouteTags} onChange={(e) => setZoneLayer(zone.id, { showRouteTags: e.target.checked })} />{" "}
+        Route tags
+      </label>
+      <label title="Write the walk from the nearest start room on each cell of the reach map">
+        <input type="checkbox" checked={zone.showReachTags} onChange={(e) => setZoneLayer(zone.id, { showReachTags: e.target.checked })} />{" "}
+        Reach tags
       </label>
       {LAYERS.map((layer) => (
         <div key={layer.entity}>

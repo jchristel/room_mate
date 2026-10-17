@@ -27,9 +27,9 @@ import { detectReferenceSources } from "../properties.js";
 import type { Scope } from "../scope.js";
 import { LAYERS, storeyElements, type ElementPayload, type StoreyMatch } from "./layers.js";
 import { fittedBounds } from "./planRenderer.js";
-import { appendRoutes } from "./routeExport.js";
+import { appendRouteTags, appendRoutes } from "./routeExport.js";
 import { layerFor, type ReachResult } from "../reach.js";
-import { routeDrawingsOnLevel, type DrawableRoute } from "../route.js";
+import { routeDrawingsOnLevel, routeTagsOnLevel, type DrawableRoute } from "../route.js";
 import type { RoomsPayload } from "./api.js";
 import type { PlanAppearance } from "../../renderer/seam.js";
 import type { OverlayLayers } from "../../renderer/svg/overlays.js";
@@ -78,6 +78,9 @@ export interface ExportOptions {
    *  already in hand, never re-asked: it holds every storey the walk touched, so a
    *  level it did not reach simply draws none. */
   reach?: { result: ReachResult; opacityPct: number } | undefined;
+  /** The zone's tag toggles: each route hop's length, and each reach cell's walk. */
+  routeTags?: boolean;
+  reachTags?: boolean;
 }
 
 /** One level's element layers, and how each one's storey match resolved. */
@@ -102,6 +105,7 @@ function describe(
   overlays: LevelOverlays,
   routeNames: readonly string[],
   reachLimitMm: number | null,
+  routeTagCount: number,
 ): string {
   const drawn: string[] = [];
   if (opts.showRooms) drawn.push("Rooms");
@@ -116,7 +120,8 @@ function describe(
   const routes = routeNames.length ? ` Routes: ${routeNames.join(", ")}.` : "";
   // The scale is stated because the colours alone say nothing on paper.
   const reach = reachLimitMm === null ? "" : ` Reach: walking distance to ${reachLimitMm / 1000} m.`;
-  return `Level ${level}. Layers: ${drawn.join(", ") || "none"}.${routes}${reach}`;
+  const tags = [routeTagCount > 0 ? "route hop lengths (metres, walk so far in brackets)" : "", reachLimitMm !== null && opts.reachTags ? "reach cell walks (metres)" : ""].filter(Boolean);
+  return `Level ${level}. Layers: ${drawn.join(", ") || "none"}.${routes}${reach}${tags.length ? ` Tags: ${tags.join("; ")}.` : ""}`;
 }
 
 /** One level as a standalone SVG document, or null when it has no rooms to
@@ -142,8 +147,8 @@ export function buildLevelSvg(
 
   const routes = routeDrawingsOnLevel(opts.routes ?? [], level.id);
   const desc = document.createElementNS(SVG_NS, "desc");
-  const reach = opts.reach ? layerFor(opts.reach.result, level.id, opts.reach.opacityPct) : null;
-  desc.textContent = describe(level.name, opts, overlays, routes.map((r) => r.name), reach?.limit_mm ?? null);
+  const reach = opts.reach ? layerFor(opts.reach.result, level.id, opts.reach.opacityPct, opts.reachTags ?? false) : null;
+  desc.textContent = describe(level.name, opts, overlays, routes.map((r) => r.name), reach?.limit_mm ?? null, opts.routeTags ? routeTagsOnLevel(opts.routes ?? [], level.id).length : 0);
   svg.appendChild(desc);
 
   const style = document.createElementNS(SVG_NS, "style");
@@ -174,6 +179,7 @@ export function buildLevelSvg(
   });
   // Last, so a route is over the rooms and every layer, as it is on screen.
   appendRoutes(svg, routes, fitted, { paper: pal.paper, ink: pal.ink }, EXPORT_WIDTH_PX);
+  if (opts.routeTags) appendRouteTags(svg, routeTagsOnLevel(opts.routes ?? [], level.id), fitted, { paper: pal.paper, ink: pal.ink });
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(svg)}`;
 }

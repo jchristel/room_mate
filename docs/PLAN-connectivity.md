@@ -42,6 +42,14 @@ deferred until the stacked-rooms measurement; vertical zones as stored data stay
 - **Not done:** routes sharing a corridor are drawn on top of each other, on a paper halo,
   not offset (decided not needed); a reload shows none until they are switched on.
 
+**Reach (built 2026-10-15 to 17; closed, no further work asked).** A distance field over
+the same graph: server read, GL heat map, SVG export, saved reaches and two tag types
+(route hop lengths, reach cell distances). The rules are in CLAUDE.md's "Reach" section.
+**Saved reaches are requests, never grids**, in the connections document beside routes,
+and a save with no `reaches` key keeps them. *Not built, by choice:* rename, edit or
+colour for a saved reach; several reaches in one SVG; a per-cell source count; an
+on-screen colour legend. Route tags say metres while the route bar says feet.
+
 **The stack view (built 2026-10-10).** "Stack view" in the Connections editor: pick a
 room and see the rooms joined to it by vertical links as a column of levels, with the
 next hop above and below offered. **Only levels that hold a room of the stack are

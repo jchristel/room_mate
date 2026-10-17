@@ -114,6 +114,19 @@ measurements and open questions are in [the plan](docs/PLAN-connectivity.md).
 - **The tables.** While a connections editor or a route tool is open, the open
   areas, vertical links and saved routes are listed on the left of the plan, each
   with its levels and a delete.
+- **Reach.** The **Reach** tool answers "what can be walked to from here": click one
+  or more start rooms, set a walk length and a grid, and the plan shows a heat map of
+  the walking distance from the nearest start (a hose reel's coverage, an exit's travel
+  distance). It uses the same graph as the routes, so a cell's distance agrees with a
+  route's length; **ignore cuts** drops the walls inside open areas. It is per zone, so
+  two zones can compare two reaches.
+- **Saved reaches.** Name a reach and keep it for the project beside the saved routes;
+  they are listed on the left, and **Show** loads one into the focused zone. What is
+  saved is the request, so a reach follows the model when it changes.
+- **Tags.** Two toggles in the **Layers** menu, both off by default: **Route tags** show
+  each hop's length and, in brackets, the walk from the start; **Reach tags** show the
+  distance to the start in each grid cell. The heat map, the legend and any switched-on
+  tags are included in **Export SVGs**.
 
 ## The API, in one screen
 
@@ -129,8 +142,9 @@ Reads, all GET unless noted:
 | `/projects`, `/projects/{id}/buildings`, `/projects/{id}/snapshots`, `/projects/{id}/milestones` | What exists. |
 | `/projects/{id}/validation` | The QA reconciliation: rooms against reference data, openings and items against rooms, spaces against rooms, and whether the models agree on a phase. |
 | `/projects/{id}/areas`, `/projects/{id}/adjacency` | Hierarchy-area rollups, and which rooms share a wall. |
-| `/projects/{id}/connections` | What people have authored: **open areas** (with the walls they keep closed), **vertical links** and **saved routes**. GET reads, PUT replaces the whole document and names the version it read (409 if it moved). A save that leaves out `routes` keeps the saved ones. See [the plan](docs/PLAN-connectivity.md). |
+| `/projects/{id}/connections` | What people have authored: **open areas** (with the walls they keep closed), **vertical links** and **saved routes** and **saved reaches**. GET reads, PUT replaces the whole document and names the version it read (409 if it moved). A save that leaves out `routes` or `reaches` keeps the saved ones. See [the plan](docs/PLAN-connectivity.md). |
 | `/projects/{id}/connectivity` | Which rooms a door joins, the rooms no door reaches, and (with `from` and `to`) the shortest route between two rooms, by a chosen `method` (door to door by default; the answer lists them with their sources), optionally from and to a point inside each room (`from_x`/`from_y`, `to_x`/`to_y`), and optionally for an object of a given `width_mm` and `height_mm`: the answer's `clearance` says the narrowest and lowest points, what could not be checked and the largest object that fits. Doors, the open areas people drew and the vertical links they drew; see [the plan](docs/PLAN-connectivity.md). |
+| `POST /projects/{id}/reach` | A walking-distance grid per storey from one or more start rooms (`sources`), out to `limit_mm` on a `spacing_mm` grid, by the `exact` (default) or `grid` method; `ignore_cuts` treats open areas' walls as open. Each cell is whole mm, `-1` for no room or `-2` for beyond the limit. The same graph as the routes. MCP tool `get_reach`. |
 | `/projects/{id}/stack` | For one room, the rooms over and under it, ranked, as candidates for a vertical link. A suggestion only; nothing is stored. |
 | `/projects/{id}/reports/columns` | What a report over one entity may name: the property names this project's snapshots carry with Revit's own value type, the record's `$intrinsics`, joined reference labels, and the join's measures. Read from each snapshot's property dictionary — a tail read, not a parse. |
 | `/projects/{id}/reports` (**POST**) | Build one report — a schedule or a by-room table — projected to the columns asked for. `?format=csv` renders the same rows as CSV. A POST that reads, because the definition does not fit a query string. |

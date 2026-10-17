@@ -120,3 +120,28 @@ export function buildLabels(
 
   return { container, labels };
 }
+
+/**
+ * The reach distance tags: one bitmap text per tag, centred on its cell, at one
+ * font size in world units (feet). Not tied to a room, so it takes no `Room`, and
+ * built whole by the caller's own count budget (`reachTags`).
+ */
+export function buildReachTags(
+  tags: readonly { x: number; y: number; text: string }[],
+  font: number,
+  style: Pick<LabelStyle, "ink" | "fontFamily">,
+): Container {
+  const container = new Container();
+  const scale = font / ATLAS_PX;
+  for (const tag of tags) {
+    const t = new BitmapText({
+      text: tag.text,
+      style: { fontFamily: style.fontFamily, fontSize: ATLAS_PX, fill: rgbaToHex(style.ink) },
+    });
+    t.anchor.set(0.5, 0.5);
+    t.position.set(tag.x, tag.y);
+    t.scale.set(scale, scale);
+    container.addChild(t);
+  }
+  return container;
+}

@@ -31,7 +31,7 @@ export {
 export { addLabel, paintLevel } from "./svg/paint.js";
 export { exportStyle } from "./svg/style.js";
 export { LEVEL_EPS_MM, onStorey, sameStorey } from "./storey.js";
-export { REACH_ALPHA, reachCells, reachColour } from "./reach.js";
+export { REACH_ALPHA, formatReachMetres, reachCells, reachColour, reachTags } from "./reach.js";
 export { GlPlanRenderer } from "./gl/renderer.js";
 export { DoorIndex, RoomIndex } from "./gl/spatial.js";
 export { buildDoorGlyph, FALLBACK_GLYPH_SIZE, MIN_FOOTPRINT_EXTENT } from "./gl/doorGlyph.js";

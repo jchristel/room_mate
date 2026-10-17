@@ -12,7 +12,7 @@
 // beside the plan, because a colour on paper means nothing without its scale.
 // Absent when nothing is covered, like every other layer with nothing to draw.
 
-import { REACH_ALPHA, reachColour } from "../reach.js";
+import { REACH_ALPHA, reachColour, reachTags } from "../reach.js";
 import type { ReachLayer } from "../seam.js";
 import type { Rect } from "../types.js";
 
@@ -21,6 +21,11 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 /** Steps of the walk, near to far. Enough to read as a gradient, few enough to
  *  keep the file small. */
 const BANDS = 24;
+
+/** The most distance tags a file holds; a finer grid is thinned to this, as the
+ *  screen thins to its own budget. Text is cheaper in a file than on the GPU, so it
+ *  is higher. */
+const MAX_TAGS = 20_000;
 
 const css = (c: readonly [number, number, number]) =>
   `rgb(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)})`;
@@ -73,7 +78,35 @@ export function paintReach(svg: SVGElement, layer: ReachLayer | undefined, fitte
     group.appendChild(el(doc, "path", { d: cells.join(""), fill: css(reachColour(((band + 0.5) / BANDS) * limit, limit)) }));
   });
   svg.appendChild(group);
+  if (layer.tags) paintTags(svg, layer);
   svg.appendChild(legend(doc, layer, fitted));
+}
+
+/** The walk written on each covered cell, in metres. Dark with a pale halo
+ *  (`paint-order: stroke`) so it reads on every colour of the ramp and on either
+ *  paper; literal colours because a custom property means nothing outside this page. */
+function paintTags(svg: SVGElement, layer: ReachLayer): void {
+  const doc = svg.ownerDocument;
+  const { tags, font } = reachTags(layer, MAX_TAGS);
+  if (tags.length === 0) return;
+  const group = el(doc, "g", {
+    class: "reach-tags",
+    "font-size": Math.round(font * 1e4) / 1e4,
+    "text-anchor": "middle",
+    "dominant-baseline": "central",
+    fill: "#111",
+    stroke: "#fff",
+    "stroke-opacity": 0.75,
+    "stroke-width": Math.round(font * 0.18 * 1e4) / 1e4,
+    "paint-order": "stroke",
+    "font-family": "monospace",
+  });
+  for (const tag of tags) {
+    const t = el(doc, "text", { x: Math.round(tag.x * 1e4) / 1e4, y: Math.round(tag.y * 1e4) / 1e4 });
+    t.textContent = tag.text;
+    group.appendChild(t);
+  }
+  svg.appendChild(group);
 }
 
 /** A colour bar from 0 to the limit, bottom left (the routes legend is top left). */

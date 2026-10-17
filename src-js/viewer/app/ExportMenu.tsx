@@ -97,6 +97,8 @@ export function ExportMenu({
           spacesModel: zone.spacesModel,
           appearance,
           routes: drawable,
+          routeTags: zone.showRouteTags,
+          reachTags: zone.showReachTags,
           reach: zone.reach ? { result: zone.reach.result, opacityPct: zone.reach.opacity } : undefined,
         },
         (done, total) => setProgress({ done, total }),

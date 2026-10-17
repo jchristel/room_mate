@@ -12,6 +12,8 @@ import {
   planPointOf,
   polylinePoints,
   routeDrawingsOnLevel,
+  routeHops,
+  routeTagsOnLevel,
   routeRows,
   segmentsOnLevel,
   type RoutePath,
@@ -375,5 +377,45 @@ describe("the height readout and the drawn width", () => {
     for (const none of [0, null, undefined]) {
       expect(routeDrawingsOnLevel([{ id: "r", name: "R", colour: "#000", path, widthMm: none }], "L1")[0]!.bandFt).toBeNull();
     }
+  });
+});
+
+describe("route tags", () => {
+  // Two doors on one level, then a climb: three hops and a last leg, 30 ft in all.
+  const door = (x: number, y: number, length: number) => ({ kind: "door" as const, point: { x, y }, length });
+  const p: RoutePath = {
+    found: true,
+    reason: null,
+    distance_ft: 30,
+    rooms: [],
+    steps: [door(10, 0, 10), door(10, 10, 10)],
+    segments: [
+      // The doors' points are repeated in, through, out, as the server sends them.
+      { level_id: "L1", points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 10, y: 10 }, { x: 10, y: 10 }, { x: 10, y: 20 }] },
+    ],
+  };
+
+  it("gives each hop its own length and the walk so far, the last ending at the route's length", () => {
+    const hops = routeHops(p);
+    expect(hops.map((h) => [h.segmentFt, h.totalFt])).toEqual([[10, 10], [10, 20], [10, 30]]);
+    // Each sits half way along its own hop.
+    expect(hops.map((h) => h.at)).toEqual([{ x: 5, y: 0 }, { x: 10, y: 5 }, { x: 10, y: 15 }]);
+  });
+
+  it("writes metres, the hop first and the walk so far in brackets", () => {
+    const tags = routeTagsOnLevel([{ id: "r", name: "R", colour: "#000", path: p }], "L1");
+    expect(tags.map((t) => t.text)).toEqual(["3.0 m (3.0 m)", "3.0 m (6.1 m)", "3.0 m (9.1 m)"]);
+  });
+
+  it("puts a hop on the level it starts on, and nothing for another level or no path", () => {
+    expect(routeTagsOnLevel([{ id: "r", name: "R", colour: "#000", path: p }], "L2")).toEqual([]);
+    expect(routeTagsOnLevel([{ id: "r", name: "R", colour: "#000", path: null }], "L1")).toEqual([]);
+    expect(routeTagsOnLevel([{ id: "r", name: "R", colour: "#000", path: p }], null)).toEqual([]);
+    expect(routeHops({ ...p, found: false })).toEqual([]);
+  });
+
+  it("still tags a crossing the polyline does not pass through, at its point", () => {
+    const off: RoutePath = { ...p, steps: [door(99, 99, 30)], distance_ft: 30 };
+    expect(routeHops(off)).toEqual([{ levelId: "L1", at: { x: 99, y: 99 }, segmentFt: 30, totalFt: 30 }]);
   });
 });

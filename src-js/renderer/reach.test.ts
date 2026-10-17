@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { REACH_ALPHA, reachCells, reachColour } from "./reach.js";
+import { REACH_ALPHA, formatReachMetres, reachCells, reachColour, reachTags } from "./reach.js";
 import type { ReachLayer } from "./seam.js";
 
 const layer = (distance_mm: number[], over: Partial<ReachLayer> = {}): ReachLayer => ({
@@ -49,5 +49,32 @@ describe("reachColour", () => {
     const a = reachColour(329, 1000);
     const b = reachColour(331, 1000);
     for (let i = 0; i < 3; i++) expect(Math.abs(a[i]! - b[i]!)).toBeLessThan(0.02);
+  });
+});
+
+describe("reachTags", () => {
+  it("writes the walk in metres on each covered cell, at its centre in the flipped frame", () => {
+    const { tags, font, stride } = reachTags(layer([0, 12345, -1, -2, 100000, 5000]), 100);
+    expect(stride).toBe(1);
+    expect(tags.map((t) => t.text)).toEqual(["0.0", "12.3", "100", "5.0"]);
+    // Cell (1, 0): origin (10, 20), spacing 2: its centre is (13, 21), and y is negated.
+    expect(tags[1]).toMatchObject({ x: 13, y: -21 });
+    // Five glyphs of 0.6 aspect fit a cell at 0.3 of its width.
+    expect(font).toBeCloseTo(0.6);
+  });
+
+  it("thins to a budget by whole rows and columns and grows the font to match", () => {
+    const wide = { origin: { x: 0, y: 0 }, spacing_ft: 1, cols: 10, rows: 10, distance_mm: Array.from({ length: 100 }, (_, i) => i * 10), limit_mm: 1000 };
+    const { tags, font, stride } = reachTags(wide, 25);
+    expect(stride).toBe(2);
+    expect(tags).toHaveLength(25);
+    expect(font).toBeCloseTo(0.6);
+    expect(reachTags(wide, 100).tags).toHaveLength(100);
+  });
+
+  it("formats a walk to a decimal, whole above a hundred metres", () => {
+    expect(formatReachMetres(1234)).toBe("1.2");
+    expect(formatReachMetres(99950)).toBe("100.0");
+    expect(formatReachMetres(100400)).toBe("100");
   });
 });

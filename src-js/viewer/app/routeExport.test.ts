@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RouteDrawing } from "../route.js";
-import { appendRoutes } from "./routeExport.js";
+import { appendRouteTags, appendRoutes } from "./routeExport.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const fitted = { x: 0, y: -100, w: 160, h: 100 };
@@ -93,5 +93,21 @@ describe("appendRoutes", () => {
     const text = new XMLSerializer().serializeToString(draw([route({ name: "A <b> & C" })]));
     expect(text).toContain("A &lt;b&gt; &amp; C");
     expect(text).not.toMatch(/<script|href=|url\(/);
+  });
+});
+
+describe("appendRouteTags", () => {
+  it("writes each tag as text, ink on a paper halo, in its own group, and nothing for none", () => {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    appendRouteTags(svg, [], fitted, pal);
+    expect(svg.childNodes.length).toBe(0);
+    appendRouteTags(svg, [{ routeId: "r1", colour: "#d9480f", at: { x: 10, y: 20 }, text: "3.0 m (6.1 m)" }], fitted, pal);
+    const g = svg.querySelector("g.route-tags")!;
+    expect(g.getAttribute("fill")).toBe(pal.ink);
+    expect(g.getAttribute("stroke")).toBe(pal.paper);
+    const t = g.querySelector("text")!;
+    expect(t.textContent).toBe("3.0 m (6.1 m)");
+    // The file's frame is y down: the plan's y is negated.
+    expect([t.getAttribute("x"), t.getAttribute("y")]).toEqual(["10", "-20"]);
   });
 });
