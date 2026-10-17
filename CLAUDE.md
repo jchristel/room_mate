@@ -521,6 +521,13 @@ Both were reported as five separate viewer bugs on RHH and are one cause each.
   tiny, because the object is). GL and SVG share `placeElementTags`. RHH's ceilings and
   floors carry no `type_name`, so the default `$type_name` prints nothing there until a
   property is named.
+- **Settings that name a property are checked against the data** (`settings_check`, logged
+  once at startup and returned as `findings` on `GET /api/settings/projects/{id}`; the
+  page puts a red triangle on the setting and its section). Room label, colour plans,
+  hover and element tags are covered. A name counts as present if it is in the dictionary
+  (last line) of the latest snapshot of that entity in any model; **"cannot tell" is never
+  a finding**: nothing stored for the entity, a pre-dictionary snapshot of anything but
+  rooms (rooms are parsed), `$` tokens. A finding never refuses a load.
 - **A layer that could not resolve exactly says so on its own toggle.** The
   "(all levels)" / "(by elevation)" suffixes are the point: a fallback nobody
   can see is the failure mode this area keeps producing.

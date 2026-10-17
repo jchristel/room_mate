@@ -73,5 +73,6 @@ pub mod reports_api;
 pub mod service;
 pub mod settings;
 pub mod settings_api;
+pub mod settings_check;
 pub mod state;
 pub mod storage;
