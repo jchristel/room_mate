@@ -14,11 +14,11 @@
 
 import { DropMenu } from "./DropMenu.js";
 import { LAYERS, layerToggleLabel } from "./layers.js";
-import { setZoneLayer, setZoneSpacesModel, type ZoneRow } from "./store.js";
+import { setZoneFfeModel, setZoneLayer, setZoneSpacesModel, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 
 export function LayerMenu({ zone }: { zone: ZoneRow }) {
-  const { spacesModels } = useViewer();
+  const { spacesModels, ffeModels } = useViewer();
 
   const on = LAYERS.filter((l) => zone.layers[l.entity]).length + (zone.showRooms ? 1 : 0) + (zone.showLabels ? 1 : 0) + (zone.showRouteTags ? 1 : 0) + (zone.showReachTags ? 1 : 0);
   // A layer whose storey match was a GUESS, surfaced on the closed button:
@@ -72,6 +72,21 @@ export function LayerMenu({ zone }: { zone: ZoneRow }) {
               ))}
             </select>
           ) : null}
+          {/* FF&E can come from several models at once (one per fit-out package),
+              so it is a set of checkboxes and not a single choice: each model is
+              drawn unless unticked. */}
+          {layer.entity === "ffe" && zone.layers.ffe && ffeModels.length > 1
+            ? ffeModels.map((m) => (
+                <label key={m} className="sub" title="Draw this model's FF&E in this zone">
+                  <input
+                    type="checkbox"
+                    checked={!zone.ffeModelsOff.includes(m)}
+                    onChange={(e) => setZoneFfeModel(zone.id, m, e.target.checked)}
+                  />{" "}
+                  {m}
+                </label>
+              ))
+            : null}
         </div>
       ))}
     </DropMenu>

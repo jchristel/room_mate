@@ -99,6 +99,10 @@ export interface ZoneRow {
    *  request cannot serve both. The default was already unscoped, so nothing
    *  fetches more than it did. */
   spacesModel: string;
+  /** The models whose FF&E this zone does NOT draw. A set of exclusions, so a model
+   *  pushed later is drawn by default and unticking every box really draws nothing.
+   *  Presentation, like `spacesModel`: the read is unscoped and filtered at paint. */
+  ffeModelsOff: readonly string[];
 }
 
 /**
@@ -168,6 +172,8 @@ export interface ViewerState {
   linkViews: boolean;
   /** Every model that has spaces, learned from an unscoped payload. */
   spacesModels: readonly string[];
+  /** Every model that has FF&E, learned from an unscoped payload. */
+  ffeModels: readonly string[];
   /** Which related types the room panel's "In this room" section lists.
    *
    *  **Page state, not per room** (C4): it is a question about how the panel
@@ -312,6 +318,7 @@ const initial: ViewerState = {
   validation: null,
   showErrors: false,
   spacesModels: [],
+  ffeModels: [],
   roomContents: { doors: true, windows: true, ffe: true, ceilings: false, floors: false },
   layersRevision: 0,
   loadingLayers: {},
@@ -386,6 +393,7 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
       ? { ...from.pickable }
       : { room: true, door: true, window: true, item: true, space: false, ceiling: false, floor: false, area: true },
     spacesModel: from?.spacesModel ?? "",
+    ffeModelsOff: from ? [...from.ffeModelsOff] : [],
     // A copy of a zone does not copy an unfinished question.
     route: null,
     edit: null,
@@ -453,6 +461,17 @@ export function setZoneLayer(
 export function setZonePickable(id: string, kind: SelectionKind, on: boolean): void {
   setState({
     zones: state.zones.map((z) => (z.id === id ? { ...z, pickable: { ...z.pickable, [kind]: on } } : z)),
+  });
+}
+
+/** Tick or untick one model's FF&E in a zone. */
+export function setZoneFfeModel(id: string, model: string, shown: boolean): void {
+  setState({
+    zones: state.zones.map((z) => {
+      if (z.id !== id) return z;
+      const rest = z.ffeModelsOff.filter((m) => m !== model);
+      return { ...z, ffeModelsOff: shown ? rest : [...rest, model] };
+    }),
   });
 }
 

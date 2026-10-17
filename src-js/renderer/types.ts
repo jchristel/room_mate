@@ -221,6 +221,8 @@ export type WindowOpening = Door;
  */
 export interface Item {
   id: string;
+  /** The model this item came from; what a zone's FF&E model checkboxes filter on. */
+  model_id?: string;
   level_id?: string;
   /** The Revit category, e.g. `"Furniture"`. The one field no opening has, and
    *  the first thing a reader filters on. */

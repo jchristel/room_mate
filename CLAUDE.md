@@ -497,6 +497,12 @@ Both were reported as five separate viewer bugs on RHH and are one cause each.
   not knowable before the first rooms payload) skips, so nothing asks for
   every storey on first load. The room contents panel says "storey not on
   screen" for a room whose storey no zone shows, rather than "none".
+- **FF&E's model choice is a set of checkboxes, as exclusions** (`ZoneRow.ffeModelsOff`,
+  under the FF&E entry of the Layers menu once there is more than one model). Spaces
+  pick one model; FF&E comes from several fit-out packages at once, so a zone draws
+  every model unless it is unticked, a model pushed later is drawn by default, and
+  unticking all draws none. Like spaces it is presentation: the read stays unscoped
+  and the filter is applied at paint and in the SVG export (which names what is left out).
 - **A layer that could not resolve exactly says so on its own toggle.** The
   "(all levels)" / "(by elevation)" suffixes are the point: a fallback nobody
   can see is the failure mode this area keeps producing.

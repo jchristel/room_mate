@@ -85,8 +85,10 @@ for (const layer of LAYERS) {
       // never a cost control.
       enabled: () => layer.pollWhenOff || layerWanted(layer.entity),
       ...(layer.entity === "spaces"
-        ? { onPayload: (payload: ElementPayload) => refreshSpacesModels(payload) }
-        : {}),
+        ? { onPayload: (payload: ElementPayload) => refreshModels(payload, "spacesModels") }
+        : layer.entity === "ffe"
+          ? { onPayload: (payload: ElementPayload) => refreshModels(payload, "ffeModels") }
+          : {}),
     }),
   );
 }
@@ -98,11 +100,11 @@ for (const layer of LAYERS) {
  *
  *  Unconditional since C1: the read is always unscoped now, so the list can
  *  never be narrowed to the one model a zone happens to be showing. */
-function refreshSpacesModels(payload: ElementPayload): void {
+function refreshModels(payload: ElementPayload, key: "spacesModels" | "ffeModels"): void {
   const { scope } = getState();
   const byProject = (payload["phase_by_model"] ?? {}) as Record<string, Record<string, unknown>>;
   const models = Object.keys(byProject[scope.projectId ?? ""] ?? {}).sort();
-  if (models.length) setState({ spacesModels: models });
+  if (models.length) setState({ [key]: models });
 }
 
 /** Poll every layer once. Returns whether any of them changed what is drawn. */
