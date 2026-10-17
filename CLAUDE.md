@@ -497,6 +497,15 @@ Both were reported as five separate viewer bugs on RHH and are one cause each.
   not knowable before the first rooms payload) skips, so nothing asks for
   every storey on first load. The room contents panel says "storey not on
   screen" for a room whose storey no zone shows, rather than "none".
+- **A room's label is placed from its REAL outline, by `renderer/labelPlacement.ts`
+  (`placeLabel`), in both painters.** It went at the area centroid, sized by the
+  bounding box: for a T or L the centroid can fall in the notch and the box is far
+  wider than the arm the text sits in. Now: the pole of inaccessibility (holes
+  excluded), the text centred on the open stretch around it, the font shrunk until
+  the block is inside the outline. On RHH's busiest level 96 of 478 labels spilled
+  before and none do. Never drops a label (a circle of radius `d` always fits), and
+  caches per room so a repaint does not search again. The SVG goldens moved with it;
+  change the rule there and nowhere else, or the file and the screen disagree.
 - **A layer that could not resolve exactly says so on its own toggle.** The
   "(all levels)" / "(by elevation)" suffixes are the point: a fallback nobody
   can see is the failure mode this area keeps producing.

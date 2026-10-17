@@ -18,7 +18,7 @@
 // present-but-empty renders nothing at all.
 
 import { BitmapText, Container } from "pixi.js";
-import { centroid, loopBox } from "../geometry.js";
+import { placeLabel } from "../labelPlacement.js";
 import type { Room } from "../types.js";
 import type { Rgba } from "./colour.js";
 
@@ -26,8 +26,6 @@ import type { Rgba } from "./colour.js";
  *  Large enough that zooming in stays crisp, small enough that the atlas is not
  *  enormous. */
 const ATLAS_PX = 48;
-/** Mono glyph aspect ratio — the same 0.6 `addLabel` uses. */
-const GLYPH_ASPECT = 0.6;
 
 function rgbaToHex(c: Rgba): number {
   return (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
@@ -76,18 +74,15 @@ export function buildLabels(
       room.label !== undefined ? room.label : [room.name || room.id].filter(Boolean);
     if (fields.length === 0) continue;
 
-    // Same constraint as addLabel: the level's base font is a ceiling, the
-    // room's own bbox is the limit.
-    const box = loopBox(outer);
+    // Same constraint as addLabel: the level's base font is a ceiling, and the
+    // room's REAL outline is the limit (`placeLabel`), not its bounding box.
     const longest = fields.reduce((n, f) => Math.max(n, String(f).length), 1);
-    const widthLimited = (box.w * 0.9) / longest / GLYPH_ASPECT;
-    const heightLimited = (box.h * 0.8) / (1 + 0.7 * (fields.length - 1));
-    const worldFont = Math.min(baseFont, widthLimited, heightLimited);
-    if (!(worldFont > 0)) continue;
+    const placed = placeLabel(room, longest, fields.length, baseFont);
+    if (!placed || !(placed.fontSize > 0)) continue;
+    const worldFont = placed.fontSize;
 
-    const c = centroid(outer);
     const node = new Container();
-    node.position.set(c.x, c.y);
+    node.position.set(placed.x, placed.y);
     // World units per atlas pixel. The atlas is fixed; the scene scales.
     const scale = worldFont / ATLAS_PX;
     node.scale.set(scale, scale);
