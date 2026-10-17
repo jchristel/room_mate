@@ -81,6 +81,39 @@ export interface SavedRoute {
   note?: string | null;
 }
 
+/** One start point of a saved reach. */
+export interface SavedReachStart {
+  room: { model_id: string; room_id: string };
+  /** Where in the room the plan was clicked; absent means the room's inside point. */
+  at?: { x: number; y: number } | null;
+}
+
+/** A reach somebody saved: the REQUEST, never the grid (the server works that out
+ *  again at read time, so it follows the doors and zones as they change). */
+export interface SavedReach {
+  id: string;
+  name: string;
+  sources: SavedReachStart[];
+  limit_mm: number;
+  spacing_mm: number;
+  method?: string | null;
+  ignore_cuts: boolean;
+  note?: string | null;
+}
+
+/** A reach as a save sends it: the room flat, and the model blank for a bare room
+ *  the plan knows, which the server resolves. */
+export interface ReachRecordBody {
+  id: string;
+  name: string;
+  sources: { room_id: string; model_id: string; at?: { x: number; y: number } | null }[];
+  limit_mm: number;
+  spacing_mm: number;
+  method?: string | null;
+  ignore_cuts: boolean;
+  note?: string | null;
+}
+
 export interface ConnectionsDoc {
   schema_version: number;
   /** The version a save must name; empty when nothing has been authored. */
@@ -90,6 +123,8 @@ export interface ConnectionsDoc {
   routes: SavedRoute[];
   /** Absent from a server older than passages; read through `passagesOf`. */
   passages?: SavedPassage[];
+  /** Absent from a server older than saved reaches; read through `reachesOf`. */
+  reaches?: SavedReach[];
 }
 
 /** What the server said one passage did, from `/connectivity`'s `connections.passages`:
@@ -105,6 +140,9 @@ export interface PassageReport {
 
 /** The passages of a document, none for one that predates them. */
 export const passagesOf = (doc: ConnectionsDoc | null): SavedPassage[] => doc?.passages ?? [];
+
+/** The reaches of a document, none for one that predates them. */
+export const reachesOf = (doc: ConnectionsDoc | null): SavedReach[] => doc?.reaches ?? [];
 
 /** What the server assumes when a link states no cost. */
 export const DEFAULT_LEVEL_COST_FT = 40;
@@ -421,6 +459,9 @@ export interface DocBody {
   links: LinkBody[];
   routes: SavedRoute[];
   passages: PassageBody[];
+  /** **Left out, the server keeps the saved reaches**, so only the reach panel need
+   *  send it and every other builder here is safe without it. */
+  reaches?: ReachRecordBody[];
 }
 
 /** A saved zone as a body: **cuts and hub included**, so a save of anything else (a
@@ -768,4 +809,67 @@ export function roomsInOtherZones(doc: ConnectionsDoc | null, editingId: string 
 
 export function connectionsUrl(scope: Scope): string | null {
   return scope.projectId ? `/projects/${encodeURIComponent(scope.projectId)}/connections` : null;
+}
+
+// ---- saved reaches -----------------------------------------------------------
+
+/** What a reach is saved from: the tool's state, in millimetres. */
+export interface ReachDraft {
+  name: string;
+  sources: { roomId: string; modelId?: string | undefined; at: { x: number; y: number } | null }[];
+  limitMm: number;
+  spacingMm: number;
+  method: string;
+  ignoreCuts: boolean;
+}
+
+const reachBody = (r: SavedReach): ReachRecordBody => ({
+  id: r.id,
+  name: r.name,
+  sources: r.sources.map((s) => ({ room_id: s.room.room_id, model_id: s.room.model_id, at: s.at ?? null })),
+  limit_mm: r.limit_mm,
+  spacing_mm: r.spacing_mm,
+  method: r.method ?? null,
+  ignore_cuts: r.ignore_cuts,
+  note: r.note ?? null,
+});
+
+/** Every list, with `reaches` replaced: what a save of the reaches alone sends. */
+function bodyWithReaches(doc: ConnectionsDoc, reaches: ReachRecordBody[]): DocBody {
+  return {
+    zones: doc.zones.map(zoneBody),
+    links: doc.links.map(linkBody),
+    routes: doc.routes.map(routeBody),
+    passages: passagesOf(doc).map(passageBody),
+    reaches,
+  };
+}
+
+/** The lists after saving a new reach. */
+export function bodyAfterSaveReach(doc: ConnectionsDoc, draft: ReachDraft): DocBody {
+  const reaches = reachesOf(doc).map(reachBody);
+  const id = idFor(draft.name, new Set(reaches.map((r) => r.id)));
+  const next: ReachRecordBody = {
+    id,
+    name: draft.name.trim(),
+    // A bare room has no model yet: blank is the wire's "not named".
+    sources: draft.sources.map((s) => ({ room_id: s.roomId, model_id: s.modelId ?? "", at: s.at })),
+    limit_mm: draft.limitMm,
+    spacing_mm: draft.spacingMm,
+    method: draft.method,
+    ignore_cuts: draft.ignoreCuts,
+  };
+  return bodyWithReaches(doc, [...reaches, next]);
+}
+
+/** The lists after deleting one saved reach. */
+export function bodyAfterDeleteReach(doc: ConnectionsDoc, id: string): DocBody {
+  return bodyWithReaches(doc, reachesOf(doc).filter((r) => r.id !== id).map(reachBody));
+}
+
+/** Why a reach cannot be saved yet, or `null`. */
+export function whyReachNotSavable(name: string, sources: number): string | null {
+  if (name.trim() === "") return "Give the reach a name.";
+  if (sources === 0) return "Click a room to start from first.";
+  return null;
 }

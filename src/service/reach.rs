@@ -102,7 +102,7 @@ const MAX_SPACING_MM: f64 = 10_000.0;
 /// hundreds of megabytes.
 const MAX_CELLS: usize = 600_000;
 /// The most sources one request may name.
-const MAX_SOURCES: usize = 500;
+pub const MAX_SOURCES: usize = 500;
 
 /// How a cell's walk is measured. See the module header.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -947,6 +947,7 @@ mod tests {
                 links: vec![],
                 routes: None,
                 passages: None,
+                reaches: None,
             },
         )
         .unwrap();

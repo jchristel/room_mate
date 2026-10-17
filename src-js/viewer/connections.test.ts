@@ -23,6 +23,9 @@ import {
   levelsText,
   bodyAfterDeleteRoute,
   bodyAfterRecolourRoute,
+  bodyAfterSaveReach,
+  bodyAfterDeleteReach,
+  whyReachNotSavable,
   bodyAfterSaveRoute,
   nextRouteColour,
   ROUTE_COLOURS,
@@ -552,5 +555,44 @@ describe("passages", () => {
   it("lists a passage in the table, named by its two rooms", () => {
     const rows = connectionRows(withPassage, (id) => id.toUpperCase());
     expect(rows.at(-1)).toMatchObject({ kind: "passage", id: "gap", name: "C ↔ D", type: "Passage" });
+  });
+});
+
+describe("saved reaches", () => {
+  const draft = { name: "Hose 30 m", sources: [{ roomId: "a", at: { x: 1, y: 2 } }, { roomId: "b", at: null }], limitMm: 30000, spacingMm: 1000, method: "exact", ignoreCuts: false };
+  const body = bodyAfterSaveReach(doc, draft);
+  const saved: ConnectionsDoc = {
+    ...doc,
+    reaches: body.reaches!.map((r) => ({
+      ...r,
+      sources: r.sources.map((s) => ({ room: { model_id: "m", room_id: s.room_id }, at: s.at ?? null })),
+    })),
+  };
+
+  it("saves the request with bare rooms for the server to resolve, and never a grid", () => {
+    expect(body.reaches).toHaveLength(1);
+    const r = body.reaches![0]!;
+    expect(r).toMatchObject({ id: "hose-30-m", limit_mm: 30000, spacing_mm: 1000, method: "exact", ignore_cuts: false });
+    expect(r.sources[0]).toEqual({ room_id: "a", model_id: "", at: { x: 1, y: 2 } });
+    expect(Object.keys(r)).not.toContain("distance_mm");
+  });
+
+  it("carries the other lists through, keeps an id unique, and deletes one", () => {
+    expect(body.zones.map((z) => z.id)).toEqual(["east", "west"]);
+    expect(body.links).toHaveLength(1);
+    expect(bodyAfterSaveReach(saved, draft).reaches!.map((r) => r.id)).toEqual(["hose-30-m", "hose-30-m-2"]);
+    expect(bodyAfterDeleteReach(saved, "hose-30-m").reaches).toEqual([]);
+    // A saved model is sent back as it is, not blanked.
+    expect(bodyAfterDeleteReach({ ...saved, reaches: [...saved.reaches!, { ...saved.reaches![0]!, id: "x" }] }, "x").reaches![0]!.sources[0]!.model_id).toBe("m");
+  });
+
+  it("does not send reaches from any other save, which the server reads as keep", () => {
+    expect(bodyAfterDeleteZone(saved, "east").reaches).toBeUndefined();
+  });
+
+  it("says why a reach cannot be saved yet", () => {
+    expect(whyReachNotSavable("", 1)).toBe("Give the reach a name.");
+    expect(whyReachNotSavable("H", 0)).toBe("Click a room to start from first.");
+    expect(whyReachNotSavable("H", 1)).toBeNull();
   });
 });

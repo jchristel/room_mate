@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeReach, layerFor, newReach, parseMetres, pickSource, problem, reachRequest, type ReachResult } from "./reach.js";
+import { describeReach, describeSaved, draftOf, layerFor, newReach, stateFromSaved, parseMetres, pickSource, problem, reachRequest, type ReachResult } from "./reach.js";
 
 const scope = { projectId: "RHH", building: null, milestone: null } as never;
 
@@ -87,5 +87,54 @@ describe("layerFor", () => {
 describe("describeReach", () => {
   it("states coverage and the rooms", () => {
     expect(describeReach(done())).toBe("50% covered (1 of 2 m²) · rooms: 1 full, 1 partial, 1 none");
+  });
+});
+
+describe("saved reaches", () => {
+  const ready = { ...newReach(), limit: "30", spacing: "2", method: "grid" as const, ignoreCuts: true };
+  const picked = pickSource(pickSource(ready, "a", { x: 1, y: 2 }), "b");
+
+  it("drafts what is asked in millimetres, and not at all when it cannot be asked", () => {
+    expect(draftOf(picked, "Hose")).toEqual({
+      name: "Hose",
+      sources: [
+        { roomId: "a", modelId: undefined, at: { x: 1, y: 2 } },
+        { roomId: "b", modelId: undefined, at: null },
+      ],
+      limitMm: 30000,
+      spacingMm: 2000,
+      method: "grid",
+      ignoreCuts: true,
+    });
+    expect(draftOf(ready, "none picked")).toBeNull();
+    expect(draftOf({ ...picked, limit: "x" }, "bad walk")).toBeNull();
+  });
+
+  it("loads a saved reach back into the tool, unmeasured, keeping the reader's opacity", () => {
+    const saved = {
+      id: "h",
+      name: "Hose",
+      sources: [{ room: { model_id: "m", room_id: "a" }, at: { x: 1, y: 2 } }, { room: { model_id: "m", room_id: "b" } }],
+      limit_mm: 30000,
+      spacing_mm: 1500,
+      method: "grid",
+      ignore_cuts: true,
+    };
+    const state = stateFromSaved(saved, 40);
+    expect(state).toMatchObject({ limit: "30", spacing: "1.5", method: "grid", ignoreCuts: true, opacity: 40, result: { state: "idle" } });
+    expect(state.sources).toEqual([
+      { roomId: "a", modelId: "m", at: { x: 1, y: 2 } },
+      { roomId: "b", modelId: "m", at: null },
+    ]);
+    // The model rides the request, so two models sharing a room id cannot be confused.
+    expect(JSON.parse(reachRequest(scope, state)!.body).sources[0]).toMatchObject({ room_id: "a", model_id: "m", x: 1, y: 2 });
+    // A method the page does not know reads as the default.
+    expect(stateFromSaved({ ...saved, method: null }, 55).method).toBe("exact");
+  });
+
+  it("says what a saved reach asks in one line", () => {
+    const base = { id: "h", name: "H", sources: [{ room: { model_id: "m", room_id: "a" } }], limit_mm: 30000, spacing_mm: 1000, ignore_cuts: false };
+    expect(describeSaved(base)).toBe("1 room · 30 m · exact");
+    expect(describeSaved({ ...base, method: "grid", ignore_cuts: true })).toBe("1 room · 30 m · grid · ignoring cuts");
   });
 });

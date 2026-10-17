@@ -411,6 +411,16 @@ The viewer draws it as a heat map (below).
   storey the walk touched, so each exported level takes its own grid and a level the
   walk missed draws none. The walk is cut into 24 bands, one path each (a file with
   one element per cell would be tens of thousands), and a legend states the scale.
+- **A saved reach is the request, never the grid** (`connections::SavedReach`, in the
+  connections document beside routes). Start rooms with their clicked points, the
+  walk and grid in mm, method, `ignore_cuts`; the map is measured again when shown,
+  so it follows the doors, zones and passages. A save that leaves out `reaches`
+  KEEPS them (the routes rule), so only the reach panel sends the list. The numbers
+  are checked by the same `reach::params` and `Method::parse` the read uses, so a
+  saved reach cannot hold a request the read would refuse. In the viewer, "show" in
+  the left panel loads it into the reach tool of the zone a pick last went to and
+  measures it (`reachMeasure.ts`, shared with the bar's Measure): the map is a zone's
+  state, not a second overlay, which is why two zones can compare two saved reaches.
 - **One storey at a time.** Vertical edges are skipped: a walk on one plate does not continue by lift.
 - **A room too small for a cell is judged on its inside point**, so a cupboard
   still gets a verdict. The grid's origin is a whole multiple of the spacing, so
