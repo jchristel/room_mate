@@ -25,6 +25,11 @@
 //! rooms when they move. Its width and height are stated, because nothing in the
 //! model can supply them, and are what the route's size checks read.
 //!
+//! **A saved reach is a request, never an answer**, like a saved route: the start
+//! rooms (with the point clicked in each), the walk, the grid, the method and
+//! whether cuts are ignored. The grid it paints is worked out at read time by
+//! `service::reach`, so it follows the doors, zones and passages as they change.
+//!
 //! **Beside the project settings, as one JSON document per project**, under
 //! `<projects_dir>/connections/<project>.json`, written the way settings are:
 //! temp then rename, a copy of the replaced file under `.backups/`, one lock.
@@ -66,6 +71,7 @@ const MAX_ZONES: usize = 5_000;
 const MAX_LINKS: usize = 20_000;
 const MAX_ROOMS_PER_ZONE: usize = 5_000;
 const MAX_ROUTES: usize = 5_000;
+const MAX_REACHES: usize = 5_000;
 const MAX_PASSAGES: usize = 20_000;
 const MAX_NOTE_CHARS: usize = 2_000;
 const MAX_DISCONNECTS_PER_ZONE: usize = 50_000;
@@ -178,6 +184,36 @@ pub struct SavedRoute {
     pub note: Option<String>,
 }
 
+/// One start point of a saved reach: a room, and where in it the person clicked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReachStart {
+    pub room: RoomRef,
+    /// Where in the room, in the frame `/connectivity` answers in. Absent means the
+    /// room's own inside point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<RoutePoint>,
+}
+
+/// A reach somebody saved: the REQUEST to `service::reach`, never its grid. See the
+/// module header. The numbers are stored as asked (millimetres), and checked by the
+/// same `reach::params` the read uses, so a saved reach cannot hold a request the
+/// read would refuse.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedReach {
+    pub id: String,
+    pub name: String,
+    pub sources: Vec<ReachStart>,
+    pub limit_mm: f64,
+    pub spacing_mm: f64,
+    /// `exact` or `grid`; absent means the server's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub ignore_cuts: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// One straight passage between two rooms on one storey. See the module header:
 /// `from` and `to` are the two clicks, and the room-boundary crossings are derived.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -216,6 +252,9 @@ pub struct ConnectionsDocument {
     /// Absent in a file written before passages existed, which reads as none.
     #[serde(default)]
     pub passages: Vec<Passage>,
+    /// Absent in a file written before reaches could be saved, which reads as none.
+    #[serde(default)]
+    pub reaches: Vec<SavedReach>,
 }
 
 impl ConnectionsDocument {
@@ -227,6 +266,7 @@ impl ConnectionsDocument {
             links: Vec::new(),
             routes: Vec::new(),
             passages: Vec::new(),
+            reaches: Vec::new(),
         }
     }
 }
@@ -294,6 +334,29 @@ pub struct RouteInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ReachStartInput {
+    #[serde(flatten)]
+    pub room: RoomInput,
+    #[serde(default)]
+    pub at: Option<RoutePoint>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReachInput {
+    pub id: String,
+    pub name: String,
+    pub sources: Vec<ReachStartInput>,
+    pub limit_mm: f64,
+    pub spacing_mm: f64,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub ignore_cuts: bool,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct PassageInput {
     pub id: String,
     pub a: RoomInput,
@@ -330,6 +393,9 @@ pub struct SaveRequest {
     /// empty list would delete them all on its next save.
     #[serde(default)]
     pub passages: Option<Vec<PassageInput>>,
+    /// **Absent means "keep the saved reaches"**, for the reason `routes` says.
+    #[serde(default)]
+    pub reaches: Option<Vec<ReachInput>>,
 }
 
 #[derive(Debug)]
@@ -533,6 +599,65 @@ pub fn validate_routes(routes: &[SavedRoute]) -> Result<(), ConnectionsError> {
     Ok(())
 }
 
+/// The rules for saved reaches, apart from `validate` for the reason `validate_routes`
+/// is. The walk and the grid go through `reach::params` and the method through
+/// `Method::parse`, so a saved reach is exactly a request the read accepts.
+pub fn validate_reaches(reaches: &[SavedReach]) -> Result<(), ConnectionsError> {
+    use crate::service::reach;
+    if reaches.len() > MAX_REACHES {
+        return bad(format!("{} reaches is more than the {MAX_REACHES} allowed", reaches.len()));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for reach in reaches {
+        if !is_path_safe_component(&reach.id) {
+            return bad(format!("reach id {:?} must be a short name that is safe as a file name", reach.id));
+        }
+        if !seen.insert(reach.id.as_str()) {
+            return bad(format!("reach id {:?} appears twice", reach.id));
+        }
+        let name = reach.name.trim();
+        if name.is_empty() {
+            return bad(format!("reach {:?} needs a name", reach.id));
+        }
+        if name.chars().count() > MAX_NAME_CHARS {
+            return bad(format!("the name of reach {:?} is longer than {MAX_NAME_CHARS} characters", reach.id));
+        }
+        if reach.sources.is_empty() {
+            return bad(format!("reach {name:?} needs at least one start room"));
+        }
+        if reach.sources.len() > reach::MAX_SOURCES {
+            return bad(format!(
+                "reach {name:?} has {} start rooms; the limit is {}",
+                reach.sources.len(),
+                reach::MAX_SOURCES
+            ));
+        }
+        let mut rooms = std::collections::BTreeSet::new();
+        for s in &reach.sources {
+            if s.room.model_id.trim().is_empty() || s.room.room_id.trim().is_empty() {
+                return bad(format!("reach {name:?} names a room with no model or no id"));
+            }
+            if !rooms.insert(&s.room) {
+                return bad(format!("reach {name:?} lists room {} of model {} twice", s.room.room_id, s.room.model_id));
+            }
+            if s.at.is_some_and(|p| !p.x.is_finite() || !p.y.is_finite()) {
+                return bad(format!("reach {name:?} has a start point that is not a number"));
+            }
+        }
+        reach::params(Some(reach.limit_mm), Some(reach.spacing_mm)).map_err(|e| match e {
+            ServiceError::Invalid(m) => ConnectionsError::Invalid(format!("reach {name:?}: {m}")),
+            ServiceError::Internal(e) => ConnectionsError::Internal(e),
+        })?;
+        if let Some(m) = &reach.method {
+            reach::Method::parse(Some(m))?;
+        }
+        if reach.note.as_ref().is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS) {
+            return bad(format!("the note on reach {name:?} is longer than {MAX_NOTE_CHARS} characters"));
+        }
+    }
+    Ok(())
+}
+
 /// The rules for passages, apart from `validate` for the reason `validate_routes` is.
 /// Whether the two rooms share a storey, and whether each point lies in its room, are
 /// read-time findings: they need the model.
@@ -705,6 +830,39 @@ pub fn resolve_routes(
         .map(Some)
 }
 
+/// Turns a save's reaches into full records. `None` is "keep what is saved" and stays
+/// `None`, so the caller can tell it from an empty list.
+pub fn resolve_reaches(
+    state: &AppState,
+    project: &str,
+    reaches: Option<Vec<ReachInput>>,
+) -> Result<Option<Vec<SavedReach>>, ConnectionsError> {
+    let Some(reaches) = reaches else { return Ok(None) };
+    let unnamed = |r: &RoomInput| r.model_id.as_deref().is_none_or(|m| m.trim().is_empty());
+    let needs_lookup = reaches.iter().any(|r| r.sources.iter().any(|s| unnamed(&s.room)));
+    let resolver = Resolver::for_project(state, project, needs_lookup)?;
+    reaches
+        .into_iter()
+        .map(|r| {
+            Ok(SavedReach {
+                id: r.id,
+                name: r.name.trim().to_string(),
+                sources: r
+                    .sources
+                    .into_iter()
+                    .map(|s| Ok(ReachStart { room: resolver.room(s.room)?, at: s.at }))
+                    .collect::<Result<Vec<_>, ConnectionsError>>()?,
+                limit_mm: r.limit_mm,
+                spacing_mm: r.spacing_mm,
+                method: r.method.filter(|m| !m.trim().is_empty()),
+                ignore_cuts: r.ignore_cuts,
+                note: r.note,
+            })
+        })
+        .collect::<Result<Vec<_>, ConnectionsError>>()
+        .map(Some)
+}
+
 /// Turns a save's passages into full records. `None` is "keep what is saved" and
 /// stays `None`. A zero width or height is the form's blank and reads as unknown.
 pub fn resolve_passages(
@@ -761,6 +919,11 @@ pub fn save(
         validate_passages(passages)?;
     }
 
+    let reaches = resolve_reaches(state, project, request.reaches)?;
+    if let Some(reaches) = &reaches {
+        validate_reaches(reaches)?;
+    }
+
     let _guard = SAVE_LOCK.lock().unwrap();
     let current = load(projects_dir, project)?;
     if current.taken_at != request.base {
@@ -778,7 +941,16 @@ pub fn save(
     }
     let routes = routes.unwrap_or(current.routes);
     let passages = passages.unwrap_or(current.passages);
-    let document = ConnectionsDocument { schema_version: SCHEMA_VERSION, taken_at, zones, links, routes, passages };
+    let reaches = reaches.unwrap_or(current.reaches);
+    let document = ConnectionsDocument {
+        schema_version: SCHEMA_VERSION,
+        taken_at,
+        zones,
+        links,
+        routes,
+        passages,
+        reaches,
+    };
 
     let dir = path.parent().expect("a connections path always has a parent");
     std::fs::create_dir_all(dir).map_err(|e| ConnectionsError::Internal(e.into()))?;
@@ -796,11 +968,12 @@ pub fn save(
     std::fs::rename(&temp, &path).map_err(|e| ConnectionsError::Internal(e.into()))?;
     crate::backups::prune(projects_dir, &stem, "json");
     tracing::info!(
-        "saved connections for project {project} ({} zones, {} links, {} routes, {} passages)",
+        "saved connections for project {project} ({} zones, {} links, {} routes, {} passages, {} reaches)",
         document.zones.len(),
         document.links.len(),
         document.routes.len(),
-        document.passages.len()
+        document.passages.len(),
+        document.reaches.len()
     );
     Ok(document)
 }
@@ -843,7 +1016,14 @@ mod tests {
     }
 
     fn request(base: &str, zones: Vec<ZoneInput>) -> SaveRequest {
-        SaveRequest { base: base.to_string(), zones, links: vec![], routes: None, passages: None }
+        SaveRequest {
+            base: base.to_string(),
+            zones,
+            links: vec![],
+            routes: None,
+            passages: None,
+            reaches: None,
+        }
     }
 
     #[test]
@@ -868,6 +1048,7 @@ mod tests {
                 links: vec![link("up", room("m", "b"), room("m", "e"))],
                 routes: None,
                 passages: None,
+                reaches: None,
             },
         )
         .unwrap();
@@ -957,6 +1138,98 @@ mod tests {
             colour: colour.to_string(),
             note: None,
         }
+    }
+
+    fn reach(id: &str) -> ReachInput {
+        ReachInput {
+            id: id.to_string(),
+            name: format!(" Reach {id} "),
+            sources: vec![
+                ReachStartInput { room: room("m", "a"), at: Some(RoutePoint { x: 1.0, y: 2.0 }) },
+                ReachStartInput { room: room("m", "b"), at: None },
+            ],
+            limit_mm: 30_000.0,
+            spacing_mm: 1_000.0,
+            method: Some(String::new()),
+            ignore_cuts: true,
+            note: None,
+        }
+    }
+
+    fn with_reaches(base: &str, reaches: Option<Vec<ReachInput>>) -> SaveRequest {
+        SaveRequest { reaches, ..request(base, vec![]) }
+    }
+
+    #[test]
+    fn test_reaches_round_trip_and_an_absent_list_keeps_them() {
+        let dir = temp_dir("reaches");
+        let first = save(&state(), &dir, "p1", with_reaches("", Some(vec![reach("r1")]))).unwrap();
+        assert_eq!(first.reaches.len(), 1);
+        assert_eq!(first.reaches[0].name, "Reach r1", "the name is trimmed");
+        assert_eq!(first.reaches[0].method, None, "a blank method is the default, not a method named \"\"");
+        assert!(first.reaches[0].ignore_cuts);
+        assert_eq!(first.reaches[0].sources[0].at, Some(RoutePoint { x: 1.0, y: 2.0 }));
+        assert_eq!(load(&dir, "p1").unwrap(), first);
+        // A caller that predates reaches sends none; that must not delete them.
+        let second = save(&state(), &dir, "p1", with_reaches(&first.taken_at, None)).unwrap();
+        assert_eq!(second.reaches, first.reaches);
+        // Saving routes or passages alone must not drop them either.
+        let third =
+            save(&state(), &dir, "p1", with_routes(&second.taken_at, Some(vec![route("r", "#aa00cc")]))).unwrap();
+        assert_eq!((third.reaches.len(), third.routes.len()), (1, 1));
+        // An explicit empty list clears.
+        let fourth = save(&state(), &dir, "p1", with_reaches(&third.taken_at, Some(vec![]))).unwrap();
+        assert!(fourth.reaches.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_file_written_before_reaches_existed_still_loads() {
+        let dir = temp_dir("old-reaches");
+        std::fs::create_dir_all(dir.join("connections")).unwrap();
+        std::fs::write(
+            dir.join("connections").join("p1.json"),
+            r#"{"schema_version":1,"taken_at":"t","zones":[],"links":[],"routes":[],"passages":[]}"#,
+        )
+        .unwrap();
+        assert!(load(&dir, "p1").unwrap().reaches.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_reach_the_read_would_refuse_cannot_be_saved() {
+        let check = |r: ReachInput| {
+            let reaches = resolve_reaches(&state(), "p1", Some(vec![r])).unwrap().unwrap();
+            validate_reaches(&reaches)
+        };
+        assert!(check(reach("ok")).is_ok());
+        let mut r = reach("a");
+        r.sources.clear();
+        assert!(check(r).is_err(), "no start room");
+        let mut r = reach("a");
+        r.sources.push(ReachStartInput { room: room("m", "a"), at: None });
+        assert!(check(r).is_err(), "a room twice");
+        for bad in [0.0, -5.0, f64::NAN, 2_000_000.0] {
+            let mut r = reach("a");
+            r.limit_mm = bad;
+            assert!(check(r).is_err(), "limit {bad}");
+        }
+        for bad in [10.0, 20_000.0] {
+            let mut r = reach("a");
+            r.spacing_mm = bad;
+            assert!(check(r).is_err(), "spacing {bad}");
+        }
+        let mut r = reach("a");
+        r.method = Some("teleport".to_string());
+        assert!(check(r).is_err(), "an unknown method");
+        let mut r = reach("a");
+        r.name = "  ".to_string();
+        assert!(check(r).is_err(), "no name");
+        let mut r = reach("a");
+        r.sources[0].at = Some(RoutePoint { x: f64::NAN, y: 0.0 });
+        assert!(check(r).is_err(), "a point that is not a number");
+        let twice = resolve_reaches(&state(), "p1", Some(vec![reach("d"), reach("d")])).unwrap().unwrap();
+        assert!(validate_reaches(&twice).is_err(), "a duplicate id");
     }
 
     fn with_routes(base: &str, routes: Option<Vec<RouteInput>>) -> SaveRequest {

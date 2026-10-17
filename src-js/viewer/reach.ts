@@ -7,6 +7,7 @@
 // answer becomes the layer one zone draws. Pure for the reason `route.ts` is.
 
 import type { ReachLayer } from "../renderer/seam.js";
+import type { ReachDraft, SavedReach } from "./connections.js";
 import type { PlanPoint } from "./route.js";
 import type { Scope } from "./scope.js";
 
@@ -16,6 +17,9 @@ export type ReachMethod = "exact" | "grid";
 export interface ReachSource {
   roomId: string;
   at: PlanPoint | null;
+  /** Set for a source loaded from a saved reach, which knows its model; a plan
+   *  click does not, and the server resolves a bare id. */
+  modelId?: string;
 }
 
 /** One storey's grid, as the server sends it (`service::reach::ReachLevel`). */
@@ -119,6 +123,7 @@ export function reachRequest(scope: Scope, state: ReachState): { url: string; bo
   const body = {
     sources: state.sources.map((s) => ({
       room_id: s.roomId,
+      ...(s.modelId ? { model_id: s.modelId } : {}),
       ...(s.at ? { x: s.at.x, y: s.at.y } : {}),
     })),
     limit_mm: parseMetres(state.limit),
@@ -171,4 +176,47 @@ export function describeReach(result: ReachResult): string {
 /** The scope a stored answer was made for, so leaving it forgets the answer. */
 export function scopeKey(scope: Scope): string {
   return `${scope.projectId}|${scope.building}|${scope.milestone}`;
+}
+
+/** The tool's state as a saved reach's draft, or `null` when it cannot be asked yet
+ *  (the same rule as `reachRequest`: a reach that cannot be measured is not saved). */
+export function draftOf(state: ReachState, name: string): ReachDraft | null {
+  const limitMm = parseMetres(state.limit);
+  const spacingMm = parseMetres(state.spacing);
+  if (problem(state) !== null || typeof limitMm !== "number" || typeof spacingMm !== "number") return null;
+  return {
+    name,
+    sources: state.sources.map((s) => ({ roomId: s.roomId, modelId: s.modelId, at: s.at })),
+    limitMm,
+    spacingMm,
+    method: state.method,
+    ignoreCuts: state.ignoreCuts,
+  };
+}
+
+/** A saved reach put into the tool, unmeasured. The opacity stays the reader's. */
+export function stateFromSaved(saved: SavedReach, opacity: number): ReachState {
+  const metres = (mm: number) => String(Math.round(mm) / 1000);
+  return {
+    sources: saved.sources.map((s) => ({
+      roomId: s.room.room_id,
+      modelId: s.room.model_id,
+      at: s.at ?? null,
+    })),
+    limit: metres(saved.limit_mm),
+    spacing: metres(saved.spacing_mm),
+    method: saved.method === "grid" ? "grid" : "exact",
+    ignoreCuts: saved.ignore_cuts,
+    opacity,
+    result: { state: "idle" },
+  };
+}
+
+/** One line on what a saved reach asks, for the panel. */
+export function describeSaved(saved: SavedReach): string {
+  const n = saved.sources.length;
+  const walk = Math.round(saved.limit_mm) / 1000;
+  const parts = [`${n} room${n === 1 ? "" : "s"}`, `${walk} m`, saved.method === "grid" ? "grid" : "exact"];
+  if (saved.ignore_cuts) parts.push("ignoring cuts");
+  return parts.join(" · ");
 }
