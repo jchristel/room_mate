@@ -85,7 +85,17 @@ button.action:disabled { opacity: 0.4; cursor: default; }
    0.72rem matches `label.field`, so a row's heading and its fields are one
    size. Anything with its own rule -- h2, .hint, the appearance grid's column
    headers -- still wins. */
-section.block { margin-bottom: 1.6rem; max-width: 760px; font-size: 0.72rem; }
+details.block { margin-bottom: 0.4rem; max-width: 760px; font-size: 0.72rem; }
+details.block > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 0.5rem;
+  border-bottom: 1px solid var(--rule); padding: 0.35rem 0;
+}
+details.block > summary::-webkit-details-marker { display: none; }
+details.block > summary::before { content: "▸"; font-size: 0.7rem; width: 0.8rem; }
+details.block[open] > summary::before { content: "▾"; }
+details.block > summary:hover { background: var(--fill); }
+details.block[open] { margin-bottom: 1.2rem; }
+.expand-bar { display: flex; gap: 0.5rem; max-width: 760px; margin-bottom: 0.6rem; }
 
 /* A ROW IS A FLEX ROW, which `.row` never actually said -- it carried no rule
    at all, so `<Row>` was a plain block div whose children were separated by
@@ -102,11 +112,10 @@ section.block { margin-bottom: 1.6rem; max-width: 760px; font-size: 0.72rem; }
 /* `label.field` already spaces itself; inside a flex row that margin doubles
    up with the gap and pulls the row apart. */
 .row > label.field { margin-right: 0; }
-section.block > h2 {
-  font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase;
-  margin: 0 0 0.15rem; border-bottom: 1px solid var(--rule); padding-bottom: 0.25rem;
+details.block > summary > h2 {
+  font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase; margin: 0;
 }
-section.block > .hint { font-size: 0.65rem; opacity: 0.6; margin: 0.15rem 0 0.6rem; }
+details.block > .hint { font-size: 0.65rem; opacity: 0.6; margin: 0.15rem 0 0.6rem; }
 
 label.field { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; margin-right: 1rem; }
 input[type="text"] {

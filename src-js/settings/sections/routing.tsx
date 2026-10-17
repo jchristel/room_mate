@@ -9,16 +9,14 @@
 import { useState } from "react";
 
 import { Block, Check, Field, NumberInput, OptionalText, Row, RowHead } from "../fields.js";
+import {
+  DEFAULT_DOOR_HEIGHT_PROPERTIES,
+  DEFAULT_FRAME_ALLOWANCE_MM,
+  DEFAULT_ROOM_HEIGHT_PROPERTY,
+  ROUTING_DEFAULT,
+} from "../defaults.js";
 import { StringList } from "../stringList.js";
 import type { RoutingPolicy, Settings } from "../types.js";
-
-/** The Rust defaults, shown as placeholders so an empty box reads as "the default" and
- *  not as "nothing". */
-const DEFAULT_ROOM_HEIGHT_PROPERTY = "Ceiling Height";
-const DEFAULT_FRAME_ALLOWANCE_MM = 150;
-const DEFAULT_DOOR_HEIGHT_PROPERTIES = "Height, Door Height";
-
-const ROUTING_DEFAULT: RoutingPolicy = { door_height_from_type_name: true, room_height_from_ceilings: true };
 
 export function RoutingSection({
   settings,
@@ -95,7 +93,7 @@ export function RoutingSection({
       <StringList
         values={routing.door_height_properties ?? []}
         list={propertyListId}
-        placeholder={DEFAULT_DOOR_HEIGHT_PROPERTIES}
+        placeholder={DEFAULT_DOOR_HEIGHT_PROPERTIES.join(", ")}
         addLabel="+ property"
         onChange={(next) => editRouting((r) => ({ ...r, door_height_properties: next }))}
       />

@@ -9,13 +9,9 @@
 
 import { useState } from "react";
 
+import { AREA_DEFAULT } from "../defaults.js";
 import { Block, Field, NumberInput, OptionalSelect, Row } from "../fields.js";
 import type { AreaPolicy, MeasurementStandard, RoomBoundary, Settings } from "../types.js";
-
-/** The Rust default, `AreaPolicy::DEFAULT_MAX_WALL_THICKNESS_FT`. A project with
- *  no `[areas]` section behaves as this, so the editor shows it rather than a
- *  blank that would read as "no ceiling". */
-const DEFAULT_MAX_WALL_THICKNESS_FT = 1.5;
 
 const STANDARDS: readonly (readonly [MeasurementStandard, string])[] = [
   ["IPMS1", "IPMS 1"],
@@ -39,7 +35,7 @@ export function AreasSection({
   settings: Settings;
   edit: (change: (s: Settings) => Settings) => void;
 }) {
-  const areas: AreaPolicy = settings.areas ?? { max_wall_thickness: DEFAULT_MAX_WALL_THICKNESS_FT };
+  const areas: AreaPolicy = settings.areas ?? AREA_DEFAULT;
   // Held as text while it is being typed -- see `NumberInput`. Seeded once per
   // mounted editor, which is per project: the editor is keyed by project id.
   const [thickness, setThickness] = useState(String(areas.max_wall_thickness));

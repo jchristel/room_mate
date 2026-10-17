@@ -29,6 +29,7 @@ export function IdentitySection({
   return (
     <>
       <Block
+        open
         title="Identity"
         hint={
           isNew
