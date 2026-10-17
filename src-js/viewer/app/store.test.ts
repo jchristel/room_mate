@@ -195,7 +195,7 @@ describe("setZoneFfeModel", () => {
   it("is per zone, and a copied zone starts from the same choice", () => {
     const first = getState().zones[0]!.id;
     setZoneFfeModel(first, "A", false);
-    addZone(first);
+    addZone();
     const [a, b] = getState().zones;
     expect(b!.ffeModelsOff).toEqual(["A"]);
     setZoneFfeModel(b!.id, "A", true);
