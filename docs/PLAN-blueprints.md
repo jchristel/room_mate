@@ -14,8 +14,11 @@ Grounded in the code as of 2026-10-18:
 |---|---|
 | Room outline, level, properties | Have. |
 | FF&E: type, category, `insertion_point` (plan, mm), `facing`, owner room | Have. |
-| FF&E footprint | **Mostly empty** (`loops` is absent on most items). |
-| FF&E **height above floor, width/depth/height, hosting** (wall-hosted, face-hosted) | **Not in the contract.** Elevations, schedules-by-size and wall-mounted rules all need these. |
+| FF&E footprint (`loops`, the instance's oriented box in plan) | Have: 15,826 of 16,161 items (98%) in RHH `HOS-INT_L1-L2` (probed 2026-10-18). The "empty on every item" comments in `renderer/types.ts` predate it and are stale. |
+| FF&E instance and type **properties** (every parameter, as exported) | Have. The probe found `Elevation from Level` on 100% of items, `Host` on 99.9%, `Offset from Host` on 99.4%, `Mounting Height` on 59%. |
+| FF&E **vertical extent and sizes** | **Partly.** The box is flattened to plan, so no height. Width/Depth/Height exist only as family-specific *parameters*: under those exact names on 15 to 20% of items, otherwise under names like `HDR Width`, `Trolley Depth`, `Seat Height`. No uniform size. |
+| FF&E **hosting kind** | Weak. `Host` is a display string (`Level : LEVEL 1`, 98% level-hosted here; walls and floors a few percent). Which wall, and where on it, is not stated. |
+| Units of those parameter values | **Display strings** (`"0.0"`, `"420.0"`), not typed. The same trap `CLAUDE.md` records for the ceiling height offset. |
 | Doors: position, `through_wall_normal`, width | Have. |
 | Authored, per-project, user-made data | Have a precedent: connections document (zones, passages, saved routes, reaches): one JSON per project, optimistic concurrency, replace-whole-list, "authored data outlives geometry; a stale reference is a finding, never an error". |
 | Revit extractor | pyRevit, **one-way** (Revit → server). |
@@ -84,10 +87,19 @@ much real layouts vary. Decide: the grammar above, how to handle non-rectangular
 and the pyRevit-versus-add-in question for stage 7 (see critique). *Output: a short
 findings note and a fixed grammar. This is the cheapest way to kill the biggest risk.*
 
-**Stage 1 — Contract gaps.** Extend the FF&E and door exports with height above floor,
-overall dimensions, host kind and host element, and a room-boundary-relative flag if the
-export can supply one. Schema version bump, ingest, storage, `/ffe` response. Old
-snapshots read with the fields absent (degrade, never guess). *Needed by 5, 8, 9.*
+**Stage 1 — Decide what the blueprint reads, then fill only real gaps.** Not "add the data":
+most of it is already exported, as properties. The question is which of three routes each
+needed fact takes, decided by a probe on House A and RHH:
+(a) **read the existing property** (`Elevation from Level`, `Offset from Host`, `Mounting
+Height`: universal or common, but strings with a unit to settle, and a tiered instance/type
+lookup the viewer already does); (b) **promote to a typed field** where a string is
+untrustworthy (height above floor is the candidate, as the ceiling offset was);
+(c) **new from Revit** where the parameters do not hold it: the **vertical extent** of the
+instance (bounding box Z, so height) and the **host wall and position on it** for
+wall-hosted items. Only (c) needs an exporter change, and per `CLAUDE.md` it must come from
+duHast or the API, not be re-derived in `room_m`. Sizes by parameter name will not work
+(15 to 20% coverage under standard names), so plan width/depth from the footprint and take
+height from (c). *Needed by 5, 8, 9.*
 
 **Stage 2 — Blueprint store and API.** Blueprint document (id, name, revision, reference
 outline, items, doors; a reserved, undesigned slot for sheet data, see track B), assignment records (room ref, blueprint
@@ -177,12 +189,13 @@ and the platform question (critique 5), which sheet automation weighs more than 
    explicitly (with a sensible default); anything else is a finding. If stage 0 shows most
    real rooms are non-rectangular, the model needs rethinking *before* stage 2, not after.
 
-2. **The data is thinner than the feature assumes.** No heights, no sizes, mostly no
-   footprints, no hosting. Elevations, wall-mounted rules and a size-aware overlap check
-   all hang on stage 1, which touches the Revit exporter (and, per `CLAUDE.md`, duHast
-   decides what an export means; fields must come from duHast or the API, not be re-derived
-   in `room_m`). Treat stage 1 as a gate with its own probe on House A, as ceilings and
-   floors had.
+2. **The data is thicker than first stated, with two real gaps.** Footprints and the common
+   elevation parameters are there. What is missing is the vertical extent and a trustworthy
+   host wall for wall-hosted items, plus a decision on reading strings versus typed fields.
+   Elevations and wall-mounted rules hang on those. Any exporter change must come from
+   duHast or the API (`CLAUDE.md`: do not re-derive in `room_m`); give stage 1 its own
+   probe on House A, as ceilings and floors had. (An earlier draft of this plan said the
+   export lacked the data; the first version of that claim was wrong and is corrected here.)
 
 3. **The Revit write side is a different kind of software.** Everything so far reads. Writing
    means transactions, worksharing (elements checked out by others), families not loaded,
