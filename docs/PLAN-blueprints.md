@@ -87,19 +87,19 @@ much real layouts vary. Decide: the grammar above, how to handle non-rectangular
 and the pyRevit-versus-add-in question for stage 7 (see critique). *Output: a short
 findings note and a fixed grammar. This is the cheapest way to kill the biggest risk.*
 
-**Stage 1 — Decide what the blueprint reads, then fill only real gaps.** Not "add the data":
-most of it is already exported, as properties. The question is which of three routes each
-needed fact takes, decided by a probe on House A and RHH:
-(a) **read the existing property** (`Elevation from Level`, `Offset from Host`, `Mounting
-Height`: universal or common, but strings with a unit to settle, and a tiered instance/type
-lookup the viewer already does); (b) **promote to a typed field** where a string is
-untrustworthy (height above floor is the candidate, as the ceiling offset was);
-(c) **new from Revit** where the parameters do not hold it: the **vertical extent** of the
-instance (bounding box Z, so height) and the **host wall and position on it** for
-wall-hosted items. Only (c) needs an exporter change, and per `CLAUDE.md` it must come from
-duHast or the API, not be re-derived in `room_m`. Sizes by parameter name will not work
-(15 to 20% coverage under standard names), so plan width/depth from the footprint and take
-height from (c). *Needed by 5, 8, 9.*
+**Stage 1 — Settle what a blueprint item holds (decided 2026-10-18: the item as exported).**
+A blueprint item is the FF&E record **as it is in the export**: category, type name,
+instance and type properties verbatim, plus location and rotation (relative to the room, per
+the grammar). No new typed fields for size, height or elevation: those stay in the
+properties and the footprint, as exported, and are read by name when needed. Matching an
+item in another room goes by **family, then type name, then instance properties**, the type
+properties being expected equal.
+**One gap found by the probe: the family name is not exported** (every item has `type_name`;
+a `Family` key exists on 2 of 16,161 and holds something else). It comes from Revit
+(`FamilyInstance.Symbol.FamilyName`) and so from duHast, not from `room_m`; until it is
+there, matching is on type name, which two families can share. Everything else in stage 1 is
+a decision, not work. (Heights for elevations, host walls for wall-hosted items and typed
+units are deferred to the stage that needs them, track B or 9.) *Needed by 2.*
 
 **Stage 2 — Blueprint store and API.** Blueprint document (id, name, revision, reference
 outline, items, doors; a reserved, undesigned slot for sheet data, see track B), assignment records (room ref, blueprint
