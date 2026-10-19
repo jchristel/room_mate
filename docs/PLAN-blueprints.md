@@ -53,7 +53,8 @@ write path into Revit. They have very different risk, which drives the staging.
    type is a reported state with a mapping table the user can fill.
 6. **Scaling is the room's size and proportions, never the items'** (decided 2026-10-19).
    Items keep their exported size. A *fixed* constraint keeps its distance in mm; a
-   *percentage* constraint stretches with the room.
+   *percentage* constraint stretches with the room, measured along the edge it is anchored to, not the
+   assign box's axes (decided 2026-10-19).
 7. **No mirroring.** A mirrored layout is a different blueprint: handed items are most
    likely a different family, and mirroring them would cause placement problems. Rotation
    is supported; mirror is not offered anywhere (decided 2026-10-19).
@@ -188,6 +189,28 @@ stub and what is missing, in the style of the door and ceiling probes (run again
 sheet set; "which duHast" means the one loaded in memory, see `CLAUDE.md`). *Everything
 else in this track depends on it.*
 
+**B0 findings so far (read 2026-10-19, SampleCodeRevitBatchProcessor `370038c6`, code only,
+nothing run in Revit):**
+
+- **Real:** `sheets_to_data.get_all_sheet_data` exports per sheet its instance properties,
+  its viewports and its schedule instances. A viewport carries its **sheet position**
+  (`GetBoxOutline` min/max and `GetBoxCenter`, as 2D points), a type (floor plan,
+  elevation, 3D or schedule; other view types are dropped), and per view: plan, elevation
+  and 3D crop box; elevation marker index and view direction; 3D eye, forward and up.
+  A schedule instance carries its position, row count and segment heights. A title-block
+  size name exists (`get_title_block_size`), matched against supported sizes.
+- **Stub:** `Data/Objects/BluePrints/room_layout_sheets.py` (`RoomLayoutSheet`: room size,
+  proportions, item count, sheets) parses nothing and its `__eq__` compares attributes it
+  does not have. It is a sketch of matching a blueprint to a room by size and proportions.
+- **Missing:** tags and their positions (nothing exists; a comment in the plan-view
+  export marks the place); view scale; view template; view name and view type name;
+  viewport type name; the schedule's bounding box (`# TODO`); the viewport's `view_id`
+  is never set by the converter, so it stays `-1`. Units of the 2D points are not yet
+  confirmed (feet from the API unless converted).
+- **Implication:** enough for a one-way proof of concept that records where each view sits
+  on a room layout sheet. Creating sheets (B4) additionally needs view type, scale and
+  template names, and tag capture.
+
 **B1 — One-way proof of concept: contract and storage for sheet data.** If B0 shows the
 export is worth keeping, a sheets entity on the existing entity stack (contract, ingest,
 storage, read route, MCP): "adding an entity is a variant, not a copy". Read-only.
@@ -298,6 +321,5 @@ blueprint.
 6. **Sheets (track B)**: are the title block, view templates and sheet naming standard across
    your projects, or per project? How far were the duHast sheet exports taken (B0 will read
    them, but your view helps)?
-7. **Percentage constraints on rotated boxes** (new): when the assign box is rotated and
-   scaled non-uniformly, should a percentage constraint follow the edge it is anchored to
-   (the plan's assumption), or the box's axes?
+7. ~~**Percentage constraints on rotated boxes.**~~ **Closed 2026-10-19:** a percentage
+   constraint follows the edge it is anchored to, not the box's axes (decision 6).
