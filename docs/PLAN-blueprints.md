@@ -281,7 +281,8 @@ the viewer). **A sheet is identified by its Revit sheet id plus the document's t
 2026-10-19). A sheet pushed again that matches on both is the same sheet and is updated; **if it
 matches but its sheet number has changed, the push is stashed as pending and the user is asked
 to confirm** (accept or reject, as a pushed blueprint is, decision 10), so a renumbering cannot
-silently rewrite a sheet someone relies on. A sheet that matches on neither is a new sheet.
+silently rewrite a sheet someone relies on. A sheet that matches on neither is a new sheet, even if its number matches an existing one.
+Both readings confirmed 2026-10-19.
 Reads: list, one sheet, and **suggest**.
 
 **B3 — Suggest, in sheet creation mode only.** `GET .../sheets/suggest?room=` ranks library
