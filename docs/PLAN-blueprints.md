@@ -108,6 +108,8 @@ much real layouts vary under size and proportion changes. Decide: the grammar ab
 handle non-rectangular rooms, and the pyRevit-versus-add-in question (see critique 5).
 *Output: a short findings note and a fixed grammar. The cheapest way to kill the biggest
 risk.*
+**House A done 2026-10-19: see [PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md).** The
+mechanics hold; House A has no repeated room types, so the sibling test needs RHH.
 
 **Stage 1 — Close the export gaps.** What a blueprint item holds is decided (the item as
 exported). Two small requests go to duHast, not `room_m`: **family name** and **hosting
