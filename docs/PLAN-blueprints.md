@@ -1,7 +1,6 @@
 # Plan: blueprints (room layouts that travel)
 
-**Status: stages 0 to 4 built on the server side (PR #215); the viewer, assignment and
-everything toward Revit are not. Revised 2026-10-19 after the author's review comments and
+**Status: stages 0 to 5 built (PR #215); assignment and everything toward Revit are not. Revised 2026-10-19 after the author's review comments and
 the stage 0 results ([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
 
 Built so far (PR #215): FF&E carries `family_name` and `host` (stage 1, read from Revit by the
@@ -10,8 +9,10 @@ revisions and its HTTP and MCP surface (stage 2, without import/export); capture
 service and endpoint, without the "Create blueprint" button or list panel); and track B's first
 slice: the sheet library on its own endpoint with identity matching, pending renumbered pushes and
 `suggest`, plus the Sheets and Blueprint pyRevit buttons (also **not yet run in Revit**). The resolver (stage 4) is built too: measured on RHH's real siblings, 90% of ensuite pairs
-land the items within 150 mm of the real ones, `1 BED B` 68%, `1 BED A` 58%. Not built:
-the viewer, assignment, the blueprint's own sheet association, tags/scale/template in
+land the items within 150 mm of the real ones, `1 BED B` 68%, `1 BED A` 58%. The blueprint viewer (stage 5) is built as a page at `/blueprints/`: list, revision timeline with
+pending revisions, the room's outline and FF&E, and an inspector for dimension constraints; the
+resolver also accepts a manual edge map. Not built:
+assignment, the blueprint's own sheet association, tags/scale/template in
 the sheet export, and anything toward Revit.
 
 ## What exists, and what does not
