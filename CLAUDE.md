@@ -339,6 +339,12 @@ get wrong:
 - **Revisions are append-only** and an assignment will pin one: an edit is a new revision,
   and `current_revision` moving is the only way to change which one new assignments use.
   Writes name the `taken_at` they read (`base`); a mismatch is a 409.
+- **A push is PENDING, never current** (`blueprints::push`, plan decision 10). A revision that
+  arrives from elsewhere is stored beside the blueprint, changes nothing about the history,
+  what is current or what an assignment pins, and waits for a person to accept it (it becomes
+  the next revision and the current one) or reject it (kept, marked rejected, never deleted).
+  `.backups/` is the safety copy made when a file is rewritten, a different thing from review.
+  Only `add_revision` (a person's own edit in the editor) can make a revision current directly.
 - **`family_name` and `host` on an FF&E item are read from Revit by `item_facts`**, not from
   duHast: the export carries neither (probed on 16,161 RHH items). Same footing as the
   category; absent means unread, never guessed. **Not yet run in Revit.**

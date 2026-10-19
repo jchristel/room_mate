@@ -21,8 +21,15 @@
 //! the geometry it came from: the room it was captured from may have moved or gone, and
 //! `source` is a record of where it came from, not a reference that must resolve.
 //!
-//! Not here yet, by design of the slicing: import and export between projects, and
-//! pending revisions from a push (decision 10). The document has room for both.
+//! **A push never becomes current by itself** (decision 10). A blueprint that arrives from
+//! elsewhere (an import now, a Revit-originated one later) is stored beside the blueprint it
+//! is for as a *pending* revision: it appears on the timeline, changes nothing about what is
+//! current or what any assignment pins, and waits for a person to **accept** it (it becomes
+//! the next revision and the current one) or **reject** it (it is kept, marked rejected, never
+//! deleted). Backups under `.backups/` are a different thing: the safety copy made when a
+//! file is rewritten, not the review step.
+//!
+//! Not here yet: import and export between projects, which is what will call `push`.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,6 +46,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Far above any real room.
 const MAX_BLUEPRINTS_PER_PROJECT: usize = 5_000;
 const MAX_REVISIONS: usize = 500;
+const MAX_PENDING: usize = 100;
 const MAX_ITEMS: usize = 5_000;
 const MAX_OUTLINE_POINTS: usize = 2_000;
 const MAX_PROPERTIES: usize = 2_000;
@@ -66,6 +74,29 @@ pub struct Revision {
     pub content: RevisionContent,
 }
 
+/// A revision that has arrived and not been reviewed. Not part of the history until accepted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingRevision {
+    /// Identifies this push among the blueprint's pending and rejected ones. Never reused.
+    pub pending_id: u32,
+    pub received_at: String,
+    /// What sent it, as the sender described itself: a project, a person, a tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(flatten)]
+    pub content: RevisionContent,
+}
+
+/// A pushed revision a person declined. Kept, so the timeline can still show it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RejectedRevision {
+    pub rejected_at: String,
+    #[serde(flatten)]
+    pub revision: PendingRevision,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Blueprint {
     pub schema_version: u32,
@@ -78,6 +109,19 @@ pub struct Blueprint {
     /// The revision new assignments use. Always one of `revisions`.
     pub current_revision: u32,
     pub revisions: Vec<Revision>,
+    /// Pushed revisions waiting for review. Absent in a file written before pushes existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<PendingRevision>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected: Vec<RejectedRevision>,
+    /// The last `pending_id` handed out. A counter and not a maximum over what is on file,
+    /// because an accepted revision leaves the pending list and its id must not come back.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub last_pending_id: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Blueprint {
@@ -99,6 +143,8 @@ pub struct BlueprintSummary {
     pub source: Option<SourceRoom>,
     pub current_revision: u32,
     pub revisions: usize,
+    /// Pushed revisions waiting for review.
+    pub pending: usize,
     /// Items in the current revision, excluded ones not counted.
     pub items: usize,
 }
@@ -112,6 +158,7 @@ impl From<&Blueprint> for BlueprintSummary {
             source: b.source.clone(),
             current_revision: b.current_revision,
             revisions: b.revisions.len(),
+            pending: b.pending.len(),
             items: b.current().map_or(0, |r| r.content.items.iter().filter(|i| !i.excluded).count()),
         }
     }
@@ -144,6 +191,24 @@ pub struct AddRevisionRequest {
 
 fn yes() -> bool {
     true
+}
+
+/// A revision arriving from elsewhere. Carries no `base`: it adds to the pending list and
+/// changes nothing a reader has seen of the history.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PushRequest {
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(flatten)]
+    pub content: RevisionContent,
+}
+
+/// Accept or reject one pending revision.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DecideRequest {
+    pub base: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -390,6 +455,9 @@ pub fn create(projects_dir: &Path, project: &str, request: CreateRequest) -> Res
         source: request.source,
         current_revision: 1,
         revisions: vec![Revision { number: 1, created_at: taken_at, note, content: request.content }],
+        pending: Vec::new(),
+        rejected: Vec::new(),
+        last_pending_id: 0,
     };
     write(projects_dir, project, &blueprint)?;
     tracing::info!("created blueprint {} ({:?}) in project {project}", blueprint.id, blueprint.name);
@@ -430,6 +498,91 @@ pub fn add_revision(
     if request.make_current {
         blueprint.current_revision = number;
     }
+    write(projects_dir, project, &blueprint)?;
+    Ok(blueprint)
+}
+
+/// Store a revision that arrived from elsewhere as **pending**. It is not a revision, is not
+/// current, and no assignment can pin it; it waits for `accept` or `reject`.
+pub fn push(projects_dir: &Path, project: &str, id: &str, request: PushRequest) -> Result<Blueprint, BlueprintError> {
+    let note = clean_note(request.note)?;
+    let origin = clean_note(request.origin)?;
+    validate_content(&request.content)?;
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let mut blueprint = load(projects_dir, project, id)?;
+    if blueprint.pending.len() >= MAX_PENDING {
+        return bad(format!("a blueprint holds at most {MAX_PENDING} pending revisions; review some first"));
+    }
+    let pending_id = blueprint.last_pending_id + 1;
+    blueprint.last_pending_id = pending_id;
+    blueprint.taken_at = next_stamp(&blueprint.taken_at);
+    blueprint.pending.push(PendingRevision {
+        pending_id,
+        received_at: blueprint.taken_at.clone(),
+        origin,
+        note,
+        content: request.content,
+    });
+    write(projects_dir, project, &blueprint)?;
+    tracing::info!("blueprint {id} in project {project} received pending revision {pending_id}");
+    Ok(blueprint)
+}
+
+fn take_pending(blueprint: &mut Blueprint, pending_id: u32) -> Result<PendingRevision, BlueprintError> {
+    match blueprint.pending.iter().position(|p| p.pending_id == pending_id) {
+        Some(i) => Ok(blueprint.pending.remove(i)),
+        None => bad(format!("the blueprint has no pending revision {pending_id}")),
+    }
+}
+
+/// Accept a pending revision: it becomes the next revision and the current one.
+pub fn accept(
+    projects_dir: &Path,
+    project: &str,
+    id: &str,
+    pending_id: u32,
+    request: DecideRequest,
+) -> Result<Blueprint, BlueprintError> {
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let mut blueprint = load(projects_dir, project, id)?;
+    if blueprint.taken_at != request.base {
+        return Err(conflict(&request.base, &blueprint.taken_at));
+    }
+    if blueprint.revisions.len() >= MAX_REVISIONS {
+        return bad(format!("a blueprint holds at most {MAX_REVISIONS} revisions"));
+    }
+    let accepted = take_pending(&mut blueprint, pending_id)?;
+    let number = blueprint.revisions.iter().map(|r| r.number).max().unwrap_or(0) + 1;
+    blueprint.taken_at = next_stamp(&blueprint.taken_at);
+    blueprint.revisions.push(Revision {
+        number,
+        created_at: blueprint.taken_at.clone(),
+        note: accepted.note,
+        content: accepted.content,
+    });
+    blueprint.current_revision = number;
+    write(projects_dir, project, &blueprint)?;
+    Ok(blueprint)
+}
+
+/// Reject a pending revision. It is kept, marked rejected, and the history is untouched.
+pub fn reject(
+    projects_dir: &Path,
+    project: &str,
+    id: &str,
+    pending_id: u32,
+    request: DecideRequest,
+) -> Result<Blueprint, BlueprintError> {
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let mut blueprint = load(projects_dir, project, id)?;
+    if blueprint.taken_at != request.base {
+        return Err(conflict(&request.base, &blueprint.taken_at));
+    }
+    let declined = take_pending(&mut blueprint, pending_id)?;
+    blueprint.taken_at = next_stamp(&blueprint.taken_at);
+    blueprint
+        .rejected
+        .push(RejectedRevision { rejected_at: blueprint.taken_at.clone(), revision: declined });
     write(projects_dir, project, &blueprint)?;
     Ok(blueprint)
 }
@@ -692,6 +845,91 @@ mod tests {
         let mut m = ok;
         m.outline.coarse.truncate(2);
         assert!(validate_content(&m).is_err(), "fewer than three corners");
+    }
+
+    /// The point of decision 10: a pushed revision changes nothing about what is current.
+    #[test]
+    fn test_a_push_is_pending_and_changes_nothing_that_is_current() {
+        let dir = temp_dir("push");
+        let v1 = create(&dir, "p1", create_req("A", 2)).unwrap();
+        let pushed = push(
+            &dir,
+            "p1",
+            &v1.id,
+            PushRequest { origin: Some("project Q".into()), note: None, content: content(5) },
+        )
+        .unwrap();
+        assert_eq!(pushed.current_revision, 1);
+        assert_eq!(pushed.revisions, v1.revisions, "the history is untouched");
+        assert_eq!(pushed.pending.len(), 1);
+        assert_eq!(pushed.pending[0].origin.as_deref(), Some("project Q"));
+        assert_eq!(pushed.pending[0].content.items.len(), 5);
+        assert_eq!(list(&dir, "p1").unwrap()[0].pending, 1);
+        assert_eq!(list(&dir, "p1").unwrap()[0].items, 2, "the summary still describes the current revision");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_accepting_a_pending_revision_makes_it_the_next_and_current() {
+        let dir = temp_dir("accept");
+        let v1 = create(&dir, "p1", create_req("A", 2)).unwrap();
+        let pushed = push(
+            &dir,
+            "p1",
+            &v1.id,
+            PushRequest { origin: None, note: Some("from Q".into()), content: content(5) },
+        )
+        .unwrap();
+        let accepted = accept(&dir, "p1", &v1.id, 1, DecideRequest { base: pushed.taken_at.clone() }).unwrap();
+        assert_eq!((accepted.current_revision, accepted.revisions.len(), accepted.pending.len()), (2, 2, 0));
+        assert_eq!(accepted.revision(2).unwrap().content.items.len(), 5);
+        assert_eq!(accepted.revision(2).unwrap().note.as_deref(), Some("from Q"));
+        assert_eq!(accepted.revision(1).unwrap(), v1.revision(1).unwrap());
+        let next = push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: content(1) }).unwrap();
+        assert_eq!(next.pending[0].pending_id, 2, "an accepted revision's id is not handed out again");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_rejecting_a_pending_revision_keeps_it_and_leaves_the_history_alone() {
+        let dir = temp_dir("reject");
+        let v1 = create(&dir, "p1", create_req("A", 2)).unwrap();
+        let pushed = push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: content(5) }).unwrap();
+        let rejected = reject(&dir, "p1", &v1.id, 1, DecideRequest { base: pushed.taken_at.clone() }).unwrap();
+        assert_eq!((rejected.current_revision, rejected.revisions.len(), rejected.pending.len()), (1, 1, 0));
+        assert_eq!(rejected.rejected.len(), 1, "kept, not deleted");
+        assert_eq!(rejected.rejected[0].revision.content.items.len(), 5);
+        // A later push does not reuse the rejected one's id, nor an accepted one's.
+        let again = push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: content(1) }).unwrap();
+        assert_eq!(again.pending[0].pending_id, 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_deciding_needs_the_current_version_and_a_pending_revision_that_exists() {
+        let dir = temp_dir("decide");
+        let v1 = create(&dir, "p1", create_req("A", 1)).unwrap();
+        let pushed = push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: content(2) }).unwrap();
+        let stale = accept(&dir, "p1", &v1.id, 1, DecideRequest { base: v1.taken_at.clone() });
+        assert!(matches!(stale, Err(BlueprintError::Conflict(_))), "read before the push");
+        assert!(accept(&dir, "p1", &v1.id, 9, DecideRequest { base: pushed.taken_at.clone() }).is_err());
+        assert!(reject(&dir, "p1", &v1.id, 9, DecideRequest { base: pushed.taken_at.clone() }).is_err());
+        assert_eq!(load(&dir, "p1", &v1.id).unwrap(), pushed, "a refused decision wrote nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_pushed_revision_is_validated_like_any_other() {
+        let dir = temp_dir("push-bad");
+        let v1 = create(&dir, "p1", create_req("A", 1)).unwrap();
+        let mut bad_content = content(1);
+        bad_content.items[0].placement.edge = 42;
+        assert!(push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: bad_content }).is_err());
+        assert!(matches!(
+            push(&dir, "p1", "nope", PushRequest { origin: None, note: None, content: content(1) }),
+            Err(BlueprintError::NotFound(_))
+        ));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -15,7 +15,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::blueprints::{
-    self, AddRevisionRequest, Blueprint, BlueprintError, BlueprintSummary, CreateRequest, UpdateRequest,
+    self, AddRevisionRequest, Blueprint, BlueprintError, BlueprintSummary, CreateRequest, DecideRequest, PushRequest,
+    UpdateRequest,
 };
 use crate::service::blueprint_capture::capture_room;
 use crate::service::blueprint_model::{RevisionContent, Skipped};
@@ -72,6 +73,37 @@ pub async fn http_add_revision(
     Json(request): Json<AddRevisionRequest>,
 ) -> Result<Json<Blueprint>, (StatusCode, String)> {
     blueprints::add_revision(&dir(&state)?, &project_id, &id, request)
+        .map(Json)
+        .map_err(to_http)
+}
+
+/// A revision arriving from elsewhere: stored as pending, never current. See `blueprints`.
+pub async fn http_push_revision(
+    State(state): State<Shared>,
+    UrlPath((project_id, id)): UrlPath<(String, String)>,
+    Json(request): Json<PushRequest>,
+) -> Result<(StatusCode, Json<Blueprint>), (StatusCode, String)> {
+    blueprints::push(&dir(&state)?, &project_id, &id, request)
+        .map(|b| (StatusCode::ACCEPTED, Json(b)))
+        .map_err(to_http)
+}
+
+pub async fn http_accept_pending(
+    State(state): State<Shared>,
+    UrlPath((project_id, id, pending_id)): UrlPath<(String, String, u32)>,
+    Json(request): Json<DecideRequest>,
+) -> Result<Json<Blueprint>, (StatusCode, String)> {
+    blueprints::accept(&dir(&state)?, &project_id, &id, pending_id, request)
+        .map(Json)
+        .map_err(to_http)
+}
+
+pub async fn http_reject_pending(
+    State(state): State<Shared>,
+    UrlPath((project_id, id, pending_id)): UrlPath<(String, String, u32)>,
+    Json(request): Json<DecideRequest>,
+) -> Result<Json<Blueprint>, (StatusCode, String)> {
+    blueprints::reject(&dir(&state)?, &project_id, &id, pending_id, request)
         .map(Json)
         .map_err(to_http)
 }
