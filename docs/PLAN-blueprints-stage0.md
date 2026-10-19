@@ -4,8 +4,8 @@ Part of [PLAN-blueprints.md](PLAN-blueprints.md). Measured 2026-10-19 with throw
 `scripts/blueprint_stage0/` (`bp0.py` is the capture and resolve sketch; `survey.py` and `exp.py`
 run House A from the checked-in data; `rhh.py`, `rhh_exp.py`, `rhh_exp3.py` run RHH from the
 production snapshot store, with the paths hard-coded). **Nothing here is product
-code.** Only the geometry and grammar questions of stage 0 are answered; the pyRevit versus C#
-spike needs Revit and has not been done.
+code.** Only the geometry and grammar questions of stage 0 are answered. The platform
+question is closed by decision (pyRevit), so no spike was run.
 
 ## What House A can and cannot test
 

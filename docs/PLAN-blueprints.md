@@ -1,6 +1,7 @@
 # Plan: blueprints (room layouts that travel)
 
-**Status: proposed, nothing built. Revised 2026-10-19 after the author's review comments.**
+**Status: proposed, nothing built. Revised 2026-10-19 after the author's review comments and
+the stage 0 results ([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
 A blueprint is a room, its FF&E, its doors and its room layout sheets, stored as
 *relationships to the room boundary* so the same layout can be placed in another room,
 rotated, or fitted to a differently sized or proportioned room, and eventually written into
@@ -44,8 +45,12 @@ write path into Revit. They have very different risk, which drives the staging.
 3. **Placement findings, never refusals.** An item that falls outside the room, overlaps
    another, or whose edge no longer exists is a reported state on that item. The resolver
    always returns the placements it could make.
-4. **Anchors are edges, to start.** Item-to-item relations are real but multiply the
-   solver's difficulty. v1 relates items to room edges and to door positions only.
+4. **Anchors are edges and doors, plus runs.** v1 relates items to room edges and door
+   positions, and to one item-to-item relation only: an item may *follow* the previous item
+   in a run (abut it) or be a child of a containing item. Stage 0: 183 of 256 new overlaps
+   when a room shrank 15% were between items that had been within 50 mm of each other
+   (casework runs, units inside wardrobes), which independent percentages squash. Every
+   other item-to-item relation stays out.
 5. **Items are the FF&E record as exported** (decided 2026-10-18): category, type name,
    instance and type properties verbatim, plus location and rotation relative to the room.
    Matched in another room by **family, then type name, then instance properties** (type
@@ -55,9 +60,13 @@ write path into Revit. They have very different risk, which drives the staging.
    Items keep their exported size. A *fixed* constraint keeps its distance in mm; a
    *percentage* constraint stretches with the room, measured along the edge it is anchored to, not the
    assign box's axes (decided 2026-10-19).
-7. **No mirroring.** A mirrored layout is a different blueprint: handed items are most
-   likely a different family, and mirroring them would cause placement problems. Rotation
-   is supported; mirror is not offered anywhere (decided 2026-10-19).
+7. **No mirroring at assignment.** A mirrored layout is a different blueprint: handed items
+   are most likely a different family, and mirroring them would cause placement problems.
+   Rotation is supported; mirror is not offered when assigning (decided 2026-10-19). Stage 0
+   shows handedness is common (37% and 43% of ensuite pairs on RHH are mirror images), so the
+   blueprint viewer offers **Create mirrored copy**, which writes a second blueprint the user
+   can then correct (swap the handed families), and the resolver reports "this room is the
+   mirror image of the blueprint" instead of resolving badly.
 8. **Blueprints are a separate endpoint**, not part of the connections document
    (decided 2026-10-19). Same write rules as connections (optimistic concurrency), own
    routes, own storage.
@@ -76,8 +85,25 @@ write path into Revit. They have very different risk, which drives the staging.
 13. **The Revit side is pull-based and defaults to a dry run.** The server holds tasks; a
     Revit button fetches, shows a diff (adds, moves, removes), and only writes on
     confirmation, in one transaction per room, reporting results back per task.
+14. **The reference outline is a general polygon, held at two tolerances** (stage 0).
+    The standardised repeated rooms on RHH (patient rooms, ensuites) are 5 to 9-edge angled
+    polygons, so rectangles are a case, not the scope. A blueprint stores a **coarse outline**
+    (jogs under about 350 mm removed) for matching and edge mapping, and the **true outline**
+    (about 30 mm) for checking findings: on the coarse outline items near column jogs fall
+    outside it (1% of `1 BED B` items on the fine outline, 21% on the coarse).
+15. **A blueprint fits a room by shape, not edge count.** Edge lengths plus turn angles,
+    cyclic shifts only (no reflection), with the door position choosing between rotations
+    that score the same. Even among same-named patient rooms 14 to 54% of pairs differ in
+    edge count because of jogs at columns and risers.
+16. **Wall devices are their own class of item.** Items under 100 mm thick (43% of House A's
+    usable items: switches, sockets, rails) are placed by wall, along-distance and height,
+    carry no footprint check, and are left out of overlap findings. Nested components
+    (`super_component_id`) are excluded from capture; they move with their parent.
+17. **Platform: pyRevit** (decided 2026-10-19). The Revit side stays in the existing
+    pyRevit extension; no C# add-in and no platform spike. Revisit only if a stage 7 or 8
+    obstacle forces it.
 
-### Constraint grammar (sketch, to be proven in stage 0)
+### Constraint grammar (sketch; stage 0 added `follows` and `class`)
 
 ```
 Placement {
@@ -86,13 +112,17 @@ Placement {
   off:     Flush | Fixed(mm) | Percent(0..100)   // distance into the room
   facing:  ToEdge | AwayFromEdge | Angle(deg, relative to edge normal)
   z:       FromFloor(mm)      // mounting height; not constrained to the room
+  follows: None | ItemRef(gap mm)   // runs: abut the previous item, or sit inside a parent
+  class:   Free | WallDevice        // wall devices: no footprint, no overlap check
 }
 ```
 
 Every dimension can be switched between a fixed value and a percentage by the user, and a
 change moves the object. An item may carry a second anchor ("2 m from this corner" is
 `Fixed(2000, from start)` on an edge) and a list of edges it may move to when the room
-does not match. There is no mirror field.
+does not match. There is no mirror field. Defaults for the fixed-or-percent rule, from stage 0:
+an item within 300 mm of a corner keeps that gap, an item within 150 mm of its wall keeps that
+gap, anything else is a percentage (both thresholds user-adjustable).
 
 ## Stages
 
@@ -100,16 +130,12 @@ Each stage ends in something usable and reviewable. The blueprint viewer (the ed
 moves ahead of the Revit write path from the earlier draft: it is where constraints are
 authored and checked, and the author has now specified it concretely.
 
-**Stage 0 — Prove the model on real data (no product code).**
-Pick 3 to 5 repeated room types from House A / RHH (patient room, WC, store). Write them as
-recipes by hand, resolve them onto their siblings with a throwaway script, and measure:
-how many siblings share edge topology, how often an item lands outside or on another, how
-much real layouts vary under size and proportion changes. Decide: the grammar above, how to
-handle non-rectangular rooms, and the pyRevit-versus-add-in question (see critique 5).
-*Output: a short findings note and a fixed grammar. The cheapest way to kill the biggest
-risk.*
-**House A done 2026-10-19: see [PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md).** The
-mechanics hold; House A has no repeated room types, so the sibling test needs RHH.
+**Stage 0 — Prove the model on real data (no product code). Done 2026-10-19** on House A and
+RHH: [PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md). Capture and resolve with throwaway
+scripts reproduce a captured layout exactly on its own room and, on RHH patient rooms and
+ensuites, land the median item within 27 to 97 mm of the real item in a sibling room (74 to
+96% of shape-compatible pairs within 150 mm). Findings folded into decisions 4, 7 and 14 to
+16. The platform question is decided (pyRevit), so there is no spike.
 
 **Stage 1 — Close the export gaps.** What a blueprint item holds is decided (the item as
 exported). Two small requests go to duHast, not `room_m`: **family name** and **hosting
@@ -125,13 +151,16 @@ the one-tool-per-read-route rule. **Import and export between projects on the sa
 (cross-server later). *No UI yet.*
 
 **Stage 3 — Capture from a room.** `service::blueprints::capture(room)` reads the room's
-outline, FF&E and doors and proposes recipes: each item snaps to its nearest edge, records
-along/off distance, and picks fixed or percentage by a rule (flush against a wall and near
-a corner is fixed; central on an edge is a percentage). A "Create blueprint" action on a
+outline, FF&E and doors and proposes recipes: each item snaps to the edge it lies beside
+(the nearest edge whose span contains it; nearest-segment distance failed on notched rooms),
+records along/off distance, and picks fixed or percentage by the decision 4 and grammar
+rules. Nested components are excluded, wall devices get their own class, and abutting items
+become runs. Both outlines are stored (decision 14). A "Create blueprint" action on a
 selected room. *Value on its own: a catalogue of the project's repeated layouts.*
 
 **Stage 4 — Resolver.** Blueprint revision + target room + transform (rotation, edge
-mapping, bounding-box scale) to placements plus findings. Pure and heavily unit-tested with
+mapping by shape, bounding-box scale) to placements plus findings, including the
+mirror-image case (decision 7). Pure and heavily unit-tested with
 the stage 0 fixtures. The core: everything after depends on it being right.
 
 **Stage 5 — Blueprint viewer (a new view in RoomMate).**
@@ -142,7 +171,7 @@ the stage 0 fixtures. The core: everything after depends on it being right.
 - **Top:** a timeline of the blueprint's revisions. Select another revision and set it
   current. Pending pushed revisions appear here to accept or reject.
 - **Right pane:** appears on selecting an item. Remove from blueprint (marks excluded), add
-  back, and the item's dimension constraints.
+  back, and the item's dimension constraints. **Create mirrored copy** of the blueprint.
 - **Constraints:** shown only for the selected item. Each can be switched between fixed
   and percentage, and a change moves the object (the stage 4 resolver, live). Stored against
   the selected revision only. Import the dimension settings from another revision, with
@@ -163,9 +192,8 @@ task is an assignment plus a snapshot of resolved placements and a state). A new
 button "Apply blueprint tasks": fetch, dry-run diff, confirm, place **one family instance
 type** with location, rotation and marker, report back. Prove the transaction, the marker,
 idempotent re-run and the results channel before the rest. Fake-Revit interface so the
-executor is testable in CI. *The Revit write loop is the largest unknown and is only
-deferred behind the viewer, not behind the whole product: if stage 0 flags the platform
-question as risky, pull a spike of this forward.*
+executor is testable in CI. *The Revit write loop is the largest unknown and is deferred
+behind the viewer. Platform is pyRevit (decision 17).*
 
 **Stage 8 — Revit write, full content.** All item kinds including wall-hosted and
 face-hosted (needs stage 1's hosting kind), doors (by host wall and offset), moves and
@@ -231,21 +259,20 @@ tags, schedule. Reuses the dry-run, marker and per-task result rules.
 
 **Open for this track:** whether title block, view templates and sheet naming are common
 across projects; whether the duHast exports are a base to extend or a prototype to
-replace; and the platform question (critique 5), which sheet automation weighs more than
-placement.
+replace. (The platform is pyRevit; sheet creation weighs on it more than placement
+does, so B4 is where that choice would be tested.)
 
 ## Critique
 
 **What is most likely to go wrong, in order:**
 
-1. **The constraint grammar will meet non-rectangular rooms and break.** "The edge" is
-   well-defined on a rectangle and ambiguous on a T. A room that changes shape can gain or
-   lose an edge, and then every anchor is stale. Mitigation: stage 0 measures it;
-   v1 requires the target room to share the blueprint's edge count and the user maps edges
-   explicitly (with a sensible default); anything else is a finding. If stage 0 shows most
-   real rooms are non-rectangular, the model needs rethinking *before* stage 2, not after.
-   Scaling the box in stage 6 makes this worse: stretching proportions is only well-defined
-   when the edges correspond.
+1. **Shape variation is the main matching risk, not rectangles.** Stage 0 showed the recipe
+   model works on the angled 5 to 9-edge rooms that actually repeat, so non-rectangular is not
+   the problem. What is: same-named rooms differ in small jogs (edge count differs on 14 to
+   54% of patient-room pairs), a third to a half of ensuite pairs are mirror images, and
+   same-shape rooms of non-standard types (toilets, consult rooms) do not share a layout at
+   all. Mitigation: shape matching on the coarse outline (decisions 14, 15), the mirrored
+   copy action, and findings for every case that does not fit.
 
 2. **The data is thick, with three known gaps.** Footprints and the common elevation
    parameters are there; sizes and heights are in the properties by decision. What is
@@ -259,18 +286,18 @@ placement.
    hosted families needing a host, and a mistake changes a real model. Mitigations are in
    the design (dry-run default, markers, one transaction per room, per-task results). The
    cost of moving the viewer ahead of it (stages 5 and 6 before 7) is that this risk is found
-   later; the one-day platform spike in stage 0 is what keeps that acceptable.
+   later. Staying on pyRevit (decision 17) keeps the Revit side in the extension already
+   shipped, which is the cheaper way to find out.
 
 4. **Handed items and rotation.** With mirroring removed, the remaining hazard is a blueprint
    applied to a room whose geometry only fits it rotated by something other than a right
    angle. Rotation is supported; the resolver must report items that land outside or on
    another after rotation, never silently clip them.
 
-5. **Platform choice for stage 7 onwards is not made.** pyRevit (IronPython, what the repo
-   already ships and where the buttons live) versus a C# add-in. pyRevit is faster to build
-   and matches the installer; a C# add-in is sturdier for transactions, sheet automation and
-   distribution. Decide in stage 0 with a one-day spike: can pyRevit create a viewport and a
-   tag reliably on the Revit versions in use?
+5. **Platform is pyRevit, by decision.** pyRevit (IronPython) is what the repo ships and where the
+   buttons live; the cost is weaker support for transactions at scale and for sheet
+   automation than a C# add-in. Accepted for now (2026-10-19). Reopen if a viewport or tag
+   cannot be created reliably, which is B4's question, not a prerequisite.
 
 6. **Scope.** Several months and three audiences (planner, designer, documenter). The
    staging gives value at 3 (catalogue), 5 (viewer and revisions), 6 (planning) and 7/8
@@ -303,7 +330,8 @@ placement.
     predictably. Prefer explicit rules a person can read ("2 m from corner A") over
     inference; show every resolved placement with the rule that produced it.
 
-**Things deliberately left out of v1:** mirroring, item-to-item relationships, automatic
+**Things deliberately left out of v1:** mirroring when assigning, item-to-item relationships
+other than runs, automatic
 fitting of a blueprint to a room (suggesting which blueprint suits which room),
 cross-server and cross-project libraries beyond same-server import/export, nested
 components, and editing Revit items already in the model that were not placed by a
@@ -313,11 +341,11 @@ blueprint.
 
 1. ~~**"Scaling" in the assign UI.**~~ **Closed 2026-10-19:** room size and proportions
    only; items keep their size (decision 6).
-2. **Rooms in scope for v1**: rectangular and orthogonal only, or L and T from the start?
-   Stage 0 will inform this, but your sense of how common each is on real projects matters.
+2. ~~**Rooms in scope for v1.**~~ **Closed 2026-10-19 by stage 0:** general polygons. The
+   rooms that repeat on RHH are angled 5 to 9-edge rooms, not rectangles (decision 14).
 3. **Scope of a blueprint**: same-server import/export is planned. Reusable across
    projects as a shared library, or only copied between them?
-4. **Revit platform**: stay with pyRevit, or is a C# add-in acceptable?
+4. ~~**Revit platform.**~~ **Closed 2026-10-19:** pyRevit (decision 17).
 5. **Who may write to Revit**: anyone using the button, or does a person approve tasks in the
    viewer first (a task state of *approved*)?
 6. **Sheets (track B)**: are the title block, view templates and sheet naming standard across
