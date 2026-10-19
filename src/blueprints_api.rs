@@ -18,10 +18,9 @@ use crate::blueprints::{
     self, AddRevisionRequest, Blueprint, BlueprintError, BlueprintSummary, CreateRequest, DecideRequest, PushRequest,
     UpdateRequest,
 };
-use crate::service::blueprint_capture::capture_room;
+use crate::service::blueprint_capture::{capture_room, qualify_room};
 use crate::service::blueprint_model::{RevisionContent, Skipped};
-use crate::service::blueprint_resolve::{resolve_in_room, Resolution};
-use crate::service::room_locator::RoomRef;
+use crate::service::blueprint_resolve::{resolve_in_room, EdgeMap, Resolution};
 use crate::state::Shared;
 
 pub fn to_http(err: BlueprintError) -> (StatusCode, String) {
@@ -134,7 +133,10 @@ pub async fn http_delete_blueprint(
 
 #[derive(Deserialize)]
 pub struct CaptureParams {
-    pub model_id: String,
+    /// The room's model. Left out, the room id is looked up among the project's rooms and is
+    /// refused if more than one model has it.
+    #[serde(default)]
+    pub model_id: Option<String>,
     pub room_id: String,
 }
 
@@ -153,7 +155,11 @@ pub async fn http_capture_blueprint(
     UrlPath(project_id): UrlPath<String>,
     Query(params): Query<CaptureParams>,
 ) -> Result<Json<CaptureResponse>, (StatusCode, String)> {
-    let room = RoomRef { model_id: params.model_id, room_id: params.room_id };
+    let room = match qualify_room(&state, &project_id, &params.room_id, params.model_id.as_deref()) {
+        Ok(Some(room)) => room,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
+        Err(e) => return Err(service_error(e)),
+    };
     // Reads the project's rooms and FF&E, which can take seconds on a large one; the other
     // service reads run inline in their handlers too.
     let result = capture_room(&state, &project_id, &room);
@@ -172,7 +178,8 @@ pub async fn http_capture_blueprint(
 
 #[derive(Deserialize)]
 pub struct ResolveParams {
-    pub model_id: String,
+    #[serde(default)]
+    pub model_id: Option<String>,
     pub room_id: String,
     /// The revision to place; the blueprint's current one when left out.
     #[serde(default)]
@@ -181,6 +188,23 @@ pub struct ResolveParams {
     /// the best fit by shape is used.
     #[serde(default)]
     pub shift: Option<usize>,
+    /// Map the edges by hand: the room edge for each blueprint edge, comma separated
+    /// (`2,3,0,1`). Wins over `shift`, and is how a room with a different edge count is placed.
+    #[serde(default)]
+    pub edge_map: Option<String>,
+}
+
+fn edge_map_of(params: &ResolveParams) -> Result<EdgeMap, (StatusCode, String)> {
+    if let Some(text) = params.edge_map.as_deref().filter(|t| !t.trim().is_empty()) {
+        let parsed: Result<Vec<usize>, _> = text.split(',').map(|n| n.trim().parse::<usize>()).collect();
+        return parsed.map(EdgeMap::Explicit).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("edge_map {text:?} is not a comma separated list of edge numbers"),
+            )
+        });
+    }
+    Ok(params.shift.map_or(EdgeMap::Auto, EdgeMap::Shift))
 }
 
 #[derive(Serialize)]
@@ -203,8 +227,13 @@ pub async fn http_resolve_blueprint(
     let Some(revision) = blueprint.revision(number) else {
         return Err((StatusCode::NOT_FOUND, format!("the blueprint has no revision {number}")));
     };
-    let room = RoomRef { model_id: params.model_id, room_id: params.room_id };
-    match resolve_in_room(&state, &project_id, &revision.content, &room, params.shift) {
+    let room = match qualify_room(&state, &project_id, &params.room_id, params.model_id.as_deref()) {
+        Ok(Some(room)) => room,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
+        Err(e) => return Err(service_error(e)),
+    };
+    let mapping = edge_map_of(&params)?;
+    match resolve_in_room(&state, &project_id, &revision.content, &room, &mapping) {
         Ok(Some((room_name, resolution))) => Ok(Json(ResolveResponse {
             blueprint_id: blueprint.id.clone(),
             revision: number,
@@ -216,6 +245,16 @@ pub async fn http_resolve_blueprint(
         Err(crate::service::ServiceError::Internal(e)) => {
             tracing::error!("resolve error: {e:#}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()))
+        }
+    }
+}
+
+fn service_error(err: crate::service::ServiceError) -> (StatusCode, String) {
+    match err {
+        crate::service::ServiceError::Invalid(msg) => (StatusCode::BAD_REQUEST, msg),
+        crate::service::ServiceError::Internal(e) => {
+            tracing::error!("blueprints error: {e:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
         }
     }
 }

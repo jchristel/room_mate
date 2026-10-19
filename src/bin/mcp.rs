@@ -78,8 +78,8 @@ struct BlueprintParams {
 struct CaptureBlueprintParams {
     /// The project id, as returned by `list_projects`.
     project_id: String,
-    /// The room's model, as returned by `get_rooms`. A room id is unique only within its model.
-    model_id: String,
+    /// The room's model. Omit it and the room id is looked up among the project's rooms (refused, naming the models, if more than one has it): a room id is unique only within its model.
+    model_id: Option<String>,
     /// The room's id.
     room_id: String,
 }
@@ -90,14 +90,16 @@ struct ResolveBlueprintParams {
     project_id: String,
     /// The blueprint id, as returned by `list_blueprints`.
     blueprint_id: String,
-    /// The target room's model, as returned by `get_rooms`.
-    model_id: String,
+    /// The target room's model. Omit it and the room id is looked up among the project's rooms.
+    model_id: Option<String>,
     /// The target room.
     room_id: String,
     /// The revision to place; the blueprint's current one when omitted.
     revision: Option<u32>,
     /// Pin the edge mapping: blueprint edge i goes to room edge (i + shift) % edges. Omit to use the best fit by shape.
     shift: Option<usize>,
+    /// Map the edges by hand: the room edge for each blueprint edge, in blueprint edge order. Wins over `shift`, and is how a room with a DIFFERENT number of edges is placed.
+    edge_map: Option<Vec<usize>>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -112,8 +114,8 @@ struct SheetParams {
 struct SuggestSheetsParams {
     /// The project id, as returned by `list_projects`.
     project_id: String,
-    /// The room's model, as returned by `get_rooms`. A room id is unique only within its model.
-    model_id: String,
+    /// The room's model. Omit it and the room id is looked up among the project's rooms (refused, naming the models, if more than one has it): a room id is unique only within its model.
+    model_id: Option<String>,
     /// The room to find a sheet for.
     room_id: String,
 }
@@ -1360,7 +1362,14 @@ impl RoommateMcp {
         description = "Work out the blueprint revision that capturing one room would produce, WITHOUT storing anything. Reads the room's outline and the FF&E attributed to it (under the project's own attribution policy) and returns the same `outline` and `items` get_blueprint shows, plus `room_name` and `skipped`: how many items capture left out because they are components of another instance (`nested`; they move with their parent) or have no footprint to write a recipe against (`no_footprint`). A silence would read as 'nothing was there', which is why they are counted. To keep one, POST the result to /projects/{id}/blueprints with a name."
     )]
     fn capture_blueprint(&self, Parameters(p): Parameters<CaptureBlueprintParams>) -> Result<CallToolResult, McpError> {
-        let room = roommate::service::room_locator::RoomRef { model_id: p.model_id, room_id: p.room_id };
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
         match roommate::service::blueprint_capture::capture_room(&self.state, &p.project_id, &room)
             .map_err(to_mcp_error)?
         {
@@ -1376,7 +1385,7 @@ impl RoommateMcp {
 
     /// Where a blueprint's items go in one room -- see `service::blueprint_resolve`.
     #[tool(
-        description = "Work out where a blueprint revision's items go in ONE target room, without storing or applying anything. Each entry of `placements` has the item's `centre` and unit `facing` in the PROJECT's plan frame in millimetres (so it draws straight onto the plan), its `size_mm` (along the facing, then across), the target `edge` it sits against and `rule`, the rule that put it there in words. Scaling is the ROOM's and never the item's: a fixed distance keeps its millimetres, a percentage keeps its fraction of the edge or of the room's depth, measured on the edge it is anchored to. An item that follows another (a run of casework, a shelf in a wardrobe) moves rigidly with it. `fit` says how the blueprint's outline matched the room's: `kind` is `plain` (the same shape up to rotation), `mirror_image` (the room is the blueprint REFLECTED: the blueprint never mirrors, so the answer is to make a mirrored copy of it, and placements are still returned for reference), `no_fit` or `edge_count_differs` (nothing is placed). `shift` is the edge mapping used and `cost` its shape cost (about 1.0 or under is a fit). A rectangle fits in two mappings a half turn apart, so pass `shift` to choose. `findings` lists what to look at, never an error: `outside` (a corner is outside the room's true outline), `overlap` (two items that did not overlap in the blueprint now do), `follow_broken`, `corner_anchored`, `mirror_image`, `shape_mismatch`. Wall devices are left out of outside and overlap findings. `excluded` counts items the blueprint holds but excludes."
+        description = "Work out where a blueprint revision's items go in ONE target room, without storing or applying anything. Each entry of `placements` has the item's `centre` and unit `facing` in the PROJECT's plan frame in millimetres (so it draws straight onto the plan), its `size_mm` (along the facing, then across), the target `edge` it sits against and `rule`, the rule that put it there in words. Scaling is the ROOM's and never the item's: a fixed distance keeps its millimetres, a percentage keeps its fraction of the edge or of the room's depth, measured on the edge it is anchored to. An item that follows another (a run of casework, a shelf in a wardrobe) moves rigidly with it. `fit` says how the blueprint's outline matched the room's: `kind` is `plain` (the same shape up to rotation), `mirror_image` (the room is the blueprint REFLECTED: the blueprint never mirrors, so the answer is to make a mirrored copy of it, and placements are still returned for reference), `no_fit` or `edge_count_differs` (nothing is placed). `shift` is the edge mapping used and `cost` its shape cost (about 1.0 or under is a fit). A rectangle fits in two mappings a half turn apart, so pass `shift` to choose. A lot of resolving is manual: pass `edge_map` (the room edge for each blueprint edge) to place a blueprint in a room with a DIFFERENT number of edges, or to override the shape fit; the fit `kind` is then `manual` and nothing is judged about the mapping. `findings` lists what to look at, never an error: `outside` (a corner is outside the room's true outline), `overlap` (two items that did not overlap in the blueprint now do), `follow_broken`, `corner_anchored`, `mirror_image`, `shape_mismatch`. Wall devices are left out of outside and overlap findings. `excluded` counts items the blueprint holds but excludes."
     )]
     fn resolve_blueprint(&self, Parameters(p): Parameters<ResolveBlueprintParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
@@ -1386,13 +1395,22 @@ impl RoommateMcp {
         let revision = blueprint
             .revision(number)
             .ok_or_else(|| McpError::invalid_params(format!("the blueprint has no revision {number}"), None))?;
-        let room = roommate::service::room_locator::RoomRef { model_id: p.model_id, room_id: p.room_id };
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
+        use roommate::service::blueprint_resolve::EdgeMap;
         match roommate::service::blueprint_resolve::resolve_in_room(
             &self.state,
             &p.project_id,
             &revision.content,
             &room,
-            p.shift,
+            &p.edge_map
+                .map_or_else(|| p.shift.map_or(EdgeMap::Auto, EdgeMap::Shift), EdgeMap::Explicit),
         )
         .map_err(to_mcp_error)?
         {
@@ -1437,7 +1455,14 @@ impl RoommateMcp {
     fn suggest_sheets(&self, Parameters(p): Parameters<SuggestSheetsParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let records = roommate::sheets::load_all(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
-        let room = roommate::service::room_locator::RoomRef { model_id: p.model_id, room_id: p.room_id };
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
         match roommate::service::sheet_suggest::suggest(&self.state, &p.project_id, &room, &records)
             .map_err(to_mcp_error)?
         {

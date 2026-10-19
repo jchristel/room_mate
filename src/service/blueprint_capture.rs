@@ -263,6 +263,38 @@ fn properties_of(map: &PropertyMap) -> Vec<Property> {
         .collect()
 }
 
+/// A room reference from a request that may leave the model out, because the plan's room rows
+/// do not name theirs. With a model it is taken as given; without one the room id is looked up
+/// among the project's rooms: `None` when no room has it, an error naming the models when
+/// several do, because a silent guess would act on the wrong room (a room id is unique only
+/// within its model). The rule `connections::Resolver` applies to a saved link.
+pub fn qualify_room(
+    state: &AppState,
+    project: &str,
+    room_id: &str,
+    model_id: Option<&str>,
+) -> Result<Option<RoomRef>, ServiceError> {
+    if let Some(model_id) = model_id.map(str::trim).filter(|m| !m.is_empty()) {
+        return Ok(Some(RoomRef { model_id: model_id.to_string(), room_id: room_id.to_string() }));
+    }
+    let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
+        return Ok(None);
+    };
+    let mut models: Vec<&str> =
+        rooms.rooms.iter().filter(|r| r.room.id == room_id).map(|r| r.model_id.as_str()).collect();
+    models.sort_unstable();
+    models.dedup();
+    match models.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(RoomRef { model_id: (*only).to_string(), room_id: room_id.to_string() })),
+        many => Err(ServiceError::Invalid(format!(
+            "room id {room_id:?} exists in {} models ({}); name the model",
+            many.len(),
+            many.join(", ")
+        ))),
+    }
+}
+
 /// The room's name and outer loop in millimetres, in the project's plan frame, or `None` when the
 /// project has no such room. Shared by capture and the resolver so both read the same outline.
 pub fn room_ring(state: &AppState, project: &str, room: &RoomRef) -> Result<Option<(String, Vec<Pt>)>, ServiceError> {

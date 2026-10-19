@@ -62,6 +62,22 @@ pub enum FitKind {
     NoFit,
     /// A different number of edges on the coarse outline: nothing is placed.
     EdgeCountDiffers,
+    /// The person chose which room edge each blueprint edge goes to; no shape fit was judged.
+    Manual,
+}
+
+/// How the blueprint's edges are mapped onto the room's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeMap {
+    /// The best cyclic shift by shape.
+    Auto,
+    /// Blueprint edge `i` to room edge `(i + shift) % edges`.
+    Shift(usize),
+    /// Blueprint edge `i` to room edge `map[i]`, chosen by a person. **The way to place a blueprint
+    /// in a room whose edge count differs, or whose mapping the shape cannot decide**: a lot of
+    /// the resolving is manual anyway, so the person's choice is accepted as it stands, with no
+    /// shape judgement and no finding about it. Two blueprint edges may share a room edge.
+    Explicit(Vec<usize>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -243,14 +259,15 @@ struct Context<'a> {
     t_coarse: &'a [Pt],
     /// The blueprint's own fine outline: what "already outside" in the blueprint is judged against.
     bp_fine: Vec<Pt>,
-    shift: usize,
+    /// Room edge for each blueprint edge.
+    edge_map: Vec<usize>,
 }
 
 impl Context<'_> {
     /// Placed against an edge by the item's own recipe.
     fn anchored(&self, item: &BlueprintItem) -> Pose {
         let p = &item.placement;
-        let j = (p.edge + self.shift) % self.es_t.len();
+        let j = self.edge_map.get(p.edge).copied().unwrap_or(0);
         let e = self.es_t[j];
         let along = match p.along_mode {
             AlongMode::FixedFromStart => p.along_mm,
@@ -387,6 +404,15 @@ pub fn resolve(
     target_ring: &[Pt],
     shift: Option<usize>,
 ) -> Result<Resolution, ServiceError> {
+    resolve_with(content, target_ring, &shift.map_or(EdgeMap::Auto, EdgeMap::Shift))
+}
+
+/// `resolve` with the edge mapping spelt out: automatic, a pinned shift, or a person's own.
+pub fn resolve_with(
+    content: &RevisionContent,
+    target_ring: &[Pt],
+    mapping: &EdgeMap,
+) -> Result<Resolution, ServiceError> {
     let t_coarse = simplify(target_ring, COARSE_TOLERANCE_MM);
     let t_fine = simplify(target_ring, FINE_TOLERANCE_MM);
     if t_coarse.len() < 3 {
@@ -400,45 +426,58 @@ pub fn resolve(
     let mut findings = Vec::new();
     let excluded = content.items.iter().filter(|i| i.excluded).count();
 
-    if bp_ring.len() != t_coarse.len() {
-        findings.push(Finding::ShapeMismatch {
-            message: format!(
-                "the blueprint's outline has {} edges and the room's has {}, so nothing was placed",
-                bp_ring.len(),
+    let (fit, edge_map) = if let EdgeMap::Explicit(map) = mapping {
+        if map.len() != bp_ring.len() {
+            return Err(ServiceError::Invalid(format!(
+                "the edge map names {} edges and the blueprint has {}",
+                map.len(),
+                bp_ring.len()
+            )));
+        }
+        if let Some(bad) = map.iter().find(|&&e| e >= t_coarse.len()) {
+            return Err(ServiceError::Invalid(format!(
+                "the edge map names room edge {bad}, but the room has {}",
                 t_coarse.len()
-            ),
-        });
-        return Ok(Resolution {
-            fit: Fit { kind: FitKind::EdgeCountDiffers, shift: 0, cost: None, mirror_cost: None },
-            outline,
-            placements: Vec::new(),
-            findings,
-            excluded,
-        });
-    }
-    if let Some(s) = shift
-        && s >= t_coarse.len()
-    {
-        return Err(ServiceError::Invalid(format!(
-            "shift {s} is out of range: the room has {} edges",
-            t_coarse.len()
-        )));
-    }
-
-    let fit = fit_outlines(&bp_ring, &t_coarse, shift, &mut findings);
+            )));
+        }
+        (Fit { kind: FitKind::Manual, shift: 0, cost: None, mirror_cost: None }, map.clone())
+    } else {
+        if bp_ring.len() != t_coarse.len() {
+            findings.push(Finding::ShapeMismatch {
+                message: format!(
+                    "the blueprint's outline has {} edges and the room's has {}, so nothing was placed; map the edges by hand",
+                    bp_ring.len(),
+                    t_coarse.len()
+                ),
+            });
+            return Ok(Resolution {
+                fit: Fit { kind: FitKind::EdgeCountDiffers, shift: 0, cost: None, mirror_cost: None },
+                outline,
+                placements: Vec::new(),
+                findings,
+                excluded,
+            });
+        }
+        let shift = if let EdgeMap::Shift(s) = mapping { Some(*s) } else { None };
+        if let Some(s) = shift
+            && s >= t_coarse.len()
+        {
+            return Err(ServiceError::Invalid(format!(
+                "shift {s} is out of range: the room has {} edges",
+                t_coarse.len()
+            )));
+        }
+        let fit = fit_outlines(&bp_ring, &t_coarse, shift, &mut findings);
+        let k = t_coarse.len();
+        let map = (0..k).map(|i| (i + fit.shift) % k).collect();
+        (fit, map)
+    };
     let es_bp = edges(&bp_ring);
     let live: Vec<&BlueprintItem> = content.items.iter().filter(|i| !i.excluded).collect();
     let bp_frame: BTreeMap<&str, (Pt, f64)> =
         live.iter().filter_map(|i| frame_in(i, &es_bp).map(|f| (i.id.as_str(), f))).collect();
     let bp_fine: Vec<Pt> = content.outline.fine.iter().map(|&p| p.into()).collect();
-    let ctx = Context {
-        live,
-        bp_frame,
-        es_t: edges(&t_coarse),
-        t_coarse: &t_coarse,
-        bp_fine,
-        shift: fit.shift,
-    };
+    let ctx = Context { live, bp_frame, es_t: edges(&t_coarse), t_coarse: &t_coarse, bp_fine, edge_map };
 
     let placed = ctx.place_all(&mut findings);
     let mut placements = Vec::new();
@@ -471,12 +510,12 @@ pub fn resolve_in_room(
     project: &str,
     content: &RevisionContent,
     room: &RoomRef,
-    shift: Option<usize>,
+    mapping: &EdgeMap,
 ) -> Result<Option<(String, Resolution)>, ServiceError> {
     let Some((room_name, ring)) = room_ring(state, project, room)? else {
         return Ok(None);
     };
-    Ok(Some((room_name, resolve(content, &ring, shift)?)))
+    Ok(Some((room_name, resolve_with(content, &ring, mapping)?)))
 }
 
 #[cfg(test)]
@@ -701,6 +740,46 @@ mod tests {
         assert!(r.findings.iter().any(|f| matches!(f, Finding::MirrorImage { .. })), "{:?}", r.findings);
         assert!(r.fit.mirror_cost.unwrap() < r.fit.cost.unwrap());
         assert_eq!(r.placements.len(), 1, "still returns what it could place");
+    }
+
+    /// A room with a different edge count, placed by a person's own mapping.
+    #[test]
+    fn test_a_manual_edge_map_places_items_in_a_room_with_a_different_edge_count() {
+        let c = content(&rect(6000.0, 4000.0), vec![src("bed", (3000.0, 600.0), 1600.0, 1000.0, (0.0, 1.0))]);
+        let l = vec![
+            (0.0, 0.0),
+            (6000.0, 0.0),
+            (6000.0, 2000.0),
+            (2500.0, 2000.0),
+            (2500.0, 4500.0),
+            (0.0, 4500.0),
+        ];
+        assert_eq!(resolve(&c, &l, None).unwrap().placements.len(), 0, "automatic gives up");
+        // Blueprint edges 0..3 (bottom, right, top, left) to the L's bottom, upper right, notch, left.
+        let r = resolve_with(&c, &l, &EdgeMap::Explicit(vec![0, 1, 4, 5])).unwrap();
+        assert_eq!(r.fit.kind, FitKind::Manual);
+        assert_eq!(r.placements.len(), 1);
+        assert!(
+            near(at(&r, "bed"), (3000.0, 600.0), 1e-6),
+            "the bottom wall is the bottom wall: {:?}",
+            at(&r, "bed")
+        );
+        assert!(r.findings.is_empty(), "{:?}", r.findings);
+        // Moving the bed's wall to another room edge moves the bed there.
+        let moved = resolve_with(&c, &l, &EdgeMap::Explicit(vec![4, 1, 4, 5])).unwrap();
+        assert!(!near(at(&moved, "bed"), (3000.0, 600.0), 1.0));
+    }
+
+    #[test]
+    fn test_a_manual_edge_map_that_cannot_be_applied_is_refused() {
+        let c = content(&rect(6000.0, 4000.0), vec![src("bed", (3000.0, 600.0), 1600.0, 1000.0, (0.0, 1.0))]);
+        let ring = rect(6000.0, 4000.0);
+        assert!(resolve_with(&c, &ring, &EdgeMap::Explicit(vec![0, 1, 2])).is_err(), "too few edges named");
+        assert!(
+            resolve_with(&c, &ring, &EdgeMap::Explicit(vec![0, 1, 2, 9])).is_err(),
+            "a room edge that is not there"
+        );
+        assert!(resolve_with(&c, &ring, &EdgeMap::Explicit(vec![0, 1, 2, 3])).is_ok());
     }
 
     #[test]

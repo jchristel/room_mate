@@ -12,7 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::service::room_locator::RoomRef;
+use crate::service::blueprint_capture::qualify_room;
 use crate::service::sheet_suggest::{self, Suggestions};
 use crate::sheets::{
     self, DecideRequest, PushOutcome, PushRequest, SheetError, SheetRecord, SheetSummary, UpdateRequest,
@@ -107,7 +107,9 @@ pub async fn http_delete_sheet(
 
 #[derive(Deserialize)]
 pub struct SuggestParams {
-    pub model_id: String,
+    /// The room's model; left out, looked up among the project's rooms (see `qualify_room`).
+    #[serde(default)]
+    pub model_id: Option<String>,
     pub room_id: String,
 }
 
@@ -118,7 +120,15 @@ pub async fn http_suggest_sheets(
     Query(params): Query<SuggestParams>,
 ) -> Result<Json<Suggestions>, (StatusCode, String)> {
     let records = sheets::load_all(&dir(&state)?, &project_id).map_err(to_http)?;
-    let room = RoomRef { model_id: params.model_id, room_id: params.room_id };
+    let room = match qualify_room(&state, &project_id, &params.room_id, params.model_id.as_deref()) {
+        Ok(Some(room)) => room,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
+        Err(crate::service::ServiceError::Invalid(msg)) => return Err((StatusCode::BAD_REQUEST, msg)),
+        Err(crate::service::ServiceError::Internal(e)) => {
+            tracing::error!("suggest error: {e:#}");
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()));
+        }
+    };
     match sheet_suggest::suggest(&state, &project_id, &room, &records) {
         Ok(Some(result)) => Ok(Json(result)),
         Ok(None) => Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
