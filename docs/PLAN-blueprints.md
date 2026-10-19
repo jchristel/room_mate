@@ -113,14 +113,18 @@ write path into Revit. They have very different risk, which drives the staging.
     kept as exported and are a different thing, stored separately, from the sheet
     association a blueprint carries. The library exists so the server can offer the closest
     sheet for a room.
-19. **The user chooses which sheets are exported**, and says which room each belongs to. Nothing
-    is inferred from sheet names or parameters: the export has no marker for a room layout
-    sheet and no link from a sheet to a room.
+19. **The user chooses which sheets are exported, and which room each belongs to.** Nothing is
+    inferred from sheet names or parameters: the export has no marker for a room layout sheet
+    and no link from a sheet to a room. The room is named **at export** when the sheet goes out
+    through the blueprint route (the blueprint already knows its room), and **afterwards, in the
+    viewer,** for rooms no blueprint covers, where the UI suggests a match and the user makes
+    the choice.
 20. **A sheet reaches a room in one of two ways.** *Direct:* the user associates sheets with a
     blueprint, and that association is exported with the blueprint. *Suggested:* in sheet
     creation mode only, the server ranks library sheets by how close their room is to the
     target room (size, proportions, number of items, as duHast's `RoomLayoutSheet` sketch
-    intended). A suggestion is offered, never applied, and never made outside sheet creation.
+    intended), the three weighed **equally** (decided 2026-10-19). A suggestion is offered,
+    never applied, and never made outside sheet creation.
 
 ### Constraint grammar (sketch; stage 0 added `follows` and `class`)
 
@@ -262,7 +266,8 @@ nothing run in Revit):**
   template names, and tag capture.
 
 **B1 — Export button (extractor).** A pyRevit button lists the document's sheets; the user picks
-the ones to export and the room each belongs to (decision 19). Each chosen sheet goes through
+the ones to export, and names the room when it is exporting through the blueprint route
+(decision 19). Each chosen sheet goes through
 duHast's `convert_revit_sheet`. It can be pushed in the same run as FF&E, since a run already
 exports several entities at once. The export carries the sheet's identity (Revit element id
 and sheet number), its properties, viewports with sheet positions, crop boxes and schedules.
@@ -271,15 +276,18 @@ template, view names.
 
 **B2 — Sheet library (server).** A `sheets` collection on its own endpoint, one record per
 sheet, scoped to a project. Each record holds the sheet as exported and the room the user
-named for it (a reference, never validated against the model on save). A sheet pushed again
-is **pending until the user accepts or rejects it**, as a pushed blueprint is (decision 10), so
-a re-export cannot silently change a sheet someone relies on. Reads: list, one sheet, and
-**suggest**.
+named for it (a reference, never validated against the model on save; it may be set later in
+the viewer). **A sheet is identified by its Revit sheet id plus the document's title** (decided
+2026-10-19). A sheet pushed again that matches on both is the same sheet and is updated; **if it
+matches but its sheet number has changed, the push is stashed as pending and the user is asked
+to confirm** (accept or reject, as a pushed blueprint is, decision 10), so a renumbering cannot
+silently rewrite a sheet someone relies on. A sheet that matches on neither is a new sheet.
+Reads: list, one sheet, and **suggest**.
 
 **B3 — Suggest, in sheet creation mode only.** `GET .../sheets/suggest?room=` ranks library
 sheets by the closeness of their room to the target room: area, proportions (the outline's
-aspect) and number of items, each worked out at read time from the rooms and FF&E, never
-stored. It returns the ranking with the figures, so a person sees why a sheet was offered.
+aspect) and number of items, **weighed equally**, each worked out at read time from the rooms
+and FF&E, never stored. It returns the ranking with the figures, so a person sees why a sheet was offered.
 Nothing applies it.
 
 **B3b — Associate sheets with a blueprint.** A blueprint carries a list of sheet references (the
@@ -386,7 +394,7 @@ blueprint.
    them, but your view helps)?
 7. ~~**Percentage constraints on rotated boxes.**~~ **Closed 2026-10-19:** a percentage
    constraint follows the edge it is anchored to, not the box's axes (decision 6).
-8. **Sheet library, three details** (open): (a) does a re-pushed sheet replace by Revit sheet
-   id, or by sheet number, when models are re-exported or renumbered; (b) is a sheet's room
-   chosen at export time, in the viewer afterwards, or either; (c) should "closest" weigh area,
-   proportions and item count equally, or let the user set the weights.
+8. ~~**Sheet library, three details.**~~ **Closed 2026-10-19:** a re-pushed sheet matches on Revit
+   sheet id plus document title, and a changed sheet number is stashed for confirmation; the
+   room is chosen at export through the blueprint route and afterwards in the viewer for rooms no
+   blueprint covers; "closest" weighs size, proportions and item count equally.
