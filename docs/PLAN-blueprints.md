@@ -110,8 +110,8 @@ write path into Revit. They have very different risk, which drives the staging.
     obstacle forces it.
 18. **Room layout sheets are a library with their own endpoint** (decided 2026-10-19), a
     collection of sheet objects beside blueprints, not inside them. Sheets saved there are
-    kept as exported and are a different thing, stored separately, from the sheet
-    association a blueprint carries. The library exists so the server can offer the closest
+    kept as exported and are stored separately from the sheet association a blueprint
+    carries (confirmed 2026-10-19). The library exists so the server can offer the closest
     sheet for a room.
 19. **The user chooses which sheets are exported, and which room each belongs to.** Nothing is
     inferred from sheet names or parameters: the export has no marker for a room layout sheet
