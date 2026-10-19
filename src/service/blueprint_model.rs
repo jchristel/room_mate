@@ -168,11 +168,32 @@ pub struct BlueprintItem {
     pub type_properties: Vec<Property>,
 }
 
+/// A door of the room the blueprint was captured from. **Orientation only**: doors are already
+/// placed in the model, and a blueprint never creates one. They exist so that two rotations
+/// that fit a room's shape equally well (a rectangle fits twice, half a turn apart) can be told
+/// apart by where the doors are.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BlueprintDoor {
+    /// The Revit element id, in the model it was captured from.
+    pub id: String,
+    /// Index into `Outline::coarse`'s edges: the edge the door lies on.
+    pub edge: usize,
+    /// Distance of the door's centre along that edge from its start, mm.
+    pub along_mm: f64,
+    /// The edge's length at capture.
+    pub edge_len_mm: f64,
+    /// The door's extent along the edge, mm.
+    pub width_mm: f64,
+}
+
 /// Everything one revision of a blueprint holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RevisionContent {
     pub outline: Outline,
     pub items: Vec<BlueprintItem>,
+    /// Absent in a revision written before doors were captured, which is not "no doors".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub doors: Vec<BlueprintDoor>,
 }
 
 /// What capture left out, as numbers: a silence would read as "there was nothing there".

@@ -54,6 +54,8 @@ pub fn default_http_addr() -> String {
     format!("{DEFAULT_HTTP_HOST}:{DEFAULT_HTTP_PORT}")
 }
 
+pub mod assignments;
+pub mod assignments_api;
 pub mod backups;
 pub mod blueprints;
 pub mod blueprints_api;

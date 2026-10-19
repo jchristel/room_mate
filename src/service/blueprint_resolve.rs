@@ -29,12 +29,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use super::blueprint_capture::room_ring;
+use super::blueprint_capture::{door_on_edges, room_doors, room_ring, SourceDoor};
 use super::blueprint_geometry::{
     box_corners, cross, depth_at, dot, edges, inside, overlaps, simplify, sub, Edge, Pt, COARSE_TOLERANCE_MM,
     FINE_TOLERANCE_MM,
 };
-use super::blueprint_model::{AlongMode, BlueprintItem, ItemClass, OffMode, Outline, Point, RevisionContent};
+use super::blueprint_model::{
+    AlongMode, BlueprintDoor, BlueprintItem, ItemClass, OffMode, Outline, Point, RevisionContent,
+};
 use super::room_locator::RoomRef;
 use super::ServiceError;
 use crate::state::AppState;
@@ -46,6 +48,8 @@ pub const OVERLAP_PEN_MM: f64 = 5.0;
 /// The shape-fit cost at or under which two outlines count as the same shape: a sum of
 /// absolute log edge-length ratios, so 1.0 is about 10% per edge over nine edges.
 pub const FIT_OK: f64 = 1.0;
+/// Two rotations whose shape costs differ by less than this are a tie that doors may break.
+const SHAPE_TIE: f64 = 0.15;
 /// A turn angle differing by more than this is a different corner.
 const TURN_TOLERANCE_DEG: f64 = 25.0;
 /// What a mismatched turn adds to the cost: enough to rule a shift out on its own.
@@ -91,6 +95,17 @@ pub struct Fit {
     pub mirror_cost: Option<f64>,
 }
 
+/// One cyclic shift that fits the room's shape, and how well its doors agree.
+#[derive(Debug, Clone, Serialize)]
+pub struct Candidate {
+    pub shift: usize,
+    pub cost: f64,
+    /// Mean distance, mm, from each blueprint door to the nearest door of the room on the edge it
+    /// lands on (`DOOR_UNMATCHED_MM` where that edge has none). Absent when either side has no door:
+    /// no evidence, which is not agreement.
+    pub door_gap_mm: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Placed {
     pub item_id: String,
@@ -124,6 +139,8 @@ pub enum Finding {
     MirrorImage { message: String },
     /// The outlines do not agree in shape.
     ShapeMismatch { message: String },
+    /// The blueprint's doors are not where the room's are, at this mapping.
+    DoorsDisagree { message: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,6 +152,93 @@ pub struct Resolution {
     pub findings: Vec<Finding>,
     /// Items the blueprint holds but excludes: not placed, counted.
     pub excluded: usize,
+    /// The rotations that fit the room's shape, best first by door agreement and then by shape.
+    /// Empty when the mapping was made by hand or the edge counts differ.
+    pub candidates: Vec<Candidate>,
+    /// The room's doors on its coarse outline: what the blueprint's doors are compared with.
+    pub doors: Vec<BlueprintDoor>,
+    /// The blueprint's doors as the chosen mapping lands them on the room (edge and distance along
+    /// it, in the room): so a person sees whether they sit on the room's doors without working it out.
+    pub mapped_doors: Vec<BlueprintDoor>,
+}
+
+/// What a blueprint door scores when the room has no door on the edge it lands on.
+pub const DOOR_UNMATCHED_MM: f64 = 3_000.0;
+/// A chosen mapping whose doors are further apart than this is reported.
+pub const DOOR_DISAGREE_MM: f64 = 600.0;
+
+/// Mean distance from each blueprint door to the nearest door of the room on the edge it maps to,
+/// taking a position as the same fraction along the edge. `None` when there is nothing to compare.
+fn door_gap(bp: &[BlueprintDoor], room: &[BlueprintDoor], edge_map: &[usize], t_edges: &[Edge]) -> Option<f64> {
+    if bp.is_empty() || room.is_empty() {
+        return None;
+    }
+    let gaps: Vec<f64> = bp
+        .iter()
+        .filter_map(|d| {
+            let j = *edge_map.get(d.edge)?;
+            let len = t_edges.get(j)?.len;
+            let want = d.along_mm / d.edge_len_mm.max(1.0) * len;
+            Some(
+                room.iter()
+                    .filter(|r| r.edge == j)
+                    .map(|r| (r.along_mm - want).abs())
+                    .min_by(f64::total_cmp)
+                    .unwrap_or(DOOR_UNMATCHED_MM),
+            )
+        })
+        .collect();
+    (!gaps.is_empty()).then(|| gaps.iter().sum::<f64>() / gaps.len() as f64)
+}
+
+/// The room's doors against its coarse outline: edge, distance along it and width.
+fn doors_on(doors: &[SourceDoor], coarse: &[Pt]) -> Vec<BlueprintDoor> {
+    let es = edges(coarse);
+    doors
+        .iter()
+        .filter_map(|d| {
+            let (edge, along_mm, width_mm) = door_on_edges(&d.footprint, coarse)?;
+            Some(BlueprintDoor { id: d.id.clone(), edge, along_mm, edge_len_mm: es[edge].len, width_mm })
+        })
+        .collect()
+}
+
+/// The blueprint's doors as `edge_map` lands them on the room: the same fraction along the edge
+/// they were on, which is the position `door_gap` compares.
+fn map_doors(doors: &[BlueprintDoor], edge_map: &[usize], t_edges: &[Edge]) -> Vec<BlueprintDoor> {
+    doors
+        .iter()
+        .filter_map(|d| {
+            let edge = *edge_map.get(d.edge)?;
+            let len = t_edges.get(edge)?.len;
+            Some(BlueprintDoor {
+                id: d.id.clone(),
+                edge,
+                along_mm: d.along_mm / d.edge_len_mm.max(1.0) * len,
+                edge_len_mm: len,
+                width_mm: d.width_mm,
+            })
+        })
+        .collect()
+}
+
+/// Say so when the chosen mapping puts the blueprint's doors well away from the room's.
+fn door_findings(
+    bp: &[BlueprintDoor],
+    room: &[BlueprintDoor],
+    edge_map: &[usize],
+    t_edges: &[Edge],
+    findings: &mut Vec<Finding>,
+) {
+    if let Some(gap) = door_gap(bp, room, edge_map, t_edges)
+        && gap > DOOR_DISAGREE_MM
+    {
+        findings.push(Finding::DoorsDisagree {
+            message: format!(
+                "the blueprint's doors land {gap:.0} mm from the room's doors on average; check the rotation"
+            ),
+        });
+    }
 }
 
 fn turns(ring: &[Pt]) -> Vec<f64> {
@@ -214,9 +318,38 @@ fn rule_text(item: &BlueprintItem, edge: usize) -> String {
 }
 
 /// How the blueprint's coarse outline sits on the target's, and what to say about it.
-fn fit_outlines(bp_ring: &[Pt], t_coarse: &[Pt], shift: Option<usize>, findings: &mut Vec<Finding>) -> Fit {
+fn fit_outlines(
+    bp_ring: &[Pt],
+    t_coarse: &[Pt],
+    shift: Option<usize>,
+    doors: (&[BlueprintDoor], &[BlueprintDoor]),
+    findings: &mut Vec<Finding>,
+) -> (Fit, Vec<Candidate>) {
     let (es_bp, es_t) = (edges(bp_ring), edges(t_coarse));
-    let (auto_shift, auto_cost) = best_shift(bp_ring, t_coarse);
+    let (ta, tb) = (turns(bp_ring), turns(t_coarse));
+    let k = t_coarse.len();
+    let mut candidates: Vec<Candidate> = (0..k)
+        .map(|s| Candidate {
+            shift: s,
+            cost: shape_cost(&es_bp, &ta, &es_t, &tb, s),
+            door_gap_mm: door_gap(doors.0, doors.1, &(0..k).map(|i| (i + s) % k).collect::<Vec<_>>(), &es_t),
+        })
+        .filter(|c| c.cost <= FIT_OK)
+        .collect();
+    // Doors choose between rotations the shape cannot tell apart: those within `SHAPE_TIE` of the best
+    // cost. A rotation that fits clearly worse is not promoted because a door happens to line up.
+    let best = candidates.iter().map(|c| c.cost).fold(f64::INFINITY, f64::min);
+    candidates.sort_by(|a, b| {
+        let (ta, tb) = (a.cost > best + SHAPE_TIE, b.cost > best + SHAPE_TIE);
+        ta.cmp(&tb)
+            .then(a.door_gap_mm.unwrap_or(0.0).total_cmp(&b.door_gap_mm.unwrap_or(0.0)))
+            .then(a.cost.total_cmp(&b.cost))
+            .then(a.shift.cmp(&b.shift))
+    });
+    let (auto_shift, auto_cost) = match candidates.first() {
+        Some(c) => (c.shift, c.cost),
+        None => best_shift(bp_ring, t_coarse),
+    };
     let s = shift.unwrap_or(auto_shift);
     let cost = if shift.is_some() {
         shape_cost(&es_bp, &turns(bp_ring), &es_t, &turns(t_coarse), s)
@@ -247,7 +380,7 @@ fn fit_outlines(bp_ring: &[Pt], t_coarse: &[Pt], shift: Option<usize>, findings:
         }),
         _ => {}
     }
-    Fit { kind, shift: s, cost: Some(cost), mirror_cost: Some(mirror_cost) }
+    (Fit { kind, shift: s, cost: Some(cost), mirror_cost: Some(mirror_cost) }, candidates)
 }
 
 /// Everything the placement step reads: the live items, their frames in the blueprint, and the
@@ -344,6 +477,30 @@ impl Context<'_> {
         placed
     }
 
+    /// What the person is shown for each live item that was placed, and a finding for each that had no
+    /// wall beside it when captured.
+    fn placements(&self, placed: &BTreeMap<String, Pose>, findings: &mut Vec<Finding>) -> Vec<Placed> {
+        let mut out = Vec::new();
+        for item in &self.live {
+            let Some(pose) = placed.get(&item.id) else { continue };
+            if item.placement.corner_anchored {
+                findings.push(Finding::CornerAnchored { item: item.id.clone() });
+            }
+            out.push(Placed {
+                item_id: item.id.clone(),
+                type_name: item.type_name.clone(),
+                category: item.category.clone(),
+                class: item.class,
+                centre: pose.c.into(),
+                facing: (pose.angle.cos(), pose.angle.sin()).into(),
+                size_mm: item.size_mm,
+                edge: pose.edge,
+                rule: pose.rule.clone(),
+            });
+        }
+        out
+    }
+
     /// Outside the true outline, and new overlaps, for free items only: a wall device is located
     /// by its wall and carries no footprint check.
     fn footprint_findings(&self, placed: &BTreeMap<String, Pose>, t_fine: &[Pt], findings: &mut Vec<Finding>) {
@@ -413,6 +570,18 @@ pub fn resolve_with(
     target_ring: &[Pt],
     mapping: &EdgeMap,
 ) -> Result<Resolution, ServiceError> {
+    resolve_with_doors(content, target_ring, mapping, &[])
+}
+
+/// `resolve_with`, and the room's doors (footprints in the project frame) to orient it by. Where
+/// the shape fits in several rotations the one whose doors agree best is used; a mapping given
+/// by hand is never overridden, only reported on.
+pub fn resolve_with_doors(
+    content: &RevisionContent,
+    target_ring: &[Pt],
+    mapping: &EdgeMap,
+    target_doors: &[SourceDoor],
+) -> Result<Resolution, ServiceError> {
     let t_coarse = simplify(target_ring, COARSE_TOLERANCE_MM);
     let t_fine = simplify(target_ring, FINE_TOLERANCE_MM);
     if t_coarse.len() < 3 {
@@ -423,6 +592,8 @@ pub fn resolve_with(
         fine: t_fine.iter().map(|&p| p.into()).collect(),
     };
     let bp_ring: Vec<Pt> = content.outline.coarse.iter().map(|&p| p.into()).collect();
+    let t_doors = doors_on(target_doors, &t_coarse);
+    let mut candidates = Vec::new();
     let mut findings = Vec::new();
     let excluded = content.items.iter().filter(|i| i.excluded).count();
 
@@ -456,6 +627,9 @@ pub fn resolve_with(
                 placements: Vec::new(),
                 findings,
                 excluded,
+                candidates: Vec::new(),
+                doors: t_doors,
+                mapped_doors: Vec::new(),
             });
         }
         let shift = if let EdgeMap::Shift(s) = mapping { Some(*s) } else { None };
@@ -467,11 +641,13 @@ pub fn resolve_with(
                 t_coarse.len()
             )));
         }
-        let fit = fit_outlines(&bp_ring, &t_coarse, shift, &mut findings);
+        let (fit, found) = fit_outlines(&bp_ring, &t_coarse, shift, (&content.doors, &t_doors), &mut findings);
+        candidates = found;
         let k = t_coarse.len();
         let map = (0..k).map(|i| (i + fit.shift) % k).collect();
         (fit, map)
     };
+    door_findings(&content.doors, &t_doors, &edge_map, &edges(&t_coarse), &mut findings);
     let es_bp = edges(&bp_ring);
     let live: Vec<&BlueprintItem> = content.items.iter().filter(|i| !i.excluded).collect();
     let bp_frame: BTreeMap<&str, (Pt, f64)> =
@@ -480,27 +656,20 @@ pub fn resolve_with(
     let ctx = Context { live, bp_frame, es_t: edges(&t_coarse), t_coarse: &t_coarse, bp_fine, edge_map };
 
     let placed = ctx.place_all(&mut findings);
-    let mut placements = Vec::new();
-    for item in &ctx.live {
-        let Some(pose) = placed.get(&item.id) else { continue };
-        if item.placement.corner_anchored {
-            findings.push(Finding::CornerAnchored { item: item.id.clone() });
-        }
-        placements.push(Placed {
-            item_id: item.id.clone(),
-            type_name: item.type_name.clone(),
-            category: item.category.clone(),
-            class: item.class,
-            centre: pose.c.into(),
-            facing: (pose.angle.cos(), pose.angle.sin()).into(),
-            size_mm: item.size_mm,
-            edge: pose.edge,
-            rule: pose.rule.clone(),
-        });
-    }
+    let placements = ctx.placements(&placed, &mut findings);
     ctx.footprint_findings(&placed, &t_fine, &mut findings);
 
-    Ok(Resolution { fit, outline, placements, findings, excluded })
+    let mapped_doors = map_doors(&content.doors, &ctx.edge_map, &ctx.es_t);
+    Ok(Resolution {
+        fit,
+        outline,
+        placements,
+        findings,
+        excluded,
+        candidates,
+        doors: t_doors,
+        mapped_doors,
+    })
 }
 
 /// Resolve `content` onto one room of the project, read as it stands today. `Ok(None)` when the
@@ -515,7 +684,8 @@ pub fn resolve_in_room(
     let Some((room_name, ring)) = room_ring(state, project, room)? else {
         return Ok(None);
     };
-    Ok(Some((room_name, resolve_with(content, &ring, mapping)?)))
+    let doors = room_doors(state, project, room)?;
+    Ok(Some((room_name, resolve_with_doors(content, &ring, mapping, &doors)?)))
 }
 
 #[cfg(test)]
@@ -928,5 +1098,66 @@ mod tests {
         let ct = centroid(&r.outline.fine.iter().map(|&p| p.into()).collect::<Vec<Pt>>());
         assert!(near(ct, (2.0e7 + 3000.0, 1.0e6 + 2000.0), 1e-3));
         assert!(near(at(&r, "bed"), (2.0e7 + 3000.0, 1.0e6 + 600.0), 1e-3));
+    }
+
+    /// A door as capture reads it: a 900 x 100 footprint centred at `c`, lying along x.
+    fn door_at(id: &str, c: Pt) -> SourceDoor {
+        SourceDoor {
+            id: id.to_string(),
+            footprint: vec![
+                (c.0 - 450.0, c.1 - 50.0),
+                (c.0 + 450.0, c.1 - 50.0),
+                (c.0 + 450.0, c.1 + 50.0),
+                (c.0 - 450.0, c.1 + 50.0),
+            ],
+        }
+    }
+
+    #[test]
+    fn test_a_doors_position_chooses_between_the_two_rotations_a_rectangle_fits() {
+        use crate::service::blueprint_capture::capture_with_doors;
+        let ring = rect(6000.0, 4000.0);
+        let c = capture_with_doors(
+            &ring,
+            vec![src("bed", (3000.0, 600.0), 1600.0, 1000.0, (0.0, 1.0))],
+            vec![door_at("d", (1000.0, 0.0))],
+        )
+        .unwrap()
+        .content;
+        assert_eq!(c.doors.len(), 1);
+        assert_eq!(c.doors[0].edge, 0);
+
+        // The room's door is on the opposite wall (edge 2), at the matching end after a half turn.
+        let with_door_on_top = [door_at("t", (5000.0, 4000.0))];
+        let r = resolve_with_doors(&c, &ring, &EdgeMap::Auto, &with_door_on_top).unwrap();
+        assert_eq!(r.fit.shift, 2, "the half turn puts the blueprint's door on the room's");
+        assert_eq!(r.candidates.len(), 2, "both rotations fit the shape");
+        assert!(r.candidates[0].door_gap_mm.unwrap() < r.candidates[1].door_gap_mm.unwrap());
+        assert!(r.findings.iter().all(|f| !matches!(f, Finding::DoorsDisagree { .. })));
+
+        // With the door on the same wall, no half turn.
+        let same_wall = [door_at("t", (1000.0, 0.0))];
+        assert_eq!(resolve_with_doors(&c, &ring, &EdgeMap::Auto, &same_wall).unwrap().fit.shift, 0);
+    }
+
+    #[test]
+    fn test_no_doors_on_either_side_is_no_evidence_and_changes_nothing() {
+        let ring = rect(6000.0, 4000.0);
+        let c = content(&ring, vec![src("bed", (3000.0, 600.0), 1600.0, 1000.0, (0.0, 1.0))]);
+        let r = resolve(&c, &ring, None).unwrap();
+        assert_eq!(r.fit.shift, 0);
+        assert!(r.candidates.iter().all(|c| c.door_gap_mm.is_none()));
+        assert!(r.doors.is_empty());
+    }
+
+    #[test]
+    fn test_a_manual_mapping_is_kept_and_a_wrong_door_is_only_reported() {
+        use crate::service::blueprint_capture::capture_with_doors;
+        let ring = rect(6000.0, 4000.0);
+        let c = capture_with_doors(&ring, vec![], vec![door_at("d", (1000.0, 0.0))]).unwrap().content;
+        let top = [door_at("t", (5000.0, 4000.0))];
+        let r = resolve_with_doors(&c, &ring, &EdgeMap::Shift(0), &top).unwrap();
+        assert_eq!(r.fit.shift, 0, "a pinned shift is never overridden");
+        assert!(r.findings.iter().any(|f| matches!(f, Finding::DoorsDisagree { .. })));
     }
 }

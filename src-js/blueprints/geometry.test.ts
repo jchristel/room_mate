@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { boundsOf, corners, depthAt, edges, frameOf, pointInPolygon, pointOn, type Pt } from "./geometry.js";
+import { boundsOf, corners, depthAt, doorSegment, edges, frameOf, pointInPolygon, pointOn, type Pt } from "./geometry.js";
 import type { BlueprintItem } from "./types.js";
 
 const rect = (w: number, h: number): Pt[] => [
@@ -74,5 +74,33 @@ describe("corners", () => {
     // Facing +y: 1000 deep up the plan, 1600 wide across it.
     expect(b.maxX - b.minX).toBeCloseTo(1600);
     expect(b.maxY - b.minY).toBeCloseTo(1000);
+  });
+});
+
+describe("doorSegment", () => {
+  const ring: Pt[] = [
+    [0, 0],
+    [4000, 0],
+    [4000, 3000],
+    [0, 3000],
+  ];
+
+  it("lies on its edge, centred on the distance along it", () => {
+    const seg = doorSegment(ring, { edge: 0, along_mm: 1000, width_mm: 900 });
+    expect(seg?.[0][0]).toBeCloseTo(550);
+    expect(seg?.[1][0]).toBeCloseTo(1450);
+    expect(seg?.[0][1]).toBeCloseTo(0);
+  });
+
+  it("can be drawn a little inside the wall", () => {
+    const seg = doorSegment(ring, { edge: 1, along_mm: 1500, width_mm: 800 }, 100);
+    // edge 1 runs up the east wall; into the room is -x
+    expect(seg?.[0][0]).toBeCloseTo(3900);
+    expect(seg?.[0][1]).toBeCloseTo(1100);
+    expect(seg?.[1][1]).toBeCloseTo(1900);
+  });
+
+  it("an edge the outline does not have is nothing", () => {
+    expect(doorSegment(ring, { edge: 9, along_mm: 0, width_mm: 100 })).toBeNull();
   });
 });

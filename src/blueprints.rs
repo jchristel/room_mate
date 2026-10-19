@@ -48,6 +48,7 @@ const MAX_BLUEPRINTS_PER_PROJECT: usize = 5_000;
 const MAX_REVISIONS: usize = 500;
 const MAX_PENDING: usize = 100;
 const MAX_ITEMS: usize = 5_000;
+const MAX_DOORS: usize = 200;
 const MAX_OUTLINE_POINTS: usize = 2_000;
 const MAX_PROPERTIES: usize = 2_000;
 const MAX_NAME_CHARS: usize = 120;
@@ -333,6 +334,15 @@ pub fn validate_content(content: &RevisionContent) -> Result<(), BlueprintError>
     }
     for p in outline.coarse.iter().chain(&outline.fine) {
         finite("an outline point", &[p.x, p.y])?;
+    }
+    if content.doors.len() > MAX_DOORS {
+        return bad(format!("a revision holds at most {MAX_DOORS} doors"));
+    }
+    for door in &content.doors {
+        if door.edge >= outline.coarse.len() {
+            return bad(format!("door {:?} is on edge {}, which the outline does not have", door.id, door.edge));
+        }
+        finite("a door's position", &[door.along_mm, door.edge_len_mm, door.width_mm])?;
     }
     if content.items.len() > MAX_ITEMS {
         return bad(format!("a revision holds at most {MAX_ITEMS} items"));
@@ -969,5 +979,20 @@ mod tests {
         assert!(rev.get("outline").is_some() && rev.get("items").is_some() && rev.get("number").is_some());
         assert!(rev.get("content").is_none());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_door_on_an_edge_the_outline_does_not_have_is_refused() {
+        let mut c = content(1);
+        c.doors.push(crate::service::blueprint_model::BlueprintDoor {
+            id: "d".to_string(),
+            edge: 9,
+            along_mm: 100.0,
+            edge_len_mm: 1000.0,
+            width_mm: 900.0,
+        });
+        assert!(matches!(validate_content(&c), Err(BlueprintError::Invalid(_))));
+        c.doors[0].edge = 0;
+        assert!(validate_content(&c).is_ok());
     }
 }

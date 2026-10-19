@@ -17,7 +17,7 @@
 //!
 //! Pure over millimetres. The adapter below reads the model and converts from feet.
 
-use crate::contract::PropertyMap;
+use crate::contract::{DoorPayload, PropertyMap};
 use crate::state::AppState;
 
 use super::blueprint_geometry::{
@@ -25,9 +25,11 @@ use super::blueprint_geometry::{
     COARSE_TOLERANCE_MM, FINE_TOLERANCE_MM,
 };
 use super::blueprint_model::{
-    AlongMode, BlueprintItem, Follow, ItemClass, OffMode, Outline, Placement, Point, Property, RevisionContent, Skipped,
+    AlongMode, BlueprintDoor, BlueprintItem, Follow, ItemClass, OffMode, Outline, Placement, Point, Property,
+    RevisionContent, Skipped,
 };
 use super::items::{assemble_items, ItemScope};
+use super::openings::{assemble_openings, OpeningKind, OpeningScope};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
 use super::ServiceError;
@@ -58,6 +60,36 @@ pub struct SourceItem {
     pub type_properties: Vec<Property>,
 }
 
+/// A door of the room, as capture reads it: only where it is. Millimetres, project-local frame.
+#[derive(Debug, Clone)]
+pub struct SourceDoor {
+    pub id: String,
+    pub footprint: Vec<Pt>,
+}
+
+/// Where a door lies against an outline: its edge, its distance along it and its width along it.
+/// The nearest edge by segment distance, not by span: a door is IN the wall, so it is never
+/// "beside" an edge in the sense an item is, and a door in a corner jog still has a nearest wall.
+pub fn door_on_edges(footprint: &[Pt], coarse: &[Pt]) -> Option<(usize, f64, f64)> {
+    if footprint.len() < 3 || coarse.len() < 3 {
+        return None;
+    }
+    let c = centroid(footprint);
+    let es = edges(coarse);
+    let (i, _) = es
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (i, segment_distance(c, e)))
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+    let e = es[i];
+    let along = (c.0 - e.a.0) * e.t.0 + (c.1 - e.a.1) * e.t.1;
+    let (lo, hi) = footprint.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+        let a = (p.0 - e.a.0) * e.t.0 + (p.1 - e.a.1) * e.t.1;
+        (lo.min(a), hi.max(a))
+    });
+    Some((i, along, hi - lo))
+}
+
 /// A captured revision and what capture left out.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Captured {
@@ -79,6 +111,15 @@ fn translate(p: Pt, origin: Pt) -> Pt {
 
 /// Write `sources` as recipes against `ring`, the room's outer loop.
 pub fn capture(ring: &[Pt], sources: Vec<SourceItem>) -> Result<Captured, ServiceError> {
+    capture_with_doors(ring, sources, Vec::new())
+}
+
+/// `capture`, and the room's doors written against the same outline.
+pub fn capture_with_doors(
+    ring: &[Pt],
+    sources: Vec<SourceItem>,
+    doors: Vec<SourceDoor>,
+) -> Result<Captured, ServiceError> {
     let fine = simplify(ring, FINE_TOLERANCE_MM);
     let coarse = simplify(ring, COARSE_TOLERANCE_MM);
     if coarse.len() < 3 {
@@ -120,9 +161,28 @@ pub fn capture(ring: &[Pt], sources: Vec<SourceItem>) -> Result<Captured, Servic
                 fine: fine.iter().map(|&p| Point::from(p)).collect(),
             },
             items: items.into_iter().map(|(item, _)| item).collect(),
+            doors: blueprint_doors(doors, origin, &coarse, &es),
         },
         skipped,
     })
+}
+
+/// The doors that have a footprint, in a stable order (edge, along, id).
+fn blueprint_doors(doors: Vec<SourceDoor>, origin: Pt, coarse: &[Pt], es: &[Edge]) -> Vec<BlueprintDoor> {
+    let mut out: Vec<BlueprintDoor> = doors
+        .into_iter()
+        .filter_map(|d| {
+            let local: Vec<Pt> = d.footprint.iter().map(|&p| translate(p, origin)).collect();
+            let (edge, along_mm, width_mm) = door_on_edges(&local, coarse)?;
+            Some(BlueprintDoor { id: d.id, edge, along_mm, edge_len_mm: es[edge].len, width_mm })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        (a.edge, a.along_mm, &a.id)
+            .partial_cmp(&(b.edge, b.along_mm, &b.id))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
 }
 
 /// One item as a recipe against `coarse`'s edges, plus the figures `find_follows` needs.
@@ -311,6 +371,28 @@ pub fn room_ring(state: &AppState, project: &str, room: &RoomRef) -> Result<Opti
     Ok(Some((found.room.name.clone(), ring)))
 }
 
+/// The doors that open onto or out of `room` (either side names it), as footprints in
+/// millimetres. **Not the doors attributed to it**: a door belongs to the room it opens into
+/// (`room_attribution`), but a door to the corridor is still a door of this room's wall, and
+/// that is the question orientation asks. A door with no footprint is left out.
+pub fn room_doors(state: &AppState, project: &str, room: &RoomRef) -> Result<Vec<SourceDoor>, ServiceError> {
+    let scope = OpeningScope { project: Some(project), ..Default::default() };
+    let Some(assembled) = assemble_openings::<DoorPayload>(state, OpeningKind::Doors, &scope)? else {
+        return Ok(Vec::new());
+    };
+    let names = |side: &Option<String>| side.as_deref() == Some(room.room_id.as_str());
+    Ok(assembled
+        .openings
+        .iter()
+        .filter(|d| d.model_id == room.model_id && (names(&d.door.from_room) || names(&d.door.to_room)))
+        .filter_map(|d| {
+            let outer = d.door.loops.first()?;
+            let footprint: Vec<Pt> = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
+            (footprint.len() >= 3).then(|| SourceDoor { id: d.door.id.clone(), footprint })
+        })
+        .collect())
+}
+
 /// Read one room and the FF&E attributed to it, and capture them.
 ///
 /// Returns `Ok(None)` when the project has no room by that reference. The FF&E is the
@@ -351,7 +433,7 @@ pub fn capture_room(
             });
         }
     }
-    let captured = capture(&ring, sources)?;
+    let captured = capture_with_doors(&ring, sources, room_doors(state, project, room)?)?;
     Ok(Some((captured, room_name)))
 }
 
@@ -540,5 +622,23 @@ mod tests {
     #[test]
     fn test_a_room_with_fewer_than_three_corners_is_refused() {
         assert!(capture(&[(0.0, 0.0), (1000.0, 0.0)], vec![]).is_err());
+    }
+
+    #[test]
+    fn test_a_door_in_the_wall_is_on_that_edge_at_that_distance_and_a_footprintless_one_is_left_out() {
+        let ring = rect(6000.0, 4000.0);
+        // 900 wide, in the south wall (edge 0), centred 1000 from its start.
+        let door = SourceDoor {
+            id: "d".to_string(),
+            footprint: vec![(550.0, -50.0), (1450.0, -50.0), (1450.0, 50.0), (550.0, 50.0)],
+        };
+        let none = SourceDoor { id: "x".to_string(), footprint: vec![] };
+        let c = capture_with_doors(&ring, vec![], vec![door, none]).unwrap().content;
+        assert_eq!(c.doors.len(), 1);
+        let d = &c.doors[0];
+        assert_eq!(d.edge, 0);
+        assert!((d.along_mm - 1000.0).abs() < 1.0, "{}", d.along_mm);
+        assert!((d.width_mm - 900.0).abs() < 1.0, "{}", d.width_mm);
+        assert!((d.edge_len_mm - 6000.0).abs() < 1.0);
     }
 }

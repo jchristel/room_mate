@@ -11,7 +11,7 @@ use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use clap::Parser;
@@ -24,6 +24,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+use roommate::assignments_api::{http_assign, http_delete_assignment, http_list_assignments};
 use roommate::blueprints_api::{
     http_accept_pending, http_add_revision, http_capture_blueprint, http_create_blueprint, http_delete_blueprint,
     http_get_blueprint, http_list_blueprints, http_push_revision, http_reject_pending, http_resolve_blueprint,
@@ -310,6 +311,9 @@ fn authored_routes() -> Router<roommate::state::Shared> {
             "/projects/{id}/blueprints/{blueprint}/pending/{pending}/reject",
             post(http_reject_pending),
         )
+        // Which blueprint is placed in which room, one per room. See `assignments`.
+        .route("/projects/{id}/assignments", get(http_list_assignments).post(http_assign))
+        .route("/projects/{id}/assignments/{assignment}", delete(http_delete_assignment))
         // The room layout sheet library: sheets a person chose to export, kept as exported.
         // Its own endpoint, apart from blueprints. POST is the extractor's push; `suggest`
         // is a read, asked for in sheet creation mode only. See `sheets`.

@@ -13,23 +13,19 @@
 // match. The fine outline sits behind it, dashed, since that is what "inside the room" is judged
 // against.
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useMemo } from "react";
 
-import { boundsOf, corners, edges, frameOf, pt, type Pt } from "./geometry.js";
-import type { BlueprintItem, Outline } from "./types.js";
+import { boundsOf, corners, doorSegment, edges, frameOf, pt, type Pt } from "./geometry.js";
+import type { BlueprintDoor, BlueprintItem, Outline } from "./types.js";
+import { usePanZoom, type View } from "./view.js";
 
 const s = (p: Pt): string => `${p[0]},${-p[1]}`;
-
-interface View {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
 
 export interface CanvasProps {
   outline: Outline;
   items: readonly BlueprintItem[];
+  /** The room's doors: orientation only, drawn on their walls. */
+  doors?: readonly BlueprintDoor[];
   selected: ReadonlySet<string>;
   showTags: boolean;
   showExcluded: boolean;
@@ -49,54 +45,13 @@ function fitView(outline: Outline, items: readonly BlueprintItem[]): View {
   return { x: b.minX - pad, y: -(b.maxY + pad), w: b.maxX - b.minX + 2 * pad, h: b.maxY - b.minY + 2 * pad };
 }
 
-export function Canvas({ outline, items, selected, showTags, showExcluded, onSelect }: CanvasProps) {
+export function Canvas({ outline, items, doors = [], selected, showTags, showExcluded, onSelect }: CanvasProps) {
   const ring = useMemo(() => outline.coarse.map(pt), [outline]);
   const fine = useMemo(() => outline.fine.map(pt), [outline]);
   const es = useMemo(() => edges(ring), [ring]);
   // The view is reset when the OUTLINE changes (another blueprint or revision), not on every edit.
   const fitted = useMemo(() => fitView(outline, items), [outline]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [view, setView] = useState<View>(fitted);
-  useEffect(() => setView(fitted), [fitted]);
-  const svg = useRef<SVGSVGElement>(null);
-  const drag = useRef<{ x: number; y: number; view: View; moved: boolean } | null>(null);
-
-  // Wheel zoom about the cursor. A native listener, because React's wheel is passive and a page
-  // that scrolls under the plan while it zooms is unusable.
-  useEffect(() => {
-    const el = svg.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const m = el.getScreenCTM();
-      if (!m) return;
-      const at = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
-      const k = e.deltaY > 0 ? 1.15 : 1 / 1.15;
-      setView((v) => ({ x: at.x - (at.x - v.x) * k, y: at.y - (at.y - v.y) * k, w: v.w * k, h: v.h * k }));
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
-
-  const onDown = (e: ReactPointerEvent<SVGSVGElement>) => {
-    drag.current = { x: e.clientX, y: e.clientY, view, moved: false };
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-  const onMove = (e: ReactPointerEvent<SVGSVGElement>) => {
-    const d = drag.current;
-    const el = svg.current;
-    if (!d || !el) return;
-    const [dx, dy] = [e.clientX - d.x, e.clientY - d.y];
-    if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
-    const rect = el.getBoundingClientRect();
-    // The viewBox keeps its aspect ratio, so the larger of the two scales is the true one.
-    const k = Math.max(d.view.w / rect.width, d.view.h / rect.height);
-    setView({ ...d.view, x: d.view.x - dx * k, y: d.view.y - dy * k });
-  };
-  const onUp = () => {
-    // A press that did not move is a click on the background: clear the selection.
-    if (drag.current && !drag.current.moved) onSelect(null, false);
-    drag.current = null;
-  };
+  const { view, svg, onPointerDown, onPointerMove, onPointerUp } = usePanZoom(fitted);
 
   const r = view.w / 160; // corner circles and edge numbers scale with the zoom
   const shown = items.filter((i) => showExcluded || !i.excluded);
@@ -109,12 +64,20 @@ export function Canvas({ outline, items, selected, showTags, showExcluded, onSel
       viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
       role="img"
       aria-label="Blueprint plan"
-      onPointerDown={onDown}
-      onPointerMove={onMove}
-      onPointerUp={onUp}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={() => {
+        // A press that did not move is a click on the background: clear the selection.
+        if (onPointerUp()) onSelect(null, false);
+      }}
     >
       <polygon className="outline-fine" points={fine.map(s).join(" ")} />
       <polygon className="outline" points={ring.map(s).join(" ")} />
+
+      {doors.map((d) => {
+        const seg = doorSegment(ring, d);
+        return seg ? <line key={`d${d.id}`} className="door" x1={seg[0][0]} y1={-seg[0][1]} x2={seg[1][0]} y2={-seg[1][1]} /> : null;
+      })}
 
       {shown.map((it) => {
         const f = frameOf(it, ring);

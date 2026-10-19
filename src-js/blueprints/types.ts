@@ -58,9 +58,20 @@ export interface BlueprintItem {
   type_properties: Property[];
 }
 
+/** A door of the room, for orientation only: a blueprint never creates one. `edge` indexes the
+ *  coarse outline; positions are mm along that edge. Absent on a revision captured before doors were. */
+export interface BlueprintDoor {
+  id: string;
+  edge: number;
+  along_mm: number;
+  edge_len_mm: number;
+  width_mm: number;
+}
+
 export interface RevisionContent {
   outline: Outline;
   items: BlueprintItem[];
+  doors?: BlueprintDoor[];
 }
 
 export interface Revision extends RevisionContent {
@@ -125,4 +136,82 @@ export interface RoomRow {
   id: string;
   name: string;
   level_id: string;
+}
+
+// --- Placing a blueprint in another room (the resolver's answer) and the assignments kept ---
+
+export type FitKind = "plain" | "mirror_image" | "no_fit" | "edge_count_differs" | "manual";
+
+export interface Fit {
+  kind: FitKind;
+  shift: number;
+  cost: number | null;
+  mirror_cost: number | null;
+}
+
+export interface Candidate {
+  shift: number;
+  cost: number;
+  /** Mean mm from each blueprint door to the nearest door of the room; null when either has none. */
+  door_gap_mm: number | null;
+}
+
+export interface Placed {
+  item_id: string;
+  type_name: string;
+  category: string;
+  class: ItemClass;
+  /** Centre in the project's plan frame, mm. */
+  centre: Point;
+  /** Unit vector of the facing. */
+  facing: Point;
+  size_mm: [number, number];
+  edge: number;
+  rule: string;
+}
+
+export type Finding =
+  | { kind: "outside"; item: string }
+  | { kind: "overlap"; a: string; b: string }
+  | { kind: "follow_broken"; item: string; reason: string }
+  | { kind: "corner_anchored"; item: string }
+  | { kind: "mirror_image"; message: string }
+  | { kind: "shape_mismatch"; message: string }
+  | { kind: "doors_disagree"; message: string };
+
+export interface ResolveResponse {
+  blueprint_id: string;
+  revision: number;
+  room_name: string;
+  fit: Fit;
+  outline: Outline;
+  placements: Placed[];
+  findings: Finding[];
+  excluded: number;
+  candidates: Candidate[];
+  /** The room's doors on its coarse outline. */
+  doors: BlueprintDoor[];
+  /** The blueprint's doors as the mapping lands them on the room. */
+  mapped_doors: BlueprintDoor[];
+}
+
+/** How the blueprint's edges were put on the room's: neither field means the best fit. */
+export interface Mapping {
+  shift?: number;
+  edge_map?: number[];
+}
+
+export interface AssignmentRow {
+  id: string;
+  blueprint_id: string;
+  revision: number;
+  room: { model_id: string; room_id: string };
+  room_name: string;
+  mapping: Mapping;
+  note?: string | null;
+  taken_at: string;
+  blueprint_name: string | null;
+  current_revision: number | null;
+  newer_revision: boolean;
+  blueprint_missing: boolean;
 }

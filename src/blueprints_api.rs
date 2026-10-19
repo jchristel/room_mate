@@ -255,7 +255,7 @@ pub async fn http_resolve_blueprint(
     }
 }
 
-fn service_error(err: crate::service::ServiceError) -> (StatusCode, String) {
+pub fn service_error(err: crate::service::ServiceError) -> (StatusCode, String) {
     match err {
         crate::service::ServiceError::Invalid(msg) => (StatusCode::BAD_REQUEST, msg),
         crate::service::ServiceError::Internal(e) => {

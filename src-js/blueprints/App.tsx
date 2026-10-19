@@ -12,12 +12,13 @@
 // **A pending revision is shown read-only.** One that has arrived (an import) is not part of the
 // history and nothing pins it; you look at it and accept or reject it on the timeline.
 //
-// Placing a blueprint in ANOTHER room is the server's resolver and belongs to the assign view in
-// the main viewer; this page edits a blueprint in its own room.
+// Placing a blueprint in ANOTHER room is the server's resolver, behind the "Assign to rooms" button
+// (`Assign.tsx`); the rest of this page edits a blueprint in its own room.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
+import { Assign } from "./Assign.js";
 import { BlueprintList } from "./BlueprintList.js";
 import { Canvas } from "./Canvas.js";
 import { persistSelection, seedProjectId } from "./common.js";
@@ -46,6 +47,7 @@ export function App() {
   const [showTags, setShowTags] = useState(false);
   const [showExcluded, setShowExcluded] = useState(true);
   const [panel, setPanel] = useState<Panel>("none");
+  const [assigning, setAssigning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,6 +92,7 @@ export function App() {
     setBlueprint(null);
     setRows(null);
     setPanel("none");
+    setAssigning(false);
     if (projectId) void refreshRows(projectId);
   }, [projectId, refreshRows]);
 
@@ -101,6 +104,7 @@ export function App() {
     setError(null);
     setNotice(null);
     setPanel("none");
+    setAssigning(false);
     try {
       show(await api.getBlueprint(projectId, id));
     } catch (e) {
@@ -256,75 +260,89 @@ export function App() {
           ) : null}
         </div>
 
-        <main>
-          {error ? <p className="banner error">{error}</p> : null}
-          {notice && !error ? <p className="banner">{notice}</p> : null}
-          {blueprint && content ? (
-            <>
-              <Timeline
-                blueprint={blueprint}
-                viewing={viewing}
-                viewingPending={pendingView?.pending_id ?? null}
-                busy={busy}
-                onView={(n) => {
-                  if (!discardOk()) return;
-                  show(blueprint, n);
-                }}
-                onViewPending={(p) => {
-                  if (!discardOk()) return;
-                  setPendingView(p);
-                  setSelected(new Set());
-                }}
-                onSetCurrent={(n) => void setCurrent(n)}
-                onDecide={(id, accept) => void decide(id, accept)}
-              />
-              <div className="toolbar">
-                <strong>{blueprint.name}</strong>
-                <span className="sub">
-                  {pendingView ? "pending revision (read-only)" : `r${viewing}${viewing === blueprint.current_revision ? " · current" : ""}`} ·{" "}
-                  {items.filter((i) => !i.excluded).length} items
-                  {items.some((i) => i.excluded) ? `, ${items.filter((i) => i.excluded).length} removed` : ""}
-                </span>
-                <label>
-                  <input type="checkbox" checked={showTags} onChange={(e) => setShowTags(e.target.checked)} /> FF&amp;E tags
-                </label>
-                <label>
-                  <input type="checkbox" checked={showExcluded} onChange={(e) => setShowExcluded(e.target.checked)} /> removed items
-                </label>
-                {dirty ? (
-                  <span className="dirty">
-                    Unsaved changes
-                    <button type="button" disabled={busy} onClick={() => void save()}>
-                      Save as new revision
-                    </button>
-                    <button type="button" disabled={busy} onClick={() => setDraft(revision?.items ?? [])}>
-                      Discard
-                    </button>
-                  </span>
-                ) : null}
-              </div>
-              <Canvas outline={content.outline} items={items} selected={selected} showTags={showTags} showExcluded={showExcluded} onSelect={select} />
-            </>
-          ) : (
-            <p className="hint empty">{rows?.length ? "Choose a blueprint on the left." : "Make a blueprint from a room, or import one."}</p>
-          )}
-        </main>
-
-        {blueprint && content ? (
-          <Inspector
-            items={items}
-            ring={ring}
-            selected={selected}
-            revisions={blueprint.revisions}
-            viewing={viewing}
-            readOnly={!!pendingView}
-            onItems={(next, msg) => {
-              setDraft(next);
-              if (msg) setNotice(msg);
-            }}
-          />
+        {assigning && projectId && blueprint ? (
+          <Assign project={projectId} blueprint={blueprint} revision={viewing} onClose={() => setAssigning(false)} />
         ) : (
-          <aside className="inspector" />
+          <>
+            <main>
+              {error ? <p className="banner error">{error}</p> : null}
+              {notice && !error ? <p className="banner">{notice}</p> : null}
+              {blueprint && content ? (
+                <>
+                  <Timeline
+                    blueprint={blueprint}
+                    viewing={viewing}
+                    viewingPending={pendingView?.pending_id ?? null}
+                    busy={busy}
+                    onView={(n) => {
+                      if (!discardOk()) return;
+                      show(blueprint, n);
+                    }}
+                    onViewPending={(p) => {
+                      if (!discardOk()) return;
+                      setPendingView(p);
+                      setSelected(new Set());
+                    }}
+                    onSetCurrent={(n) => void setCurrent(n)}
+                    onDecide={(id, accept) => void decide(id, accept)}
+                  />
+                  <div className="toolbar">
+                    <strong>{blueprint.name}</strong>
+                    <span className="sub">
+                      {pendingView ? "pending revision (read-only)" : `r${viewing}${viewing === blueprint.current_revision ? " · current" : ""}`} ·{" "}
+                      {items.filter((i) => !i.excluded).length} items
+                      {items.some((i) => i.excluded) ? `, ${items.filter((i) => i.excluded).length} removed` : ""}
+                    </span>
+                    <label>
+                      <input type="checkbox" checked={showTags} onChange={(e) => setShowTags(e.target.checked)} /> FF&amp;E tags
+                    </label>
+                    <label>
+                      <input type="checkbox" checked={showExcluded} onChange={(e) => setShowExcluded(e.target.checked)} /> removed items
+                    </label>
+                    <button
+                      type="button"
+                      disabled={!!pendingView || dirty}
+                      title={pendingView ? "Accept the pending revision first" : dirty ? "Save the changes first: an assignment pins a saved revision" : "Place this revision in other rooms"}
+                      onClick={() => setAssigning(true)}
+                    >
+                      Assign to rooms
+                    </button>
+                    {dirty ? (
+                      <span className="dirty">
+                        Unsaved changes
+                        <button type="button" disabled={busy} onClick={() => void save()}>
+                          Save as new revision
+                        </button>
+                        <button type="button" disabled={busy} onClick={() => setDraft(revision?.items ?? [])}>
+                          Discard
+                        </button>
+                      </span>
+                    ) : null}
+                  </div>
+                  <Canvas outline={content.outline} items={items} doors={content.doors ?? []} selected={selected} showTags={showTags} showExcluded={showExcluded} onSelect={select} />
+                </>
+              ) : (
+                <p className="hint empty">{rows?.length ? "Choose a blueprint on the left." : "Make a blueprint from a room, or import one."}</p>
+              )}
+            </main>
+
+            {blueprint && content ? (
+              <Inspector
+                items={items}
+                ring={ring}
+                selected={selected}
+                revisions={blueprint.revisions}
+                viewing={viewing}
+                readOnly={!!pendingView}
+                onItems={(next, msg) => {
+                  setDraft(next);
+                  if (msg) setNotice(msg);
+                }}
+              />
+            ) : (
+              <aside className="inspector" />
+            )}
+          </>
         )}
       </div>
     </>

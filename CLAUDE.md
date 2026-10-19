@@ -317,8 +317,9 @@ the sliver rules since removed, and again after).
 ## Blueprints: a room's layout as recipes against its edges
 
 Built: the store, capture, the resolver (blueprint + another room -> placements and findings)
-the blueprint viewer (`/blueprints/`) and the HTTP/MCP reads and writes. **Not built: the assign UI,
-anything toward Revit.**
+the blueprint viewer (`/blueprints/`), the assign view (the same page, "Assign to rooms"), the
+assignment store and the HTTP/MCP reads and writes. **Not built: dragging a box over the main plan,
+per-item overrides, a mirrored copy, anything toward Revit.**
 The reasoning and the measurements behind every rule below are in
 [`PLAN-blueprints.md`](docs/PLAN-blueprints.md) and its stage 0 note; what is expensive to
 get wrong:
@@ -357,6 +358,27 @@ get wrong:
     It uses the existing endpoints, so it added no server surface.
   - **Room rows name no model**, so `model_id` is optional on capture, resolve and suggest: it is
     looked up among the project's rooms and refused, naming the models, if more than one has the id.
+- **Doors orient a blueprint; they never create one.** The doors are already in the model.
+  Capture reads the doors either side of which names the room (`room_doors`, NOT the attributed
+  ones: a door to the corridor is still a door in this room's wall) and stores each as an edge, a
+  distance along it and a width (`BlueprintDoor`, `door_on_edges`: nearest edge by segment
+  distance, because a door is IN the wall). The resolver compares them with the target room's
+  doors (`door_gap`: mean mm to the nearest door on the edge the blueprint's lands on, 3,000 where
+  that edge has none) to break a **tie of shape**: rotations whose cost is within `SHAPE_TIE` of
+  the best, which is every rectangle's two half-turn fits. A rotation that fits clearly worse is
+  never promoted because a door lines up. No door on either side is no evidence (`door_gap_mm`
+  absent), not agreement. A pinned shift or a hand mapping is never overridden, only reported
+  (`doors_disagree`). `candidates` and `mapped_doors` ride the resolve answer so the view needs no
+  rule of its own.
+- **An assignment is a request, never a result** (`assignments`, one JSON per assignment under
+  `assignments/<project>/`, NOT under `blueprints/`, whose listing reads every `*.json`). It names the
+  blueprint, the revision it pins, the room (with its model, qualified server-side) and the mapping
+  (`shift` or `edge_map` or neither = best fit, worked out again on every read). Placements are
+  never stored, so a room that moves is followed. One per room: assigning again replaces it and
+  keeps its id. `newer_revision` and `blueprint_missing` are reported states on the list.
+- **The assign view is a mode of the blueprints page, not a drawing over the main plan.** It draws
+  the resolver's answer (`AssignCanvas`) and chooses what to ask; it has no placement rule of its
+  own. Solid bar = a door the room has, dashed = where the blueprint's lands.
 - **Resolving is partly manual, by design.** `edge_map` on resolve is the person's own mapping of
   blueprint edges to room edges (the way to place in a room with a different edge count); the fit
   kind is then `manual` and nothing about the mapping is judged.

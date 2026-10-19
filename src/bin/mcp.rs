@@ -7,10 +7,10 @@
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
 //! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
-//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets` --
+//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets`, `list_assignments` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Thirty-eight in
+//! and the one forwarded mutation (`upload_reference`, below). Thirty-nine in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -1425,8 +1425,21 @@ impl RoommateMcp {
                 "placements": resolution.placements,
                 "findings": resolution.findings,
                 "excluded": resolution.excluded,
+                "candidates": resolution.candidates,
+                "doors": resolution.doors,
+                "mapped_doors": resolution.mapped_doors,
             })),
         }
+    }
+
+    /// Which blueprint is placed in which room -- see `assignments::list`.
+    #[tool(
+        description = "List the project's blueprint ASSIGNMENTS: which blueprint a person placed in which room. Authored data, one per room. Each row has `id`, `blueprint_id` and `blueprint_name`, the pinned `revision` (an edit to the blueprint later changes nothing here until a person re-assigns), `current_revision`, `newer_revision` (the blueprint has moved on since), `blueprint_missing` (it was deleted: a reported state), `room` ({model_id, room_id}), `room_name` as it was when assigned, `mapping` (a `shift`, or an `edge_map` the person chose by hand, or neither for the best fit) and an optional `note`. Placements are NOT stored: to see where the items land, call resolve_blueprint with the row's blueprint, revision, room and mapping. Writing is HTTP-only (POST /projects/{id}/assignments)."
+    )]
+    fn list_assignments(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::assignments::list(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&rows)
     }
 
     /// The project's room layout sheet library -- see `sheets::list`.

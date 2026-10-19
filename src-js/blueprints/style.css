@@ -108,3 +108,23 @@ code { font-family: var(--mono); background: var(--fill); padding: 0 0.2rem; }
   .page { grid-template-columns: 1fr; }
   .left, .inspector { border: 0; border-bottom: 1px solid var(--rule); }
 }
+
+/* Doors: orientation only. Solid is a door the room has; dashed is where the blueprint's lands. */
+.canvas .door { stroke: var(--ink); stroke-width: 5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.canvas .door.mapped { stroke: var(--accent); stroke-width: 4; stroke-dasharray: 7 4; }
+.canvas .item.flagged polygon { stroke: var(--accent); stroke-width: 2.2; fill: var(--error); }
+
+/* The assign view's main column has no revision timeline: toolbar, banner, canvas. */
+main.assign { grid-template-rows: auto auto minmax(0, 1fr); }
+.legend { font-size: 0.7rem; opacity: 0.8; display: flex; gap: 0.4rem; align-items: center; }
+.legend .bar { display: inline-block; width: 1.4rem; height: 0; border-top: 4px solid var(--ink); }
+.legend .bar.mapped { border-top: 4px dashed var(--accent); }
+button.on { background: var(--fill); border-color: var(--ink); }
+.findings { list-style: none; margin: 0.3rem 0; padding: 0; display: grid; gap: 0.2rem; font-size: 0.72rem; }
+.findings li { display: flex; gap: 0.4rem; align-items: baseline; }
+.findings li button:first-child { text-align: left; background: transparent; border: 0; padding: 0; color: var(--ink); text-decoration: underline dotted; }
+.findings li.doors_disagree, .findings li.shape_mismatch, .findings li.mirror_image { color: var(--accent); }
+.inspector label.stack { display: grid; gap: 0.15rem; font-size: 0.7rem; }
+.inspector label.stack input { width: 100%; border: 1px solid var(--rule); background: var(--paper); padding: 0.25rem 0.4rem; }
+.inspector input[type="search"] { width: 100%; border: 1px solid var(--rule); background: var(--paper); padding: 0.25rem 0.4rem; }
+.inspector .picklist li button { width: 100%; }

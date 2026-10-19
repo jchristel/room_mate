@@ -112,3 +112,11 @@ export function boundsOf(points: readonly Pt[]): Bounds {
   const ys = points.map((p) => p[1]);
   return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
 }
+
+/** A door as a segment lying on its edge, `off` mm into the room (0 draws it on the wall). */
+export function doorSegment(ring: readonly Pt[], door: { edge: number; along_mm: number; width_mm: number }, off = 0): [Pt, Pt] | null {
+  const e = edges(ring)[door.edge];
+  if (!e) return null;
+  const half = door.width_mm / 2;
+  return [pointOn(e, door.along_mm - half, off), pointOn(e, door.along_mm + half, off)];
+}
