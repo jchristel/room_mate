@@ -317,7 +317,8 @@ the sliver rules since removed, and again after).
 ## Blueprints: a room's layout as recipes against its edges
 
 Built: the store, capture, the resolver (blueprint + another room -> placements and findings)
-and the HTTP/MCP reads and writes. **Not built: the viewer, assignment, anything toward Revit.**
+the blueprint viewer (`/blueprints/`) and the HTTP/MCP reads and writes. **Not built: the assign UI,
+anything toward Revit.**
 The reasoning and the measurements behind every rule below are in
 [`PLAN-blueprints.md`](docs/PLAN-blueprints.md) and its stage 0 note; what is expensive to
 get wrong:
@@ -339,6 +340,26 @@ get wrong:
 - **Revisions are append-only** and an assignment will pin one: an edit is a new revision,
   and `current_revision` moving is the only way to change which one new assignments use.
   Writes name the `taken_at` they read (`base`); a mismatch is a 409.
+- **The blueprint viewer is its own page, `/blueprints/` (`src-js/blueprints`), drawn in SVG.** One
+  room and a few hundred rectangles do not need the GL renderer, and an editor needs the
+  hit-testing and labels SVG gives for free. It edits a blueprint in its OWN room; placing one in
+  ANOTHER room is the server's resolver and belongs to the assign view, because two copies of
+  "where does the bed go" is how a preview and a result disagree (`geometry.ts` ports only `edges`,
+  `point` and `depth_at`).
+  - **Edit a DRAFT, save a NEW revision.** The items of the revision being viewed are copied into a
+    draft; Save appends them as the next revision. Nothing edits a revision that exists.
+  - **A dimension is a captured distance plus a mode.** Switching fixed/percentage moves nothing in
+    its own room; it decides what the item does when the room is another size. The number typed is
+    in the mode's unit (mm from the start, mm from the END, or a percentage).
+  - **A pending revision is read-only** and sits on the timeline until accepted or rejected.
+  - **An import never overwrites.** From another project on the same server or from a file: a name
+    the project already has goes in as a pending revision of that blueprint; a new name is created.
+    It uses the existing endpoints, so it added no server surface.
+  - **Room rows name no model**, so `model_id` is optional on capture, resolve and suggest: it is
+    looked up among the project's rooms and refused, naming the models, if more than one has the id.
+- **Resolving is partly manual, by design.** `edge_map` on resolve is the person's own mapping of
+  blueprint edges to room edges (the way to place in a room with a different edge count); the fit
+  kind is then `manual` and nothing about the mapping is judged.
 - **A push is PENDING, never current** (`blueprints::push`, plan decision 10). A revision that
   arrives from elsewhere is stored beside the blueprint, changes nothing about the history,
   what is current or what an assignment pins, and waits for a person to accept it (it becomes

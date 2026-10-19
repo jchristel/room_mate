@@ -144,6 +144,9 @@ pub struct CaptureParams {
 #[derive(Serialize)]
 pub struct CaptureResponse {
     pub room_name: String,
+    /// The room's model, as the server resolved it, so a caller that named only the room id
+    /// can record where the blueprint came from.
+    pub model_id: String,
     #[serde(flatten)]
     pub content: RevisionContent,
     /// What capture left out, as numbers.
@@ -164,9 +167,12 @@ pub async fn http_capture_blueprint(
     // service reads run inline in their handlers too.
     let result = capture_room(&state, &project_id, &room);
     match result {
-        Ok(Some((captured, room_name))) => {
-            Ok(Json(CaptureResponse { room_name, content: captured.content, skipped: captured.skipped }))
-        }
+        Ok(Some((captured, room_name))) => Ok(Json(CaptureResponse {
+            room_name,
+            model_id: room.model_id.clone(),
+            content: captured.content,
+            skipped: captured.skipped,
+        })),
         Ok(None) => Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
         Err(crate::service::ServiceError::Invalid(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
         Err(crate::service::ServiceError::Internal(e)) => {

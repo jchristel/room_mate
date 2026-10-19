@@ -146,6 +146,7 @@ export function App() {
         </select>
         <div className="links">
           <a href="/">viewer</a>
+          <a href="/blueprints/">blueprints</a>
           <a href="/settings/">settings</a>
         </div>
       </header>

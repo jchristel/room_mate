@@ -1376,6 +1376,7 @@ impl RoommateMcp {
             None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
             Some((captured, room_name)) => json_result(&serde_json::json!({
                 "room_name": room_name,
+                "model_id": room.model_id,
                 "outline": captured.content.outline,
                 "items": captured.content.items,
                 "skipped": captured.skipped,
