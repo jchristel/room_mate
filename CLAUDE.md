@@ -314,6 +314,38 @@ the sliver rules since removed, and again after).
   (solid, dash, dot) and dot duty cycle rather than colour. Off by default, poll
   gated, no model picker, `/floors`' ETag covers rooms -- the ceilings reasons.
 
+## Blueprints: a room's layout as recipes against its edges
+
+Built: the store, capture and the HTTP/MCP reads and writes. **Not built: the resolver
+(blueprint + another room -> placements), the viewer, assignment, anything toward Revit.**
+The reasoning and the measurements behind every rule below are in
+[`PLAN-blueprints.md`](docs/PLAN-blueprints.md) and its stage 0 note; what is expensive to
+get wrong:
+
+- **A recipe, never coordinates**, and both halves ride the record: the distance *as
+  captured* (`along_mm`, `off_mm`) and the *mode* that says how a room of another size reads
+  it (`fixed_from_start`, `fixed_from_end`, `percent`). Switching a dimension between fixed
+  and percentage is a change of mode, so nothing is recomputed that could drift.
+- **Two outlines, two jobs.** Placements index the **coarse** outline's edges (jogs under
+  350 mm removed), because same-named RHH patient rooms differ in column nibs and an edge
+  count that includes them matched half of them; "is it inside the room" is checked against
+  the **fine** one (30 mm), because the items that sit in those nibs are outside the coarse.
+  Mixing them up reports findings that are not there.
+- **An item belongs to the edge it lies beside** (nearest edge whose span contains its
+  centre), not the nearest segment: nearest-segment clamped six items in House A's notched
+  rooms to an edge's end, where the position cannot be reproduced.
+- **No mirroring, anywhere.** Outlines are counter-clockwise and a room fits a blueprint by
+  a cyclic shift of edges only. A mirror image is a different blueprint (handed families).
+- **Revisions are append-only** and an assignment will pin one: an edit is a new revision,
+  and `current_revision` moving is the only way to change which one new assignments use.
+  Writes name the `taken_at` they read (`base`); a mismatch is a 409.
+- **`family_name` and `host` on an FF&E item are read from Revit by `item_facts`**, not from
+  duHast: the export carries neither (probed on 16,161 RHH items). Same footing as the
+  category; absent means unread, never guessed. **Not yet run in Revit.**
+- **Capture reads the whole project's FF&E** (`assemble_items`, unscoped by storey) and keeps
+  the room's items, so on RHH it costs a few seconds. Narrowing it with a storey scope is the
+  obvious fix and has not been needed yet.
+
 ## Traps in the door export
 
 - **`±1e30` is not geometry.** duHast used to return Revit's *uninitialized*

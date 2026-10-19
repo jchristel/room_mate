@@ -6,10 +6,11 @@
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
-//! `list_saved_reports`, `get_saved_report` --
+//! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
+//! `capture_blueprint` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Thirty-one in
+//! and the one forwarded mutation (`upload_reference`, below). Thirty-four in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -63,6 +64,24 @@ use roommate::state::Shared;
 struct ProjectIdParams {
     /// The project id, as returned by `list_projects`.
     project_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct BlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The blueprint id, as returned by `list_blueprints`.
+    blueprint_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CaptureBlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The room's model, as returned by `get_rooms`. A room id is unique only within its model.
+    model_id: String,
+    /// The room's id.
+    room_id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -468,6 +487,23 @@ fn connections_to_mcp_error(err: roommate::connections::ConnectionsError) -> Mcp
         ConnectionsError::Invalid(msg) | ConnectionsError::Conflict(msg) => McpError::invalid_params(msg, None),
         ConnectionsError::Internal(e) => {
             tracing::error!("connections error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn blueprints_to_mcp_error(err: roommate::blueprints::BlueprintError) -> McpError {
+    use roommate::blueprints::BlueprintError;
+    match err {
+        BlueprintError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no blueprints to read".to_string(),
+            None,
+        ),
+        BlueprintError::Invalid(msg) | BlueprintError::Conflict(msg) | BlueprintError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        BlueprintError::Internal(e) => {
+            tracing::error!("blueprints error: {e:#}");
             McpError::internal_error("internal error".to_string(), None)
         }
     }
@@ -1245,6 +1281,46 @@ impl RoommateMcp {
         let dir = self.projects_dir()?;
         let document = roommate::connections::load(&dir, &p.project_id).map_err(connections_to_mcp_error)?;
         json_result(&document)
+    }
+
+    /// The project's authored blueprints -- see `blueprints::list`.
+    #[tool(
+        description = "List the blueprints authored for one project, by name. A BLUEPRINT is a room and the FF&E in it written as RECIPES against the room's edges (which edge, how far along it, how far into the room, which way it faces), so the same layout can be placed in another room; it is authored data, not read from the model. Each row has `id`, `name`, `taken_at` (the blueprint's version), `source` (the room it was captured from: a record, not a reference that must still resolve), `current_revision` (the revision new assignments use), `revisions` (how many) and `items` (in the current revision, excluded ones not counted). Revisions are append-only: an edit is a new revision. Read one with get_blueprint; to see what a room would capture as, use capture_blueprint. Writing is HTTP-only (POST /projects/{id}/blueprints)."
+    )]
+    fn list_blueprints(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::blueprints::list(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One blueprint with all its revisions -- see `blueprints::load`.
+    #[tool(
+        description = "Read one blueprint with every revision. A revision holds an `outline` (`coarse`: jogs under about 350 mm removed, and the one every placement's `edge` index refers to, counter-clockwise with edge i running from vertex i to i+1; `fine`: corners only, for checking whether something is inside the room; both in millimetres with the room's centroid as the origin) and `items`. An item is the FF&E record as exported (`family_name` when the extractor carried it, `type_name`, `category`, `properties` and `type_properties` verbatim) with a `placement`: `edge`, `along_mm` (the item's centre from the edge's start, as captured) and `along_mode` (`fixed_from_start`, `fixed_from_end` or `percent`: how that distance is read in a room of another size), `off_mm` and `off_mode` (`fixed` or `percent` of the room's `depth_mm` in front of the edge), `edge_len_mm`, `facing_deg` (from the edge's inward normal) and `size_mm` (along the facing, then across). `class` is `wall_device` for something under 100 mm thick (a switch or socket: located by wall and height, no footprint check) and `free` otherwise; `excluded` marks an item removed from the blueprint but kept; `follows` says the item abuts the previous one in a run, or sits `inside` another, and so keeps its gap to it instead of getting its own percentage. `corner_anchored` is true for an item with no edge beside it. Nothing here is derived from today's model."
+    )]
+    fn get_blueprint(&self, Parameters(p): Parameters<BlueprintParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let blueprint =
+            roommate::blueprints::load(&dir, &p.project_id, &p.blueprint_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&blueprint)
+    }
+
+    /// What capturing a room would produce -- see `service::blueprint_capture`.
+    #[tool(
+        description = "Work out the blueprint revision that capturing one room would produce, WITHOUT storing anything. Reads the room's outline and the FF&E attributed to it (under the project's own attribution policy) and returns the same `outline` and `items` get_blueprint shows, plus `room_name` and `skipped`: how many items capture left out because they are components of another instance (`nested`; they move with their parent) or have no footprint to write a recipe against (`no_footprint`). A silence would read as 'nothing was there', which is why they are counted. To keep one, POST the result to /projects/{id}/blueprints with a name."
+    )]
+    fn capture_blueprint(&self, Parameters(p): Parameters<CaptureBlueprintParams>) -> Result<CallToolResult, McpError> {
+        let room = roommate::service::room_locator::RoomRef { model_id: p.model_id, room_id: p.room_id };
+        match roommate::service::blueprint_capture::capture_room(&self.state, &p.project_id, &room)
+            .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some((captured, room_name)) => json_result(&serde_json::json!({
+                "room_name": room_name,
+                "outline": captured.content.outline,
+                "items": captured.content.items,
+                "skipped": captured.skipped,
+            })),
+        }
     }
 
     /// Lists every uploaded snapshot id for one project's reference source --

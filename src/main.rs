@@ -24,6 +24,10 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+use roommate::blueprints_api::{
+    http_add_revision, http_capture_blueprint, http_create_blueprint, http_delete_blueprint, http_get_blueprint,
+    http_list_blueprints, http_update_blueprint,
+};
 use roommate::bootstrap::build_state;
 use roommate::connections_api::{http_get_connections, http_put_connections};
 use roommate::handlers::{
@@ -380,6 +384,16 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // list and names the version it read, so two editors cannot overwrite
         // each other unseen. See `connections`.
         .route("/projects/{id}/connections", get(http_get_connections).put(http_put_connections))
+        // Blueprints: a room and its FF&E as recipes against the room's edges. Their own
+        // endpoint, one file each, append-only revisions. `capture` is a read: it
+        // stores nothing. See `blueprints`.
+        .route("/projects/{id}/blueprints", get(http_list_blueprints).post(http_create_blueprint))
+        .route("/projects/{id}/blueprints/capture", get(http_capture_blueprint))
+        .route(
+            "/projects/{id}/blueprints/{blueprint}",
+            get(http_get_blueprint).put(http_update_blueprint).delete(http_delete_blueprint),
+        )
+        .route("/projects/{id}/blueprints/{blueprint}/revisions", post(http_add_revision))
         // Milestone comparison: a baseline-vs-each-other diff of rooms and a
         // user-defined property set. POST (not GET) for its list body — see
         // `handlers::compare_project_milestones`.

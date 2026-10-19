@@ -55,6 +55,8 @@ pub fn default_http_addr() -> String {
 }
 
 pub mod backups;
+pub mod blueprints;
+pub mod blueprints_api;
 pub mod bootstrap;
 pub mod classify;
 pub mod connections;

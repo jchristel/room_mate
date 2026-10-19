@@ -451,7 +451,10 @@ mod tests {
         .unwrap();
         assert!(legacy.family_name.is_none() && legacy.host.is_none());
         let json = serde_json::to_value(&legacy).unwrap();
-        assert!(json.get("family_name").is_none() && json.get("host").is_none(), "absent stays absent on the wire");
+        assert!(
+            json.get("family_name").is_none() && json.get("host").is_none(),
+            "absent stays absent on the wire"
+        );
 
         let item: Item = serde_json::from_value(serde_json::json!({
             "id": "2", "level_id": "1", "category": "Electrical Fixtures", "type_id": "t", "type_name": "GPO",
