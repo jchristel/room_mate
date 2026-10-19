@@ -1,9 +1,10 @@
 layout:
   - RoomsAndDoors
+  - Blueprint
   - ByCategory
 
 # bundle tooltip
-tooltip: Rooms and doors together, or one entity at a time
+tooltip: Rooms and doors together, the blueprint sheet export, or one entity at a time
 
 
 # bundle author

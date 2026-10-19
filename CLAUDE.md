@@ -352,6 +352,37 @@ get wrong:
   the room's items, so on RHH it costs a few seconds. Narrowing it with a storey scope is the
   obvious fix and has not been needed yet.
 
+## Room layout sheets: a library kept by identity, and two buttons that choose
+
+Built: the sheet library on the server (`sheets`, `sheets_api`, `service::sheet_suggest`),
+two pyRevit buttons, MCP reads. **Not built: a viewer for any of it, the blueprint's own
+sheet association, tags/scale/template in the export.** Rules that are expensive to get wrong:
+
+- **Their own endpoint (`/projects/{id}/sheets`), apart from blueprints, and not a snapshot
+  push.** Rooms, doors and the rest replace a model's state; the library is authored data
+  kept by sheet identity, one file per sheet. The sheets a blueprint is associated with are
+  a separate record (decision 18), stored elsewhere.
+- **Identity is the Revit sheet id plus the document title.** A match with the same sheet
+  number updates the sheet; a match whose number changed is **stashed pending** for a person
+  to accept or reject; a match on neither is a new sheet *even if its number is taken*.
+- **The sheet body is duHast's export, as exported, and opaque to the server.** Tags, view
+  scale, view template and view names are not in it. Typing it server-side would pin the
+  server to an export that is still changing.
+- **A sheet's room is chosen by a person**, at export (the Blueprint button) or afterwards.
+  Nothing infers it from sheet names or parameters; the export marks neither a room layout
+  sheet nor its room. It is a reference and is never validated on save.
+- **`suggest` offers and never applies, and only for sheet creation mode.** Area, proportions
+  and item count are weighed equally, each as a log-ratio, worked out from today's rooms and
+  FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short
+  side, so a rotated room reads the same.
+- **The Blueprint button pushes sheets ONLY, on purpose.** A rooms or FF&E push replaces a
+  model's whole snapshot, so pushing just the chosen rooms' contents would make every other
+  room vanish from the viewer. The blueprint is captured on the server from rooms and FF&E
+  already pushed; the button only says which sheets belong to which room.
+- **Neither sheet entry point is in `ENTITY_EXPORTERS`.** They are selection-driven, and the
+  generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
+  side was checked for syntax, ASCII and duHast-import closure only.
+
 ## Traps in the door export
 
 - **`±1e30` is not geometry.** duHast used to return Revit's *uninitialized*

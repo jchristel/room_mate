@@ -40,6 +40,14 @@ from room_m.utils.provenance import (
     report_build,
 )
 
+from room_m.utils.sheets import (
+    placed_rooms,
+    sheets_of,
+    pick as pick_items,
+)
+from room_m.exporters.sheets import read_sheets
+from room_m.post_sheets import describe_outcomes, post_sheets
+
 from room_m.utils.post_envelope import (
     build_run_envelope,
     build_model_block,
@@ -386,6 +394,175 @@ def floors_export_entry(doc, uiapp, output, forms):
     :rtype: Result
     """
     return export_entry(doc, uiapp, output, forms, entities=(FLOORS,))
+
+def _single_document(doc, forms, button_name):
+    """The ONE document a sheet run works in, or None. `pick_document` is multiselect-capable;
+    a sheet run names rooms and sheets of one document, so more than one is refused rather
+    than guessed at."""
+    picked = pick_document(doc, forms, button_name=button_name, multiselect=True)
+    if not picked:
+        return None
+    if not isinstance(picked, (list, tuple)):
+        picked = [picked]
+    if len(picked) != 1:
+        forms.alert(
+            "Pick exactly one model: the rooms and the sheets you choose belong to one document.",
+            title="Roommate - export aborted", warn_icon=True)
+        return None
+    return picked[0]
+
+
+def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
+    """Read the chosen sheets with duHast and push them to the sheet library, reporting what
+    the server did with each. `assignments` is a list of `(sheet entry, room or None)`."""
+    pushed, failures = read_sheets(selected_doc, assignments, phase_name)
+    for label, reason in failures:
+        return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
+    if not pushed:
+        return_value.update_sep(False, "No sheet could be read, so nothing was pushed.")
+        return
+    ok, status, text, outcomes = post_sheets(project["id"], pushed)
+    if not ok:
+        return_value.update_sep(
+            False, "Sheet push failed ({}): {}".format(status if status is not None else "no response", text))
+        return
+    for line in describe_outcomes(outcomes):
+        return_value.append_message(line)
+    return_value.append_message("{} sheet(s) pushed".format(len(pushed)))
+
+
+def sheets_export_entry(doc, uiapp, output, forms):
+    """Push SHEETS you choose to the sheet library, with no room attached.
+
+    The sheets go in as they are; the room each was made for is set afterwards, in the
+    viewer. Nothing is inferred from sheet names or parameters: the export has no marker
+    for a room layout sheet, so the person picks. Use the Blueprint button to name rooms
+    at the same time.
+
+    Not a snapshot push and not an entry in `ENTITY_EXPORTERS`: the library is authored
+    data the server keeps by sheet identity (Revit sheet id plus document title).
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_doc = _single_document(doc, forms, "Select the model whose sheets to export")
+        if selected_doc is None:
+            return_value.append_message("No document selected")
+            return return_value
+        project = choose_project(forms)
+        if project is None:
+            return_value.update_sep(False, "Export aborted: no project selected.")
+            return return_value
+
+        sheets = sheets_of(selected_doc)
+        if not sheets:
+            forms.alert("This model has no sheets.", title="Roommate - nothing to export", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: the model has no sheets.")
+            return return_value
+        chosen = pick_items(forms, sheets, "Select the sheets to export", "Export these sheets")
+        if not chosen:
+            return_value.update_sep(False, "Export aborted: no sheets selected.")
+            return return_value
+
+        _push_sheets(project, [(entry, None) for entry in chosen], selected_doc, None, return_value)
+    except Exception as e:
+        return_value.update_sep(False, "Sheet export failed with exception: {}".format(e))
+    return return_value
+
+
+def blueprint_export_entry(doc, uiapp, output, forms):
+    """The BLUEPRINT export: a phase, then the rooms, then the sheets that belong to each.
+
+    1. **Phase.** The rooms offered are the placed rooms of the phase you pick.
+    2. **Rooms.** The rooms you want a blueprint's sheets for.
+    3. **Sheets, room by room.** For each chosen room, the sheets that are its room layout
+       sheets. A sheet is offered once: one already given to an earlier room is not offered
+       again, because a library sheet has one room.
+
+    The sheets then go to the sheet library with their rooms named, which is the direct
+    association of decision 20 in docs/PLAN-blueprints.md.
+
+    **It pushes sheets only, and that is deliberate.** A rooms or FF&E push replaces a
+    model's whole snapshot, so pushing just the chosen rooms' contents would make every
+    other room vanish from the viewer. The blueprint itself is captured on the server from
+    the rooms and FF&E already pushed (use the Rooms and FFE buttons for those), so this
+    button only has to say which sheets belong to which room.
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_doc = _single_document(doc, forms, "Select the model holding the rooms and sheets")
+        if selected_doc is None:
+            return_value.append_message("No document selected")
+            return return_value
+        project = choose_project(forms)
+        if project is None:
+            return_value.update_sep(False, "Export aborted: no project selected.")
+            return return_value
+
+        # 1. phase
+        phase_name = choose_phase([selected_doc], forms)
+        if phase_name is None:
+            return_value.update_sep(False, "Export aborted: no phase selected.")
+            return return_value
+        return_value.append_message("Phase '{}'".format(phase_name))
+
+        # 2. rooms
+        rooms = placed_rooms(selected_doc, phase_name)
+        if not rooms:
+            forms.alert("No placed rooms in phase '{}'.".format(phase_name),
+                        title="Roommate - nothing to export", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: no placed rooms in that phase.")
+            return return_value
+        chosen_rooms = pick_items(forms, rooms, "Select the rooms to export sheets for", "Use these rooms")
+        if not chosen_rooms:
+            return_value.update_sep(False, "Export aborted: no rooms selected.")
+            return return_value
+
+        # 3. sheets, room by room
+        available = sheets_of(selected_doc)
+        if not available:
+            forms.alert("This model has no sheets.", title="Roommate - nothing to export", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: the model has no sheets.")
+            return return_value
+        assignments = []
+        taken = set()
+        for room in chosen_rooms:
+            remaining = [s for s in available if s["id"] not in taken]
+            if not remaining:
+                return_value.append_message("{}: no sheets left to choose from".format(room["label"]))
+                continue
+            chosen = pick_items(
+                forms, remaining,
+                "Sheets for room {}".format(room["label"]),
+                "Use for this room")
+            if chosen is None:
+                return_value.update_sep(False, "Export aborted at room {}.".format(room["label"]))
+                return return_value
+            for entry in chosen:
+                taken.add(entry["id"])
+                assignments.append((entry, room))
+            return_value.append_message("{}: {} sheet(s)".format(room["label"], len(chosen)))
+
+        if not assignments:
+            return_value.update_sep(False, "Nothing to push: no sheet was chosen for any room.")
+            return return_value
+
+        _push_sheets(project, assignments, selected_doc, phase_name, return_value)
+    except Exception as e:
+        return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
+    return return_value
+
 
 def export_entry(doc, uiapp, output, forms, entities):
 
