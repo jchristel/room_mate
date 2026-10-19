@@ -108,6 +108,19 @@ write path into Revit. They have very different risk, which drives the staging.
 17. **Platform: pyRevit** (decided 2026-10-19). The Revit side stays in the existing
     pyRevit extension; no C# add-in and no platform spike. Revisit only if a stage 7 or 8
     obstacle forces it.
+18. **Room layout sheets are a library with their own endpoint** (decided 2026-10-19), a
+    collection of sheet objects beside blueprints, not inside them. Sheets saved there are
+    kept as exported and are a different thing, stored separately, from the sheet
+    association a blueprint carries. The library exists so the server can offer the closest
+    sheet for a room.
+19. **The user chooses which sheets are exported**, and says which room each belongs to. Nothing
+    is inferred from sheet names or parameters: the export has no marker for a room layout
+    sheet and no link from a sheet to a room.
+20. **A sheet reaches a room in one of two ways.** *Direct:* the user associates sheets with a
+    blueprint, and that association is exported with the blueprint. *Suggested:* in sheet
+    creation mode only, the server ranks library sheets by how close their room is to the
+    target room (size, proportions, number of items, as duHast's `RoomLayoutSheet` sketch
+    intended). A suggestion is offered, never applied, and never made outside sheet creation.
 
 ### Constraint grammar (sketch; stage 0 added `follows` and `class`)
 
@@ -216,7 +229,8 @@ may carry a sheet specification, and stage 2 reserves the slot without designing
 
 **Scope for now, decided 2026-10-19:** review the duHast code with a view to using the
 sheet export code in RoomMate, and make it a **one-way proof of concept, Revit to
-RoomMate**. Creating sheets in Revit (B4) stays in the plan but is not scheduled.
+RoomMate**, into a **sheet library with its own endpoint** (decision 18). Creating sheets in
+Revit (B4) stays in the plan but is not scheduled.
 
 **B0 — Review the duHast sheet exports.** Read the existing IronPython sheet code and record
 exactly what it returns: sheets, views and view types, viewport positions and extents, view
@@ -247,17 +261,30 @@ nothing run in Revit):**
   on a room layout sheet. Creating sheets (B4) additionally needs view type, scale and
   template names, and tag capture.
 
-**B1 — One-way proof of concept: contract and storage for sheet data.** If B0 shows the
-export is worth keeping, a sheets entity on the existing entity stack (contract, ingest,
-storage, read route, MCP): "adding an entity is a variant, not a copy". Read-only.
+**B1 — Export button (extractor).** A pyRevit button lists the document's sheets; the user picks
+the ones to export and the room each belongs to (decision 19). Each chosen sheet goes through
+duHast's `convert_revit_sheet`. It can be pushed in the same run as FF&E, since a run already
+exports several entities at once. The export carries the sheet's identity (Revit element id
+and sheet number), its properties, viewports with sheet positions, crop boxes and schedules.
+Not carried, because duHast does not export it: tags and their positions, view scale, view
+template, view names.
 
-**B2 — Capture a layout-sheet specification from existing sheets.** Which views (plan,
-elevations, 3D, schedule), their types and templates by name, viewport positions relative
-to the sheet, tag positions relative to their elements. Same recipe principle as
-blueprints: relationships, not absolute coordinates.
+**B2 — Sheet library (server).** A `sheets` collection on its own endpoint, one record per
+sheet, scoped to a project. Each record holds the sheet as exported and the room the user
+named for it (a reference, never validated against the model on save). A sheet pushed again
+is **pending until the user accepts or rejects it**, as a pushed blueprint is (decision 10), so
+a re-export cannot silently change a sheet someone relies on. Reads: list, one sheet, and
+**suggest**.
 
-**B3 — Attach a spec to a blueprint and preview it.** Resolver output feeds it (which
-walls, which items to tag).
+**B3 — Suggest, in sheet creation mode only.** `GET .../sheets/suggest?room=` ranks library
+sheets by the closeness of their room to the target room: area, proportions (the outline's
+aspect) and number of items, each worked out at read time from the rooms and FF&E, never
+stored. It returns the ranking with the figures, so a person sees why a sheet was offered.
+Nothing applies it.
+
+**B3b — Associate sheets with a blueprint.** A blueprint carries a list of sheet references (the
+direct route, decision 20), and exporting a blueprint carries the sheets it names. Needs the
+blueprint export, which is not built.
 
 **B4 — Revit creation (not scheduled).** A task kind on the stage-7 channel: views from the
 project's own templates and title block (named in the spec, never invented), viewports,
@@ -359,3 +386,7 @@ blueprint.
    them, but your view helps)?
 7. ~~**Percentage constraints on rotated boxes.**~~ **Closed 2026-10-19:** a percentage
    constraint follows the edge it is anchored to, not the box's axes (decision 6).
+8. **Sheet library, three details** (open): (a) does a re-pushed sheet replace by Revit sheet
+   id, or by sheet number, when models are re-exported or renumbered; (b) is a sheet's room
+   chosen at export time, in the viewer afterwards, or either; (c) should "closest" weigh area,
+   proportions and item count equally, or let the user set the weights.
