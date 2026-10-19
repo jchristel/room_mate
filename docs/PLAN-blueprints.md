@@ -1,6 +1,6 @@
 # Plan: blueprints (room layouts that travel)
 
-**Status: stages 0 to 3 built on the server side (PR #215); the resolver, viewer, assignment and
+**Status: stages 0 to 4 built on the server side (PR #215); the viewer, assignment and
 everything toward Revit are not. Revised 2026-10-19 after the author's review comments and
 the stage 0 results ([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
 
@@ -9,8 +9,9 @@ extractor, **not yet run in Revit**); the blueprint store with append-only revis
 revisions and its HTTP and MCP surface (stage 2, without import/export); capture from a room (stage 3's
 service and endpoint, without the "Create blueprint" button or list panel); and track B's first
 slice: the sheet library on its own endpoint with identity matching, pending renumbered pushes and
-`suggest`, plus the Sheets and Blueprint pyRevit buttons (also **not yet run in Revit**). Not built:
-the resolver, the viewer, assignment, the blueprint's own sheet association, tags/scale/template in
+`suggest`, plus the Sheets and Blueprint pyRevit buttons (also **not yet run in Revit**). The resolver (stage 4) is built too: measured on RHH's real siblings, 90% of ensuite pairs
+land the items within 150 mm of the real ones, `1 BED B` 68%, `1 BED A` 58%. Not built:
+the viewer, assignment, the blueprint's own sheet association, tags/scale/template in
 the sheet export, and anything toward Revit.
 
 ## What exists, and what does not
