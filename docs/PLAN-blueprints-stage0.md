@@ -125,7 +125,7 @@ toilets, store and utility rooms (WCST, RESUS, BMEQ, WCAC), where the layout var
 1. **Decision 4 (no item-to-item relations in v1) should be revisited** for one case: an item
    that abuts another (a run of casework, a unit inside a wardrobe). The smallest form is a
    "follows the previous item" anchor, or a group that is placed as one.
-2. **The blueprint stores the simplified outline**, and edge counts and mapping use it.
+2. **The blueprint stores the simplified outline** (see 6 for the two tolerances).
 3. **Thin wall devices are a class of their own**: edge, height, no footprint checks.
 4. **Hybrid is the default rule**, with the 300 mm and 150 mm thresholds user-adjustable.
 5. **Rectangles first is wrong.** The standardised, repeated rooms (patient rooms, ensuites)
