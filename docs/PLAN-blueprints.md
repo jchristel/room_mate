@@ -1,7 +1,13 @@
 # Plan: blueprints (room layouts that travel)
 
-**Status: proposed, nothing built. Revised 2026-10-19 after the author's review comments and
+**Status: stages 0 to 3 built on the server side (PR #215); the resolver, viewer, assignment and
+everything toward Revit are not. Revised 2026-10-19 after the author's review comments and
 the stage 0 results ([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
+
+Built so far: FF&E carries `family_name` and `host` (stage 1, read from Revit by the
+extractor, **not yet run in Revit**); the blueprint store with append-only revisions and its
+HTTP and MCP surface (stage 2, without import/export or pending revisions); and capture from
+a room (stage 3's service and endpoint, without the "Create blueprint" button or list panel).
 A blueprint is a room, its FF&E, its doors and its room layout sheets, stored as
 *relationships to the room boundary* so the same layout can be placed in another room,
 rotated, or fitted to a differently sized or proportioned room, and eventually written into
