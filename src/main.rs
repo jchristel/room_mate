@@ -45,6 +45,10 @@ use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
     http_upload_reference,
 };
+use roommate::sheets_api::{
+    http_accept_sheet_push, http_delete_sheet, http_get_sheet, http_list_sheets, http_push_sheets,
+    http_reject_sheet_push, http_suggest_sheets, http_update_sheet,
+};
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
 /// Cap on the buffered `/rooms` body -- applies to the DECOMPRESSED size, since
@@ -278,6 +282,44 @@ fn viewer_cache_control() -> SetResponseHeaderLayer<HeaderValue> {
 /// Build the application router. Split out of `main` so the CORS policy above
 /// is reachable from a test — a security control with no regression test is one
 /// refactor away from silently reverting to `permissive()`.
+/// The routes for data a person authors rather than reads off the model: blueprints and the
+/// room layout sheet library. Split out of `build_router` only to keep that one readable.
+fn authored_routes() -> Router<roommate::state::Shared> {
+    Router::new()
+        // Blueprints: a room and its FF&E as recipes against the room's edges. Their own
+        // endpoint, one file each, append-only revisions. `capture` is a read: it
+        // stores nothing. See `blueprints`.
+        .route("/projects/{id}/blueprints", get(http_list_blueprints).post(http_create_blueprint))
+        .route("/projects/{id}/blueprints/capture", get(http_capture_blueprint))
+        .route(
+            "/projects/{id}/blueprints/{blueprint}",
+            get(http_get_blueprint).put(http_update_blueprint).delete(http_delete_blueprint),
+        )
+        .route("/projects/{id}/blueprints/{blueprint}/revisions", post(http_add_revision))
+        // A revision from elsewhere is stored PENDING and changes nothing current; a person
+        // accepts it (it becomes the next revision) or rejects it (kept, marked rejected).
+        .route("/projects/{id}/blueprints/{blueprint}/pending", post(http_push_revision))
+        .route(
+            "/projects/{id}/blueprints/{blueprint}/pending/{pending}/accept",
+            post(http_accept_pending),
+        )
+        .route(
+            "/projects/{id}/blueprints/{blueprint}/pending/{pending}/reject",
+            post(http_reject_pending),
+        )
+        // The room layout sheet library: sheets a person chose to export, kept as exported.
+        // Its own endpoint, apart from blueprints. POST is the extractor's push; `suggest`
+        // is a read, asked for in sheet creation mode only. See `sheets`.
+        .route("/projects/{id}/sheets", get(http_list_sheets).post(http_push_sheets))
+        .route("/projects/{id}/sheets/suggest", get(http_suggest_sheets))
+        .route(
+            "/projects/{id}/sheets/{sheet}",
+            get(http_get_sheet).put(http_update_sheet).delete(http_delete_sheet),
+        )
+        .route("/projects/{id}/sheets/{sheet}/pending/{pending}/accept", post(http_accept_sheet_push))
+        .route("/projects/{id}/sheets/{sheet}/pending/{pending}/reject", post(http_reject_sheet_push))
+}
+
 fn build_router(state: roommate::state::Shared) -> Router {
     Router::new()
         .route(
@@ -384,27 +426,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // list and names the version it read, so two editors cannot overwrite
         // each other unseen. See `connections`.
         .route("/projects/{id}/connections", get(http_get_connections).put(http_put_connections))
-        // Blueprints: a room and its FF&E as recipes against the room's edges. Their own
-        // endpoint, one file each, append-only revisions. `capture` is a read: it
-        // stores nothing. See `blueprints`.
-        .route("/projects/{id}/blueprints", get(http_list_blueprints).post(http_create_blueprint))
-        .route("/projects/{id}/blueprints/capture", get(http_capture_blueprint))
-        .route(
-            "/projects/{id}/blueprints/{blueprint}",
-            get(http_get_blueprint).put(http_update_blueprint).delete(http_delete_blueprint),
-        )
-        .route("/projects/{id}/blueprints/{blueprint}/revisions", post(http_add_revision))
-        // A revision from elsewhere is stored PENDING and changes nothing current; a person
-        // accepts it (it becomes the next revision) or rejects it (kept, marked rejected).
-        .route("/projects/{id}/blueprints/{blueprint}/pending", post(http_push_revision))
-        .route(
-            "/projects/{id}/blueprints/{blueprint}/pending/{pending}/accept",
-            post(http_accept_pending),
-        )
-        .route(
-            "/projects/{id}/blueprints/{blueprint}/pending/{pending}/reject",
-            post(http_reject_pending),
-        )
+        .merge(authored_routes())
         // Milestone comparison: a baseline-vs-each-other diff of rooms and a
         // user-defined property set. POST (not GET) for its list body — see
         // `handlers::compare_project_milestones`.

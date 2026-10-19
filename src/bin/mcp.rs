@@ -7,10 +7,10 @@
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
 //! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
-//! `capture_blueprint` --
+//! `capture_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Thirty-four in
+//! and the one forwarded mutation (`upload_reference`, below). Thirty-seven in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -81,6 +81,24 @@ struct CaptureBlueprintParams {
     /// The room's model, as returned by `get_rooms`. A room id is unique only within its model.
     model_id: String,
     /// The room's id.
+    room_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SheetParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The sheet record id, as returned by `list_sheets`.
+    sheet_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SuggestSheetsParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The room's model, as returned by `get_rooms`. A room id is unique only within its model.
+    model_id: String,
+    /// The room to find a sheet for.
     room_id: String,
 }
 
@@ -504,6 +522,23 @@ fn blueprints_to_mcp_error(err: roommate::blueprints::BlueprintError) -> McpErro
         }
         BlueprintError::Internal(e) => {
             tracing::error!("blueprints error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn sheets_to_mcp_error(err: roommate::sheets::SheetError) -> McpError {
+    use roommate::sheets::SheetError;
+    match err {
+        SheetError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no sheets to read".to_string(),
+            None,
+        ),
+        SheetError::Invalid(msg) | SheetError::Conflict(msg) | SheetError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        SheetError::Internal(e) => {
+            tracing::error!("sheets error: {e:#}");
             McpError::internal_error("internal error".to_string(), None)
         }
     }
@@ -1320,6 +1355,42 @@ impl RoommateMcp {
                 "items": captured.content.items,
                 "skipped": captured.skipped,
             })),
+        }
+    }
+
+    /// The project's room layout sheet library -- see `sheets::list`.
+    #[tool(
+        description = "List the room layout sheets in one project's sheet LIBRARY: sheets a person chose to export from Revit and keep as exported, so the closest one can be offered for a room. It is authored data, kept apart from blueprints, not read from the model. Each row has `id`, `taken_at` (the record's version), `revit_sheet_id` and `document_title` (together a sheet's identity: a sheet id is unique only within its document), `sheet_number`, `sheet_name`, `room` (the room the person said it was made for, or null if none yet: a reference that may no longer resolve), `viewports` (how many) and `pending` (pushes held back for a person to confirm, because the sheet number changed). Read one with get_sheet; to find the sheets closest to a room use suggest_sheets. Writing is HTTP-only (POST /projects/{id}/sheets)."
+    )]
+    fn list_sheets(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::sheets::list(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One library sheet -- see `sheets::load`.
+    #[tool(
+        description = "Read one room layout sheet from the library, as exported. `sheet` is duHast's export of the Revit sheet unchanged: its instance and type properties, its `view_ports` (each with a type of floor plan, elevation, 3D or schedule, a `bounding_box` and `centre_point` giving its position on the sheet, and per view the crop box, plus the marker index and view direction for an elevation, the eye, forward and up for a 3D view, or the row count and segment heights for a schedule) and its sheet size. NOT in the export: tags and their positions, view scale, view template and view names. `pending` lists pushes of this sheet that arrived with a CHANGED sheet number and are being held for a person to accept or reject: they are not the sheet, so do not describe one as the sheet's current number or layout. `rejected` keeps the ones that were declined."
+    )]
+    fn get_sheet(&self, Parameters(p): Parameters<SheetParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let record = roommate::sheets::load(&dir, &p.project_id, &p.sheet_id).map_err(sheets_to_mcp_error)?;
+        json_result(&record)
+    }
+
+    /// The library sheets closest to one room -- see `service::sheet_suggest`.
+    #[tool(
+        description = "Rank the project's library sheets by how close the room each was made for is to ONE target room, closest first. Closeness weighs three figures EQUALLY: the room's area, its proportions (the long side over the short side of the smallest rectangle enclosing the outline) and the number of FF&E items in it, each compared as a ratio, so twice the area is as far as half the area. `distance` is the mean of `parts`, and `signature` is each room's own three figures, so the reason a sheet was offered is in the answer. Worked out from the rooms and FF&E as they are today, and never stored. This OFFERS and never applies: it is for sheet creation mode, a person chooses, and a low distance is a similarity of room size and contents and says nothing about whether the sheet's layout suits the room. `unassigned` counts sheets with no room, which cannot be ranked, and `unresolved` lists sheets whose room is not in the model today, with the reason."
+    )]
+    fn suggest_sheets(&self, Parameters(p): Parameters<SuggestSheetsParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let records = roommate::sheets::load_all(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        let room = roommate::service::room_locator::RoomRef { model_id: p.model_id, room_id: p.room_id };
+        match roommate::service::sheet_suggest::suggest(&self.state, &p.project_id, &room, &records)
+            .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some(result) => json_result(&result),
         }
     }
 

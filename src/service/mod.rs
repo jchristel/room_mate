@@ -28,6 +28,7 @@ pub mod reports;
 pub mod room_locator;
 pub mod rooms;
 pub mod routing;
+pub mod sheet_suggest;
 pub mod snapshots;
 pub mod spaces;
 pub mod stacking;

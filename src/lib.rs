@@ -75,5 +75,7 @@ pub mod reports_api;
 pub mod service;
 pub mod settings;
 pub mod settings_api;
+pub mod sheets;
+pub mod sheets_api;
 pub mod state;
 pub mod storage;
