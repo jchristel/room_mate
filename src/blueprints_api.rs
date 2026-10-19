@@ -20,6 +20,7 @@ use crate::blueprints::{
 };
 use crate::service::blueprint_capture::capture_room;
 use crate::service::blueprint_model::{RevisionContent, Skipped};
+use crate::service::blueprint_resolve::{resolve_in_room, Resolution};
 use crate::service::room_locator::RoomRef;
 use crate::state::Shared;
 
@@ -164,6 +165,56 @@ pub async fn http_capture_blueprint(
         Err(crate::service::ServiceError::Invalid(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
         Err(crate::service::ServiceError::Internal(e)) => {
             tracing::error!("capture error: {e:#}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ResolveParams {
+    pub model_id: String,
+    pub room_id: String,
+    /// The revision to place; the blueprint's current one when left out.
+    #[serde(default)]
+    pub revision: Option<u32>,
+    /// Pin the edge mapping (blueprint edge `i` to room edge `(i + shift) % edges`); left out,
+    /// the best fit by shape is used.
+    #[serde(default)]
+    pub shift: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct ResolveResponse {
+    pub blueprint_id: String,
+    pub revision: u32,
+    pub room_name: String,
+    #[serde(flatten)]
+    pub resolution: Resolution,
+}
+
+/// Where a blueprint revision's items go in one room. A read: nothing is stored or applied.
+pub async fn http_resolve_blueprint(
+    State(state): State<Shared>,
+    UrlPath((project_id, id)): UrlPath<(String, String)>,
+    Query(params): Query<ResolveParams>,
+) -> Result<Json<ResolveResponse>, (StatusCode, String)> {
+    let blueprint = blueprints::load(&dir(&state)?, &project_id, &id).map_err(to_http)?;
+    let number = params.revision.unwrap_or(blueprint.current_revision);
+    let Some(revision) = blueprint.revision(number) else {
+        return Err((StatusCode::NOT_FOUND, format!("the blueprint has no revision {number}")));
+    };
+    let room = RoomRef { model_id: params.model_id, room_id: params.room_id };
+    match resolve_in_room(&state, &project_id, &revision.content, &room, params.shift) {
+        Ok(Some((room_name, resolution))) => Ok(Json(ResolveResponse {
+            blueprint_id: blueprint.id.clone(),
+            revision: number,
+            room_name,
+            resolution,
+        })),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
+        Err(crate::service::ServiceError::Invalid(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
+        Err(crate::service::ServiceError::Internal(e)) => {
+            tracing::error!("resolve error: {e:#}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()))
         }
     }

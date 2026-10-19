@@ -204,6 +204,27 @@ pub fn box_corners(c: Pt, f: Pt, hu: f64, hv: f64) -> [Pt; 4] {
         .map(|(sx, sy)| (c.0 + sx * hu * f.0 + sy * hv * v.0, c.1 + sx * hu * f.1 + sy * hv * v.1))
 }
 
+/// Whether two convex polygons interpenetrate by more than `pen` mm (separating-axis test).
+/// Touching, or sharing an edge, is not an overlap.
+pub fn overlaps(p: &[Pt], q: &[Pt], pen: f64) -> bool {
+    for poly in [p, q] {
+        for i in 0..poly.len() {
+            let e = sub(poly[(i + 1) % poly.len()], poly[i]);
+            let axis = unit((-e.1, e.0));
+            let (pa, qa): (Vec<f64>, Vec<f64>) =
+                (p.iter().map(|&x| dot(x, axis)).collect(), q.iter().map(|&x| dot(x, axis)).collect());
+            let (p_hi, q_hi) =
+                (pa.iter().cloned().fold(f64::MIN, f64::max), qa.iter().cloned().fold(f64::MIN, f64::max));
+            let (p_lo, q_lo) =
+                (pa.iter().cloned().fold(f64::MAX, f64::min), qa.iter().cloned().fold(f64::MAX, f64::min));
+            if p_hi.min(q_hi) - p_lo.max(q_lo) <= pen {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +284,17 @@ mod tests {
         assert!((depth_at(&ring, 0, es[0].point(1000.0, 0.0)) - 3000.0).abs() < 1.0);
         // Edge 1 runs up the right wall, so its depth is the room's width.
         assert!((depth_at(&ring, 1, es[1].point(1000.0, 0.0)) - 4000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_boxes_overlap_only_when_they_interpenetrate() {
+        let a = box_corners((0.0, 0.0), (1.0, 0.0), 300.0, 300.0);
+        let touching = box_corners((600.0, 0.0), (1.0, 0.0), 300.0, 300.0);
+        let over = box_corners((500.0, 0.0), (1.0, 0.0), 300.0, 300.0);
+        let apart = box_corners((900.0, 0.0), (1.0, 0.0), 300.0, 300.0);
+        assert!(!overlaps(&a, &touching, 5.0), "a shared edge is not an overlap");
+        assert!(overlaps(&a, &over, 5.0));
+        assert!(!overlaps(&a, &apart, 5.0));
     }
 
     #[test]

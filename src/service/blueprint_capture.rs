@@ -263,6 +263,22 @@ fn properties_of(map: &PropertyMap) -> Vec<Property> {
         .collect()
 }
 
+/// The room's name and outer loop in millimetres, in the project's plan frame, or `None` when the
+/// project has no such room. Shared by capture and the resolver so both read the same outline.
+pub fn room_ring(state: &AppState, project: &str, room: &RoomRef) -> Result<Option<(String, Vec<Pt>)>, ServiceError> {
+    let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
+        return Ok(None);
+    };
+    let Some(found) = rooms.rooms.iter().find(|r| r.model_id == room.model_id && r.room.id == room.room_id) else {
+        return Ok(None);
+    };
+    let Some(outer) = found.room.loops.first() else {
+        return Err(ServiceError::Invalid(format!("room {:?} has no outline", room.room_id)));
+    };
+    let ring = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
+    Ok(Some((found.room.name.clone(), ring)))
+}
+
 /// Read one room and the FF&E attributed to it, and capture them.
 ///
 /// Returns `Ok(None)` when the project has no room by that reference. The FF&E is the
@@ -273,16 +289,9 @@ pub fn capture_room(
     project: &str,
     room: &RoomRef,
 ) -> Result<Option<(Captured, String)>, ServiceError> {
-    let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
+    let Some((room_name, ring)) = room_ring(state, project, room)? else {
         return Ok(None);
     };
-    let Some(found) = rooms.rooms.iter().find(|r| r.model_id == room.model_id && r.room.id == room.room_id) else {
-        return Ok(None);
-    };
-    let Some(outer) = found.room.loops.first() else {
-        return Err(ServiceError::Invalid(format!("room {:?} has no outline", room.room_id)));
-    };
-    let ring: Vec<Pt> = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
 
     let mut sources = Vec::new();
     if let Some(ffe) = assemble_items(state, &ItemScope { project: Some(project), ..Default::default() })? {
@@ -311,7 +320,7 @@ pub fn capture_room(
         }
     }
     let captured = capture(&ring, sources)?;
-    Ok(Some((captured, found.room.name.clone())))
+    Ok(Some((captured, room_name)))
 }
 
 #[cfg(test)]

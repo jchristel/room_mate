@@ -13,6 +13,7 @@ pub mod areas;
 pub mod blueprint_capture;
 pub mod blueprint_geometry;
 pub mod blueprint_model;
+pub mod blueprint_resolve;
 pub mod comparison;
 pub mod connectivity;
 pub mod entity_scope;

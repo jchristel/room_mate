@@ -316,8 +316,8 @@ the sliver rules since removed, and again after).
 
 ## Blueprints: a room's layout as recipes against its edges
 
-Built: the store, capture and the HTTP/MCP reads and writes. **Not built: the resolver
-(blueprint + another room -> placements), the viewer, assignment, anything toward Revit.**
+Built: the store, capture, the resolver (blueprint + another room -> placements and findings)
+and the HTTP/MCP reads and writes. **Not built: the viewer, assignment, anything toward Revit.**
 The reasoning and the measurements behind every rule below are in
 [`PLAN-blueprints.md`](docs/PLAN-blueprints.md) and its stage 0 note; what is expensive to
 get wrong:
@@ -345,6 +345,26 @@ get wrong:
   the next revision and the current one) or reject it (kept, marked rejected, never deleted).
   `.backups/` is the safety copy made when a file is rewritten, a different thing from review.
   Only `add_revision` (a person's own edit in the editor) can make a revision current directly.
+- **The resolver (`service::blueprint_resolve`) always returns what it could place** and says the
+  rest as findings. Measured on RHH's real siblings (12 rooms each, every ordered pair): `ENS-IN`
+  and `ENS-OUT` 90% of pairs within 150 mm (median 71 and 58 mm), `1 BED B` 68% (116 mm),
+  `1 BED A` 58% (147 mm). Rules that are easy to break:
+  - **Scaling is the room's.** A fixed distance keeps its mm, a percentage keeps its fraction of
+    the edge it is anchored to (or of the room's depth in front of it), items keep their size.
+  - **A follower is placed rigidly relative to the item it follows**, in that item's own frame,
+    so a run is never squashed and a shelf stays in its wardrobe. A follower of an excluded item,
+    or in a loop, is placed by its own recipe and reported (`validate_content` refuses a loop).
+  - **A finding is about what the room CHANGES.** `outside` and `overlap` are reported only
+    where the blueprint did not already have them (three of 66 `1 BED B` items are outside their
+    own source room, and would otherwise be reported on every resolve). Wall devices are left out.
+  - **Mirror image is said only when no rotation fits.** A rectangle's reflection is a rotation,
+    so a badly pinned shift on a symmetric room is `no_fit`, not `mirror_image`. The resolver
+    never mirrors; the answer is a mirrored copy of the blueprint.
+  - **A rectangle fits in two mappings a half turn apart**, and shape cannot choose: pass `shift`
+    (the blueprint's doors are what will, in the assign UI).
+  - **A different coarse edge count places nothing** (`edge_count_differs`): 32% of `1 BED B` and
+    62% of `1 BED A` pairs on RHH. Mapping across differing edge counts is not built.
+  - **Results are in the project's plan frame**, so they draw straight onto the plan.
 - **`family_name` and `host` on an FF&E item are read from Revit by `item_facts`**, not from
   duHast: the export carries neither (probed on 16,161 RHH items). Same footing as the
   category; absent means unread, never guessed. **Not yet run in Revit.**

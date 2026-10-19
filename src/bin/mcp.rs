@@ -7,10 +7,10 @@
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
 //! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
-//! `capture_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets` --
+//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Thirty-seven in
+//! and the one forwarded mutation (`upload_reference`, below). Thirty-eight in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -82,6 +82,22 @@ struct CaptureBlueprintParams {
     model_id: String,
     /// The room's id.
     room_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ResolveBlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The blueprint id, as returned by `list_blueprints`.
+    blueprint_id: String,
+    /// The target room's model, as returned by `get_rooms`.
+    model_id: String,
+    /// The target room.
+    room_id: String,
+    /// The revision to place; the blueprint's current one when omitted.
+    revision: Option<u32>,
+    /// Pin the edge mapping: blueprint edge i goes to room edge (i + shift) % edges. Omit to use the best fit by shape.
+    shift: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1354,6 +1370,42 @@ impl RoommateMcp {
                 "outline": captured.content.outline,
                 "items": captured.content.items,
                 "skipped": captured.skipped,
+            })),
+        }
+    }
+
+    /// Where a blueprint's items go in one room -- see `service::blueprint_resolve`.
+    #[tool(
+        description = "Work out where a blueprint revision's items go in ONE target room, without storing or applying anything. Each entry of `placements` has the item's `centre` and unit `facing` in the PROJECT's plan frame in millimetres (so it draws straight onto the plan), its `size_mm` (along the facing, then across), the target `edge` it sits against and `rule`, the rule that put it there in words. Scaling is the ROOM's and never the item's: a fixed distance keeps its millimetres, a percentage keeps its fraction of the edge or of the room's depth, measured on the edge it is anchored to. An item that follows another (a run of casework, a shelf in a wardrobe) moves rigidly with it. `fit` says how the blueprint's outline matched the room's: `kind` is `plain` (the same shape up to rotation), `mirror_image` (the room is the blueprint REFLECTED: the blueprint never mirrors, so the answer is to make a mirrored copy of it, and placements are still returned for reference), `no_fit` or `edge_count_differs` (nothing is placed). `shift` is the edge mapping used and `cost` its shape cost (about 1.0 or under is a fit). A rectangle fits in two mappings a half turn apart, so pass `shift` to choose. `findings` lists what to look at, never an error: `outside` (a corner is outside the room's true outline), `overlap` (two items that did not overlap in the blueprint now do), `follow_broken`, `corner_anchored`, `mirror_image`, `shape_mismatch`. Wall devices are left out of outside and overlap findings. `excluded` counts items the blueprint holds but excludes."
+    )]
+    fn resolve_blueprint(&self, Parameters(p): Parameters<ResolveBlueprintParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let blueprint =
+            roommate::blueprints::load(&dir, &p.project_id, &p.blueprint_id).map_err(blueprints_to_mcp_error)?;
+        let number = p.revision.unwrap_or(blueprint.current_revision);
+        let revision = blueprint
+            .revision(number)
+            .ok_or_else(|| McpError::invalid_params(format!("the blueprint has no revision {number}"), None))?;
+        let room = roommate::service::room_locator::RoomRef { model_id: p.model_id, room_id: p.room_id };
+        match roommate::service::blueprint_resolve::resolve_in_room(
+            &self.state,
+            &p.project_id,
+            &revision.content,
+            &room,
+            p.shift,
+        )
+        .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some((room_name, resolution)) => json_result(&serde_json::json!({
+                "blueprint_id": blueprint.id,
+                "revision": number,
+                "room_name": room_name,
+                "fit": resolution.fit,
+                "outline": resolution.outline,
+                "placements": resolution.placements,
+                "findings": resolution.findings,
+                "excluded": resolution.excluded,
             })),
         }
     }

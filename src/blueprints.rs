@@ -387,6 +387,25 @@ pub fn validate_content(content: &RevisionContent) -> Result<(), BlueprintError>
             return bad(format!("item {:?} has more than {MAX_PROPERTIES} properties", item.id));
         }
     }
+    // A chain of followers must end: an item cannot (through others) follow itself. The resolver
+    // survives a loop and reports it, but a saved revision should not hold one.
+    let follows: std::collections::HashMap<&str, &str> = content
+        .items
+        .iter()
+        .filter_map(|i| i.follows.as_ref().map(|f| (i.id.as_str(), f.item.as_str())))
+        .collect();
+    for item in &content.items {
+        let mut at = item.id.as_str();
+        for _ in 0..=content.items.len() {
+            match follows.get(at) {
+                Some(&next) => at = next,
+                None => break,
+            }
+            if at == item.id {
+                return bad(format!("item {:?} follows itself through a loop of followers", item.id));
+            }
+        }
+    }
     Ok(())
 }
 
