@@ -160,7 +160,7 @@ def translate_item(item, contribution):
     carries no id (nothing downstream could key on it).
 
     `contribution` is the whole export contribution, and what this reads out of
-    it is `facts` -- `{id: {"room", "category"}}` from
+    it is `facts` -- `{id: {"room", "category", "family_name", "host"}}` from
     `room_m.utils.items.item_facts`. The whole contribution rather than just
     that map, because `post_entity` hands every entity the same argument and
     what each needs from it is itself per entity.
@@ -230,6 +230,11 @@ def translate_item(item, contribution):
         "super_component_id": parent,
         "type_id": str(type_props.get("id", "unknown")),
         "type_name": type_props.get("name", "Unknown Type"),
+        # Read from Revit by `item_facts` because the export carries neither: no
+        # family field exists on `DataItem`, and its `Host` parameter is a display
+        # string. None is sent as absent, never as a guess.
+        "family_name": facts.get("family_name"),
+        "host": facts.get("host"),
         "properties": properties_to_map(instance),
         "type_properties": properties_to_map(type_props),
     }
