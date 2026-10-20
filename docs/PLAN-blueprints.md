@@ -216,6 +216,9 @@ write path into Revit. They have very different risk, which drives the staging.
     type, tag family + type, viewport type): several observations of one key are reduced to a single rule
     (median offset) when the rules are made, so the same blueprint always tags the same way. Where a tag
     is placed relative to its element is derived from the raw observation, never stored in the export.
+    **Built (2026-10-21):** observations endpoint, the rules store (paper mm in the element's own frame, median of
+    samples, a re-pushed sheet replaces its samples), rules carried in a task, and the extractor sending tags. The
+    plug-in does not place tags yet (the apply button), and none of it has run in Revit.
 25. **A library sheet carries a stored summary of its room** (decided 2026-10-20, replacing
     "worked out at read time, never stored"): the room's bounding box X and Y dimensions and
     its number of items, as at push. They make a sheet comparable with a task's room without
