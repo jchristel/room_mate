@@ -30,6 +30,8 @@ import { LayerMenu } from "./LayerMenu.js";
 import { SelectionFilter } from "./SelectionFilter.js";
 import { ExportMenu } from "./ExportMenu.js";
 import { loadAreas } from "./areasData.js";
+import { watchRoomTasks } from "./taskData.js";
+import { TASKS_PLAN, TASK_STATE_COLOUR, TASK_STATE_LABEL, taskColourForRoom } from "../taskStatus.js";
 import { tierNames } from "../areas.js";
 import { elementsOnStorey, layerPayload, typePropertiesOf, zoneAwaitsLayers, type ElementOf } from "./layers.js";
 import { tagsRequest } from "../elementTags.js";
@@ -66,6 +68,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     scope,
     roomsLoading,
     tagSettings,
+    roomTasks,
   } = useViewer();
   // This zone's own visibility, since C1 — see `ZoneRow.layers`.
   const { layers, showRooms, showLabels, spacesModel, ffeModelsOff } = zone;
@@ -132,7 +135,10 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   // page's rule.
   const rooms = useMemo(() => (payload ? roomsOnLevel(payload, levelId) : []), [payload, levelId]);
   const levelName = levels.find((l) => l.id === levelId)?.name ?? levelId ?? "";
-  const plan = colourPlans.find((p) => p.name === zone.colourPlan) ?? null;
+  const byTasks = zone.colourPlan === TASKS_PLAN;
+  const plan = byTasks ? null : (colourPlans.find((p) => p.name === zone.colourPlan) ?? null);
+  // Read the tasks only while this zone colours by them.
+  useEffect(() => (byTasks ? watchRoomTasks() : undefined), [byTasks]);
   // Which joined sources this payload carries. A plan names a field as
   // `<source>.<field>` and the lookup binds the prefix only against this list, so
   // leaving it out colours every room "no data" without an error.
@@ -202,6 +208,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           errorRoomIds: errorRooms,
           showErrors,
           ...(plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, plan, ctx, sources) } : {}),
+          ...(byTasks && roomTasks ? { colourFor: (room: Room) => taskColourForRoom(room, roomTasks) } : {}),
           doors: on("doors"),
           showDoors: layers.doors,
           windows: on("windows"),
@@ -244,7 +251,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, ffeModelsOff, layersRevision, plan, sources, errorRooms, showErrors, zone.tags, tagSettings]);
+  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, ffeModelsOff, layersRevision, plan, byTasks, roomTasks, sources, errorRooms, showErrors, zone.tags, tagSettings]);
 
   // Search is applied to what is ALREADY drawn -- never by re-rendering. A
   // search can match thousands of rooms, and a keystroke must not re-upload a
@@ -304,17 +311,28 @@ export function Zone({ zone }: { zone: ZoneRow }) {
             two plans is the comparison this picker exists for. Hidden when the
             project declares none, which is the ordinary case. */}
         <select
-          className={`picker colourSelect${colourPlans.length ? "" : " hidden"}`}
+          className="picker colourSelect"
           value={zone.colourPlan ?? ""}
           onChange={(e) => setZoneColourPlan(zone.id, e.target.value || null)}
         >
           <option value="">No colour</option>
+          <option value={TASKS_PLAN}>{TASKS_PLAN}</option>
           {colourPlans.map((p) => (
             <option key={p.name} value={p.name}>
               {p.name}
             </option>
           ))}
         </select>
+        {byTasks ? (
+          <span className="taskKey" aria-label="Room task colours">
+            {(Object.keys(TASK_STATE_COLOUR) as (keyof typeof TASK_STATE_COLOUR)[]).map((k) => (
+              <span key={k} className="taskKeyItem">
+                <i style={{ background: TASK_STATE_COLOUR[k] }} />
+                {TASK_STATE_LABEL[k]}
+              </span>
+            ))}
+          </span>
+        ) : null}
         <select
           className={`picker levelSelect${levels.length > 1 ? "" : " hidden"}`}
           value={levelId ?? ""}

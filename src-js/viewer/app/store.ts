@@ -18,6 +18,7 @@ import type { ColourPlan } from "../colour.js";
 import type { ElementKind } from "../../renderer/seam.js";
 import type { FilterState } from "../properties.js";
 import type { AreasData } from "../areas.js";
+import type { TaskIndex } from "../taskStatus.js";
 import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { TagEntity } from "../../renderer/elementTags.js";
@@ -210,6 +211,8 @@ export interface ViewerState {
    *  band's figures: it is scope-derived, so a second copy per zone could only
    *  disagree with itself. */
   areas: AreasData | null;
+  /** The project's live room tasks by room, while some zone colours by them (`taskData.ts`). */
+  roomTasks: TaskIndex | null;
   /** The tier the BAND's figures are at. Separate from a zone's overlay tier
    *  on purpose: the overlay answers "what does this floor look like by
    *  department", the figures "what do the departments total across the job". */
@@ -321,6 +324,7 @@ const initial: ViewerState = {
   linkViews: false,
   search: { query: "", fields: new Set(), seen: new Set(), matches: null, active: false },
   areas: null,
+  roomTasks: null,
   areasBandTier: 0,
   pickList: null,
   validation: null,
@@ -717,6 +721,10 @@ export function setShowErrors(on: boolean): void {
 
 export function setAreas(data: AreasData | null): void {
   setState({ areas: data });
+}
+
+export function setRoomTasks(index: TaskIndex | null): void {
+  setState({ roomTasks: index });
 }
 
 export function setAreasBandTier(depth: number): void {

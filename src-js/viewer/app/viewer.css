@@ -1023,3 +1023,8 @@
 
   /* One model's checkbox under the FF&E entry in the Layers menu. */
   label.sub { display: block; margin-left: 1.3rem; font-size: 0.66rem; white-space: nowrap; }
+
+/* The key to the "Room tasks" colouring: one swatch per state, beside the colour picker. */
+.taskKey { display: inline-flex; flex-wrap: wrap; gap: 0.1rem 0.6rem; align-items: center; font-size: 0.7rem; color: var(--muted, inherit); }
+.taskKeyItem { display: inline-flex; align-items: center; gap: 0.25rem; }
+.taskKeyItem i { width: 0.7rem; height: 0.7rem; border: 1px solid var(--rule, #888); display: inline-block; }

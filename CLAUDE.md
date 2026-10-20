@@ -432,8 +432,11 @@ get wrong:
 Built (server side): the task store (`tasks`), making tasks (`service::task_build`), the HTTP and MCP
 surface (`tasks_api`; MCP reads `list_tasks`, `get_task`) and the task list page at `/tasks/` (`src-js/tasks`:
 filters, a task's items, sheets, findings and attempts, dismiss, resend, and a panel that makes tasks of either
-kind; it reads the list again every few seconds to show what a session did). **Not built: the pyRevit "apply
-tasks" button, the plan colouring by last task status in the main viewer, the update task kind.** The server
+kind; it reads the list again every few seconds to show what a session did). the main viewer's
+"Room tasks" colouring (`viewer/taskStatus.ts`, a choice in the zone's colour picker: a room draws in the state
+of its newest task that is not dismissed; a task's number must agree with the room's, because a viewer room names no
+model; read only while a zone uses it, every 8 s; not in the SVG export). **Not built: the pyRevit "apply
+tasks" button, the update task kind.** The server
 leaves an empty list out of a task, so the page reads a task back with its lists filled in. Plan decisions 21 to 26.
 
 - **A task is a record, unlike an assignment.** It holds the resolver's placements, the sheet layouts
