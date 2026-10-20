@@ -53,6 +53,7 @@ use roommate::sheets_api::{
     http_accept_sheet_push, http_delete_sheet, http_get_sheet, http_list_sheets, http_push_sheets,
     http_reject_sheet_push, http_suggest_sheets, http_update_sheet,
 };
+use roommate::tag_rules_api::{http_delete_tag_rule, http_get_tag_rule, http_list_tag_rules, http_observe_tags};
 use roommate::tasks_api::{
     http_claim_tasks, http_create_tasks, http_dismiss_task, http_get_task, http_list_tasks, http_report_tasks,
     http_resend_task,
@@ -329,6 +330,11 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         .route("/projects/{id}/tasks/{task}", get(http_get_task))
         .route("/projects/{id}/tasks/{task}/dismiss", post(http_dismiss_task))
         .route("/projects/{id}/tasks/{task}/resend", post(http_resend_task))
+        // Tag rules: where a tag goes relative to the element it tags, one rule per key. POST is
+        // the extractor's observations. See `tag_rules`.
+        .route("/projects/{id}/tagrules", get(http_list_tag_rules))
+        .route("/projects/{id}/tagrules/observations", post(http_observe_tags))
+        .route("/projects/{id}/tagrules/{rule}", get(http_get_tag_rule).delete(http_delete_tag_rule))
         .route("/projects/{id}/roomtasks", post(http_claim_tasks))
         .route("/projects/{id}/roomtasks/report", post(http_report_tasks))
         .route("/projects/{id}/blueprints/{blueprint}/solve", post(http_solve_blueprint))

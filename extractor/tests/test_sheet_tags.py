@@ -47,5 +47,17 @@ class TakeTags(unittest.TestCase):
         self.assertIn("boom", lines[1])
 
 
+class Outcome(unittest.TestCase):
+    def test_the_server_answer_is_described_with_the_first_reasons(self):
+        skipped = [{"tag_id": i, "reason": "no facing"} for i in range(7)]
+        lines = st.describe_outcome({"samples": 3, "rules_changed": 2, "skipped": skipped})
+        self.assertEqual("3 tag(s) taken into 2 tag rule(s)", lines[0])
+        self.assertEqual("7 tag(s) not used", lines[1])
+        self.assertEqual("    and 2 more", lines[-1])
+
+    def test_a_clean_answer_is_one_line(self):
+        self.assertEqual(1, len(st.describe_outcome({"samples": 1, "rules_changed": 1})))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -96,7 +96,7 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
       {t.sheets.length > 0 ? (
         <>
           <h3>Sheets to make ({t.sheets.length})</h3>
-          <p className="hint">The source sheet's number, name and id are not used for the new sheets: the Revit side generates those from the room. No tags are carried.</p>
+          <p className="hint">The source sheet's number, name and id are not used for the new sheets: the Revit side generates those from the room. Tags are not in the layout: the rules below say where they go.</p>
           <table>
             <thead>
               <tr>
@@ -111,6 +111,37 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
                   <td>{s.sheet_number}</td>
                   <td>{s.sheet_name ?? ""}</td>
                   <td>{s.sheet.view_ports?.length ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ) : null}
+
+      {t.tag_rules.length > 0 ? (
+        <>
+          <h3>Tag rules ({t.tag_rules.length})</h3>
+          <p className="hint">One rule per tagged family and type, tag type and viewport type, the median of the tags it was learned from. Offsets are in millimetres on the sheet, in the element's own frame (along its facing, then to its left).</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Tagged</th>
+                <th>Tag</th>
+                <th>Viewport</th>
+                <th>Head (along, left)</th>
+                <th>Leader</th>
+                <th>Samples</th>
+              </tr>
+            </thead>
+            <tbody>
+              {t.tag_rules.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.key.tagged_family} : {r.key.tagged_type}</td>
+                  <td>{r.key.tag_family} : {r.key.tag_type}</td>
+                  <td>{r.key.viewport_type}</td>
+                  <td>{r.placement.head.x.toFixed(1)}, {r.placement.head.y.toFixed(1)}</td>
+                  <td>{r.placement.has_leader ? "yes" : "no"}</td>
+                  <td>{r.sample_count}</td>
                 </tr>
               ))}
             </tbody>

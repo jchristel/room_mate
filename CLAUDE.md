@@ -462,12 +462,32 @@ leaves an empty list out of a task, so the page reads a task back with its lists
 - **`create_rls` compares the sheet's stored room summary with the target's** and warns (never refuses)
   when they differ by more than `RLS_ROOM_WARN_DISTANCE`.
 
+## Tag rules: where a tag goes, learned from tags in Revit views
+
+Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`), MCP reads (`list_tag_rules`,
+`get_tag_rule`), tag rules carried in a task, and the pyRevit side (the sheet read takes tags out of the sheet,
+`room_m/sheet_tags.py`, and `post_tags.py` sends them). The tag classes and their reading from Revit are in duHast
+(`Data/Objects/Collectors/data_tag*.py`, `Revit/Annotation/Export/to_data_tag.py`). **Not run in Revit, and
+the plug-in does not yet place tags** (that is the apply button). Plan decision 24.
+
+- **A rule's key is names only** (tagged category + family + type, tag category + family + type, viewport type),
+  never Revit ids: a blueprint places new elements with new ids. The ids in an observation say where a sample was
+  read and are how a re-push replaces its own samples.
+- **One rule per key**: the median of its samples, recomputed on every push, so a blueprint always tags the same
+  way. The samples are kept; the answer is `placement`.
+- **A sample is paper millimetres in the element's own frame** (x along its facing, y to its left), the model
+  offset divided by the view scale. A rule therefore holds at any scale and turns with the item; the rotation is
+  relative to the facing. An element with no point location or no plan facing gives no sample, said in `skipped`.
+- **Tags never ride in a sheet.** The extractor takes them out of the viewports before a sheet goes to the library
+  or a blueprint, and a task carries the rules for its sheets' viewport types (for a populate task only those for
+  the families and types it places) as they were when it was made.
+
 ## Room layout sheets: a library kept by identity, and two buttons that choose
 
 Built: the sheet library on the server (`sheets`, `sheets_api`, `service::sheet_suggest`),
 two pyRevit buttons, MCP reads. **Not built: a viewer for any of it, sheets inside a blueprint
 revision (plan decision 18, which also changes the Blueprint button), the library's room summary,
-tags/scale/template in the export.** Rules that are expensive to get wrong:
+template in the export (tags and view scale are read: see Tag rules).** Rules that are expensive to get wrong:
 
 - **Their own endpoint (`/projects/{id}/sheets`), apart from blueprints, and not a snapshot
   push.** Rooms, doors and the rest replace a model's state; the library is authored data

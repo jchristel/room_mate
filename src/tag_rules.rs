@@ -1,0 +1,816 @@
+//! Tag rules: where a tag goes relative to the element it tags, learned from tags in Revit views
+//! (plan decision 24, and its "tag data" paragraph).
+//!
+//! **Observations in, one rule per key out.** The extractor sends the tags it read from a sheet's
+//! viewports (duHast's `DataTag`, as exported) as observations. Each tagged element of each tag
+//! becomes a *sample* of the rule for its key: the tagged element's category, family name and
+//! type name, the tag's category, family name and type name, and the viewport type. **Names only;
+//! Revit ids are never part of a key**, because a blueprint places new elements with new ids. Each
+//! rule stores its samples and the figures worked out from them, so the same blueprint always tags
+//! the same way: the median of the samples, recomputed whenever a sample is added or replaced.
+//!
+//! **A sample is a placement relative to the element, on paper.** The tag head, elbow and leader
+//! end are taken from the element's location point into the element's own frame (x along its
+//! facing, y to its left), and divided by the view scale, so millimetres on the sheet. A rule
+//! therefore holds at any scale and turns with the item. The tag's rotation is stored relative to
+//! the element's facing. An element with no plan facing gives no sample: a guessed direction is
+//! worse than none.
+//!
+//! **A sample is identified by where it was read** (document, sheet, tag, tagged element), so
+//! pushing the same sheet again replaces its samples and never counts them twice.
+//!
+//! One JSON file per rule under `<projects_dir>/tagrules/<project>/<id>.json`, written the way
+//! sheets are (temp, rename, a copy under `.backups/`, one lock). This module is the only code
+//! that reads or writes them.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+
+use crate::state::is_path_safe_component;
+
+pub const SCHEMA_VERSION: u32 = 1;
+
+const MAX_RULES_PER_PROJECT: usize = 20_000;
+const MAX_OBSERVATIONS_PER_PUSH: usize = 5_000;
+const MAX_SAMPLES_PER_RULE: usize = 500;
+const MAX_TEXT_CHARS: usize = 300;
+
+// ---- what the extractor sends -----------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct P3 {
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default)]
+    pub z: f64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Matrix {
+    #[serde(default)]
+    pub data: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Location {
+    #[serde(default)]
+    pub translation_coord: P3,
+    #[serde(default)]
+    pub rotation_coord: Option<Matrix>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TypeNames {
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub family_name: String,
+    #[serde(default)]
+    pub type_name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TaggedElement {
+    #[serde(default)]
+    pub host_element_id: i64,
+    #[serde(default)]
+    pub link_element_id: i64,
+    #[serde(flatten)]
+    pub names: TypeNames,
+    #[serde(default)]
+    pub location_point: Option<Location>,
+    #[serde(default)]
+    pub elbow_location: Option<P3>,
+    #[serde(default)]
+    pub leader_end: Option<P3>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ObservedTag {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub tag_kind: String,
+    #[serde(default)]
+    pub tag_type: TypeNames,
+    #[serde(default)]
+    pub rotation: f64,
+    #[serde(default)]
+    pub orientation: String,
+    #[serde(default)]
+    pub has_leader: bool,
+    #[serde(default)]
+    pub leader_end_condition: String,
+    /// The tag head, mm, in the model's coordinates.
+    #[serde(default)]
+    pub point: P3,
+    #[serde(default)]
+    pub tagged_elements: Vec<TaggedElement>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceSheet {
+    #[serde(default)]
+    pub document_title: String,
+    #[serde(default)]
+    pub revit_sheet_id: String,
+    #[serde(default)]
+    pub sheet_number: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Observation {
+    #[serde(default)]
+    pub viewport_type: Option<String>,
+    #[serde(default)]
+    pub view_id: Option<i64>,
+    #[serde(default)]
+    pub view_scale: Option<f64>,
+    #[serde(default)]
+    pub sheet: SourceSheet,
+    pub tag: ObservedTag,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ObservationsRequest {
+    pub observations: Vec<Observation>,
+}
+
+// ---- what is stored ---------------------------------------------------------------------------
+
+/// What a rule is keyed by. Names only.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RuleKey {
+    pub tagged_category: String,
+    pub tagged_family: String,
+    pub tagged_type: String,
+    pub tag_category: String,
+    pub tag_family: String,
+    pub tag_type: String,
+    pub viewport_type: String,
+}
+
+impl RuleKey {
+    fn canonical(&self) -> String {
+        [
+            &self.tagged_category,
+            &self.tagged_family,
+            &self.tagged_type,
+            &self.tag_category,
+            &self.tag_family,
+            &self.tag_type,
+            &self.viewport_type,
+        ]
+        .iter()
+        .map(|s| s.trim().to_lowercase())
+        .collect::<Vec<_>>()
+        .join("\u{1f}")
+    }
+
+    /// A file name for the key: stable (FNV-1a, never the std hasher, which may change between
+    /// releases) and safe.
+    pub fn id(&self) -> String {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in self.canonical().bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        format!("tr-{h:016x}")
+    }
+}
+
+/// Where one sample was read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SampleSource {
+    pub sheet: SourceSheet,
+    pub tag_id: i64,
+    /// The tagged element's id in the source model: provenance and replacement only.
+    pub element_id: i64,
+}
+
+/// Paper millimetres in the element's frame: x along its facing, y to its left.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Offset {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sample {
+    pub source: SampleSource,
+    pub view_scale: f64,
+    pub head: Offset,
+    /// Radians, relative to the element's facing, in (-pi, pi].
+    pub rotation: f64,
+    pub orientation: String,
+    pub has_leader: bool,
+    pub leader_end_condition: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elbow: Option<Offset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<Offset>,
+}
+
+/// The one answer for a key: what a task applies.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Placement {
+    pub head: Offset,
+    pub rotation: f64,
+    pub orientation: String,
+    pub has_leader: bool,
+    pub leader_end_condition: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elbow: Option<Offset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<Offset>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagRule {
+    pub schema_version: u32,
+    pub id: String,
+    pub key: RuleKey,
+    /// `independent`, `room`, `space` or `area`: which kind of Revit tag to create.
+    pub tag_kind: String,
+    pub placement: Placement,
+    pub sample_count: usize,
+    pub updated_at: String,
+    #[serde(default)]
+    pub samples: Vec<Sample>,
+}
+
+/// A rule without its samples: what a list shows and a task carries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuleSummary {
+    pub id: String,
+    pub key: RuleKey,
+    pub tag_kind: String,
+    pub placement: Placement,
+    pub sample_count: usize,
+    pub updated_at: String,
+}
+
+impl From<&TagRule> for RuleSummary {
+    fn from(r: &TagRule) -> Self {
+        RuleSummary {
+            id: r.id.clone(),
+            key: r.key.clone(),
+            tag_kind: r.tag_kind.clone(),
+            placement: r.placement.clone(),
+            sample_count: r.sample_count,
+            updated_at: r.updated_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Skipped {
+    pub tag_id: i64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ObservationOutcome {
+    /// Samples taken in (new or replacing).
+    pub samples: usize,
+    pub rules_changed: usize,
+    pub skipped: Vec<Skipped>,
+}
+
+#[derive(Debug)]
+pub enum TagRuleError {
+    NotFileBacked,
+    Invalid(String),
+    NotFound(String),
+    Internal(anyhow::Error),
+}
+
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
+
+fn bad<T>(msg: String) -> Result<T, TagRuleError> {
+    Err(TagRuleError::Invalid(msg))
+}
+
+fn internal<E: Into<anyhow::Error>>(e: E) -> TagRuleError {
+    TagRuleError::Internal(e.into())
+}
+
+fn project_dir(projects_dir: &Path, project: &str) -> Result<PathBuf, TagRuleError> {
+    if !is_path_safe_component(project) {
+        return bad(format!("project id {project:?} cannot be a file name"));
+    }
+    Ok(projects_dir.join("tagrules").join(project))
+}
+
+fn rule_path(projects_dir: &Path, project: &str, id: &str) -> Result<PathBuf, TagRuleError> {
+    if !is_path_safe_component(id) {
+        return bad(format!("rule id {id:?} cannot be a file name"));
+    }
+    Ok(project_dir(projects_dir, project)?.join(format!("{id}.json")))
+}
+
+fn read(path: &Path) -> Result<TagRule, TagRuleError> {
+    let bytes = std::fs::read(path).map_err(internal)?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| TagRuleError::Internal(anyhow::anyhow!("{} is not a tag rule: {e}", path.display())))
+}
+
+/// Every rule of the project, by key. A file that cannot be read is an error, not a gap.
+pub fn load_all(projects_dir: &Path, project: &str) -> Result<Vec<TagRule>, TagRuleError> {
+    let dir = project_dir(projects_dir, project)?;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(internal(e)),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(internal)?.path();
+        if path.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        out.push(read(&path)?);
+    }
+    out.sort_by_key(|r| r.key.canonical());
+    Ok(out)
+}
+
+pub fn list(projects_dir: &Path, project: &str) -> Result<Vec<RuleSummary>, TagRuleError> {
+    Ok(load_all(projects_dir, project)?.iter().map(RuleSummary::from).collect())
+}
+
+pub fn load(projects_dir: &Path, project: &str, id: &str) -> Result<TagRule, TagRuleError> {
+    let path = rule_path(projects_dir, project, id)?;
+    match std::fs::read(&path) {
+        Ok(_) => read(&path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(TagRuleError::NotFound(format!("no tag rule {id:?} in project {project:?}")))
+        }
+        Err(e) => Err(internal(e)),
+    }
+}
+
+fn now() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string()
+}
+
+fn write(projects_dir: &Path, project: &str, rule: &TagRule) -> Result<(), TagRuleError> {
+    let path = rule_path(projects_dir, project, &rule.id)?;
+    let dir = path.parent().expect("a rule path always has a parent");
+    std::fs::create_dir_all(dir).map_err(internal)?;
+    let json = serde_json::to_vec_pretty(rule).map_err(internal)?;
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, &json).map_err(internal)?;
+    let stem = format!("tagrule-{project}-{}", rule.id);
+    if path.exists()
+        && let Err(e) = crate::backups::back_up(projects_dir, &stem, "json", &path)
+    {
+        std::fs::remove_file(&temp).ok();
+        return Err(TagRuleError::Internal(e));
+    }
+    std::fs::rename(&temp, &path).map_err(internal)?;
+    crate::backups::prune(projects_dir, &stem, "json");
+    Ok(())
+}
+
+pub fn delete(projects_dir: &Path, project: &str, id: &str) -> Result<(), TagRuleError> {
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let path = rule_path(projects_dir, project, id)?;
+    if !path.exists() {
+        return Err(TagRuleError::NotFound(format!("no tag rule {id:?} in project {project:?}")));
+    }
+    let stem = format!("tagrule-{project}-{id}");
+    crate::backups::back_up(projects_dir, &stem, "json", &path).map_err(TagRuleError::Internal)?;
+    std::fs::remove_file(&path).map_err(internal)
+}
+
+// ---- from an observation to samples -----------------------------------------------------------
+
+fn clean(s: &str) -> String {
+    s.trim().chars().take(MAX_TEXT_CHARS).collect()
+}
+
+/// The element's facing in plan: its local X, projected. `None` when it has no plan component.
+fn facing_of(loc: &Location) -> Option<(f64, f64)> {
+    let row = loc.rotation_coord.as_ref()?.data.first()?;
+    let (x, y) = (*row.first()?, *row.get(1)?);
+    let len = x.hypot(y);
+    (len > 1e-6).then(|| (x / len, y / len))
+}
+
+/// A model-space point as an offset from the element, in its frame, in paper mm.
+fn to_offset(p: P3, from: P3, facing: (f64, f64), scale: f64) -> Offset {
+    let (dx, dy) = (p.x - from.x, p.y - from.y);
+    Offset {
+        x: (dx * facing.0 + dy * facing.1) / scale,
+        y: (-dx * facing.1 + dy * facing.0) / scale,
+    }
+}
+
+fn wrap(angle: f64) -> f64 {
+    let two_pi = std::f64::consts::TAU;
+    let mut a = angle % two_pi;
+    if a > std::f64::consts::PI {
+        a -= two_pi;
+    } else if a <= -std::f64::consts::PI {
+        a += two_pi;
+    }
+    a
+}
+
+/// `(key, kind, sample)` for each tagged element of the observation that can be used, and a
+/// reason for the ones that cannot.
+fn samples_of(obs: &Observation) -> Vec<Result<(RuleKey, String, Sample), String>> {
+    let tag = &obs.tag;
+    let Some(viewport_type) = obs.viewport_type.as_deref().map(clean).filter(|v| !v.is_empty()) else {
+        return vec![Err("the observation names no viewport type".to_string())];
+    };
+    let Some(scale) = obs.view_scale.filter(|s| *s > 0.0) else {
+        return vec![Err("the view's scale was not read".to_string())];
+    };
+    if tag.tag_type.family_name.trim().is_empty() {
+        return vec![Err("the tag's family name was not read".to_string())];
+    }
+    if tag.tagged_elements.is_empty() {
+        return vec![Err("the tag refers to no element".to_string())];
+    }
+    tag.tagged_elements
+        .iter()
+        .map(|el| {
+            if el.names.family_name.trim().is_empty() || el.names.type_name.trim().is_empty() {
+                return Err(format!("tagged element {}: its family or type name was not read", el.host_element_id));
+            }
+            let loc = el
+                .location_point
+                .as_ref()
+                .ok_or_else(|| format!("tagged element {}: it has no point location", el.host_element_id))?;
+            let facing = facing_of(loc)
+                .ok_or_else(|| format!("tagged element {}: it has no plan facing", el.host_element_id))?;
+            let from = loc.translation_coord;
+            let key = RuleKey {
+                tagged_category: clean(&el.names.category),
+                tagged_family: clean(&el.names.family_name),
+                tagged_type: clean(&el.names.type_name),
+                tag_category: clean(&tag.tag_type.category),
+                tag_family: clean(&tag.tag_type.family_name),
+                tag_type: clean(&tag.tag_type.type_name),
+                viewport_type: viewport_type.clone(),
+            };
+            let element_id = if el.link_element_id > 0 { el.link_element_id } else { el.host_element_id };
+            let sample = Sample {
+                source: SampleSource { sheet: obs.sheet.clone(), tag_id: tag.id, element_id },
+                view_scale: scale,
+                head: to_offset(tag.point, from, facing, scale),
+                rotation: wrap(tag.rotation - facing.1.atan2(facing.0)),
+                orientation: clean(&tag.orientation),
+                has_leader: tag.has_leader,
+                leader_end_condition: clean(&tag.leader_end_condition),
+                elbow: el.elbow_location.filter(|_| tag.has_leader).map(|p| to_offset(p, from, facing, scale)),
+                end: el.leader_end.filter(|_| tag.has_leader).map(|p| to_offset(p, from, facing, scale)),
+            };
+            let kind = if tag.tag_kind.trim().is_empty() {
+                "independent".to_string()
+            } else {
+                clean(&tag.tag_kind)
+            };
+            Ok((key, kind, sample))
+        })
+        .collect()
+}
+
+// ---- from samples to the one rule -------------------------------------------------------------
+
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
+}
+
+fn median_offset(it: impl Iterator<Item = Offset>) -> Option<Offset> {
+    let all: Vec<Offset> = it.collect();
+    (!all.is_empty()).then(|| Offset {
+        x: median(all.iter().map(|o| o.x).collect()),
+        y: median(all.iter().map(|o| o.y).collect()),
+    })
+}
+
+/// The most common value, the first seen winning a tie, so the answer does not move with order.
+fn mode(values: impl Iterator<Item = String>) -> String {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for v in values {
+        match counts.iter_mut().find(|(s, _)| *s == v) {
+            Some(c) => c.1 += 1,
+            None => counts.push((v, 1)),
+        }
+    }
+    let best = counts.iter().map(|c| c.1).max().unwrap_or(0);
+    counts.into_iter().find(|c| c.1 == best).map(|c| c.0).unwrap_or_default()
+}
+
+/// The single placement a rule's samples agree on. Median per component; a rotation is the
+/// median of angles taken around the first (so a spread across +-pi does not average to nothing).
+pub fn reduce(samples: &[Sample]) -> Placement {
+    let anchor = samples.first().map_or(0.0, |s| s.rotation);
+    let rotation = wrap(anchor + median(samples.iter().map(|s| wrap(s.rotation - anchor)).collect()));
+    let leaders = samples.iter().filter(|s| s.has_leader).count();
+    let has_leader = leaders * 2 > samples.len();
+    let with_leader = || samples.iter().filter(|s| s.has_leader);
+    Placement {
+        head: median_offset(samples.iter().map(|s| s.head)).unwrap_or(Offset { x: 0.0, y: 0.0 }),
+        rotation,
+        orientation: mode(samples.iter().map(|s| s.orientation.clone())),
+        has_leader,
+        leader_end_condition: if has_leader {
+            mode(with_leader().map(|s| s.leader_end_condition.clone()))
+        } else {
+            String::new()
+        },
+        elbow: if has_leader {
+            median_offset(with_leader().filter_map(|s| s.elbow))
+        } else {
+            None
+        },
+        end: if has_leader {
+            median_offset(with_leader().filter_map(|s| s.end))
+        } else {
+            None
+        },
+    }
+}
+
+/// Takes a push of observations in. Each sample replaces the one read from the same place.
+pub fn observe(
+    projects_dir: &Path,
+    project: &str,
+    request: ObservationsRequest,
+) -> Result<ObservationOutcome, TagRuleError> {
+    if request.observations.len() > MAX_OBSERVATIONS_PER_PUSH {
+        return bad(format!("at most {MAX_OBSERVATIONS_PER_PUSH} observations in one push"));
+    }
+    let mut outcome = ObservationOutcome::default();
+    let mut grouped: HashMap<String, (RuleKey, String, Vec<Sample>)> = HashMap::new();
+    for obs in &request.observations {
+        for result in samples_of(obs) {
+            match result {
+                Ok((key, kind, sample)) => {
+                    outcome.samples += 1;
+                    grouped.entry(key.id()).or_insert_with(|| (key, kind, Vec::new())).2.push(sample);
+                }
+                Err(reason) => outcome.skipped.push(Skipped { tag_id: obs.tag.id, reason }),
+            }
+        }
+    }
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let existing = load_all(projects_dir, project)?;
+    let by_id: HashMap<String, TagRule> = existing.into_iter().map(|r| (r.id.clone(), r)).collect();
+    let mut ids: Vec<String> = grouped.keys().cloned().collect();
+    ids.sort();
+    for id in ids {
+        let (key, kind, incoming) = grouped.remove(&id).expect("id came from the map");
+        if !by_id.contains_key(&id) && by_id.len() >= MAX_RULES_PER_PROJECT {
+            return bad(format!("a project holds at most {MAX_RULES_PER_PROJECT} tag rules"));
+        }
+        let mut samples = by_id.get(&id).map(|r| r.samples.clone()).unwrap_or_default();
+        for s in incoming {
+            samples.retain(|e| e.source != s.source);
+            samples.push(s);
+        }
+        if samples.len() > MAX_SAMPLES_PER_RULE {
+            samples.drain(..samples.len() - MAX_SAMPLES_PER_RULE);
+        }
+        let rule = TagRule {
+            schema_version: SCHEMA_VERSION,
+            id: id.clone(),
+            key,
+            tag_kind: kind,
+            placement: reduce(&samples),
+            sample_count: samples.len(),
+            updated_at: now(),
+            samples,
+        };
+        write(projects_dir, project, &rule)?;
+        outcome.rules_changed += 1;
+    }
+    Ok(outcome)
+}
+
+/// The rules a task carries: those for these viewport types and, when the items are known, only
+/// for these `(family, type)` pairs. `None` items means any element (a task that finds the items
+/// already in the room). Compared as names, case-insensitively.
+pub fn rules_for(
+    projects_dir: &Path,
+    project: &str,
+    viewport_types: &[String],
+    items: Option<&[(String, String)]>,
+) -> Result<Vec<RuleSummary>, TagRuleError> {
+    let wanted = |s: &str| s.trim().to_lowercase();
+    let types: Vec<String> = viewport_types.iter().map(|v| wanted(v)).collect();
+    let pairs: Option<Vec<(String, String)>> = items.map(|i| i.iter().map(|(f, t)| (wanted(f), wanted(t))).collect());
+    Ok(load_all(projects_dir, project)?
+        .iter()
+        .filter(|r| types.contains(&wanted(&r.key.viewport_type)))
+        .filter(|r| {
+            pairs
+                .as_ref()
+                .is_none_or(|p| p.contains(&(wanted(&r.key.tagged_family), wanted(&r.key.tagged_type))))
+        })
+        .map(RuleSummary::from)
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh directory per test, removed when dropped.
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn dir() -> TestDir {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("roommate-tagrules-{}-{n}", std::process::id()));
+        std::fs::remove_dir_all(&path).ok();
+        std::fs::create_dir_all(&path).unwrap();
+        TestDir(path)
+    }
+
+    fn location(x: f64, y: f64, facing: (f64, f64)) -> Location {
+        Location {
+            translation_coord: P3 { x, y, z: 0.0 },
+            rotation_coord: Some(Matrix {
+                data: vec![
+                    vec![facing.0, facing.1, 0.0],
+                    vec![-facing.1, facing.0, 0.0],
+                    vec![0.0, 0.0, 1.0],
+                ],
+            }),
+        }
+    }
+
+    /// A bed at (`x`, 0) facing `facing`, tagged by a head at `head`.
+    fn obs(tag_id: i64, x: f64, facing: (f64, f64), head: (f64, f64)) -> Observation {
+        Observation {
+            viewport_type: Some("floor plan".to_string()),
+            view_id: Some(7),
+            view_scale: Some(50.0),
+            sheet: SourceSheet {
+                document_title: "M".into(),
+                revit_sheet_id: "1".into(),
+                sheet_number: "RLS-1".into(),
+            },
+            tag: ObservedTag {
+                id: tag_id,
+                tag_kind: "independent".into(),
+                tag_type: TypeNames {
+                    category: "Furniture Tags".into(),
+                    family_name: "FTag".into(),
+                    type_name: "Std".into(),
+                },
+                rotation: 0.0,
+                orientation: "Horizontal".into(),
+                point: P3 { x: head.0, y: head.1, z: 0.0 },
+                tagged_elements: vec![TaggedElement {
+                    host_element_id: 100 + tag_id,
+                    names: TypeNames {
+                        category: "Furniture".into(),
+                        family_name: "Bed".into(),
+                        type_name: "Queen".into(),
+                    },
+                    location_point: Some(location(x, 0.0, facing)),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        }
+    }
+
+    fn push(d: &Path, o: Vec<Observation>) -> ObservationOutcome {
+        observe(d, "p", ObservationsRequest { observations: o }).unwrap()
+    }
+
+    #[test]
+    fn test_an_offset_is_in_the_elements_frame_and_in_paper_millimetres() {
+        // Element facing +y; the head is 1000 mm along +x of the model, which is to the element's right.
+        let d = dir();
+        let out = push(d.path(), vec![obs(1, 0.0, (0.0, 1.0), (1000.0, 500.0))]);
+        assert_eq!(out.samples, 1);
+        let rule = &load_all(d.path(), "p").unwrap()[0];
+        // along facing (+y) = 500 mm -> 10 on paper; to the left (-x) = -1000 mm -> -20.
+        assert!((rule.placement.head.x - 10.0).abs() < 1e-9, "{:?}", rule.placement.head);
+        assert!((rule.placement.head.y + 20.0).abs() < 1e-9, "{:?}", rule.placement.head);
+    }
+
+    #[test]
+    fn test_one_rule_per_key_and_the_median_of_its_samples() {
+        let d = dir();
+        // three beds, the same tag type, three different head positions along x (paper mm 2, 4, 100)
+        push(
+            d.path(),
+            vec![
+                obs(1, 0.0, (1.0, 0.0), (100.0, 0.0)),
+                obs(2, 5000.0, (1.0, 0.0), (5200.0, 0.0)),
+                obs(3, 9000.0, (1.0, 0.0), (14000.0, 0.0)),
+            ],
+        );
+        let rules = load_all(d.path(), "p").unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].sample_count, 3);
+        assert!((rules[0].placement.head.x - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_pushing_the_same_sheet_again_replaces_its_samples() {
+        let d = dir();
+        push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (100.0, 0.0))]);
+        push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (500.0, 0.0))]);
+        let rule = &load_all(d.path(), "p").unwrap()[0];
+        assert_eq!(rule.sample_count, 1);
+        assert!((rule.placement.head.x - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_the_key_ignores_ids_and_case() {
+        let a = obs(1, 0.0, (1.0, 0.0), (1.0, 0.0));
+        let mut b = obs(2, 0.0, (1.0, 0.0), (1.0, 0.0));
+        b.tag.tagged_elements[0].names.family_name = "BED".into();
+        let d = dir();
+        push(d.path(), vec![a, b]);
+        assert_eq!(load_all(d.path(), "p").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_what_cannot_be_used_is_skipped_with_a_reason() {
+        let mut no_scale = obs(1, 0.0, (1.0, 0.0), (1.0, 0.0));
+        no_scale.view_scale = None;
+        let mut no_facing = obs(2, 0.0, (0.0, 0.0), (1.0, 0.0));
+        no_facing.tag.tagged_elements[0].location_point =
+            Some(Location { translation_coord: P3::default(), rotation_coord: None });
+        let mut no_element = obs(3, 0.0, (1.0, 0.0), (1.0, 0.0));
+        no_element.tag.tagged_elements.clear();
+        let out = push(dir().path(), vec![no_scale, no_facing, no_element]);
+        assert_eq!(out.samples, 0);
+        assert_eq!(out.skipped.len(), 3);
+        assert!(out.skipped[1].reason.contains("facing"));
+    }
+
+    #[test]
+    fn test_rules_for_filters_by_viewport_type_and_items() {
+        let d = dir();
+        push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (1.0, 0.0))]);
+        let all = rules_for(d.path(), "p", &["Floor Plan".to_string()], None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(rules_for(d.path(), "p", &["elevation".to_string()], None).unwrap().is_empty());
+        let items = [("bed".to_string(), "queen".to_string())];
+        assert_eq!(rules_for(d.path(), "p", &["floor plan".to_string()], Some(&items)).unwrap().len(), 1);
+        let other = [("Desk".to_string(), "S".to_string())];
+        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], Some(&other)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_a_rotation_spread_across_pi_does_not_average_to_nothing() {
+        let s = |r: f64| Sample {
+            source: SampleSource { sheet: SourceSheet::default(), tag_id: 0, element_id: 0 },
+            view_scale: 50.0,
+            head: Offset { x: 0.0, y: 0.0 },
+            rotation: r,
+            orientation: String::new(),
+            has_leader: false,
+            leader_end_condition: String::new(),
+            elbow: None,
+            end: None,
+        };
+        let p = reduce(&[s(3.1), s(-3.1), s(3.12)]);
+        assert!(p.rotation.abs() > 3.0, "{}", p.rotation);
+    }
+
+    #[test]
+    fn test_delete_removes_the_rule_and_a_missing_one_is_not_found() {
+        let d = dir();
+        push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (1.0, 0.0))]);
+        let id = load_all(d.path(), "p").unwrap()[0].id.clone();
+        delete(d.path(), "p", &id).unwrap();
+        assert!(matches!(delete(d.path(), "p", &id), Err(TagRuleError::NotFound(_))));
+        assert!(load_all(d.path(), "p").unwrap().is_empty());
+    }
+}

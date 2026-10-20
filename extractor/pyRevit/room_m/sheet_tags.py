@@ -57,3 +57,17 @@ def describe_problems(label, problems):
         for p in problems:
             lines.append("    {}".format(p))
     return lines
+
+
+def describe_outcome(outcome, shown=5):
+    """Lines for the run's output from the server's answer to a push of observations: how many
+    tags became samples, and why the others were left out (the first few, with a count)."""
+    lines = ["{} tag(s) taken into {} tag rule(s)".format(outcome.get("samples", 0), outcome.get("rules_changed", 0))]
+    skipped = outcome.get("skipped") or []
+    if skipped:
+        lines.append("{} tag(s) not used".format(len(skipped)))
+        for item in skipped[:shown]:
+            lines.append("    tag {}: {}".format(item.get("tag_id"), item.get("reason")))
+        if len(skipped) > shown:
+            lines.append("    and {} more".format(len(skipped) - shown))
+    return lines

@@ -25,6 +25,7 @@ use crate::contract::Point2D;
 use crate::service::blueprint_model::BlueprintSheet;
 use crate::sheets::{self, SheetError};
 use crate::state::AppState;
+use crate::tag_rules::{self, RuleSummary};
 use crate::tasks::{BlueprintRef, NewTask, TaskItem, TaskKind, TaskRoom};
 
 const FT_TO_MM: f64 = super::blueprint_capture::FT_TO_MM;
@@ -129,7 +130,7 @@ pub fn populate_from_assignment(
     }
 
     let to_model = project_to_model(state, project, &room.model_id)?;
-    let items = resolution
+    let items: Vec<TaskItem> = resolution
         .placements
         .iter()
         .filter_map(|p| {
@@ -161,6 +162,15 @@ pub fn populate_from_assignment(
             "the model's placement could not be undone, so positions are in the project's plan frame".to_string(),
         ));
     }
+    let tag_rules = if params.create_rls {
+        let pairs: Vec<(String, String)> = items
+            .iter()
+            .map(|i| (i.family_name.clone().unwrap_or_default(), i.type_name.clone()))
+            .collect();
+        tag_rules_for(projects_dir, project, &revision.content.sheets, Some(&pairs), &mut findings)
+    } else {
+        Vec::new()
+    };
     Ok(NewTask {
         kind: TaskKind::PopulateRoom,
         model_id: room.model_id,
@@ -177,8 +187,59 @@ pub fn populate_from_assignment(
         library_sheet_id: None,
         items,
         sheets: if params.create_rls { revision.content.sheets.clone() } else { Vec::new() },
+        tag_rules,
         findings,
     })
+}
+
+/// The viewport types the sheets show: a tag rule is for one of them.
+fn viewport_types(sheets: &[BlueprintSheet]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for sheet in sheets {
+        for port in sheet.sheet.get("view_ports").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(t) = port.get("vp_type").and_then(Value::as_str)
+                && !out.iter().any(|o| o.eq_ignore_ascii_case(t))
+            {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The tag rules a task carries (plan decision 24). A rules store that cannot be read is a finding
+/// and no rules, never a refusal: the layout does not depend on them.
+fn tag_rules_for(
+    projects_dir: &std::path::Path,
+    project: &str,
+    sheets: &[BlueprintSheet],
+    items: Option<&[(String, String)]>,
+    findings: &mut Vec<Value>,
+) -> Vec<RuleSummary> {
+    let types = viewport_types(sheets);
+    if types.is_empty() {
+        return Vec::new();
+    }
+    match tag_rules::rules_for(projects_dir, project, &types, items) {
+        Ok(rules) => rules,
+        Err(_) => {
+            findings.push(finding(
+                "tag_rules_unreadable",
+                "the tag rules could not be read, so no tags will be placed".to_string(),
+            ));
+            Vec::new()
+        }
+    }
+}
+
+fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
+    BlueprintSheet {
+        revit_sheet_id: record.revit_sheet_id.clone(),
+        document_title: record.document_title.clone(),
+        sheet_number: record.sheet_number.clone(),
+        sheet_name: record.sheet_name.clone(),
+        sheet: record.sheet.clone(),
+    }
 }
 
 /// A create-RLS task: one library sheet's layout for one room. Nothing is placed. A sheet whose
@@ -228,6 +289,15 @@ pub fn rls_from_sheet(
         )),
         (Some(_), None) => {}
     }
+    // No items are placed: the rules for every element are carried, for the plug-in to apply to
+    // whatever it finds in the room.
+    let tag_rules = tag_rules_for(
+        projects_dir,
+        project,
+        std::slice::from_ref(&sheet_for_rules(&record)),
+        None,
+        &mut findings,
+    );
     Ok(NewTask {
         kind: TaskKind::CreateRls,
         model_id: room.model_id.clone(),
@@ -239,6 +309,7 @@ pub fn rls_from_sheet(
         blueprint: None,
         library_sheet_id: Some(record.id.clone()),
         items: Vec::new(),
+        tag_rules,
         sheets: vec![BlueprintSheet {
             revit_sheet_id: record.revit_sheet_id,
             document_title: record.document_title,

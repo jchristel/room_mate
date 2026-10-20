@@ -7,7 +7,7 @@
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
 //! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
-//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets`, `list_assignments`, `list_tasks`, `get_task` --
+//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets`, `list_assignments`, `list_tasks`, `get_task`, `list_tag_rules`, `get_tag_rule` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
 //! and the one forwarded mutation (`upload_reference`, below). Forty-one in
@@ -120,6 +120,14 @@ struct TaskParams {
     project_id: String,
     /// The task id, as returned by `list_tasks`.
     task_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct TagRuleParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The rule id, as returned by `list_tag_rules`.
+    rule_id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -577,6 +585,21 @@ fn tasks_to_mcp_error(err: roommate::tasks::TaskError) -> McpError {
         }
         TaskError::Internal(e) => {
             tracing::error!("tasks error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn tag_rules_to_mcp_error(err: roommate::tag_rules::TagRuleError) -> McpError {
+    use roommate::tag_rules::TagRuleError;
+    match err {
+        TagRuleError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no tag rules to read".to_string(),
+            None,
+        ),
+        TagRuleError::Invalid(msg) | TagRuleError::NotFound(msg) => McpError::invalid_params(msg, None),
+        TagRuleError::Internal(e) => {
+            tracing::error!("tag rules error: {e:#}");
             McpError::internal_error("internal error".to_string(), None)
         }
     }
@@ -1481,7 +1504,7 @@ impl RoommateMcp {
 
     /// Room tasks, as a Revit session sees them -- see `tasks::list`.
     #[tool(
-        description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."
+        description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets`, `tag_rules` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."
     )]
     fn list_tasks(&self, Parameters(p): Parameters<ListTasksParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
@@ -1499,7 +1522,7 @@ impl RoommateMcp {
 
     /// One task in full -- see `tasks::load`.
     #[tool(
-        description = "Read one room task in full. `items` are the family instances to place, in the target MODEL's own frame, millimetres: `x_mm`, `y_mm` (centre), `facing_x`/`facing_y` (unit vector), `size_mm` (along the facing, then across), `family_name`, `type_name`, `category`, `placement_type` (`free` or `wall_device`), `host` and the instance and type `properties` as exported. `sheets` are the room layout sheet layouts to make (as exported by duHast: viewports with sheet positions and types; no tags, which a later rule store supplies), with the number, name and id of the SOURCE sheet, which are not for the new sheets. `findings` is what the resolver said the room changes about the layout and any warning from making the task. `attempts` lists each go by a Revit session with its status and messages."
+        description = "Read one room task in full. `items` are the family instances to place, in the target MODEL's own frame, millimetres: `x_mm`, `y_mm` (centre), `facing_x`/`facing_y` (unit vector), `size_mm` (along the facing, then across), `family_name`, `type_name`, `category`, `placement_type` (`free` or `wall_device`), `host` and the instance and type `properties` as exported. `sheets` are the room layout sheet layouts to make (as exported by duHast: viewports with sheet positions and types; no tags: the tag rules for them are in `tag_rules`), with the number, name and id of the SOURCE sheet, which are not for the new sheets. `findings` is what the resolver said the room changes about the layout and any warning from making the task. `attempts` lists each go by a Revit session with its status and messages."
     )]
     fn get_task(&self, Parameters(p): Parameters<TaskParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
@@ -1515,6 +1538,26 @@ impl RoommateMcp {
         let dir = self.projects_dir()?;
         let rows = roommate::sheets::list(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
         json_result(&rows)
+    }
+
+    /// Tag rules -- see `tag_rules::list`.
+    #[tool(
+        description = "List the project's TAG RULES: where a tag goes relative to the element it tags, learned from tags in Revit views and kept as ONE rule per key. The key is names only (never Revit ids, because a blueprint places new elements with new ids): the tagged element's category, family and type (`tagged_*`), the tag's category, family and type (`tag_*`) and the `viewport_type` it was read in. `placement` is the answer: `head`, `elbow` and `end` are offsets in PAPER millimetres in the element's own frame (x along its facing, y to its left), `rotation` is radians relative to the facing, plus `orientation`, `has_leader` and `leader_end_condition`; `sample_count` is how many tags it was made from (the median of them). `tag_kind` is `independent`, `room`, `space` or `area`. Read one, with its samples, with get_tag_rule. Writing is HTTP-only (POST /projects/{id}/tagrules/observations)."
+    )]
+    fn list_tag_rules(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::tag_rules::list(&dir, &p.project_id).map_err(tag_rules_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One tag rule with its samples -- see `tag_rules::load`.
+    #[tool(
+        description = "Read one tag rule with the `samples` it is the median of. Each sample says where it was read (`source`: the sheet, the tag's id and the tagged element's id in the source model, which are provenance and never how a rule is found) and the placement it measured, so a rule that looks wrong can be traced to the tag that made it."
+    )]
+    fn get_tag_rule(&self, Parameters(p): Parameters<TagRuleParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rule = roommate::tag_rules::load(&dir, &p.project_id, &p.rule_id).map_err(tag_rules_to_mcp_error)?;
+        json_result(&rule)
     }
 
     /// One library sheet -- see `sheets::load`.

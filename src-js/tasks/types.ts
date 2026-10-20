@@ -36,6 +36,7 @@ export interface TaskSummary {
   blueprint?: BlueprintRef;
   items: number;
   sheets: number;
+  tag_rules: number;
   findings: number;
   created_at: string;
   updated_at: string;
@@ -79,10 +80,33 @@ export interface Attempt {
   messages?: string[];
 }
 
-export interface Task extends Omit<TaskSummary, "items" | "sheets" | "findings" | "attempts" | "last_messages"> {
+export interface Offset {
+  x: number;
+  y: number;
+}
+
+/** One tag rule a task carries: names only, offsets in paper millimetres in the element's frame. */
+export interface TagRule {
+  id: string;
+  key: {
+    tagged_category: string;
+    tagged_family: string;
+    tagged_type: string;
+    tag_category: string;
+    tag_family: string;
+    tag_type: string;
+    viewport_type: string;
+  };
+  tag_kind: string;
+  placement: { head: Offset; rotation: number; has_leader: boolean };
+  sample_count: number;
+}
+
+export interface Task extends Omit<TaskSummary, "items" | "sheets" | "tag_rules" | "findings" | "attempts" | "last_messages"> {
   library_sheet_id?: string;
   items: TaskItem[];
   sheets: TaskSheet[];
+  tag_rules: TagRule[];
   findings: Finding[];
   attempts: Attempt[];
 }

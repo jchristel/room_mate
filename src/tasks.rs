@@ -30,6 +30,7 @@ use serde_json::Value;
 
 use crate::service::blueprint_model::{BlueprintSheet, ItemClass, Property};
 use crate::state::is_path_safe_component;
+use crate::tag_rules::RuleSummary;
 
 pub const SCHEMA_VERSION: u32 = 1;
 const MAX_TASKS_PER_PROJECT: usize = 50_000;
@@ -150,6 +151,11 @@ pub struct Task {
     /// The sheet layouts to make (no tags: the Revit side applies the tag rules, decision 24).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<BlueprintSheet>,
+    /// How to tag what the sheets show, as the rules were when the task was made: one per key
+    /// (`tag_rules`), for the viewport types of the sheets and, for a populate task, only the
+    /// families and types it places. The plug-in applies them to the items it places or finds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tag_rules: Vec<RuleSummary>,
     /// What the resolver said the room changes, and any other warning from making the task.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<Value>,
@@ -175,6 +181,7 @@ pub struct TaskSummary {
     pub blueprint: Option<BlueprintRef>,
     pub items: usize,
     pub sheets: usize,
+    pub tag_rules: usize,
     pub findings: usize,
     pub created_at: String,
     pub updated_at: String,
@@ -199,6 +206,7 @@ impl From<&Task> for TaskSummary {
             blueprint: t.blueprint.clone(),
             items: t.items.len(),
             sheets: t.sheets.len(),
+            tag_rules: t.tag_rules.len(),
             findings: t.findings.len(),
             created_at: t.created_at.clone(),
             updated_at: t.updated_at.clone(),
@@ -222,6 +230,7 @@ pub struct NewTask {
     pub library_sheet_id: Option<String>,
     pub items: Vec<TaskItem>,
     pub sheets: Vec<BlueprintSheet>,
+    pub tag_rules: Vec<RuleSummary>,
     pub findings: Vec<Value>,
 }
 
@@ -416,6 +425,7 @@ pub fn create(projects_dir: &Path, project: &str, new: NewTask) -> Result<Task, 
         library_sheet_id: new.library_sheet_id,
         items: new.items,
         sheets: new.sheets,
+        tag_rules: new.tag_rules,
         findings: new.findings,
         created_at: stamp.clone(),
         updated_at: stamp,
@@ -570,6 +580,7 @@ mod tests {
             library_sheet_id: None,
             items: vec![],
             sheets: vec![],
+            tag_rules: vec![],
             findings: vec![],
         }
     }

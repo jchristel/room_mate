@@ -15,6 +15,7 @@ const row = (id: string, state: TaskSummary["state"], model = "m", at = "2026-10
   overwrite_rls: false,
   items: 0,
   sheets: 0,
+  tag_rules: 0,
   findings: 0,
   created_at: at,
   updated_at: at,

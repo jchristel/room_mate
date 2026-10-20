@@ -48,7 +48,8 @@ from room_m.utils.sheets import (
 from room_m.exporters.sheets import read_sheets
 from room_m.post_blueprints import describe_outcome, explain_refusal, post_blueprint
 from room_m.post_sheets import describe_outcomes, post_sheets
-from room_m.sheet_tags import describe_problems
+from room_m.post_tags import all_observations, post_observations
+from room_m.sheet_tags import describe_outcome, describe_problems
 
 from room_m.utils.post_envelope import (
     build_run_envelope,
@@ -414,15 +415,22 @@ def _single_document(doc, forms, button_name):
     return picked[0]
 
 
-def _report_tags(pushed, return_value):
-    """Say how many tags were read from the sheets, and any that were skipped. Nothing sends
-    them yet: the server has no tag rules store, so they are read and left out of the push."""
+def _report_tags(project_id, pushed, return_value):
+    """Say which tags could not be read, then send the ones that were to the tag rules store.
+    A failure here is reported and never stops the sheet push: the layout does not need its tags."""
     for p in pushed:
         for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
             return_value.append_message(line)
-    count = sum(len(p.get("tags") or []) for p in pushed)
-    if count:
-        return_value.append_message("{} tag(s) read; they are not pushed yet (no tag rules store)".format(count))
+    observations = all_observations(pushed)
+    if not observations:
+        return
+    ok, status, text, outcome = post_observations(project_id, observations)
+    if not ok:
+        return_value.append_message(
+            "Tag rules not updated ({}): {}".format(status if status is not None else "no response", text))
+        return
+    for line in describe_outcome(outcome):
+        return_value.append_message(line)
 
 
 def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
@@ -431,7 +439,6 @@ def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
     pushed, failures = read_sheets(selected_doc, assignments, phase_name)
     for label, reason in failures:
         return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
-    _report_tags(pushed, return_value)
     if not pushed:
         return_value.update_sep(False, "No sheet could be read, so nothing was pushed.")
         return
@@ -443,6 +450,8 @@ def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
     for line in describe_outcomes(outcomes):
         return_value.append_message(line)
     return_value.append_message("{} sheet(s) pushed".format(len(pushed)))
+    # after the sheets: tags are only worth keeping from sheets the server accepted
+    _report_tags(project["id"], pushed, return_value)
 
 
 def sheets_export_entry(doc, uiapp, output, forms):
@@ -587,7 +596,6 @@ def blueprint_export_entry(doc, uiapp, output, forms):
             pushed, failures = read_sheets(selected_doc, [(entry, None) for entry in chosen], None)
             for label, reason in failures:
                 return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
-            _report_tags(pushed, return_value)
             if failures or not pushed:
                 # A blueprint with some of its sheets would read as the whole layout.
                 return_value.update_sep(
@@ -599,6 +607,7 @@ def blueprint_export_entry(doc, uiapp, output, forms):
                 return_value.update_sep(False, "{}: {}".format(name, explain_refusal(status, text)))
                 continue
             return_value.append_message(describe_outcome(name, outcome))
+            _report_tags(project["id"], pushed, return_value)
     except Exception as e:
         return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
     return return_value

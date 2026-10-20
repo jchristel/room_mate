@@ -19,14 +19,14 @@ async function send<T>(method: string, url: string, body: unknown): Promise<Sent
 }
 
 const whole = (r: Sent<Task>): Sent<Task> =>
-  r.ok ? { ok: true, value: { ...r.value, items: r.value.items ?? [], sheets: r.value.sheets ?? [], findings: r.value.findings ?? [], attempts: r.value.attempts ?? [] } } : r;
+  r.ok ? { ok: true, value: { ...r.value, items: r.value.items ?? [], sheets: r.value.sheets ?? [], tag_rules: r.value.tag_rules ?? [], findings: r.value.findings ?? [], attempts: r.value.attempts ?? [] } } : r;
 
 export const listProjects = () => apiGet<ProjectRow[]>("/projects");
 export const listTasks = (project: string) => apiGet<TaskSummary[]>(`${base(project)}/tasks`);
 /** The server leaves an empty list out of a task, so read it back with the lists there. */
 export const getTask = async (project: string, id: string): Promise<Task> => {
-  const t = await apiGet<Partial<Task> & Omit<Task, "items" | "sheets" | "findings" | "attempts">>(`${base(project)}/tasks/${encodeURIComponent(id)}`);
-  return { ...t, items: t.items ?? [], sheets: t.sheets ?? [], findings: t.findings ?? [], attempts: t.attempts ?? [] };
+  const t = await apiGet<Partial<Task> & Omit<Task, "items" | "sheets" | "tag_rules" | "findings" | "attempts">>(`${base(project)}/tasks/${encodeURIComponent(id)}`);
+  return { ...t, items: t.items ?? [], sheets: t.sheets ?? [], tag_rules: t.tag_rules ?? [], findings: t.findings ?? [], attempts: t.attempts ?? [] };
 };
 export const listAssignments = (project: string) => apiGet<AssignmentRow[]>(`${base(project)}/assignments`);
 export const listSheets = (project: string) => apiGet<SheetRow[]>(`${base(project)}/sheets`);
