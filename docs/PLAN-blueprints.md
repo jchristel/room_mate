@@ -28,7 +28,8 @@ and the library stores a summary of each sheet's room (decision 25).
 
 Not built: dragging, rotating or scaling a box over the main plan; per-item overrides; a mirrored
 copy (left out on purpose, decision 7); tags, view scale and view template in the sheet export;
-the tag-rule store (B5); and anything toward Revit (decisions 21 to 26).
+the tag-rule store (B5); and the Revit side of tasks (the server half of decisions 21 to 26 is built: store, ask and report
+channel, dismiss and resend).
 
 ## What exists, and what does not
 
@@ -312,7 +313,11 @@ over the plan. Scaling the box scales the room reference only (decision 6). Reus
 zone/overlay machinery. Per-item overrides stored with an assignment are also not built.
 *Value without Revit: planning and coverage ("which rooms follow which blueprint").*
 
-**Stage 7 — Revit write, thin slice (the walking skeleton).** Task model on the server
+**Stage 7 — Revit write, thin slice (the walking skeleton).** **Server half built:** the task model and its
+states, making populate and create-RLS tasks from assignments or a library sheet (placements in the target
+model's own frame), the `roomtasks` ask and report channel, dismiss and resend, MCP reads. **Still to do:**
+the pyRevit apply button, a task list in the viewer with the plan colouring, and everything Revit-side.
+Original scope: task model on the server
 (decisions 21 to 23: a task is a resolved snapshot plus a status), the `roomtasks` endpoint,
 and a task list for the person (dismiss, resend). A new pyRevit button "Apply blueprint
 tasks": fetch for the open model, validate the whole list, report aborts, ask about warnings,
@@ -514,11 +519,14 @@ blueprint.
    sheet id plus document title, and a changed sheet number is stashed for confirmation; the
    room is chosen at export (through the Sheets button, for library sheets) and afterwards in the
    viewer; "closest" weighs size, proportions and item count equally.
-9. **Room identity in a task.** The tab finds the room *by number*, the assignment holds model
+9. **Room identity in a task.** *Built as proposed:* the task carries the id and the room's `Number`
+   property (a room has no number field of its own). Still to confirm: the number is unique within a model, or say what to do when it is not. The tab finds the room *by number*, the assignment holds model
    plus room id. A task should carry both (id for the server, number for Revit's check), and
    the check "does the room still exist" should compare the number *and* warn if the id
    moved. Confirm the number is unique within a model, or say what to do when it is not.
-10. **Frame of the placements.** The resolver answers in the project's plan frame; Revit needs
+10. **Frame of the placements.** *Built:* placements leave the server in the target model's own frame
+    (the inverse of its placement, unit-tested; not yet checked against a linked model with an offset
+    origin). The resolver answers in the project's plan frame; Revit needs
     the target model's own frame. The server should put it back through the model's placement
     (the inverse of `service::placement`) when it makes the task. To confirm against a linked
     model with an offset origin before stage 7.
