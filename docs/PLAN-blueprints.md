@@ -315,8 +315,9 @@ zone/overlay machinery. Per-item overrides stored with an assignment are also no
 
 **Stage 7 — Revit write, thin slice (the walking skeleton).** **Server half built:** the task model and its
 states, making populate and create-RLS tasks from assignments or a library sheet (placements in the target
-model's own frame), the `roomtasks` ask and report channel, dismiss and resend, MCP reads. **Still to do:**
-the pyRevit apply button, a task list in the viewer with the plan colouring, and everything Revit-side.
+model's own frame), the `roomtasks` ask and report channel, dismiss and resend, MCP reads. The task list is a page, `/tasks/` (filters, a task's contents and attempts, dismiss, resend, making
+tasks). **Still to do:** the pyRevit apply button, the plan colouring by last task status in the main
+viewer, and everything Revit-side.
 Original scope: task model on the server
 (decisions 21 to 23: a task is a resolved snapshot plus a status), the `roomtasks` endpoint,
 and a task list for the person (dismiss, resend). A new pyRevit button "Apply blueprint
