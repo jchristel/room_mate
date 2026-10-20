@@ -1,28 +1,39 @@
 # Plan: blueprints (room layouts that travel)
 
-**Status: stages 0 to 5 built and a first cut of stage 6 (PR #215); the box over the main plan and everything toward Revit are not. Revised 2026-10-19 after the author's review comments and
-the stage 0 results ([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
+**Status: stages 0 to 5 built, and a first cut of stage 6 (PR #215); the box over the main plan and
+everything toward Revit are not. Revised 2026-10-20 after the author's review of the Revit task
+design and of how sheets are stored; first written 2026-10-19 from the stage 0 results
+([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
 
 Built so far (PR #215): FF&E carries `family_name` and `host` (stage 1, read from Revit by the
 extractor, **not yet run in Revit**); the blueprint store with append-only revisions, pending pushed
-revisions and its HTTP and MCP surface (stage 2, without import/export); capture from a room (stage 3's
-service and endpoint, without the "Create blueprint" button or list panel); and track B's first
-slice: the sheet library on its own endpoint with identity matching, pending renumbered pushes and
-`suggest`, plus the Sheets and Blueprint pyRevit buttons (also **not yet run in Revit**). The resolver (stage 4) is built too: measured on RHH's real siblings, 90% of ensuite pairs
-land the items within 150 mm of the real ones, `1 BED B` 68%, `1 BED A` 58%. The blueprint viewer (stage 5) is built as a page at `/blueprints/`: list, revision timeline with
-pending revisions, the room's outline and FF&E, and an inspector for dimension constraints; the
-resolver also accepts a manual edge map. **Stage 6 is built as a mode of that page, not in the main viewer** (several rooms can be assigned at once, from a solver pass over the ticked rooms)
-("Assign to rooms"): pick a room, see the resolver's answer drawn in it with the room's doors and where the
-blueprint's land, choose between the rotations that fit (best by doors first) or map the edges by hand, and
-save an assignment (one per room, pinning a revision; the request is stored, never the placements). Doors are
-captured with the blueprint for orientation only, and break ties of shape. Not built: dragging, rotating or
-scaling a box over the main plan, per-item overrides, a mirrored copy (left out on purpose, see decision 7),
-the blueprint's own sheet association, tags/scale/template in
-the sheet export, and anything toward Revit (the task design is decisions 21 to 23).
+revisions, import and export between projects, and its HTTP and MCP surface (stage 2); capture from a
+room (stage 3); the resolver (stage 4), which on RHH's real sibling rooms lands the items within
+150 mm of the real ones for 90% of ensuite pairs, 68% of `1 BED B` and 58% of `1 BED A`; the blueprint
+viewer at `/blueprints/` (stage 5: list, New from a room, Import and Export, revision timeline with
+pending revisions, the room's outline, doors and FF&E, an inspector for dimension constraints, and a
+manual edge map); and **stage 6 as a mode of that page, not in the main viewer** ("Assign to rooms"):
+pick a room, see the resolver's answer drawn in it with the room's doors and where the blueprint's
+land, choose between the rotations that fit (best by doors first) or map the edges by hand, and save
+an assignment (one per room, pinning a revision; the request is stored, never the placements).
+**Several rooms can be assigned at once**: the resolver is asked about each ticked room at the best
+fit and a verdict (fits, to look at, cannot be placed) is shown before assigning. Doors are captured
+with the blueprint for orientation only, and break ties of shape.
+
+Track B's first slice is built too: the sheet library on its own endpoint with identity matching,
+pending renumbered pushes and `suggest`, plus the Sheets and Blueprint pyRevit buttons (**not yet run
+in Revit**). **These change** with the 2026-10-20 decisions: the Blueprint button will push the room
+and its sheets into a blueprint instead of writing to the library (decisions 18 and 19), and the
+library will store a summary of each sheet's room (decision 25).
+
+Not built: dragging, rotating or scaling a box over the main plan; per-item overrides; a mirrored
+copy (left out on purpose, decision 7); sheets inside a blueprint revision and the blueprint push
+(B3b); the library's room summary (B3c); tags, view scale and view template in the sheet export;
+the tag-rule store (B5); and anything toward Revit (decisions 21 to 26).
 
 ## What exists, and what does not
 
-Grounded in the code as of 2026-10-18:
+Grounded in the code as of 2026-10-18; rows marked *now* were true then and have since changed:
 
 | Need | State |
 |---|---|
@@ -31,14 +42,14 @@ Grounded in the code as of 2026-10-18:
 | FF&E footprint (`loops`, the instance's oriented box in plan) | Have: 15,826 of 16,161 items (98%) in RHH `HOS-INT_L1-L2` (probed 2026-10-18). The "empty on every item" comments in `renderer/types.ts` predate it and are stale. |
 | FF&E instance and type **properties** (every parameter, as exported) | Have. The probe found `Elevation from Level` on 100% of items, `Host` on 99.9%, `Offset from Host` on 99.4%, `Mounting Height` on 59%. |
 | FF&E **vertical extent and sizes** | **Not needed as separate fields** (decided): they are part of the type and instance properties, which a blueprint item carries as exported. |
-| FF&E **hosting kind** | Weak: `Host` is a display string (`Level : LEVEL 1`); which wall, and where on it, is not stated. **To be added to the exporter** (decided), via duHast. |
-| Family name | **Not exported.** `type_name` is on every item; a `Family` key exists on 2 of 16,161 and holds something else. Comes from Revit (`FamilyInstance.Symbol.FamilyName`), so from duHast. |
+| FF&E **hosting kind** | Weak: `Host` is a display string (`Level : LEVEL 1`); which wall, and where on it, is not stated. *Now:* `host` is read from Revit by the extractor (built, not yet run in Revit). |
+| Family name | **Not exported.** `type_name` is on every item; a `Family` key exists on 2 of 16,161 and holds something else. *Now:* read from Revit by the extractor (`item_facts`), built, not yet run in Revit. |
 | Units of parameter values | Display strings (`"0.0"`, `"420.0"`), not typed. The trap `CLAUDE.md` records for the ceiling height offset. |
 | Doors: position, `through_wall_normal`, width | Have. |
 | Authored, per-project, user-made data | Precedent: connections document (zones, passages, saved routes, reaches): one JSON per project, optimistic concurrency, replace-whole-list, "authored data outlives geometry; a stale reference is a finding, never an error". |
 | Revit extractor | pyRevit, **one-way** (Revit → server). |
-| Anything that sends work **to** Revit | **Does not exist.** A new channel, not an extension. |
-| Room layout sheet data | duHast has **rudimentary IronPython exports** (not yet surveyed; first task of track B). Nothing is in the server contract. |
+| Anything that sends work **to** Revit | **Does not exist** (still true). A new channel, not an extension. |
+| Room layout sheet data | duHast has rudimentary IronPython exports, surveyed in B0 (below). *Now:* the sheet library holds them as exported, on its own endpoint. |
 
 So blueprints are three products in one: a constraint model, an editor, and the first
 write path into Revit. They have very different risk, which drives the staging.
@@ -72,17 +83,14 @@ write path into Revit. They have very different risk, which drives the staging.
    Items keep their exported size. A *fixed* constraint keeps its distance in mm; a
    *percentage* constraint stretches with the room, measured along the edge it is anchored to, not the
    assign box's axes (decided 2026-10-19).
-7. **No mirroring at assignment.** A mirrored layout is a different blueprint: handed items
-   are most likely a different family, and mirroring them would cause placement problems.
-   Rotation is supported; mirror is not offered when assigning (decided 2026-10-19). Stage 0
+7. **No mirroring, at assignment or by copy** (decided 2026-10-19, confirmed 2026-10-20).
+   Handed items are most likely a different family, and a reflection would place the wrong
+   one in a way that looks right. Rotation is supported; mirror is not offered. Stage 0
    shows handedness is common (37% and 43% of ensuite pairs on RHH are mirror images), so the
-   blueprint viewer offers **Create mirrored copy**, which writes a second blueprint the user
-   can then correct (swap the handed families), and the resolver reports "this room is the
-   mirror image of the blueprint" instead of resolving badly.
-   **Decided 2026-10-20: no automatic mirrored copy.** Handed families make a reflection
-   wrong in ways that look right, so the other hand is authored by a person as its own
-   blueprint. A link between the two ("handed pair", so a `mirror_image` finding can offer
-   the other one) is possible later; nothing is generated.
+   resolver reports "this room is the mirror image of the blueprint" instead of resolving
+   badly, and the other hand is **authored by a person as its own blueprint**. No mirrored
+   copy is generated. A link between the two ("handed pair", so the finding can offer the
+   other blueprint) is possible later.
 8. **Blueprints are a separate endpoint**, not part of the connections document
    (decided 2026-10-19). Same write rules as connections (optimistic concurrency), own
    routes, own storage.
@@ -100,7 +108,7 @@ write path into Revit. They have very different risk, which drives the staging.
     (a QA report falls out of this, and may be the first thing people value).
 13. **The Revit side is pull-based, and a task is checked as a whole before anything is written**
     (revised 2026-10-20 from the "Revit interactions" tab). The server holds tasks; a Revit
-    button asks for the tasks of one model, validates the entire list (decision 21), reports
+    button asks for the tasks of one model, validates the entire list (decision 22), reports
     anything aborted before work starts, shows warnings with *abort* or *ignore and proceed*,
     and reports a status per task afterwards. One transaction per room. The earlier "dry-run
     diff by default" is kept for the update task type; the populate task's safety is its
@@ -146,6 +154,43 @@ write path into Revit. They have very different risk, which drives the staging.
     only, the server ranks library sheets by how close their room is to the target room (size,
     proportions, number of items), the three weighed **equally** (decided 2026-10-19). A
     suggestion is offered, never applied, and never made outside sheet creation.
+21. **Revit tasks (design from the user's "Revit interactions" tab, 2026-10-20).** Once a
+    blueprint is assigned to rooms the user can create tasks to be actioned in Revit. Kinds
+    (decision 26 adds the second): **populate room from blueprint**, **create RLS from a
+    library sheet**, and **update room from blueprint** (items update or location update after a
+    room-size or design change; not now). **Populate is built first.** Its properties:
+    - `phase`: the phase to create content in.
+    - `overwrite_layout`: true deletes the room's existing content in that phase; false aborts the
+      task if the room already has content in it.
+    - `create_rls` and `overwrite_rls` (default false): if an RLS with the generated number exists
+      and overwrite is true it is deleted and recreated; if false the sheets alone are skipped,
+      with a warning.
+    - **items**: family name, family type name, placement type, related data.
+    - **RLS data**, from the pinned revision's sheets (decision 18): number and size of sheets,
+      each viewport's type and location. **Tags are not in it** (decision 24): they come from the
+      tag rules, per family and view type, applied to the items placed.
+    A task is a record, **unlike an assignment**: it holds the resolver's placements and the
+    sheet data as they were when the task was made, so what Revit is told cannot change
+    underneath it. The resolver stays on the server (decision 2); the plugin only validates and
+    writes.
+22. **Task validation, all before work starts.** The whole list is checked; any abort is
+    reported to the server first.
+    - Phase name does not exist in the model: **abort**.
+    - Room (found by its number) no longer exists: **abort**.
+    - Room already has content in the phase and `overwrite_layout` is false: **abort**.
+    - An RLS with the generated number exists and `overwrite_rls` is false: **warning**
+      (that task's sheets are skipped).
+    - A specified family or type is in neither the model nor the library location: **warning**.
+    - No sheet family (title block) for the requested RLS size: **abort**.
+    A warning is shown to the person with two choices: abort, or ignore and proceed.
+23. **Task transport and states.** A new endpoint, `roomtasks`, takes a **model name**
+    and returns that model's queued tasks and marks them *in progress*, so another Revit
+    session is not given the same ones. The plugin then posts a status per task: *completed*,
+    *completed with warnings*, *failed* or *aborted* (an abort from the validation above is
+    reported before work, with its reason). On the server the person can read the task list,
+    **dismiss** a task, or **resend** one (back into the queue, which is also the way out of a
+    session that died holding tasks *in progress*). Ideally a room's last task status is
+    drawn on the plan viewer through a colouring option.
 24. **Tags are not part of a sheet.** A task may put a library sheet into a room whose items
     differ from those the sheet was made for, so tags tied to items cannot travel with it. Tag
     placement is a **separate store, future work**, keyed by family name and type name plus
@@ -171,41 +216,6 @@ write path into Revit. They have very different risk, which drives the staging.
     - **Populate room from blueprint, and create RLS** (decision 21). Input: an assignment
       (revision and mapping), the phase, `overwrite_layout`, `create_rls`, `overwrite_rls`; the
       sheets come from the pinned revision.
-21. **Revit tasks (design from the user's "Revit interactions" tab, 2026-10-20).** Once a
-    blueprint is assigned to rooms the user can create tasks to be actioned in Revit. Two
-    types; **only the first is built first**:
-    - **Populate room from blueprint** (type 1). Properties: `phase` (the phase to create
-      content in); `overwrite_layout` (true: existing content of the room in that phase is
-      deleted; false: if the room already has content in that phase, abort); `create_rls`
-      (true: create the room layout sheet(s); if one with the generated number exists and
-      `overwrite_rls` is true delete and recreate it, if false skip the sheets only and warn);
-      `overwrite_rls` (default false); a list of **items** (family name, family type name,
-      placement type, related data); and **RLS data** (size and number of sheets; per sheet its
-      viewports, their types and locations; per placed instance its tag data: the view type to
-      tag in and the tag's location relative to the element).
-    - **Update room from blueprint** (type 2, not now): either an items update (what to add
-      or remove) or a location update after a room-size or design change.
-    A task is a record, **unlike an assignment**: it holds the resolver's placements as they
-    were when the task was made, so what Revit is told cannot change underneath it. The
-    resolver stays on the server (decision 2); the plugin only validates and writes.
-22. **Task validation, all before work starts.** The whole list is checked; any abort is
-    reported to the server first.
-    - Phase name does not exist in the model: **abort**.
-    - Room (found by its number) no longer exists: **abort**.
-    - Room already has content in the phase and `overwrite_layout` is false: **abort**.
-    - An RLS with the generated number exists and `overwrite_rls` is false: **warning**
-      (that task's sheets are skipped).
-    - A specified family or type is in neither the model nor the library location: **warning**.
-    - No sheet family (title block) for the requested RLS size: **abort**.
-    A warning is shown to the person with two choices: abort, or ignore and proceed.
-23. **Task transport and states.** A new endpoint, `roomtasks`, takes a **model name**
-    and returns that model's queued tasks and marks them *in progress*, so another Revit
-    session is not given the same ones. The plugin then posts a status per task: *completed*,
-    *completed with warnings*, *failed* or *aborted* (an abort from the validation above is
-    reported before work, with its reason). On the server the person can read the task list,
-    **dismiss** a task, or **resend** one (back into the queue, which is also the way out of a
-    session that died holding tasks *in progress*). Ideally a room's last task status is
-    drawn on the plan viewer through a colouring option.
 
 ### Constraint grammar (sketch; stage 0 added `follows` and `class`)
 
@@ -248,11 +258,11 @@ name. Probe on House A as ceilings and floors had before relying on either. *Nee
 and 4.*
 
 **Stage 2 — Blueprint store and API (own endpoint).** Blueprint document (id, name, ordered
-revisions, current revision, reference outline, items with excluded flag, doors, a reserved
-and undesigned slot for sheet data), assignment records (room ref, pinned revision,
-placement of the box), pending pushed revisions. Optimistic concurrency, MCP tool parity per
+revisions, current revision, reference outline, items with excluded flag, doors, and sheets
+once B3b lands), assignment records (room ref, pinned revision, mapping), pending pushed
+revisions. Optimistic concurrency, MCP tool parity per
 the one-tool-per-read-route rule. **Import and export between projects on the same server**
-(cross-server later). *No UI yet.*
+(cross-server later). *Built; the UI is stage 5.*
 
 **Stage 3 — Capture from a room.** `service::blueprints::capture(room)` reads the room's
 outline, FF&E and doors and proposes recipes: each item snaps to the edge it lies beside
@@ -280,16 +290,18 @@ the stage 0 fixtures. The core: everything after depends on it being right.
   and percentage, and a change moves the object (the stage 4 resolver, live). Stored against
   the selected revision only. Import the dimension settings from another revision, with
   multi-select for bulk updates.
-Built on the Pixi renderer already in use. *The biggest UI piece; the first with a real
+Built as its own page in SVG, not on the Pixi renderer: one room and a few hundred rectangles
+need the hit-testing and labels SVG gives for free. *The biggest UI piece; the first with a real
 brief.*
 
-**Stage 6 — Assign UI in the main viewer.** Flow: select the rooms a blueprint applies to,
-select the blueprint, then place a bounding box that shows the blueprint's outline and door
-for orientation; the user drags, rotates and scales it to match the real room, with snap
-to endpoints. Ghost items drawn over the plan, findings listed and clickable, assignment
-saved. Scaling the box scales the room reference only (decision 6). Reuses the zone/overlay
-machinery. *Value without Revit: planning and coverage ("which rooms follow which
-blueprint").*
+**Stage 6 — Assign UI. First cut built as a mode of the blueprint page** (see the status): one
+room at a time with rotations and a hand mapping, or several rooms at once from a solver pass,
+saving assignments. **Still to do, as originally specified:** in the main viewer, select the rooms
+and the blueprint, then place a bounding box showing the blueprint's outline and door for
+orientation, drag, rotate and scale it to match the real room with snap to endpoints, ghost items
+over the plan. Scaling the box scales the room reference only (decision 6). Reuses the
+zone/overlay machinery. Per-item overrides stored with an assignment are also not built.
+*Value without Revit: planning and coverage ("which rooms follow which blueprint").*
 
 **Stage 7 — Revit write, thin slice (the walking skeleton).** Task model on the server
 (decisions 21 to 23: a task is a resolved snapshot plus a status), the `roomtasks` endpoint,
@@ -301,7 +313,7 @@ re-run and the results channel before the rest. Fake-Revit interface so the exec
 testable in CI. *The Revit write loop is the largest unknown and is deferred behind the
 viewer. Platform is pyRevit (decision 17).*
 
-**Stage 8 — Revit write, full content.** `overwrite_layout` (delete then place), the RLS data (sheets, viewports, tags; needs track B's missing tag and view-template export), the update task type, the last-status colouring on the plan, and all item kinds including wall-hosted and
+**Stage 8 — Revit write, full content.** `overwrite_layout` (delete then place), creating the RLS (sheets and viewports, then tags from the tag rules; needs track B's tag and view-template export), the create-RLS-from-a-sheet task (decision 26), the update task type, the last-status colouring on the plan, and all item kinds including wall-hosted and
 face-hosted (needs stage 1's hosting kind), doors (by host wall and offset), moves and
 removals of previously placed items, missing-type mapping, per-room results with reasons.
 
@@ -348,14 +360,14 @@ nothing run in Revit):**
   on a room layout sheet. Creating sheets (B4) additionally needs view type, scale and
   template names, and tag capture.
 
-**B1 — Export button (extractor).** A pyRevit button lists the document's sheets; the user picks
-the ones to export, and names the room when it is exporting through the blueprint route
-(decision 19). Each chosen sheet goes through
-duHast's `convert_revit_sheet`. It can be pushed in the same run as FF&E, since a run already
-exports several entities at once. The export carries the sheet's identity (Revit element id
-and sheet number), its properties, viewports with sheet positions, crop boxes and schedules.
-Not carried, because duHast does not export it: tags and their positions, view scale, view
-template, view names.
+**B1 — Export buttons (extractor).** In Revit the user picks rooms and, per room, its sheets
+(decision 19). **Blueprint button:** pushes the room and its sheets into a blueprint; both are
+required (B3b). **Sheets button:** pushes the sheets to the library, with the room named at export.
+Each chosen sheet goes through duHast's `convert_revit_sheet`, and tags are dropped before pushing
+(decision 24). It can be pushed in the same run as FF&E, since a run already exports several
+entities at once. The export carries the sheet's identity (Revit element id and sheet number), its
+properties, viewports with sheet positions, crop boxes and schedules. Not carried, because duHast
+does not export it: tags and their positions, view scale, view template, view names.
 
 **B2 — Sheet library (server).** A `sheets` collection on its own endpoint, one record per
 sheet, scoped to a project. Each record holds the sheet as exported and the room the user
@@ -370,8 +382,9 @@ Reads: list, one sheet, and **suggest**. Each record also holds a summary of its
 push (B3c).
 
 **B3 — Suggest, in sheet creation mode only.** `GET .../sheets/suggest?room=` ranks library
-sheets by the closeness of their room to the target room: area, proportions (the outline's
-aspect) and number of items, **weighed equally**, each compared with the target room's current figures against the sheet's stored summary (B3c). It returns the ranking with the figures, so a person sees why a sheet was offered.
+sheets by the closeness of their room to the target room: area, proportions and number of
+items, **weighed equally**, each compared with the target room's current figures against the
+sheet's stored summary (B3c): area as the stored X times Y, proportions as long over short side. It returns the ranking with the figures, so a person sees why a sheet was offered.
 Nothing applies it.
 
 **B3b — Sheets inside a blueprint (replaces "associate sheets", 2026-10-20).** A blueprint
@@ -384,12 +397,12 @@ room on the server and attaches the sheets.
 **B3c — Library room summary.** Store the room's bounding box X and Y and item count with
 each library sheet at push (decision 25), and have suggest use them.
 
-**B5 — Tag rules (future).** A store of tag placement by family name, type name and viewport
-type (decision 24), applied by tasks.
-
 **B4 — Revit creation (not scheduled).** A task kind on the stage-7 channel: views from the
 project's own templates and title block (named in the spec, never invented), viewports,
-tags, schedule. Reuses the dry-run, marker and per-task result rules.
+tags, schedule. Reuses the validation, marker and per-task status rules (decisions 22 and 23).
+
+**B5 — Tag rules (future).** A store of tag placement by family name, type name and viewport
+type (decision 24), applied by tasks.
 
 **Open for this track:** whether title block, view templates and sheet naming are common
 across projects; whether the duHast exports are a base to extend or a prototype to
@@ -405,20 +418,21 @@ does, so B4 is where that choice would be tested.)
    the problem. What is: same-named rooms differ in small jogs (edge count differs on 14 to
    54% of patient-room pairs), a third to a half of ensuite pairs are mirror images, and
    same-shape rooms of non-standard types (toilets, consult rooms) do not share a layout at
-   all. Mitigation: shape matching on the coarse outline (decisions 14, 15), the mirrored
-   copy action, and findings for every case that does not fit.
+   all. Mitigation: shape matching on the coarse outline (decisions 14, 15), the resolver's
+   mirror-image finding (the other hand is its own blueprint), and findings for every case that does not fit.
 
-2. **The data is thick, with three known gaps.** Footprints and the common elevation
-   parameters are there; sizes and heights are in the properties by decision. What is
-   missing is the family name and the hosting kind, and the units of parameter values are
-   display strings. Any exporter change must come from duHast or the API (`CLAUDE.md`: do
+2. **The data is thick, with known gaps.** Footprints and the common elevation
+   parameters are there; sizes and heights are in the properties by decision. The family name
+   and the hosting kind are now read from Revit by the extractor but not yet run in Revit, and
+   the units of parameter values are display strings. Tags, view scale and view templates are
+   not in the sheet export. Any exporter change must come from duHast or the API (`CLAUDE.md`: do
    not re-derive in `room_m`); give stage 1 its own probe on House A. (An earlier draft said
    the export lacked footprints and properties; that claim was wrong and is corrected.)
 
 3. **The Revit write side is a different kind of software.** Everything so far reads. Writing
    means transactions, worksharing (elements checked out by others), families not loaded,
    hosted families needing a host, and a mistake changes a real model. Mitigations are in
-   the design (dry-run default, markers, one transaction per room, per-task results). The
+   the design (whole-list validation before any write, markers, one transaction per room, per-task results). The
    cost of moving the viewer ahead of it (stages 5 and 6 before 7) is that this risk is found
    later. Staying on pyRevit (decision 17) keeps the Revit side in the extension already
    shipped, which is the cheaper way to find out.
@@ -452,7 +466,7 @@ does, so B4 is where that choice would be tested.)
 
 9. **Security.** The server tells a Revit user's machine to change a model. Tasks come from
    authored data, so the plugin must validate everything it is told (types, ids, ranges),
-   never execute free-form content, and always show the diff. Cross-check with
+   never execute free-form content, and validate the whole list and report aborts before writing. Cross-check with
    `STRATEGY-SECURITY.md` before stage 7 ships.
 
 10. **Testing.** Revit cannot run in CI. The executor is split into a pure planner (task +
@@ -481,16 +495,16 @@ blueprint.
    projects as a shared library, or only copied between them?
 4. ~~**Revit platform.**~~ **Closed 2026-10-19:** pyRevit (decision 17).
 5. **Who may write to Revit**: anyone using the button, or does a person approve tasks in the
-   viewer first (a task state of *approved*)?
+   viewer first (a task state of *approved*)? (parked; the tasks tab has the person who runs the
+   button seeing every warning, and tasks come from what a person created on the server)
 6. **Sheets (track B)**: are the title block, view templates and sheet naming standard across
-   your projects, or per project? How far were the duHast sheet exports taken (B0 will read
-   them, but your view helps)?
+   your projects, or per project? (parked; B0 has read the duHast exports, see above)
 7. ~~**Percentage constraints on rotated boxes.**~~ **Closed 2026-10-19:** a percentage
    constraint follows the edge it is anchored to, not the box's axes (decision 6).
 8. ~~**Sheet library, three details.**~~ **Closed 2026-10-19:** a re-pushed sheet matches on Revit
    sheet id plus document title, and a changed sheet number is stashed for confirmation; the
-   room is chosen at export through the blueprint route and afterwards in the viewer for rooms no
-   blueprint covers; "closest" weighs size, proportions and item count equally.
+   room is chosen at export (through the Sheets button, for library sheets) and afterwards in the
+   viewer; "closest" weighs size, proportions and item count equally.
 9. **Room identity in a task.** The tab finds the room *by number*, the assignment holds model
    plus room id. A task should carry both (id for the server, number for Revit's check), and
    the check "does the room still exist" should compare the number *and* warn if the id
@@ -506,3 +520,6 @@ blueprint.
 12. **Tag and viewport data is not exported yet** (track B "missing"), so the RLS half of a
     populate task has nothing to read until the sheet export carries tags, view scale and
     view templates. The populate task can ship without RLS.
+13. ~~**How a blueprint and its sheets are stored.**~~ **Closed 2026-10-20:** two methods. A blueprint
+    revision holds its sheets (always pushed with the room data); the library holds sheets that
+    belong to no blueprint; no sheet holds tags (decisions 18, 24 to 26).
