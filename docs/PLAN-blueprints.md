@@ -207,6 +207,15 @@ write path into Revit. They have very different risk, which drives the staging.
     the library. Until duHast exports tags nothing is stored, and the plugin drops tags from a
     sheet before pushing. A sheet's name, number and id are not used on assignment: the Revit
     side generates them from the target room.
+
+    **Tag data (decided 2026-10-21).** The export holds raw observations as duHast data classes
+    (`DataTag`, `DataTaggedElement`, `DataTagType`, in `Data/Objects/Collectors`): positions in mm in the
+    model's own coordinates, the tag's category, family and type name, and the tagged element's category,
+    family and type name. **The ids in them are provenance, never the lookup**: a blueprint places new
+    elements with new ids, so a rule is found by names. **One rule per key** (tagged category + family +
+    type, tag family + type, viewport type): several observations of one key are reduced to a single rule
+    (median offset) when the rules are made, so the same blueprint always tags the same way. Where a tag
+    is placed relative to its element is derived from the raw observation, never stored in the export.
 25. **A library sheet carries a stored summary of its room** (decided 2026-10-20, replacing
     "worked out at read time, never stored"): the room's bounding box X and Y dimensions and
     its number of items, as at push. They make a sheet comparable with a task's room without
