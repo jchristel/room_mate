@@ -122,24 +122,55 @@ write path into Revit. They have very different risk, which drives the staging.
 17. **Platform: pyRevit** (decided 2026-10-19). The Revit side stays in the existing
     pyRevit extension; no C# add-in and no platform spike. Revisit only if a stage 7 or 8
     obstacle forces it.
-18. **Room layout sheets are a library with their own endpoint** (decided 2026-10-19), a
-    collection of sheet objects beside blueprints, not inside them. Sheets saved there are
-    kept as exported and are stored separately from the sheet association a blueprint
-    carries (confirmed 2026-10-19). The library exists so the server can offer the closest
-    sheet for a room.
+18. **Sheets live in two places, and they are two storage methods** (clarified 2026-10-20).
+    - **Inside a blueprint.** A blueprint push always carries the room and its sheets (the
+      plugin enforces both, and the server refuses a blueprint push without sheets), so a
+      revision holds outline, items, doors **and sheets**. The sheets are layout only:
+      number and size, each viewport's type, position and extent. The blueprint is
+      self-contained, so export and import carry its sheets, and an assignment that pins a
+      revision pins its sheets. A sheet arriving again is a pending revision (decision 10).
+    - **In the library** (its own endpoint, decided 2026-10-19), for sheets that belong to no
+      blueprint: one record per sheet, kept as exported. It is what "suggest" searches.
+    **Neither holds tags** (decision 24). A sheet in a blueprint is a copy and stays
+    independent of the library.
 19. **The user chooses which sheets are exported, and which room each belongs to.** Nothing is
     inferred from sheet names or parameters: the export has no marker for a room layout sheet
-    and no link from a sheet to a room. The room is named **at export** when the sheet goes out
-    through the blueprint route (the blueprint already knows its room), and **afterwards, in the
-    viewer,** for rooms no blueprint covers, where the UI suggests a match and the user makes
-    the choice.
-20. **A sheet reaches a room in one of two ways.** *Direct:* the user associates sheets with a
-    blueprint, and that association is exported with the blueprint. *Suggested:* in sheet
-    creation mode only, the server ranks library sheets by how close their room is to the
-    target room (size, proportions, number of items, as duHast's `RoomLayoutSheet` sketch
-    intended), the three weighed **equally** (decided 2026-10-19). A suggestion is offered,
-    never applied, and never made outside sheet creation.
-
+    and no link from a sheet to a room. In Revit the user picks rooms and, per room, its
+    sheets. Through the **blueprint button** they go into a blueprint (with the room data, as a
+    pending revision of the blueprint of that name, or a new blueprint; the same rule as
+    import). Through the **Sheets button** they go to the library, where the room is named at
+    export or afterwards in the viewer.
+20. **A sheet reaches a room in one of two ways.** *Through a blueprint:* an assignment pins a
+    revision and the revision holds the sheets (no separate association record; the earlier
+    "associate sheets with a blueprint" step is dropped). *Suggested:* in sheet creation mode
+    only, the server ranks library sheets by how close their room is to the target room (size,
+    proportions, number of items), the three weighed **equally** (decided 2026-10-19). A
+    suggestion is offered, never applied, and never made outside sheet creation.
+24. **Tags are not part of a sheet.** A task may put a library sheet into a room whose items
+    differ from those the sheet was made for, so tags tied to items cannot travel with it. Tag
+    placement is a **separate store, future work**, keyed by family name and type name plus
+    viewport type, holding where the tag goes relative to the element. A task applies those
+    rules to whichever items it places or finds, whether the sheets came from a blueprint or
+    the library. Until duHast exports tags nothing is stored, and the plugin drops tags from a
+    sheet before pushing. A sheet's name, number and id are not used on assignment: the Revit
+    side generates them from the target room.
+25. **A library sheet carries a stored summary of its room** (decided 2026-10-20, replacing
+    "worked out at read time, never stored"): the room's bounding box X and Y dimensions and
+    its number of items, as at push. They make a sheet comparable with a task's room without
+    the sheet's own room being on the server, or unchanged. No room geometry is stored. The
+    server works them out from the rooms and FF&E at push time (the one source of both);
+    dimensions are of the smallest enclosing rectangle, so a rotated room reads the same, and
+    the item count is counted as capture counts. Suggest ranks on these figures against the
+    target room's current ones. A blueprint needs no such summary: it holds the room itself.
+26. **Two task kinds read different inputs** (decided 2026-10-20), both validated as in
+    decision 22 where the check applies:
+    - **Create RLS from a sheet.** Input: a library sheet, the target room, the phase and
+      `overwrite_rls`. No items are placed, so there is no layout check; the stored room
+      summary against the target room's size is a warning when they differ widely, and tags
+      come from the tag rules applied to the items found in the room.
+    - **Populate room from blueprint, and create RLS** (decision 21). Input: an assignment
+      (revision and mapping), the phase, `overwrite_layout`, `create_rls`, `overwrite_rls`; the
+      sheets come from the pinned revision.
 21. **Revit tasks (design from the user's "Revit interactions" tab, 2026-10-20).** Once a
     blueprint is assigned to rooms the user can create tasks to be actioned in Revit. Two
     types; **only the first is built first**:
@@ -281,7 +312,7 @@ properties; only if track B wants to show a sheet before generating it.
 
 Not part of stages 0 to 9 and not blocking them. Blueprints are useful without it
 (catalogue, planning, Revit placement). It joins the main track at one point: a blueprint
-may carry a sheet specification, and stage 2 reserves the slot without designing it.
+carries its sheets (decision 18), which is stage 2's reserved slot, now designed (B3b).
 
 **Scope for now, decided 2026-10-19:** review the duHast code with a view to using the
 sheet export code in RoomMate, and make it a **one-way proof of concept, Revit to
@@ -335,17 +366,26 @@ matches but its sheet number has changed, the push is stashed as pending and the
 to confirm** (accept or reject, as a pushed blueprint is, decision 10), so a renumbering cannot
 silently rewrite a sheet someone relies on. A sheet that matches on neither is a new sheet, even if its number matches an existing one.
 Both readings confirmed 2026-10-19.
-Reads: list, one sheet, and **suggest**.
+Reads: list, one sheet, and **suggest**. Each record also holds a summary of its room as at
+push (B3c).
 
 **B3 — Suggest, in sheet creation mode only.** `GET .../sheets/suggest?room=` ranks library
 sheets by the closeness of their room to the target room: area, proportions (the outline's
-aspect) and number of items, **weighed equally**, each worked out at read time from the rooms
-and FF&E, never stored. It returns the ranking with the figures, so a person sees why a sheet was offered.
+aspect) and number of items, **weighed equally**, each compared with the target room's current figures against the sheet's stored summary (B3c). It returns the ranking with the figures, so a person sees why a sheet was offered.
 Nothing applies it.
 
-**B3b — Associate sheets with a blueprint.** A blueprint carries a list of sheet references (the
-direct route, decision 20), and exporting a blueprint carries the sheets it names. Needs the
-blueprint export, which is not built.
+**B3b — Sheets inside a blueprint (replaces "associate sheets", 2026-10-20).** A blueprint
+revision holds `sheets` beside outline, items and doors; the blueprint push carries both
+and is refused without sheets; export and import carry them. Same sheet shape as the library
+without tags, and without the sheet's name, number or id being used on assignment (decisions
+18 and 24). Needs `sheets` in the revision and a blueprint-push endpoint that captures the
+room on the server and attaches the sheets.
+
+**B3c — Library room summary.** Store the room's bounding box X and Y and item count with
+each library sheet at push (decision 25), and have suggest use them.
+
+**B5 — Tag rules (future).** A store of tag placement by family name, type name and viewport
+type (decision 24), applied by tasks.
 
 **B4 — Revit creation (not scheduled).** A task kind on the stage-7 channel: views from the
 project's own templates and title block (named in the spec, never invented), viewports,
