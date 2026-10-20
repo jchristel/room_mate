@@ -316,8 +316,8 @@ zone/overlay machinery. Per-item overrides stored with an assignment are also no
 **Stage 7 — Revit write, thin slice (the walking skeleton).** **Server half built:** the task model and its
 states, making populate and create-RLS tasks from assignments or a library sheet (placements in the target
 model's own frame), the `roomtasks` ask and report channel, dismiss and resend, MCP reads. The task list is a page, `/tasks/` (filters, a task's contents and attempts, dismiss, resend, making
-tasks). **Still to do:** the pyRevit apply button, the plan colouring by last task status in the main
-viewer, and everything Revit-side.
+tasks), and the main viewer colours rooms by their last task's state (a choice in the zone's colour picker; not in
+the SVG export). **Still to do:** the pyRevit apply button and everything Revit-side.
 Original scope: task model on the server
 (decisions 21 to 23: a task is a resolved snapshot plus a status), the `roomtasks` endpoint,
 and a task list for the person (dismiss, resend). A new pyRevit button "Apply blueprint
@@ -328,7 +328,7 @@ re-run and the results channel before the rest. Fake-Revit interface so the exec
 testable in CI. *The Revit write loop is the largest unknown and is deferred behind the
 viewer. Platform is pyRevit (decision 17).*
 
-**Stage 8 — Revit write, full content.** `overwrite_layout` (delete then place), creating the RLS (sheets and viewports, then tags from the tag rules; needs track B's tag and view-template export), the create-RLS-from-a-sheet task (decision 26), the update task type, the last-status colouring on the plan, and all item kinds including wall-hosted and
+**Stage 8 — Revit write, full content.** `overwrite_layout` (delete then place), creating the RLS (sheets and viewports, then tags from the tag rules; needs track B's tag and view-template export), the create-RLS-from-a-sheet task (decision 26), the update task type, and all item kinds including wall-hosted and
 face-hosted (needs stage 1's hosting kind), doors (by host wall and offset), moves and
 removals of previously placed items, missing-type mapping, per-room results with reasons.
 
