@@ -3,8 +3,8 @@
 //! track B, decisions 18 to 20).
 //!
 //! **Their own endpoint and their own files, apart from blueprints.** A sheet in the
-//! library is stored as exported; the sheets a blueprint is associated with are a
-//! separate record that blueprint carries. One JSON file per sheet, under
+//! library is stored as exported and belongs to no blueprint; a blueprint revision holds its
+//! own copy of its sheets (plan decision 18), a different storage method. One JSON file per sheet, under
 //! `<projects_dir>/sheets/<project>/<id>.json`, written the way blueprints are (temp then
 //! rename, a copy of the replaced file under `.backups/`, one lock), and this module is the
 //! only code that reads or writes them.

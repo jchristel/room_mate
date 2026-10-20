@@ -423,8 +423,9 @@ get wrong:
 ## Room layout sheets: a library kept by identity, and two buttons that choose
 
 Built: the sheet library on the server (`sheets`, `sheets_api`, `service::sheet_suggest`),
-two pyRevit buttons, MCP reads. **Not built: a viewer for any of it, the blueprint's own
-sheet association, tags/scale/template in the export.** Rules that are expensive to get wrong:
+two pyRevit buttons, MCP reads. **Not built: a viewer for any of it, sheets inside a blueprint
+revision (plan decision 18, which also changes the Blueprint button), the library's room summary,
+tags/scale/template in the export.** Rules that are expensive to get wrong:
 
 - **Their own endpoint (`/projects/{id}/sheets`), apart from blueprints, and not a snapshot
   push.** Rooms, doors and the rest replace a model's state; the library is authored data

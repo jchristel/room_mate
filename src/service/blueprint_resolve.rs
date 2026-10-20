@@ -22,8 +22,8 @@
 //! blueprint's own placements, so nothing extra is stored.
 //!
 //! **No reflection.** Edges map by a cyclic shift only (decision 7). A mirror-image room is
-//! recognised and *said*, so the person can make a mirrored copy; the resolver does not
-//! quietly mirror, because the handed families would then be wrong.
+//! recognised and *said*; the other hand is a blueprint a person authors (a reflection would
+//! place the wrong families), so the resolver never mirrors and nothing generates a copy.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -135,7 +135,7 @@ pub enum Finding {
     FollowBroken { item: String, reason: String },
     /// The item had no edge beside it when captured.
     CornerAnchored { item: String },
-    /// The room is the blueprint's shape reflected: make a mirrored copy.
+    /// The room is the blueprint's shape reflected: it needs the other hand's blueprint.
     MirrorImage { message: String },
     /// The outlines do not agree in shape.
     ShapeMismatch { message: String },
@@ -370,7 +370,7 @@ fn fit_outlines(
     };
     match kind {
         FitKind::MirrorImage => findings.push(Finding::MirrorImage {
-            message: "this room is the blueprint's shape reflected; rotation cannot reach it, so make a mirrored copy of the blueprint".to_string(),
+            message: "this room is the blueprint's shape reflected; rotation cannot reach it, so it needs a blueprint authored for the other hand".to_string(),
         }),
         FitKind::NoFit if auto_cost <= FIT_OK => findings.push(Finding::ShapeMismatch {
             message: format!("shift {s} does not fit the room's shape (cost {cost:.2}); shift {auto_shift} does"),

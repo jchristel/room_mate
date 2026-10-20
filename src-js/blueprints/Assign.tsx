@@ -327,7 +327,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
                 );
               })}
             </ul>
-            {result.fit.kind === "mirror_image" ? <p className="hint">A mirrored copy of the blueprint is not built yet.</p> : null}
+            {result.fit.kind === "mirror_image" ? <p className="hint">This room is the other hand of the blueprint. Assign a blueprint authored for the other hand; nothing is mirrored for you.</p> : null}
             {selected ? (
               <p className="note">
                 <b>{nameOf(selected)}</b>
