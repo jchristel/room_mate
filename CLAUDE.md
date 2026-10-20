@@ -451,10 +451,11 @@ tags/scale/template in the export.** Rules that are expensive to get wrong:
   and item count are weighed equally, each as a log-ratio, worked out from today's rooms and
   FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short
   side, so a rotated room reads the same.
-- **The Blueprint button pushes sheets ONLY, on purpose** (to change: plan decisions 18 and 19 make it push the room and its sheets to `.../blueprints/from-revit`; the server half is built, the button is not). A rooms or FF&E push replaces a
-  model's whole snapshot, so pushing just the chosen rooms' contents would make every other
-  room vanish from the viewer. The blueprint is captured on the server from rooms and FF&E
-  already pushed; the button only says which sheets belong to which room.
+- **The Blueprint button pushes a room and its sheets to `.../blueprints/from-revit`; the Sheets button
+  pushes sheets alone to the library.** The Blueprint button sends NO room contents: a rooms or FF&E push
+  replaces a model's whole snapshot, so the blueprint's room is captured on the server from what is
+  already pushed, and the button only says which room, which sheets and what name. A room with no sheet
+  is skipped, and a blueprint is not pushed unless every chosen sheet could be read.
 - **A library sheet stores a summary of its room** (`RoomSummary`: the enclosing rectangle's long and
   short sides, area, item count), worked out by the server when the room is set (push or the viewer's
   set-room), never sent by the extractor. Suggest ranks on it, so a sheet still ranks when its room has

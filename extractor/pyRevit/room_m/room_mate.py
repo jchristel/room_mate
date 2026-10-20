@@ -46,6 +46,7 @@ from room_m.utils.sheets import (
     pick as pick_items,
 )
 from room_m.exporters.sheets import read_sheets
+from room_m.post_blueprints import describe_outcome, explain_refusal, post_blueprint
 from room_m.post_sheets import describe_outcomes, post_sheets
 
 from room_m.utils.post_envelope import (
@@ -476,22 +477,20 @@ def sheets_export_entry(doc, uiapp, output, forms):
 
 
 def blueprint_export_entry(doc, uiapp, output, forms):
-    """The BLUEPRINT export: a phase, then the rooms, then the sheets that belong to each.
+    """The BLUEPRINT push: a phase, then the rooms, then the sheets that belong to each.
 
     1. **Phase.** The rooms offered are the placed rooms of the phase you pick.
-    2. **Rooms.** The rooms you want a blueprint's sheets for.
-    3. **Sheets, room by room.** For each chosen room, the sheets that are its room layout
-       sheets. A sheet is offered once: one already given to an earlier room is not offered
-       again, because a library sheet has one room.
+    2. **Rooms.** The rooms you want a blueprint from.
+    3. **Sheets, room by room.** For each chosen room, its room layout sheets. **A room with
+       no sheet is not pushed**: a blueprint is a room and its sheets together, and the server
+       refuses one without. A sheet is offered once: one given to an earlier room is not
+       offered again.
+    4. **Name.** One per room, defaulting to the room's name. A name the project already has
+       becomes a pending revision of that blueprint, to accept or reject in the viewer.
 
-    The sheets then go to the sheet library with their rooms named, which is the direct
-    association of decision 20 in docs/PLAN-blueprints.md.
-
-    **It pushes sheets only, and that is deliberate.** A rooms or FF&E push replaces a
-    model's whole snapshot, so pushing just the chosen rooms' contents would make every
-    other room vanish from the viewer. The blueprint itself is captured on the server from
-    the rooms and FF&E already pushed (use the Rooms and FFE buttons for those), so this
-    button only has to say which sheets belong to which room.
+    The room's contents are NOT sent: the server captures them from the rooms and FF&E it
+    already holds, so push those first with the Rooms and FFE buttons. A sheets-only push to the
+    library is the Sheets button (docs/PLAN-blueprints.md, decisions 18 and 19).
 
     **Not yet run in Revit.**
 
@@ -524,7 +523,7 @@ def blueprint_export_entry(doc, uiapp, output, forms):
                         title="Roommate - nothing to export", warn_icon=True)
             return_value.update_sep(False, "Export aborted: no placed rooms in that phase.")
             return return_value
-        chosen_rooms = pick_items(forms, rooms, "Select the rooms to export sheets for", "Use these rooms")
+        chosen_rooms = pick_items(forms, rooms, "Select the rooms to make blueprints from", "Use these rooms")
         if not chosen_rooms:
             return_value.update_sep(False, "Export aborted: no rooms selected.")
             return return_value
@@ -532,33 +531,60 @@ def blueprint_export_entry(doc, uiapp, output, forms):
         # 3. sheets, room by room
         available = sheets_of(selected_doc)
         if not available:
-            forms.alert("This model has no sheets.", title="Roommate - nothing to export", warn_icon=True)
+            forms.alert("This model has no sheets, and a blueprint needs its room layout sheets.",
+                        title="Roommate - nothing to export", warn_icon=True)
             return_value.update_sep(False, "Export aborted: the model has no sheets.")
             return return_value
-        assignments = []
+        plan = []
         taken = set()
         for room in chosen_rooms:
             remaining = [s for s in available if s["id"] not in taken]
-            if not remaining:
-                return_value.append_message("{}: no sheets left to choose from".format(room["label"]))
-                continue
             chosen = pick_items(
                 forms, remaining,
-                "Sheets for room {}".format(room["label"]),
-                "Use for this room")
+                "Sheets for room {} (at least one)".format(room["label"]),
+                "Use for this room") if remaining else []
             if chosen is None:
                 return_value.update_sep(False, "Export aborted at room {}.".format(room["label"]))
                 return return_value
+            if not chosen:
+                return_value.append_message(
+                    "{}: skipped, a blueprint needs at least one room layout sheet".format(room["label"]))
+                continue
             for entry in chosen:
                 taken.add(entry["id"])
-                assignments.append((entry, room))
-            return_value.append_message("{}: {} sheet(s)".format(room["label"], len(chosen)))
+            # 4. name
+            name = forms.ask_for_string(
+                default=room["name"] or room["label"],
+                prompt="Blueprint name for room {}".format(room["label"]),
+                title="Roommate - blueprint name")
+            if name is None:
+                return_value.update_sep(False, "Export aborted at room {}.".format(room["label"]))
+                return return_value
+            name = name.strip()
+            if not name:
+                return_value.append_message("{}: skipped, no blueprint name".format(room["label"]))
+                continue
+            plan.append((room, name, chosen))
 
-        if not assignments:
-            return_value.update_sep(False, "Nothing to push: no sheet was chosen for any room.")
+        if not plan:
+            return_value.update_sep(False, "Nothing to push: no room had both a sheet and a name.")
             return return_value
 
-        _push_sheets(project, assignments, selected_doc, phase_name, return_value)
+        for room, name, chosen in plan:
+            pushed, failures = read_sheets(selected_doc, [(entry, None) for entry in chosen], None)
+            for label, reason in failures:
+                return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
+            if failures or not pushed:
+                # A blueprint with some of its sheets would read as the whole layout.
+                return_value.update_sep(
+                    False, "{}: not pushed, because not every chosen sheet could be read.".format(name))
+                continue
+            ok, status, text, outcome = post_blueprint(
+                project["id"], name, room["id"], selected_doc.Title, selected_doc.Title, pushed)
+            if not ok:
+                return_value.update_sep(False, "{}: {}".format(name, explain_refusal(status, text)))
+                continue
+            return_value.append_message(describe_outcome(name, outcome))
     except Exception as e:
         return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
     return return_value
