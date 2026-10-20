@@ -92,6 +92,7 @@ export function Header() {
       <Search />
       <div className="links">
         <a href="/blueprints/">blueprints</a>
+        <a href="/tasks/">tasks</a>
         <a href="/reports/">reports</a>
         <a href="/settings/">settings</a>
       </div>

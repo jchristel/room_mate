@@ -430,8 +430,11 @@ get wrong:
 ## Room tasks: what a Revit session is told, kept as a record
 
 Built (server side): the task store (`tasks`), making tasks (`service::task_build`), the HTTP and MCP
-surface (`tasks_api`; MCP reads `list_tasks`, `get_task`). **Not built: the pyRevit "apply tasks" button,
-a viewer for the task list or its plan colouring, the update task kind.** Plan decisions 21 to 26.
+surface (`tasks_api`; MCP reads `list_tasks`, `get_task`) and the task list page at `/tasks/` (`src-js/tasks`:
+filters, a task's items, sheets, findings and attempts, dismiss, resend, and a panel that makes tasks of either
+kind; it reads the list again every few seconds to show what a session did). **Not built: the pyRevit "apply
+tasks" button, the plan colouring by last task status in the main viewer, the update task kind.** The server
+leaves an empty list out of a task, so the page reads a task back with its lists filled in. Plan decisions 21 to 26.
 
 - **A task is a record, unlike an assignment.** It holds the resolver's placements, the sheet layouts
   and the findings as they were when it was made, so what Revit writes cannot change underneath it. The

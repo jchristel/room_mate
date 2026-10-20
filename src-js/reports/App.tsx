@@ -147,6 +147,7 @@ export function App() {
         <div className="links">
           <a href="/">viewer</a>
           <a href="/blueprints/">blueprints</a>
+          <a href="/tasks/">tasks</a>
           <a href="/settings/">settings</a>
         </div>
       </header>
