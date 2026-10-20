@@ -215,3 +215,31 @@ export interface AssignmentRow {
   newer_revision: boolean;
   blueprint_missing: boolean;
 }
+
+// --- Several rooms at once ---
+
+export type Verdict = "clear" | "check" | "cannot";
+
+/** How the blueprint does in one room at the best fit: the resolver's answer boiled down to a row. */
+export interface RoomSolve {
+  room_id: string;
+  model_id?: string;
+  room_name: string;
+  verdict: Verdict;
+  reason: string;
+  fit?: FitKind;
+  shift?: number;
+  cost?: number | null;
+  door_gap_mm?: number | null;
+  placed: number;
+  items: number;
+  outside: number;
+  overlap: number;
+  doors_disagree: boolean;
+}
+
+export interface AssignOutcome {
+  room_id: string;
+  assigned: boolean;
+  error?: string;
+}

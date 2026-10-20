@@ -6,6 +6,7 @@
 import { apiGet, apiSend } from "./common.js";
 import type {
   AssignmentRow,
+  AssignOutcome,
   Blueprint,
   BlueprintSummary,
   CaptureResponse,
@@ -14,6 +15,7 @@ import type {
   ResolveResponse,
   RevisionContent,
   RoomRow,
+  RoomSolve,
   SourceRoom,
 } from "./types.js";
 
@@ -91,3 +93,11 @@ export const assign = (project: string, blueprintId: string, revision: number, r
 
 export const deleteAssignment = (project: string, id: string) =>
   send<null>("DELETE", `${base(project)}/assignments/${encodeURIComponent(id)}`, null);
+
+/** How a revision does in each of several rooms at the best fit. A read: nothing is stored. */
+export const solve = (project: string, id: string, revision: number, roomIds: string[]) =>
+  send<RoomSolve[]>("POST", `${base(project)}/blueprints/${encodeURIComponent(id)}/solve`, { revision, room_ids: roomIds });
+
+/** Put a revision in each of several rooms at the best fit, replacing each room's assignment. */
+export const assignMany = (project: string, blueprintId: string, revision: number, roomIds: string[], note?: string) =>
+  send<AssignOutcome[]>("POST", `${base(project)}/assignments/many`, { blueprint_id: blueprintId, revision, room_ids: roomIds, note });

@@ -12,12 +12,13 @@
 // REQUEST (blueprint, pinned revision, room, mapping), never the placements: they are worked out again
 // on every read, from the room as it stands.
 //
-// Not here yet: dragging, rotating or scaling a box over the main plan (this works in the blueprint's
-// own page, on one room at a time), per-item overrides, and assigning several rooms in one go.
+// Several rooms at once is `AssignMany`, which asks the same resolver about each and lets the person
+// tick. Not here yet: dragging, rotating or scaling a box over the main plan, and per-item overrides.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AssignCanvas } from "./AssignCanvas.js";
+import { AssignMany } from "./AssignMany.js";
 import * as api from "./api.js";
 import type { AssignmentRow, Blueprint, Finding, Mapping, ResolveResponse, RoomRow } from "./types.js";
 
@@ -69,6 +70,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
   const [byHand, setByHand] = useState<number[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [showTags, setShowTags] = useState(false);
+  const [many, setMany] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -209,6 +211,35 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
       </main>
 
       <aside className="inspector">
+        <div className="actions">
+          <button type="button" className={many ? "" : "on"} onClick={() => setMany(false)}>
+            One room
+          </button>
+          <button type="button" className={many ? "on" : ""} onClick={() => setMany(true)}>
+            Several rooms
+          </button>
+        </div>
+        {many ? (
+          <AssignMany
+            project={project}
+            blueprint={blueprint}
+            revision={revision}
+            rooms={rooms}
+            levels={levels}
+            assigned={assigned}
+            onPreview={choose}
+            onOpen={(r) => {
+              setMany(false);
+              choose(r);
+            }}
+            onAssigned={(m) => {
+              setNotice(m);
+              void refreshAssigned();
+            }}
+          />
+        ) : null}
+        {many ? null : (
+          <>
         <h3>Room</h3>
         {!rooms ? <p className="hint">Reading the rooms…</p> : null}
         <input type="search" placeholder="Filter rooms by name" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter rooms" />
@@ -224,8 +255,10 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
           ))}
         </ul>
         {rooms && rooms.length > shown.length ? <p className="hint">Showing {shown.length}; type to narrow. ● has an assignment.</p> : null}
+          </>
+        )}
 
-        {result ? (
+        {result && !many ? (
           <>
             <h3>Mapping</h3>
             <p className="sub">

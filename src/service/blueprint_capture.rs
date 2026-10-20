@@ -376,19 +376,48 @@ pub fn room_ring(state: &AppState, project: &str, room: &RoomRef) -> Result<Opti
 /// (`room_attribution`), but a door to the corridor is still a door of this room's wall, and
 /// that is the question orientation asks. A door with no footprint is left out.
 pub fn room_doors(state: &AppState, project: &str, room: &RoomRef) -> Result<Vec<SourceDoor>, ServiceError> {
+    Ok(project_doors(state, project)?
+        .into_iter()
+        .filter(|d| d.opens_onto(room))
+        .map(|d| d.door)
+        .collect())
+}
+
+/// A door with the rooms it names, for a caller asking about several rooms from one read.
+pub struct ProjectDoor {
+    pub model_id: String,
+    pub from_room: Option<String>,
+    pub to_room: Option<String>,
+    pub door: SourceDoor,
+}
+
+impl ProjectDoor {
+    /// Either side names `room`, in the room's own model (a room id is unique only within one).
+    pub fn opens_onto(&self, room: &RoomRef) -> bool {
+        let names = |side: &Option<String>| side.as_deref() == Some(room.room_id.as_str());
+        self.model_id == room.model_id && (names(&self.from_room) || names(&self.to_room))
+    }
+}
+
+/// Every door of the project that has a footprint, in millimetres. One read, so assigning many
+/// rooms costs one assembly of the doors and not one per room.
+pub fn project_doors(state: &AppState, project: &str) -> Result<Vec<ProjectDoor>, ServiceError> {
     let scope = OpeningScope { project: Some(project), ..Default::default() };
     let Some(assembled) = assemble_openings::<DoorPayload>(state, OpeningKind::Doors, &scope)? else {
         return Ok(Vec::new());
     };
-    let names = |side: &Option<String>| side.as_deref() == Some(room.room_id.as_str());
     Ok(assembled
         .openings
         .iter()
-        .filter(|d| d.model_id == room.model_id && (names(&d.door.from_room) || names(&d.door.to_room)))
         .filter_map(|d| {
             let outer = d.door.loops.first()?;
             let footprint: Vec<Pt> = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
-            (footprint.len() >= 3).then(|| SourceDoor { id: d.door.id.clone(), footprint })
+            (footprint.len() >= 3).then(|| ProjectDoor {
+                model_id: d.model_id.clone(),
+                from_room: d.door.from_room.clone(),
+                to_room: d.door.to_room.clone(),
+                door: SourceDoor { id: d.door.id.clone(), footprint },
+            })
         })
         .collect())
 }

@@ -319,7 +319,8 @@ the sliver rules since removed, and again after).
 Built: the store, capture, the resolver (blueprint + another room -> placements and findings)
 the blueprint viewer (`/blueprints/`), the assign view (the same page, "Assign to rooms"), the
 assignment store and the HTTP/MCP reads and writes. **Not built: dragging a box over the main plan,
-per-item overrides, a mirrored copy, anything toward Revit.**
+per-item overrides, anything toward Revit. No mirrored copy, on purpose: handed families make a reflection
+wrong in ways that look right, so a person authors the other hand as its own blueprint.**
 The reasoning and the measurements behind every rule below are in
 [`PLAN-blueprints.md`](docs/PLAN-blueprints.md) and its stage 0 note; what is expensive to
 get wrong:
@@ -379,6 +380,10 @@ get wrong:
 - **The assign view is a mode of the blueprints page, not a drawing over the main plan.** It draws
   the resolver's answer (`AssignCanvas`) and chooses what to ask; it has no placement rule of its
   own. Solid bar = a door the room has, dashed = where the blueprint's lands.
+- **Assigning several rooms is the same resolver, asked once per room** (`service::blueprint_solve`,
+  `POST .../blueprints/{id}/solve`, `POST .../assignments/many`). The rooms and doors are read once for the
+  batch; each row is a verdict (`clear`, `check`, `cannot`) that is advice and never a gate. The batch assigns
+  the best fit only: a mapping by hand is a decision about one room and stays in the single-room view.
 - **Resolving is partly manual, by design.** `edge_map` on resolve is the person's own mapping of
   blueprint edges to room edges (the way to place in a room with a different edge count); the fit
   kind is then `manual` and nothing about the mapping is judged.
