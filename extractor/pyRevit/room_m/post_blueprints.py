@@ -21,6 +21,7 @@ except ImportError:  # CPython 3
     from urllib.parse import quote
 
 from room_m.post_common import _post_content
+from room_m.sheet_tags import take_tags
 
 SERVER_URL = "http://127.0.0.1:5151/projects/{}/blueprints/from-revit"
 
@@ -35,13 +36,10 @@ def blueprint_url(project_id):
 
 def strip_tags(sheet):
     """Drop tag data from a sheet before it is pushed (plan decision 24): tags belong to the
-    items of one room and do not travel with a layout. duHast does not export tags today, so
-    this removes nothing yet; it keeps the rule true when it does."""
-    if isinstance(sheet, dict):
-        sheet.pop("tags", None)
-        for port in sheet.get("view_ports", []) or []:
-            if isinstance(port, dict):
-                port.pop("tags", None)
+    items of one room and do not travel with a layout. `read_sheet` has already taken them out
+    (`room_m.sheet_tags.take_tags`); this keeps the rule true for a sheet that was not read
+    that way."""
+    take_tags(sheet)
     return sheet
 
 

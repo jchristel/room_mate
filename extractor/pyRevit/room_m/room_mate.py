@@ -48,6 +48,7 @@ from room_m.utils.sheets import (
 from room_m.exporters.sheets import read_sheets
 from room_m.post_blueprints import describe_outcome, explain_refusal, post_blueprint
 from room_m.post_sheets import describe_outcomes, post_sheets
+from room_m.sheet_tags import describe_problems
 
 from room_m.utils.post_envelope import (
     build_run_envelope,
@@ -413,12 +414,24 @@ def _single_document(doc, forms, button_name):
     return picked[0]
 
 
+def _report_tags(pushed, return_value):
+    """Say how many tags were read from the sheets, and any that were skipped. Nothing sends
+    them yet: the server has no tag rules store, so they are read and left out of the push."""
+    for p in pushed:
+        for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
+            return_value.append_message(line)
+    count = sum(len(p.get("tags") or []) for p in pushed)
+    if count:
+        return_value.append_message("{} tag(s) read; they are not pushed yet (no tag rules store)".format(count))
+
+
 def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
     """Read the chosen sheets with duHast and push them to the sheet library, reporting what
     the server did with each. `assignments` is a list of `(sheet entry, room or None)`."""
     pushed, failures = read_sheets(selected_doc, assignments, phase_name)
     for label, reason in failures:
         return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
+    _report_tags(pushed, return_value)
     if not pushed:
         return_value.update_sep(False, "No sheet could be read, so nothing was pushed.")
         return
@@ -574,6 +587,7 @@ def blueprint_export_entry(doc, uiapp, output, forms):
             pushed, failures = read_sheets(selected_doc, [(entry, None) for entry in chosen], None)
             for label, reason in failures:
                 return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
+            _report_tags(pushed, return_value)
             if failures or not pushed:
                 # A blueprint with some of its sheets would read as the whole layout.
                 return_value.update_sep(

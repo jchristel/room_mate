@@ -8,11 +8,25 @@ sent as it stands: this module does not re-measure a viewport. What it ADDS is t
 identity the server needs and duHast does not carry as one thing -- the Revit sheet id and
 the document title, together -- and the room the person chose.
 
-Not in duHast's export, so not here: tags and their positions, view scale, view template,
-view names. See docs/PLAN-blueprints.md, track B.
+**Tags are taken out of the sheet** (`room_m.sheet_tags`): the sheet that goes to the library
+or a blueprint has none, and they come back as `pushed["tags"]` (observations) with what could
+not be read in `pushed["tag_problems"]`. Both are the extractor's own keys: the pushers drop
+them. Not in duHast's export, so not here: view template, view names. See
+docs/PLAN-blueprints.md, track B.
 """
 
 from room_m.post_common import duhast_to_plain
+from room_m.sheet_tags import take_tags
+
+
+def _tag_problems():
+    """The tags duHast skipped while converting the sheet (see `to_data_tag.take_problems`);
+    none when this duHast does not read tags."""
+    try:
+        from duHast.Revit.Annotation.Export.to_data_tag import take_problems
+    except ImportError:
+        return []
+    return take_problems()
 
 
 def read_sheet(doc, entry, room=None, phase_name=None):
@@ -30,6 +44,11 @@ def read_sheet(doc, entry, room=None, phase_name=None):
         "sheet_name": entry["name"],
         "sheet": duhast_to_plain(data),
     }
+    pushed["tags"] = take_tags(
+        pushed["sheet"],
+        {"document_title": doc.Title, "revit_sheet_id": entry["id"], "sheet_number": entry["number"]},
+    )
+    pushed["tag_problems"] = _tag_problems()
     if room is not None:
         # The server holds the room as `{model_id, room_id}`; a model is its document's title,
         # as everywhere else in this extractor.

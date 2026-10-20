@@ -26,6 +26,14 @@ def sheets_url(project_id):
     return SERVER_URL.format(quote(project_id, safe=""))
 
 
+# The extractor's own keys on a read sheet: not part of what the library stores.
+_EXTRACTOR_KEYS = ("tags", "tag_problems")
+
+
+def _library_sheet(pushed):
+    return dict((k, v) for k, v in pushed.items() if k not in _EXTRACTOR_KEYS)
+
+
 def post_sheets(project_id, pushed):
     """POST `pushed` (a list from `room_m.exporters.sheets.read_sheets`) and return
     `(ok, status, text, outcomes)`; `outcomes` is the server's per-sheet answer, or `[]`
@@ -35,7 +43,7 @@ def post_sheets(project_id, pushed):
 
     # ensure_ascii=False, as every other push here does: escaping a non-ASCII character under
     # IronPython 2.7 decodes with the system code page and aborts the push.
-    body = json.dumps({"sheets": pushed}, ensure_ascii=False)
+    body = json.dumps({"sheets": [_library_sheet(p) for p in pushed]}, ensure_ascii=False)
     ok, status, text = _post_content(
         sheets_url(project_id), StringContent(body, Encoding.UTF8, "application/json")
     )
