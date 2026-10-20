@@ -27,11 +27,10 @@ import { fileNameFor, toFile, type Imported } from "./exchange.js";
 import { pt } from "./geometry.js";
 import { ImportBlueprint } from "./ImportBlueprint.js";
 import { Inspector } from "./Inspector.js";
-import { NewBlueprint } from "./NewBlueprint.js";
 import { Timeline } from "./Timeline.js";
 import type { Blueprint, BlueprintItem, BlueprintSummary, PendingRevision, ProjectRow } from "./types.js";
 
-type Panel = "none" | "new" | "import";
+type Panel = "none" | "import";
 
 const message = (e: unknown): string => String((e as Error).message ?? e);
 
@@ -237,24 +236,11 @@ export function App() {
             selectedId={blueprint?.id ?? null}
             busy={busy}
             onSelect={(id) => void open(id)}
-            onNew={() => setPanel("new")}
             onImport={() => setPanel("import")}
             onExport={exportFile}
             onRename={() => void rename()}
             onDelete={() => void remove()}
           />
-          {projectId && panel === "new" ? (
-            <NewBlueprint
-              project={projectId}
-              onCancel={() => setPanel("none")}
-              onCreated={(b) => {
-                setPanel("none");
-                show(b);
-                setNotice(`Created "${b.name}".`);
-                void refreshRows(projectId);
-              }}
-            />
-          ) : null}
           {projectId && panel === "import" ? (
             <ImportBlueprint project={projectId} projects={projects} existing={rows ?? []} onImported={(r) => void imported(r)} onCancel={() => setPanel("none")} />
           ) : null}

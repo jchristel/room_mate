@@ -162,6 +162,7 @@ pub fn capture_with_doors(
             },
             items: items.into_iter().map(|(item, _)| item).collect(),
             doors: blueprint_doors(doors, origin, &coarse, &es),
+            sheets: Vec::new(),
         },
         skipped,
     })

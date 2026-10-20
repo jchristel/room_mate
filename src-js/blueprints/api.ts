@@ -9,7 +9,6 @@ import type {
   AssignOutcome,
   Blueprint,
   BlueprintSummary,
-  CaptureResponse,
   Mapping,
   ProjectRow,
   ResolveResponse,
@@ -42,9 +41,6 @@ export const getBlueprint = (project: string, id: string) =>
  *  looks it up (refusing, naming the models, if more than one has it). */
 export const listRooms = (project: string) =>
   apiGet<{ rooms: RoomRow[]; levels: { id: string; name: string }[] }>(`/rooms?project=${encodeURIComponent(project)}`);
-
-export const capture = (project: string, roomId: string) =>
-  apiGet<CaptureResponse>(`${base(project)}/blueprints/capture?room_id=${encodeURIComponent(roomId)}`);
 
 export const createBlueprint = (project: string, name: string, source: SourceRoom | null, content: RevisionContent, note?: string) =>
   send<Blueprint>("POST", `${base(project)}/blueprints`, { name, source, note, ...content });

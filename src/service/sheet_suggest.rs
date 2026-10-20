@@ -7,9 +7,10 @@
 //! against 10 is not the same distance as 105 against 110. The distance is the plain mean
 //! of the three, and the figures ride the answer so a person sees *why* a sheet was offered.
 //!
-//! **Worked out at read time, never stored.** A sheet stores the room it was made for; this
-//! reads that room's outline and items as they are today, so a room that has been redrawn
-//! changes its sheet's rank and nothing is rewritten.
+//! **A sheet is ranked on the summary of its room stored at push** (`RoomSummary`, plan decision
+//! 25), so it still ranks when that room has since been redrawn or is not on the server. A sheet
+//! with no stored summary (pushed before it existed) is read from its room as it is today.
+//! The target room is always read as it is today.
 //!
 //! **A suggestion is offered, never applied.** The ranking is the whole product: it chooses
 //! nothing, and it is only asked for in sheet creation mode. A sheet with no room cannot be
@@ -22,7 +23,7 @@
 
 use serde::Serialize;
 
-use crate::sheets::{SheetRecord, SheetRoom};
+use crate::sheets::{RoomSummary, SheetRecord, SheetRoom};
 use crate::state::AppState;
 
 use super::blueprint_capture::FT_TO_MM;
@@ -96,11 +97,17 @@ const M2_PER_MM2: f64 = 1.0e-6;
 /// The long side over the short side of the smallest rectangle (over the outline's own edge
 /// directions) that encloses the outline.
 pub fn proportion_of(ring: &[Pt]) -> f64 {
+    enclosing_rectangle(ring).map_or(1.0, |(long, short)| long / short)
+}
+
+/// The long and short sides, mm, of the smallest rectangle (over the outline's own edge
+/// directions) that encloses the outline. `None` for an outline with no area.
+pub fn enclosing_rectangle(ring: &[Pt]) -> Option<(f64, f64)> {
     let ring = simplify(ring, COARSE_TOLERANCE_MM);
     if ring.len() < 3 {
-        return 1.0;
+        return None;
     }
-    let mut best: Option<(f64, f64)> = None; // (area, proportion)
+    let mut best: Option<(f64, f64, f64)> = None; // (area, long, short)
     for e in edges(&ring) {
         let n = (-e.t.1, e.t.0);
         let (mut lo_t, mut hi_t, mut lo_n, mut hi_n) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
@@ -116,11 +123,44 @@ pub fn proportion_of(ring: &[Pt]) -> f64 {
             continue;
         }
         let area = w * h;
-        if best.is_none_or(|(a, _)| area < a) {
-            best = Some((area, w.max(h) / w.min(h)));
+        if best.is_none_or(|(a, _, _)| area < a) {
+            best = Some((area, w.max(h), w.min(h)));
         }
     }
-    best.map_or(1.0, |(_, p)| p)
+    best.map(|(_, long, short)| (long, short))
+}
+
+impl From<RoomSummary> for Signature {
+    fn from(s: RoomSummary) -> Self {
+        Signature {
+            area_m2: s.area_m2,
+            proportion: if s.y_mm > 0.0 { s.x_mm / s.y_mm } else { 1.0 },
+            items: s.items,
+        }
+    }
+}
+
+/// What a library sheet stores about its room (decision 25), worked out now from the rooms and
+/// FF&E the project holds. `Ok(None)` when the room is not among them.
+pub fn room_summary(state: &AppState, project: &str, room: &RoomRef) -> Result<Option<RoomSummary>, ServiceError> {
+    let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
+        return Ok(None);
+    };
+    let Some(found) = rooms.rooms.iter().find(|r| r.model_id == room.model_id && r.room.id == room.room_id) else {
+        return Ok(None);
+    };
+    let Some(outer) = found.room.loops.first() else {
+        return Ok(None);
+    };
+    let ring: Vec<Pt> = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
+    let Some((x_mm, y_mm)) = enclosing_rectangle(&ring) else {
+        return Ok(None);
+    };
+    let mut items = 0;
+    if let Some(ffe) = assemble_items(state, &ItemScope { project: Some(project), ..Default::default() })? {
+        items = ffe.ffe.iter().filter(|it| it.owner_rooms_qualified.contains(room)).count();
+    }
+    Ok(Some(RoomSummary { x_mm, y_mm, area_m2: signed_area(&ring).abs() * M2_PER_MM2, items }))
 }
 
 fn ratio_distance(a: f64, b: f64) -> f64 {
@@ -216,6 +256,14 @@ pub fn suggest(
             continue;
         };
         let room_ref = RoomRef { model_id: sheet_room.model_id.clone(), room_id: sheet_room.room_id.clone() };
+        // The summary stored at push wins: it is what the sheet was made for, and it still ranks
+        // when its room has moved on or is not on the server. Only a sheet without one is read
+        // from its room as it is today.
+        if let Some(summary) = sheet.room_summary {
+            let name = signature_of(&room_ref).map_or_else(String::new, |(name, _)| name);
+            candidates.push((sheet, sheet_room.clone(), name, Signature::from(summary)));
+            continue;
+        }
         match signature_of(&room_ref) {
             Some((name, sig)) => candidates.push((sheet, sheet_room.clone(), name, sig)),
             None => unresolved.push(Unresolved {
@@ -265,6 +313,7 @@ mod tests {
             sheet_name: String::new(),
             room: None,
             phase: None,
+            room_summary: None,
             received_at: String::new(),
             sheet: json!({}),
             pending: vec![],
@@ -282,6 +331,14 @@ mod tests {
         let turned: Vec<Pt> =
             rect(4000.0, 2000.0).into_iter().map(|p| (p.0 * k - p.1 * s, p.0 * s + p.1 * k)).collect();
         assert!((proportion_of(&turned) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_the_enclosing_rectangle_gives_the_sides_and_a_stored_summary_reads_as_a_signature() {
+        let (long, short) = enclosing_rectangle(&rect(4000.0, 2500.0)).unwrap();
+        assert!((long - 4000.0).abs() < 1e-6 && (short - 2500.0).abs() < 1e-6);
+        let sig = Signature::from(RoomSummary { x_mm: 4000.0, y_mm: 2000.0, area_m2: 7.5, items: 4 });
+        assert_eq!((sig.area_m2, sig.proportion, sig.items), (7.5, 2.0, 4));
     }
 
     #[test]

@@ -384,6 +384,13 @@ get wrong:
   `POST .../blueprints/{id}/solve`, `POST .../assignments/many`). The rooms and doors are read once for the
   batch; each row is a verdict (`clear`, `check`, `cannot`) that is advice and never a gate. The batch assigns
   the best fit only: a mapping by hand is a decision about one room and stays in the single-room view.
+- **A blueprint comes only from Revit, with its sheets** (`POST .../blueprints/from-revit`). The server
+  captures the room from the rooms and FF&E already pushed and attaches the sheets the user chose;
+  a new name creates, an existing name becomes a pending revision. `create` and `push` refuse content
+  with no sheets; an edit copies the current revision's sheets forward and never changes them. A
+  sheet in a blueprint is layout only (no tags) and its number, name and id are never used on
+  assignment. A blueprint made before this has no sheets, stays valid and says so. The viewer has no
+  "new from a room". Import/export carry sheets and doors; a file without sheets is refused.
 - **Resolving is partly manual, by design.** `edge_map` on resolve is the person's own mapping of
   blueprint edges to room edges (the way to place in a room with a different edge count); the fit
   kind is then `manual` and nothing about the mapping is judged.
@@ -444,10 +451,14 @@ tags/scale/template in the export.** Rules that are expensive to get wrong:
   and item count are weighed equally, each as a log-ratio, worked out from today's rooms and
   FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short
   side, so a rotated room reads the same.
-- **The Blueprint button pushes sheets ONLY, on purpose.** A rooms or FF&E push replaces a
+- **The Blueprint button pushes sheets ONLY, on purpose** (to change: plan decisions 18 and 19 make it push the room and its sheets to `.../blueprints/from-revit`; the server half is built, the button is not). A rooms or FF&E push replaces a
   model's whole snapshot, so pushing just the chosen rooms' contents would make every other
   room vanish from the viewer. The blueprint is captured on the server from rooms and FF&E
   already pushed; the button only says which sheets belong to which room.
+- **A library sheet stores a summary of its room** (`RoomSummary`: the enclosing rectangle's long and
+  short sides, area, item count), worked out by the server when the room is set (push or the viewer's
+  set-room), never sent by the extractor. Suggest ranks on it, so a sheet still ranks when its room has
+  been redrawn or is not on the server; a sheet without one is read from its room as before.
 - **Neither sheet entry point is in `ENTITY_EXPORTERS`.** They are selection-driven, and the
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
   side was checked for syntax, ASCII and duHast-import closure only.

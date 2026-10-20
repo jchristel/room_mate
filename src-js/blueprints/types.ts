@@ -68,10 +68,22 @@ export interface BlueprintDoor {
   width_mm: number;
 }
 
+/** A room layout sheet a blueprint carries: layout only, no tags. Its number, name and id are for
+ *  recognising it on a re-push and are never used on assignment. Opaque to this page. */
+export interface BlueprintSheet {
+  revit_sheet_id: string;
+  document_title: string;
+  sheet_number: string;
+  sheet_name?: string;
+  sheet: unknown;
+}
+
 export interface RevisionContent {
   outline: Outline;
   items: BlueprintItem[];
   doors?: BlueprintDoor[];
+  /** Absent on a revision made before sheets were held. */
+  sheets?: BlueprintSheet[];
 }
 
 export interface Revision extends RevisionContent {
@@ -118,13 +130,8 @@ export interface BlueprintSummary {
   revisions: number;
   pending: number;
   items: number;
-}
-
-export interface CaptureResponse extends RevisionContent {
-  room_name: string;
-  /** The model the server resolved the room in. */
-  model_id: string;
-  skipped: { nested: number; no_footprint: number };
+  /** Room layout sheets in the current revision. */
+  sheets: number;
 }
 
 export interface ProjectRow {

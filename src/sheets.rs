@@ -50,6 +50,22 @@ pub struct SheetRoom {
     pub room_id: String,
 }
 
+/// The room a sheet was made for, as it was when the sheet was pushed (plan decision 25): so
+/// the sheet can be compared with a task's room without that room being on the server, or
+/// unchanged. **No geometry**, and worked out by the server from the rooms and FF&E it holds,
+/// never sent by the extractor.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RoomSummary {
+    /// The long side of the room's smallest enclosing rectangle, mm.
+    pub x_mm: f64,
+    /// The short side of that rectangle, mm.
+    pub y_mm: f64,
+    /// The room's area, square metres.
+    pub area_m2: f64,
+    /// FF&E items attributed to the room.
+    pub items: usize,
+}
+
 /// A re-push that matched an existing sheet but changed its number, waiting for a person.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingSheet {
@@ -61,6 +77,8 @@ pub struct PendingSheet {
     pub room: Option<SheetRoom>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_summary: Option<RoomSummary>,
     pub sheet: Value,
 }
 
@@ -87,6 +105,10 @@ pub struct SheetRecord {
     /// The Revit phase the export was run under, when it was run through the blueprint route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
+    /// The room as it was when the sheet's room was set (decision 25). Absent for a sheet pushed
+    /// before this was stored, or whose room was not on the server then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_summary: Option<RoomSummary>,
     /// When the sheet's data last arrived.
     pub received_at: String,
     /// The sheet as duHast exports it.
@@ -113,6 +135,8 @@ pub struct SheetSummary {
     pub sheet_number: String,
     pub sheet_name: String,
     pub room: Option<SheetRoom>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_summary: Option<RoomSummary>,
     pub viewports: usize,
     pub pending: usize,
 }
@@ -127,6 +151,7 @@ impl From<&SheetRecord> for SheetSummary {
             sheet_number: r.sheet_number.clone(),
             sheet_name: r.sheet_name.clone(),
             room: r.room.clone(),
+            room_summary: r.room_summary,
             viewports: r.sheet.get("view_ports").and_then(Value::as_array).map_or(0, Vec::len),
             pending: r.pending.len(),
         }
@@ -145,6 +170,9 @@ pub struct PushedSheet {
     pub room: Option<SheetRoom>,
     #[serde(default)]
     pub phase: Option<String>,
+    /// Filled in by the server from the rooms and FF&E it holds; whatever the extractor sends is ignored.
+    #[serde(default, skip_deserializing)]
+    pub room_summary: Option<RoomSummary>,
     pub sheet: Value,
 }
 
@@ -184,6 +212,9 @@ pub struct UpdateRequest {
     /// Remove it. Wins over `room`.
     #[serde(default)]
     pub clear_room: bool,
+    /// Filled in by the server for the new room; never read from the request.
+    #[serde(default, skip_deserializing)]
+    pub room_summary: Option<RoomSummary>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -359,6 +390,7 @@ fn check_pushed(p: &PushedSheet) -> Result<PushedSheet, SheetError> {
         sheet_name: check_text("sheet name", &p.sheet_name, false)?,
         room: p.room.clone(),
         phase: p.phase.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        room_summary: p.room_summary,
         sheet: p.sheet.clone(),
     })
 }
@@ -407,6 +439,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     sheet_name: p.sheet_name,
                     room: p.room,
                     phase: p.phase,
+                    room_summary: p.room_summary,
                     received_at,
                     sheet: p.sheet,
                     pending: Vec::new(),
@@ -426,6 +459,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                 // The room chosen in Revit is an explicit choice, so it sets; no room keeps what is there.
                 if p.room.is_some() {
                     record.room = p.room;
+                    record.room_summary = p.room_summary;
                 }
                 if p.phase.is_some() {
                     record.phase = p.phase;
@@ -451,6 +485,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     sheet_name: p.sheet_name,
                     room: p.room,
                     phase: p.phase,
+                    room_summary: p.room_summary,
                     sheet: p.sheet,
                 });
                 write(projects_dir, project, record)?;
@@ -482,8 +517,10 @@ pub fn update(projects_dir: &Path, project: &str, id: &str, request: UpdateReque
     }
     if request.clear_room {
         record.room = None;
+        record.room_summary = None;
     } else if request.room.is_some() {
         record.room = request.room;
+        record.room_summary = request.room_summary;
     }
     record.taken_at = next_stamp(&record.taken_at);
     write(projects_dir, project, &record)?;
@@ -517,6 +554,7 @@ pub fn accept(
     record.received_at = accepted.received_at;
     if accepted.room.is_some() {
         record.room = accepted.room;
+        record.room_summary = accepted.room_summary;
     }
     if accepted.phase.is_some() {
         record.phase = accepted.phase;
@@ -582,8 +620,47 @@ mod tests {
             sheet_name: format!("Layout {number}"),
             room: None,
             phase: None,
+            room_summary: None,
             sheet: json!({ "view_ports": [{}, {}, {}] }),
         }
+    }
+
+    fn summary(items: usize) -> RoomSummary {
+        RoomSummary { x_mm: 4000.0, y_mm: 3000.0, area_m2: 12.0, items }
+    }
+
+    /// The room's summary is stored with the sheet, follows its room, and is dropped with it.
+    #[test]
+    fn test_the_room_summary_is_stored_replaced_with_the_room_and_cleared_with_it() {
+        let dir = temp_dir("summary");
+        let mut s = sheet("1", "Doc", "RLS-01");
+        s.room = room("m", "r1");
+        s.room_summary = Some(summary(7));
+        let pushed = push_one(&dir, s);
+        let rec = load(&dir, "p1", &pushed.id).unwrap();
+        assert_eq!(rec.room_summary, Some(summary(7)));
+        let moved = update(
+            &dir,
+            "p1",
+            &rec.id,
+            UpdateRequest {
+                base: rec.taken_at.clone(),
+                room: room("m", "r2"),
+                clear_room: false,
+                room_summary: Some(summary(9)),
+            },
+        )
+        .unwrap();
+        assert_eq!(moved.room_summary, Some(summary(9)));
+        let cleared = update(
+            &dir,
+            "p1",
+            &rec.id,
+            UpdateRequest { base: moved.taken_at, room: None, clear_room: true, room_summary: None },
+        )
+        .unwrap();
+        assert_eq!((cleared.room, cleared.room_summary), (None, None));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn push_one(dir: &Path, s: PushedSheet) -> PushOutcome {
@@ -700,7 +777,12 @@ mod tests {
             &dir,
             "p1",
             &first.id,
-            UpdateRequest { base: rec.taken_at.clone(), room: room("m", "r1"), clear_room: false },
+            UpdateRequest {
+                base: rec.taken_at.clone(),
+                room: room("m", "r1"),
+                clear_room: false,
+                room_summary: None,
+            },
         )
         .unwrap();
         assert_eq!(set.room, room("m", "r1"));
@@ -708,11 +790,16 @@ mod tests {
             &dir,
             "p1",
             &first.id,
-            UpdateRequest { base: rec.taken_at, room: room("m", "r2"), clear_room: false },
+            UpdateRequest { base: rec.taken_at, room: room("m", "r2"), clear_room: false, room_summary: None },
         );
         assert!(matches!(stale, Err(SheetError::Conflict(_))));
-        let cleared =
-            update(&dir, "p1", &first.id, UpdateRequest { base: set.taken_at, room: None, clear_room: true }).unwrap();
+        let cleared = update(
+            &dir,
+            "p1",
+            &first.id,
+            UpdateRequest { base: set.taken_at, room: None, clear_room: true, room_summary: None },
+        )
+        .unwrap();
         assert_eq!(cleared.room, None);
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -13,9 +13,11 @@ use axum::{
 use serde::Deserialize;
 
 use crate::service::blueprint_capture::qualify_room;
+use crate::service::room_locator::RoomRef;
 use crate::service::sheet_suggest::{self, Suggestions};
 use crate::sheets::{
-    self, DecideRequest, PushOutcome, PushRequest, SheetError, SheetRecord, SheetSummary, UpdateRequest,
+    self, DecideRequest, PushOutcome, PushRequest, RoomSummary, SheetError, SheetRecord, SheetRoom, SheetSummary,
+    UpdateRequest,
 };
 use crate::state::Shared;
 
@@ -53,21 +55,45 @@ pub async fn http_get_sheet(
     sheets::load(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
 }
 
+/// The room's summary as the server holds it now (plan decision 25). `None` when the room is not
+/// on the server: the sheet is still stored, and is ranked from its room as it is read later.
+fn summary_of(state: &Shared, project: &str, room: &SheetRoom) -> Option<RoomSummary> {
+    let room = RoomRef { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
+    match sheet_suggest::room_summary(state, project, &room) {
+        Ok(found) => found,
+        Err(e) => {
+            tracing::warn!("room summary for a sheet push failed: {e}");
+            None
+        }
+    }
+}
+
 /// The extractor's push. 200 with what happened to each sheet: created, updated, or stashed
-/// as pending because its number changed.
+/// as pending because its number changed. Each sheet that names a room also stores a summary of
+/// it, read from the rooms and FF&E pushed already.
 pub async fn http_push_sheets(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
-    Json(request): Json<PushRequest>,
+    Json(mut request): Json<PushRequest>,
 ) -> Result<Json<Vec<PushOutcome>>, (StatusCode, String)> {
+    let mut seen: std::collections::HashMap<(String, String), Option<RoomSummary>> = std::collections::HashMap::new();
+    for sheet in &mut request.sheets {
+        if let Some(room) = &sheet.room {
+            let key = (room.model_id.clone(), room.room_id.clone());
+            sheet.room_summary = *seen.entry(key).or_insert_with(|| summary_of(&state, &project_id, room));
+        }
+    }
     sheets::push(&dir(&state)?, &project_id, request).map(Json).map_err(to_http)
 }
 
 pub async fn http_update_sheet(
     State(state): State<Shared>,
     UrlPath((project_id, id)): UrlPath<(String, String)>,
-    Json(request): Json<UpdateRequest>,
+    Json(mut request): Json<UpdateRequest>,
 ) -> Result<Json<SheetRecord>, (StatusCode, String)> {
+    if let Some(room) = &request.room {
+        request.room_summary = summary_of(&state, &project_id, room);
+    }
     sheets::update(&dir(&state)?, &project_id, &id, request).map(Json).map_err(to_http)
 }
 

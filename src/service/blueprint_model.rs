@@ -186,6 +186,25 @@ pub struct BlueprintDoor {
     pub width_mm: f64,
 }
 
+/// A room layout sheet a blueprint carries: the layout of the sheets to make for a room that is
+/// assigned the blueprint. **A copy, independent of the sheet library** (plan decision 18), and
+/// **layout only**: no tags (decision 24), and the sheet's number, name and id are kept to
+/// recognise it on a re-push and are never used on assignment (the Revit side generates those
+/// from the target room).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BlueprintSheet {
+    /// The sheet's `ElementId` in its document. With `document_title`, its identity on a re-push.
+    pub revit_sheet_id: String,
+    pub document_title: String,
+    /// As in the source model: informational.
+    pub sheet_number: String,
+    #[serde(default)]
+    pub sheet_name: String,
+    /// The sheet as duHast exports it (viewports with sheet positions and types, schedules),
+    /// opaque to the server like a library sheet's body.
+    pub sheet: serde_json::Value,
+}
+
 /// Everything one revision of a blueprint holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RevisionContent {
@@ -194,6 +213,10 @@ pub struct RevisionContent {
     /// Absent in a revision written before doors were captured, which is not "no doors".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub doors: Vec<BlueprintDoor>,
+    /// The room layout sheets the Revit push carried. Empty in a revision made before sheets
+    /// were held, which is not "no sheets wanted": a task from it cannot create sheets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheets: Vec<BlueprintSheet>,
 }
 
 /// What capture left out, as numbers: a silence would read as "there was nothing there".

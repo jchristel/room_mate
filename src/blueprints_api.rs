@@ -16,10 +16,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::blueprints::{
     self, AddRevisionRequest, Blueprint, BlueprintError, BlueprintSummary, CreateRequest, DecideRequest, PushRequest,
-    UpdateRequest,
+    SourceRoom, UpdateRequest,
 };
 use crate::service::blueprint_capture::{capture_room, qualify_room};
-use crate::service::blueprint_model::{RevisionContent, Skipped};
+use crate::service::blueprint_model::{BlueprintSheet, RevisionContent, Skipped};
 use crate::service::blueprint_resolve::{resolve_in_room, EdgeMap, Resolution};
 use crate::state::Shared;
 
@@ -263,4 +263,104 @@ pub fn service_error(err: crate::service::ServiceError) -> (StatusCode, String) 
             (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
         }
     }
+}
+
+/// What the Revit push sends: a room, the sheets chosen for it, and the name of the blueprint.
+/// **The room data is not sent**: the server captures it from the rooms and FF&E already pushed
+/// (one capture rule, in Rust), so the plugin only says which room and which sheets.
+#[derive(Deserialize)]
+pub struct RevitPushBody {
+    pub name: String,
+    pub room_id: String,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Who pushed, for the timeline (for example the Revit document's title).
+    #[serde(default)]
+    pub origin: Option<String>,
+    pub sheets: Vec<BlueprintSheet>,
+}
+
+#[derive(Serialize)]
+pub struct RevitPushOutcome {
+    pub blueprint_id: String,
+    pub name: String,
+    /// `created` (a new blueprint, revision 1 current) or `pending` (a revision of the blueprint
+    /// of that name, waiting for a person to accept it).
+    pub outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_id: Option<u32>,
+    pub room_name: String,
+    pub skipped: Skipped,
+}
+
+/// A blueprint from Revit: the room as the server holds it, plus the sheets the user chose.
+/// **The only way a blueprint is made** (plan decision 18), so sheets are required. A name the
+/// project already has becomes a pending revision of that blueprint, never an overwrite
+/// (decision 10); a new name creates one.
+pub async fn http_push_from_revit(
+    State(state): State<Shared>,
+    UrlPath(project_id): UrlPath<String>,
+    Json(body): Json<RevitPushBody>,
+) -> Result<(StatusCode, Json<RevitPushOutcome>), (StatusCode, String)> {
+    if body.sheets.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "a blueprint push carries the room's layout sheets; pick at least one".to_string(),
+        ));
+    }
+    let room = match qualify_room(&state, &project_id, &body.room_id, body.model_id.as_deref()) {
+        Ok(Some(room)) => room,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
+        Err(e) => return Err(service_error(e)),
+    };
+    let (captured, room_name) = match capture_room(&state, &project_id, &room) {
+        Ok(Some(found)) => found,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
+        Err(e) => return Err(service_error(e)),
+    };
+    let mut content = captured.content;
+    content.sheets = body.sheets;
+    let projects = dir(&state)?;
+    let name = body.name.trim().to_string();
+    let existing = blueprints::list(&projects, &project_id)
+        .map_err(to_http)?
+        .into_iter()
+        .find(|b| b.name == name);
+    let source = SourceRoom { model_id: room.model_id, room_id: room.room_id, room_name: room_name.clone() };
+    let (blueprint, outcome, pending_id) = match existing {
+        Some(found) => {
+            let pushed = blueprints::push(
+                &projects,
+                &project_id,
+                &found.id,
+                PushRequest { origin: body.origin, note: body.note, content },
+            )
+            .map_err(to_http)?;
+            let pending_id = pushed.last_pending_id;
+            (pushed, "pending", Some(pending_id))
+        }
+        None => {
+            let created = blueprints::create(
+                &projects,
+                &project_id,
+                CreateRequest { name, source: Some(source), note: body.note, content },
+            )
+            .map_err(to_http)?;
+            (created, "created", None)
+        }
+    };
+    let status = if outcome == "created" { StatusCode::CREATED } else { StatusCode::ACCEPTED };
+    Ok((
+        status,
+        Json(RevitPushOutcome {
+            blueprint_id: blueprint.id,
+            name: blueprint.name,
+            outcome,
+            pending_id,
+            room_name,
+            skipped: captured.skipped,
+        }),
+    ))
 }

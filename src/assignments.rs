@@ -273,7 +273,7 @@ fn write(projects_dir: &Path, project: &str, assignment: &Assignment) -> Result<
 mod tests {
     use super::*;
     use crate::blueprints::CreateRequest;
-    use crate::service::blueprint_model::{Outline, Point, RevisionContent};
+    use crate::service::blueprint_model::{BlueprintSheet, Outline, Point, RevisionContent};
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("roommate-assignments-{tag}-{}", std::process::id()));
@@ -294,6 +294,13 @@ mod tests {
             outline: Outline { coarse: ring.clone(), fine: ring },
             items: vec![],
             doors: vec![],
+            sheets: vec![BlueprintSheet {
+                revit_sheet_id: "1".to_string(),
+                document_title: "D".to_string(),
+                sheet_number: "RLS-01".to_string(),
+                sheet_name: String::new(),
+                sheet: serde_json::json!({}),
+            }],
         }
     }
 

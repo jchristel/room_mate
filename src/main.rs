@@ -29,8 +29,8 @@ use roommate::assignments_api::{
 };
 use roommate::blueprints_api::{
     http_accept_pending, http_add_revision, http_capture_blueprint, http_create_blueprint, http_delete_blueprint,
-    http_get_blueprint, http_list_blueprints, http_push_revision, http_reject_pending, http_resolve_blueprint,
-    http_update_blueprint,
+    http_get_blueprint, http_list_blueprints, http_push_from_revit, http_push_revision, http_reject_pending,
+    http_resolve_blueprint, http_update_blueprint,
 };
 use roommate::bootstrap::build_state;
 use roommate::connections_api::{http_get_connections, http_put_connections};
@@ -302,6 +302,8 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         .route("/projects/{id}/blueprints/{blueprint}/revisions", post(http_add_revision))
         // Where a revision's items go in one room: a read, nothing stored or applied.
         .route("/projects/{id}/blueprints/{blueprint}/resolve", get(http_resolve_blueprint))
+        // The Revit push: a room and its sheets, the server captures the room. See `blueprints_api`.
+        .route("/projects/{id}/blueprints/from-revit", post(http_push_from_revit))
         // A revision from elsewhere is stored PENDING and changes nothing current; a person
         // accepts it (it becomes the next revision) or rejects it (kept, marked rejected).
         .route("/projects/{id}/blueprints/{blueprint}/pending", post(http_push_revision))

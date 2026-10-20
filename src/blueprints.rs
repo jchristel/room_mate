@@ -29,7 +29,8 @@
 //! deleted). Backups under `.backups/` are a different thing: the safety copy made when a
 //! file is rewritten, not the review step.
 //!
-//! Not here yet: import and export between projects, which is what will call `push`.
+//! **A blueprint comes only from Revit, with its sheets** (decision 18). `create` and `push` refuse
+//! content without sheets; an edit (`add_revision`) copies the current revision's sheets forward.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,7 +38,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service::blueprint_model::RevisionContent;
+use crate::service::blueprint_model::{BlueprintSheet, RevisionContent};
 use crate::state::is_path_safe_component;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -49,6 +50,8 @@ const MAX_REVISIONS: usize = 500;
 const MAX_PENDING: usize = 100;
 const MAX_ITEMS: usize = 5_000;
 const MAX_DOORS: usize = 200;
+const MAX_SHEETS: usize = 50;
+const MAX_SHEET_BYTES: usize = 5_000_000;
 const MAX_OUTLINE_POINTS: usize = 2_000;
 const MAX_PROPERTIES: usize = 2_000;
 const MAX_NAME_CHARS: usize = 120;
@@ -148,6 +151,8 @@ pub struct BlueprintSummary {
     pub pending: usize,
     /// Items in the current revision, excluded ones not counted.
     pub items: usize,
+    /// Room layout sheets in the current revision; 0 for a blueprint made before sheets were held.
+    pub sheets: usize,
 }
 
 impl From<&Blueprint> for BlueprintSummary {
@@ -161,6 +166,7 @@ impl From<&Blueprint> for BlueprintSummary {
             revisions: b.revisions.len(),
             pending: b.pending.len(),
             items: b.current().map_or(0, |r| r.content.items.iter().filter(|i| !i.excluded).count()),
+            sheets: b.current().map_or(0, |r| r.content.sheets.len()),
         }
     }
 }
@@ -323,6 +329,25 @@ fn finite(label: &str, values: &[f64]) -> Result<(), BlueprintError> {
     }
 }
 
+fn validate_sheets(sheets: &[BlueprintSheet]) -> Result<(), BlueprintError> {
+    if sheets.len() > MAX_SHEETS {
+        return bad(format!("a revision holds at most {MAX_SHEETS} sheets"));
+    }
+    for sheet in sheets {
+        if sheet.revit_sheet_id.trim().is_empty() || sheet.document_title.trim().is_empty() {
+            return bad("a sheet needs a Revit sheet id and a document title".to_string());
+        }
+        if !sheet.sheet.is_object() {
+            return bad(format!("sheet {:?}: the exported data must be an object", sheet.sheet_number));
+        }
+        let size = serde_json::to_vec(&sheet.sheet).map_or(usize::MAX, |v| v.len());
+        if size > MAX_SHEET_BYTES {
+            return bad(format!("sheet {:?} is {size} bytes; at most {MAX_SHEET_BYTES}", sheet.sheet_number));
+        }
+    }
+    Ok(())
+}
+
 /// The one rule set for what a revision may hold. Pure, so it is testable without a disk.
 pub fn validate_content(content: &RevisionContent) -> Result<(), BlueprintError> {
     let outline = &content.outline;
@@ -335,6 +360,7 @@ pub fn validate_content(content: &RevisionContent) -> Result<(), BlueprintError>
     for p in outline.coarse.iter().chain(&outline.fine) {
         finite("an outline point", &[p.x, p.y])?;
     }
+    validate_sheets(&content.sheets)?;
     if content.doors.len() > MAX_DOORS {
         return bad(format!("a revision holds at most {MAX_DOORS} doors"));
     }
@@ -466,10 +492,22 @@ fn write(projects_dir: &Path, project: &str, blueprint: &Blueprint) -> Result<()
     Ok(())
 }
 
+/// A blueprint comes only from Revit and always with its sheets (plan decision 18): a layout
+/// borrowed from another room's sheet would carry that room's viewports and sizes.
+fn require_sheets(content: &RevisionContent) -> Result<(), BlueprintError> {
+    if content.sheets.is_empty() {
+        return bad(
+            "a blueprint needs its room layout sheets: it is created by the Revit push, which carries them".to_string(),
+        );
+    }
+    Ok(())
+}
+
 pub fn create(projects_dir: &Path, project: &str, request: CreateRequest) -> Result<Blueprint, BlueprintError> {
     let name = clean_name(&request.name)?;
     let note = clean_note(request.note)?;
     validate_content(&request.content)?;
+    require_sheets(&request.content)?;
     let _guard = SAVE_LOCK.lock().unwrap();
     let dir = project_dir(projects_dir, project)?;
     if list(projects_dir, project)?.len() >= MAX_BLUEPRINTS_PER_PROJECT {
@@ -500,6 +538,10 @@ fn conflict(base: &str, current: &str) -> BlueprintError {
 }
 
 /// Append a revision. Revisions are never edited in place.
+///
+/// **An edit never changes the sheets**: they change only by a Revit re-push, which arrives
+/// pending. So whatever sheets the request carries are ignored and the current revision's are
+/// copied forward (an edit of an older revision therefore gets the current sheets).
 pub fn add_revision(
     projects_dir: &Path,
     project: &str,
@@ -518,12 +560,11 @@ pub fn add_revision(
     }
     let number = blueprint.revisions.iter().map(|r| r.number).max().unwrap_or(0) + 1;
     blueprint.taken_at = next_stamp(&blueprint.taken_at);
-    blueprint.revisions.push(Revision {
-        number,
-        created_at: blueprint.taken_at.clone(),
-        note,
-        content: request.content,
-    });
+    let mut content = request.content;
+    content.sheets = blueprint.current().map(|r| r.content.sheets.clone()).unwrap_or_default();
+    blueprint
+        .revisions
+        .push(Revision { number, created_at: blueprint.taken_at.clone(), note, content });
     if request.make_current {
         blueprint.current_revision = number;
     }
@@ -537,6 +578,7 @@ pub fn push(projects_dir: &Path, project: &str, id: &str, request: PushRequest) 
     let note = clean_note(request.note)?;
     let origin = clean_note(request.origin)?;
     validate_content(&request.content)?;
+    require_sheets(&request.content)?;
     let _guard = SAVE_LOCK.lock().unwrap();
     let mut blueprint = load(projects_dir, project, id)?;
     if blueprint.pending.len() >= MAX_PENDING {
@@ -663,6 +705,7 @@ pub fn delete(projects_dir: &Path, project: &str, id: &str, base: &str) -> Resul
 mod tests {
     use super::*;
     use crate::service::blueprint_capture::{capture, SourceItem};
+    use crate::service::blueprint_model::BlueprintSheet;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("roommate-blueprints-{tag}-{}", std::process::id()));
@@ -694,11 +737,60 @@ mod tests {
                 }
             })
             .collect();
-        capture(&ring, sources).unwrap().content
+        let mut c = capture(&ring, sources).unwrap().content;
+        c.sheets = vec![sheet("1", "RLS-01")];
+        c
+    }
+
+    fn sheet(id: &str, number: &str) -> BlueprintSheet {
+        BlueprintSheet {
+            revit_sheet_id: id.into(),
+            document_title: "Doc".into(),
+            sheet_number: number.into(),
+            sheet_name: String::new(),
+            sheet: serde_json::json!({ "view_ports": [] }),
+        }
     }
 
     fn create_req(name: &str, items: usize) -> CreateRequest {
         CreateRequest { name: name.into(), source: None, note: None, content: content(items) }
+    }
+
+    /// A blueprint comes only from Revit, with its sheets (plan decision 18).
+    #[test]
+    fn test_a_blueprint_without_sheets_is_refused_on_create_and_on_push() {
+        let dir = temp_dir("no-sheets");
+        let mut bare = content(1);
+        bare.sheets.clear();
+        let refused = create(
+            &dir,
+            "p1",
+            CreateRequest { name: "A".into(), source: None, note: None, content: bare.clone() },
+        );
+        assert!(matches!(refused, Err(BlueprintError::Invalid(m)) if m.contains("sheets")));
+        let made = create(&dir, "p1", create_req("A", 1)).unwrap();
+        let pushed = push(&dir, "p1", &made.id, PushRequest { origin: None, note: None, content: bare });
+        assert!(matches!(pushed, Err(BlueprintError::Invalid(_))));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An edit never changes the sheets: whatever the request carries, the current revision's
+    /// are copied forward.
+    #[test]
+    fn test_an_edit_copies_the_current_sheets_forward_and_ignores_the_requests() {
+        let dir = temp_dir("sheets-forward");
+        let v1 = create(&dir, "p1", create_req("A", 1)).unwrap();
+        let mut edited = content(2);
+        edited.sheets = vec![sheet("9", "OTHER")];
+        let v2 = add_revision(
+            &dir,
+            "p1",
+            &v1.id,
+            AddRevisionRequest { base: v1.taken_at.clone(), note: None, make_current: true, content: edited },
+        )
+        .unwrap();
+        assert_eq!(v2.revision(2).unwrap().content.sheets, v1.revision(1).unwrap().content.sheets);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
