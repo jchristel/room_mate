@@ -8,9 +8,9 @@ design and of how sheets are stored; first written 2026-10-19 from the stage 0 r
 Built so far (PR #215): FF&E carries `family_name` and `host` (stage 1, read from Revit by the
 extractor, **not yet run in Revit**); the blueprint store with append-only revisions, pending pushed
 revisions, import and export between projects, and its HTTP and MCP surface (stage 2); capture from a
-room (stage 3); the resolver (stage 4), which on RHH's real sibling rooms lands the items within
+room (stage 3, a service for the Revit push); the resolver (stage 4), which on RHH's real sibling rooms lands the items within
 150 mm of the real ones for 90% of ensuite pairs, 68% of `1 BED B` and 58% of `1 BED A`; the blueprint
-viewer at `/blueprints/` (stage 5: list, New from a room, Import and Export, revision timeline with
+viewer at `/blueprints/` (stage 5: list, Import and Export ("New from a room" is to be removed, decision 18), revision timeline with
 pending revisions, the room's outline, doors and FF&E, an inspector for dimension constraints, and a
 manual edge map); and **stage 6 as a mode of that page, not in the main viewer** ("Assign to rooms"):
 pick a room, see the resolver's answer drawn in it with the room's doors and where the blueprint's
@@ -139,6 +139,14 @@ write path into Revit. They have very different risk, which drives the staging.
       revision pins its sheets. A sheet arriving again is a pending revision (decision 10).
     - **In the library** (its own endpoint, decided 2026-10-19), for sheets that belong to no
       blueprint: one record per sheet, kept as exported. It is what "suggest" searches.
+    **A blueprint comes only from Revit** (decided 2026-10-20). A layout borrowed from another
+    room's sheet would carry that room's viewports and sizes, so a blueprint is created only by
+    the Revit push, which always carries the room data and its sheets; the server refuses a
+    create or a push without sheets. The viewer has no "New from a room". Import and export stay
+    (an exported blueprint carries its sheets), and an edit in the viewer makes a new revision
+    that copies the previous revision's sheets unchanged; sheets change only by a Revit
+    re-push, which arrives pending. A blueprint made before this rule has no sheets, stays
+    valid and is shown as having none; a task from it cannot create sheets and says why.
     **Neither holds tags** (decision 24). A sheet in a blueprint is a copy and stays
     independent of the library.
 19. **The user chooses which sheets are exported, and which room each belongs to.** Nothing is
@@ -269,8 +277,9 @@ outline, FF&E and doors and proposes recipes: each item snaps to the edge it lie
 (the nearest edge whose span contains it; nearest-segment distance failed on notched rooms),
 records along/off distance, and picks fixed or percentage by the decision 4 and grammar
 rules. Nested components are excluded, wall devices get their own class, and abutting items
-become runs. Both outlines are stored (decision 14). A "Create blueprint" action on a
-selected room. *Value on its own: a catalogue of the project's repeated layouts.*
+become runs. Both outlines are stored (decision 14). The capture is a service and a read
+(MCP `capture_blueprint`) that the Revit push uses; there is no "Create blueprint" action in the
+viewer (decision 18). *Value on its own: a catalogue of the project's repeated layouts.*
 
 **Stage 4 — Resolver.** Blueprint revision + target room + transform (rotation, edge
 mapping by shape, bounding-box scale) to placements plus findings, including the
@@ -279,7 +288,8 @@ the stage 0 fixtures. The core: everything after depends on it being right.
 
 **Stage 5 — Blueprint viewer (a new view in RoomMate).**
 - **Left pane:** the list of blueprints, single selection, like routes and reaches.
-  Import and export of blueprints (same-server projects for now).
+  Import and export of blueprints (same-server projects for now). Blueprints are created only
+  by the Revit push (decision 18), so the earlier "New from a room" is to be removed.
 - **Centre:** the room outline drawn as a polygon with a circle at each vertex, the
   FF&E and the doors, with an on/off toggle for FF&E tags.
 - **Top:** a timeline of the blueprint's revisions. Select another revision and set it
