@@ -22,13 +22,12 @@ with the blueprint for orientation only, and break ties of shape.
 
 Track B's first slice is built too: the sheet library on its own endpoint with identity matching,
 pending renumbered pushes and `suggest`, plus the Sheets and Blueprint pyRevit buttons (**not yet run
-in Revit**). **These change** with the 2026-10-20 decisions: the Blueprint button will push the room
-and its sheets into a blueprint instead of writing to the library (decisions 18 and 19), and the
-library will store a summary of each sheet's room (decision 25).
+in Revit**). The 2026-10-20 decisions are built on the server and in the buttons (still **not run in Revit**): the
+Blueprint button pushes a room and its sheets to `POST .../blueprints/from-revit` (decisions 18 and 19),
+and the library stores a summary of each sheet's room (decision 25).
 
 Not built: dragging, rotating or scaling a box over the main plan; per-item overrides; a mirrored
-copy (left out on purpose, decision 7); sheets inside a blueprint revision and the blueprint push
-(B3b); the library's room summary (B3c); tags, view scale and view template in the sheet export;
+copy (left out on purpose, decision 7); tags, view scale and view template in the sheet export;
 the tag-rule store (B5); and anything toward Revit (decisions 21 to 26).
 
 ## What exists, and what does not
@@ -267,7 +266,7 @@ and 4.*
 
 **Stage 2 — Blueprint store and API (own endpoint).** Blueprint document (id, name, ordered
 revisions, current revision, reference outline, items with excluded flag, doors, and sheets
-once B3b lands), assignment records (room ref, pinned revision, mapping), pending pushed
+built, B3b), assignment records (room ref, pinned revision, mapping), pending pushed
 revisions. Optimistic concurrency, MCP tool parity per
 the one-tool-per-read-route rule. **Import and export between projects on the same server**
 (cross-server later). *Built; the UI is stage 5.*
@@ -397,14 +396,14 @@ items, **weighed equally**, each compared with the target room's current figures
 sheet's stored summary (B3c): area as the stored X times Y, proportions as long over short side. It returns the ranking with the figures, so a person sees why a sheet was offered.
 Nothing applies it.
 
-**B3b — Sheets inside a blueprint (replaces "associate sheets", 2026-10-20).** A blueprint
+**B3b — Sheets inside a blueprint (replaces "associate sheets", 2026-10-20). Built (server and button; not run in Revit).** A blueprint
 revision holds `sheets` beside outline, items and doors; the blueprint push carries both
 and is refused without sheets; export and import carry them. Same sheet shape as the library
 without tags, and without the sheet's name, number or id being used on assignment (decisions
 18 and 24). Needs `sheets` in the revision and a blueprint-push endpoint that captures the
 room on the server and attaches the sheets.
 
-**B3c — Library room summary.** Store the room's bounding box X and Y and item count with
+**B3c — Library room summary. Built.** Store the room's bounding box X and Y and item count with
 each library sheet at push (decision 25), and have suggest use them.
 
 **B4 — Revit creation (not scheduled).** A task kind on the stage-7 channel: views from the
