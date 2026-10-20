@@ -435,8 +435,10 @@ filters, a task's items, sheets, findings and attempts, dismiss, resend, and a p
 kind; it reads the list again every few seconds to show what a session did). the main viewer's
 "Room tasks" colouring (`viewer/taskStatus.ts`, a choice in the zone's colour picker: a room draws in the state
 of its newest task that is not dismissed; a task's number must agree with the room's, because a viewer room names no
-model; read only while a zone uses it, every 8 s; not in the SVG export). **Not built: the pyRevit "apply
-tasks" button, the update task kind.** The server
+model; read only while a zone uses it, every 8 s; not in the SVG export). The Revit side has its checking
+(`room_m/task_plan.py`: every task checked before any is written, aborts reported first, one question for the
+warnings; pure, tested on CPython in `extractor/tests`) and its transport (`post_tasks.py`). **Not built: the "apply
+tasks" button that supplies `facts` from Revit and writes, the update task kind.** The server
 leaves an empty list out of a task, so the page reads a task back with its lists filled in. Plan decisions 21 to 26.
 
 - **A task is a record, unlike an assignment.** It holds the resolver's placements, the sheet layouts

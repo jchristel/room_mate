@@ -43,6 +43,10 @@ jobs:
     - name: Check the extension bundles
       run: python scripts/check_extension.py
 
+    # The pure parts of the extractor, run on CPython: they import nothing from Revit.
+    - name: Test the task planner
+      run: python -m unittest discover -s extractor/tests -v
+
     # The lock file is what makes a build reproducible, so a malformed one is
     # worth catching here rather than at the next release.
     - name: Check the duHast pin
