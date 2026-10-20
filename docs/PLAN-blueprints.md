@@ -317,7 +317,7 @@ zone/overlay machinery. Per-item overrides stored with an assignment are also no
 states, making populate and create-RLS tasks from assignments or a library sheet (placements in the target
 model's own frame), the `roomtasks` ask and report channel, dismiss and resend, MCP reads. The task list is a page, `/tasks/` (filters, a task's contents and attempts, dismiss, resend, making
 tasks), and the main viewer colours rooms by their last task's state (a choice in the zone's colour picker; not in
-the SVG export). **Still to do:** the pyRevit apply button and everything Revit-side.
+the SVG export). The plug-in has the decision 22 checking as a pure, CPython-tested planner (`room_m/task_plan.py`) and the `roomtasks` transport. **Still to do:** the apply button that answers the planner's questions from Revit (phase, room by number, content, RLS numbers, title blocks, families) and writes.
 Original scope: task model on the server
 (decisions 21 to 23: a task is a resolved snapshot plus a status), the `roomtasks` endpoint,
 and a task list for the person (dismiss, resend). A new pyRevit button "Apply blueprint
