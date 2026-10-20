@@ -1,6 +1,7 @@
 layout:
   - RoomsAndDoors
   - Blueprint
+  - ApplyTasks
   - ByCategory
 
 # bundle tooltip

@@ -437,8 +437,11 @@ kind; it reads the list again every few seconds to show what a session did). the
 of its newest task that is not dismissed; a task's number must agree with the room's, because a viewer room names no
 model; read only while a zone uses it, every 8 s; not in the SVG export). The Revit side has its checking
 (`room_m/task_plan.py`: every task checked before any is written, aborts reported first, one question for the
-warnings; pure, tested on CPython in `extractor/tests`) and its transport (`post_tasks.py`). **Not built: the "apply
-tasks" button that supplies `facts` from Revit and writes, the update task kind.** The server
+warnings; pure, tested on CPython in `extractor/tests`) and its transport (`post_tasks.py`). The **Apply tasks** button
+is written (`apply_tasks_entry`): `apply_run` is the sequence (claim, check, ask once, report aborts before any work,
+write and report each task, report any stranded one failed; tested with fakes), `apply_facts` answers the planner from
+Revit, `apply_write` writes one task per `TransactionGroup` so a failed task leaves no trace, `apply_geometry` is the
+pure arithmetic. **Not run in Revit. Not built: the update task kind.** The server
 leaves an empty list out of a task, so the page reads a task back with its lists filled in. Plan decisions 21 to 26.
 
 - **A task is a record, unlike an assignment.** It holds the resolver's placements, the sheet layouts
@@ -461,6 +464,20 @@ leaves an empty list out of a task, so the page reads a task back with its lists
   carries the id as well; absent means the room has none.
 - **`create_rls` compares the sheet's stored room summary with the target's** and warns (never refuses)
   when they differ by more than `RLS_ROOM_WARN_DISTANCE`.
+
+## Applying a task: what the button does and leaves out
+
+- **The RLS number is `RLS-{room number}`** (`apply_geometry.DEFAULT_NUMBER_TEMPLATE`), with `-1`, `-2` when a task has
+  several sheets, and a sheet's **title block is chosen by size**: the layout's `sheet_size` must appear as a whole
+  token in a title block family or type name. Both are guesses at a convention, not rules; change them there.
+- **A family not in the model is loaded from `ROOMMATE_FAMILY_LIBRARY`** (a folder of `<family>.rfa`), else it is a
+  warning. Items are placed on the room's level with the facing's rotation; wall-hosted ones go on the nearest wall
+  within 450 mm; face and work plane based ones are reported, not placed. Instance and type parameters are not applied.
+- **A viewport is a fresh plan view of the room** at the exported scale, cropped to the exported size (never smaller than
+  the room), placed where it was. Elevation, 3D and schedule viewports are reported, not made.
+- **Tags are read back from the model**, not from the task: each instance in the room (placed now or already there)
+  gets the independent tags whose names have a rule for it, at `apply_geometry.tag_placement`. Room, space and area tag
+  kinds, and a tag's own rotation, are not placed yet.
 
 ## Tag rules: where a tag goes, learned from tags in Revit views
 

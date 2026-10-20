@@ -49,7 +49,8 @@ from room_m.exporters.sheets import read_sheets
 from room_m.post_blueprints import describe_outcome, explain_refusal, post_blueprint
 from room_m.post_sheets import describe_outcomes, post_sheets
 from room_m.post_tags import all_observations, post_observations
-from room_m.sheet_tags import describe_outcome, describe_problems
+from room_m.post_tasks import claim_tasks, report_tasks
+from room_m.sheet_tags import describe_outcome as describe_tag_outcome, describe_problems
 
 from room_m.utils.post_envelope import (
     build_run_envelope,
@@ -429,7 +430,7 @@ def _report_tags(project_id, pushed, return_value):
         return_value.append_message(
             "Tag rules not updated ({}): {}".format(status if status is not None else "no response", text))
         return
-    for line in describe_outcome(outcome):
+    for line in describe_tag_outcome(outcome):
         return_value.append_message(line)
 
 
@@ -610,6 +611,81 @@ def blueprint_export_entry(doc, uiapp, output, forms):
             _report_tags(project["id"], pushed, return_value)
     except Exception as e:
         return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
+    return return_value
+
+
+def apply_tasks_entry(doc, uiapp, output, forms):
+    """APPLY the room tasks the server holds for this model.
+
+    1. **Claim.** Every queued task for this model is handed over and marked in progress.
+    2. **Check the whole list** before anything is written (`room_m.task_plan`). A task that
+       cannot run is reported aborted straight away.
+    3. **Ask once** if some tasks only have warnings: proceed with them, or abort those.
+    4. **Write each task** in one Revit transaction group, so a task that fails leaves no trace,
+       and report it as soon as it is done.
+
+    The plug-in only validates and writes; it never resolves a layout (the task already holds
+    the placements). See `room_m.apply_run`, `room_m.apply_write` and docs/PLAN-blueprints.md.
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_doc = _single_document(doc, forms, "Select the model the tasks are for")
+        if selected_doc is None:
+            return_value.append_message("No document selected")
+            return return_value
+        project = choose_project(forms)
+        if project is None:
+            return_value.update_sep(False, "Apply aborted: no project selected.")
+            return return_value
+
+        ok, status, text, tasks = claim_tasks(project["id"], selected_doc.Title)
+        if not ok:
+            return_value.update_sep(
+                False, "Could not ask the server for tasks ({}): {}".format(status if status is not None else "no response", text))
+            return return_value
+        if not tasks:
+            forms.alert("There are no queued tasks for model '{}'.".format(selected_doc.Title),
+                        title="Roommate - nothing to apply")
+            return_value.append_message("No queued tasks for '{}'".format(selected_doc.Title))
+            return return_value
+        return_value.append_message("{} task(s) claimed for '{}'".format(len(tasks), selected_doc.Title))
+
+        from room_m.apply_facts import RevitFacts
+        from room_m.apply_write import TaskWriter
+        from room_m.apply_run import run
+
+        facts = RevitFacts(selected_doc)
+        writer = TaskWriter(selected_doc, facts)
+
+        def ask_proceed(lines):
+            message = "Some tasks have warnings:\n\n" + "\n".join(lines) + "\n\nProceed with them, or abort those tasks?"
+            choice = forms.alert(message, title="Roommate - warnings", options=["Proceed", "Abort those tasks"])
+            return choice == "Proceed"
+
+        def send(reports):
+            ok, status, text, outcomes = report_tasks(project["id"], reports)
+            if not ok:
+                return False, "{}: {}".format(status if status is not None else "no response", text)
+            bad = [o.get("error") or "not recorded" for o in outcomes if not o.get("recorded")]
+            return (not bad), "; ".join(bad)
+
+        def say(line):
+            try:
+                output.print_md(line)
+            except Exception:
+                pass
+
+        sent, lines = run(tasks, facts, writer, ask_proceed, send, say)
+        failed = [r for r in sent if r["status"] in ("failed", "aborted")]
+        return_value.append_message("{} report(s) sent, {} failed or aborted".format(len(sent), len(failed)))
+    except Exception as e:
+        return_value.update_sep(False, "Apply failed with exception: {}".format(e))
     return return_value
 
 
