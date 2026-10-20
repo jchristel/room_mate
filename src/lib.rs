@@ -64,6 +64,8 @@ pub mod classify;
 pub mod connections;
 pub mod connections_api;
 pub mod contract;
+pub mod tasks;
+pub mod tasks_api;
 
 /// A saved report definition — see `roommate_shared::reports`. Re-exported so
 /// the server names it by the path its own modules use, exactly as `contract`

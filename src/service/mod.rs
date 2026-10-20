@@ -36,6 +36,7 @@ pub mod spaces;
 pub mod stacking;
 pub mod surface_attribution;
 pub mod surfaces;
+pub mod task_build;
 pub mod type_table;
 pub mod validation;
 

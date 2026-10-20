@@ -7,10 +7,10 @@
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
 //! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
-//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets`, `list_assignments` --
+//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets`, `list_assignments`, `list_tasks`, `get_task` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Thirty-nine in
+//! and the one forwarded mutation (`upload_reference`, below). Forty-one in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -100,6 +100,26 @@ struct ResolveBlueprintParams {
     shift: Option<usize>,
     /// Map the edges by hand: the room edge for each blueprint edge, in blueprint edge order. Wins over `shift`, and is how a room with a DIFFERENT number of edges is placed.
     edge_map: Option<Vec<usize>>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ListTasksParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Only the tasks for this model (the Revit document's title).
+    #[serde(default)]
+    model_id: Option<String>,
+    /// Only tasks in this state: queued, in_progress, completed, completed_with_warnings, failed, aborted or dismissed.
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct TaskParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The task id, as returned by `list_tasks`.
+    task_id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -540,6 +560,23 @@ fn blueprints_to_mcp_error(err: roommate::blueprints::BlueprintError) -> McpErro
         }
         BlueprintError::Internal(e) => {
             tracing::error!("blueprints error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn tasks_to_mcp_error(err: roommate::tasks::TaskError) -> McpError {
+    use roommate::tasks::TaskError;
+    match err {
+        TaskError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no tasks to read".to_string(),
+            None,
+        ),
+        TaskError::Invalid(msg) | TaskError::Conflict(msg) | TaskError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        TaskError::Internal(e) => {
+            tracing::error!("tasks error: {e:#}");
             McpError::internal_error("internal error".to_string(), None)
         }
     }
@@ -1440,6 +1477,34 @@ impl RoommateMcp {
         let dir = self.projects_dir()?;
         let rows = roommate::assignments::list(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
         json_result(&rows)
+    }
+
+    /// Room tasks, as a Revit session sees them -- see `tasks::list`.
+    #[tool(
+        description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."
+    )]
+    fn list_tasks(&self, Parameters(p): Parameters<ListTasksParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let state = match p.state.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            None => None,
+            Some(s) => Some(
+                serde_json::from_value::<roommate::tasks::TaskState>(serde_json::Value::String(s.to_string()))
+                    .map_err(|_| McpError::invalid_params(format!("{s:?} is not a task state"), None))?,
+            ),
+        };
+        let rows =
+            roommate::tasks::list(&dir, &p.project_id, p.model_id.as_deref(), state).map_err(tasks_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One task in full -- see `tasks::load`.
+    #[tool(
+        description = "Read one room task in full. `items` are the family instances to place, in the target MODEL's own frame, millimetres: `x_mm`, `y_mm` (centre), `facing_x`/`facing_y` (unit vector), `size_mm` (along the facing, then across), `family_name`, `type_name`, `category`, `placement_type` (`free` or `wall_device`), `host` and the instance and type `properties` as exported. `sheets` are the room layout sheet layouts to make (as exported by duHast: viewports with sheet positions and types; no tags, which a later rule store supplies), with the number, name and id of the SOURCE sheet, which are not for the new sheets. `findings` is what the resolver said the room changes about the layout and any warning from making the task. `attempts` lists each go by a Revit session with its status and messages."
+    )]
+    fn get_task(&self, Parameters(p): Parameters<TaskParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let task = roommate::tasks::load(&dir, &p.project_id, &p.task_id).map_err(tasks_to_mcp_error)?;
+        json_result(&task)
     }
 
     /// The project's room layout sheet library -- see `sheets::list`.

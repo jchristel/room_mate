@@ -53,6 +53,10 @@ use roommate::sheets_api::{
     http_accept_sheet_push, http_delete_sheet, http_get_sheet, http_list_sheets, http_push_sheets,
     http_reject_sheet_push, http_suggest_sheets, http_update_sheet,
 };
+use roommate::tasks_api::{
+    http_claim_tasks, http_create_tasks, http_dismiss_task, http_get_task, http_list_tasks, http_report_tasks,
+    http_resend_task,
+};
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
 /// Cap on the buffered `/rooms` body -- applies to the DECOMPRESSED size, since
@@ -319,6 +323,14 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         .route("/projects/{id}/assignments", get(http_list_assignments).post(http_assign))
         .route("/projects/{id}/assignments/{assignment}", delete(http_delete_assignment))
         .route("/projects/{id}/assignments/many", post(http_assign_many))
+        // Room tasks: work for a Revit session. See `tasks`. `roomtasks` is the session's side
+        // (a POST, because asking marks the tasks in progress); `tasks` is the person's.
+        .route("/projects/{id}/tasks", get(http_list_tasks).post(http_create_tasks))
+        .route("/projects/{id}/tasks/{task}", get(http_get_task))
+        .route("/projects/{id}/tasks/{task}/dismiss", post(http_dismiss_task))
+        .route("/projects/{id}/tasks/{task}/resend", post(http_resend_task))
+        .route("/projects/{id}/roomtasks", post(http_claim_tasks))
+        .route("/projects/{id}/roomtasks/report", post(http_report_tasks))
         .route("/projects/{id}/blueprints/{blueprint}/solve", post(http_solve_blueprint))
         // The room layout sheet library: sheets a person chose to export, kept as exported.
         // Its own endpoint, apart from blueprints. POST is the extractor's push; `suggest`

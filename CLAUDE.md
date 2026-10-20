@@ -427,6 +427,33 @@ get wrong:
   the room's items, so on RHH it costs a few seconds. Narrowing it with a storey scope is the
   obvious fix and has not been needed yet.
 
+## Room tasks: what a Revit session is told, kept as a record
+
+Built (server side): the task store (`tasks`), making tasks (`service::task_build`), the HTTP and MCP
+surface (`tasks_api`; MCP reads `list_tasks`, `get_task`). **Not built: the pyRevit "apply tasks" button,
+a viewer for the task list or its plan colouring, the update task kind.** Plan decisions 21 to 26.
+
+- **A task is a record, unlike an assignment.** It holds the resolver's placements, the sheet layouts
+  and the findings as they were when it was made, so what Revit writes cannot change underneath it. The
+  plugin validates and writes; it never resolves.
+- **Placements leave in the target MODEL's own frame, mm.** The resolver answers in the project's plan
+  frame, so `task_build` puts each position back through the inverse of that model's placement
+  (`ModelToShared::inverse`) and each direction through its linear part. A model with no placement (the
+  anchor) is left as it is. Do not hand Revit project-frame coordinates.
+- **States and who moves them.** `queued` on creation or resend; `POST .../roomtasks {model_id}` hands a
+  session that model's queued tasks in full and marks them `in_progress` (a POST, because asking changes
+  them); `POST .../roomtasks/report` records `completed`, `completed_with_warnings`, `failed` or
+  `aborted`, and only for a task that is `in_progress`. A person can `dismiss` (any state) or `resend`
+  (any but queued, which is also the way out of a session that died holding tasks). Attempts are kept.
+- **One live task per kind per room.** A second queued or in-progress task of the same kind for a room is
+  refused at creation and at resend: both would be handed out together.
+- **Each room of a request stands alone**: a blueprint that was deleted, a room that has gone, a layout
+  that would place nothing, or `create_rls` on a blueprint with no sheets is a row saying why.
+- **The room is found by its `Number` property** (a room has no number field of its own) and the task
+  carries the id as well; absent means the room has none.
+- **`create_rls` compares the sheet's stored room summary with the target's** and warns (never refuses)
+  when they differ by more than `RLS_ROOM_WARN_DISTANCE`.
+
 ## Room layout sheets: a library kept by identity, and two buttons that choose
 
 Built: the sheet library on the server (`sheets`, `sheets_api`, `service::sheet_suggest`),
