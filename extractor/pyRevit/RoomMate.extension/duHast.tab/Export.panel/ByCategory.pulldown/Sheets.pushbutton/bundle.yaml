@@ -1,0 +1,8 @@
+title: "Sheets"
+
+tooltip: |
+  Exports the sheets you choose to the RoomMate sheet library.
+  The room each belongs to is set afterwards, in the viewer.
+
+author:
+  - Jan Christel

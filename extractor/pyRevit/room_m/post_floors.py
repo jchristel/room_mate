@@ -35,8 +35,8 @@ FLOORS_PUSH = post_surfaces.SurfacePush(
     entity="floors",
     list_key="floor",
     schema_version=1,
-    url="http://127.0.0.1:5151/floors",
-    url_stream="http://127.0.0.1:5151/floors/stream",
+    url="/floors",
+    url_stream="/floors/stream",
 )
 
 

@@ -40,6 +40,20 @@ from room_m.utils.provenance import (
     report_build,
 )
 
+from room_m.utils.sheets import (
+    placed_rooms,
+    sheets_of,
+    pick as pick_items,
+)
+from room_m.exporters.sheets import read_sheets
+from room_m.post_blueprints import describe_outcome, explain_refusal, post_blueprint
+from room_m.post_sheets import describe_outcomes, post_sheets
+from room_m.post_tags import all_observations, post_observations
+from room_m.post_tasks import claim_tasks, report_tasks
+from room_m import server_config
+from room_m.post_common import SERVER_URL_PROJECTS, fetch_projects
+from room_m.sheet_tags import describe_outcome as describe_tag_outcome, describe_problems
+
 from room_m.utils.post_envelope import (
     build_run_envelope,
     build_model_block,
@@ -386,6 +400,356 @@ def floors_export_entry(doc, uiapp, output, forms):
     :rtype: Result
     """
     return export_entry(doc, uiapp, output, forms, entities=(FLOORS,))
+
+def _single_document(doc, forms, button_name):
+    """The ONE document a sheet run works in, or None. `pick_document` is multiselect-capable;
+    a sheet run names rooms and sheets of one document, so more than one is refused rather
+    than guessed at."""
+    picked = pick_document(doc, forms, button_name=button_name, multiselect=True)
+    if not picked:
+        return None
+    if not isinstance(picked, (list, tuple)):
+        picked = [picked]
+    if len(picked) != 1:
+        forms.alert(
+            "Pick exactly one model: the rooms and the sheets you choose belong to one document.",
+            title="Roommate - export aborted", warn_icon=True)
+        return None
+    return picked[0]
+
+
+def _report_tags(project_id, pushed, return_value):
+    """Say which tags could not be read, then send the ones that were to the tag rules store.
+    A failure here is reported and never stops the sheet push: the layout does not need its tags."""
+    for p in pushed:
+        for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
+            return_value.append_message(line)
+    observations = all_observations(pushed)
+    if not observations:
+        return
+    ok, status, text, outcome = post_observations(project_id, observations)
+    if not ok:
+        return_value.append_message(
+            "Tag rules not updated ({}): {}".format(status if status is not None else "no response", text))
+        return
+    for line in describe_tag_outcome(outcome):
+        return_value.append_message(line)
+
+
+def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
+    """Read the chosen sheets with duHast and push them to the sheet library, reporting what
+    the server did with each. `assignments` is a list of `(sheet entry, room or None)`."""
+    pushed, failures = read_sheets(selected_doc, assignments, phase_name)
+    for label, reason in failures:
+        return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
+    if not pushed:
+        return_value.update_sep(False, "No sheet could be read, so nothing was pushed.")
+        return
+    ok, status, text, outcomes = post_sheets(project["id"], pushed)
+    if not ok:
+        return_value.update_sep(
+            False, "Sheet push failed ({}): {}".format(status if status is not None else "no response", text))
+        return
+    for line in describe_outcomes(outcomes):
+        return_value.append_message(line)
+    return_value.append_message("{} sheet(s) pushed".format(len(pushed)))
+    # after the sheets: tags are only worth keeping from sheets the server accepted
+    _report_tags(project["id"], pushed, return_value)
+
+
+def sheets_export_entry(doc, uiapp, output, forms):
+    """Push SHEETS you choose to the sheet library, with no room attached.
+
+    The sheets go in as they are; the room each was made for is set afterwards, in the
+    viewer. Nothing is inferred from sheet names or parameters: the export has no marker
+    for a room layout sheet, so the person picks. Use the Blueprint button to name rooms
+    at the same time.
+
+    Not a snapshot push and not an entry in `ENTITY_EXPORTERS`: the library is authored
+    data the server keeps by sheet identity (Revit sheet id plus document title).
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_doc = _single_document(doc, forms, "Select the model whose sheets to export")
+        if selected_doc is None:
+            return_value.append_message("No document selected")
+            return return_value
+        project = choose_project(forms)
+        if project is None:
+            return_value.update_sep(False, "Export aborted: no project selected.")
+            return return_value
+
+        sheets = sheets_of(selected_doc)
+        if not sheets:
+            forms.alert("This model has no sheets.", title="Roommate - nothing to export", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: the model has no sheets.")
+            return return_value
+        chosen = pick_items(forms, sheets, "Select the sheets to export", "Export these sheets")
+        if not chosen:
+            return_value.update_sep(False, "Export aborted: no sheets selected.")
+            return return_value
+
+        _push_sheets(project, [(entry, None) for entry in chosen], selected_doc, None, return_value)
+    except Exception as e:
+        return_value.update_sep(False, "Sheet export failed with exception: {}".format(e))
+    return return_value
+
+
+def blueprint_export_entry(doc, uiapp, output, forms):
+    """The BLUEPRINT push: a phase, then the rooms, then the sheets that belong to each.
+
+    1. **Phase.** The rooms offered are the placed rooms of the phase you pick.
+    2. **Rooms.** The rooms you want a blueprint from.
+    3. **Sheets, room by room.** For each chosen room, its room layout sheets. **A room with
+       no sheet is not pushed**: a blueprint is a room and its sheets together, and the server
+       refuses one without. A sheet is offered once: one given to an earlier room is not
+       offered again.
+    4. **Name.** One per room, defaulting to the room's name. A name the project already has
+       becomes a pending revision of that blueprint, to accept or reject in the viewer.
+
+    The room's contents are NOT sent: the server captures them from the rooms and FF&E it
+    already holds, so push those first with the Rooms and FFE buttons. A sheets-only push to the
+    library is the Sheets button (docs/PLAN-blueprints.md, decisions 18 and 19).
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_doc = _single_document(doc, forms, "Select the model holding the rooms and sheets")
+        if selected_doc is None:
+            return_value.append_message("No document selected")
+            return return_value
+        project = choose_project(forms)
+        if project is None:
+            return_value.update_sep(False, "Export aborted: no project selected.")
+            return return_value
+
+        # 1. phase
+        phase_name = choose_phase([selected_doc], forms)
+        if phase_name is None:
+            return_value.update_sep(False, "Export aborted: no phase selected.")
+            return return_value
+        return_value.append_message("Phase '{}'".format(phase_name))
+
+        # 2. rooms
+        rooms = placed_rooms(selected_doc, phase_name)
+        if not rooms:
+            forms.alert("No placed rooms in phase '{}'.".format(phase_name),
+                        title="Roommate - nothing to export", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: no placed rooms in that phase.")
+            return return_value
+        chosen_rooms = pick_items(forms, rooms, "Select the rooms to make blueprints from", "Use these rooms")
+        if not chosen_rooms:
+            return_value.update_sep(False, "Export aborted: no rooms selected.")
+            return return_value
+
+        # 3. sheets, room by room
+        available = sheets_of(selected_doc)
+        if not available:
+            forms.alert("This model has no sheets, and a blueprint needs its room layout sheets.",
+                        title="Roommate - nothing to export", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: the model has no sheets.")
+            return return_value
+        plan = []
+        taken = set()
+        for room in chosen_rooms:
+            remaining = [s for s in available if s["id"] not in taken]
+            chosen = pick_items(
+                forms, remaining,
+                "Sheets for room {} (at least one)".format(room["label"]),
+                "Use for this room") if remaining else []
+            if chosen is None:
+                return_value.update_sep(False, "Export aborted at room {}.".format(room["label"]))
+                return return_value
+            if not chosen:
+                return_value.append_message(
+                    "{}: skipped, a blueprint needs at least one room layout sheet".format(room["label"]))
+                continue
+            for entry in chosen:
+                taken.add(entry["id"])
+            # 4. name
+            name = forms.ask_for_string(
+                default=room["name"] or room["label"],
+                prompt="Blueprint name for room {}".format(room["label"]),
+                title="Roommate - blueprint name")
+            if name is None:
+                return_value.update_sep(False, "Export aborted at room {}.".format(room["label"]))
+                return return_value
+            name = name.strip()
+            if not name:
+                return_value.append_message("{}: skipped, no blueprint name".format(room["label"]))
+                continue
+            plan.append((room, name, chosen))
+
+        if not plan:
+            return_value.update_sep(False, "Nothing to push: no room had both a sheet and a name.")
+            return return_value
+
+        for room, name, chosen in plan:
+            pushed, failures = read_sheets(selected_doc, [(entry, None) for entry in chosen], None)
+            for label, reason in failures:
+                return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
+            if failures or not pushed:
+                # A blueprint with some of its sheets would read as the whole layout.
+                return_value.update_sep(
+                    False, "{}: not pushed, because not every chosen sheet could be read.".format(name))
+                continue
+            ok, status, text, outcome = post_blueprint(
+                project["id"], name, room["id"], selected_doc.Title, selected_doc.Title, pushed)
+            if not ok:
+                return_value.update_sep(False, "{}: {}".format(name, explain_refusal(status, text)))
+                continue
+            return_value.append_message(describe_outcome(name, outcome))
+            _report_tags(project["id"], pushed, return_value)
+    except Exception as e:
+        return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
+    return return_value
+
+
+def server_entry(doc, uiapp, output, forms):
+    """Choose which RoomMate server this computer's extractor talks to.
+
+    The server runs on this computer unless it was started to serve a network (`--bind 0.0.0.0`);
+    to push from Revit to a server on ANOTHER computer, type the address it printed at startup
+    (`192.168.0.97`, or `192.168.0.97:5151`, or its `.local` name). The address is checked by asking
+    that server for its projects BEFORE it is kept, and is kept for every later run, in
+    `server.json` in the RoomMate folder of the user's application data. Typing `default` goes back
+    to the server on this computer. The `ROOMMATE_SERVER` environment variable, when set, wins over
+    the kept address and the run says so (`room_m.server_config`).
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        current, source = server_config.resolve()
+        typed = forms.ask_for_string(
+            default=current,
+            prompt="Address of the RoomMate server (for example 192.168.0.97 or mac.local:5151).\n"
+                   "Type 'default' for the server on this computer.",
+            title="Roommate - server")
+        if typed is None:
+            return_value.append_message("Server unchanged: {}".format(server_config.describe()))
+            return return_value
+        typed = typed.strip()
+        resetting = typed.lower() in server_config._RESET_WORDS
+        candidate = server_config.DEFAULT_URL
+        if not resetting:
+            try:
+                candidate = server_config.normalise(typed)
+            except ValueError as e:
+                forms.alert(str(e), title="Roommate - server address", warn_icon=True)
+                return_value.update_sep(False, "Server unchanged: {}".format(e))
+                return return_value
+        ok, status, answer = fetch_projects(candidate + SERVER_URL_PROJECTS)
+        if not ok:
+            keep = forms.alert(
+                "{}\n\nKeep this address anyway?".format(answer),
+                title="Roommate - server not reachable", yes=True, no=True, warn_icon=True)
+            if not keep:
+                return_value.update_sep(False, "Server unchanged: {}".format(answer))
+                return return_value
+        server_config.save(typed)
+        return_value.append_message("Server set to {}".format(server_config.describe()))
+        return_value.append_message(
+            "{} project(s) registered there".format(len(answer)) if ok else "Not reachable now: {}".format(answer))
+        in_force = server_config.resolve()[0]
+        if in_force != candidate:
+            return_value.append_message(
+                "NOTE: the {} environment variable is set, so {} is what is used until it is removed".format(
+                    server_config.ENV_VAR, in_force))
+    except Exception as e:
+        return_value.update_sep(False, "Server setting failed with exception: {}".format(e))
+    return return_value
+
+
+def apply_tasks_entry(doc, uiapp, output, forms):
+    """APPLY the room tasks the server holds for this model.
+
+    1. **Claim.** Every queued task for this model is handed over and marked in progress.
+    2. **Check the whole list** before anything is written (`room_m.task_plan`). A task that
+       cannot run is reported aborted straight away.
+    3. **Ask once** if some tasks only have warnings: proceed with them, or abort those.
+    4. **Write each task** in one Revit transaction group, so a task that fails leaves no trace,
+       and report it as soon as it is done.
+
+    The plug-in only validates and writes; it never resolves a layout (the task already holds
+    the placements). See `room_m.apply_run`, `room_m.apply_write` and docs/PLAN-blueprints.md.
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_doc = _single_document(doc, forms, "Select the model the tasks are for")
+        if selected_doc is None:
+            return_value.append_message("No document selected")
+            return return_value
+        project = choose_project(forms)
+        if project is None:
+            return_value.update_sep(False, "Apply aborted: no project selected.")
+            return return_value
+
+        ok, status, text, tasks = claim_tasks(project["id"], selected_doc.Title)
+        if not ok:
+            return_value.update_sep(
+                False, "Could not ask the server for tasks ({}): {}".format(status if status is not None else "no response", text))
+            return return_value
+        if not tasks:
+            forms.alert("There are no queued tasks for model '{}'.".format(selected_doc.Title),
+                        title="Roommate - nothing to apply")
+            return_value.append_message("No queued tasks for '{}'".format(selected_doc.Title))
+            return return_value
+        return_value.append_message("{} task(s) claimed for '{}'".format(len(tasks), selected_doc.Title))
+
+        from room_m.apply_facts import RevitFacts
+        from room_m.apply_write import TaskWriter
+        from room_m.apply_run import run
+
+        facts = RevitFacts(selected_doc)
+        writer = TaskWriter(selected_doc, facts)
+
+        def ask_proceed(lines):
+            message = "Some tasks have warnings:\n\n" + "\n".join(lines) + "\n\nProceed with them, or abort those tasks?"
+            choice = forms.alert(message, title="Roommate - warnings", options=["Proceed", "Abort those tasks"])
+            return choice == "Proceed"
+
+        def send(reports):
+            ok, status, text, outcomes = report_tasks(project["id"], reports)
+            if not ok:
+                return False, "{}: {}".format(status if status is not None else "no response", text)
+            bad = [o.get("error") or "not recorded" for o in outcomes if not o.get("recorded")]
+            return (not bad), "; ".join(bad)
+
+        def say(line):
+            try:
+                output.print_md(line)
+            except Exception:
+                pass
+
+        sent, lines = run(tasks, facts, writer, ask_proceed, send, say)
+        failed = [r for r in sent if r["status"] in ("failed", "aborted")]
+        return_value.append_message("{} report(s) sent, {} failed or aborted".format(len(sent), len(failed)))
+    except Exception as e:
+        return_value.update_sep(False, "Apply failed with exception: {}".format(e))
+    return return_value
+
 
 def export_entry(doc, uiapp, output, forms, entities):
 

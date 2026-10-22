@@ -1,0 +1,9 @@
+title: "Server"
+
+tooltip: |
+  Choose which RoomMate server this computer pushes to.
+  The server on this computer by default; type the address it printed
+  to use one running on another computer on the network.
+
+author:
+  - Jan Christel

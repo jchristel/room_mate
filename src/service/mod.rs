@@ -10,6 +10,11 @@
 
 pub mod adjacency;
 pub mod areas;
+pub mod blueprint_capture;
+pub mod blueprint_geometry;
+pub mod blueprint_model;
+pub mod blueprint_resolve;
+pub mod blueprint_solve;
 pub mod comparison;
 pub mod connectivity;
 pub mod entity_scope;
@@ -25,11 +30,13 @@ pub mod reports;
 pub mod room_locator;
 pub mod rooms;
 pub mod routing;
+pub mod sheet_suggest;
 pub mod snapshots;
 pub mod spaces;
 pub mod stacking;
 pub mod surface_attribution;
 pub mod surfaces;
+pub mod task_build;
 pub mod type_table;
 pub mod validation;
 

@@ -47,13 +47,18 @@ from System import TimeSpan
 from System.Net.Http import HttpClient
 from System.Text import Encoding
 
+from room_m import server_config
 
 
+
+# **Every URL in the post_* modules is a PATH** (`/rooms`), joined to the server in force at the moment
+# of the request by `server_config.url_for` (see `room_m.server_config` for why not at import).
+#
 # The settings endpoint, NOT /projects: a push target must be a *registered*
 # project, and /projects lists only projects that already have stored
 # snapshots -- which a project can only get by being pushed to first. See
 # fetch_projects.
-SERVER_URL_PROJECTS = "http://127.0.0.1:5151/api/settings/projects"
+SERVER_URL_PROJECTS = "/api/settings/projects"
 
 
 # Which producer this script feeds the server from. The server resolves
@@ -397,6 +402,7 @@ def fetch_projects(url=SERVER_URL_PROJECTS):
     project onboarded yet" (a hard stop for the producer), not a failure; a 2xx
     whose body isn't a JSON list is a genuine failure (unexpected server
     shape)."""
+    url = server_config.url_for(url)
     client = make_client()
     try:
         response = client.GetAsync(url).Result
@@ -417,9 +423,15 @@ def fetch_projects(url=SERVER_URL_PROJECTS):
         ]
         return (True, status, projects)
     except Exception as e:
-        return (False, None, "could not reach {}: {}".format(url, unwrap_aggregate(e)))
+        return (False, None, _unreachable(url, e))
     finally:
         client.Dispose()
+
+
+def _unreachable(url, error):
+    """The message for a request that never got an answer: the address that was tried, what the
+    network said, and what usually fixes it."""
+    return "could not reach {}: {}. {}".format(url, unwrap_aggregate(error), server_config.unreachable_hint(url))
 
 
 def empty_push_refusal(entity, envelope, raw_count, dropped):
@@ -488,6 +500,7 @@ def _post_content(url, content):
     print stays for the interactive pyRevit console; the tuple is for the
     caller's `Result` tracking -- a failure must end the run red, not vanish
     into the console scrollback."""
+    url = server_config.url_for(url)
     client = make_client()
     try:
         response = client.PostAsync(url, content).Result
@@ -496,7 +509,7 @@ def _post_content(url, content):
         print("Server responded {}: {}".format(status, text))
         return (200 <= status < 300, status, text)
     except Exception as e:
-        message = "could not reach {}: {}".format(url, unwrap_aggregate(e))
+        message = _unreachable(url, e)
         print(message)
         return (False, None, message)
     finally:

@@ -24,18 +24,22 @@ import { OpenZoneOverlay } from "./OpenZoneOverlay.js";
 import { SavedRoutesOverlay } from "./SavedRoutesOverlay.js";
 import { OpenZonePanel } from "./OpenZonePanel.js";
 import { RoutePanel } from "./RoutePanel.js";
+import { BlueprintOverlay } from "./BlueprintOverlay.js";
+import { BlueprintPanel } from "./BlueprintPanel.js";
 import { ReachPanel } from "./ReachPanel.js";
 import { layerFor } from "../reach.js";
 import { LayerMenu } from "./LayerMenu.js";
 import { SelectionFilter } from "./SelectionFilter.js";
 import { ExportMenu } from "./ExportMenu.js";
 import { loadAreas } from "./areasData.js";
+import { watchRoomTasks } from "./taskData.js";
+import { TASKS_PLAN, TASK_STATE_COLOUR, TASK_STATE_LABEL, taskColourForRoom } from "../taskStatus.js";
 import { tierNames } from "../areas.js";
 import { elementsOnStorey, layerPayload, typePropertiesOf, zoneAwaitsLayers, type ElementOf } from "./layers.js";
 import { tagsRequest } from "../elementTags.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
-import { closePickList, setZoneAreas, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneReachMode, setZoneRouteMode, type ZoneRow } from "./store.js";
+import { closePickList, setZoneAreas, setZoneBlueprintMode, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneReachMode, setZoneRouteMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
@@ -66,6 +70,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     scope,
     roomsLoading,
     tagSettings,
+    roomTasks,
   } = useViewer();
   // This zone's own visibility, since C1 — see `ZoneRow.layers`.
   const { layers, showRooms, showLabels, spacesModel, ffeModelsOff } = zone;
@@ -132,7 +137,10 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   // page's rule.
   const rooms = useMemo(() => (payload ? roomsOnLevel(payload, levelId) : []), [payload, levelId]);
   const levelName = levels.find((l) => l.id === levelId)?.name ?? levelId ?? "";
-  const plan = colourPlans.find((p) => p.name === zone.colourPlan) ?? null;
+  const byTasks = zone.colourPlan === TASKS_PLAN;
+  const plan = byTasks ? null : (colourPlans.find((p) => p.name === zone.colourPlan) ?? null);
+  // Read the tasks only while this zone colours by them.
+  useEffect(() => (byTasks ? watchRoomTasks() : undefined), [byTasks]);
   // Which joined sources this payload carries. A plan names a field as
   // `<source>.<field>` and the lookup binds the prefix only against this list, so
   // leaving it out colours every room "no data" without an error.
@@ -202,6 +210,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           errorRoomIds: errorRooms,
           showErrors,
           ...(plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, plan, ctx, sources) } : {}),
+          ...(byTasks && roomTasks ? { colourFor: (room: Room) => taskColourForRoom(room, roomTasks) } : {}),
           doors: on("doors"),
           showDoors: layers.doors,
           windows: on("windows"),
@@ -244,7 +253,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
     // The GL context is created asynchronously; painting before it exists draws
     // nothing and looks exactly like a broken payload.
     void renderer.ready.then(draw);
-  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, ffeModelsOff, layersRevision, plan, sources, errorRooms, showErrors, zone.tags, tagSettings]);
+  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, ffeModelsOff, layersRevision, plan, byTasks, roomTasks, sources, errorRooms, showErrors, zone.tags, tagSettings]);
 
   // Search is applied to what is ALREADY drawn -- never by re-rendering. A
   // search can match thousands of rooms, and a keystroke must not re-upload a
@@ -304,17 +313,28 @@ export function Zone({ zone }: { zone: ZoneRow }) {
             two plans is the comparison this picker exists for. Hidden when the
             project declares none, which is the ordinary case. */}
         <select
-          className={`picker colourSelect${colourPlans.length ? "" : " hidden"}`}
+          className="picker colourSelect"
           value={zone.colourPlan ?? ""}
           onChange={(e) => setZoneColourPlan(zone.id, e.target.value || null)}
         >
           <option value="">No colour</option>
+          <option value={TASKS_PLAN}>{TASKS_PLAN}</option>
           {colourPlans.map((p) => (
             <option key={p.name} value={p.name}>
               {p.name}
             </option>
           ))}
         </select>
+        {byTasks ? (
+          <span className="taskKey" aria-label="Room task colours">
+            {(Object.keys(TASK_STATE_COLOUR) as (keyof typeof TASK_STATE_COLOUR)[]).map((k) => (
+              <span key={k} className="taskKeyItem">
+                <i style={{ background: TASK_STATE_COLOUR[k] }} />
+                {TASK_STATE_LABEL[k]}
+              </span>
+            ))}
+          </span>
+        ) : null}
         <select
           className={`picker levelSelect${levels.length > 1 ? "" : " hidden"}`}
           value={levelId ?? ""}
@@ -353,6 +373,13 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           Reach
         </button>
         <button
+          className={`route-toggle${zone.blueprint ? " on" : ""}`}
+          title="Lay a blueprint into a room as a ghost, choose which rotation fits, and assign it"
+          onClick={() => setZoneBlueprintMode(zone.id, zone.blueprint === null)}
+        >
+          Blueprint
+        </button>
+        <button
           className={`route-toggle${zone.edit ? " on" : ""}`}
           title="Define open zones (rooms the model does not join with doors) and vertical links (floor-to-floor hops for lifts and stairs)"
           onClick={() => setZoneEditMode(zone.id, zone.edit === null)}
@@ -388,6 +415,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       </div>
       <RoutePanel zone={zone} />
       <ReachPanel zone={zone} />
+      <BlueprintPanel zone={zone} />
       <OpenZonePanel zone={zone} />
       <div className="zone-canvas">
         <canvas className="plan-gl" ref={canvasRef} />
@@ -407,6 +435,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           <SavedRoutesOverlay zoneId={zone.id} levelId={levelId} />
           {/* Above the footprints: a route is the thing being asked about. */}
           <RouteOverlay zoneId={zone.id} levelId={levelId} route={zone.route} />
+          <BlueprintOverlay zoneId={zone.id} levelId={levelId} tool={zone.blueprint} />
         </svg>
         {/* The per-room tooltip the browser used to draw for free from an SVG
             `<title>`. WebGL has no elements, so it is a DOM node the hover

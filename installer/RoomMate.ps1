@@ -25,12 +25,20 @@
     binary's --server-url and any configured pyRevit pusher both point at it, so
     moving it here means moving it there too.
 
+.PARAMETER Bind
+    The interface to listen on. The default, 127.0.0.1, is this computer only. Use
+    0.0.0.0 to let another computer on the same network (a Revit machine running
+    the pyRevit extension) reach the server; the server then prints the address to
+    type into the pyRevit side. There is NO authentication, so use it only on a
+    network you trust.
+
 .PARAMETER NoBrowser
     Start the server without opening a browser.
 #>
 [CmdletBinding()]
 param(
     [int] $Port = 5151,
+    [string] $Bind = '127.0.0.1',
     [switch] $NoBrowser
 )
 
@@ -115,7 +123,8 @@ Write-Host ''
 
 & $Exe --server-settings (Join-Path $Settings 'server.toml') `
        --project-settings (Join-Path $Settings 'projects') `
-       --port $Port
+       --port $Port `
+       --bind $Bind
 
 # A shortcut-launched window vanishing on a startup error takes the error
 # message with it, which is the difference between "port is taken" and "RoomMate

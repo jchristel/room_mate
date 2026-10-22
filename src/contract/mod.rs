@@ -45,7 +45,7 @@ pub use ceilings::{CeilingModelUpload, CeilingPayload, CeilingsUpload, SUPPORTED
 pub use doors::{DoorModelEnvelope, DoorPayload, DoorStreamEnvelope, DoorsUpload, StreamDoor, SUPPORTED_DOOR_SCHEMA};
 pub use ffe::{FfeModelEnvelope, FfePayload, FfeStreamEnvelope, FfeUpload, StreamItem, SUPPORTED_FFE_SCHEMA};
 pub use floors::{FloorModelUpload, FloorPayload, FloorsUpload, SUPPORTED_FLOOR_SCHEMA};
-pub use items::{Item, ItemEnvelope};
+pub use items::{Item, ItemEnvelope, ItemHost};
 pub use openings::{Opening, OpeningEnvelope};
 pub use spaces::{
     SpaceModelEnvelope, SpaceModelUpload, SpacePayload, SpaceStreamEnvelope, SpacesUpload, StreamSpace,

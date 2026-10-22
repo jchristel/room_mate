@@ -106,8 +106,56 @@ def items_in_phase(doc, phase_name, categories):
     return allowed
 
 
+def family_name_of(instance):
+    """The family this instance's type belongs to, or None.
+
+    `FamilyInstance.Symbol.FamilyName`: two families can share a type name, and the
+    export carries the type name only (a probe of 16,161 RHH items found no family
+    field), so this is what lets a blueprint tell them apart. Read here because there
+    is nothing to disagree with: duHast does not export it at all, so this is a gap
+    filled, the same footing as the category. None when unreadable, never a guess
+    from the type name."""
+    try:
+        symbol = instance.Symbol
+        name = symbol.FamilyName if symbol is not None else None
+        return str(name) if name else None
+    except Exception:
+        return None
+
+
+def host_of(instance):
+    """What this instance is hosted on, as `{"kind", "id", "face_hosted"}`, or None.
+
+    `FamilyInstance.Host` is the host ELEMENT -- a wall, floor or ceiling -- and is
+    None for a level-hosted instance, which is the common case (98% of RHH's items
+    here): the export's `Host` parameter says which level, as a display string. The
+    export names neither the wall nor whether the family is face-hosted, which is what
+    placing a wall-mounted item from a blueprint needs. `kind` is the host's category as
+    Revit shows it. None, not an empty record, when there is nothing to say."""
+    try:
+        host = instance.Host
+    except Exception:
+        return None
+    if host is None:
+        return None
+    try:
+        kind = host.Category.Name if host.Category is not None else None
+    except Exception:
+        kind = None
+    face_hosted = False
+    try:
+        face_hosted = instance.HostFace is not None
+    except Exception:
+        face_hosted = False
+    try:
+        host_id = element_id_str(host.Id)
+    except Exception:
+        return None
+    return {"kind": kind, "id": host_id, "face_hosted": face_hosted}
+
+
 def item_facts(doc, phase_name, categories, identify_by="room"):
-    """`{item id: {"room", "owner_spaces", "category"}}` for every instance of
+    """`{item id: {"room", "owner_spaces", "category", "family_name", "host"}}` for every instance of
     `categories`.
 
     **One collector pass per category, and ONE spatial reference, not two.**
@@ -181,5 +229,7 @@ def item_facts(doc, phase_name, categories, identify_by="room"):
                 "room": reference if identify_by == "room" else None,
                 "owner_spaces": [reference] if identify_by == "space" and reference else [],
                 "category": name,
+                "family_name": family_name_of(instance),
+                "host": host_of(instance),
             }
     return facts

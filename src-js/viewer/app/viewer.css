@@ -712,6 +712,23 @@
   .route-mark-grab:active { cursor: grabbing; }
   .route-mark.start { fill: #2e9e4f; }
   .route-mark.end { fill: #d64545; }
+  /* The blueprint ghost: strokes and a light tint only, so the plan beneath stays readable; it
+     never takes a click, which belongs to the room pick. */
+  .bp-room { fill: none; stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+  .bp-box { fill: var(--accent); fill-opacity: 0.06; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+  /* A handle is a short line with a wide, round, non-scaling stroke: a dot that stays one size on screen. */
+  .bp-handle { stroke: var(--accent); stroke-width: 13px; stroke-linecap: round; vector-effect: non-scaling-stroke;
+               pointer-events: stroke; cursor: grab; touch-action: none; }
+  .bp-handle.move { stroke-width: 17px; stroke-opacity: 0.55; cursor: move; }
+  .bp-handle.rotate { stroke: #2e9e4f; }
+  .bp-handle:active { cursor: grabbing; }
+  .bp-item { pointer-events: none; }
+  .bp-item polygon { fill: var(--accent); fill-opacity: 0.18; stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 5 3;
+                     vector-effect: non-scaling-stroke; }
+  .bp-item line { stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+  .bp-item.wall polygon { fill-opacity: 0.35; }
+  .bp-item.flagged polygon { stroke: #d64545; fill: #d64545; fill-opacity: 0.22; }
+  .routeBar a.chip { text-decoration: none; color: inherit; }
   /* Saved routes: one colour each, on a paper halo so crossing routes stay legible. */
   .saved-route-halo { fill: none; stroke: var(--paper); stroke-width: 7; vector-effect: non-scaling-stroke;
                       stroke-linejoin: round; stroke-linecap: round; opacity: 0.85; pointer-events: none; }
@@ -1023,3 +1040,8 @@
 
   /* One model's checkbox under the FF&E entry in the Layers menu. */
   label.sub { display: block; margin-left: 1.3rem; font-size: 0.66rem; white-space: nowrap; }
+
+/* The key to the "Room tasks" colouring: one swatch per state, beside the colour picker. */
+.taskKey { display: inline-flex; flex-wrap: wrap; gap: 0.1rem 0.6rem; align-items: center; font-size: 0.7rem; color: var(--muted, inherit); }
+.taskKeyItem { display: inline-flex; align-items: center; gap: 0.25rem; }
+.taskKeyItem i { width: 0.7rem; height: 0.7rem; border: 1px solid var(--rule, #888); display: inline-block; }
