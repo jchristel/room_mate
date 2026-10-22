@@ -28,11 +28,10 @@
 //!   core (reads shared with the MCP binary) + the `/api/settings` Axum
 //!   adapters; saves hot-swap the registry.
 
-/// The interface the HTTP server binds to. **Loopback on purpose, and not
-/// configurable**: the server has no authentication of any kind, and the
-/// settings API can write project files, so binding a routable interface would
-/// expose that to the network. Serving beyond localhost is a deliberate
-/// decision with prerequisites, not a flag.
+/// The interface the HTTP server binds to **by default**: loopback. The server has no
+/// authentication of any kind, and the settings API can write project files, so serving a network
+/// is an explicit opt-in (`--bind`, see `network`) for a network the operator trusts, never what
+/// happens by accident.
 pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
 
 /// Default port for the HTTP server, overridable with `--port` (or the `PORT`
@@ -76,6 +75,7 @@ pub mod reports {
     pub use roommate_shared::reports::*;
 }
 pub mod handlers;
+pub mod network;
 pub mod reference;
 pub mod reports_api;
 pub mod service;

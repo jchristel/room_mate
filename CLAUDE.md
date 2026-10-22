@@ -564,6 +564,24 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
   side was checked for syntax, ASCII and duHast-import closure only.
 
+## Serving a closed network: how Revit on another computer reaches the server
+
+- **Loopback is the default and leaving it is an explicit opt-in**: `--bind 0.0.0.0` (or `ROOMMATE_BIND`; an
+  address, never a name; IPv6 works). The server has **no authentication** and `/api/settings` writes project files, so
+  this is for a network the operator trusts, never the internet. A non-loopback start prints the addresses to type
+  (this machine's primary IPv4 and `<name>.local`) and a one-line warning. `src/network.rs` is the module.
+- **The `Host` guard stays on off loopback, and that is the part that is easy to break.** A request from the Revit
+  machine says `Host: 192.168.x.x:5151`, which the loopback-only guard refused. A network bind allows IP literals
+  (a DNS-rebinding page cannot present one), this machine's own names (`mac`, `mac.local`) and `--allow-host` names
+  (repeatable or comma separated, `ROOMMATE_ALLOW_HOSTS`); a Host naming any other domain is still a 403, on reads and
+  on the settings writes. Do not widen it to "any Host" because a LAN client was refused: list the name.
+- **CORS is irrelevant to the pyRevit side** (it is not a browser); a browser on the other machine loads the viewer
+  same-origin from the server's address.
+- **The macOS or Windows firewall is the usual reason a correct setup does not connect**: allow incoming connections
+  for the binary, and use a fixed address or the `.local` name. A tunnel (`ssh -N -L 5151:127.0.0.1:5151 user@host`)
+  needs none of this and keeps the server on loopback.
+- **The pyRevit side still posts to `http://127.0.0.1:5151`** (13 modules); a configurable base URL is the next piece.
+
 ## Traps in the door export
 
 - **`±1e30` is not geometry.** duHast used to return Revit's *uninitialized*

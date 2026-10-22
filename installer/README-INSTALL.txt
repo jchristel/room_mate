@@ -45,8 +45,24 @@ Getting data in
 
 The store starts empty, so the viewer has nothing to draw until a model is
 pushed to it. Pushes come from the pyRevit extension that runs inside Revit;
-it posts to http://127.0.0.1:5151, so the server has to be running when you
-push.
+it posts to http://127.0.0.1:5151 unless told otherwise, so the server has to be
+running when you push.
+
+Revit on a different computer
+-----------------------------
+
+To push from Revit on another computer on the same (trusted) network, start the
+server so that it listens on the network. The server has NO authentication:
+anyone who can reach its port can read and change the data, so use this only on
+a closed network.
+
+    RoomMate.ps1 -Bind 0.0.0.0           (or: roommate.exe ... --bind 0.0.0.0)
+
+The server prints the addresses it can be reached at, for example
+http://192.168.0.97:5151. Give that address to the pyRevit side. Allow incoming
+connections to the server in the firewall of the computer it runs on. Use a
+fixed address (or the computer's .local name) so it does not change. A DNS name
+other than the computer's own must be listed with --allow-host.
 
 If you installed the pyRevit toolbar component, the buttons are on the duHast
 tab, in the Export panel: "Rooms + Doors" pushes both, and the By Category
