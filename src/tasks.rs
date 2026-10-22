@@ -7,8 +7,11 @@
 //! what a Revit session writes cannot change underneath it, and a later look says what was asked.
 //! The plugin validates and writes; it never resolves (decision 2).
 //!
-//! **Two kinds.** `populate_room` places a blueprint's items in a room (and, if asked, its
-//! sheets); `create_rls` makes room layout sheets from a library sheet and places nothing.
+//! **Three kinds.** `populate_room` places a blueprint's items in a room (and, if asked, its
+//! sheets); `create_rls` makes room layout sheets from a library sheet and places nothing;
+//! `update_room` brings a room populated earlier back in line with its blueprint (decision 21:
+//! items, or only their locations, after a room-size or design change). An update is a DRY RUN
+//! unless the person turns that off (decision 13): the session reports the diff and writes nothing.
 //!
 //! **States, and who moves them.** A task is `queued` when made or resent. A Revit session asks
 //! for a model's tasks (`claim`) and every queued one becomes `in_progress`, so another session
@@ -47,6 +50,21 @@ pub enum TaskKind {
     PopulateRoom,
     /// Make room layout sheets from a library sheet; nothing is placed.
     CreateRls,
+    /// Update a room populated earlier from its blueprint: the task holds the layout as the
+    /// resolver now places it, and the session matches it to what is in the room by the
+    /// marker each placed item carries (blueprint id, revision, item id).
+    UpdateRoom,
+}
+
+/// What an update changes in a room that already holds the blueprint's items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateMode {
+    /// Items: add the ones the layout has and the room lacks, remove the ones it no longer has,
+    /// change type and properties, and move.
+    Items,
+    /// Locations: move what is there; add and remove nothing.
+    Locations,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +159,12 @@ pub struct Task {
     pub create_rls: bool,
     #[serde(default)]
     pub overwrite_rls: bool,
+    /// `update_room` only: what the update changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_mode: Option<UpdateMode>,
+    /// `update_room` only: report what would change and write nothing. Defaults to true.
+    #[serde(default)]
+    pub dry_run: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blueprint: Option<BlueprintRef>,
     /// `create_rls`: the library sheet the layout was taken from.
@@ -178,6 +202,9 @@ pub struct TaskSummary {
     pub create_rls: bool,
     pub overwrite_rls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_mode: Option<UpdateMode>,
+    pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub blueprint: Option<BlueprintRef>,
     pub items: usize,
     pub sheets: usize,
@@ -203,6 +230,8 @@ impl From<&Task> for TaskSummary {
             overwrite_layout: t.overwrite_layout,
             create_rls: t.create_rls,
             overwrite_rls: t.overwrite_rls,
+            update_mode: t.update_mode,
+            dry_run: t.dry_run,
             blueprint: t.blueprint.clone(),
             items: t.items.len(),
             sheets: t.sheets.len(),
@@ -226,6 +255,8 @@ pub struct NewTask {
     pub overwrite_layout: bool,
     pub create_rls: bool,
     pub overwrite_rls: bool,
+    pub update_mode: Option<UpdateMode>,
+    pub dry_run: bool,
     pub blueprint: Option<BlueprintRef>,
     pub library_sheet_id: Option<String>,
     pub items: Vec<TaskItem>,
@@ -421,6 +452,8 @@ pub fn create(projects_dir: &Path, project: &str, new: NewTask) -> Result<Task, 
         overwrite_layout: new.overwrite_layout,
         create_rls: new.create_rls,
         overwrite_rls: new.overwrite_rls,
+        update_mode: new.update_mode,
+        dry_run: new.dry_run,
         blueprint: new.blueprint,
         library_sheet_id: new.library_sheet_id,
         items: new.items,
@@ -576,6 +609,8 @@ mod tests {
             overwrite_layout: false,
             create_rls: false,
             overwrite_rls: false,
+            update_mode: None,
+            dry_run: false,
             blueprint: None,
             library_sheet_id: None,
             items: vec![],
@@ -674,5 +709,23 @@ mod tests {
         blank.phase = "  ".to_string();
         assert!(matches!(create(&dir, "p", blank), Err(TaskError::Invalid(_))));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_an_update_task_keeps_its_mode_and_is_a_separate_live_task_from_a_populate() {
+        let dir = temp_dir("update");
+        create(&dir, "p", new_task("m1", "r1")).unwrap();
+        let mut update = new_task("m1", "r1");
+        update.kind = TaskKind::UpdateRoom;
+        update.update_mode = Some(UpdateMode::Locations);
+        update.dry_run = true;
+        let made = create(&dir, "p", update.clone()).expect("a different kind for the same room is allowed");
+        assert_eq!(made.update_mode, Some(UpdateMode::Locations));
+        assert!(made.dry_run);
+        let again = create(&dir, "p", update);
+        assert!(matches!(again, Err(TaskError::Conflict(_))), "{again:?}");
+        let read = load(&dir, "p", &made.id).unwrap();
+        assert_eq!(read.update_mode, Some(UpdateMode::Locations));
+        assert_eq!(TaskSummary::from(&read).update_mode, Some(UpdateMode::Locations));
     }
 }

@@ -2,7 +2,7 @@
 // shown to the person, verbatim.
 
 import { apiGet, apiSend } from "./common.js";
-import type { AssignmentRow, Made, ProjectRow, RoomRow, SheetRow, Task, TaskState, TaskSummary } from "./types.js";
+import type { AssignmentRow, Made, ProjectRow, RoomRow, SheetRow, Task, TaskState, TaskSummary, UpdateMode } from "./types.js";
 
 export type Sent<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -48,6 +48,15 @@ export interface PopulateRequest {
 
 export const makePopulate = (project: string, r: PopulateRequest) =>
   send<Made[]>("POST", `${base(project)}/tasks`, { kind: "populate_room", ...r });
+
+export const makeUpdate = (project: string, assignmentIds: string[], phase: string, mode: UpdateMode, dryRun: boolean) =>
+  send<Made[]>("POST", `${base(project)}/tasks`, {
+    kind: "update_room",
+    assignment_ids: assignmentIds,
+    phase,
+    mode,
+    dry_run: dryRun,
+  });
 
 export const makeRls = (project: string, sheetId: string, roomIds: string[], phase: string, overwriteRls: boolean) =>
   send<Made[]>("POST", `${base(project)}/tasks`, {

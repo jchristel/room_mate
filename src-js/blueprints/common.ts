@@ -35,3 +35,15 @@ export const seedProjectId = (): string | null => common.seedProjectId();
 
 /** Mirror the pick into the URL (replaceState) and localStorage. */
 export const persistSelection = (projectId: string | null): void => common.persistSelection(projectId);
+
+/** A blueprint a person should look at: pushed revisions waiting for a decision, or none of the
+ *  room layout sheets a task needs (one made before sheets were held). */
+export const blueprintNeedsAttention = (b: { sheets: number; pending: number }): boolean => b.sheets === 0 || b.pending > 0;
+
+/** Why, in a sentence. Empty when it does not. */
+export function attentionReasons(b: { sheets: number; pending: number }): string[] {
+  const out: string[] = [];
+  if (b.sheets === 0) out.push("no room layout sheets");
+  if (b.pending > 0) out.push(`${b.pending} pending revision${b.pending === 1 ? "" : "s"} to accept or reject`);
+  return out;
+}

@@ -1,12 +1,14 @@
-// Making tasks. Two kinds, each with its own input (plan decision 26): **populate** takes
-// assignments (a blueprint already placed in a room, its mapping and revision pinned) and
-// **create RLS** takes a library sheet and the rooms to make sheets for. The server makes each
+// Making tasks. Three kinds, each with its own input (plan decisions 21 and 26): **populate** and
+// **update** take assignments (a blueprint already placed in a room, its mapping and revision
+// pinned) and **create RLS** takes a library sheet and the rooms to make sheets for. An update
+// is a dry run unless the person turns that off. The server makes each
 // room on its own, so the answer is a row per room: the task, or why it could not be made.
 
 import { useMemo, useState } from "react";
 
 import * as api from "./api.js";
-import type { AssignmentRow, Made, RoomRow, SheetRow } from "./types.js";
+import { UPDATE_MODE_TEXT } from "./model.js";
+import type { AssignmentRow, Made, RoomRow, SheetRow, UpdateMode } from "./types.js";
 
 export interface MakeProps {
   project: string;
@@ -17,7 +19,7 @@ export interface MakeProps {
   onClose(): void;
 }
 
-type Kind = "populate_room" | "create_rls";
+type Kind = "populate_room" | "create_rls" | "update_room";
 
 export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose }: MakeProps) {
   const [kind, setKind] = useState<Kind>("populate_room");
@@ -28,6 +30,8 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
   const [createRls, setCreateRls] = useState(false);
   const [overwriteRls, setOverwriteRls] = useState(false);
   const [sheetId, setSheetId] = useState("");
+  const [mode, setMode] = useState<UpdateMode>("locations");
+  const [dryRun, setDryRun] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [made, setMade] = useState<Made[] | null>(null);
@@ -35,7 +39,7 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
   const f = filter.trim().toLowerCase();
   const subjects = useMemo(
     () =>
-      kind === "populate_room"
+      kind !== "create_rls"
         ? assignments
             .filter((a) => !a.blueprint_missing && (!f || a.room_name.toLowerCase().includes(f) || (a.blueprint_name ?? "").toLowerCase().includes(f)))
             .map((a) => ({ id: a.id, label: a.room_name, sub: `${a.blueprint_name ?? "?"} r${a.revision}` }))
@@ -58,7 +62,7 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
     setError(null);
   };
 
-  const ready = phase.trim() !== "" && picked.size > 0 && (kind === "populate_room" || sheetId !== "");
+  const ready = phase.trim() !== "" && picked.size > 0 && (kind !== "create_rls" || sheetId !== "");
 
   const submit = async () => {
     setBusy(true);
@@ -67,7 +71,9 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
     const r =
       kind === "populate_room"
         ? await api.makePopulate(project, { assignment_ids: ids, phase: phase.trim(), overwrite_layout: overwriteLayout, create_rls: createRls, overwrite_rls: overwriteRls })
-        : await api.makeRls(project, sheetId, ids, phase.trim(), overwriteRls);
+        : kind === "update_room"
+          ? await api.makeUpdate(project, ids, phase.trim(), mode, dryRun)
+          : await api.makeRls(project, sheetId, ids, phase.trim(), overwriteRls);
     setBusy(false);
     if (!r.ok) return setError(r.error);
     setMade(r.value);
@@ -89,6 +95,9 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
         <button type="button" className={kind === "populate_room" ? "on" : ""} onClick={() => switchKind("populate_room")}>
           Populate rooms from a blueprint
         </button>
+        <button type="button" className={kind === "update_room" ? "on" : ""} onClick={() => switchKind("update_room")}>
+          Update rooms from their blueprint
+        </button>
         <button type="button" className={kind === "create_rls" ? "on" : ""} onClick={() => switchKind("create_rls")}>
           Create RLS from a library sheet
         </button>
@@ -99,7 +108,23 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
         <input type="text" value={phase} onChange={(e) => setPhase(e.target.value)} placeholder="New Construction" />
       </label>
 
-      {kind === "populate_room" ? (
+      {kind === "update_room" ? (
+        <>
+          <label className="stack">
+            What to update
+            <select value={mode} onChange={(e) => setMode(e.target.value as UpdateMode)}>
+              {(Object.keys(UPDATE_MODE_TEXT) as UpdateMode[]).map((m) => (
+                <option key={m} value={m}>
+                  {UPDATE_MODE_TEXT[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} /> Dry run: report what would change and write nothing
+          </label>
+        </>
+      ) : kind === "populate_room" ? (
         <>
           <label>
             <input type="checkbox" checked={overwriteLayout} onChange={(e) => setOverwriteLayout(e.target.checked)} /> Overwrite the room's existing layout (deletes its content in the phase; off, the task aborts if the room has any)
@@ -132,9 +157,9 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
         </>
       )}
 
-      <h3>{kind === "populate_room" ? "Assignments" : "Rooms"}</h3>
+      <h3>{kind !== "create_rls" ? "Assignments" : "Rooms"}</h3>
       <input type="search" placeholder="Filter by name" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter" />
-      {subjects.length === 0 ? <p className="hint">{kind === "populate_room" ? "No assignments. Assign a blueprint to rooms on the blueprints page first." : "No rooms."}</p> : null}
+      {subjects.length === 0 ? <p className="hint">{kind !== "create_rls" ? "No assignments. Assign a blueprint to rooms on the blueprints page first." : "No rooms."}</p> : null}
       <ul className="picks">
         {subjects.map((s) => (
           <li key={s.id}>

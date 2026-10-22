@@ -1,7 +1,7 @@
 // What the tasks page knows about a task that is not drawing: the words for a state, what a person
 // may do with a task in each state, and how a finding reads. Pure, so it is tested.
 
-import type { Finding, Task, TaskKind, TaskState, TaskSummary } from "./types.js";
+import type { Finding, Task, TaskKind, TaskState, TaskSummary, UpdateMode } from "./types.js";
 
 export const STATES: readonly TaskState[] = [
   "queued",
@@ -26,6 +26,12 @@ export const STATE_TEXT: Record<TaskState, string> = {
 export const KIND_TEXT: Record<TaskKind, string> = {
   populate_room: "Populate room",
   create_rls: "Create RLS",
+  update_room: "Update room",
+};
+
+export const UPDATE_MODE_TEXT: Record<UpdateMode, string> = {
+  items: "items (add, remove, change, move)",
+  locations: "locations only (move)",
 };
 
 /** A task a person can still drop: any that is not already dismissed (including one in progress,

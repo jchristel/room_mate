@@ -21,7 +21,7 @@ import * as api from "./api.js";
 import { Assign } from "./Assign.js";
 import { BlueprintList } from "./BlueprintList.js";
 import { Canvas } from "./Canvas.js";
-import { persistSelection, seedProjectId } from "./common.js";
+import { attentionReasons, persistSelection, seedProjectId } from "./common.js";
 import { sameItems } from "./draft.js";
 import { fileNameFor, toFile, type Imported } from "./exchange.js";
 import { pt } from "./geometry.js";
@@ -53,6 +53,7 @@ export function App() {
 
   const revision = blueprint?.revisions.find((r) => r.number === viewing) ?? null;
   const dirty = !!revision && !pendingView && !sameItems(draft, revision.items);
+  const summary = rows?.find((r) => r.id === blueprint?.id) ?? null;
   const content = pendingView ?? revision;
   const items = pendingView ? pendingView.items : draft;
   const ring = useMemo(() => (content ? content.outline.coarse.map(pt) : []), [content]);
@@ -225,6 +226,7 @@ export function App() {
         <div className="links">
           <a href="/">viewer</a>
           <a href="/tasks/">tasks</a>
+          <a href="/library/">library</a>
           <a href="/reports/">reports</a>
           <a href="/settings/">settings</a>
         </div>
@@ -254,6 +256,12 @@ export function App() {
             <main>
               {error ? <p className="banner error">{error}</p> : null}
               {notice && !error ? <p className="banner">{notice}</p> : null}
+              {blueprint && summary && summary.sheets === 0 ? (
+                <p className="banner attention">
+                  This blueprint has {attentionReasons(summary)[0]}: it was made before sheets were held. It still assigns and populates rooms, but a task cannot create sheets from it.
+                  Push it again from Revit with the Blueprint button, choosing its sheets; the push arrives here as a pending revision to accept.
+                </p>
+              ) : null}
               {blueprint && content ? (
                 <>
                   <Timeline

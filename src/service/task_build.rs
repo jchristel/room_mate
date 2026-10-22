@@ -26,7 +26,7 @@ use crate::service::blueprint_model::BlueprintSheet;
 use crate::sheets::{self, SheetError};
 use crate::state::AppState;
 use crate::tag_rules::{self, RuleSummary};
-use crate::tasks::{BlueprintRef, NewTask, TaskItem, TaskKind, TaskRoom};
+use crate::tasks::{BlueprintRef, NewTask, TaskItem, TaskKind, TaskRoom, UpdateMode};
 
 const FT_TO_MM: f64 = super::blueprint_capture::FT_TO_MM;
 
@@ -41,6 +41,16 @@ pub struct PopulateParams {
     pub overwrite_layout: bool,
     pub create_rls: bool,
     pub overwrite_rls: bool,
+}
+
+/// What a person sets on an update task.
+#[derive(Debug, Clone)]
+pub struct UpdateParams {
+    pub phase: String,
+    pub mode: UpdateMode,
+    /// Report the difference and write nothing: the default, for the reason given in the plan
+    /// (decision 13).
+    pub dry_run: bool,
 }
 
 fn refuse<T>(reason: impl Into<String>) -> Result<T, ServiceError> {
@@ -173,6 +183,8 @@ pub fn populate_from_assignment(
     };
     Ok(NewTask {
         kind: TaskKind::PopulateRoom,
+        update_mode: None,
+        dry_run: false,
         model_id: room.model_id,
         room: task_room,
         phase: params.phase.clone(),
@@ -230,6 +242,28 @@ fn tag_rules_for(
             Vec::new()
         }
     }
+}
+
+/// An update task for one assignment: the layout as the resolver places it now, with no sheets
+/// and no tags (an update moves and changes items; it does not make a layout sheet).
+pub fn update_from_assignment(
+    state: &AppState,
+    projects_dir: &std::path::Path,
+    project: &str,
+    assignment: &Assignment,
+    params: &UpdateParams,
+) -> Result<NewTask, ServiceError> {
+    let populate = PopulateParams {
+        phase: params.phase.clone(),
+        overwrite_layout: false,
+        create_rls: false,
+        overwrite_rls: false,
+    };
+    let mut new = populate_from_assignment(state, projects_dir, project, assignment, &populate)?;
+    new.kind = TaskKind::UpdateRoom;
+    new.update_mode = Some(params.mode);
+    new.dry_run = params.dry_run;
+    Ok(new)
 }
 
 fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
@@ -300,6 +334,8 @@ pub fn rls_from_sheet(
     );
     Ok(NewTask {
         kind: TaskKind::CreateRls,
+        update_mode: None,
+        dry_run: false,
         model_id: room.model_id.clone(),
         room: task_room,
         phase: phase.to_string(),

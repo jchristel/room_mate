@@ -1,6 +1,9 @@
 // The shapes the tasks page reads, as the server writes them (`src/tasks.rs`, `tasks_api.rs`).
 
-export type TaskKind = "populate_room" | "create_rls";
+export type TaskKind = "populate_room" | "create_rls" | "update_room";
+
+/** What an update changes: the items (add, remove, change, move) or only where they are. */
+export type UpdateMode = "items" | "locations";
 
 export type TaskState =
   | "queued"
@@ -33,6 +36,9 @@ export interface TaskSummary {
   overwrite_layout: boolean;
   create_rls: boolean;
   overwrite_rls: boolean;
+  update_mode?: UpdateMode;
+  /** An update that reports its difference and writes nothing. */
+  dry_run: boolean;
   blueprint?: BlueprintRef;
   items: number;
   sheets: number;

@@ -6,6 +6,7 @@ import type { TaskSummary } from "./types.js";
 const row = (id: string, state: TaskSummary["state"], model = "m", at = "2026-10-20T09:00:00Z"): TaskSummary => ({
   id,
   kind: "populate_room",
+  dry_run: false,
   state,
   model_id: model,
   room: { room_id: id, name: id },

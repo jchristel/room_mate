@@ -16,10 +16,12 @@ use crate::assignments;
 use crate::blueprints_api::service_error;
 use crate::service::blueprint_capture::qualify_room;
 use crate::service::room_locator::RoomRef;
-use crate::service::task_build::{populate_from_assignment, rls_from_sheet, PopulateParams};
+use crate::service::task_build::{
+    populate_from_assignment, rls_from_sheet, update_from_assignment, PopulateParams, UpdateParams,
+};
 use crate::service::ServiceError;
 use crate::state::Shared;
-use crate::tasks::{self, Report, ReportOutcome, Task, TaskError, TaskState, TaskSummary};
+use crate::tasks::{self, Report, ReportOutcome, Task, TaskError, TaskState, TaskSummary, UpdateMode};
 
 const MAX_ROOMS_PER_REQUEST: usize = 200;
 
@@ -68,8 +70,8 @@ pub async fn http_get_task(
     tasks::load(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
 }
 
-/// What to make. `populate_room` names assignments (one task per assignment); `create_rls` names a
-/// library sheet and the rooms to make sheets for.
+/// What to make. `populate_room` and `update_room` name assignments (one task per assignment);
+/// `create_rls` names a library sheet and the rooms to make sheets for.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CreateBody {
@@ -90,6 +92,19 @@ pub enum CreateBody {
         #[serde(default)]
         overwrite_rls: bool,
     },
+    /// Bring rooms populated earlier back in line with their assignments' blueprints.
+    UpdateRoom {
+        assignment_ids: Vec<String>,
+        phase: String,
+        mode: UpdateMode,
+        /// Defaults to true: report the difference and write nothing.
+        #[serde(default = "yes")]
+        dry_run: bool,
+    },
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// What happened to one room of a request: the task made, or why not.
@@ -148,6 +163,24 @@ pub async fn http_create_tasks(
                     continue;
                 };
                 match populate_from_assignment(&state, &projects, &project_id, assignment, &params) {
+                    Ok(new) => out.push(queue(&projects, &project_id, &id, new)),
+                    Err(ServiceError::Invalid(reason)) => out.push(refusal(&id, &assignment.room_name, reason)),
+                    Err(e) => return Err(service_error(e)),
+                }
+            }
+        }
+        CreateBody::UpdateRoom { assignment_ids, phase, mode, dry_run } => {
+            if assignment_ids.len() > MAX_ROOMS_PER_REQUEST {
+                return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_REQUEST} rooms at a time")));
+            }
+            let all = assignments::list_raw(&projects, &project_id).map_err(crate::blueprints_api::to_http)?;
+            let params = UpdateParams { phase, mode, dry_run };
+            for id in assignment_ids {
+                let Some(assignment) = all.iter().find(|a| a.id == id) else {
+                    out.push(refusal(&id, "", "no such assignment".to_string()));
+                    continue;
+                };
+                match update_from_assignment(&state, &projects, &project_id, assignment, &params) {
                     Ok(new) => out.push(queue(&projects, &project_id, &id, new)),
                     Err(ServiceError::Invalid(reason)) => out.push(refusal(&id, &assignment.room_name, reason)),
                     Err(e) => return Err(service_error(e)),

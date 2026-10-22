@@ -91,6 +91,19 @@ pub async fn http_update_sheet(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
     Json(mut request): Json<UpdateRequest>,
 ) -> Result<Json<SheetRecord>, (StatusCode, String)> {
+    if request.room.is_none()
+        && let Some(room_id) = request.room_id.clone()
+    {
+        request.room = match qualify_room(&state, &project_id, &room_id, request.model_id.as_deref()) {
+            Ok(Some(room)) => Some(SheetRoom { model_id: room.model_id, room_id: room.room_id }),
+            Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
+            Err(crate::service::ServiceError::Invalid(msg)) => return Err((StatusCode::BAD_REQUEST, msg)),
+            Err(crate::service::ServiceError::Internal(e)) => {
+                tracing::error!("update sheet error: {e:#}");
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()));
+            }
+        };
+    }
     if let Some(room) = &request.room {
         request.room_summary = summary_of(&state, &project_id, room);
     }

@@ -1,6 +1,6 @@
 // One task, as a person checks what Revit was or will be told, and what the session said.
 
-import { KIND_TEXT, STATE_TEXT, canDismiss, canResend, findingText, needsAttention, shortTime } from "./model.js";
+import { KIND_TEXT, STATE_TEXT, UPDATE_MODE_TEXT, canDismiss, canResend, findingText, needsAttention, shortTime } from "./model.js";
 import type { Task } from "./types.js";
 
 export interface DetailProps {
@@ -15,6 +15,7 @@ const yes = (b: boolean): string => (b ? "yes" : "no");
 export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
   const t = task;
   const populate = t.kind === "populate_room";
+  const update = t.kind === "update_room";
   return (
     <div className="detail">
       <div className="toolbar">
@@ -39,12 +40,23 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
         </dd>
         <dt>Phase</dt>
         <dd>{t.phase}</dd>
-        {populate ? (
+        {populate || update ? (
           <>
             <dt>Blueprint</dt>
             <dd>{t.blueprint ? `${t.blueprint.name}, revision ${t.blueprint.revision}` : "—"}</dd>
-            <dt>Overwrite layout</dt>
-            <dd>{yes(t.overwrite_layout)}</dd>
+            {update ? (
+              <>
+                <dt>Update</dt>
+                <dd>{t.update_mode ? UPDATE_MODE_TEXT[t.update_mode] : "—"}</dd>
+                <dt>Dry run</dt>
+                <dd>{yes(t.dry_run)}</dd>
+              </>
+            ) : (
+              <>
+                <dt>Overwrite layout</dt>
+                <dd>{yes(t.overwrite_layout)}</dd>
+              </>
+            )}
           </>
         ) : (
           <>
@@ -52,11 +64,15 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
             <dd>{t.library_sheet_id ?? "—"}</dd>
           </>
         )}
-        <dt>Create RLS</dt>
-        <dd>
-          {yes(t.create_rls)}
-          {t.create_rls ? ` · overwrite existing: ${yes(t.overwrite_rls)}` : ""}
-        </dd>
+        {update ? null : (
+          <>
+            <dt>Create RLS</dt>
+            <dd>
+              {yes(t.create_rls)}
+              {t.create_rls ? ` · overwrite existing: ${yes(t.overwrite_rls)}` : ""}
+            </dd>
+          </>
+        )}
         <dt>Made</dt>
         <dd>
           {shortTime(t.created_at)} · last change {shortTime(t.updated_at)}

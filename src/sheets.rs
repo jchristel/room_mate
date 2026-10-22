@@ -209,6 +209,14 @@ pub struct UpdateRequest {
     /// Set the sheet's room.
     #[serde(default)]
     pub room: Option<SheetRoom>,
+    /// Set the sheet's room by id alone, for a client that does not know the room's model (the
+    /// viewer's room rows name none). Qualified by the handler, as `suggest` does; ignored when
+    /// `room` is given.
+    #[serde(default)]
+    pub room_id: Option<String>,
+    /// With `room_id`, when two models hold a room of that id.
+    #[serde(default)]
+    pub model_id: Option<String>,
     /// Remove it. Wins over `room`.
     #[serde(default)]
     pub clear_room: bool,
@@ -647,6 +655,8 @@ mod tests {
                 base: rec.taken_at.clone(),
                 room: room("m", "r2"),
                 clear_room: false,
+                room_id: None,
+                model_id: None,
                 room_summary: Some(summary(9)),
             },
         )
@@ -656,7 +666,14 @@ mod tests {
             &dir,
             "p1",
             &rec.id,
-            UpdateRequest { base: moved.taken_at, room: None, clear_room: true, room_summary: None },
+            UpdateRequest {
+                base: moved.taken_at,
+                room: None,
+                clear_room: true,
+                room_id: None,
+                model_id: None,
+                room_summary: None,
+            },
         )
         .unwrap();
         assert_eq!((cleared.room, cleared.room_summary), (None, None));
@@ -781,6 +798,8 @@ mod tests {
                 base: rec.taken_at.clone(),
                 room: room("m", "r1"),
                 clear_room: false,
+                room_id: None,
+                model_id: None,
                 room_summary: None,
             },
         )
@@ -790,14 +809,28 @@ mod tests {
             &dir,
             "p1",
             &first.id,
-            UpdateRequest { base: rec.taken_at, room: room("m", "r2"), clear_room: false, room_summary: None },
+            UpdateRequest {
+                base: rec.taken_at,
+                room: room("m", "r2"),
+                clear_room: false,
+                room_id: None,
+                model_id: None,
+                room_summary: None,
+            },
         );
         assert!(matches!(stale, Err(SheetError::Conflict(_))));
         let cleared = update(
             &dir,
             "p1",
             &first.id,
-            UpdateRequest { base: set.taken_at, room: None, clear_room: true, room_summary: None },
+            UpdateRequest {
+                base: set.taken_at,
+                room: None,
+                clear_room: true,
+                room_id: None,
+                model_id: None,
+                room_summary: None,
+            },
         )
         .unwrap();
         assert_eq!(cleared.room, None);

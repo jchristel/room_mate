@@ -134,3 +134,7 @@ button.on { background: var(--fill); border-color: var(--ink); }
 .picklist.many li.cannot button { opacity: 0.6; }
 .picklist.many li.check button { border-color: var(--accent); }
 .findings li.cannot { color: var(--accent); }
+
+.list .filter { display: block; font-size: 0.72rem; margin: 0.4rem 0; }
+i.attention { font-style: normal; font-size: 0.62rem; margin-left: 0.4rem; padding: 0 0.3rem; background: var(--accent); color: var(--paper); border-radius: 2px; }
+.banner.attention { background: var(--fill-hover); }

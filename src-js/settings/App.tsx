@@ -268,6 +268,7 @@ export function App() {
         <h1>Room Plan · Settings</h1>
         <a href="/blueprints/">blueprints</a>
         <a href="/tasks/">tasks</a>
+        <a href="/library/">library</a>
         <a href="/reports/">reports</a>
         <a href="/">← viewer</a>
       </header>
