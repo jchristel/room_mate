@@ -318,9 +318,9 @@ the sliver rules since removed, and again after).
 
 Built: the store, capture, the resolver (blueprint + another room -> placements and findings)
 the blueprint viewer (`/blueprints/`), the assign view (the same page, "Assign to rooms"), the
-assignment store and the HTTP/MCP reads and writes. **Not built: dragging a box over the main plan,
-per-item overrides, anything toward Revit. No mirrored copy, on purpose: handed families make a reflection
-wrong in ways that look right, so a person authors the other hand as its own blueprint.**
+assignment store and the HTTP/MCP reads and writes, a Blueprint tool in the main viewer (below) and per-item overrides
+(below). **No mirrored copy, on purpose: handed families make a reflection wrong in ways that look right, so a person
+authors the other hand as its own blueprint.**
 The reasoning and the measurements behind every rule below are in
 [`PLAN-blueprints.md`](docs/PLAN-blueprints.md) and its stage 0 note; what is expensive to
 get wrong:
@@ -391,6 +391,20 @@ get wrong:
   sheet in a blueprint is layout only (no tags) and its number, name and id are never used on
   assignment. A blueprint made before this has no sheets, stays valid and says so. The viewer has no
   "new from a room". Import/export carry sheets and doors; a file without sheets is refused.
+- **Per-item overrides belong to ONE assignment and are applied by the resolver, never by the page.** An
+  `ItemOverride` (leave out, or nudge in whole mm and turn in whole degrees, in the plan frame) is applied to the poses
+  the recipes gave, *before* the `outside` and `overlap` findings, so those are judged where the item now is. One per
+  item, no-ops dropped, an unknown item is the `override_unused` finding and not an error. **It affects its own item
+  only**: a follower keeps the place the resolver gave it. The assign view previews through the resolve read's
+  `overrides` parameter (so the drawing is the server's answer), and assigning again WITHOUT `overrides` keeps the
+  room's (a client written before them must not clear them); `[]` clears. Changing the mapping after nudging can leave a
+  nudge that no longer fits, and that is the person's to look at.
+- **The Blueprint tool in the main viewer is what is left of "drag, rotate and scale a box".** That sketch predates the
+  resolver: the room sets the position and the scale (decision 6), so only the room and the rotation are choices. A
+  click on a room moves the ghost there (the choke point is `store.select`, like route and reach, and the tool is
+  exclusive with them), Rotate steps through the resolver's fitting rotations best-by-doors first, and Assign saves the
+  assignment at that rotation. It draws the resolver's answer (`GET .../resolve`), computes no placement, and is not
+  in the SVG export.
 - **Resolving is partly manual, by design.** `edge_map` on resolve is the person's own mapping of
   blueprint edges to room edges (the way to place in a room with a different edge count); the fit
   kind is then `manual` and nothing about the mapping is judged.
@@ -441,7 +455,9 @@ warnings; pure, tested on CPython in `extractor/tests`) and its transport (`post
 is written (`apply_tasks_entry`): `apply_run` is the sequence (claim, check, ask once, report aborts before any work,
 write and report each task, report any stranded one failed; tested with fakes), `apply_facts` answers the planner from
 Revit, `apply_write` writes one task per `TransactionGroup` so a failed task leaves no trace, `apply_geometry` is the
-pure arithmetic. **Not run in Revit. Not built: the update task kind.** The server
+pure arithmetic. **Not run in Revit.** The `update_room` kind is built on the server and the tasks page (items or
+locations only, a dry run unless turned off, made from an assignment, carrying the layout as it resolves now with no
+sheets or tags); **the plug-in does not know it yet, so the planner aborts one as an unknown kind.** The server
 leaves an empty list out of a task, so the page reads a task back with its lists filled in. Plan decisions 21 to 26.
 
 - **A task is a record, unlike an assignment.** It holds the resolver's placements, the sheet layouts
@@ -502,9 +518,10 @@ the plug-in does not yet place tags** (that is the apply button). Plan decision 
 ## Room layout sheets: a library kept by identity, and two buttons that choose
 
 Built: the sheet library on the server (`sheets`, `sheets_api`, `service::sheet_suggest`),
-two pyRevit buttons, MCP reads. **Not built: a viewer for any of it, sheets inside a blueprint
-revision (plan decision 18, which also changes the Blueprint button), the library's room summary,
-template in the export (tags and view scale are read: see Tag rules).** Rules that are expensive to get wrong:
+two pyRevit buttons, MCP reads, and a page for the library and the tag rules at `/library/` (`src-js/library`: set or
+clear a sheet's room, accept or reject a renumbered push, suggest, browse and delete rules; setting a room sends a bare
+`room_id` and the server finds the model, as `suggest` does). **Not built: view template in the export (tags and view
+scale are read: see Tag rules).** Rules that are expensive to get wrong:
 
 - **Their own endpoint (`/projects/{id}/sheets`), apart from blueprints, and not a snapshot
   push.** Rooms, doors and the rest replace a model's state; the library is authored data

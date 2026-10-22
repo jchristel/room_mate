@@ -712,6 +712,16 @@
   .route-mark-grab:active { cursor: grabbing; }
   .route-mark.start { fill: #2e9e4f; }
   .route-mark.end { fill: #d64545; }
+  /* The blueprint ghost: strokes and a light tint only, so the plan beneath stays readable; it
+     never takes a click, which belongs to the room pick. */
+  .bp-room { fill: none; stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+  .bp-item { pointer-events: none; }
+  .bp-item polygon { fill: var(--accent); fill-opacity: 0.18; stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 5 3;
+                     vector-effect: non-scaling-stroke; }
+  .bp-item line { stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+  .bp-item.wall polygon { fill-opacity: 0.35; }
+  .bp-item.flagged polygon { stroke: #d64545; fill: #d64545; fill-opacity: 0.22; }
+  .routeBar a.chip { text-decoration: none; color: inherit; }
   /* Saved routes: one colour each, on a paper halo so crossing routes stay legible. */
   .saved-route-halo { fill: none; stroke: var(--paper); stroke-width: 7; vector-effect: non-scaling-stroke;
                       stroke-linejoin: round; stroke-linecap: round; opacity: 0.85; pointer-events: none; }

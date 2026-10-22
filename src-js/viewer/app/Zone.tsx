@@ -24,6 +24,8 @@ import { OpenZoneOverlay } from "./OpenZoneOverlay.js";
 import { SavedRoutesOverlay } from "./SavedRoutesOverlay.js";
 import { OpenZonePanel } from "./OpenZonePanel.js";
 import { RoutePanel } from "./RoutePanel.js";
+import { BlueprintOverlay } from "./BlueprintOverlay.js";
+import { BlueprintPanel } from "./BlueprintPanel.js";
 import { ReachPanel } from "./ReachPanel.js";
 import { layerFor } from "../reach.js";
 import { LayerMenu } from "./LayerMenu.js";
@@ -37,7 +39,7 @@ import { elementsOnStorey, layerPayload, typePropertiesOf, zoneAwaitsLayers, typ
 import { tagsRequest } from "../elementTags.js";
 import { onStoreysChanged } from "./poll.js";
 import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
-import { closePickList, setZoneAreas, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneReachMode, setZoneRouteMode, type ZoneRow } from "./store.js";
+import { closePickList, setZoneAreas, setZoneBlueprintMode, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneReachMode, setZoneRouteMode, type ZoneRow } from "./store.js";
 import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
@@ -371,6 +373,13 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           Reach
         </button>
         <button
+          className={`route-toggle${zone.blueprint ? " on" : ""}`}
+          title="Lay a blueprint into a room as a ghost, choose which rotation fits, and assign it"
+          onClick={() => setZoneBlueprintMode(zone.id, zone.blueprint === null)}
+        >
+          Blueprint
+        </button>
+        <button
           className={`route-toggle${zone.edit ? " on" : ""}`}
           title="Define open zones (rooms the model does not join with doors) and vertical links (floor-to-floor hops for lifts and stairs)"
           onClick={() => setZoneEditMode(zone.id, zone.edit === null)}
@@ -406,6 +415,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       </div>
       <RoutePanel zone={zone} />
       <ReachPanel zone={zone} />
+      <BlueprintPanel zone={zone} />
       <OpenZonePanel zone={zone} />
       <div className="zone-canvas">
         <canvas className="plan-gl" ref={canvasRef} />
@@ -425,6 +435,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           <SavedRoutesOverlay zoneId={zone.id} levelId={levelId} />
           {/* Above the footprints: a route is the thing being asked about. */}
           <RouteOverlay zoneId={zone.id} levelId={levelId} route={zone.route} />
+          <BlueprintOverlay levelId={levelId} tool={zone.blueprint} />
         </svg>
         {/* The per-room tooltip the browser used to draw for free from an SVG
             `<title>`. WebGL has no elements, so it is a DOM node the hover
