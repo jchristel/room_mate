@@ -68,8 +68,8 @@ from room_m.utils.phase_filter import (
     in_selected_phase,
 )
 
-SERVER_URL = "http://127.0.0.1:5151/spaces"
-SERVER_URL_STREAM = "http://127.0.0.1:5151/spaces/stream"
+SERVER_URL = "/spaces"
+SERVER_URL_STREAM = "/spaces/stream"
 SCHEMA_VERSION = 1
 
 

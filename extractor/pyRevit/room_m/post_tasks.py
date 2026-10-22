@@ -19,7 +19,7 @@ except ImportError:  # CPython 3
 
 from room_m.post_common import _post_content
 
-BASE_URL = "http://127.0.0.1:5151/projects/{}/roomtasks"
+BASE_URL = "/projects/{}/roomtasks"
 
 
 def claim_url(project_id):

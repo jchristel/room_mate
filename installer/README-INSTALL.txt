@@ -59,7 +59,10 @@ a closed network.
     RoomMate.ps1 -Bind 0.0.0.0           (or: roommate.exe ... --bind 0.0.0.0)
 
 The server prints the addresses it can be reached at, for example
-http://192.168.0.97:5151. Give that address to the pyRevit side. Allow incoming
+http://192.168.0.97:5151. On the Revit computer, click the Server button (duHast tab, Export panel), type
+that address and confirm; it is checked before it is kept, and kept for later runs.
+Type default to go back to the server on the same computer. (The ROOMMATE_SERVER
+environment variable, if set, wins over the button.) Allow incoming
 connections to the server in the firewall of the computer it runs on. Use a
 fixed address (or the computer's .local name) so it does not change. A DNS name
 other than the computer's own must be listed with --allow-host.

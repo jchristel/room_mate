@@ -244,8 +244,8 @@ FFE = EntityPush(
     entity="ffe",
     list_key="item",
     schema_version=1,
-    url="http://127.0.0.1:5151/ffe",
-    url_stream="http://127.0.0.1:5151/ffe/stream",
+    url="/ffe",
+    url_stream="/ffe/stream",
     translate=translate_item,
     # Never reached: this producer applies no nested filter, because whether a
     # component is an item is a project convention and lives in the server's

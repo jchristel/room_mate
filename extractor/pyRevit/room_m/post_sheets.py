@@ -19,7 +19,7 @@ except ImportError:  # CPython 3
 
 from room_m.post_common import _post_content
 
-SERVER_URL = "http://127.0.0.1:5151/projects/{}/sheets"
+SERVER_URL = "/projects/{}/sheets"
 
 
 def sheets_url(project_id):

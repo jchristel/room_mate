@@ -580,7 +580,13 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
 - **The macOS or Windows firewall is the usual reason a correct setup does not connect**: allow incoming connections
   for the binary, and use a fixed address or the `.local` name. A tunnel (`ssh -N -L 5151:127.0.0.1:5151 user@host`)
   needs none of this and keeps the server on loopback.
-- **The pyRevit side still posts to `http://127.0.0.1:5151`** (13 modules); a configurable base URL is the next piece.
+- **The pyRevit side takes the server from `room_m/server_config.py`, resolved when a request is made** (the
+  `ROOMMATE_SERVER` environment variable, else `server.json` in `%APPDATA%\RoomMate`, else `http://127.0.0.1:5151`), and
+  the **Server** button writes it after checking the address answers. A typed address gets the default port 5151 when it
+  has none. **Every `post_*` module holds a PATH** (`/rooms`), joined to the base URL only in `post_common` (the project
+  fetch and `_post_content`): a module constant would freeze the address for a pyRevit session that stays open for hours,
+  and `scripts/check_extension.py` fails on a literal loopback address anywhere but `server_config.py`. Every run prints
+  which server it used and why (`provenance`); an unreachable one names the URL and the usual causes. Not run in Revit.
 
 ## Traps in the door export
 

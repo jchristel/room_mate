@@ -50,6 +50,8 @@ from room_m.post_blueprints import describe_outcome, explain_refusal, post_bluep
 from room_m.post_sheets import describe_outcomes, post_sheets
 from room_m.post_tags import all_observations, post_observations
 from room_m.post_tasks import claim_tasks, report_tasks
+from room_m import server_config
+from room_m.post_common import SERVER_URL_PROJECTS, fetch_projects
 from room_m.sheet_tags import describe_outcome as describe_tag_outcome, describe_problems
 
 from room_m.utils.post_envelope import (
@@ -611,6 +613,66 @@ def blueprint_export_entry(doc, uiapp, output, forms):
             _report_tags(project["id"], pushed, return_value)
     except Exception as e:
         return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
+    return return_value
+
+
+def server_entry(doc, uiapp, output, forms):
+    """Choose which RoomMate server this computer's extractor talks to.
+
+    The server runs on this computer unless it was started to serve a network (`--bind 0.0.0.0`);
+    to push from Revit to a server on ANOTHER computer, type the address it printed at startup
+    (`192.168.0.97`, or `192.168.0.97:5151`, or its `.local` name). The address is checked by asking
+    that server for its projects BEFORE it is kept, and is kept for every later run, in
+    `server.json` in the RoomMate folder of the user's application data. Typing `default` goes back
+    to the server on this computer. The `ROOMMATE_SERVER` environment variable, when set, wins over
+    the kept address and the run says so (`room_m.server_config`).
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        current, source = server_config.resolve()
+        typed = forms.ask_for_string(
+            default=current,
+            prompt="Address of the RoomMate server (for example 192.168.0.97 or mac.local:5151).\n"
+                   "Type 'default' for the server on this computer.",
+            title="Roommate - server")
+        if typed is None:
+            return_value.append_message("Server unchanged: {}".format(server_config.describe()))
+            return return_value
+        typed = typed.strip()
+        resetting = typed.lower() in server_config._RESET_WORDS
+        candidate = server_config.DEFAULT_URL
+        if not resetting:
+            try:
+                candidate = server_config.normalise(typed)
+            except ValueError as e:
+                forms.alert(str(e), title="Roommate - server address", warn_icon=True)
+                return_value.update_sep(False, "Server unchanged: {}".format(e))
+                return return_value
+        ok, status, answer = fetch_projects(candidate + SERVER_URL_PROJECTS)
+        if not ok:
+            keep = forms.alert(
+                "{}\n\nKeep this address anyway?".format(answer),
+                title="Roommate - server not reachable", yes=True, no=True, warn_icon=True)
+            if not keep:
+                return_value.update_sep(False, "Server unchanged: {}".format(answer))
+                return return_value
+        server_config.save(typed)
+        return_value.append_message("Server set to {}".format(server_config.describe()))
+        return_value.append_message(
+            "{} project(s) registered there".format(len(answer)) if ok else "Not reachable now: {}".format(answer))
+        in_force = server_config.resolve()[0]
+        if in_force != candidate:
+            return_value.append_message(
+                "NOTE: the {} environment variable is set, so {} is what is used until it is removed".format(
+                    server_config.ENV_VAR, in_force))
+    except Exception as e:
+        return_value.update_sep(False, "Server setting failed with exception: {}".format(e))
     return return_value
 
 

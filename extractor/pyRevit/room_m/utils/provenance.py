@@ -123,6 +123,13 @@ def build_lines():
     expected_lib = _expected_lib_dir()
 
     lines.append("RoomMate extractor: {}".format(room_m_build))
+    # Which server this run will talk to, and why that one: with the server on another computer,
+    # "it pushed to the wrong place" is the first thing to rule out.
+    try:
+        from room_m import server_config
+        lines.append("RoomMate server: {}".format(server_config.describe()))
+    except Exception as e:
+        lines.append("RoomMate server: could not be worked out ({})".format(e))
     lines.append("duHast: {} loaded from {}".format(duhast_build, duhast_dir or UNKNOWN))
 
     if duhast_dir is None:

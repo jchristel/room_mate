@@ -2,6 +2,7 @@ layout:
   - RoomsAndDoors
   - Blueprint
   - ApplyTasks
+  - Server
   - ByCategory
 
 # bundle tooltip

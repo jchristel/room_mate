@@ -89,8 +89,8 @@ WINDOWS = EntityPush(
     entity="windows",
     list_key="window",
     schema_version=1,
-    url="http://127.0.0.1:5151/windows",
-    url_stream="http://127.0.0.1:5151/windows/stream",
+    url="/windows",
+    url_stream="/windows/stream",
     translate=lambda element, contribution: translate_opening(
         element, contribution["placements"]
     ),

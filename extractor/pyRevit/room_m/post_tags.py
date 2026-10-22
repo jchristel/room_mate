@@ -17,7 +17,7 @@ except ImportError:  # CPython 3
 
 from room_m.post_common import _post_content
 
-SERVER_URL = "http://127.0.0.1:5151/projects/{}/tagrules/observations"
+SERVER_URL = "/projects/{}/tagrules/observations"
 
 # A push of observations is at most this many on the server.
 BATCH = 2000

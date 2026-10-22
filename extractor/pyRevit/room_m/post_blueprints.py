@@ -23,7 +23,7 @@ except ImportError:  # CPython 3
 from room_m.post_common import _post_content
 from room_m.sheet_tags import take_tags
 
-SERVER_URL = "http://127.0.0.1:5151/projects/{}/blueprints/from-revit"
+SERVER_URL = "/projects/{}/blueprints/from-revit"
 
 # What the server keeps of a sheet in a blueprint: its identity (to recognise it on a re-push)
 # and duHast's layout. Not the room and not the phase, which belong to the library's records.

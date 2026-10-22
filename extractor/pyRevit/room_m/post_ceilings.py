@@ -34,8 +34,8 @@ CEILINGS_PUSH = post_surfaces.SurfacePush(
     entity="ceilings",
     list_key="ceiling",
     schema_version=1,
-    url="http://127.0.0.1:5151/ceilings",
-    url_stream="http://127.0.0.1:5151/ceilings/stream",
+    url="/ceilings",
+    url_stream="/ceilings/stream",
 )
 
 
