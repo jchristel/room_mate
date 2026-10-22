@@ -30,7 +30,7 @@ Built since (2026-10-21 and 22): the tag-rule store and the tag export (decision
 (server and tasks page; the plug-in does not know it, so it aborts one); a page for the sheet library and the tag
 rules (`/library/`); blueprints that need attention are flagged; **per-item overrides** (a room leaves out, moves or
 turns single items, kept with its assignment, applied by the resolver before its findings); and the **Blueprint tool
-in the main viewer**, which is what stage 6's box became (see stage 6).
+in the main viewer** (a ghost, a best fit and a box laid by hand: see stage 6).
 
 Not built: a mirrored copy (left out on purpose, decision 7); view template in the sheet export; the Revit side
 of the update kind; and running any of the Revit side in Revit.
@@ -322,14 +322,16 @@ brief.*
 
 **Stage 6 — Assign UI. Built:** as a mode of the blueprint page (one room at a time with rotations and a hand
 mapping, or several rooms at once from a solver pass, saving assignments), and as the **Blueprint tool in the main
-viewer** (a fourth per-zone tool beside route, reach and connections). **The box as first specified (drag, rotate
-and scale it to match the room, with snap) did not survive the resolver**: the room sets the position and the scale
-(decision 6), so the ghost is always fitted and there is nothing to drag or stretch. What is a real choice is which
-room and which rotation, so a click on a room moves the ghost there, Rotate steps through the rotations the server
-says fit (best by doors first, which is the snap), and Assign saves it. It draws the resolver's answer and is not in
-the SVG export. **Per-item overrides are built** (leave out, nudge in whole mm, turn in whole degrees; one per item,
-this room's only, applied to the resolver's poses before the `outside` and `overlap` findings, so a follower keeps
-its place unless it is overridden itself).
+viewer** (a fourth per-zone tool beside route, reach and connections). **The box is the room reference.** Rooms are
+never exactly the blueprint's shape, so a person moves, turns and stretches the blueprint's own outline over the room
+by hand (handles on the plan, or numbers), and the recipes resolve against the box, not the room (decision 6: items
+keep their size, a fixed distance keeps its mm, a percentage stretches with the box). The room's real outline only
+judges the findings. It is stored on the assignment as `mapping.frame` (relative to the room, so a room that moves is
+followed; stretch between 0.2 and 5, never a mirror) and is one of three mappings with a shift and an edge map. The
+best fit by shape (click a room, Rotate through the rotations that fit) is the starting point, "Adjust by hand" turns
+it into a box. Not in the SVG export. **Per-item overrides are built** (leave out, nudge in whole mm, turn in whole
+degrees; one per item, this room's only, applied to the resolver's poses before the `outside` and `overlap`
+findings, so a follower keeps its place unless it is overridden itself).
 *Value without Revit: planning and coverage ("which rooms follow which blueprint").*
 
 **Stage 7 — Revit write, thin slice (the walking skeleton).** **Server half built:** the task model and its
