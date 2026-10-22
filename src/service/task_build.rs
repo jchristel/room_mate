@@ -91,6 +91,16 @@ fn room_facts(state: &AppState, project: &str, room: &RoomRef) -> Result<Option<
         }))
 }
 
+/// What a stored mapping asks of the resolver.
+fn edge_map_of(mapping: &Mapping) -> EdgeMap {
+    match mapping {
+        Mapping { frame: Some(f), .. } => EdgeMap::Frame(*f),
+        Mapping { edge_map: Some(map), .. } => EdgeMap::Explicit(map.clone()),
+        Mapping { shift: Some(s), .. } => EdgeMap::Shift(*s),
+        _ => EdgeMap::Auto,
+    }
+}
+
 fn finding(kind: &str, message: String) -> Value {
     json!({ "kind": kind, "message": message })
 }
@@ -123,11 +133,7 @@ pub fn populate_from_assignment(
     let Some(task_room) = room_facts(state, project, &room)? else {
         return refuse("the room is not in the model any more");
     };
-    let mapping = match &assignment.mapping {
-        Mapping { edge_map: Some(map), .. } => EdgeMap::Explicit(map.clone()),
-        Mapping { shift: Some(s), .. } => EdgeMap::Shift(*s),
-        _ => EdgeMap::Auto,
-    };
+    let mapping = edge_map_of(&assignment.mapping);
     let Some((_, resolution)) =
         resolve_in_room_with(state, project, &revision.content, &room, &mapping, &assignment.overrides)?
     else {

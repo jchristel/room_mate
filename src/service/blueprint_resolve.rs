@@ -29,11 +29,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::assignments::ItemOverride;
+use crate::assignments::{Frame, ItemOverride};
 
 use super::blueprint_capture::{door_on_edges, room_doors, room_ring, SourceDoor};
 use super::blueprint_geometry::{
-    box_corners, cross, depth_at, dot, edges, inside, overlaps, simplify, sub, Edge, Pt, COARSE_TOLERANCE_MM,
+    box_corners, centroid, cross, depth_at, dot, edges, inside, overlaps, simplify, sub, Edge, Pt, COARSE_TOLERANCE_MM,
     FINE_TOLERANCE_MM,
 };
 use super::blueprint_model::{
@@ -70,10 +70,13 @@ pub enum FitKind {
     EdgeCountDiffers,
     /// The person chose which room edge each blueprint edge goes to; no shape fit was judged.
     Manual,
+    /// The person laid a box over the room by hand (`EdgeMap::Frame`): the recipes are resolved
+    /// against the box, so nothing about the room's own shape was judged.
+    Framed,
 }
 
 /// How the blueprint's edges are mapped onto the room's.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EdgeMap {
     /// The best cyclic shift by shape.
     Auto,
@@ -84,6 +87,10 @@ pub enum EdgeMap {
     /// the resolving is manual anyway, so the person's choice is accepted as it stands, with no
     /// shape judgement and no finding about it. Two blueprint edges may share a room edge.
     Explicit(Vec<usize>),
+    /// A box the person moved, turned and stretched over the room (`assignments::Frame`). **The box
+    /// is the reference the recipes resolve against; the room's own outline only judges the
+    /// findings** (`outside`), and its doors are not compared (the box has none of its own).
+    Frame(Frame),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -613,6 +620,17 @@ fn apply_overrides(placed: &mut BTreeMap<String, Pose>, overrides: &[ItemOverrid
     }
 }
 
+/// The blueprint's coarse outline as a person laid it over `room` (`Frame`): the reference the
+/// recipes resolve against. Same edges as the blueprint, so the mapping is the identity.
+fn box_over(bp_ring: &[Pt], room: &[Pt], f: &Frame) -> Result<Vec<Pt>, ServiceError> {
+    if bp_ring.len() < 3 {
+        return Err(ServiceError::Invalid("the blueprint's outline has fewer than three corners".to_string()));
+    }
+    let (c0, room_at) = (centroid(bp_ring), centroid(room));
+    let centre = (room_at.0 + f.dx_mm, room_at.1 + f.dy_mm);
+    Ok(bp_ring.iter().map(|&p| f.place(p, c0, centre)).collect())
+}
+
 /// `resolve_with_doors` with a room's own item overrides.
 pub fn resolve_with_overrides(
     content: &RevisionContent,
@@ -621,8 +639,16 @@ pub fn resolve_with_overrides(
     target_doors: &[SourceDoor],
     overrides: &[ItemOverride],
 ) -> Result<Resolution, ServiceError> {
-    let t_coarse = simplify(target_ring, COARSE_TOLERANCE_MM);
-    let t_fine = simplify(target_ring, FINE_TOLERANCE_MM);
+    let bp_ring: Vec<Pt> = content.outline.coarse.iter().map(|&p| p.into()).collect();
+    let framed = if let EdgeMap::Frame(f) = mapping {
+        Some(f.checked().map_err(ServiceError::Invalid)?)
+    } else {
+        None
+    };
+    let (t_coarse, t_fine) = match &framed {
+        Some(f) => (box_over(&bp_ring, target_ring, f)?, simplify(target_ring, FINE_TOLERANCE_MM)),
+        None => (simplify(target_ring, COARSE_TOLERANCE_MM), simplify(target_ring, FINE_TOLERANCE_MM)),
+    };
     if t_coarse.len() < 3 {
         return Err(ServiceError::Invalid("the room's outline has fewer than three corners".to_string()));
     }
@@ -630,13 +656,17 @@ pub fn resolve_with_overrides(
         coarse: t_coarse.iter().map(|&p| p.into()).collect(),
         fine: t_fine.iter().map(|&p| p.into()).collect(),
     };
-    let bp_ring: Vec<Pt> = content.outline.coarse.iter().map(|&p| p.into()).collect();
-    let t_doors = doors_on(target_doors, &t_coarse);
+    let t_doors = if framed.is_some() { Vec::new() } else { doors_on(target_doors, &t_coarse) };
     let mut candidates = Vec::new();
     let mut findings = Vec::new();
     let excluded = content.items.iter().filter(|i| i.excluded).count();
 
-    let (fit, edge_map) = if let EdgeMap::Explicit(map) = mapping {
+    let (fit, edge_map) = if framed.is_some() {
+        (
+            Fit { kind: FitKind::Framed, shift: 0, cost: None, mirror_cost: None },
+            (0..bp_ring.len()).collect(),
+        )
+    } else if let EdgeMap::Explicit(map) = mapping {
         if map.len() != bp_ring.len() {
             return Err(ServiceError::Invalid(format!(
                 "the edge map names {} edges and the blueprint has {}",
@@ -686,7 +716,9 @@ pub fn resolve_with_overrides(
         let map = (0..k).map(|i| (i + fit.shift) % k).collect();
         (fit, map)
     };
-    door_findings(&content.doors, &t_doors, &edge_map, &edges(&t_coarse), &mut findings);
+    if framed.is_none() {
+        door_findings(&content.doors, &t_doors, &edge_map, &edges(&t_coarse), &mut findings);
+    }
     let es_bp = edges(&bp_ring);
     let live: Vec<&BlueprintItem> = content.items.iter().filter(|i| !i.excluded).collect();
     let bp_frame: BTreeMap<&str, (Pt, f64)> =
@@ -1269,5 +1301,74 @@ mod tests {
             "{:?}",
             out.findings
         );
+    }
+
+    fn frame(dx: f64, dy: f64, rot: f64, sx: f64, sy: f64) -> Frame {
+        Frame { dx_mm: dx, dy_mm: dy, rotate_deg: rot, sx, sy }
+    }
+
+    #[test]
+    fn test_a_box_turns_stretches_and_moves_about_the_blueprints_pivot() {
+        let f = frame(100.0, -50.0, 90.0, 2.0, 0.5);
+        let c0 = (1000.0, 1000.0);
+        // The pivot goes to the centre; a point 10 right of it is stretched to 20, then turned to point up.
+        let at = f.place(c0, c0, (0.0, 0.0));
+        assert!(near(at, (0.0, 0.0), 1e-9));
+        let p = f.place((1010.0, 1000.0), c0, (0.0, 0.0));
+        assert!(near(p, (0.0, 20.0), 1e-9), "{p:?}");
+        let q = f.place((1000.0, 1010.0), c0, (0.0, 0.0));
+        assert!(near(q, (-5.0, 0.0), 1e-9), "{q:?}");
+    }
+
+    #[test]
+    fn test_a_box_outside_what_a_stretch_can_be_is_refused_and_a_turn_is_wrapped() {
+        assert!(frame(0.0, 0.0, 0.0, 0.1, 1.0).checked().is_err());
+        assert!(frame(0.0, 0.0, 0.0, 1.0, 9.0).checked().is_err());
+        assert!(frame(0.0, 0.0, f64::NAN, 1.0, 1.0).checked().is_err());
+        assert!((frame(0.0, 0.0, 270.0, 1.0, 1.0).checked().unwrap().rotate_deg + 90.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_an_identity_box_on_the_blueprints_own_room_puts_every_item_back() {
+        let (ring, c) = two_items();
+        let plain = resolve_with_doors(&c, &ring, &EdgeMap::Auto, &[]).unwrap();
+        let r = resolve_with_overrides(&c, &ring, &EdgeMap::Frame(frame(0.0, 0.0, 0.0, 1.0, 1.0)), &[], &[]).unwrap();
+        assert_eq!(r.fit.kind, FitKind::Framed);
+        for id in ["bed", "table"] {
+            assert!(near(at(&r, id), at(&plain, id), 1e-6), "{id}: {:?} vs {:?}", at(&r, id), at(&plain, id));
+        }
+        assert_eq!(r.outline.coarse.len(), c.outline.coarse.len(), "the box has the blueprint's edges");
+    }
+
+    #[test]
+    fn test_a_stretched_box_keeps_item_sizes_and_moves_the_items_with_it() {
+        let (ring, c) = two_items();
+        let plain = resolve_with_doors(&c, &ring, &EdgeMap::Auto, &[]).unwrap();
+        let r = resolve_with_overrides(&c, &ring, &EdgeMap::Frame(frame(0.0, 0.0, 0.0, 1.5, 1.0)), &[], &[]).unwrap();
+        for id in ["bed", "table"] {
+            assert_eq!(placed(&r, id).size_mm, placed(&plain, id).size_mm, "items keep their size");
+        }
+        // The box is 1.5 times as wide, about the room's centre: its outline spans 9000 mm in x.
+        let xs: Vec<f64> = r.outline.coarse.iter().map(|p| p.x).collect();
+        let width = xs.iter().cloned().fold(f64::MIN, f64::max) - xs.iter().cloned().fold(f64::MAX, f64::min);
+        assert!((width - 9000.0).abs() < 1e-6, "{width}");
+        // The table sits mid-room, so it stays on the room's centre line.
+        assert!((at(&r, "table").0 - at(&plain, "table").0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_a_turned_box_turns_the_items_and_judges_findings_against_the_real_room() {
+        let (ring, c) = two_items();
+        let plain = resolve_with_doors(&c, &ring, &EdgeMap::Auto, &[]).unwrap();
+        let r = resolve_with_overrides(&c, &ring, &EdgeMap::Frame(frame(0.0, 0.0, 90.0, 1.0, 1.0)), &[], &[]).unwrap();
+        let (a, b) = (placed(&plain, "bed").facing, placed(&r, "bed").facing);
+        assert!((b.x + a.y).abs() < 1e-9 && (b.y - a.x).abs() < 1e-9, "{a:?} -> {b:?}");
+        // A quarter turn of a 6000 x 4000 box puts it 4000 wide in a 6000 x 4000 room: some of it is outside.
+        let wide =
+            resolve_with_overrides(&c, &ring, &EdgeMap::Frame(frame(0.0, 0.0, 0.0, 1.0, 1.0)), &[], &[]).unwrap();
+        assert!(!wide.findings.iter().any(|f| matches!(f, Finding::Outside { .. })));
+        let off =
+            resolve_with_overrides(&c, &ring, &EdgeMap::Frame(frame(5000.0, 0.0, 0.0, 1.0, 1.0)), &[], &[]).unwrap();
+        assert!(off.findings.iter().any(|f| matches!(f, Finding::Outside { .. })), "{:?}", off.findings);
     }
 }

@@ -5,7 +5,7 @@
 // asked, aborts the one in flight, and an answer that lands after is patched into the zone's
 // CURRENT state rather than the one the request was made from.
 
-import { resolveUrl, type BlueprintToolState, type ResolveBody } from "../blueprintTool.js";
+import { resolveUrl, type BlueprintToolState, type PlanXY, type ResolveBody } from "../blueprintTool.js";
 import { fetchJson } from "./api.js";
 import { getState, patchZoneBlueprint } from "./store.js";
 
@@ -28,6 +28,19 @@ const base = (project: string) => `/projects/${encodeURIComponent(project)}`;
 
 export const listBlueprints = (project: string, signal?: AbortSignal) => fetchJson<BlueprintRow[]>(`${base(project)}/blueprints`, signal);
 export const listAssignments = (project: string, signal?: AbortSignal) => fetchJson<AssignmentLite[]>(`${base(project)}/assignments`, signal);
+
+/** The blueprint's coarse outline for a revision (the current one when `revision` is null), in mm:
+ *  what a box laid over a room is made of. */
+export async function loadOutline(project: string, blueprintId: string, revision: number | null, signal?: AbortSignal): Promise<PlanXY[]> {
+  const bp = await fetchJson<{ current_revision: number; revisions: { number: number; outline: { coarse: PlanXY[] } }[] }>(
+    `${base(project)}/blueprints/${encodeURIComponent(blueprintId)}`,
+    signal,
+  );
+  const wanted = revision ?? bp.current_revision;
+  const found = bp.revisions.find((r) => r.number === wanted);
+  if (!found) throw new Error(`the blueprint has no revision ${wanted}`);
+  return found.outline.coarse;
+}
 
 const inFlight = new Map<string, AbortController>();
 
@@ -67,7 +80,7 @@ export async function assignTool(project: string, s: BlueprintToolState): Promis
   const body: Record<string, unknown> = {
     blueprint_id: s.blueprintId,
     room_id: s.roomId,
-    mapping: s.shift === null ? {} : { shift: s.shift },
+    mapping: s.frame ? { frame: s.frame } : s.shift === null ? {} : { shift: s.shift },
   };
   if (s.revision !== null) body.revision = s.revision;
   try {

@@ -435,7 +435,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
           <SavedRoutesOverlay zoneId={zone.id} levelId={levelId} />
           {/* Above the footprints: a route is the thing being asked about. */}
           <RouteOverlay zoneId={zone.id} levelId={levelId} route={zone.route} />
-          <BlueprintOverlay levelId={levelId} tool={zone.blueprint} />
+          <BlueprintOverlay zoneId={zone.id} levelId={levelId} tool={zone.blueprint} />
         </svg>
         {/* The per-room tooltip the browser used to draw for free from an SVG
             `<title>`. WebGL has no elements, so it is a DOM node the hover

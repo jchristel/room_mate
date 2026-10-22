@@ -203,6 +203,10 @@ pub struct ResolveParams {
     /// rule. Checked as an assignment's are.
     #[serde(default)]
     pub overrides: Option<String>,
+    /// A box laid over the room by hand, as JSON (`{"dx_mm":0,"dy_mm":0,"rotate_deg":0,"sx":1,"sy":1}`,
+    /// see `assignments::Frame`). Wins over `edge_map` and `shift`.
+    #[serde(default)]
+    pub frame: Option<String>,
 }
 
 /// The previewed overrides of a resolve, parsed and checked.
@@ -220,6 +224,12 @@ fn overrides_of(params: &ResolveParams) -> Result<Vec<crate::assignments::ItemOv
 }
 
 fn edge_map_of(params: &ResolveParams) -> Result<EdgeMap, (StatusCode, String)> {
+    if let Some(text) = params.frame.as_deref().filter(|t| !t.trim().is_empty()) {
+        let frame: crate::assignments::Frame =
+            serde_json::from_str(text).map_err(|e| (StatusCode::BAD_REQUEST, format!("frame is not a box ({e})")))?;
+        let frame = frame.checked().map_err(|m| (StatusCode::BAD_REQUEST, m))?;
+        return Ok(EdgeMap::Frame(frame));
+    }
     if let Some(text) = params.edge_map.as_deref().filter(|t| !t.trim().is_empty()) {
         let parsed: Result<Vec<usize>, _> = text.split(',').map(|n| n.trim().parse::<usize>()).collect();
         return parsed.map(EdgeMap::Explicit).map_err(|_| {

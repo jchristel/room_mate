@@ -147,7 +147,7 @@ export interface RoomRow {
 
 // --- Placing a blueprint in another room (the resolver's answer) and the assignments kept ---
 
-export type FitKind = "plain" | "mirror_image" | "no_fit" | "edge_count_differs" | "manual";
+export type FitKind = "plain" | "mirror_image" | "no_fit" | "edge_count_differs" | "manual" | "framed";
 
 export interface Fit {
   kind: FitKind;
@@ -207,6 +207,9 @@ export interface ResolveResponse {
 export interface Mapping {
   shift?: number;
   edge_map?: number[];
+  /** A box laid over the room by hand in the main viewer's Blueprint tool (src/assignments.rs `Frame`):
+   *  the blueprint's outline moved, turned and stretched. Edited there, shown and kept here. */
+  frame?: { dx_mm: number; dy_mm: number; rotate_deg: number; sx: number; sy: number };
 }
 
 /** A room's change to one blueprint item, kept with its assignment (src/assignments.rs). Whole

@@ -47,10 +47,72 @@ pub struct RoomKey {
     pub room_id: String,
 }
 
-/// How the blueprint's edges were put on the room's. At most one of the two is set; neither
+/// A box a person laid over a room by hand: the blueprint's own outline, moved, turned and
+/// stretched until it matches a room whose outline is not quite the blueprint's. **The box is the
+/// room reference the recipes are resolved against** (plan decision 6): items keep their size, a
+/// fixed distance keeps its millimetres, a percentage stretches with the box. The room's own outline
+/// is then only what findings are judged against.
+///
+/// `world = centre + R(rotate_deg) * S(sx, sy) * (p - c0)`, where `c0` is the vertex mean of the
+/// blueprint's coarse outline (the pivot, so a stretch and a turn do not move the box), `S` stretches
+/// along the BLUEPRINT's own axes (so they follow the box round when it is turned), and
+/// `centre = room vertex mean + (dx_mm, dy_mm)`. Held relative to the room, so a room that moves is
+/// followed. No mirroring: both scales are positive (decision 7).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Frame {
+    pub dx_mm: f64,
+    pub dy_mm: f64,
+    /// Counter-clockwise, degrees.
+    pub rotate_deg: f64,
+    pub sx: f64,
+    pub sy: f64,
+}
+
+/// A stretch outside this is a different room, not a stretch.
+pub const MIN_SCALE: f64 = 0.2;
+pub const MAX_SCALE: f64 = 5.0;
+const MAX_FRAME_MOVE_MM: f64 = 200_000.0;
+
+impl Frame {
+    /// The box as it is kept: finite, in range, the turn in (-180, 180].
+    pub fn checked(self) -> Result<Frame, String> {
+        let all = [self.dx_mm, self.dy_mm, self.rotate_deg, self.sx, self.sy];
+        if all.iter().any(|v| !v.is_finite()) {
+            return Err("a box has finite numbers".to_string());
+        }
+        if self.dx_mm.abs() > MAX_FRAME_MOVE_MM || self.dy_mm.abs() > MAX_FRAME_MOVE_MM {
+            return Err(format!("a box sits within {MAX_FRAME_MOVE_MM} mm of its room"));
+        }
+        if !(MIN_SCALE..=MAX_SCALE).contains(&self.sx) || !(MIN_SCALE..=MAX_SCALE).contains(&self.sy) {
+            return Err(format!(
+                "a box stretches between {MIN_SCALE} and {MAX_SCALE} times; that is a different room"
+            ));
+        }
+        let mut r = self.rotate_deg % 360.0;
+        if r > 180.0 {
+            r -= 360.0;
+        } else if r <= -180.0 {
+            r += 360.0;
+        }
+        Ok(Frame { rotate_deg: r, ..self })
+    }
+
+    /// Where blueprint point `p` lands: `c0` is the blueprint outline's pivot and `centre` where the
+    /// pivot goes.
+    pub fn place(&self, p: (f64, f64), c0: (f64, f64), centre: (f64, f64)) -> (f64, f64) {
+        let (x, y) = ((p.0 - c0.0) * self.sx, (p.1 - c0.1) * self.sy);
+        let (s, c) = self.rotate_deg.to_radians().sin_cos();
+        (centre.0 + x * c - y * s, centre.1 + x * s + y * c)
+    }
+}
+
+/// How the blueprint's edges were put on the room's. At most one of the three is set; none
 /// means "the best fit by shape and doors, worked out on every read".
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Mapping {
+    /// A box laid over the room by hand (see `Frame`); the blueprint's edges map to the box's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<Frame>,
     /// Blueprint edge `i` to room edge `(i + shift) % edges`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shift: Option<usize>,
@@ -102,7 +164,7 @@ impl ItemOverride {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Assignment {
     pub schema_version: u32,
     pub id: String,
@@ -230,9 +292,22 @@ pub fn list(projects_dir: &Path, project: &str) -> Result<Vec<AssignmentRow>, Bl
 }
 
 fn clean_mapping(mapping: Mapping) -> Result<Mapping, BlueprintError> {
-    if mapping.shift.is_some() && mapping.edge_map.is_some() {
-        return bad("a mapping is a shift or an edge map, not both".to_string());
+    if [
+        mapping.shift.is_some(),
+        mapping.edge_map.is_some(),
+        mapping.frame.is_some(),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count()
+        > 1
+    {
+        return bad("a mapping is a shift, an edge map or a box, not more than one".to_string());
     }
+    let mapping = match mapping.frame {
+        Some(f) => Mapping { frame: Some(f.checked().map_err(BlueprintError::Invalid)?), ..mapping },
+        None => mapping,
+    };
     if mapping.edge_map.as_ref().is_some_and(|m| m.len() > MAX_EDGES) {
         return bad(format!("an edge map names at most {MAX_EDGES} edges"));
     }
@@ -467,7 +542,7 @@ mod tests {
         let tmp = temp_dir(&format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
         let a = blueprint(&tmp, "A");
         let mut both = request(&a, "r1");
-        both.mapping = Mapping { shift: Some(1), edge_map: Some(vec![0, 1, 2, 3]) };
+        both.mapping = Mapping { shift: Some(1), edge_map: Some(vec![0, 1, 2, 3]), frame: None };
         assert!(matches!(assign(&tmp, "p", both), Err(BlueprintError::Invalid(_))));
         assert!(matches!(assign(&tmp, "p", request("nope", "r1")), Err(BlueprintError::NotFound(_))));
         let mut late = request(&a, "r1");
@@ -528,5 +603,30 @@ mod tests {
         let mut clear = request(&a, "r1");
         clear.overrides = Some(Vec::new());
         assert!(assign(&tmp, "p", clear).unwrap().overrides.is_empty());
+    }
+
+    #[test]
+    fn test_a_box_is_kept_checked_and_exclusive_of_the_other_mappings() {
+        let tmp = temp_dir(&format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+        let a = blueprint(&tmp, "A");
+        let boxed = Frame { dx_mm: 120.0, dy_mm: -40.0, rotate_deg: 270.0, sx: 1.2, sy: 0.9 };
+
+        let mut req = request(&a, "r1");
+        req.mapping = Mapping { frame: Some(boxed), ..Mapping::default() };
+        let made = assign(&tmp, "p", req).unwrap();
+        let kept = made.mapping.frame.expect("the box is kept");
+        assert!((kept.rotate_deg + 90.0).abs() < 1e-9, "a turn is wrapped: {}", kept.rotate_deg);
+        assert_eq!(list_raw(&tmp, "p").unwrap()[0].mapping.frame, Some(kept), "and it reads back");
+
+        let mut both = request(&a, "r2");
+        both.mapping = Mapping { frame: Some(boxed), shift: Some(1), edge_map: None };
+        assert!(
+            matches!(assign(&tmp, "p", both), Err(BlueprintError::Invalid(_))),
+            "a box and a shift are two answers"
+        );
+
+        let mut wild = request(&a, "r3");
+        wild.mapping = Mapping { frame: Some(Frame { sx: 9.0, ..boxed }), ..Mapping::default() };
+        assert!(matches!(assign(&tmp, "p", wild), Err(BlueprintError::Invalid(_))));
     }
 }

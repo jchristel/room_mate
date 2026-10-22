@@ -38,13 +38,14 @@ const message = (e: unknown): string => String((e as Error).message ?? e);
 const KIND_TEXT: Record<string, string> = {
   plain: "fits by shape",
   manual: "mapped by hand",
+  framed: "box laid by hand in the main viewer",
   mirror_image: "mirror image of the room",
   no_fit: "does not fit by shape",
   edge_count_differs: "different number of edges",
 };
 
 function sameMapping(a: Mapping, b: Mapping): boolean {
-  return a.shift === b.shift && (a.edge_map ?? []).join(",") === (b.edge_map ?? []).join(",");
+  return a.shift === b.shift && (a.edge_map ?? []).join(",") === (b.edge_map ?? []).join(",") && JSON.stringify(a.frame ?? null) === JSON.stringify(b.frame ?? null);
 }
 
 function findingText(f: Finding, name: (id: string) => string): string {
@@ -195,7 +196,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
   const leftOut = overrides.filter((o) => o.exclude);
   const selectedPlaced = selected ? result?.placements.find((p) => p.item_id === selected) : undefined;
   const selectedOverride = selected ? overrideFor(overrides, selected) : undefined;
-  const auto = mapping.shift === undefined && !mapping.edge_map;
+  const auto = mapping.shift === undefined && !mapping.edge_map && !mapping.frame;
 
   return (
     <>
@@ -288,6 +289,11 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
                 By hand
               </button>
             </div>
+            {mapping.frame ? (
+              <p className="note">
+                This room's blueprint is a box laid over it by hand (turned {Math.round(mapping.frame.rotate_deg)}°, stretched {Math.round(mapping.frame.sx * 100)}% by {Math.round(mapping.frame.sy * 100)}%). Change it with the Blueprint tool on the main plan; Best fit here replaces it.
+              </p>
+            ) : null}
             {result.candidates.length > 0 ? (
               <fieldset>
                 <legend>Rotations that fit</legend>

@@ -77,7 +77,8 @@ export const decidePending = (project: string, id: string, pendingId: number, ba
 /** Where a blueprint revision's items go in one room. A read: nothing is stored. */
 export const resolve = (project: string, id: string, roomId: string, revision: number, mapping: Mapping, overrides?: string) => {
   const q = new URLSearchParams({ room_id: roomId, revision: String(revision) });
-  if (mapping.edge_map) q.set("edge_map", mapping.edge_map.join(","));
+  if (mapping.frame) q.set("frame", JSON.stringify(mapping.frame));
+  else if (mapping.edge_map) q.set("edge_map", mapping.edge_map.join(","));
   else if (mapping.shift !== undefined) q.set("shift", String(mapping.shift));
   if (overrides) q.set("overrides", overrides);
   return apiGet<ResolveResponse>(`${base(project)}/blueprints/${encodeURIComponent(id)}/resolve?${q.toString()}`);

@@ -399,12 +399,23 @@ get wrong:
   `overrides` parameter (so the drawing is the server's answer), and assigning again WITHOUT `overrides` keeps the
   room's (a client written before them must not clear them); `[]` clears. Changing the mapping after nudging can leave a
   nudge that no longer fits, and that is the person's to look at.
-- **The Blueprint tool in the main viewer is what is left of "drag, rotate and scale a box".** That sketch predates the
-  resolver: the room sets the position and the scale (decision 6), so only the room and the rotation are choices. A
-  click on a room moves the ghost there (the choke point is `store.select`, like route and reach, and the tool is
-  exclusive with them), Rotate steps through the resolver's fitting rotations best-by-doors first, and Assign saves the
-  assignment at that rotation. It draws the resolver's answer (`GET .../resolve`), computes no placement, and is not
-  in the SVG export.
+- **The Blueprint tool in the main viewer lays a blueprint into a room two ways, and the BOX is the point.** Rooms are
+  never perfectly the blueprint's shape, so a person moves, turns and stretches the blueprint's own outline over the room
+  (`assignments::Frame`: `world = centre + R(turn) * S(sx, sy) * (p - pivot)`, stretch along the BLUEPRINT's axes so it
+  follows the box round, `centre` = the room's vertex mean + `(dx, dy)` so a room that moves is followed, both scales
+  positive and between 0.2 and 5 because a mirror is a different blueprint). **The box is the room reference the
+  recipes resolve against (plan decision 6): items keep their size, a fixed distance keeps its mm, a percentage
+  stretches with the box**, and the room's real outline only judges the findings (`outside`); the box has no doors, so
+  none are compared. It is `EdgeMap::Frame` in the resolver (`FitKind::Framed`, identity edge mapping, no
+  simplification so the box keeps the blueprint's edge count), `mapping.frame` on an assignment (one of shift, edge map
+  or box), and the `frame` parameter of the resolve read. The client's `boxPoint` is the same arithmetic and is used
+  ONLY to draw the box while it is dragged (the placements are always the server's answer, a moment behind); a test on
+  each side pins the same numbers. The other way is the best fit (click a room, Rotate through the fitting rotations).
+  A click on a room moves the tool there (the choke point is `store.select`, exclusive with route, reach and
+  connections); the handles are dots, six, with the turn handle on a corner because one that stands off a side by a
+  fixed WORLD distance lands on that side's handle when the plan is small. **The viewer's world is feet and the
+  resolver's numbers are millimetres; `BlueprintOverlay` converts at its edge** (it once drew them unconverted and the
+  ghost was 300 times too large). Not in the SVG export.
 - **Resolving is partly manual, by design.** `edge_map` on resolve is the person's own mapping of
   blueprint edges to room edges (the way to place in a room with a different edge count); the fit
   kind is then `manual` and nothing about the mapping is judged.
