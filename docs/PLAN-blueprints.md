@@ -1,7 +1,7 @@
 # Plan: blueprints (room layouts that travel)
 
-**Status: stages 0 to 5 built, and a first cut of stage 6 (PR #215); the box over the main plan and
-everything toward Revit are not. Revised 2026-10-20 after the author's review of the Revit task
+**Status: stages 0 to 6 built (PR #215), and the server half of stages 7 and 8; the Revit side is written
+(the Apply tasks button) but has never run in Revit. Revised 2026-10-20 after the author's review of the Revit task
 design and of how sheets are stored; first written 2026-10-19 from the stage 0 results
 ([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
 
@@ -26,10 +26,14 @@ in Revit**). The 2026-10-20 decisions are built on the server and in the buttons
 Blueprint button pushes a room and its sheets to `POST .../blueprints/from-revit` (decisions 18 and 19),
 and the library stores a summary of each sheet's room (decision 25).
 
-Not built: dragging, rotating or scaling a box over the main plan; per-item overrides; a mirrored
-copy (left out on purpose, decision 7); tags, view scale and view template in the sheet export;
-the tag-rule store (B5); and the Revit side of tasks (the server half of decisions 21 to 26 is built: store, ask and report
-channel, dismiss and resend).
+Built since (2026-10-21 and 22): the tag-rule store and the tag export (decision 24); the `update_room` task kind
+(server and tasks page; the plug-in does not know it, so it aborts one); a page for the sheet library and the tag
+rules (`/library/`); blueprints that need attention are flagged; **per-item overrides** (a room leaves out, moves or
+turns single items, kept with its assignment, applied by the resolver before its findings); and the **Blueprint tool
+in the main viewer**, which is what stage 6's box became (see stage 6).
+
+Not built: a mirrored copy (left out on purpose, decision 7); view template in the sheet export; the Revit side
+of the update kind; and running any of the Revit side in Revit.
 
 ## What exists, and what does not
 
@@ -316,20 +320,24 @@ Built as its own page in SVG, not on the Pixi renderer: one room and a few hundr
 need the hit-testing and labels SVG gives for free. *The biggest UI piece; the first with a real
 brief.*
 
-**Stage 6 — Assign UI. First cut built as a mode of the blueprint page** (see the status): one
-room at a time with rotations and a hand mapping, or several rooms at once from a solver pass,
-saving assignments. **Still to do, as originally specified:** in the main viewer, select the rooms
-and the blueprint, then place a bounding box showing the blueprint's outline and door for
-orientation, drag, rotate and scale it to match the real room with snap to endpoints, ghost items
-over the plan. Scaling the box scales the room reference only (decision 6). Reuses the
-zone/overlay machinery. Per-item overrides stored with an assignment are also not built.
+**Stage 6 — Assign UI. Built:** as a mode of the blueprint page (one room at a time with rotations and a hand
+mapping, or several rooms at once from a solver pass, saving assignments), and as the **Blueprint tool in the main
+viewer** (a fourth per-zone tool beside route, reach and connections). **The box as first specified (drag, rotate
+and scale it to match the room, with snap) did not survive the resolver**: the room sets the position and the scale
+(decision 6), so the ghost is always fitted and there is nothing to drag or stretch. What is a real choice is which
+room and which rotation, so a click on a room moves the ghost there, Rotate steps through the rotations the server
+says fit (best by doors first, which is the snap), and Assign saves it. It draws the resolver's answer and is not in
+the SVG export. **Per-item overrides are built** (leave out, nudge in whole mm, turn in whole degrees; one per item,
+this room's only, applied to the resolver's poses before the `outside` and `overlap` findings, so a follower keeps
+its place unless it is overridden itself).
 *Value without Revit: planning and coverage ("which rooms follow which blueprint").*
 
 **Stage 7 — Revit write, thin slice (the walking skeleton).** **Server half built:** the task model and its
 states, making populate and create-RLS tasks from assignments or a library sheet (placements in the target
 model's own frame), the `roomtasks` ask and report channel, dismiss and resend, MCP reads. The task list is a page, `/tasks/` (filters, a task's contents and attempts, dismiss, resend, making
 tasks), and the main viewer colours rooms by their last task's state (a choice in the zone's colour picker; not in
-the SVG export). The plug-in has the decision 22 checking as a pure, CPython-tested planner (`room_m/task_plan.py`) and the `roomtasks` transport. **Still to do:** the apply button that answers the planner's questions from Revit (phase, room by number, content, RLS numbers, title blocks, families) and writes.
+the SVG export). The plug-in has the decision 22 checking as a pure, CPython-tested planner (`room_m/task_plan.py`) and the `roomtasks` transport. **The apply button is written** (`room_m/apply_*.py`: the sequence, the facts the planner asks, the writer, the
+arithmetic) and not run in Revit. **Still to do:** run it, and give the plug-in the `update_room` kind.
 Original scope: task model on the server
 (decisions 21 to 23: a task is a resolved snapshot plus a status), the `roomtasks` endpoint,
 and a task list for the person (dismiss, resend). A new pyRevit button "Apply blueprint
