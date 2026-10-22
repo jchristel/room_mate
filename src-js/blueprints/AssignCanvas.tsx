@@ -20,6 +20,8 @@ const s = (p: Pt): string => `${p[0]},${-p[1]}`;
 export interface AssignCanvasProps {
   result: ResolveResponse;
   selected: string | null;
+  /** Items this room moved or turned: drawn so a person can see what they changed. */
+  changed: ReadonlySet<string>;
   showTags: boolean;
   onSelect(id: string | null): void;
 }
@@ -49,7 +51,7 @@ function fitView(result: ResolveResponse): View {
   return { x: b.minX - pad, y: -(b.maxY + pad), w: b.maxX - b.minX + 2 * pad, h: b.maxY - b.minY + 2 * pad };
 }
 
-export function AssignCanvas({ result, selected, showTags, onSelect }: AssignCanvasProps) {
+export function AssignCanvas({ result, selected, changed, showTags, onSelect }: AssignCanvasProps) {
   const ring = useMemo(() => result.outline.coarse.map(pt), [result.outline]);
   const fine = useMemo(() => result.outline.fine.map(pt), [result.outline]);
   const es = useMemo(() => edges(ring), [ring]);
@@ -81,7 +83,7 @@ export function AssignCanvas({ result, selected, showTags, onSelect }: AssignCan
         const frame = { centre: pt(p.centre), angle: Math.atan2(fy, fx) };
         const box = corners(frame, p.size_mm);
         const front: Pt = [frame.centre[0] + fx * (p.size_mm[0] / 2), frame.centre[1] + fy * (p.size_mm[0] / 2)];
-        const cls = `item${p.class === "wall_device" ? " wall" : ""}${flagged.has(p.item_id) ? " flagged" : ""}${selected === p.item_id ? " selected" : ""}`;
+        const cls = `item${p.class === "wall_device" ? " wall" : ""}${flagged.has(p.item_id) ? " flagged" : ""}${selected === p.item_id ? " selected" : ""}${changed.has(p.item_id) ? " changed" : ""}`;
         return (
           <g
             key={p.item_id}

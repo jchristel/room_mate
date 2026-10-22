@@ -13,7 +13,7 @@
 
 use serde_json::{json, Value};
 
-use super::blueprint_resolve::{resolve_in_room, EdgeMap};
+use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
 use super::placement;
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
@@ -128,7 +128,9 @@ pub fn populate_from_assignment(
         Mapping { shift: Some(s), .. } => EdgeMap::Shift(*s),
         _ => EdgeMap::Auto,
     };
-    let Some((_, resolution)) = resolve_in_room(state, project, &revision.content, &room, &mapping)? else {
+    let Some((_, resolution)) =
+        resolve_in_room_with(state, project, &revision.content, &room, &mapping, &assignment.overrides)?
+    else {
         return refuse("the room is not in the model any more");
     };
     let live = revision.content.items.iter().filter(|i| !i.excluded).count();

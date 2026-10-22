@@ -33,6 +33,9 @@ pub const SCHEMA_VERSION: u32 = 1;
 const MAX_ASSIGNMENTS_PER_PROJECT: usize = 20_000;
 const MAX_EDGES: usize = 2_000;
 const MAX_NOTE_CHARS: usize = 2_000;
+const MAX_OVERRIDES: usize = 2_000;
+/// A nudge further than this is a different place, not a nudge (mm).
+pub const MAX_NUDGE_MM: i32 = 20_000;
 
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -56,6 +59,49 @@ pub struct Mapping {
     pub edge_map: Option<Vec<usize>>,
 }
 
+/// A person's change to ONE blueprint item in ONE room, kept with the assignment: leave it out, or
+/// move and turn it from where the resolver put it.
+///
+/// **Applied to the resolver's answer, never to the blueprint**, so the blueprint stays the intent
+/// and the change is this room's alone. **Whole millimetres and degrees**, which is what a person
+/// types and what lets an assignment stay `Eq`. **One per item** (a second would have to be argued
+/// with), and an item that is not in the pinned revision is reported by the resolver, not refused
+/// here: authored data outlives what it names. **Affects its own item only**: a follower keeps the
+/// place the resolver gave it, and can be overridden itself.
+///
+/// The nudge is in the project's plan frame (where the placement is drawn), so it is what the person
+/// saw. Changing the mapping afterwards can leave a nudge that no longer fits, and it is the person's
+/// to look at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemOverride {
+    pub item_id: String,
+    /// Do not place this item in this room.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclude: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dx_mm: i32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dy_mm: i32,
+    /// Counter-clockwise, about the item's own centre.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rotate_deg: i32,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(n: &i32) -> bool {
+    *n == 0
+}
+
+impl ItemOverride {
+    /// Whether it changes anything.
+    pub fn is_noop(&self) -> bool {
+        !self.exclude && self.dx_mm == 0 && self.dy_mm == 0 && self.rotate_deg == 0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Assignment {
     pub schema_version: u32,
@@ -68,6 +114,9 @@ pub struct Assignment {
     pub room_name: String,
     #[serde(default)]
     pub mapping: Mapping,
+    /// This room's changes to single items (see `ItemOverride`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overrides: Vec<ItemOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     pub taken_at: String,
@@ -85,6 +134,10 @@ pub struct AssignRequest {
     pub room_name: String,
     #[serde(default)]
     pub mapping: Mapping,
+    /// `None` keeps the room's existing overrides (a client written before they existed must not
+    /// clear them by assigning again); `Some(vec![])` clears them.
+    #[serde(default)]
+    pub overrides: Option<Vec<ItemOverride>>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -186,12 +239,42 @@ fn clean_mapping(mapping: Mapping) -> Result<Mapping, BlueprintError> {
     Ok(mapping)
 }
 
+/// The overrides as they are kept: one per item, none that change nothing, none out of range.
+pub fn clean_overrides(overrides: Vec<ItemOverride>) -> Result<Vec<ItemOverride>, BlueprintError> {
+    if overrides.len() > MAX_OVERRIDES {
+        return bad(format!("an assignment holds at most {MAX_OVERRIDES} item overrides"));
+    }
+    let mut out: Vec<ItemOverride> = Vec::new();
+    for o in overrides {
+        if o.item_id.trim().is_empty() {
+            return bad("an item override names an item".to_string());
+        }
+        if o.dx_mm.abs() > MAX_NUDGE_MM || o.dy_mm.abs() > MAX_NUDGE_MM {
+            return bad(format!(
+                "item {:?}: a nudge is at most {MAX_NUDGE_MM} mm; that is a different place",
+                o.item_id
+            ));
+        }
+        if o.rotate_deg.abs() > 360 {
+            return bad(format!("item {:?}: a rotation is at most 360 degrees either way", o.item_id));
+        }
+        if out.iter().any(|x| x.item_id == o.item_id) {
+            return bad(format!("item {:?} has more than one override; an item has one", o.item_id));
+        }
+        if !o.is_noop() {
+            out.push(o);
+        }
+    }
+    Ok(out)
+}
+
 /// Assign a blueprint to a room, replacing the room's existing assignment if it has one.
 pub fn assign(projects_dir: &Path, project: &str, request: AssignRequest) -> Result<Assignment, BlueprintError> {
     if request.room.room_id.trim().is_empty() || request.room.model_id.trim().is_empty() {
         return bad("an assignment needs a room and its model".to_string());
     }
     let mapping = clean_mapping(request.mapping)?;
+    let overrides = request.overrides.map(clean_overrides).transpose()?;
     let note = request.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
     if note.as_ref().is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS) {
         return bad(format!("a note is at most {MAX_NOTE_CHARS} characters"));
@@ -219,6 +302,10 @@ pub fn assign(projects_dir: &Path, project: &str, request: AssignRequest) -> Res
         room: request.room,
         room_name: request.room_name,
         mapping,
+        overrides: match overrides {
+            Some(o) => o,
+            None => replaced.map(|a| a.overrides.clone()).unwrap_or_default(),
+        },
         note,
         taken_at: now(),
     };
@@ -321,6 +408,7 @@ mod tests {
             room: RoomKey { model_id: "m".to_string(), room_id: room.to_string() },
             room_name: format!("Room {room}"),
             mapping: Mapping::default(),
+            overrides: None,
             note: None,
         }
     }
@@ -395,5 +483,50 @@ mod tests {
         delete(&tmp, "p", &made.id).unwrap();
         assert!(list_raw(&tmp, "p").unwrap().is_empty());
         assert!(matches!(delete(&tmp, "p", &made.id), Err(BlueprintError::NotFound(_))));
+    }
+
+    fn nudge(id: &str, dx: i32) -> ItemOverride {
+        ItemOverride { item_id: id.to_string(), exclude: false, dx_mm: dx, dy_mm: 0, rotate_deg: 0 }
+    }
+
+    #[test]
+    fn test_overrides_are_kept_one_per_item_and_a_noop_is_dropped() {
+        let tmp = temp_dir(&format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+        let a = blueprint(&tmp, "A");
+        let mut req = request(&a, "r1");
+        req.overrides = Some(vec![nudge("bed", 50), nudge("chair", 0)]);
+        let made = assign(&tmp, "p", req).unwrap();
+        assert_eq!(made.overrides, vec![nudge("bed", 50)], "a no-op change is not kept");
+
+        let mut twice = request(&a, "r2");
+        twice.overrides = Some(vec![nudge("bed", 1), nudge("bed", 2)]);
+        assert!(
+            matches!(assign(&tmp, "p", twice), Err(BlueprintError::Invalid(_))),
+            "an item has one override"
+        );
+
+        let mut far = request(&a, "r3");
+        far.overrides = Some(vec![nudge("bed", MAX_NUDGE_MM + 1)]);
+        assert!(matches!(assign(&tmp, "p", far), Err(BlueprintError::Invalid(_))));
+    }
+
+    #[test]
+    fn test_assigning_again_without_overrides_keeps_them_and_an_empty_list_clears_them() {
+        let tmp = temp_dir(&format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+        let a = blueprint(&tmp, "A");
+        let mut first = request(&a, "r1");
+        first.overrides = Some(vec![nudge("bed", 50)]);
+        assign(&tmp, "p", first).unwrap();
+
+        let kept = assign(&tmp, "p", request(&a, "r1")).unwrap();
+        assert_eq!(
+            kept.overrides,
+            vec![nudge("bed", 50)],
+            "a client that does not send them must not clear them"
+        );
+
+        let mut clear = request(&a, "r1");
+        clear.overrides = Some(Vec::new());
+        assert!(assign(&tmp, "p", clear).unwrap().overrides.is_empty());
     }
 }

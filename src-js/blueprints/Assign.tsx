@@ -13,14 +13,17 @@
 // on every read, from the room as it stands.
 //
 // Several rooms at once is `AssignMany`, which asks the same resolver about each and lets the person
-// tick. Not here yet: dragging, rotating or scaling a box over the main plan, and per-item overrides.
+// tick. **Per-item overrides** (leave an item out, nudge it, turn it) are this room's own and are kept with
+// its assignment; they ride the resolve request, so the drawing is still the server's answer. Not here yet:
+// dragging, rotating or scaling a box over the main plan.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AssignCanvas } from "./AssignCanvas.js";
 import { AssignMany } from "./AssignMany.js";
 import * as api from "./api.js";
-import type { AssignmentRow, Blueprint, Finding, Mapping, ResolveResponse, RoomRow } from "./types.js";
+import { adjust, describe, encode, overrideFor, reset, sameOverrides } from "./overrides.js";
+import type { AssignmentRow, Blueprint, Finding, ItemOverride, Mapping, ResolveResponse, RoomRow } from "./types.js";
 
 export interface AssignProps {
   project: string;
@@ -54,6 +57,8 @@ function findingText(f: Finding, name: (id: string) => string): string {
       return `${name(f.item)}: ${f.reason}`;
     case "corner_anchored":
       return `${name(f.item)} had no wall beside it when captured; its position is approximate`;
+    case "override_unused":
+      return `a change to item ${f.item} was not used: this revision does not place that item`;
     default:
       return f.message;
   }
@@ -66,6 +71,8 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
   const [filter, setFilter] = useState("");
   const [room, setRoom] = useState<RoomRow | null>(null);
   const [mapping, setMapping] = useState<Mapping>({});
+  const [overrides, setOverrides] = useState<ItemOverride[]>([]);
+  const [step, setStep] = useState(50);
   const [result, setResult] = useState<ResolveResponse | null>(null);
   const [byHand, setByHand] = useState<number[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -100,7 +107,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
     let live = true;
     setBusy(true);
     api
-      .resolve(project, blueprint.id, room.id, revision, mapping)
+      .resolve(project, blueprint.id, room.id, revision, mapping, encode(overrides))
       .then((r) => {
         if (!live) return;
         setResult(r);
@@ -115,7 +122,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
     return () => {
       live = false;
     };
-  }, [project, blueprint.id, room, revision, mapping]);
+  }, [project, blueprint.id, room, revision, mapping, overrides]);
 
   const choose = (r: RoomRow) => {
     setRoom(r);
@@ -124,6 +131,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
     setNotice(null);
     const existing = assigned.find((a) => a.room.room_id === r.id && a.blueprint_id === blueprint.id);
     setMapping(existing?.mapping ?? {});
+    setOverrides(existing?.overrides ?? []);
     if (existing?.mapping.edge_map) setByHand(existing.mapping.edge_map);
   };
 
@@ -152,7 +160,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
   const save = async () => {
     if (!room) return;
     setBusy(true);
-    const r = await api.assign(project, blueprint.id, revision, room.id, mapping, note.trim() || undefined);
+    const r = await api.assign(project, blueprint.id, revision, room.id, mapping, note.trim() || undefined, overrides);
     setBusy(false);
     if (!r.ok) return setError(r.error);
     setError(null);
@@ -179,7 +187,14 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
   }, [rooms, filter]);
   const roomEdges = result?.outline.coarse.length ?? 0;
   const here = room ? assigned.find((a) => a.room.room_id === room.id) : undefined;
-  const saved = !!here && here.blueprint_id === blueprint.id && here.revision === revision && sameMapping(here.mapping, mapping);
+  const saved =
+    !!here && here.blueprint_id === blueprint.id && here.revision === revision && sameMapping(here.mapping, mapping) && sameOverrides(here.overrides ?? [], overrides);
+  const changed = useMemo(() => new Set(overrides.filter((o) => !o.exclude).map((o) => o.item_id)), [overrides]);
+  // Items the blueprint holds that this room leaves out, named from the blueprint (they are not in the answer).
+  const itemsOfRevision = blueprint.revisions.find((r) => r.number === revision)?.items ?? [];
+  const leftOut = overrides.filter((o) => o.exclude);
+  const selectedPlaced = selected ? result?.placements.find((p) => p.item_id === selected) : undefined;
+  const selectedOverride = selected ? overrideFor(overrides, selected) : undefined;
   const auto = mapping.shift === undefined && !mapping.edge_map;
 
   return (
@@ -204,7 +219,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
         </div>
         {error ? <p className="banner error">{error}</p> : notice ? <p className="banner">{notice}</p> : <div />}
         {result ? (
-          <AssignCanvas result={result} selected={selected} showTags={showTags} onSelect={setSelected} />
+          <AssignCanvas result={result} selected={selected} changed={changed} showTags={showTags} onSelect={setSelected} />
         ) : (
           <p className="hint empty">{room ? (busy ? "Placing…" : "") : "Choose a room on the right to place this blueprint in."}</p>
         )}
@@ -328,13 +343,55 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
               })}
             </ul>
             {result.fit.kind === "mirror_image" ? <p className="hint">This room is the other hand of the blueprint. Assign a blueprint authored for the other hand; nothing is mirrored for you.</p> : null}
-            {selected ? (
+            {selectedPlaced ? (
+              <fieldset className="item-changes">
+                <legend>{selectedPlaced.type_name}</legend>
+                <p className="hint">{selectedPlaced.rule}</p>
+                <label className="num">
+                  step (mm)
+                  <input type="number" min={1} max={2000} value={step} onChange={(e) => setStep(Math.max(1, Math.round(Number(e.target.value)) || 1))} />
+                </label>
+                <div className="pad" role="group" aria-label="Move this item in this room">
+                  <button type="button" aria-label="Move up" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { dy_mm: step }))}>↑</button>
+                  <button type="button" aria-label="Move left" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { dx_mm: -step }))}>←</button>
+                  <button type="button" aria-label="Move right" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { dx_mm: step }))}>→</button>
+                  <button type="button" aria-label="Move down" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { dy_mm: -step }))}>↓</button>
+                </div>
+                <div className="actions">
+                  <button type="button" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { rotate_deg: 90 }))}>Turn 90° left</button>
+                  <button type="button" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { rotate_deg: -90 }))}>Turn 90° right</button>
+                </div>
+                <div className="actions">
+                  <button type="button" className="danger" onClick={() => { setOverrides((l) => adjust(l, selectedPlaced.item_id, { exclude: true })); setSelected(null); }}>
+                    Leave out of this room
+                  </button>
+                  <button type="button" disabled={!selectedOverride} onClick={() => setOverrides((l) => reset(l, selectedPlaced.item_id))}>
+                    Put back as the blueprint has it
+                  </button>
+                </div>
+                {selectedOverride ? <p className="note">{describe(selectedOverride)}</p> : null}
+              </fieldset>
+            ) : selected ? (
               <p className="note">
                 <b>{nameOf(selected)}</b>
-                <br />
-                {result.placements.find((p) => p.item_id === selected)?.rule}
               </p>
             ) : null}
+            {leftOut.length > 0 ? (
+              <fieldset className="item-changes">
+                <legend>Left out of this room</legend>
+                <ul className="findings">
+                  {leftOut.map((o) => (
+                    <li key={o.item_id}>
+                      {itemsOfRevision.find((i) => i.id === o.item_id)?.type_name ?? `item ${o.item_id}`}
+                      <button type="button" onClick={() => setOverrides((l) => reset(l, o.item_id))}>
+                        put back
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </fieldset>
+            ) : null}
+            {overrides.length > 0 ? <p className="hint">{overrides.length} change{overrides.length === 1 ? "" : "s"} to single items, kept with this assignment when you assign.</p> : null}
 
             <h3>Assign</h3>
             <label className="stack">

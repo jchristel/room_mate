@@ -184,7 +184,8 @@ export type Finding =
   | { kind: "corner_anchored"; item: string }
   | { kind: "mirror_image"; message: string }
   | { kind: "shape_mismatch"; message: string }
-  | { kind: "doors_disagree"; message: string };
+  | { kind: "doors_disagree"; message: string }
+  | { kind: "override_unused"; item: string };
 
 export interface ResolveResponse {
   blueprint_id: string;
@@ -208,6 +209,16 @@ export interface Mapping {
   edge_map?: number[];
 }
 
+/** A room's change to one blueprint item, kept with its assignment (src/assignments.rs). Whole
+ *  millimetres and degrees, in the plan's frame; zero fields are left out. */
+export interface ItemOverride {
+  item_id: string;
+  exclude?: boolean;
+  dx_mm?: number;
+  dy_mm?: number;
+  rotate_deg?: number;
+}
+
 export interface AssignmentRow {
   id: string;
   blueprint_id: string;
@@ -215,6 +226,8 @@ export interface AssignmentRow {
   room: { model_id: string; room_id: string };
   room_name: string;
   mapping: Mapping;
+  /** This room's changes to single items. Absent when there are none. */
+  overrides?: ItemOverride[];
   note?: string | null;
   taken_at: string;
   blueprint_name: string | null;

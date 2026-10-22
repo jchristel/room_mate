@@ -13,7 +13,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::assignments::{self, AssignRequest, Assignment, AssignmentRow, Mapping, RoomKey};
+use crate::assignments::{self, AssignRequest, Assignment, AssignmentRow, ItemOverride, Mapping, RoomKey};
 use crate::blueprints;
 use crate::blueprints_api::{service_error, to_http};
 use crate::service::blueprint_capture::{qualify_room, room_ring};
@@ -45,6 +45,10 @@ pub struct AssignBody {
     pub model_id: Option<String>,
     #[serde(default)]
     pub mapping: Mapping,
+    /// This room's changes to single items. Left out, the room's existing ones are KEPT (a client
+    /// written before they existed must not clear them by assigning again); `[]` clears them.
+    #[serde(default)]
+    pub overrides: Option<Vec<ItemOverride>>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -71,6 +75,7 @@ pub async fn http_assign(
         room: RoomKey { model_id: room.model_id, room_id: room.room_id },
         room_name,
         mapping: body.mapping,
+        overrides: body.overrides,
         note: body.note,
     };
     assignments::assign(&dir(&state)?, &project_id, request).map(Json).map_err(to_http)
@@ -165,6 +170,7 @@ pub async fn http_assign_many(
                 room: RoomKey { model_id: room.model_id, room_id: room.room_id },
                 room_name,
                 mapping: Mapping::default(),
+                overrides: None,
                 note: body.note.clone(),
             };
             assignments::assign(&projects, &project_id, request).map(|_| ()).map_err(|e| to_http(e).1)

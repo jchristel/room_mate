@@ -29,6 +29,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::assignments::ItemOverride;
+
 use super::blueprint_capture::{door_on_edges, room_doors, room_ring, SourceDoor};
 use super::blueprint_geometry::{
     box_corners, cross, depth_at, dot, edges, inside, overlaps, simplify, sub, Edge, Pt, COARSE_TOLERANCE_MM,
@@ -141,6 +143,10 @@ pub enum Finding {
     ShapeMismatch { message: String },
     /// The blueprint's doors are not where the room's are, at this mapping.
     DoorsDisagree { message: String },
+    /// An override names an item this revision does not place (it was deleted, excluded, or the
+    /// assignment now pins another revision). Reported, never an error: authored data outlives
+    /// what it names.
+    OverrideUnused { item: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -582,6 +588,39 @@ pub fn resolve_with_doors(
     mapping: &EdgeMap,
     target_doors: &[SourceDoor],
 ) -> Result<Resolution, ServiceError> {
+    resolve_with_overrides(content, target_ring, mapping, target_doors, &[])
+}
+
+/// A person's changes to single items, applied to the poses the recipes gave (see
+/// `ItemOverride`). **After placement and before the findings**, so `outside` and `overlap` are
+/// judged on where the item now is. It touches its own item only: a follower keeps the place the
+/// resolver gave it.
+fn apply_overrides(placed: &mut BTreeMap<String, Pose>, overrides: &[ItemOverride], findings: &mut Vec<Finding>) {
+    for o in overrides {
+        if o.exclude {
+            if placed.remove(&o.item_id).is_none() {
+                findings.push(Finding::OverrideUnused { item: o.item_id.clone() });
+            }
+            continue;
+        }
+        let Some(pose) = placed.get_mut(&o.item_id) else {
+            findings.push(Finding::OverrideUnused { item: o.item_id.clone() });
+            continue;
+        };
+        pose.c = (pose.c.0 + f64::from(o.dx_mm), pose.c.1 + f64::from(o.dy_mm));
+        pose.angle += f64::from(o.rotate_deg).to_radians();
+        pose.rule = format!("{} (changed for this room)", pose.rule);
+    }
+}
+
+/// `resolve_with_doors` with a room's own item overrides.
+pub fn resolve_with_overrides(
+    content: &RevisionContent,
+    target_ring: &[Pt],
+    mapping: &EdgeMap,
+    target_doors: &[SourceDoor],
+    overrides: &[ItemOverride],
+) -> Result<Resolution, ServiceError> {
     let t_coarse = simplify(target_ring, COARSE_TOLERANCE_MM);
     let t_fine = simplify(target_ring, FINE_TOLERANCE_MM);
     if t_coarse.len() < 3 {
@@ -655,7 +694,8 @@ pub fn resolve_with_doors(
     let bp_fine: Vec<Pt> = content.outline.fine.iter().map(|&p| p.into()).collect();
     let ctx = Context { live, bp_frame, es_t: edges(&t_coarse), t_coarse: &t_coarse, bp_fine, edge_map };
 
-    let placed = ctx.place_all(&mut findings);
+    let mut placed = ctx.place_all(&mut findings);
+    apply_overrides(&mut placed, overrides, &mut findings);
     let placements = ctx.placements(&placed, &mut findings);
     ctx.footprint_findings(&placed, &t_fine, &mut findings);
 
@@ -681,11 +721,23 @@ pub fn resolve_in_room(
     room: &RoomRef,
     mapping: &EdgeMap,
 ) -> Result<Option<(String, Resolution)>, ServiceError> {
+    resolve_in_room_with(state, project, content, room, mapping, &[])
+}
+
+/// `resolve_in_room` with the room's own item overrides (an assignment's, or a preview's).
+pub fn resolve_in_room_with(
+    state: &AppState,
+    project: &str,
+    content: &RevisionContent,
+    room: &RoomRef,
+    mapping: &EdgeMap,
+    overrides: &[ItemOverride],
+) -> Result<Option<(String, Resolution)>, ServiceError> {
     let Some((room_name, ring)) = room_ring(state, project, room)? else {
         return Ok(None);
     };
     let doors = room_doors(state, project, room)?;
-    Ok(Some((room_name, resolve_with_doors(content, &ring, mapping, &doors)?)))
+    Ok(Some((room_name, resolve_with_overrides(content, &ring, mapping, &doors, overrides)?)))
 }
 
 #[cfg(test)]
@@ -1159,5 +1211,63 @@ mod tests {
         let r = resolve_with_doors(&c, &ring, &EdgeMap::Shift(0), &top).unwrap();
         assert_eq!(r.fit.shift, 0, "a pinned shift is never overridden");
         assert!(r.findings.iter().any(|f| matches!(f, Finding::DoorsDisagree { .. })));
+    }
+
+    fn nudge(id: &str, dx: i32, dy: i32, rot: i32) -> ItemOverride {
+        ItemOverride { item_id: id.to_string(), exclude: false, dx_mm: dx, dy_mm: dy, rotate_deg: rot }
+    }
+
+    fn two_items() -> (Vec<Pt>, RevisionContent) {
+        let ring = rect(6000.0, 4000.0);
+        let c = content(
+            &ring,
+            vec![
+                src("bed", (3000.0, 600.0), 1600.0, 1000.0, (0.0, 1.0)),
+                src("table", (3000.0, 2200.0), 800.0, 800.0, (0.0, 1.0)),
+            ],
+        );
+        (ring, c)
+    }
+
+    #[test]
+    fn test_an_override_moves_and_turns_its_own_item_only() {
+        let (ring, c) = two_items();
+        let plain = resolve_with_doors(&c, &ring, &EdgeMap::Auto, &[]).unwrap();
+        let o = resolve_with_overrides(&c, &ring, &EdgeMap::Auto, &[], &[nudge("table", 150, -50, 90)]).unwrap();
+        assert!(near(at(&o, "table"), (at(&plain, "table").0 + 150.0, at(&plain, "table").1 - 50.0), 1e-6));
+        assert!(near(at(&o, "bed"), at(&plain, "bed"), 1e-9), "the other item is where it was");
+        let (a, b) = (placed(&plain, "table").facing, placed(&o, "table").facing);
+        // A quarter turn counter-clockwise: (x, y) -> (-y, x).
+        assert!((b.x + a.y).abs() < 1e-9 && (b.y - a.x).abs() < 1e-9, "{a:?} -> {b:?}");
+        assert!(placed(&o, "table").rule.contains("changed for this room"));
+    }
+
+    #[test]
+    fn test_an_excluded_override_leaves_the_item_out_and_an_unknown_one_is_reported() {
+        let (ring, c) = two_items();
+        let leave_out = ItemOverride { item_id: "bed".to_string(), exclude: true, dx_mm: 0, dy_mm: 0, rotate_deg: 0 };
+        let r = resolve_with_overrides(&c, &ring, &EdgeMap::Auto, &[], &[leave_out, nudge("ghost", 10, 0, 0)]).unwrap();
+        assert!(r.placements.iter().all(|p| p.item_id != "bed"));
+        assert_eq!(r.placements.len(), 1);
+        assert!(
+            r.findings.contains(&Finding::OverrideUnused { item: "ghost".to_string() }),
+            "{:?}",
+            r.findings
+        );
+    }
+
+    #[test]
+    fn test_findings_are_judged_where_the_override_put_the_item() {
+        let (ring, c) = two_items();
+        let plain = resolve_with_doors(&c, &ring, &EdgeMap::Auto, &[]).unwrap();
+        assert!(!plain.findings.iter().any(|f| matches!(f, Finding::Outside { .. })));
+        let out = resolve_with_overrides(&c, &ring, &EdgeMap::Auto, &[], &[nudge("table", 9000, 0, 0)]);
+        // 9000 mm is a legal nudge for the resolver (the store bounds it); the table is now outside.
+        let out = out.unwrap();
+        assert!(
+            out.findings.iter().any(|f| matches!(f, Finding::Outside { item } if item == "table")),
+            "{:?}",
+            out.findings
+        );
     }
 }

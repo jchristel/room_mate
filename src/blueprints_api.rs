@@ -20,7 +20,7 @@ use crate::blueprints::{
 };
 use crate::service::blueprint_capture::{capture_room, qualify_room};
 use crate::service::blueprint_model::{BlueprintSheet, RevisionContent, Skipped};
-use crate::service::blueprint_resolve::{resolve_in_room, EdgeMap, Resolution};
+use crate::service::blueprint_resolve::{resolve_in_room_with, EdgeMap, Resolution};
 use crate::state::Shared;
 
 pub fn to_http(err: BlueprintError) -> (StatusCode, String) {
@@ -198,6 +198,25 @@ pub struct ResolveParams {
     /// (`2,3,0,1`). Wins over `shift`, and is how a room with a different edge count is placed.
     #[serde(default)]
     pub edge_map: Option<String>,
+    /// A room's item overrides to preview, as a JSON array (`[{"item_id":"7","dx_mm":20}]`): what
+    /// the assign view sends so the drawing is the server's answer and not a second copy of the
+    /// rule. Checked as an assignment's are.
+    #[serde(default)]
+    pub overrides: Option<String>,
+}
+
+/// The previewed overrides of a resolve, parsed and checked.
+fn overrides_of(params: &ResolveParams) -> Result<Vec<crate::assignments::ItemOverride>, (StatusCode, String)> {
+    const MAX_CHARS: usize = 200_000;
+    let Some(text) = params.overrides.as_deref().filter(|t| !t.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    if text.len() > MAX_CHARS {
+        return Err((StatusCode::BAD_REQUEST, format!("overrides is at most {MAX_CHARS} characters")));
+    }
+    let parsed: Vec<crate::assignments::ItemOverride> = serde_json::from_str(text)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("overrides is not a JSON list of item overrides: {e}")))?;
+    crate::assignments::clean_overrides(parsed).map_err(to_http)
 }
 
 fn edge_map_of(params: &ResolveParams) -> Result<EdgeMap, (StatusCode, String)> {
@@ -239,7 +258,8 @@ pub async fn http_resolve_blueprint(
         Err(e) => return Err(service_error(e)),
     };
     let mapping = edge_map_of(&params)?;
-    match resolve_in_room(&state, &project_id, &revision.content, &room, &mapping) {
+    let overrides = overrides_of(&params)?;
+    match resolve_in_room_with(&state, &project_id, &revision.content, &room, &mapping, &overrides) {
         Ok(Some((room_name, resolution))) => Ok(Json(ResolveResponse {
             blueprint_id: blueprint.id.clone(),
             revision: number,

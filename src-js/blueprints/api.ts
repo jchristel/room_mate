@@ -9,6 +9,7 @@ import type {
   AssignOutcome,
   Blueprint,
   BlueprintSummary,
+  ItemOverride,
   Mapping,
   ProjectRow,
   ResolveResponse,
@@ -74,18 +75,19 @@ export const decidePending = (project: string, id: string, pendingId: number, ba
   );
 
 /** Where a blueprint revision's items go in one room. A read: nothing is stored. */
-export const resolve = (project: string, id: string, roomId: string, revision: number, mapping: Mapping) => {
+export const resolve = (project: string, id: string, roomId: string, revision: number, mapping: Mapping, overrides?: string) => {
   const q = new URLSearchParams({ room_id: roomId, revision: String(revision) });
   if (mapping.edge_map) q.set("edge_map", mapping.edge_map.join(","));
   else if (mapping.shift !== undefined) q.set("shift", String(mapping.shift));
+  if (overrides) q.set("overrides", overrides);
   return apiGet<ResolveResponse>(`${base(project)}/blueprints/${encodeURIComponent(id)}/resolve?${q.toString()}`);
 };
 
 export const listAssignments = (project: string) => apiGet<AssignmentRow[]>(`${base(project)}/assignments`);
 
 /** Put a blueprint revision in a room, replacing the room's assignment if it has one. */
-export const assign = (project: string, blueprintId: string, revision: number, roomId: string, mapping: Mapping, note?: string) =>
-  send<unknown>("POST", `${base(project)}/assignments`, { blueprint_id: blueprintId, revision, room_id: roomId, mapping, note });
+export const assign = (project: string, blueprintId: string, revision: number, roomId: string, mapping: Mapping, note?: string, overrides: ItemOverride[] = []) =>
+  send<unknown>("POST", `${base(project)}/assignments`, { blueprint_id: blueprintId, revision, room_id: roomId, mapping, note, overrides });
 
 export const deleteAssignment = (project: string, id: string) =>
   send<null>("DELETE", `${base(project)}/assignments/${encodeURIComponent(id)}`, null);

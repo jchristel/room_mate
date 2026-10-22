@@ -138,3 +138,9 @@ button.on { background: var(--fill); border-color: var(--ink); }
 .list .filter { display: block; font-size: 0.72rem; margin: 0.4rem 0; }
 i.attention { font-style: normal; font-size: 0.62rem; margin-left: 0.4rem; padding: 0 0.3rem; background: var(--accent); color: var(--paper); border-radius: 2px; }
 .banner.attention { background: var(--fill-hover); }
+
+.canvas .item.changed polygon { stroke-dasharray: 6 3; }
+fieldset.item-changes { margin: 0.5rem 0; }
+.item-changes .pad { display: grid; grid-template-columns: repeat(4, 2.2rem); gap: 0.25rem; margin: 0.4rem 0; }
+.item-changes label.num { display: flex; gap: 0.5rem; align-items: center; font-size: 0.7rem; }
+.item-changes label.num input { width: 5rem; }
