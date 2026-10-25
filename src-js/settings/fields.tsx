@@ -13,7 +13,26 @@
 // cannot round-trip that through a `number`, so it is string-backed and reports
 // `null` until the text parses.
 
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
+import type { SettingFinding } from "./types.js";
+
+/** What the server found wrong with the loaded project's property names. Provided
+ *  once by the page; the sections read it through `Block` and `Warn`. Findings are
+ *  about the SAVED settings and the data stored now, not about unsaved edits. */
+export const FindingsContext = createContext<readonly SettingFinding[]>([]);
+
+/** A red triangle for the findings at `setting` (exactly; with `within`, every
+ *  finding of the section of that name), with the missing names in its tooltip.
+ *  Nothing when there are none. */
+export function Warn({ setting, within = false }: { setting: string; within?: boolean }) {
+  const hits = useContext(FindingsContext).filter((f) => f.setting === setting || (within && f.section === setting));
+  if (hits.length === 0) return null;
+  return (
+    <span className="warn" role="img" aria-label="property not found" title={hits.map((f) => f.message).join("\n")}>
+      ▲
+    </span>
+  );
+}
 
 export function Row({ children }: { children: ReactNode }) {
   return <div className="row">{children}</div>;
@@ -306,17 +325,22 @@ export function Block({
   title,
   hint,
   open = false,
+  section,
   children,
 }: {
   title: string;
   hint?: ReactNode;
   open?: boolean;
+  /** The section's key in the server's findings, when it names properties. The
+   *  triangle sits on the summary so a closed section still shows it. */
+  section?: string;
   children: ReactNode;
 }) {
   return (
     <details className="block" open={open}>
       <summary>
         <h2>{title}</h2>
+        {section ? <Warn setting={section} within /> : null}
       </summary>
       {hint !== undefined && <p className="hint">{hint}</p>}
       {children}

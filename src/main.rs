@@ -553,6 +553,8 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     let state = build_state(&args.server_settings, &args.project_settings)?;
+    // Say, once, which settings name a property the data no longer has.
+    roommate::settings_check::log_startup(&state, &args.project_settings);
     let hostname = network::machine_hostname();
     let hosts = HostPolicy::for_bind(args.bind, hostname.as_deref(), &args.allow_host);
     let app = build_router(state, hosts);
