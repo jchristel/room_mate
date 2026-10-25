@@ -137,6 +137,23 @@ fn decode_snapshot<P: serde::de::DeserializeOwned>(bytes: &[u8]) -> serde_json::
     decoder.decode(|| serde_json::from_slice(bytes))
 }
 
+/// Every property name a stored snapshot holds -- instance and type tier together --
+/// read from its dictionary line alone, so a 300 MB snapshot costs one line.
+///
+/// `None` for a legacy snapshot, which has no dictionary: its names are only known by
+/// parsing it, and "cannot tell" must not be reported as "none".
+pub fn property_names_of(bytes: &[u8]) -> Option<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Keys {
+        property_keys: Vec<String>,
+    }
+    let line = trailer_line(bytes)?;
+    let mut object = Vec::with_capacity(line.len());
+    object.push(b'{');
+    object.extend_from_slice(line.get(1..)?);
+    serde_json::from_slice::<Keys>(&object).ok().map(|k| k.property_keys)
+}
+
 /// The snapshot's last line, when it is a property-codec trailer.
 fn trailer_line(bytes: &[u8]) -> Option<&[u8]> {
     let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);

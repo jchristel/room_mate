@@ -48,6 +48,32 @@ pub struct ProjectFileSummary {
 pub struct ProjectSettingsResponse {
     pub file: String,
     pub settings: Settings,
+    /// Settings that name a property the project's data no longer has (see
+    /// `SettingFinding`). Empty is the ordinary state, and also what a project with
+    /// nothing stored yet answers: absent data is not a finding.
+    #[serde(default)]
+    pub findings: Vec<SettingFinding>,
+}
+
+/// One setting that names a property nothing in the project's latest data carries.
+///
+/// **A finding, never an error**: the project still loads and draws, and the name just
+/// resolves to nothing -- exactly the "an unresolvable name contributes nothing" rule
+/// the settings follow everywhere. What the finding adds is that somebody is told,
+/// where they edit it, before a reader finds the colour plan grey or the tag blank.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct SettingFinding {
+    /// The settings section: `room_label`, `colour_plans`, `hover` or `tags`.
+    pub section: String,
+    /// Which setting inside it: `room_label`, `hover.ffe`, `tags.ceilings`,
+    /// `colour_plans.<plan name>`.
+    pub setting: String,
+    /// The property name that was not found.
+    pub property: String,
+    /// The entity whose data was searched.
+    pub entity: String,
+    pub message: String,
 }
 
 /// Result of one reference CSV upload, echoed to the uploader. Carries the

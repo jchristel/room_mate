@@ -178,3 +178,6 @@ input[type="text"]:read-only { background: var(--fill); opacity: 0.8; }
 .colour-reset:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
 
 .tag-colours { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
+
+/* A property a setting names that the project's data does not carry. */
+.warn { color: #c8102e; margin-left: 0.4rem; font-size: 0.8em; cursor: help; }

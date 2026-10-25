@@ -1,6 +1,6 @@
 // The room label: which fields the viewer prints on each room, in order.
 
-import { Block } from "../fields.js";
+import { Block, Warn } from "../fields.js";
 import { StringList } from "../stringList.js";
 import type { Settings } from "../types.js";
 
@@ -16,6 +16,7 @@ export function RoomLabelSection({
   return (
     <Block
       title="Room label"
+      section="room_label"
       hint={
         <>
           Ordered fields shown on each room in the viewer. <code>$name</code> and <code>$id</code> are the room&apos;s
@@ -25,6 +26,7 @@ export function RoomLabelSection({
         </>
       }
     >
+      <Warn setting="room_label" />
       <StringList
         values={settings.room_label}
         list={propertyListId}
