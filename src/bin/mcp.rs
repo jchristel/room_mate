@@ -6,10 +6,11 @@
 //! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
-//! `list_saved_reports`, `get_saved_report` --
+//! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
+//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets`, `list_assignments`, `list_tasks`, `get_task`, `list_tag_rules`, `get_tag_rule` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Thirty-one in
+//! and the one forwarded mutation (`upload_reference`, below). Forty-one in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -63,6 +64,88 @@ use roommate::state::Shared;
 struct ProjectIdParams {
     /// The project id, as returned by `list_projects`.
     project_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct BlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The blueprint id, as returned by `list_blueprints`.
+    blueprint_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CaptureBlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The room's model. Omit it and the room id is looked up among the project's rooms (refused, naming the models, if more than one has it): a room id is unique only within its model.
+    model_id: Option<String>,
+    /// The room's id.
+    room_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ResolveBlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The blueprint id, as returned by `list_blueprints`.
+    blueprint_id: String,
+    /// The target room's model. Omit it and the room id is looked up among the project's rooms.
+    model_id: Option<String>,
+    /// The target room.
+    room_id: String,
+    /// The revision to place; the blueprint's current one when omitted.
+    revision: Option<u32>,
+    /// Pin the edge mapping: blueprint edge i goes to room edge (i + shift) % edges. Omit to use the best fit by shape.
+    shift: Option<usize>,
+    /// Map the edges by hand: the room edge for each blueprint edge, in blueprint edge order. Wins over `shift`, and is how a room with a DIFFERENT number of edges is placed.
+    edge_map: Option<Vec<usize>>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ListTasksParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Only the tasks for this model (the Revit document's title).
+    #[serde(default)]
+    model_id: Option<String>,
+    /// Only tasks in this state: queued, in_progress, completed, completed_with_warnings, failed, aborted or dismissed.
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct TaskParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The task id, as returned by `list_tasks`.
+    task_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct TagRuleParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The rule id, as returned by `list_tag_rules`.
+    rule_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SheetParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The sheet record id, as returned by `list_sheets`.
+    sheet_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SuggestSheetsParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The room's model. Omit it and the room id is looked up among the project's rooms (refused, naming the models, if more than one has it): a room id is unique only within its model.
+    model_id: Option<String>,
+    /// The room to find a sheet for.
+    room_id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -468,6 +551,72 @@ fn connections_to_mcp_error(err: roommate::connections::ConnectionsError) -> Mcp
         ConnectionsError::Invalid(msg) | ConnectionsError::Conflict(msg) => McpError::invalid_params(msg, None),
         ConnectionsError::Internal(e) => {
             tracing::error!("connections error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn blueprints_to_mcp_error(err: roommate::blueprints::BlueprintError) -> McpError {
+    use roommate::blueprints::BlueprintError;
+    match err {
+        BlueprintError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no blueprints to read".to_string(),
+            None,
+        ),
+        BlueprintError::Invalid(msg) | BlueprintError::Conflict(msg) | BlueprintError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        BlueprintError::Internal(e) => {
+            tracing::error!("blueprints error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn tasks_to_mcp_error(err: roommate::tasks::TaskError) -> McpError {
+    use roommate::tasks::TaskError;
+    match err {
+        TaskError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no tasks to read".to_string(),
+            None,
+        ),
+        TaskError::Invalid(msg) | TaskError::Conflict(msg) | TaskError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        TaskError::Internal(e) => {
+            tracing::error!("tasks error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn tag_rules_to_mcp_error(err: roommate::tag_rules::TagRuleError) -> McpError {
+    use roommate::tag_rules::TagRuleError;
+    match err {
+        TagRuleError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no tag rules to read".to_string(),
+            None,
+        ),
+        TagRuleError::Invalid(msg) | TagRuleError::NotFound(msg) => McpError::invalid_params(msg, None),
+        TagRuleError::Internal(e) => {
+            tracing::error!("tag rules error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn sheets_to_mcp_error(err: roommate::sheets::SheetError) -> McpError {
+    use roommate::sheets::SheetError;
+    match err {
+        SheetError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no sheets to read".to_string(),
+            None,
+        ),
+        SheetError::Invalid(msg) | SheetError::Conflict(msg) | SheetError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        SheetError::Internal(e) => {
+            tracing::error!("sheets error: {e:#}");
             McpError::internal_error("internal error".to_string(), None)
         }
     }
@@ -1245,6 +1394,203 @@ impl RoommateMcp {
         let dir = self.projects_dir()?;
         let document = roommate::connections::load(&dir, &p.project_id).map_err(connections_to_mcp_error)?;
         json_result(&document)
+    }
+
+    /// The project's authored blueprints -- see `blueprints::list`.
+    #[tool(
+        description = "List the blueprints authored for one project, by name. A BLUEPRINT is a room and the FF&E in it written as RECIPES against the room's edges (which edge, how far along it, how far into the room, which way it faces), so the same layout can be placed in another room; it is authored data, not read from the model. Each row has `id`, `name`, `taken_at` (the blueprint's version), `source` (the room it was captured from: a record, not a reference that must still resolve), `current_revision` (the revision new assignments use), `revisions` (how many), `pending` (revisions pushed from elsewhere and waiting for a person to accept or reject them) and `items` (in the current revision, excluded ones not counted). Revisions are append-only: an edit is a new revision. Read one with get_blueprint; to see what a room would capture as, use capture_blueprint. A blueprint is made only by the Revit push, which carries its room layout sheets (`sheets`, layout only, no tags); writing is HTTP-only (POST /projects/{id}/blueprints/from-revit)."
+    )]
+    fn list_blueprints(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::blueprints::list(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One blueprint with all its revisions -- see `blueprints::load`.
+    #[tool(
+        description = "Read one blueprint with every revision. A revision holds an `outline` (`coarse`: jogs under about 350 mm removed, and the one every placement's `edge` index refers to, counter-clockwise with edge i running from vertex i to i+1; `fine`: corners only, for checking whether something is inside the room; both in millimetres with the room's centroid as the origin) and `items`. An item is the FF&E record as exported (`family_name` when the extractor carried it, `type_name`, `category`, `properties` and `type_properties` verbatim) with a `placement`: `edge`, `along_mm` (the item's centre from the edge's start, as captured) and `along_mode` (`fixed_from_start`, `fixed_from_end` or `percent`: how that distance is read in a room of another size), `off_mm` and `off_mode` (`fixed` or `percent` of the room's `depth_mm` in front of the edge), `edge_len_mm`, `facing_deg` (from the edge's inward normal) and `size_mm` (along the facing, then across). `class` is `wall_device` for something under 100 mm thick (a switch or socket: located by wall and height, no footprint check) and `free` otherwise; `excluded` marks an item removed from the blueprint but kept; `follows` says the item abuts the previous one in a run, or sits `inside` another, and so keeps its gap to it instead of getting its own percentage. `corner_anchored` is true for an item with no edge beside it. `pending` lists revisions that ARRIVED (an import, later a Revit push) and have not been reviewed: they are NOT part of the history, are not current, and no assignment can pin one, until a person accepts it (it becomes the next revision and the current one) or rejects it (it moves to `rejected`, kept). Do not describe a pending revision as the blueprint's layout. Nothing here is derived from today's model."
+    )]
+    fn get_blueprint(&self, Parameters(p): Parameters<BlueprintParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let blueprint =
+            roommate::blueprints::load(&dir, &p.project_id, &p.blueprint_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&blueprint)
+    }
+
+    /// What capturing a room would produce -- see `service::blueprint_capture`.
+    #[tool(
+        description = "Work out the blueprint revision that capturing one room would produce, WITHOUT storing anything. Reads the room's outline and the FF&E attributed to it (under the project's own attribution policy) and returns the same `outline` and `items` get_blueprint shows, plus `room_name` and `skipped`: how many items capture left out because they are components of another instance (`nested`; they move with their parent) or have no footprint to write a recipe against (`no_footprint`). A silence would read as 'nothing was there', which is why they are counted. To keep one, POST the result to /projects/{id}/blueprints with a name."
+    )]
+    fn capture_blueprint(&self, Parameters(p): Parameters<CaptureBlueprintParams>) -> Result<CallToolResult, McpError> {
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
+        match roommate::service::blueprint_capture::capture_room(&self.state, &p.project_id, &room)
+            .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some((captured, room_name)) => json_result(&serde_json::json!({
+                "room_name": room_name,
+                "model_id": room.model_id,
+                "outline": captured.content.outline,
+                "items": captured.content.items,
+                "skipped": captured.skipped,
+            })),
+        }
+    }
+
+    /// Where a blueprint's items go in one room -- see `service::blueprint_resolve`.
+    #[tool(
+        description = "Work out where a blueprint revision's items go in ONE target room, without storing or applying anything. Each entry of `placements` has the item's `centre` and unit `facing` in the PROJECT's plan frame in millimetres (so it draws straight onto the plan), its `size_mm` (along the facing, then across), the target `edge` it sits against and `rule`, the rule that put it there in words. Scaling is the ROOM's and never the item's: a fixed distance keeps its millimetres, a percentage keeps its fraction of the edge or of the room's depth, measured on the edge it is anchored to. An item that follows another (a run of casework, a shelf in a wardrobe) moves rigidly with it. `fit` says how the blueprint's outline matched the room's: `kind` is `plain` (the same shape up to rotation), `mirror_image` (the room is the blueprint REFLECTED: the blueprint never mirrors, so the answer is a blueprint authored for the other hand; it, and placements are still returned for reference), `no_fit` or `edge_count_differs` (nothing is placed). `shift` is the edge mapping used and `cost` its shape cost (about 1.0 or under is a fit). A rectangle fits in two mappings a half turn apart, so pass `shift` to choose. A lot of resolving is manual: pass `edge_map` (the room edge for each blueprint edge) to place a blueprint in a room with a DIFFERENT number of edges, or to override the shape fit; the fit `kind` is then `manual` and nothing is judged about the mapping. `findings` lists what to look at, never an error: `outside` (a corner is outside the room's true outline), `overlap` (two items that did not overlap in the blueprint now do), `follow_broken`, `corner_anchored`, `mirror_image`, `shape_mismatch`. Wall devices are left out of outside and overlap findings. `excluded` counts items the blueprint holds but excludes."
+    )]
+    fn resolve_blueprint(&self, Parameters(p): Parameters<ResolveBlueprintParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let blueprint =
+            roommate::blueprints::load(&dir, &p.project_id, &p.blueprint_id).map_err(blueprints_to_mcp_error)?;
+        let number = p.revision.unwrap_or(blueprint.current_revision);
+        let revision = blueprint
+            .revision(number)
+            .ok_or_else(|| McpError::invalid_params(format!("the blueprint has no revision {number}"), None))?;
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
+        use roommate::service::blueprint_resolve::EdgeMap;
+        match roommate::service::blueprint_resolve::resolve_in_room(
+            &self.state,
+            &p.project_id,
+            &revision.content,
+            &room,
+            &p.edge_map
+                .map_or_else(|| p.shift.map_or(EdgeMap::Auto, EdgeMap::Shift), EdgeMap::Explicit),
+        )
+        .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some((room_name, resolution)) => json_result(&serde_json::json!({
+                "blueprint_id": blueprint.id,
+                "revision": number,
+                "room_name": room_name,
+                "fit": resolution.fit,
+                "outline": resolution.outline,
+                "placements": resolution.placements,
+                "findings": resolution.findings,
+                "excluded": resolution.excluded,
+                "candidates": resolution.candidates,
+                "doors": resolution.doors,
+                "mapped_doors": resolution.mapped_doors,
+            })),
+        }
+    }
+
+    /// Which blueprint is placed in which room -- see `assignments::list`.
+    #[tool(
+        description = "List the project's blueprint ASSIGNMENTS: which blueprint a person placed in which room. Authored data, one per room. Each row has `id`, `blueprint_id` and `blueprint_name`, the pinned `revision` (an edit to the blueprint later changes nothing here until a person re-assigns), `current_revision`, `newer_revision` (the blueprint has moved on since), `blueprint_missing` (it was deleted: a reported state), `room` ({model_id, room_id}), `room_name` as it was when assigned, `mapping` (a `shift`, or an `edge_map` the person chose by hand, or neither for the best fit) and an optional `note`. Placements are NOT stored: to see where the items land, call resolve_blueprint with the row's blueprint, revision, room and mapping. Writing is HTTP-only (POST /projects/{id}/assignments)."
+    )]
+    fn list_assignments(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::assignments::list(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// Room tasks, as a Revit session sees them -- see `tasks::list`.
+    #[tool(
+        description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets`, `tag_rules` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."
+    )]
+    fn list_tasks(&self, Parameters(p): Parameters<ListTasksParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let state = match p.state.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            None => None,
+            Some(s) => Some(
+                serde_json::from_value::<roommate::tasks::TaskState>(serde_json::Value::String(s.to_string()))
+                    .map_err(|_| McpError::invalid_params(format!("{s:?} is not a task state"), None))?,
+            ),
+        };
+        let rows =
+            roommate::tasks::list(&dir, &p.project_id, p.model_id.as_deref(), state).map_err(tasks_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One task in full -- see `tasks::load`.
+    #[tool(
+        description = "Read one room task in full. `items` are the family instances to place, in the target MODEL's own frame, millimetres: `x_mm`, `y_mm` (centre), `facing_x`/`facing_y` (unit vector), `size_mm` (along the facing, then across), `family_name`, `type_name`, `category`, `placement_type` (`free` or `wall_device`), `host` and the instance and type `properties` as exported. `sheets` are the room layout sheet layouts to make (as exported by duHast: viewports with sheet positions and types; no tags: the tag rules for them are in `tag_rules`), with the number, name and id of the SOURCE sheet, which are not for the new sheets. `findings` is what the resolver said the room changes about the layout and any warning from making the task. `attempts` lists each go by a Revit session with its status and messages."
+    )]
+    fn get_task(&self, Parameters(p): Parameters<TaskParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let task = roommate::tasks::load(&dir, &p.project_id, &p.task_id).map_err(tasks_to_mcp_error)?;
+        json_result(&task)
+    }
+
+    /// The project's room layout sheet library -- see `sheets::list`.
+    #[tool(
+        description = "List the room layout sheets in one project's sheet LIBRARY: sheets a person chose to export from Revit and keep as exported, so the closest one can be offered for a room. It is authored data, kept apart from blueprints, not read from the model. Each row has `id`, `taken_at` (the record's version), `revit_sheet_id` and `document_title` (together a sheet's identity: a sheet id is unique only within its document), `sheet_number`, `sheet_name`, `room` (the room the person said it was made for, or null if none yet: a reference that may no longer resolve), `viewports` (how many) and `pending` (pushes held back for a person to confirm, because the sheet number changed). Read one with get_sheet; to find the sheets closest to a room use suggest_sheets. Writing is HTTP-only (POST /projects/{id}/sheets)."
+    )]
+    fn list_sheets(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::sheets::list(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// Tag rules -- see `tag_rules::list`.
+    #[tool(
+        description = "List the project's TAG RULES: where a tag goes relative to the element it tags, learned from tags in Revit views and kept as ONE rule per key. The key is names only (never Revit ids, because a blueprint places new elements with new ids): the tagged element's category, family and type (`tagged_*`), the tag's category, family and type (`tag_*`) and the `viewport_type` it was read in. `placement` is the answer: `head`, `elbow` and `end` are offsets in PAPER millimetres in the element's own frame (x along its facing, y to its left), `rotation` is radians relative to the facing, plus `orientation`, `has_leader` and `leader_end_condition`; `sample_count` is how many tags it was made from (the median of them). `tag_kind` is `independent`, `room`, `space` or `area`. Read one, with its samples, with get_tag_rule. Writing is HTTP-only (POST /projects/{id}/tagrules/observations)."
+    )]
+    fn list_tag_rules(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::tag_rules::list(&dir, &p.project_id).map_err(tag_rules_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One tag rule with its samples -- see `tag_rules::load`.
+    #[tool(
+        description = "Read one tag rule with the `samples` it is the median of. Each sample says where it was read (`source`: the sheet, the tag's id and the tagged element's id in the source model, which are provenance and never how a rule is found) and the placement it measured, so a rule that looks wrong can be traced to the tag that made it."
+    )]
+    fn get_tag_rule(&self, Parameters(p): Parameters<TagRuleParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rule = roommate::tag_rules::load(&dir, &p.project_id, &p.rule_id).map_err(tag_rules_to_mcp_error)?;
+        json_result(&rule)
+    }
+
+    /// One library sheet -- see `sheets::load`.
+    #[tool(
+        description = "Read one room layout sheet from the library, as exported. `sheet` is duHast's export of the Revit sheet unchanged: its instance and type properties, its `view_ports` (each with a type of floor plan, elevation, 3D or schedule, a `bounding_box` and `centre_point` giving its position on the sheet, and per view the crop box, plus the marker index and view direction for an elevation, the eye, forward and up for a 3D view, or the row count and segment heights for a schedule) and its sheet size. NOT in the export: tags and their positions, view scale, view template and view names. `pending` lists pushes of this sheet that arrived with a CHANGED sheet number and are being held for a person to accept or reject: they are not the sheet, so do not describe one as the sheet's current number or layout. `rejected` keeps the ones that were declined."
+    )]
+    fn get_sheet(&self, Parameters(p): Parameters<SheetParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let record = roommate::sheets::load(&dir, &p.project_id, &p.sheet_id).map_err(sheets_to_mcp_error)?;
+        json_result(&record)
+    }
+
+    /// The library sheets closest to one room -- see `service::sheet_suggest`.
+    #[tool(
+        description = "Rank the project's library sheets by how close the room each was made for is to ONE target room, closest first. Closeness weighs three figures EQUALLY: the room's area, its proportions (the long side over the short side of the smallest rectangle enclosing the outline) and the number of FF&E items in it, each compared as a ratio, so twice the area is as far as half the area. `distance` is the mean of `parts`, and `signature` is each room's own three figures, so the reason a sheet was offered is in the answer. Worked out from the rooms and FF&E as they are today, and never stored. This OFFERS and never applies: it is for sheet creation mode, a person chooses, and a low distance is a similarity of room size and contents and says nothing about whether the sheet's layout suits the room. `unassigned` counts sheets with no room, which cannot be ranked, and `unresolved` lists sheets whose room is not in the model today, with the reason."
+    )]
+    fn suggest_sheets(&self, Parameters(p): Parameters<SuggestSheetsParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let records = roommate::sheets::load_all(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
+        match roommate::service::sheet_suggest::suggest(&self.state, &p.project_id, &room, &records)
+            .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some(result) => json_result(&result),
+        }
     }
 
     /// Lists every uploaded snapshot id for one project's reference source --

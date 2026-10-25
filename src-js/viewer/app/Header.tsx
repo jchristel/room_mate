@@ -91,6 +91,9 @@ export function Header() {
       </button>
       <Search />
       <div className="links">
+        <a href="/blueprints/">blueprints</a>
+        <a href="/tasks/">tasks</a>
+        <a href="/library/">library</a>
         <a href="/reports/">reports</a>
         <a href="/settings/">settings</a>
       </div>

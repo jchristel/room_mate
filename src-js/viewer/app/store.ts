@@ -18,12 +18,14 @@ import type { ColourPlan } from "../colour.js";
 import type { ElementKind } from "../../renderer/seam.js";
 import type { FilterState } from "../properties.js";
 import type { AreasData } from "../areas.js";
+import type { TaskIndex } from "../taskStatus.js";
 import type { ValidationReport } from "../validation.js";
 import type { HoverProperties, ViewerAppearance } from "./appearance.js";
 import type { TagEntity } from "../../renderer/elementTags.js";
 import { DEFAULT_TAG_SETTINGS, type TagSettings } from "../elementTags.js";
 import type { Scope } from "../scope.js";
 import { newEdit, pickForEdit, type ConnectionsDoc, type PassageReport, type ZoneEdit } from "../connections.js";
+import { newBlueprintTool, pickRoom as pickBlueprintRoom, type BlueprintToolState } from "../blueprintTool.js";
 import { newReach, pickSource, type ReachState } from "../reach.js";
 import { newRoute, pickEndpoint, type PlanPoint, type RouteResult, type RouteState } from "../route.js";
 
@@ -51,6 +53,10 @@ export interface ZoneRow {
    *  `edit`: all three claim a room pick. While it is on and has an answer, the
    *  zone draws the heat map. */
   reach: ReachState | null;
+  /** This zone's blueprint tool, or `null` when it is off: a blueprint laid into a clicked room as a
+   *  ghost, to choose its rotation and assign it. Exclusive with the other three tools, which all
+   *  claim a room pick. Presentation only; it is not in the SVG export. */
+  blueprint: BlueprintToolState | null;
   /** This zone's footprint overlay: on/off and which tier. Per zone because
    *  both are presentation — two zones showing one level at two tiers is a
    *  comparison the overlay exists to make. */
@@ -210,6 +216,8 @@ export interface ViewerState {
    *  band's figures: it is scope-derived, so a second copy per zone could only
    *  disagree with itself. */
   areas: AreasData | null;
+  /** The project's live room tasks by room, while some zone colours by them (`taskData.ts`). */
+  roomTasks: TaskIndex | null;
   /** The tier the BAND's figures are at. Separate from a zone's overlay tier
    *  on purpose: the overlay answers "what does this floor look like by
    *  department", the figures "what do the departments total across the job". */
@@ -321,6 +329,7 @@ const initial: ViewerState = {
   linkViews: false,
   search: { query: "", fields: new Set(), seen: new Set(), matches: null, active: false },
   areas: null,
+  roomTasks: null,
   areasBandTier: 0,
   pickList: null,
   validation: null,
@@ -408,6 +417,7 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
     route: null,
     edit: null,
     reach: null,
+    blueprint: null,
   };
 }
 
@@ -560,6 +570,7 @@ export function select(
       if (zone.route) patchZoneRoute(target, pickEndpoint(zone.route, id, at));
       else if (zone.edit) patchZoneEdit(target, pickForEdit(zone.edit, id, at));
       else if (zone.reach) patchZoneReach(target, pickSource(zone.reach, id, at));
+      else if (zone.blueprint) patchZoneBlueprint(target, pickBlueprintRoom(zone.blueprint, id));
       return;
     }
   }
@@ -568,7 +579,7 @@ export function select(
 
 /** Whether a zone has a room-picking tool on. */
 function hasTool(z: ZoneRow): boolean {
-  return z.route !== null || z.edit !== null || z.reach !== null;
+  return z.route !== null || z.edit !== null || z.reach !== null || z.blueprint !== null;
 }
 
 /** Which zone's tool a room pick is for, or `null` for none.
@@ -591,7 +602,7 @@ function toolTarget(zoneId: string | null): string | null {
 export function setZoneRouteMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
-      z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null, edit: on ? null : z.edit, reach: on ? null : z.reach } : z,
+      z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null, edit: on ? null : z.edit, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint } : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
@@ -601,7 +612,7 @@ export function setZoneRouteMode(id: string, on: boolean): void {
 export function setZoneEditMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
-      z.id === id ? { ...z, edit: on ? (z.edit ?? newEdit()) : null, route: on ? null : z.route, reach: on ? null : z.reach } : z,
+      z.id === id ? { ...z, edit: on ? (z.edit ?? newEdit()) : null, route: on ? null : z.route, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint } : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
@@ -611,10 +622,27 @@ export function setZoneEditMode(id: string, on: boolean): void {
 export function setZoneReachMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
-      z.id === id ? { ...z, reach: on ? (z.reach ?? newReach()) : null, route: on ? null : z.route, edit: on ? null : z.edit } : z,
+      z.id === id ? { ...z, reach: on ? (z.reach ?? newReach()) : null, route: on ? null : z.route, edit: on ? null : z.edit, blueprint: on ? null : z.blueprint } : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
+}
+
+/** Turn one zone's blueprint tool on (fresh) or off, and the other tools off. */
+export function setZoneBlueprintMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id
+        ? { ...z, blueprint: on ? (z.blueprint ?? newBlueprintTool()) : null, route: on ? null : z.route, edit: on ? null : z.edit, reach: on ? null : z.reach }
+        : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Replace one zone's blueprint tool state; a no-op when the tool is off. */
+export function patchZoneBlueprint(id: string, next: BlueprintToolState): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.blueprint ? { ...z, blueprint: next } : z)) });
 }
 
 /** Replace one zone's reach state; a no-op when its tool is off. */
@@ -717,6 +745,10 @@ export function setShowErrors(on: boolean): void {
 
 export function setAreas(data: AreasData | null): void {
   setState({ areas: data });
+}
+
+export function setRoomTasks(index: TaskIndex | null): void {
+  setState({ roomTasks: index });
 }
 
 export function setAreasBandTier(depth: number): void {

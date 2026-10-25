@@ -78,8 +78,8 @@ DOORS = EntityPush(
     entity="doors",
     list_key="door",
     schema_version=2,
-    url="http://127.0.0.1:5151/doors",
-    url_stream="http://127.0.0.1:5151/doors/stream",
+    url="/doors",
+    url_stream="/doors/stream",
     translate=lambda element, contribution: translate_opening(
         element, contribution["placements"]
     ),

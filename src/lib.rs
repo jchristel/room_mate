@@ -28,11 +28,10 @@
 //!   core (reads shared with the MCP binary) + the `/api/settings` Axum
 //!   adapters; saves hot-swap the registry.
 
-/// The interface the HTTP server binds to. **Loopback on purpose, and not
-/// configurable**: the server has no authentication of any kind, and the
-/// settings API can write project files, so binding a routable interface would
-/// expose that to the network. Serving beyond localhost is a deliberate
-/// decision with prerequisites, not a flag.
+/// The interface the HTTP server binds to **by default**: loopback. The server has no
+/// authentication of any kind, and the settings API can write project files, so serving a network
+/// is an explicit opt-in (`--bind`, see `network`) for a network the operator trusts, never what
+/// happens by accident.
 pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
 
 /// Default port for the HTTP server, overridable with `--port` (or the `PORT`
@@ -54,12 +53,20 @@ pub fn default_http_addr() -> String {
     format!("{DEFAULT_HTTP_HOST}:{DEFAULT_HTTP_PORT}")
 }
 
+pub mod assignments;
+pub mod assignments_api;
 pub mod backups;
+pub mod blueprints;
+pub mod blueprints_api;
 pub mod bootstrap;
 pub mod classify;
 pub mod connections;
 pub mod connections_api;
 pub mod contract;
+pub mod tag_rules;
+pub mod tag_rules_api;
+pub mod tasks;
+pub mod tasks_api;
 
 /// A saved report definition — see `roommate_shared::reports`. Re-exported so
 /// the server names it by the path its own modules use, exactly as `contract`
@@ -68,11 +75,14 @@ pub mod reports {
     pub use roommate_shared::reports::*;
 }
 pub mod handlers;
+pub mod network;
 pub mod reference;
 pub mod reports_api;
 pub mod service;
 pub mod settings;
 pub mod settings_api;
 pub mod settings_check;
+pub mod sheets;
+pub mod sheets_api;
 pub mod state;
 pub mod storage;

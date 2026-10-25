@@ -40,6 +40,24 @@ use super::{Loop, Point2D, PropertyMap, PropertyTiers};
 /// difference produces the three that matter here — one `room` rather than a
 /// pair, `facing` rather than `through_wall_normal`, and no attribution policy
 /// to choose between sides.
+/// The element an item is hosted on. The extractor reads it from the Revit API, because
+/// the export carries only the `Host` display string ("Level : LEVEL 1"), which names
+/// neither the wall nor where on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemHost {
+    /// The host's category as Revit shows it (`"Walls"`, `"Floors"`, `"Ceilings"`),
+    /// when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The host's `ElementId`, a string like every other id here and unique only within
+    /// its model.
+    pub id: String,
+    /// Whether the instance is face-hosted (`FamilyInstance.HostFace`) rather than
+    /// hosted by the element as a whole.
+    #[serde(default)]
+    pub face_hosted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
     /// The Revit `ElementId`, as a string on the wire like every other id here.
@@ -259,6 +277,25 @@ pub struct Item {
     /// in Revit must not fork anything.
     pub type_name: String,
 
+    /// The family this instance's type belongs to (`FamilyInstance.Symbol.FamilyName`).
+    ///
+    /// **Read from Revit by the extractor, not from the export**: `DataItem` has
+    /// no family field, which a probe of 16,161 RHH items confirmed. Two families
+    /// can share a type name, so this is what a blueprint matches an item on
+    /// before it falls back to `type_name`. Absent in a snapshot pushed before the
+    /// field existed, and absent when the extractor could not read it -- never
+    /// guessed from the type name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_name: Option<String>,
+
+    /// What this instance is hosted on, when it is hosted by an element
+    /// (`FamilyInstance.Host`): a wall, a floor, a ceiling. **Absent for a
+    /// level-hosted instance, which is the common case**, and the `Host`
+    /// parameter in `properties` says which level. Absent in a snapshot pushed
+    /// before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<ItemHost>,
+
     /// This instance's own properties, keyed by the *source's own* property
     /// name, exactly as `Room.properties` and `Opening::properties` are.
     #[serde(default, with = "super::property_codec::map")]
@@ -404,6 +441,31 @@ mod tests {
         assert_eq!(item.room, None, "a space-identified push never populates room");
     }
 
+    /// The family name and the host arrive from the extractor; a snapshot pushed before
+    /// they existed has neither, and neither is guessed.
+    #[test]
+    fn test_family_name_and_host_are_optional_and_round_trip() {
+        let legacy: Item = serde_json::from_value(serde_json::json!({
+            "id": "1", "level_id": "1", "category": "Furniture", "type_id": "t", "type_name": "Chair"
+        }))
+        .unwrap();
+        assert!(legacy.family_name.is_none() && legacy.host.is_none());
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(
+            json.get("family_name").is_none() && json.get("host").is_none(),
+            "absent stays absent on the wire"
+        );
+
+        let item: Item = serde_json::from_value(serde_json::json!({
+            "id": "2", "level_id": "1", "category": "Electrical Fixtures", "type_id": "t", "type_name": "GPO",
+            "family_name": "Socket Outlet", "host": { "kind": "Walls", "id": "99", "face_hosted": true }
+        }))
+        .unwrap();
+        assert_eq!(item.family_name.as_deref(), Some("Socket Outlet"));
+        let host = item.host.unwrap();
+        assert_eq!((host.kind.as_deref(), host.id.as_str(), host.face_hosted), (Some("Walls"), "99", true));
+    }
+
     /// `"-1"` is a level id like any other on the wire. Revit gives an unhosted
     /// element an invalid `LevelId` and duHast derives the item's level from
     /// solid geometry a family may not have -- 71 of 644 on House A. Filtering
@@ -458,6 +520,8 @@ mod tests {
             super_component_id: None,
             type_id: "t".into(),
             type_name: "Desk".into(),
+            family_name: None,
+            host: None,
             properties: BTreeMap::from([("Mark".into(), value("F-101")), ("Depth".into(), value(""))]),
             type_properties: Arc::new(BTreeMap::from([
                 ("Depth".into(), value("800")),

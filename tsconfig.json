@@ -39,6 +39,7 @@
     "vite.config.ts",
     "vite.settings.config.ts",
     "vite.reports.config.ts",
+    "vite.blueprints.config.ts",
     "vite.viewer.config.ts"
   ]
 }

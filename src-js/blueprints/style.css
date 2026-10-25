@@ -1,0 +1,146 @@
+/* The blueprints page's own CSS. The palette comes from static/tokens.css; the shapes match the
+   reports and settings pages (same header, same uppercase labels, same monospace) because they are
+   siblings a reader moves between. */
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper); color: var(--ink);
+  font-family: var(--mono); font-size: 13px; line-height: 1.5;
+  overflow: hidden;
+}
+/* The page's own rows live on #root, which is what holds the header and the three columns: the
+   grid on body would lay out #root and the script tag, not them. */
+#root { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+button, select, input { font-family: var(--mono); font-size: 0.78rem; color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+header {
+  display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+  padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--ink);
+}
+header h1 { font-size: 0.95rem; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; margin: 0; }
+header select { background: var(--paper); border: 1px solid var(--rule); padding: 0.2rem 0.4rem; }
+header .links { margin-left: auto; display: flex; gap: 1rem; }
+header .links a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+header .links a:hover { text-decoration: underline; }
+
+.page { display: grid; grid-template-columns: 17rem minmax(0, 1fr) 21rem; min-height: 0; overflow: hidden; }
+.left, .inspector { overflow-y: auto; padding: 0.75rem; border-right: 1px solid var(--rule); }
+.inspector { border-right: 0; border-left: 1px solid var(--rule); }
+main { min-width: 0; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); }
+main > .hint.empty { grid-row: 1 / -1; }
+
+button {
+  background: var(--fill); border: 1px solid var(--rule); padding: 0.25rem 0.6rem; cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--fill-hover); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.danger { color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
+
+.list ul, .picklist { list-style: none; margin: 0.5rem 0; padding: 0; display: grid; gap: 0.25rem; }
+.list li button, .picklist li button {
+  width: 100%; text-align: left; display: grid; gap: 0.1rem; background: transparent; border: 1px solid transparent; padding: 0.3rem 0.5rem;
+}
+.list li button span, .picklist li button span { opacity: 0.6; font-size: 0.7rem; }
+.list li button.on, .picklist li button.on { background: var(--fill); border-color: var(--ink); }
+.picklist { max-height: 16rem; overflow-y: auto; }
+
+.panel { border-top: 1px solid var(--ink); margin-top: 0.75rem; padding-top: 0.5rem; display: grid; gap: 0.4rem; }
+.panel h3, .inspector h3 { font-size: 0.82rem; margin: 0; }
+.panel input[type="search"], .panel input[type="text"] { width: 100%; border: 1px solid var(--rule); background: var(--paper); padding: 0.25rem 0.4rem; }
+.panel label { display: grid; gap: 0.15rem; font-size: 0.7rem; opacity: 0.85; }
+fieldset { border: 1px solid var(--rule); margin: 0.5rem 0; padding: 0.4rem 0.5rem; display: grid; gap: 0.4rem; }
+legend { font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.6; padding: 0 0.3rem; }
+fieldset label { display: grid; gap: 0.15rem; font-size: 0.7rem; }
+fieldset select, fieldset input[type="number"] { width: 100%; background: var(--paper); border: 1px solid var(--rule); padding: 0.2rem 0.3rem; }
+.num { display: flex; align-items: center; gap: 0.4rem; }
+.num input { flex: 1; }
+
+.hint { font-size: 0.7rem; opacity: 0.65; margin: 0.4rem 0; }
+.hint.empty { padding: 2rem; }
+.sub { font-size: 0.72rem; opacity: 0.7; margin: 0.15rem 0 0.5rem; }
+.note { font-size: 0.72rem; background: var(--fill); padding: 0.3rem 0.5rem; margin: 0.4rem 0; }
+.banner { margin: 0; padding: 0.35rem 1rem; font-size: 0.74rem; background: var(--fill); }
+.banner.error, p.error { background: var(--error); }
+.dirty { margin-left: auto; display: flex; gap: 0.5rem; align-items: center; color: var(--accent); font-weight: 600; }
+
+.timeline { padding: 0.5rem 1rem; border-bottom: 1px solid var(--rule); display: flex; gap: 1rem; align-items: center; overflow-x: auto; }
+.timeline ol { list-style: none; margin: 0; padding: 0; display: flex; gap: 0.4rem; align-items: center; }
+.timeline li { display: flex; align-items: center; gap: 0.3rem; }
+.timeline li > button:first-child { display: grid; gap: 0; text-align: left; background: transparent; border: 1px solid var(--rule); padding: 0.2rem 0.5rem; }
+.timeline li.on > button:first-child { background: var(--fill); border-color: var(--ink); }
+.timeline li.pending > button:first-child { border-style: dashed; }
+.timeline li span, .timeline li em { font-size: 0.66rem; opacity: 0.65; font-style: normal; }
+.timeline .badge { color: var(--ok); opacity: 1; font-weight: 600; }
+.timeline .action { white-space: nowrap; }
+.timeline .rejected { font-size: 0.66rem; opacity: 0.55; white-space: nowrap; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; padding: 0.4rem 1rem; border-bottom: 1px solid var(--rule); }
+.toolbar label { display: flex; gap: 0.3rem; align-items: center; font-size: 0.72rem; }
+
+.canvas { display: block; width: 100%; height: 100%; min-height: 0; background: var(--paper); cursor: grab; touch-action: none; }
+.canvas .outline { fill: rgba(255, 255, 255, 0.55); stroke: var(--ink); stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.canvas .outline-fine { fill: none; stroke: var(--ink); opacity: 0.4; stroke-width: 1; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+.canvas .vertex { fill: var(--paper); stroke: var(--ink); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.canvas .edge-no { fill: var(--accent); font-family: var(--mono); font-weight: 600; pointer-events: none; }
+.canvas .item { cursor: pointer; }
+.canvas .item polygon { fill: var(--fill); stroke: var(--ink); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.canvas .item:hover polygon { fill: var(--fill-hover); }
+.canvas .item .facing { stroke: var(--ink); stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: 0.7; }
+.canvas .item.wall polygon { fill: var(--ink); }
+.canvas .item .device { fill: var(--accent); stroke: var(--paper); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.canvas .item.excluded polygon { fill: none; stroke-dasharray: 5 4; opacity: 0.45; }
+.canvas .item.excluded .facing, .canvas .item.excluded .device { opacity: 0.3; }
+.canvas .item.selected polygon { stroke: var(--accent); stroke-width: 2.6; fill: var(--fill-hover); }
+.canvas .tag { fill: var(--ink); font-family: var(--mono); pointer-events: none; paint-order: stroke; stroke: var(--paper); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.canvas .follow { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+
+.props { width: 100%; border-collapse: collapse; font-size: 0.7rem; }
+.props th { text-align: left; font-weight: 400; opacity: 0.65; padding: 0.1rem 0.4rem 0.1rem 0; vertical-align: top; }
+.props td { word-break: break-word; }
+details { margin-top: 0.5rem; }
+summary { cursor: pointer; font-size: 0.72rem; }
+code { font-family: var(--mono); background: var(--fill); padding: 0 0.2rem; }
+
+@media (max-width: 60rem) {
+  .page { grid-template-columns: 1fr; }
+  .left, .inspector { border: 0; border-bottom: 1px solid var(--rule); }
+}
+
+/* Doors: orientation only. Solid is a door the room has; dashed is where the blueprint's lands. */
+.canvas .door { stroke: var(--ink); stroke-width: 5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.canvas .door.mapped { stroke: var(--accent); stroke-width: 4; stroke-dasharray: 7 4; }
+.canvas .item.flagged polygon { stroke: var(--accent); stroke-width: 2.2; fill: var(--error); }
+
+/* The assign view's main column has no revision timeline: toolbar, banner, canvas. */
+main.assign { grid-template-rows: auto auto minmax(0, 1fr); }
+.legend { font-size: 0.7rem; opacity: 0.8; display: flex; gap: 0.4rem; align-items: center; }
+.legend .bar { display: inline-block; width: 1.4rem; height: 0; border-top: 4px solid var(--ink); }
+.legend .bar.mapped { border-top: 4px dashed var(--accent); }
+button.on { background: var(--fill); border-color: var(--ink); }
+.findings { list-style: none; margin: 0.3rem 0; padding: 0; display: grid; gap: 0.2rem; font-size: 0.72rem; }
+.findings li { display: flex; gap: 0.4rem; align-items: baseline; }
+.findings li button:first-child { text-align: left; background: transparent; border: 0; padding: 0; color: var(--ink); text-decoration: underline dotted; }
+.findings li.doors_disagree, .findings li.shape_mismatch, .findings li.mirror_image { color: var(--accent); }
+.inspector label.stack { display: grid; gap: 0.15rem; font-size: 0.7rem; }
+.inspector label.stack input { width: 100%; border: 1px solid var(--rule); background: var(--paper); padding: 0.25rem 0.4rem; }
+.inspector input[type="search"] { width: 100%; border: 1px solid var(--rule); background: var(--paper); padding: 0.25rem 0.4rem; }
+.inspector .picklist li button { width: 100%; }
+
+/* Assign several rooms: a tick box beside each room's button, tinted by the solver's verdict. */
+.picklist.many li { display: grid; grid-template-columns: auto 1fr; gap: 0.3rem; align-items: center; }
+.picklist.many li.cannot button { opacity: 0.6; }
+.picklist.many li.check button { border-color: var(--accent); }
+.findings li.cannot { color: var(--accent); }
+
+.list .filter { display: block; font-size: 0.72rem; margin: 0.4rem 0; }
+i.attention { font-style: normal; font-size: 0.62rem; margin-left: 0.4rem; padding: 0 0.3rem; background: var(--accent); color: var(--paper); border-radius: 2px; }
+.banner.attention { background: var(--fill-hover); }
+
+.canvas .item.changed polygon { stroke-dasharray: 6 3; }
+fieldset.item-changes { margin: 0.5rem 0; }
+.item-changes .pad { display: grid; grid-template-columns: repeat(4, 2.2rem); gap: 0.25rem; margin: 0.4rem 0; }
+.item-changes label.num { display: flex; gap: 0.5rem; align-items: center; font-size: 0.7rem; }
+.item-changes label.num input { width: 5rem; }

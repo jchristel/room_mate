@@ -91,6 +91,23 @@ def check_icons(problems):
                 problems.append("%s: missing %s" % (os.path.relpath(dirpath, EXTENSION), icon))
 
 
+def check_no_server_address(problems):
+    """**Only `room_m/server_config.py` may name a server address.** Everything else posts to a PATH
+    that `server_config.url_for` joins to the server in force at the moment of the request; a literal
+    loopback address anywhere else is the old hard-wired server coming back, and it would silently
+    ignore the Server button and push to the wrong computer."""
+    room_m = os.path.join(os.path.dirname(ROOM_MATE))
+    for dirpath, files in walk(room_m):
+        for name in files:
+            if not name.endswith(".py") or name == "server_config.py":
+                continue
+            path = os.path.join(dirpath, name)
+            text = open(path, encoding="utf-8").read()
+            for n, line in enumerate(text.splitlines(), 1):
+                if re.search(r"https?://(?:127\.0\.0\.1|localhost)|\b127\.0\.0\.1:\d", line):
+                    problems.append("%s:%d: a literal server address (use room_m.server_config)" % (os.path.relpath(path, room_m), n))
+
+
 def check_buttons(problems):
     """Returns the set of entry points the buttons wire up."""
     wired = set()
@@ -124,6 +141,7 @@ def main():
     check_text_files(problems)
     check_layouts(problems)
     check_icons(problems)
+    check_no_server_address(problems)
     wired, defined = check_buttons(problems)
 
     json.load(open(os.path.join(EXTENSION, "extension.json"), encoding="ascii"))

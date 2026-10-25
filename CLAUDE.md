@@ -314,6 +314,280 @@ the sliver rules since removed, and again after).
   (solid, dash, dot) and dot duty cycle rather than colour. Off by default, poll
   gated, no model picker, `/floors`' ETag covers rooms -- the ceilings reasons.
 
+## Blueprints: a room's layout as recipes against its edges
+
+Built: the store, capture, the resolver (blueprint + another room -> placements and findings)
+the blueprint viewer (`/blueprints/`), the assign view (the same page, "Assign to rooms"), the
+assignment store and the HTTP/MCP reads and writes, a Blueprint tool in the main viewer (below) and per-item overrides
+(below). **No mirrored copy, on purpose: handed families make a reflection wrong in ways that look right, so a person
+authors the other hand as its own blueprint.**
+The reasoning and the measurements behind every rule below are in
+[`PLAN-blueprints.md`](docs/PLAN-blueprints.md) and its stage 0 note; what is expensive to
+get wrong:
+
+- **A recipe, never coordinates**, and both halves ride the record: the distance *as
+  captured* (`along_mm`, `off_mm`) and the *mode* that says how a room of another size reads
+  it (`fixed_from_start`, `fixed_from_end`, `percent`). Switching a dimension between fixed
+  and percentage is a change of mode, so nothing is recomputed that could drift.
+- **Two outlines, two jobs.** Placements index the **coarse** outline's edges (jogs under
+  350 mm removed), because same-named RHH patient rooms differ in column nibs and an edge
+  count that includes them matched half of them; "is it inside the room" is checked against
+  the **fine** one (30 mm), because the items that sit in those nibs are outside the coarse.
+  Mixing them up reports findings that are not there.
+- **An item belongs to the edge it lies beside** (nearest edge whose span contains its
+  centre), not the nearest segment: nearest-segment clamped six items in House A's notched
+  rooms to an edge's end, where the position cannot be reproduced.
+- **No mirroring, anywhere.** Outlines are counter-clockwise and a room fits a blueprint by
+  a cyclic shift of edges only. A mirror image is a different blueprint (handed families).
+- **Revisions are append-only** and an assignment will pin one: an edit is a new revision,
+  and `current_revision` moving is the only way to change which one new assignments use.
+  Writes name the `taken_at` they read (`base`); a mismatch is a 409.
+- **The blueprint viewer is its own page, `/blueprints/` (`src-js/blueprints`), drawn in SVG.** One
+  room and a few hundred rectangles do not need the GL renderer, and an editor needs the
+  hit-testing and labels SVG gives for free. It edits a blueprint in its OWN room; placing one in
+  ANOTHER room is the server's resolver and belongs to the assign view, because two copies of
+  "where does the bed go" is how a preview and a result disagree (`geometry.ts` ports only `edges`,
+  `point` and `depth_at`).
+  - **Edit a DRAFT, save a NEW revision.** The items of the revision being viewed are copied into a
+    draft; Save appends them as the next revision. Nothing edits a revision that exists.
+  - **A dimension is a captured distance plus a mode.** Switching fixed/percentage moves nothing in
+    its own room; it decides what the item does when the room is another size. The number typed is
+    in the mode's unit (mm from the start, mm from the END, or a percentage).
+  - **A pending revision is read-only** and sits on the timeline until accepted or rejected.
+  - **An import never overwrites.** From another project on the same server or from a file: a name
+    the project already has goes in as a pending revision of that blueprint; a new name is created.
+    It uses the existing endpoints, so it added no server surface.
+  - **Room rows name no model**, so `model_id` is optional on capture, resolve and suggest: it is
+    looked up among the project's rooms and refused, naming the models, if more than one has the id.
+- **Doors orient a blueprint; they never create one.** The doors are already in the model.
+  Capture reads the doors either side of which names the room (`room_doors`, NOT the attributed
+  ones: a door to the corridor is still a door in this room's wall) and stores each as an edge, a
+  distance along it and a width (`BlueprintDoor`, `door_on_edges`: nearest edge by segment
+  distance, because a door is IN the wall). The resolver compares them with the target room's
+  doors (`door_gap`: mean mm to the nearest door on the edge the blueprint's lands on, 3,000 where
+  that edge has none) to break a **tie of shape**: rotations whose cost is within `SHAPE_TIE` of
+  the best, which is every rectangle's two half-turn fits. A rotation that fits clearly worse is
+  never promoted because a door lines up. No door on either side is no evidence (`door_gap_mm`
+  absent), not agreement. A pinned shift or a hand mapping is never overridden, only reported
+  (`doors_disagree`). `candidates` and `mapped_doors` ride the resolve answer so the view needs no
+  rule of its own.
+- **An assignment is a request, never a result** (`assignments`, one JSON per assignment under
+  `assignments/<project>/`, NOT under `blueprints/`, whose listing reads every `*.json`). It names the
+  blueprint, the revision it pins, the room (with its model, qualified server-side) and the mapping
+  (`shift` or `edge_map` or neither = best fit, worked out again on every read). Placements are
+  never stored, so a room that moves is followed. One per room: assigning again replaces it and
+  keeps its id. `newer_revision` and `blueprint_missing` are reported states on the list.
+- **The assign view is a mode of the blueprints page, not a drawing over the main plan.** It draws
+  the resolver's answer (`AssignCanvas`) and chooses what to ask; it has no placement rule of its
+  own. Solid bar = a door the room has, dashed = where the blueprint's lands.
+- **Assigning several rooms is the same resolver, asked once per room** (`service::blueprint_solve`,
+  `POST .../blueprints/{id}/solve`, `POST .../assignments/many`). The rooms and doors are read once for the
+  batch; each row is a verdict (`clear`, `check`, `cannot`) that is advice and never a gate. The batch assigns
+  the best fit only: a mapping by hand is a decision about one room and stays in the single-room view.
+- **A blueprint comes only from Revit, with its sheets** (`POST .../blueprints/from-revit`). The server
+  captures the room from the rooms and FF&E already pushed and attaches the sheets the user chose;
+  a new name creates, an existing name becomes a pending revision. `create` and `push` refuse content
+  with no sheets; an edit copies the current revision's sheets forward and never changes them. A
+  sheet in a blueprint is layout only (no tags) and its number, name and id are never used on
+  assignment. A blueprint made before this has no sheets, stays valid and says so. The viewer has no
+  "new from a room". Import/export carry sheets and doors; a file without sheets is refused.
+- **Per-item overrides belong to ONE assignment and are applied by the resolver, never by the page.** An
+  `ItemOverride` (leave out, or nudge in whole mm and turn in whole degrees, in the plan frame) is applied to the poses
+  the recipes gave, *before* the `outside` and `overlap` findings, so those are judged where the item now is. One per
+  item, no-ops dropped, an unknown item is the `override_unused` finding and not an error. **It affects its own item
+  only**: a follower keeps the place the resolver gave it. The assign view previews through the resolve read's
+  `overrides` parameter (so the drawing is the server's answer), and assigning again WITHOUT `overrides` keeps the
+  room's (a client written before them must not clear them); `[]` clears. Changing the mapping after nudging can leave a
+  nudge that no longer fits, and that is the person's to look at.
+- **The Blueprint tool in the main viewer lays a blueprint into a room two ways, and the BOX is the point.** Rooms are
+  never perfectly the blueprint's shape, so a person moves, turns and stretches the blueprint's own outline over the room
+  (`assignments::Frame`: `world = centre + R(turn) * S(sx, sy) * (p - pivot)`, stretch along the BLUEPRINT's axes so it
+  follows the box round, `centre` = the room's vertex mean + `(dx, dy)` so a room that moves is followed, both scales
+  positive and between 0.2 and 5 because a mirror is a different blueprint). **The box is the room reference the
+  recipes resolve against (plan decision 6): items keep their size, a fixed distance keeps its mm, a percentage
+  stretches with the box**, and the room's real outline only judges the findings (`outside`); the box has no doors, so
+  none are compared. It is `EdgeMap::Frame` in the resolver (`FitKind::Framed`, identity edge mapping, no
+  simplification so the box keeps the blueprint's edge count), `mapping.frame` on an assignment (one of shift, edge map
+  or box), and the `frame` parameter of the resolve read. The client's `boxPoint` is the same arithmetic and is used
+  ONLY to draw the box while it is dragged (the placements are always the server's answer, a moment behind); a test on
+  each side pins the same numbers. The other way is the best fit (click a room, Rotate through the fitting rotations).
+  A click on a room moves the tool there (the choke point is `store.select`, exclusive with route, reach and
+  connections); the handles are dots, six, with the turn handle on a corner because one that stands off a side by a
+  fixed WORLD distance lands on that side's handle when the plan is small. **The viewer's world is feet and the
+  resolver's numbers are millimetres; `BlueprintOverlay` converts at its edge** (it once drew them unconverted and the
+  ghost was 300 times too large). Not in the SVG export.
+- **Resolving is partly manual, by design.** `edge_map` on resolve is the person's own mapping of
+  blueprint edges to room edges (the way to place in a room with a different edge count); the fit
+  kind is then `manual` and nothing about the mapping is judged.
+- **A push is PENDING, never current** (`blueprints::push`, plan decision 10). A revision that
+  arrives from elsewhere is stored beside the blueprint, changes nothing about the history,
+  what is current or what an assignment pins, and waits for a person to accept it (it becomes
+  the next revision and the current one) or reject it (kept, marked rejected, never deleted).
+  `.backups/` is the safety copy made when a file is rewritten, a different thing from review.
+  Only `add_revision` (a person's own edit in the editor) can make a revision current directly.
+- **The resolver (`service::blueprint_resolve`) always returns what it could place** and says the
+  rest as findings. Measured on RHH's real siblings (12 rooms each, every ordered pair): `ENS-IN`
+  and `ENS-OUT` 90% of pairs within 150 mm (median 71 and 58 mm), `1 BED B` 68% (116 mm),
+  `1 BED A` 58% (147 mm). Rules that are easy to break:
+  - **Scaling is the room's.** A fixed distance keeps its mm, a percentage keeps its fraction of
+    the edge it is anchored to (or of the room's depth in front of it), items keep their size.
+  - **A follower is placed rigidly relative to the item it follows**, in that item's own frame,
+    so a run is never squashed and a shelf stays in its wardrobe. A follower of an excluded item,
+    or in a loop, is placed by its own recipe and reported (`validate_content` refuses a loop).
+  - **A finding is about what the room CHANGES.** `outside` and `overlap` are reported only
+    where the blueprint did not already have them (three of 66 `1 BED B` items are outside their
+    own source room, and would otherwise be reported on every resolve). Wall devices are left out.
+  - **Mirror image is said only when no rotation fits.** A rectangle's reflection is a rotation,
+    so a badly pinned shift on a symmetric room is `no_fit`, not `mirror_image`. The resolver
+    never mirrors; the answer is a mirrored copy of the blueprint.
+  - **A rectangle fits in two mappings a half turn apart**, and shape cannot choose: pass `shift`
+    (the blueprint's doors are what will, in the assign UI).
+  - **A different coarse edge count places nothing** (`edge_count_differs`): 32% of `1 BED B` and
+    62% of `1 BED A` pairs on RHH. Mapping across differing edge counts is not built.
+  - **Results are in the project's plan frame**, so they draw straight onto the plan.
+- **`family_name` and `host` on an FF&E item are read from Revit by `item_facts`**, not from
+  duHast: the export carries neither (probed on 16,161 RHH items). Same footing as the
+  category; absent means unread, never guessed. **Not yet run in Revit.**
+- **Capture reads the whole project's FF&E** (`assemble_items`, unscoped by storey) and keeps
+  the room's items, so on RHH it costs a few seconds. Narrowing it with a storey scope is the
+  obvious fix and has not been needed yet.
+
+## Room tasks: what a Revit session is told, kept as a record
+
+Built (server side): the task store (`tasks`), making tasks (`service::task_build`), the HTTP and MCP
+surface (`tasks_api`; MCP reads `list_tasks`, `get_task`) and the task list page at `/tasks/` (`src-js/tasks`:
+filters, a task's items, sheets, findings and attempts, dismiss, resend, and a panel that makes tasks of either
+kind; it reads the list again every few seconds to show what a session did). the main viewer's
+"Room tasks" colouring (`viewer/taskStatus.ts`, a choice in the zone's colour picker: a room draws in the state
+of its newest task that is not dismissed; a task's number must agree with the room's, because a viewer room names no
+model; read only while a zone uses it, every 8 s; not in the SVG export). The Revit side has its checking
+(`room_m/task_plan.py`: every task checked before any is written, aborts reported first, one question for the
+warnings; pure, tested on CPython in `extractor/tests`) and its transport (`post_tasks.py`). The **Apply tasks** button
+is written (`apply_tasks_entry`): `apply_run` is the sequence (claim, check, ask once, report aborts before any work,
+write and report each task, report any stranded one failed; tested with fakes), `apply_facts` answers the planner from
+Revit, `apply_write` writes one task per `TransactionGroup` so a failed task leaves no trace, `apply_geometry` is the
+pure arithmetic. **Not run in Revit.** The `update_room` kind is built on the server and the tasks page (items or
+locations only, a dry run unless turned off, made from an assignment, carrying the layout as it resolves now with no
+sheets or tags); **the plug-in does not know it yet, so the planner aborts one as an unknown kind.** The server
+leaves an empty list out of a task, so the page reads a task back with its lists filled in. Plan decisions 21 to 26.
+
+- **A task is a record, unlike an assignment.** It holds the resolver's placements, the sheet layouts
+  and the findings as they were when it was made, so what Revit writes cannot change underneath it. The
+  plugin validates and writes; it never resolves.
+- **Placements leave in the target MODEL's own frame, mm.** The resolver answers in the project's plan
+  frame, so `task_build` puts each position back through the inverse of that model's placement
+  (`ModelToShared::inverse`) and each direction through its linear part. A model with no placement (the
+  anchor) is left as it is. Do not hand Revit project-frame coordinates.
+- **States and who moves them.** `queued` on creation or resend; `POST .../roomtasks {model_id}` hands a
+  session that model's queued tasks in full and marks them `in_progress` (a POST, because asking changes
+  them); `POST .../roomtasks/report` records `completed`, `completed_with_warnings`, `failed` or
+  `aborted`, and only for a task that is `in_progress`. A person can `dismiss` (any state) or `resend`
+  (any but queued, which is also the way out of a session that died holding tasks). Attempts are kept.
+- **One live task per kind per room.** A second queued or in-progress task of the same kind for a room is
+  refused at creation and at resend: both would be handed out together.
+- **Each room of a request stands alone**: a blueprint that was deleted, a room that has gone, a layout
+  that would place nothing, or `create_rls` on a blueprint with no sheets is a row saying why.
+- **The room is found by its `Number` property** (a room has no number field of its own) and the task
+  carries the id as well; absent means the room has none.
+- **`create_rls` compares the sheet's stored room summary with the target's** and warns (never refuses)
+  when they differ by more than `RLS_ROOM_WARN_DISTANCE`.
+
+## Applying a task: what the button does and leaves out
+
+- **The RLS number is `RLS-{room number}`** (`apply_geometry.DEFAULT_NUMBER_TEMPLATE`), with `-1`, `-2` when a task has
+  several sheets, and a sheet's **title block is chosen by size**: the layout's `sheet_size` must appear as a whole
+  token in a title block family or type name. Both are guesses at a convention, not rules; change them there.
+- **A family not in the model is loaded from `ROOMMATE_FAMILY_LIBRARY`** (a folder of `<family>.rfa`), else it is a
+  warning. Items are placed on the room's level with the facing's rotation; wall-hosted ones go on the nearest wall
+  within 450 mm; face and work plane based ones are reported, not placed. Instance and type parameters are not applied.
+- **A viewport is a fresh plan view of the room** at the exported scale, cropped to the exported size (never smaller than
+  the room), placed where it was. Elevation, 3D and schedule viewports are reported, not made.
+- **Tags are read back from the model**, not from the task: each instance in the room (placed now or already there)
+  gets the independent tags whose names have a rule for it, at `apply_geometry.tag_placement`. Room, space and area tag
+  kinds, and a tag's own rotation, are not placed yet.
+
+## Tag rules: where a tag goes, learned from tags in Revit views
+
+Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`), MCP reads (`list_tag_rules`,
+`get_tag_rule`), tag rules carried in a task, and the pyRevit side (the sheet read takes tags out of the sheet,
+`room_m/sheet_tags.py`, and `post_tags.py` sends them). The tag classes and their reading from Revit are in duHast
+(`Data/Objects/Collectors/data_tag*.py`, `Revit/Annotation/Export/to_data_tag.py`). **Not run in Revit, and
+the plug-in does not yet place tags** (that is the apply button). Plan decision 24.
+
+- **A rule's key is names only** (tagged category + family + type, tag category + family + type, viewport type),
+  never Revit ids: a blueprint places new elements with new ids. The ids in an observation say where a sample was
+  read and are how a re-push replaces its own samples.
+- **One rule per key**: the median of its samples, recomputed on every push, so a blueprint always tags the same
+  way. The samples are kept; the answer is `placement`.
+- **A sample is paper millimetres in the element's own frame** (x along its facing, y to its left), the model
+  offset divided by the view scale. A rule therefore holds at any scale and turns with the item; the rotation is
+  relative to the facing. An element with no point location or no plan facing gives no sample, said in `skipped`.
+- **Tags never ride in a sheet.** The extractor takes them out of the viewports before a sheet goes to the library
+  or a blueprint, and a task carries the rules for its sheets' viewport types (for a populate task only those for
+  the families and types it places) as they were when it was made.
+
+## Room layout sheets: a library kept by identity, and two buttons that choose
+
+Built: the sheet library on the server (`sheets`, `sheets_api`, `service::sheet_suggest`),
+two pyRevit buttons, MCP reads, and a page for the library and the tag rules at `/library/` (`src-js/library`: set or
+clear a sheet's room, accept or reject a renumbered push, suggest, browse and delete rules; setting a room sends a bare
+`room_id` and the server finds the model, as `suggest` does). **Not built: view template in the export (tags and view
+scale are read: see Tag rules).** Rules that are expensive to get wrong:
+
+- **Their own endpoint (`/projects/{id}/sheets`), apart from blueprints, and not a snapshot
+  push.** Rooms, doors and the rest replace a model's state; the library is authored data
+  kept by sheet identity, one file per sheet. The sheets a blueprint is associated with are
+  a separate record (decision 18), stored elsewhere.
+- **Identity is the Revit sheet id plus the document title.** A match with the same sheet
+  number updates the sheet; a match whose number changed is **stashed pending** for a person
+  to accept or reject; a match on neither is a new sheet *even if its number is taken*.
+- **The sheet body is duHast's export, as exported, and opaque to the server.** Tags, view
+  scale, view template and view names are not in it. Typing it server-side would pin the
+  server to an export that is still changing.
+- **A sheet's room is chosen by a person**, at export (the Blueprint button) or afterwards.
+  Nothing infers it from sheet names or parameters; the export marks neither a room layout
+  sheet nor its room. It is a reference and is never validated on save.
+- **`suggest` offers and never applies, and only for sheet creation mode.** Area, proportions
+  and item count are weighed equally, each as a log-ratio, worked out from today's rooms and
+  FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short
+  side, so a rotated room reads the same.
+- **The Blueprint button pushes a room and its sheets to `.../blueprints/from-revit`; the Sheets button
+  pushes sheets alone to the library.** The Blueprint button sends NO room contents: a rooms or FF&E push
+  replaces a model's whole snapshot, so the blueprint's room is captured on the server from what is
+  already pushed, and the button only says which room, which sheets and what name. A room with no sheet
+  is skipped, and a blueprint is not pushed unless every chosen sheet could be read.
+- **A library sheet stores a summary of its room** (`RoomSummary`: the enclosing rectangle's long and
+  short sides, area, item count), worked out by the server when the room is set (push or the viewer's
+  set-room), never sent by the extractor. Suggest ranks on it, so a sheet still ranks when its room has
+  been redrawn or is not on the server; a sheet without one is read from its room as before.
+- **Neither sheet entry point is in `ENTITY_EXPORTERS`.** They are selection-driven, and the
+  generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
+  side was checked for syntax, ASCII and duHast-import closure only.
+
+## Serving a closed network: how Revit on another computer reaches the server
+
+- **Loopback is the default and leaving it is an explicit opt-in**: `--bind 0.0.0.0` (or `ROOMMATE_BIND`; an
+  address, never a name; IPv6 works). The server has **no authentication** and `/api/settings` writes project files, so
+  this is for a network the operator trusts, never the internet. A non-loopback start prints the addresses to type
+  (this machine's primary IPv4 and `<name>.local`) and a one-line warning. `src/network.rs` is the module.
+- **The `Host` guard stays on off loopback, and that is the part that is easy to break.** A request from the Revit
+  machine says `Host: 192.168.x.x:5151`, which the loopback-only guard refused. A network bind allows IP literals
+  (a DNS-rebinding page cannot present one), this machine's own names (`mac`, `mac.local`) and `--allow-host` names
+  (repeatable or comma separated, `ROOMMATE_ALLOW_HOSTS`); a Host naming any other domain is still a 403, on reads and
+  on the settings writes. Do not widen it to "any Host" because a LAN client was refused: list the name.
+- **CORS is irrelevant to the pyRevit side** (it is not a browser); a browser on the other machine loads the viewer
+  same-origin from the server's address.
+- **The macOS or Windows firewall is the usual reason a correct setup does not connect**: allow incoming connections
+  for the binary, and use a fixed address or the `.local` name. A tunnel (`ssh -N -L 5151:127.0.0.1:5151 user@host`)
+  needs none of this and keeps the server on loopback.
+- **The pyRevit side takes the server from `room_m/server_config.py`, resolved when a request is made** (the
+  `ROOMMATE_SERVER` environment variable, else `server.json` in `%APPDATA%\RoomMate`, else `http://127.0.0.1:5151`), and
+  the **Server** button writes it after checking the address answers. A typed address gets the default port 5151 when it
+  has none. **Every `post_*` module holds a PATH** (`/rooms`), joined to the base URL only in `post_common` (the project
+  fetch and `_post_content`): a module constant would freeze the address for a pyRevit session that stays open for hours,
+  and `scripts/check_extension.py` fails on a literal loopback address anywhere but `server_config.py`. Every run prints
+  which server it used and why (`provenance`); an unreachable one names the URL and the usual causes. Not run in Revit.
+
 ## Traps in the door export
 
 - **`±1e30` is not geometry.** duHast used to return Revit's *uninitialized*

@@ -4,14 +4,16 @@
 //! module index). The `mcp` binary (`src/bin/mcp.rs`) is the other consumer
 //! of that lib crate, over stdio instead of HTTP.
 
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Context;
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use clap::Parser;
@@ -24,6 +26,14 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+use roommate::assignments_api::{
+    http_assign, http_assign_many, http_delete_assignment, http_list_assignments, http_solve_blueprint,
+};
+use roommate::blueprints_api::{
+    http_accept_pending, http_add_revision, http_capture_blueprint, http_create_blueprint, http_delete_blueprint,
+    http_get_blueprint, http_list_blueprints, http_push_from_revit, http_push_revision, http_reject_pending,
+    http_resolve_blueprint, http_update_blueprint,
+};
 use roommate::bootstrap::build_state;
 use roommate::connections_api::{http_get_connections, http_put_connections};
 use roommate::handlers::{
@@ -36,10 +46,20 @@ use roommate::handlers::{
     ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows, ingest_windows_stream,
     post_project_reach,
 };
+use roommate::network::{self, HostPolicy};
 use roommate::reports_api::{http_delete_report, http_get_report, http_list_reports, http_save_report};
 use roommate::settings_api::{
     http_create_project, http_get_project, http_get_project_resolved, http_list_projects, http_update_project,
     http_upload_reference,
+};
+use roommate::sheets_api::{
+    http_accept_sheet_push, http_delete_sheet, http_get_sheet, http_list_sheets, http_push_sheets,
+    http_reject_sheet_push, http_suggest_sheets, http_update_sheet,
+};
+use roommate::tag_rules_api::{http_delete_tag_rule, http_get_tag_rule, http_list_tag_rules, http_observe_tags};
+use roommate::tasks_api::{
+    http_claim_tasks, http_create_tasks, http_dismiss_task, http_get_task, http_list_tasks, http_report_tasks,
+    http_resend_task,
 };
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
@@ -82,9 +102,22 @@ struct Args {
     /// the checked-in launch config pins the port instead of letting the harness
     /// assign one — now a choice rather than a constraint.
     ///
-    /// The host is deliberately not configurable — see `DEFAULT_HTTP_HOST`.
     #[arg(long, env = "PORT", default_value_t = DEFAULT_HTTP_PORT)]
     port: u16,
+
+    /// The interface to listen on. Defaults to loopback (`127.0.0.1`): only this machine can reach
+    /// the server. `0.0.0.0` listens on every interface, so another computer on the same network
+    /// (a Revit machine running the pyRevit extension) can reach it; a single address limits it to
+    /// that interface. **There is no authentication**, so use it only on a network you trust (see
+    /// `network`). Also read from `ROOMMATE_BIND`.
+    #[arg(long, env = "ROOMMATE_BIND", default_value = DEFAULT_HTTP_HOST)]
+    bind: IpAddr,
+
+    /// An extra `Host` name to answer to when serving a network (repeat it, or comma-separate; also
+    /// `ROOMMATE_ALLOW_HOSTS`). This machine's own hostname and any IP address are already allowed
+    /// with a non-loopback `--bind`; list a DNS name the machine is reached by if it has one.
+    #[arg(long = "allow-host", env = "ROOMMATE_ALLOW_HOSTS", value_delimiter = ',')]
+    allow_host: Vec<String>,
 }
 
 /// Cross-origin policy: **read-only, and that is the security boundary.**
@@ -117,10 +150,10 @@ struct Args {
 ///
 /// Cross-origin `GET` still exposes room data to any page you visit. That is a
 /// deliberate, narrower tradeoff kept for the dev convenience above — revisit
-/// it with an origin allowlist if this ever runs anywhere but a workstation,
-/// and put real authentication in front of `/api/settings` before binding
-/// anything but loopback — which is why `DEFAULT_HTTP_HOST` is a constant with
-/// no flag behind it, while the port next to it is configurable.
+/// it with an origin allowlist if this ever runs anywhere but a workstation.
+/// Leaving loopback is `--bind`, an explicit opt-in for a CLOSED network with no
+/// authentication (see `network`): the pyRevit pusher is not a browser, so CORS
+/// never applies to it, and the `Host` check below is what stays on.
 ///
 /// **This layer is half the control, not all of it.** It decides from the
 /// `Origin`, and a DNS-rebinding attack is built precisely to make that field
@@ -141,24 +174,9 @@ fn read_only_cors() -> CorsLayer {
         .expose_headers([header::ETAG])
 }
 
-/// The host names this server will answer to. Anything else is a request that
-/// reached our socket under a name we do not own — see `guard_host`.
-const ALLOWED_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
-
-/// Strip the `:port` suffix and any IPv6 brackets from a `Host` header value.
-/// IPv6 literals are bracketed (`[::1]:5151`), so the last colon is only a
-/// port separator when it falls outside the brackets.
-fn host_name(value: &str) -> &str {
-    let bare = if let Some(end) = value.find(']') {
-        &value[..end + 1]
-    } else if value.matches(':').count() == 1 {
-        value.split(':').next().unwrap_or(value)
-    } else {
-        // A bare IPv6 literal with no brackets and no port.
-        value
-    };
-    bare.trim_start_matches('[').trim_end_matches(']')
-}
+// The host names this server answers to are `network::HostPolicy`'s: loopback, and, when serving
+// a network, IP literals, this machine's own names and the operator's. Anything else is a request
+// that reached our socket under a name we do not own — see `guard_host`.
 
 /// **The defence `read_only_cors` cannot provide: DNS rebinding.**
 ///
@@ -187,8 +205,12 @@ fn host_name(value: &str) -> &str {
 /// This is a name check, not authentication: it stops a remote page from driving
 /// this server, and does nothing about a hostile process already on the machine.
 /// Real auth in front of `/api/settings` remains the prerequisite for binding
-/// anything but loopback (see `DEFAULT_HTTP_HOST`).
-async fn guard_host(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+/// anything but a closed network (see `network`).
+async fn guard_host(
+    axum::extract::State(policy): axum::extract::State<Arc<HostPolicy>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
     let claimed = req
         .headers()
         .get(axum::http::header::HOST)
@@ -196,12 +218,12 @@ async fn guard_host(req: axum::extract::Request, next: axum::middleware::Next) -
         .or_else(|| req.uri().host());
 
     if let Some(claimed) = claimed
-        && !ALLOWED_HOSTS.contains(&host_name(claimed))
+        && !policy.allows(claimed)
     {
-        tracing::warn!("refused request claiming Host {claimed:?} — not a loopback name this server answers to");
+        tracing::warn!("refused request claiming Host {claimed:?} — not a name this server answers to");
         return (
             StatusCode::FORBIDDEN,
-            "this server answers only to localhost; the Host header named something else\n",
+            "this server does not answer to that Host name; use an IP address, this machine's name, or list it with --allow-host\n",
         )
             .into_response();
     }
@@ -274,7 +296,67 @@ fn viewer_cache_control() -> SetResponseHeaderLayer<HeaderValue> {
 /// Build the application router. Split out of `main` so the CORS policy above
 /// is reachable from a test — a security control with no regression test is one
 /// refactor away from silently reverting to `permissive()`.
-fn build_router(state: roommate::state::Shared) -> Router {
+/// The routes for data a person authors rather than reads off the model: blueprints and the
+/// room layout sheet library. Split out of `build_router` only to keep that one readable.
+fn authored_routes() -> Router<roommate::state::Shared> {
+    Router::new()
+        // Blueprints: a room and its FF&E as recipes against the room's edges. Their own
+        // endpoint, one file each, append-only revisions. `capture` is a read: it
+        // stores nothing. See `blueprints`.
+        .route("/projects/{id}/blueprints", get(http_list_blueprints).post(http_create_blueprint))
+        .route("/projects/{id}/blueprints/capture", get(http_capture_blueprint))
+        .route(
+            "/projects/{id}/blueprints/{blueprint}",
+            get(http_get_blueprint).put(http_update_blueprint).delete(http_delete_blueprint),
+        )
+        .route("/projects/{id}/blueprints/{blueprint}/revisions", post(http_add_revision))
+        // Where a revision's items go in one room: a read, nothing stored or applied.
+        .route("/projects/{id}/blueprints/{blueprint}/resolve", get(http_resolve_blueprint))
+        // The Revit push: a room and its sheets, the server captures the room. See `blueprints_api`.
+        .route("/projects/{id}/blueprints/from-revit", post(http_push_from_revit))
+        // A revision from elsewhere is stored PENDING and changes nothing current; a person
+        // accepts it (it becomes the next revision) or rejects it (kept, marked rejected).
+        .route("/projects/{id}/blueprints/{blueprint}/pending", post(http_push_revision))
+        .route(
+            "/projects/{id}/blueprints/{blueprint}/pending/{pending}/accept",
+            post(http_accept_pending),
+        )
+        .route(
+            "/projects/{id}/blueprints/{blueprint}/pending/{pending}/reject",
+            post(http_reject_pending),
+        )
+        // Which blueprint is placed in which room, one per room. See `assignments`.
+        .route("/projects/{id}/assignments", get(http_list_assignments).post(http_assign))
+        .route("/projects/{id}/assignments/{assignment}", delete(http_delete_assignment))
+        .route("/projects/{id}/assignments/many", post(http_assign_many))
+        // Room tasks: work for a Revit session. See `tasks`. `roomtasks` is the session's side
+        // (a POST, because asking marks the tasks in progress); `tasks` is the person's.
+        .route("/projects/{id}/tasks", get(http_list_tasks).post(http_create_tasks))
+        .route("/projects/{id}/tasks/{task}", get(http_get_task))
+        .route("/projects/{id}/tasks/{task}/dismiss", post(http_dismiss_task))
+        .route("/projects/{id}/tasks/{task}/resend", post(http_resend_task))
+        // Tag rules: where a tag goes relative to the element it tags, one rule per key. POST is
+        // the extractor's observations. See `tag_rules`.
+        .route("/projects/{id}/tagrules", get(http_list_tag_rules))
+        .route("/projects/{id}/tagrules/observations", post(http_observe_tags))
+        .route("/projects/{id}/tagrules/{rule}", get(http_get_tag_rule).delete(http_delete_tag_rule))
+        .route("/projects/{id}/roomtasks", post(http_claim_tasks))
+        .route("/projects/{id}/roomtasks/report", post(http_report_tasks))
+        .route("/projects/{id}/blueprints/{blueprint}/solve", post(http_solve_blueprint))
+        // The room layout sheet library: sheets a person chose to export, kept as exported.
+        // Its own endpoint, apart from blueprints. POST is the extractor's push; `suggest`
+        // is a read, asked for in sheet creation mode only. See `sheets`.
+        .route("/projects/{id}/sheets", get(http_list_sheets).post(http_push_sheets))
+        .route("/projects/{id}/sheets/suggest", get(http_suggest_sheets))
+        .route(
+            "/projects/{id}/sheets/{sheet}",
+            get(http_get_sheet).put(http_update_sheet).delete(http_delete_sheet),
+        )
+        .route("/projects/{id}/sheets/{sheet}/pending/{pending}/accept", post(http_accept_sheet_push))
+        .route("/projects/{id}/sheets/{sheet}/pending/{pending}/reject", post(http_reject_sheet_push))
+}
+
+fn build_router(state: roommate::state::Shared, hosts: HostPolicy) -> Router {
     Router::new()
         .route(
             "/rooms",
@@ -380,6 +462,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // list and names the version it read, so two editors cannot overwrite
         // each other unseen. See `connections`.
         .route("/projects/{id}/connections", get(http_get_connections).put(http_put_connections))
+        .merge(authored_routes())
         // Milestone comparison: a baseline-vs-each-other diff of rooms and a
         // user-defined property set. POST (not GET) for its list body — see
         // `handlers::compare_project_milestones`.
@@ -451,7 +534,7 @@ fn build_router(state: roommate::state::Shared) -> Router {
         // wraps outward). A DNS-rebound request is same-origin and never
         // reaches the CORS layer's decision at all, so the name check has to
         // sit in front of it rather than behind. See `guard_host`.
-        .layer(axum::middleware::from_fn(guard_host))
+        .layer(axum::middleware::from_fn_with_state(Arc::new(hosts), guard_host))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -472,9 +555,11 @@ async fn main() -> anyhow::Result<()> {
     let state = build_state(&args.server_settings, &args.project_settings)?;
     // Say, once, which settings name a property the data no longer has.
     roommate::settings_check::log_startup(&state, &args.project_settings);
-    let app = build_router(state);
+    let hostname = network::machine_hostname();
+    let hosts = HostPolicy::for_bind(args.bind, hostname.as_deref(), &args.allow_host);
+    let app = build_router(state, hosts);
 
-    let addr = format!("{DEFAULT_HTTP_HOST}:{}", args.port);
+    let addr = SocketAddr::new(args.bind, args.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| {
         format!("could not bind {addr} — is another roommate already listening on port {}?", args.port)
     })?;
@@ -482,6 +567,16 @@ async fn main() -> anyhow::Result<()> {
     // works and only the pages 404. See `viewer_root`.
     tracing::info!("viewer files from {}", viewer_root().display());
     tracing::info!("viewer on http://{addr}  (POST room JSON to http://{addr}/rooms)");
+    if network::serves_network(args.bind) {
+        // The address a person types into the pyRevit side, and the one thing worth saying out
+        // loud about the choice: nothing here checks who is asking.
+        for url in network::reachable_urls(addr, hostname.as_deref()) {
+            tracing::info!("reachable from other computers at {url}");
+        }
+        tracing::warn!(
+            "serving a network: there is no authentication, so anyone who can reach this port can read and change the data. Use a network you trust."
+        );
+    }
     axum::serve(listener, app).await?;
 
     Ok(())
@@ -494,7 +589,6 @@ mod tests {
     use axum::http::{header, Request, StatusCode};
     use roommate::state::AppState;
     use roommate::storage::MemStore;
-    use std::sync::Arc;
     use tower::ServiceExt;
 
     /// The installed shape: `static/` beside the binary wins, and the result is
@@ -570,19 +664,24 @@ mod tests {
         assert!(Args::try_parse_from(argv).is_err());
     }
 
-    /// The bind address is loopback plus the chosen port, and the host is not
-    /// reachable from a flag — see `DEFAULT_HTTP_HOST` for why that is a
-    /// security decision rather than an oversight.
+    /// With no `--bind` the address is loopback plus the chosen port: leaving this machine is an
+    /// explicit opt-in (see `DEFAULT_HTTP_HOST`), never a default.
     #[test]
     fn test_bind_address_is_loopback_plus_chosen_port() {
-        assert_eq!(format!("{DEFAULT_HTTP_HOST}:{}", parse(&["--port", "9000"]).port), "127.0.0.1:9000");
+        let args = parse(&["--port", "9000"]);
+        assert_eq!(SocketAddr::new(args.bind, args.port).to_string(), "127.0.0.1:9000");
+        assert_eq!(DEFAULT_HTTP_HOST, "127.0.0.1");
         assert_eq!(roommate::default_http_addr(), format!("127.0.0.1:{DEFAULT_HTTP_PORT}"));
     }
 
     fn router() -> Router {
+        router_for(HostPolicy::loopback_only())
+    }
+
+    fn router_for(hosts: HostPolicy) -> Router {
         let state: roommate::state::Shared =
             Arc::new(AppState::new(Box::new(MemStore::new()), Default::default(), None));
-        build_router(state)
+        build_router(state, hosts)
     }
 
     /// **The regression guard for the silent-stale-viewer bug.** Without
@@ -701,7 +800,11 @@ mod tests {
 
     /// One request announcing `host`, as a browser fills the header in.
     async fn with_host(path: &str, method: &str, host: &str) -> StatusCode {
-        router()
+        with_host_under(HostPolicy::loopback_only(), path, method, host).await
+    }
+
+    async fn with_host_under(hosts: HostPolicy, path: &str, method: &str, host: &str) -> StatusCode {
+        router_for(hosts)
             .oneshot(
                 Request::builder()
                     .method(method)
@@ -768,14 +871,100 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    /// The port split has to survive IPv6 literals, where colons are part of
-    /// the address rather than a port separator.
+    /// **Serving a network must not switch the rebinding defence off.** With a non-loopback bind
+    /// the pyRevit pusher's `Host: 192.168.x.x:5151` reaches a handler, and so does this machine's
+    /// own name, while a made-up domain (what a rebinding page presents) is still refused, on
+    /// reads and on the settings writes alike.
+    #[tokio::test]
+    async fn test_a_network_bind_answers_ip_literals_and_still_refuses_other_domains() {
+        let net = || HostPolicy::for_bind("0.0.0.0".parse().unwrap(), Some("Mac-Studio.lan"), &[]);
+        for host in [
+            "192.168.1.20:5151",
+            "10.0.0.5",
+            "[fe80::1]:5151",
+            "mac-studio.local:5151",
+            "localhost:5151",
+        ] {
+            assert_eq!(with_host_under(net(), "/projects", "GET", host).await, StatusCode::OK, "Host {host:?}");
+        }
+        for host in ["evil.example", "evil.example:5151", "192.168.1.20.evil.example"] {
+            for (path, method) in [("/projects", "GET"), ("/api/settings/projects", "POST")] {
+                assert_eq!(
+                    with_host_under(net(), path, method, host).await,
+                    StatusCode::FORBIDDEN,
+                    "{method} {path} with Host {host:?}"
+                );
+            }
+        }
+    }
+
+    /// The default is unchanged: a LAN address is refused until the operator opts in with `--bind`.
+    #[tokio::test]
+    async fn test_without_bind_a_lan_address_is_still_refused() {
+        assert_eq!(with_host("/projects", "GET", "192.168.1.20:5151").await, StatusCode::FORBIDDEN);
+    }
+
+    /// The refusal tells the operator what to do, because the usual cause is a Host spelled with a
+    /// DNS name nobody listed.
+    #[tokio::test]
+    async fn test_a_refused_host_says_how_to_allow_it() {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .header(header::HOST, "plans.internal")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("--allow-host"));
+    }
+
+    /// An end-to-end check over a real socket on every interface: a request that names the machine
+    /// by an address other than `localhost` (as another computer's pyRevit would) is answered.
+    #[tokio::test]
+    async fn test_a_server_bound_to_every_interface_answers_a_request_by_address() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let hosts = HostPolicy::for_bind("0.0.0.0".parse().unwrap(), None, &[]);
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, router_for(hosts)).await.unwrap() });
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let request = format!("GET /projects HTTP/1.1\r\nHost: 192.168.1.20:{port}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).await.unwrap();
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    }
+
+    /// `--bind` defaults to loopback, takes an address (IPv4 or IPv6) and refuses a name.
     #[test]
-    fn test_host_name_strips_port_not_address() {
-        assert_eq!(host_name("localhost:5151"), "localhost");
-        assert_eq!(host_name("127.0.0.1"), "127.0.0.1");
-        assert_eq!(host_name("[::1]:5151"), "::1");
-        assert_eq!(host_name("[::1]"), "::1");
-        assert_eq!(host_name("::1"), "::1");
+    fn test_bind_defaults_to_loopback_and_takes_an_address() {
+        assert_eq!(parse(&[]).bind, "127.0.0.1".parse::<IpAddr>().unwrap());
+        assert_eq!(parse(&["--bind", "0.0.0.0"]).bind, "0.0.0.0".parse::<IpAddr>().unwrap());
+        assert_eq!(parse(&["--bind", "192.168.1.20"]).bind, "192.168.1.20".parse::<IpAddr>().unwrap());
+        assert_eq!(parse(&["--bind", "::"]).bind, "::".parse::<IpAddr>().unwrap());
+        let bad = Args::try_parse_from([
+            "roommate",
+            "--server-settings",
+            "s",
+            "--project-settings",
+            "p",
+            "--bind",
+            "my-mac",
+        ]);
+        assert!(bad.is_err(), "a name is not an interface");
+    }
+
+    #[test]
+    fn test_allowed_hosts_are_repeatable_and_comma_separated() {
+        assert_eq!(
+            parse(&["--allow-host", "a.internal", "--allow-host", "b"]).allow_host,
+            vec!["a.internal", "b"]
+        );
+        assert_eq!(parse(&["--allow-host", "a.internal,b"]).allow_host, vec!["a.internal", "b"]);
+        assert!(parse(&[]).allow_host.is_empty());
     }
 }

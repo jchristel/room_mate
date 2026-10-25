@@ -500,6 +500,8 @@ mod tests {
             super_component_id: parent.map(str::to_string),
             type_id: "t1".to_string(),
             type_name: "Desk 1600x800".to_string(),
+            family_name: None,
+            host: None,
             properties: BTreeMap::from([("Mark".into(), CustomValue { value: format!("F-{id}"), storage_type: None })]),
             type_properties: Default::default(),
         }
