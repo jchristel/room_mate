@@ -21,8 +21,8 @@ use crate::contract::{DoorPayload, PropertyMap};
 use crate::state::AppState;
 
 use super::blueprint_geometry::{
-    box_corners, centroid, cross, depth_at, dist, dot, edges, inside, simplify, sub, unit, Edge, Pt,
-    COARSE_TOLERANCE_MM, FINE_TOLERANCE_MM,
+    box_corners, centroid, coarse_outline, cross, depth_at, dist, dot, edges, inside, simplify, sub, unit, Edge, Pt,
+    FINE_TOLERANCE_MM,
 };
 use super::blueprint_model::{
     AlongMode, BlueprintDoor, BlueprintItem, Follow, ItemClass, OffMode, Outline, Placement, Point, Property,
@@ -121,7 +121,7 @@ pub fn capture_with_doors(
     doors: Vec<SourceDoor>,
 ) -> Result<Captured, ServiceError> {
     let fine = simplify(ring, FINE_TOLERANCE_MM);
-    let coarse = simplify(ring, COARSE_TOLERANCE_MM);
+    let coarse = coarse_outline(ring);
     if coarse.len() < 3 {
         return Err(ServiceError::Invalid("the room's outline has fewer than three corners".to_string()));
     }

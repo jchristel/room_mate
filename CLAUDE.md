@@ -333,7 +333,13 @@ get wrong:
   350 mm removed), because same-named RHH patient rooms differ in column nibs and an edge
   count that includes them matched half of them; "is it inside the room" is checked against
   the **fine** one (30 mm), because the items that sit in those nibs are outside the coarse.
-  Mixing them up reports findings that are not there.
+  Mixing them up reports findings that are not there. **The coarse outline is the fine one with the jogs taken out of
+  it** (`blueprint_geometry::coarse_outline`), never `simplify(raw, 350)`: that removes the first vertex within 350 mm
+  of its neighbours' line, so a boundary point 60 mm from a corner cost the room the corner and tilted three edges
+  of House A's `WC 00.03` by 1.2 degrees. Measured on RHH: it changes 37% of the rooms' coarse outlines, none of the
+  fine, and the share of rooms with an edge off every fine direction falls from 47% to 21%. The price is sibling
+  edge-count agreement: `1 BED B` pairs that differ rise from 16% to 20% (the old result agreed partly by cutting
+  corners). A stored blueprint keeps the outline it was captured with until it is pushed again.
 - **An item belongs to the edge it lies beside** (nearest edge whose span contains its
   centre), not the nearest segment: nearest-segment clamped six items in House A's notched
   rooms to an edge's end, where the position cannot be reproduced.
