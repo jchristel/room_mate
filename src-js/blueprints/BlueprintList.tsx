@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 
-import { attentionReasons, blueprintNeedsAttention } from "./common.js";
+import { attentionReasons, blueprintNeedsAttention, filterBlueprints } from "./common.js";
 import type { BlueprintSummary } from "./types.js";
 
 export interface ListProps {
@@ -20,8 +20,9 @@ export interface ListProps {
 
 export function BlueprintList({ rows, selectedId, busy, onSelect, onImport, onExport, onRename, onDelete }: ListProps) {
   const [onlyAttention, setOnlyAttention] = useState(false);
+  const [text, setText] = useState("");
   const attention = rows?.filter(blueprintNeedsAttention).length ?? 0;
-  const shown = onlyAttention ? rows?.filter(blueprintNeedsAttention) : rows;
+  const shown = rows ? filterBlueprints(onlyAttention ? rows.filter(blueprintNeedsAttention) : rows, text) : rows;
   return (
     <aside className="list" aria-label="Blueprints">
       <div className="actions">
@@ -29,12 +30,14 @@ export function BlueprintList({ rows, selectedId, busy, onSelect, onImport, onEx
           Import
         </button>
       </div>
+      <input type="search" placeholder="Filter: name or room" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter blueprints" />
       {attention > 0 ? (
         <label className="filter">
           <input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} /> Needs attention ({attention})
         </label>
       ) : null}
       {rows === null ? <p className="hint">Reading the blueprints…</p> : null}
+      {rows && rows.length > 0 && shown?.length === 0 ? <p className="hint">No blueprint matches.</p> : null}
       {rows?.length === 0 ? <p className="hint">No blueprints yet. A blueprint is pushed from Revit with its room layout sheets; Import reads an export of one.</p> : null}
       <ul>
         {shown?.map((b) => (

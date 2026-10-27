@@ -47,3 +47,14 @@ export function attentionReasons(b: { sheets: number; pending: number }): string
   if (b.pending > 0) out.push(`${b.pending} pending revision${b.pending === 1 ? "" : "s"} to accept or reject`);
   return out;
 }
+
+/** Blueprints whose name or source room contains every word of `text` (case-insensitive). Order is kept:
+ *  the list is the server's, and a filter that reorders it would move rows under the pointer. */
+export function filterBlueprints<T extends { name: string; source: { room_name: string; room_id: string } | null }>(rows: readonly T[], text: string): T[] {
+  const words = text.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [...rows];
+  return rows.filter((b) => {
+    const hay = [b.name, b.source?.room_name ?? "", b.source?.room_id ?? ""].join(" ").toLowerCase();
+    return words.every((w) => hay.includes(w));
+  });
+}

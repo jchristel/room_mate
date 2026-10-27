@@ -12,7 +12,9 @@
 import { useMemo } from "react";
 
 import { boundsOf, corners, doorSegment, edges, pt, type Pt } from "./geometry.js";
-import type { Finding, ResolveResponse } from "./types.js";
+import { TagLabel } from "./TagLabel.js";
+import { itemTagLines } from "./tagText.js";
+import type { BlueprintItem, Finding, ResolveResponse } from "./types.js";
 import { usePanZoom, type View } from "./view.js";
 
 const s = (p: Pt): string => `${p[0]},${-p[1]}`;
@@ -23,6 +25,10 @@ export interface AssignCanvasProps {
   /** Items this room moved or turned: drawn so a person can see what they changed. */
   changed: ReadonlySet<string>;
   showTags: boolean;
+  /** The `[tags] ffe` fields the tag says (the main viewer's setting), resolved against the blueprint's items. */
+  tagFields: readonly string[];
+  /** The blueprint's items by id: a placement carries only the type name, the properties are the item's. */
+  itemsById: ReadonlyMap<string, BlueprintItem>;
   onSelect(id: string | null): void;
 }
 
@@ -51,7 +57,7 @@ function fitView(result: ResolveResponse): View {
   return { x: b.minX - pad, y: -(b.maxY + pad), w: b.maxX - b.minX + 2 * pad, h: b.maxY - b.minY + 2 * pad };
 }
 
-export function AssignCanvas({ result, selected, changed, showTags, onSelect }: AssignCanvasProps) {
+export function AssignCanvas({ result, selected, changed, showTags, tagFields, itemsById, onSelect }: AssignCanvasProps) {
   const ring = useMemo(() => result.outline.coarse.map(pt), [result.outline]);
   const fine = useMemo(() => result.outline.fine.map(pt), [result.outline]);
   const es = useMemo(() => edges(ring), [ring]);
@@ -99,16 +105,12 @@ export function AssignCanvas({ result, selected, changed, showTags, onSelect }: 
             <line className="facing" x1={frame.centre[0]} y1={-frame.centre[1]} x2={front[0]} y2={-front[1]} />
             {p.class === "wall_device" ? <circle className="device" cx={frame.centre[0]} cy={-frame.centre[1]} r={r * 0.9} /> : null}
             {showTags ? (
-              <text
-                className="tag"
+              <TagLabel
                 x={frame.centre[0]}
                 y={-frame.centre[1]}
                 fontSize={Math.min(Math.max(Math.min(...p.size_mm) / 5, view.w / 220), view.w / 70)}
-                textAnchor="middle"
-                dominantBaseline="central"
-              >
-                {p.type_name.length > 22 ? `${p.type_name.slice(0, 21)}…` : p.type_name}
-              </text>
+                lines={itemTagLines(tagFields, itemsById.get(p.item_id) ?? { id: p.item_id, type_name: p.type_name })}
+              />
             ) : null}
           </g>
         );
