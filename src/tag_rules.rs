@@ -16,6 +16,12 @@
 //! the element's facing. An element with no plan facing gives no sample: a guessed direction is
 //! worse than none.
 //!
+//! **Room, space and area tags are rules too, for the room.** The tagged element is the room (or space
+//! or area), which has no family or type and no facing, so such a rule is keyed by the category
+//! alone (`Rooms`, family and type empty) and its offsets are in the plan's own axes, +x then +y.
+//! A task carries it for every viewport of its type, whatever items it places, because it is
+//! about the room and not about an item.
+//!
 //! **A sample is identified by where it was read** (document, sheet, tag, tagged element), so
 //! pushing the same sheet again replaces its samples and never counts them twice.
 //!
@@ -395,6 +401,11 @@ fn clean(s: &str) -> String {
     s.trim().chars().take(MAX_TEXT_CHARS).collect()
 }
 
+/// Whether a tag kind tags a room, space or area: the tagged element then has no family, type or facing.
+pub fn is_spatial(tag_kind: &str) -> bool {
+    matches!(tag_kind.trim().to_lowercase().as_str(), "room" | "space" | "area")
+}
+
 /// The element's facing in plan: its local X, projected. `None` when it has no plan component.
 fn facing_of(loc: &Location) -> Option<(f64, f64)> {
     let row = loc.rotation_coord.as_ref()?.data.first()?;
@@ -439,23 +450,32 @@ fn samples_of(obs: &Observation) -> Vec<Result<(RuleKey, String, Sample), String
     if tag.tagged_elements.is_empty() {
         return vec![Err("the tag refers to no element".to_string())];
     }
+    let spatial = is_spatial(&tag.tag_kind);
     tag.tagged_elements
         .iter()
         .map(|el| {
-            if el.names.family_name.trim().is_empty() || el.names.type_name.trim().is_empty() {
+            if spatial {
+                if el.names.category.trim().is_empty() {
+                    return Err(format!("tagged element {}: its category was not read", el.host_element_id));
+                }
+            } else if el.names.family_name.trim().is_empty() || el.names.type_name.trim().is_empty() {
                 return Err(format!("tagged element {}: its family or type name was not read", el.host_element_id));
             }
             let loc = el
                 .location_point
                 .as_ref()
                 .ok_or_else(|| format!("tagged element {}: it has no point location", el.host_element_id))?;
-            let facing = facing_of(loc)
-                .ok_or_else(|| format!("tagged element {}: it has no plan facing", el.host_element_id))?;
+            // A room has no orientation of its own: its tag is placed in the plan's axes.
+            let facing = if spatial {
+                (1.0, 0.0)
+            } else {
+                facing_of(loc).ok_or_else(|| format!("tagged element {}: it has no plan facing", el.host_element_id))?
+            };
             let from = loc.translation_coord;
             let key = RuleKey {
                 tagged_category: clean(&el.names.category),
-                tagged_family: clean(&el.names.family_name),
-                tagged_type: clean(&el.names.type_name),
+                tagged_family: if spatial { String::new() } else { clean(&el.names.family_name) },
+                tagged_type: if spatial { String::new() } else { clean(&el.names.type_name) },
                 tag_category: clean(&tag.tag_type.category),
                 tag_family: clean(&tag.tag_type.family_name),
                 tag_type: clean(&tag.tag_type.type_name),
@@ -604,7 +624,8 @@ pub fn observe(
 }
 
 /// The rules a task carries: those for these viewport types and, when the items are known, only
-/// for these `(family, type)` pairs. `None` items means any element (a task that finds the items
+/// for these `(family, type)` pairs (a room, space or area tag rule is about the room, so it is
+/// carried whatever the items are). `None` items means any element (a task that finds the items
 /// already in the room). Compared as names, case-insensitively.
 pub fn rules_for(
     projects_dir: &Path,
@@ -619,9 +640,10 @@ pub fn rules_for(
         .iter()
         .filter(|r| types.contains(&wanted(&r.key.viewport_type)))
         .filter(|r| {
-            pairs
-                .as_ref()
-                .is_none_or(|p| p.contains(&(wanted(&r.key.tagged_family), wanted(&r.key.tagged_type))))
+            is_spatial(&r.tag_kind)
+                || pairs
+                    .as_ref()
+                    .is_none_or(|p| p.contains(&(wanted(&r.key.tagged_family), wanted(&r.key.tagged_type))))
         })
         .map(RuleSummary::from)
         .collect())
@@ -772,6 +794,59 @@ mod tests {
         assert_eq!(out.samples, 0);
         assert_eq!(out.skipped.len(), 3);
         assert!(out.skipped[1].reason.contains("facing"));
+    }
+
+    /// A room tag: the tagged element is the room, with a category and a point and nothing else.
+    fn room_obs(tag_id: i64, head: (f64, f64)) -> Observation {
+        let mut o = obs(tag_id, 1000.0, (1.0, 0.0), head);
+        o.tag.tag_kind = "room".into();
+        o.tag.tag_type = TypeNames {
+            category: "Room Tags".into(),
+            family_name: "Room Tag".into(),
+            type_name: "Room Tag".into(),
+        };
+        o.tag.tagged_elements[0].names = TypeNames { category: "Rooms".into(), ..Default::default() };
+        o.tag.tagged_elements[0].location_point =
+            Some(Location { translation_coord: P3 { x: 1000.0, y: 0.0, z: 0.0 }, rotation_coord: None });
+        o
+    }
+
+    #[test]
+    fn test_a_room_tag_is_a_rule_keyed_by_the_category_in_the_plans_own_axes() {
+        let d = dir();
+        let out = push(d.path(), vec![room_obs(1, (1000.0 + 500.0, 250.0))]);
+        assert_eq!((out.samples, out.skipped.len()), (1, 0), "{:?}", out.skipped);
+        let rule = &load_all(d.path(), "p").unwrap()[0];
+        assert_eq!(rule.tag_kind, "room");
+        assert_eq!(
+            (
+                rule.key.tagged_category.as_str(),
+                rule.key.tagged_family.as_str(),
+                rule.key.tagged_type.as_str()
+            ),
+            ("Rooms", "", "")
+        );
+        // 500 mm along +x and 250 mm along +y at 1:50 is 10 and 5 on paper.
+        assert!((rule.placement.head.x - 10.0).abs() < 1e-9 && (rule.placement.head.y - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_a_room_tag_with_no_category_is_skipped_with_a_reason() {
+        let mut o = room_obs(1, (1.0, 1.0));
+        o.tag.tagged_elements[0].names.category.clear();
+        let out = push(dir().path(), vec![o]);
+        assert_eq!(out.samples, 0);
+        assert!(out.skipped[0].reason.contains("category"));
+    }
+
+    #[test]
+    fn test_a_room_rule_rides_with_every_task_whatever_items_it_places() {
+        let d = dir();
+        push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (1.0, 0.0)), room_obs(2, (1001.0, 1.0))]);
+        let other = [("Chair".to_string(), "Std".to_string())];
+        let carried = rules_for(d.path(), "p", &["floor plan".to_string()], Some(&other)).unwrap();
+        assert_eq!(carried.len(), 1);
+        assert_eq!(carried[0].tag_kind, "room");
     }
 
     #[test]
