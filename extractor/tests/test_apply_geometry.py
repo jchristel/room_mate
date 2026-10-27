@@ -53,6 +53,30 @@ class TagPlacement(unittest.TestCase):
         self.assertEqual(g.facing_angle(item(fx=0.0, fy=0.0)), 0.0)
 
 
+def room_rule(head=(20.0, 10.0), vp="floor plan"):
+    return {
+        "tag_kind": "room",
+        "key": {"tagged_family": "", "tagged_type": "", "viewport_type": vp},
+        "placement": {"head": {"x": head[0], "y": head[1]}, "rotation": 0.0, "has_leader": False},
+    }
+
+
+class RoomTags(unittest.TestCase):
+    def test_a_room_rule_is_the_rooms_by_viewport_type_alone(self):
+        rules = [room_rule(), room_rule(vp="elevation"), rule()]
+        self.assertEqual(len(g.room_rules(rules, "Floor Plan")), 1)
+
+    def test_a_room_rule_is_never_an_items_even_when_the_item_has_no_names(self):
+        nameless = item(family="", type_name="")
+        self.assertEqual(g.rules_for_item([room_rule()], nameless, "floor plan"), [])
+
+    def test_the_offset_is_in_the_plans_axes_from_the_rooms_point(self):
+        p = g.tag_placement(g.room_like(1000.0, 2000.0), room_rule(head=(20.0, 10.0)), 50)
+        self.assertAlmostEqual(p["head"][0], 2000.0)
+        self.assertAlmostEqual(p["head"][1], 2500.0)
+        self.assertAlmostEqual(p["rotation"], 0.0)
+
+
 class Rules(unittest.TestCase):
     def test_rules_match_by_names_and_viewport_type_ignoring_case(self):
         rules = [rule(), rule(vp="elevation"), rule(family="Chair")]

@@ -75,11 +75,19 @@ def _norm(s):
     return (s or "").strip().lower()
 
 
+def is_independent(rule):
+    """Whether a rule is for an independent tag (the kind a rule without `tag_kind` is)."""
+    return (rule.get("tag_kind") or "independent") == "independent"
+
+
 def rules_for_item(rules, item, viewport_type):
-    """The rules that tag `item` in a viewport of `viewport_type`, matched by names. A rule is
-    one per key, but two keys can differ by the tag only, so an item may get several tags."""
+    """The independent-tag rules that tag `item` in a viewport of `viewport_type`, matched by
+    names. A rule is one per key, but two keys can differ by the tag only, so an item may get
+    several tags. A room tag rule has no family or type to match and is never an item's."""
     out = []
     for r in rules:
+        if not is_independent(r):
+            continue
         k = r["key"]
         if _norm(k["viewport_type"]) != _norm(viewport_type):
             continue
@@ -89,6 +97,22 @@ def rules_for_item(rules, item, viewport_type):
             continue
         out.append(r)
     return out
+
+
+def room_rules(rules, viewport_type):
+    """The room tag rules for a viewport of `viewport_type`. A room has no family or type, so
+    these are matched by the viewport type alone (the server only carries rules of the task's
+    viewport types, and a room tag rule is keyed by the category `Rooms`)."""
+    return [
+        r for r in rules
+        if (r.get("tag_kind") or "") == "room" and _norm(r["key"]["viewport_type"]) == _norm(viewport_type)
+    ]
+
+
+def room_like(x_mm, y_mm):
+    """A room as `tag_placement` wants an element: a point, and no orientation of its own, so its
+    tag's offset is in the plan's own axes (+x, then +y), as the server learned it."""
+    return {"x_mm": x_mm, "y_mm": y_mm, "facing_x": 1.0, "facing_y": 0.0}
 
 
 def rls_number(room_number, index=0, count=1, template=None):

@@ -503,8 +503,10 @@ leaves an empty list out of a task, so the page reads a task back with its lists
 - **A viewport is a fresh plan view of the room** at the exported scale, cropped to the exported size (never smaller than
   the room), placed where it was. Elevation, 3D and schedule viewports are reported, not made.
 - **Tags are read back from the model**, not from the task: each instance in the room (placed now or already there)
-  gets the independent tags whose names have a rule for it, at `apply_geometry.tag_placement`. Room, space and area tag
-  kinds, and a tag's own rotation, are not placed yet.
+  gets the independent tags whose names have a rule for it, at `apply_geometry.tag_placement`. The **room tag** is made
+  from the room tag rule (`apply_geometry.room_rules`, matched by viewport type alone) at the rule's offset from the
+  room's point, in the plan's own axes (`NewRoomTag` on the room's point, then the head moved). Space and area tag kinds,
+  and a tag's own rotation, are not placed yet.
 
 ## Tag rules: where a tag goes, learned from tags in Revit views
 
@@ -515,7 +517,10 @@ Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`)
 the plug-in does not yet place tags** (that is the apply button). Plan decision 24.
 
 - **A rule's key is names only** (tagged category + family + type, tag category + family + type, viewport type),
-  never Revit ids: a blueprint places new elements with new ids. The ids in an observation say where a sample was
+  never Revit ids: a blueprint places new elements with new ids. **A room, space or area tag is a rule too**
+  (`tag_rules::is_spatial`): the tagged element has no family, type or facing, so its key is the category alone
+  (`Rooms`, family and type empty), its offsets are in the plan's own axes, and a task carries it for every viewport of its
+  type whatever items it places. Revit 2026's `RoomTag` names its room by `Room`; it has no `TaggedLocalElementId`. The ids in an observation say where a sample was
   read and are how a re-push replaces its own samples.
 - **One rule per key**: the median of its samples, recomputed on every push, so a blueprint always tags the same
   way. The samples are kept; the answer is `placement`.

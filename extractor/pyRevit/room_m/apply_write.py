@@ -17,8 +17,10 @@ calls, one task per `TransactionGroup`, so a task that fails leaves the model as
   each floor plan viewport (a fresh view of the room at the exported scale and crop, placed
   where the viewport was). Elevation, 3D and schedule viewports are reported, not made.
 - Tags: for each floor plan view, each element in the room gets the tags its names have a rule
-  for, at the rule's place for that element (`apply_geometry.tag_placement`). Only independent
-  tags are made. A tag's own rotation is not applied (Revit's tag orientation is).
+  for, at the rule's place for that element (`apply_geometry.tag_placement`), and the room gets
+  its room tag where the room tag rule puts it (offset from the room's point, in the plan's axes).
+  Space and area tags are not made. A tag's own rotation is not applied (Revit's tag orientation
+  is).
 
 **Not yet run in Revit.**
 """
@@ -30,6 +32,7 @@ from Autodesk.Revit.DB import (
     FamilyPlacementType,
     FilteredElementCollector,
     IndependentTag,
+    LinkElementId,
     LeaderEndCondition,
     Line,
     Reference,
@@ -38,6 +41,7 @@ from Autodesk.Revit.DB import (
     Transaction,
     TransactionGroup,
     TransactionStatus,
+    UV,
     ViewFamily,
     ViewFamilyType,
     ViewPlan,
@@ -335,7 +339,7 @@ class TaskWriter(object):
 
         view = self._in_transaction("RoomMate: view for sheet {}".format(number), work)
         self.doc.Regenerate()
-        self._tag_view(task, view, scale, targets, level, number, notes)
+        self._tag_view(task, view, scale, targets, level, number, notes, room)
 
     # -- tags -------------------------------------------------------------------------------
 
@@ -374,23 +378,24 @@ class TaskWriter(object):
         except Exception:
             return None
 
-    def _tag_view(self, task, view, scale, targets, level, number, notes):
+    def _tag_view(self, task, view, scale, targets, level, number, notes, room):
         rules = task.get("tag_rules") or []
-        if not rules or not targets:
+        if not rules:
             return
         if not scale:
             notes.append("sheet {}: the view scale is not known, so no tags were placed".format(number))
             return
         made = [0]
+        room_made = [0]
         problems = []
         other_kinds = set()
+        for rule in rules:
+            if not geo.is_independent(rule) and rule.get("tag_kind") != "room":
+                other_kinds.add(rule.get("tag_kind"))
 
         def work():
             for instance, like in targets:
                 for rule in geo.rules_for_item(rules, like, geo.PLAN):
-                    if rule.get("tag_kind") != "independent":
-                        other_kinds.add(rule.get("tag_kind"))
-                        continue
                     placement = geo.tag_placement(like, rule, scale)
                     if placement is None:
                         continue
@@ -399,9 +404,19 @@ class TaskWriter(object):
                         made[0] += 1
                     except Exception as e:
                         problems.append("tag '{}' on '{}' not placed: {}".format(rule["key"]["tag_type"], like["type_name"], e))
+            for rule in geo.room_rules(rules, geo.PLAN):
+                try:
+                    point = room.Location.Point
+                    placement = geo.tag_placement(geo.room_like(point.X * geo.MM_PER_FT, point.Y * geo.MM_PER_FT), rule, scale)
+                    if placement is None:
+                        continue
+                    self._place_room_tag(view, room, rule, placement, level)
+                    room_made[0] += 1
+                except Exception as e:
+                    problems.append("room tag '{}' not placed: {}".format(rule["key"]["tag_type"], e))
 
         self._in_transaction("RoomMate: tags for sheet {}".format(number), work)
-        notes.append("sheet {}: {} tag(s) placed".format(number, made[0]))
+        notes.append("sheet {}: {} tag(s) placed, {} room tag(s)".format(number, made[0], room_made[0]))
         self._capped(notes, "tags not placed", problems)
         if other_kinds:
             notes.append("tags of kind {} are not placed yet".format(", ".join(sorted(str(k) for k in other_kinds))))
@@ -425,4 +440,24 @@ class TaskWriter(object):
             except Exception:
                 # The tag is made; a leader that will not take its free end keeps Revit's.
                 pass
+        return tag
+
+    def _place_room_tag(self, view, room, rule, placement, level):
+        """The room's tag in `view`: made on the room's own point, then its head moved to the
+        rule's place (a room tag made away from its room can be refused), with a leader back to
+        the room when the rule has one."""
+        z = level.Elevation
+        point = room.Location.Point
+        tag = self.doc.Create.NewRoomTag(LinkElementId(room.Id), UV(point.X, point.Y), view.Id)
+        key = rule["key"]
+        wanted = self.facts.room_tag_type(key["tag_family"], key["tag_type"])
+        if wanted is not None and element_id_str(wanted.Id) != element_id_str(tag.GetTypeId()):
+            tag.ChangeTypeId(wanted.Id)
+        try:
+            if placement["has_leader"]:
+                tag.HasLeader = True
+            tag.TagHeadPosition = XYZ(geo.mm_to_ft(placement["head"][0]), geo.mm_to_ft(placement["head"][1]), z)
+        except Exception:
+            # The tag is made on the room; a head that will not move stays where Revit put it.
+            pass
         return tag

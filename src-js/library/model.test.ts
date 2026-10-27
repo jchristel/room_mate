@@ -17,6 +17,8 @@ describe("tag rules", () => {
 
   it("are labelled by the names a modeller uses", () => {
     expect(ruleLabel(rules[0]!)).toBe("Bed / Queen tagged by FTag / Std");
+    const room = { ...rules[0]!, key: { ...rules[0]!.key, tagged_category: "Rooms", tagged_family: "", tagged_type: "" } };
+    expect(ruleLabel(room)).toBe("Rooms tagged by FTag / Std");
   });
 
   it("are narrowed by every word, in any field, ignoring case", () => {

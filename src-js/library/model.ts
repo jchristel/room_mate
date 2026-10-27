@@ -7,7 +7,9 @@ const trim = (s: string): string => s.trim();
 /** "Bed / Queen tagged by FTag / Std" -- what a rule is about, in the words a modeller uses. */
 export function ruleLabel(r: RuleSummary): string {
   const k = r.key;
-  return `${k.tagged_family} / ${k.tagged_type} tagged by ${k.tag_family} / ${k.tag_type}`;
+  // A room, space or area has no family or type: the rule is about the category.
+  const tagged = k.tagged_family || k.tagged_type ? `${k.tagged_family} / ${k.tagged_type}` : k.tagged_category || "element";
+  return `${tagged} tagged by ${k.tag_family} / ${k.tag_type}`;
 }
 
 /** Radians as whole-ish degrees, for people. */
