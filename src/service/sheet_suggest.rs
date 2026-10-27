@@ -27,7 +27,7 @@ use crate::sheets::{RoomSummary, SheetRecord, SheetRoom};
 use crate::state::AppState;
 
 use super::blueprint_capture::FT_TO_MM;
-use super::blueprint_geometry::{dot, edges, signed_area, simplify, Pt, COARSE_TOLERANCE_MM};
+use super::blueprint_geometry::{coarse_outline, dot, edges, signed_area, Pt};
 use super::items::{assemble_items, ItemScope};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
@@ -103,7 +103,7 @@ pub fn proportion_of(ring: &[Pt]) -> f64 {
 /// The long and short sides, mm, of the smallest rectangle (over the outline's own edge
 /// directions) that encloses the outline. `None` for an outline with no area.
 pub fn enclosing_rectangle(ring: &[Pt]) -> Option<(f64, f64)> {
-    let ring = simplify(ring, COARSE_TOLERANCE_MM);
+    let ring = coarse_outline(ring);
     if ring.len() < 3 {
         return None;
     }

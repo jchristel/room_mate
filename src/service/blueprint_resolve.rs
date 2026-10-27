@@ -33,7 +33,7 @@ use crate::assignments::{Frame, ItemOverride};
 
 use super::blueprint_capture::{door_on_edges, room_doors, room_ring, SourceDoor};
 use super::blueprint_geometry::{
-    box_corners, centroid, cross, depth_at, dot, edges, inside, overlaps, simplify, sub, Edge, Pt, COARSE_TOLERANCE_MM,
+    box_corners, centroid, coarse_outline, cross, depth_at, dot, edges, inside, overlaps, simplify, sub, Edge, Pt,
     FINE_TOLERANCE_MM,
 };
 use super::blueprint_model::{
@@ -647,7 +647,7 @@ pub fn resolve_with_overrides(
     };
     let (t_coarse, t_fine) = match &framed {
         Some(f) => (box_over(&bp_ring, target_ring, f)?, simplify(target_ring, FINE_TOLERANCE_MM)),
-        None => (simplify(target_ring, COARSE_TOLERANCE_MM), simplify(target_ring, FINE_TOLERANCE_MM)),
+        None => (coarse_outline(target_ring), simplify(target_ring, FINE_TOLERANCE_MM)),
     };
     if t_coarse.len() < 3 {
         return Err(ServiceError::Invalid("the room's outline has fewer than three corners".to_string()));

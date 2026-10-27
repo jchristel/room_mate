@@ -118,6 +118,20 @@ pub fn simplify(ring: &[Pt], tol: f64) -> Vec<Pt> {
     p
 }
 
+/// The outline edges are mapped on: the fine outline, then the jogs under
+/// [`COARSE_TOLERANCE_MM`] taken out of THAT.
+///
+/// Never `simplify(ring, COARSE_TOLERANCE_MM)` on the raw ring. `simplify` removes the first
+/// vertex within the tolerance of the line through its neighbours, and a boundary that carries a
+/// point 60 mm from a corner (a door jamb, a room separator) puts that corner 60 mm from the
+/// line between its neighbours, so the CORNER went and a chord took its place: House A's
+/// `WC 00.03`, a 3312 x 2768 mm rectangle, came out with three edges 1.2 degrees off square.
+/// The fine pass first leaves only real corners and real jogs for the coarse one to judge. On
+/// RHH it moves the coarse outline of 37% of the rooms and the fine outline of none.
+pub fn coarse_outline(ring: &[Pt]) -> Vec<Pt> {
+    simplify(&simplify(ring, FINE_TOLERANCE_MM), COARSE_TOLERANCE_MM)
+}
+
 /// One side of an outline, with the frame a recipe is written in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Edge {
@@ -231,6 +245,36 @@ mod tests {
 
     fn rect(w: f64, h: f64) -> Vec<Pt> {
         vec![(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+    }
+
+    /// House A `WC 00.03`: a rectangle whose boundary has points 60 mm from three of its corners.
+    #[test]
+    fn test_a_point_beside_a_corner_does_not_cost_the_coarse_outline_its_corner() {
+        const FT: f64 = 304.8;
+        let ring: Vec<Pt> = [
+            (60.20442135121404, 29.89337270341045),
+            (60.00889880450828, 29.89337270341045),
+            (49.33827961893068, 29.89337270341048),
+            (49.33827961893068, 29.676524697387137),
+            (49.33827961893066, 22.849722021769843),
+            (49.33827961893066, 22.45867692835832),
+            (49.33827961893067, 20.812007874014142),
+            (49.54036384542645, 20.812007874014142),
+            (60.00889880450826, 20.81200787401411),
+            (60.20442135121402, 20.81200787401411),
+        ]
+        .iter()
+        .map(|&(x, y)| (x * FT, y * FT))
+        .collect();
+        let coarse = coarse_outline(&ring);
+        assert_eq!(coarse.len(), 4);
+        for e in edges(&coarse) {
+            let off_square = (e.t.0.abs().min(e.t.1.abs())).asin().to_degrees();
+            assert!(off_square < 0.01, "an edge is {off_square} degrees off square");
+        }
+        // The first-found removal this replaces: 1.2 degrees.
+        let old = edges(&simplify(&ring, COARSE_TOLERANCE_MM));
+        assert!(old.iter().any(|e| e.t.0.abs().min(e.t.1.abs()).asin().to_degrees() > 1.0));
     }
 
     #[test]
