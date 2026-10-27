@@ -30,6 +30,8 @@ export interface AssignProps {
   blueprint: Blueprint;
   /** The saved revision being placed. A draft or a pending one is not assignable. */
   revision: number;
+  /** The `[tags] ffe` fields the tags say. */
+  tagFields: readonly string[];
   onClose(): void;
 }
 
@@ -65,7 +67,7 @@ function findingText(f: Finding, name: (id: string) => string): string {
   }
 }
 
-export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
+export function Assign({ project, blueprint, revision, tagFields, onClose }: AssignProps) {
   const [rooms, setRooms] = useState<RoomRow[] | null>(null);
   const [levels, setLevels] = useState<Map<string, string>>(new Map());
   const [assigned, setAssigned] = useState<AssignmentRow[]>([]);
@@ -193,6 +195,10 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
   const changed = useMemo(() => new Set(overrides.filter((o) => !o.exclude).map((o) => o.item_id)), [overrides]);
   // Items the blueprint holds that this room leaves out, named from the blueprint (they are not in the answer).
   const itemsOfRevision = blueprint.revisions.find((r) => r.number === revision)?.items ?? [];
+  const itemsById = useMemo(
+    () => new Map((blueprint.revisions.find((r) => r.number === revision)?.items ?? []).map((i) => [i.id, i] as const)),
+    [blueprint, revision],
+  );
   const leftOut = overrides.filter((o) => o.exclude);
   const selectedPlaced = selected ? result?.placements.find((p) => p.item_id === selected) : undefined;
   const selectedOverride = selected ? overrideFor(overrides, selected) : undefined;
@@ -220,7 +226,7 @@ export function Assign({ project, blueprint, revision, onClose }: AssignProps) {
         </div>
         {error ? <p className="banner error">{error}</p> : notice ? <p className="banner">{notice}</p> : <div />}
         {result ? (
-          <AssignCanvas result={result} selected={selected} changed={changed} showTags={showTags} onSelect={setSelected} />
+          <AssignCanvas result={result} selected={selected} changed={changed} showTags={showTags} tagFields={tagFields} itemsById={itemsById} onSelect={setSelected} />
         ) : (
           <p className="hint empty">{room ? (busy ? "Placing…" : "") : "Choose a room on the right to place this blueprint in."}</p>
         )}

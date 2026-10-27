@@ -4,6 +4,7 @@
 // anyone distrust it.
 
 import { apiGet, apiSend } from "./common.js";
+import { DEFAULT_TAG_FIELDS, tagFieldsOf } from "./tagText.js";
 import type {
   AssignmentRow,
   AssignOutcome,
@@ -32,6 +33,11 @@ async function send<T>(method: string, url: string, body: unknown): Promise<Sent
     return { ok: false, error: "the server's answer was not JSON" };
   }
 }
+
+/** The project's `[tags] ffe` fields: the setting the main viewer's FF&E tags use. A project whose settings cannot
+ *  be read gets the default, as the viewer does. */
+export const getTagFields = (project: string): Promise<readonly string[]> =>
+  apiGet<unknown>(`/api/settings/resolve/${encodeURIComponent(project)}`).then(tagFieldsOf, () => DEFAULT_TAG_FIELDS);
 
 export const listProjects = () => apiGet<ProjectRow[]>("/projects");
 export const listBlueprints = (project: string) => apiGet<BlueprintSummary[]>(`${base(project)}/blueprints`);

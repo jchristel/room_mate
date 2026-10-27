@@ -25,6 +25,7 @@ import { attentionReasons, persistSelection, seedProjectId } from "./common.js";
 import { sameItems } from "./draft.js";
 import { fileNameFor, toFile, type Imported } from "./exchange.js";
 import { pt } from "./geometry.js";
+import { DEFAULT_TAG_FIELDS } from "./tagText.js";
 import { ImportBlueprint } from "./ImportBlueprint.js";
 import { Inspector } from "./Inspector.js";
 import { Timeline } from "./Timeline.js";
@@ -44,6 +45,8 @@ export function App() {
   const [draft, setDraft] = useState<BlueprintItem[]>([]);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [showTags, setShowTags] = useState(false);
+  // What the tags say: the project's `[tags] ffe`, the setting the main viewer's FF&E tags use.
+  const [tagFields, setTagFields] = useState<readonly string[]>(DEFAULT_TAG_FIELDS);
   const [showExcluded, setShowExcluded] = useState(true);
   const [panel, setPanel] = useState<Panel>("none");
   const [assigning, setAssigning] = useState(false);
@@ -95,6 +98,11 @@ export function App() {
     setAssigning(false);
     if (projectId) void refreshRows(projectId);
   }, [projectId, refreshRows]);
+
+  useEffect(() => {
+    setTagFields(DEFAULT_TAG_FIELDS);
+    if (projectId) void api.getTagFields(projectId).then(setTagFields);
+  }, [projectId]);
 
   /** Ask before throwing an unsaved draft away. */
   const discardOk = (): boolean => !dirty || window.confirm("Discard the unsaved changes to this revision?");
@@ -250,7 +258,7 @@ export function App() {
         </div>
 
         {assigning && projectId && blueprint ? (
-          <Assign project={projectId} blueprint={blueprint} revision={viewing} onClose={() => setAssigning(false)} />
+          <Assign project={projectId} blueprint={blueprint} revision={viewing} tagFields={tagFields} onClose={() => setAssigning(false)} />
         ) : (
           <>
             <main>
@@ -314,7 +322,7 @@ export function App() {
                       </span>
                     ) : null}
                   </div>
-                  <Canvas outline={content.outline} items={items} doors={content.doors ?? []} selected={selected} showTags={showTags} showExcluded={showExcluded} onSelect={select} />
+                  <Canvas outline={content.outline} items={items} doors={content.doors ?? []} selected={selected} showTags={showTags} tagFields={tagFields} showExcluded={showExcluded} onSelect={select} />
                 </>
               ) : (
                 <p className="hint empty">{rows?.length ? "Choose a blueprint on the left." : "Make a blueprint from a room, or import one."}</p>

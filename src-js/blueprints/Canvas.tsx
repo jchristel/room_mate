@@ -17,6 +17,8 @@ import { useMemo } from "react";
 
 import { boundsOf, corners, doorSegment, edges, frameOf, pt, type Pt } from "./geometry.js";
 import type { BlueprintDoor, BlueprintItem, Outline } from "./types.js";
+import { TagLabel } from "./TagLabel.js";
+import { itemTagLines } from "./tagText.js";
 import { usePanZoom, type View } from "./view.js";
 
 const s = (p: Pt): string => `${p[0]},${-p[1]}`;
@@ -28,6 +30,8 @@ export interface CanvasProps {
   doors?: readonly BlueprintDoor[];
   selected: ReadonlySet<string>;
   showTags: boolean;
+  /** The `[tags] ffe` fields the tag says (the main viewer's setting). */
+  tagFields: readonly string[];
   showExcluded: boolean;
   onSelect(id: string | null, additive: boolean): void;
 }
@@ -45,7 +49,7 @@ function fitView(outline: Outline, items: readonly BlueprintItem[]): View {
   return { x: b.minX - pad, y: -(b.maxY + pad), w: b.maxX - b.minX + 2 * pad, h: b.maxY - b.minY + 2 * pad };
 }
 
-export function Canvas({ outline, items, doors = [], selected, showTags, showExcluded, onSelect }: CanvasProps) {
+export function Canvas({ outline, items, doors = [], selected, showTags, tagFields, showExcluded, onSelect }: CanvasProps) {
   const ring = useMemo(() => outline.coarse.map(pt), [outline]);
   const fine = useMemo(() => outline.fine.map(pt), [outline]);
   const es = useMemo(() => edges(ring), [ring]);
@@ -101,16 +105,12 @@ export function Canvas({ outline, items, doors = [], selected, showTags, showExc
             <line className="facing" x1={f.centre[0]} y1={-f.centre[1]} x2={front[0]} y2={-front[1]} />
             {it.class === "wall_device" ? <circle className="device" cx={f.centre[0]} cy={-f.centre[1]} r={r * 0.9} /> : null}
             {showTags ? (
-              <text
-                className="tag"
+              <TagLabel
                 x={f.centre[0]}
                 y={-f.centre[1]}
                 fontSize={Math.min(Math.max(Math.min(...it.size_mm) / 5, view.w / 220), view.w / 70)}
-                textAnchor="middle"
-                dominantBaseline="central"
-              >
-                {it.type_name.length > 22 ? `${it.type_name.slice(0, 21)}…` : it.type_name}
-              </text>
+                lines={itemTagLines(tagFields, it)}
+              />
             ) : null}
           </g>
         );
