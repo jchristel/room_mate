@@ -45,7 +45,9 @@ export function roomRingMm(room: { loops?: { points: { x: number; y: number }[] 
 }
 
 export function BlueprintOverlay({ zoneId, levelId, tool }: { zoneId: string; levelId: string | null; tool: BlueprintToolState | null }) {
-  const { payload } = useViewer();
+  const { payload, appearance } = useViewer();
+  // The box's colour is `[appearance] blueprint_box`; the stylesheet's blue is the default.
+  const boxColour = appearance?.blueprint_box ?? undefined;
   if (!tool || levelId === null || !tool.roomId) return null;
   const room = payload?.rooms?.find((r) => r.id === tool.roomId);
   // The ghost belongs to the room's storey: on another level's plan it would float over nothing.
@@ -64,7 +66,7 @@ export function BlueprintOverlay({ zoneId, levelId, tool }: { zoneId: string; le
   return (
     <g className="blueprint-overlay">
       {roomRing ? <polygon className="bp-room" points={svgPoints(roomRing)} /> : null}
-      {box ? <polygon className="bp-box" points={svgPoints(box)} /> : null}
+      {box ? <polygon className="bp-box" points={svgPoints(box)} {...(boxColour ? { style: { stroke: boxColour, fill: boxColour } } : {})} /> : null}
       {done?.placements.map((p) => {
         const corners = ghostCorners(p);
         const front = { x: p.centre.x + p.facing.x * (p.size_mm[0] / 2), y: p.centre.y + p.facing.y * (p.size_mm[0] / 2) };

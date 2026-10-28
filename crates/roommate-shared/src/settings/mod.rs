@@ -380,6 +380,12 @@ pub struct Appearance {
     /// long dash, dot -- and a colour override cannot take that away.
     #[serde(default, skip_serializing_if = "OutlineAppearance::is_default")]
     pub floors: OutlineAppearance,
+
+    /// The blueprint box: the outline a blueprint's items are written against, drawn in the
+    /// blueprint viewer (where its nodes are edited) and over the plan by the Blueprint tool.
+    /// Theme default: a blue, so it is never mistaken for the room outline it sits on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blueprint_box: Option<String>,
 }
 
 impl Appearance {
@@ -393,6 +399,7 @@ impl Appearance {
             && self.spaces.is_default()
             && self.ceilings.is_default()
             && self.floors.is_default()
+            && self.blueprint_box.is_none()
     }
 }
 

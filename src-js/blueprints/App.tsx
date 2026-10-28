@@ -22,14 +22,15 @@ import { Assign } from "./Assign.js";
 import { BlueprintList } from "./BlueprintList.js";
 import { Canvas } from "./Canvas.js";
 import { attentionReasons, persistSelection, seedProjectId } from "./common.js";
+import { alignEdge, dominantAngle, rotatePoint } from "./boxEdit.js";
 import { sameItems } from "./draft.js";
 import { fileNameFor, toFile, type Imported } from "./exchange.js";
-import { pt } from "./geometry.js";
+import { pt, type Pt } from "./geometry.js";
 import { DEFAULT_TAG_FIELDS } from "./tagText.js";
 import { ImportBlueprint } from "./ImportBlueprint.js";
 import { Inspector } from "./Inspector.js";
 import { Timeline } from "./Timeline.js";
-import type { Blueprint, BlueprintItem, BlueprintSummary, PendingRevision, ProjectRow } from "./types.js";
+import type { Blueprint, BlueprintDoor, BlueprintItem, BlueprintSummary, Outline, PendingRevision, ProjectRow } from "./types.js";
 
 type Panel = "none" | "import";
 
@@ -48,6 +49,10 @@ export function App() {
   // What the tags say: the project's `[tags] ffe`, the setting the main viewer's FF&E tags use.
   const [tagFields, setTagFields] = useState<readonly string[]>(DEFAULT_TAG_FIELDS);
   const [showExcluded, setShowExcluded] = useState(true);
+  // The box as edited: its outline and the doors written against it. Null is the revision's own.
+  const [boxEdited, setBoxEdited] = useState<{ outline: Outline; doors: BlueprintDoor[] } | null>(null);
+  const [boxColour, setBoxColour] = useState(api.DEFAULT_BOX_COLOUR);
+  const [aligning, setAligning] = useState(false);
   const [panel, setPanel] = useState<Panel>("none");
   const [assigning, setAssigning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -55,9 +60,10 @@ export function App() {
   const [busy, setBusy] = useState(false);
 
   const revision = blueprint?.revisions.find((r) => r.number === viewing) ?? null;
-  const dirty = !!revision && !pendingView && !sameItems(draft, revision.items);
+  const dirty = !!revision && !pendingView && (boxEdited !== null || !sameItems(draft, revision.items));
   const summary = rows?.find((r) => r.id === blueprint?.id) ?? null;
-  const content = pendingView ?? revision;
+  const stored = pendingView ?? revision;
+  const content = stored && !pendingView && boxEdited ? { ...stored, outline: boxEdited.outline, doors: boxEdited.doors } : stored;
   const items = pendingView ? pendingView.items : draft;
   const ring = useMemo(() => (content ? content.outline.coarse.map(pt) : []), [content]);
 
@@ -88,6 +94,8 @@ export function App() {
     setViewing(n);
     setPendingView(null);
     setDraft(b.revisions.find((r) => r.number === n)?.items ?? []);
+    setBoxEdited(null);
+    setAligning(false);
     setSelected(new Set());
   }, []);
 
@@ -101,7 +109,11 @@ export function App() {
 
   useEffect(() => {
     setTagFields(DEFAULT_TAG_FIELDS);
-    if (projectId) void api.getTagFields(projectId).then(setTagFields);
+    setBoxColour(api.DEFAULT_BOX_COLOUR);
+    if (projectId) {
+      void api.getTagFields(projectId).then(setTagFields);
+      void api.getBoxColour(projectId).then(setBoxColour);
+    }
   }, [projectId]);
 
   /** Ask before throwing an unsaved draft away. */
@@ -139,7 +151,7 @@ export function App() {
     const note = window.prompt("A note for the new revision (optional):", "");
     if (note === null) return;
     setBusy(true);
-    const r = await api.addRevision(projectId, blueprint.id, blueprint.taken_at, { outline: revision.outline, items: draft }, note.trim() || null);
+    const r = await api.addRevision(projectId, blueprint.id, blueprint.taken_at, { outline: content?.outline ?? revision.outline, items: draft, doors: content?.doors ?? [] }, note.trim() || null);
     const number = r.ok ? Math.max(...r.value.revisions.map((x) => x.number)) : undefined;
     await settle(r, "Saved as a new revision. The earlier one is untouched.", number);
   };
@@ -200,6 +212,33 @@ export function App() {
         ? `Imported as a new blueprint, "${r.blueprint.name}".`
         : `"${r.into}" already exists, so the import is waiting on its timeline as a pending revision.`,
     );
+  };
+
+  /** Write the draft's items and doors against a new box. The server places them (the page has no
+   *  placement rule of its own); the answer becomes the draft, and a save is the usual new revision. */
+  const reshape = async (target: { nodes: Pt[] } | { to: "rectangle" | "room" }): Promise<void> => {
+    if (!projectId || !content || pendingView) return;
+    const wire = "nodes" in target ? { nodes: target.nodes.map(([x, y]) => ({ x, y })) } : target;
+    const r = await api.reshape(projectId, { outline: content.outline, items: draft, doors: content.doors ?? [] }, wire);
+    if (!r.ok) return setError(r.error);
+    setError(null);
+    setDraft(r.value.items);
+    setBoxEdited({ outline: r.value.outline, doors: r.value.doors ?? [] });
+    setNotice(`The box has ${r.value.outline.coarse.length} nodes. Items kept their place in the room; save to keep it as a new revision.`);
+  };
+
+  /** Turn the whole blueprint so the room's walls run along the axes. Only the outlines turn: an item is a
+   *  distance along an edge and its facing is measured from the edge, so no recipe changes. */
+  const squareUp = () => {
+    if (!content || pendingView) return;
+    const angle = dominantAngle(content.outline.fine.map(pt));
+    if (angle === 0) return setNotice("The room's walls already run along the axes.");
+    const turn = (ps: { x: number; y: number }[]) => ps.map((q) => {
+      const [x, y] = rotatePoint([q.x, q.y], -angle);
+      return { x, y };
+    });
+    setBoxEdited({ outline: { coarse: turn(content.outline.coarse), fine: turn(content.outline.fine) }, doors: content.doors ?? [] });
+    setNotice(`Turned the blueprint ${(-angle).toFixed(1)}° so its walls run along the axes. Nothing in it moved relative to the walls.`);
   };
 
   const select = (id: string | null, additive: boolean) => {
@@ -316,13 +355,60 @@ export function App() {
                         <button type="button" disabled={busy} onClick={() => void save()}>
                           Save as new revision
                         </button>
-                        <button type="button" disabled={busy} onClick={() => setDraft(revision?.items ?? [])}>
+                        <button type="button" disabled={busy} onClick={() => { setDraft(revision?.items ?? []); setBoxEdited(null); setAligning(false); }}>
                           Discard
                         </button>
                       </span>
                     ) : null}
                   </div>
-                  <Canvas outline={content.outline} items={items} doors={content.doors ?? []} selected={selected} showTags={showTags} tagFields={tagFields} showExcluded={showExcluded} onSelect={select} />
+                  {!pendingView ? (
+                    <div className="toolbar box-bar">
+                      <strong>Box</strong>
+                      <span className="sub">
+                        {content.outline.coarse.length} nodes · drag a node (Alt: no snap) · double-click the line to add one · double-click a node to remove it
+                      </span>
+                      <button type="button" title="The rectangle round the room, squared to its walls" onClick={() => void reshape({ to: "rectangle" })}>
+                        Rectangle
+                      </button>
+                      <button type="button" title="The room's own outline, as blueprints were made before they started from a rectangle" onClick={() => void reshape({ to: "room" })}>
+                        Room outline
+                      </button>
+                      <button type="button" title="Turn the whole blueprint so the room's walls run along the axes" onClick={squareUp}>
+                        Square up
+                      </button>
+                      <button type="button" className={aligning ? "on" : ""} aria-pressed={aligning} title="Pick a side of the box, then a wall of the room (dashed): the side is laid along it" onClick={() => setAligning(!aligning)}>
+                        Align side with wall
+                      </button>
+                    </div>
+                  ) : null}
+                  <Canvas
+                    outline={content.outline}
+                    items={items}
+                    doors={content.doors ?? []}
+                    selected={selected}
+                    showTags={showTags}
+                    tagFields={tagFields}
+                    showExcluded={showExcluded}
+                    onSelect={select}
+                    boxColour={boxColour}
+                    {...(pendingView
+                      ? {}
+                      : {
+                          box: {
+                            onNodes: (ring: Pt[]) => reshape({ nodes: ring }),
+                            onRefuse: (text: string) => setNotice(text),
+                            aligning,
+                            onAlign: (side: number, wall: number) => {
+                              const fine = content.outline.fine.map(pt);
+                              const a = fine[wall];
+                              const b = fine[(wall + 1) % fine.length];
+                              if (!a || !b) return;
+                              setAligning(false);
+                              void reshape({ nodes: alignEdge(content.outline.coarse.map(pt), side, a, b) });
+                            },
+                          },
+                        })}
+                  />
                 </>
               ) : (
                 <p className="hint empty">{rows?.length ? "Choose a blueprint on the left." : "Make a blueprint from a room, or import one."}</p>

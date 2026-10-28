@@ -32,7 +32,7 @@ use roommate::assignments_api::{
 use roommate::blueprints_api::{
     http_accept_pending, http_add_revision, http_capture_blueprint, http_create_blueprint, http_delete_blueprint,
     http_get_blueprint, http_list_blueprints, http_push_from_revit, http_push_revision, http_reject_pending,
-    http_resolve_blueprint, http_update_blueprint,
+    http_reshape_blueprint, http_resolve_blueprint, http_update_blueprint,
 };
 use roommate::bootstrap::build_state;
 use roommate::connections_api::{http_get_connections, http_put_connections};
@@ -305,6 +305,8 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         // stores nothing. See `blueprints`.
         .route("/projects/{id}/blueprints", get(http_list_blueprints).post(http_create_blueprint))
         .route("/projects/{id}/blueprints/capture", get(http_capture_blueprint))
+        // Writes a draft's items against an edited reference outline; stores nothing.
+        .route("/projects/{id}/blueprints/reshape", post(http_reshape_blueprint))
         .route(
             "/projects/{id}/blueprints/{blueprint}",
             get(http_get_blueprint).put(http_update_blueprint).delete(http_delete_blueprint),

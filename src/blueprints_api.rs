@@ -21,6 +21,7 @@ use crate::blueprints::{
 use crate::service::blueprint_capture::{capture_room, qualify_room};
 use crate::service::blueprint_model::{BlueprintSheet, RevisionContent, Skipped};
 use crate::service::blueprint_resolve::{resolve_in_room_with, EdgeMap, Resolution};
+use crate::sheets::{PushRequest as SheetsPush, PushedSheet, SheetRoom};
 use crate::state::Shared;
 
 pub fn to_http(err: BlueprintError) -> (StatusCode, String) {
@@ -323,6 +324,44 @@ pub struct RevitPushOutcome {
     pub pending_id: Option<u32>,
     pub room_name: String,
     pub skipped: Skipped,
+    /// How many of the push's sheets were also offered to the sheet library (created, updated or
+    /// held for a decision), so they can be used for a room layout sheet on their own.
+    pub library_sheets: usize,
+}
+
+fn source_room_of(room: &crate::service::room_locator::RoomRef) -> SheetRoom {
+    SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() }
+}
+
+/// The blueprint's sheets also go to the sheet library, made for the blueprint's room, so the
+/// Library page can make a room layout sheet from one with no blueprint and no items (they carry
+/// no tags either way: the extractor takes them out before a sheet leaves Revit). **A copy**, as
+/// the blueprint's own is (plan decision 18): the library matches by sheet identity, so a re-push
+/// updates it and a changed number waits for a person. A library that cannot take them is logged
+/// and never fails the blueprint push, which is the thing that was asked for.
+fn offer_to_library(state: &Shared, project: &str, room: &SheetRoom, sheets: &[BlueprintSheet]) -> usize {
+    let Ok(projects) = dir(state) else { return 0 };
+    let summary = crate::sheets_api::summary_of(state, project, room);
+    let pushed: Vec<PushedSheet> = sheets
+        .iter()
+        .map(|s| PushedSheet {
+            revit_sheet_id: s.revit_sheet_id.clone(),
+            document_title: s.document_title.clone(),
+            sheet_number: s.sheet_number.clone(),
+            sheet_name: s.sheet_name.clone(),
+            room: Some(room.clone()),
+            phase: None,
+            room_summary: summary,
+            sheet: s.sheet.clone(),
+        })
+        .collect();
+    match crate::sheets::push(&projects, project, SheetsPush { sheets: pushed }) {
+        Ok(outcomes) => outcomes.len(),
+        Err(e) => {
+            tracing::warn!("a blueprint's sheets could not be offered to the library: {e:?}");
+            0
+        }
+    }
 }
 
 /// A blueprint from Revit: the room as the server holds it, plus the sheets the user chose.
@@ -352,6 +391,7 @@ pub async fn http_push_from_revit(
     };
     let mut content = captured.content;
     content.sheets = body.sheets;
+    let library_sheets = offer_to_library(&state, &project_id, &source_room_of(&room), &content.sheets);
     let projects = dir(&state)?;
     let name = body.name.trim().to_string();
     let existing = blueprints::list(&projects, &project_id)
@@ -391,6 +431,36 @@ pub async fn http_push_from_revit(
             pending_id,
             room_name,
             skipped: captured.skipped,
+            library_sheets,
         }),
     ))
+}
+
+/// What the box editor asks: this content, with its reference outline made these nodes, or the
+/// rectangle round the room, or the room's own outline.
+#[derive(Deserialize)]
+pub struct ReshapeBody {
+    pub content: RevisionContent,
+    #[serde(default)]
+    pub nodes: Option<Vec<crate::service::blueprint_model::Point>>,
+    /// `rectangle` or `room`, when no nodes are given.
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
+/// Write a blueprint's items and doors again against an edited reference outline, and answer with
+/// the content. **Stores nothing**: the page keeps the answer as its draft and a save is the
+/// ordinary new revision (`blueprint_reshape`).
+pub async fn http_reshape_blueprint(
+    UrlPath(_project_id): UrlPath<String>,
+    Json(body): Json<ReshapeBody>,
+) -> Result<Json<RevisionContent>, (StatusCode, String)> {
+    use crate::service::blueprint_reshape::{reshape, Target};
+    let target = match (body.nodes, body.to.as_deref()) {
+        (Some(nodes), None) => Target::Nodes(nodes.into_iter().map(Into::into).collect()),
+        (None, Some("rectangle")) => Target::Rectangle,
+        (None, Some("room")) => Target::RoomOutline,
+        _ => return Err((StatusCode::BAD_REQUEST, "give either `nodes` or `to` (`rectangle` or `room`)".to_string())),
+    };
+    reshape(&body.content, target).map(Json).map_err(service_error)
 }

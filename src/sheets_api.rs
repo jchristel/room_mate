@@ -57,7 +57,7 @@ pub async fn http_get_sheet(
 
 /// The room's summary as the server holds it now (plan decision 25). `None` when the room is not
 /// on the server: the sheet is still stored, and is ranked from its room as it is read later.
-fn summary_of(state: &Shared, project: &str, room: &SheetRoom) -> Option<RoomSummary> {
+pub(crate) fn summary_of(state: &Shared, project: &str, room: &SheetRoom) -> Option<RoomSummary> {
     let room = RoomRef { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
     match sheet_suggest::room_summary(state, project, &room) {
         Ok(found) => found,

@@ -340,6 +340,20 @@ get wrong:
   fine, and the share of rooms with an edge off every fine direction falls from 47% to 21%. The price is sibling
   edge-count agreement: `1 BED B` pairs that differ rise from 16% to 20% (the old result agreed partly by cutting
   corners). A stored blueprint keeps the outline it was captured with until it is pushed again.
+- **A blueprint's reference outline (the BOX) starts as a rectangle, and a person reshapes it.** Capture from Revit
+  (`Reference::Box`) turns the room so its walls run along the axes (`dominant_angle_deg`: the length-weighted mean of
+  the edge angles modulo a quarter turn, so a room on an angled part of the building is squared up) and writes the
+  recipes against the rectangle round it; the real outline rides beside it as `fine`. Turning changes no recipe, because
+  an item is a distance along an edge and its facing is measured from the edge. **Editing the box never moves an item**:
+  `service::blueprint_reshape` reads each item's centre and facing out of the OLD outline and writes them again against
+  the NEW one (`POST .../blueprints/reshape`, a read of a draft, stores nothing), and an item on a wall that did not
+  change keeps its recipe whole, modes included. A box has 4 to 64 nodes, no side under 10 mm, and no crossing
+  (a clockwise one is turned round). The page's gestures live in `blueprints/boxEdit.ts` (drag a node and it snaps its
+  two lines horizontal or vertical, Alt off; double-click the line adds a node, double-click a node removes it; align a
+  side with a room wall; Square up). **The price, accepted**: the best-fit path compares the blueprint's edges with a
+  target room's, so a rectangle blueprint fits only 4-edge rooms and anything else is `edge_count_differs`; the box
+  tool in the main viewer does not care, and "Room outline" in the viewer gives back the old shape in one click.
+  Existing blueprints keep the outline they were made with. The box draws in `[appearance] blueprint_box` (a blue).
 - **An item belongs to the edge it lies beside** (nearest edge whose span contains its
   centre), not the nearest segment: nearest-segment clamped six items in House A's notched
   rooms to an edge's end, where the position cannot be reproduced.
@@ -562,6 +576,16 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   and item count are weighed equally, each as a log-ratio, worked out from today's rooms and
   FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short
   side, so a rotated room reads the same.
+- **A blueprint's sheets are also offered to the library** (`blueprints_api::offer_to_library`), made for the
+  blueprint's room, so a room layout sheet can be made from one with no blueprint and no items: the library page's
+  "Make room layout sheets from this sheet" queues a `create_rls` task per room, **with `with_tags: false`** (the tasks
+  page keeps the tag rules). A copy, matched by sheet identity: a re-push updates it and a renumbered one waits for a
+  person. A library that cannot take them is logged and never fails the blueprint push.
+- **A room outline sent by the extractor has its collinear vertices dropped** (`room_m/ring_tidy.py`, rooms only).
+  Revit puts a vertex wherever the boundary changes wall: 77.5% of RHH's rooms (2,080 of 2,683) have one and 28% of all
+  boundary vertices (7,659 of 27,558) are one, nearly all within 0.5 mm of the line. Lossless, so the tolerance is
+  0.5 mm and a real jog is never cut (that question is the server's coarse and fine outlines). A spike that doubles back
+  stays. Spaces, ceilings and floors are not tidied. Snapshots already stored keep theirs until re-pushed.
 - **The Blueprint button pushes a room and its sheets to `.../blueprints/from-revit`; the Sheets button
   pushes sheets alone to the library.** The Blueprint button sends NO room contents: a rooms or FF&E push
   replaces a model's whole snapshot, so the blueprint's room is captured on the server from what is

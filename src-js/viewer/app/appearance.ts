@@ -32,6 +32,8 @@ export interface ViewerAppearance extends PlanAppearance {
   spaces?: WithSelection<NonNullable<PlanAppearance["spaces"]>> | undefined;
   ceilings?: WithSelection<NonNullable<PlanAppearance["ceilings"]>> | undefined;
   floors?: WithSelection<NonNullable<PlanAppearance["floors"]>> | undefined;
+  /** The blueprint box's colour: drawn by the page's overlay, not by GL. */
+  blueprint_box?: string | null | undefined;
 }
 
 /**

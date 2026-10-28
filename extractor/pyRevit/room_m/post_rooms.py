@@ -40,6 +40,7 @@ from System.Net.Http import StringContent, ByteArrayContent
 from System.Net.Http.Headers import MediaTypeHeaderValue
 from System.Text import Encoding
 
+from room_m.ring_tidy import without_collinear
 from room_m.post_common import (
     LEVEL_LIST_KEY,
     build_identity_envelope,
@@ -98,10 +99,11 @@ def translate_room(room):
     if not outer:
         return None  # unplaced room, nothing to draw
 
-    loops = [{"points": loop_to_points(outer)}]
+    # A vertex where the boundary only changes wall adds no corner: dropped (ring_tidy).
+    loops = [{"points": loop_to_points(without_collinear(outer))}]
     for inner in poly.get("inner_loops", []):
         if inner:
-            loops.append({"points": loop_to_points(inner)})
+            loops.append({"points": loop_to_points(without_collinear(inner))})
 
     props = room.get("instance_properties", {})
     room_id = str(props.get("id", "unknown"))
