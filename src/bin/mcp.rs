@@ -7,10 +7,10 @@
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
 //! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
-//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `suggest_sheets`, `list_assignments`, `list_tasks`, `get_task`, `list_tag_rules`, `get_tag_rule` --
+//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `get_sheet_elevations`, `suggest_sheets`, `list_assignments`, `list_tasks`, `get_task`, `list_tag_rules`, `get_tag_rule` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Forty-one in
+//! and the one forwarded mutation (`upload_reference`, below). Forty-two in
 //! total, and "one per existing HTTP read route" is now literally true -- it was
 //! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
 //! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
@@ -1568,6 +1568,18 @@ impl RoommateMcp {
         let dir = self.projects_dir()?;
         let record = roommate::sheets::load(&dir, &p.project_id, &p.sheet_id).map_err(sheets_to_mcp_error)?;
         json_result(&record)
+    }
+
+    /// Which wall each elevation on a library sheet looks at -- see `service::elevation_facing`.
+    #[tool(
+        description = "For one library sheet, which elevation viewport is which index of which elevation marker, and which wall(s) of the sheet's room each looks at. `markers` lists each marker (`marker_id`, `location`, and its `views` as [index, view_id] in index order). `elevations` has one row per elevation viewport: `view_id`, `marker_id`, `marker_index`, the elevation line (`line_start`, `line_end`, model mm), `looks` (the plan direction it looks along), `depth_mm` (how far, absent when not depth limited) and `faces`: the room edges it covers, largest first, each with `edge` (index in the room's 30 mm counter-clockwise outline), its end points `a`/`b`, `edge_mm`, `visible_mm` (the part inside the view), `square_on` (cosine of the angle between the wall and the view: 1 straight on) and `nearest_mm`. Worked out when asked from the room as it is now; occlusion by other walls is not judged. A sheet exported before markers were read, or with no room, says so in `findings` instead of failing."
+    )]
+    fn get_sheet_elevations(&self, Parameters(p): Parameters<SheetParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let record = roommate::sheets::load(&dir, &p.project_id, &p.sheet_id).map_err(sheets_to_mcp_error)?;
+        let out = roommate::service::elevation_facing::for_sheet(&self.state, &p.project_id, &record)
+            .map_err(to_mcp_error)?;
+        json_result(&out)
     }
 
     /// The library sheets closest to one room -- see `service::sheet_suggest`.

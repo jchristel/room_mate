@@ -586,6 +586,15 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   boundary vertices (7,659 of 27,558) are one, nearly all within 0.5 mm of the line. Lossless, so the tolerance is
   0.5 mm and a real jog is never cut (that question is the server's coarse and fine outlines). A spike that doubles back
   stays. Spaces, ceilings and floors are not tidied. Snapshots already stored keep theirs until re-pushed.
+- **Which wall an elevation looks at is derived at read time, never stored** (`service::elevation_facing`,
+  `GET /projects/{id}/sheets/{sheet}/elevations`, MCP `get_sheet_elevations`). The sheet carries, per elevation viewport,
+  its marker (`marker_id`, `marker_location`), the view's `marker_index`, the elevation line (`line_start`/`line_end`),
+  `view_direction`, `view_depth` and the far clip (duHast PR #96; all absent on a sheet exported before it, which is a
+  finding). An edge is faced when its inward normal points back at the viewer (`square_on` >= 0.1) and part of it lies
+  between the line's ends and within the depth; the sheet's model-frame numbers are compared with the room put back
+  through the inverse placement. **Occlusion is not judged.** Front-on versus side-on is the same `square_on`
+  (1 front, near 0 side); tag rules do not yet key on it. **Not run in Revit**: the depth is read as minus the crop
+  box's `Min.Z` and the marker's `Location` is assumed to be a point.
 - **The Blueprint button pushes a room and its sheets to `.../blueprints/from-revit`; the Sheets button
   pushes sheets alone to the library.** The Blueprint button sends NO room contents: a rooms or FF&E push
   replaces a model's whole snapshot, so the blueprint's room is captured on the server from what is

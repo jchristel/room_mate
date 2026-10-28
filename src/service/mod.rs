@@ -18,6 +18,7 @@ pub mod blueprint_resolve;
 pub mod blueprint_solve;
 pub mod comparison;
 pub mod connectivity;
+pub mod elevation_facing;
 pub mod entity_scope;
 pub mod geodesic;
 pub mod items;

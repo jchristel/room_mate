@@ -54,7 +54,7 @@ use roommate::settings_api::{
 };
 use roommate::sheets_api::{
     http_accept_sheet_push, http_delete_sheet, http_get_sheet, http_list_sheets, http_push_sheets,
-    http_reject_sheet_push, http_suggest_sheets, http_update_sheet,
+    http_reject_sheet_push, http_sheet_elevations, http_suggest_sheets, http_update_sheet,
 };
 use roommate::tag_rules_api::{http_delete_tag_rule, http_get_tag_rule, http_list_tag_rules, http_observe_tags};
 use roommate::tasks_api::{
@@ -354,6 +354,7 @@ fn authored_routes() -> Router<roommate::state::Shared> {
             "/projects/{id}/sheets/{sheet}",
             get(http_get_sheet).put(http_update_sheet).delete(http_delete_sheet),
         )
+        .route("/projects/{id}/sheets/{sheet}/elevations", get(http_sheet_elevations))
         .route("/projects/{id}/sheets/{sheet}/pending/{pending}/accept", post(http_accept_sheet_push))
         .route("/projects/{id}/sheets/{sheet}/pending/{pending}/reject", post(http_reject_sheet_push))
 }

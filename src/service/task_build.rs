@@ -366,7 +366,7 @@ pub fn rls_from_sheet(
 }
 
 /// The project frame back into one model's own frame (millimetres in and out; the placement is in feet).
-struct ToModel {
+pub(crate) struct ToModel {
     inverse: Option<crate::contract::ModelToShared>,
     /// The model has a placement but it could not be inverted: positions are left as they are.
     degenerate: bool,
@@ -377,7 +377,7 @@ impl ToModel {
         self.inverse.is_none() && !self.degenerate
     }
 
-    fn point(&self, p: (f64, f64)) -> (f64, f64) {
+    pub(crate) fn point(&self, p: (f64, f64)) -> (f64, f64) {
         match &self.inverse {
             Some(t) => {
                 let q = t.place(Point2D { x: p.0 / FT_TO_MM, y: p.1 / FT_TO_MM });
@@ -395,7 +395,7 @@ impl ToModel {
     }
 }
 
-fn project_to_model(state: &AppState, project: &str, model_id: &str) -> Result<ToModel, ServiceError> {
+pub(crate) fn project_to_model(state: &AppState, project: &str, model_id: &str) -> Result<ToModel, ServiceError> {
     let placement = placement::from_index(state)?;
     Ok(match placement.for_model(project, model_id) {
         None => ToModel { inverse: None, degenerate: false },

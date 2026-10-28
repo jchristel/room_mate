@@ -13,6 +13,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::service::blueprint_capture::qualify_room;
+use crate::service::elevation_facing::{self, Elevations};
 use crate::service::room_locator::RoomRef;
 use crate::service::sheet_suggest::{self, Suggestions};
 use crate::sheets::{
@@ -53,6 +54,17 @@ pub async fn http_get_sheet(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<Json<SheetRecord>, (StatusCode, String)> {
     sheets::load(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
+}
+
+/// Which wall each elevation on a sheet looks at, worked out now from the sheet's room.
+pub async fn http_sheet_elevations(
+    State(state): State<Shared>,
+    UrlPath((project_id, id)): UrlPath<(String, String)>,
+) -> Result<Json<Elevations>, (StatusCode, String)> {
+    let record = sheets::load(&dir(&state)?, &project_id, &id).map_err(to_http)?;
+    elevation_facing::for_sheet(&state, &project_id, &record)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 /// The room's summary as the server holds it now (plan decision 25). `None` when the room is not
