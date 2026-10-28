@@ -69,4 +69,10 @@ ceilings?: OutlineAppearance,
  * plan, so the three are told apart by their stroke pattern -- solid,
  * long dash, dot -- and a colour override cannot take that away.
  */
-floors?: OutlineAppearance, };
+floors?: OutlineAppearance, 
+/**
+ * The blueprint box: the outline a blueprint's items are written against, drawn in the
+ * blueprint viewer (where its nodes are edited) and over the plan by the Blueprint tool.
+ * Theme default: a blue, so it is never mistaken for the room outline it sits on.
+ */
+blueprint_box?: string | null, };

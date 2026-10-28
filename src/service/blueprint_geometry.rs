@@ -132,6 +132,73 @@ pub fn coarse_outline(ring: &[Pt]) -> Vec<Pt> {
     simplify(&simplify(ring, FINE_TOLERANCE_MM), COARSE_TOLERANCE_MM)
 }
 
+/// The direction the walls mostly run in, in degrees within (-45, 45]: the length-weighted mean of
+/// the edge angles taken modulo a quarter turn (the mean of `4 * angle`, so a wall and the wall
+/// at right angles to it vote together). Turn the ring by the negative of this to square it up.
+/// A ring with no length gives 0.
+pub fn dominant_angle_deg(ring: &[Pt]) -> f64 {
+    let (mut s, mut c) = (0.0, 0.0);
+    for e in edges(ring) {
+        let a = 4.0 * e.t.1.atan2(e.t.0);
+        s += e.len * a.sin();
+        c += e.len * a.cos();
+    }
+    if s.hypot(c) < 1e-9 {
+        return 0.0;
+    }
+    let deg = s.atan2(c).to_degrees() / 4.0;
+    // Float noise on an already square ring is not a turn.
+    if deg.abs() < 0.001 {
+        0.0
+    } else {
+        deg
+    }
+}
+
+/// `p` turned counter-clockwise by `deg` about the origin.
+pub fn rotate(p: Pt, deg: f64) -> Pt {
+    let (s, c) = deg.to_radians().sin_cos();
+    (p.0 * c - p.1 * s, p.0 * s + p.1 * c)
+}
+
+/// The axis-aligned rectangle round the ring, counter-clockwise from its lower left.
+pub fn bounding_rect(ring: &[Pt]) -> Vec<Pt> {
+    let (x0, x1) = ring.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.0), b.max(p.0)));
+    let (y0, y1) = ring.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+}
+
+/// Whether no two sides that are not neighbours cross or touch, and no two neighbours fold back
+/// on each other. A box that crosses itself has no inside, so no recipe against it means anything.
+pub fn is_simple(ring: &[Pt]) -> bool {
+    let n = ring.len();
+    if n < 3 {
+        return false;
+    }
+    let side = |p: Pt, q: Pt, r: Pt| cross(sub(q, p), sub(r, p));
+    let crosses = |a: Pt, b: Pt, c: Pt, d: Pt| {
+        let (d1, d2, d3, d4) = (side(a, b, c), side(a, b, d), side(c, d, a), side(c, d, b));
+        d1 * d2 <= 0.0 && d3 * d4 <= 0.0
+    };
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        // Neighbours share a vertex; they must not lie back along each other.
+        let c = ring[(i + 2) % n];
+        if side(a, b, c).abs() < 1e-9 && dot(sub(b, a), sub(c, b)) < 0.0 {
+            return false;
+        }
+        for j in i + 2..n {
+            if i == 0 && j == n - 1 {
+                continue;
+            }
+            if crosses(a, b, ring[j], ring[(j + 1) % n]) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// One side of an outline, with the frame a recipe is written in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Edge {
@@ -248,6 +315,35 @@ mod tests {
     }
 
     /// House A `WC 00.03`: a rectangle whose boundary has points 60 mm from three of its corners.
+    #[test]
+    fn test_the_dominant_angle_squares_a_turned_rectangle_and_ignores_which_wall_it_reads() {
+        let turned: Vec<Pt> = rect(6000.0, 3000.0).into_iter().map(|p| rotate(p, 31.0)).collect();
+        let a = dominant_angle_deg(&turned);
+        assert!((a - 31.0).abs() < 1e-6, "{a}");
+        let square: Vec<Pt> = turned.iter().map(|&p| rotate(p, -a)).collect();
+        let r = bounding_rect(&square);
+        assert!((dist(r[0], r[1]) - 6000.0).abs() < 1e-6 && (dist(r[1], r[2]) - 3000.0).abs() < 1e-6);
+        assert_eq!(dominant_angle_deg(&rect(6000.0, 3000.0)), 0.0);
+        // 100 degrees is 10 past a right angle: 10, not -80.
+        let tilted: Vec<Pt> = rect(6000.0, 3000.0).into_iter().map(|p| rotate(p, 100.0)).collect();
+        assert!((dominant_angle_deg(&tilted) - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_a_bow_tie_is_not_simple_and_a_notched_room_is() {
+        assert!(is_simple(&rect(4000.0, 3000.0)));
+        assert!(!is_simple(&[(0.0, 0.0), (4000.0, 3000.0), (4000.0, 0.0), (0.0, 3000.0)]));
+        let l = [
+            (0.0, 0.0),
+            (4000.0, 0.0),
+            (4000.0, 1500.0),
+            (1500.0, 1500.0),
+            (1500.0, 3000.0),
+            (0.0, 3000.0),
+        ];
+        assert!(is_simple(&l));
+    }
+
     #[test]
     fn test_a_point_beside_a_corner_does_not_cost_the_coarse_outline_its_corner() {
         const FT: f64 = 304.8;

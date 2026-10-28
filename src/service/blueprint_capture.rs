@@ -21,8 +21,8 @@ use crate::contract::{DoorPayload, PropertyMap};
 use crate::state::AppState;
 
 use super::blueprint_geometry::{
-    box_corners, centroid, coarse_outline, cross, depth_at, dist, dot, edges, inside, simplify, sub, unit, Edge, Pt,
-    FINE_TOLERANCE_MM,
+    bounding_rect, box_corners, centroid, coarse_outline, cross, depth_at, dist, dominant_angle_deg, dot, edges,
+    inside, rotate, simplify, sub, unit, Edge, Pt, FINE_TOLERANCE_MM,
 };
 use super::blueprint_model::{
     AlongMode, BlueprintDoor, BlueprintItem, Follow, ItemClass, OffMode, Outline, Placement, Point, Property,
@@ -98,11 +98,11 @@ pub struct Captured {
 }
 
 /// The working figures for one item while placements are being worked out.
-struct Measured {
-    ht: f64,
-    hn: f64,
-    corners: [Pt; 4],
-    area: f64,
+pub(super) struct Measured {
+    pub(super) ht: f64,
+    pub(super) hn: f64,
+    pub(super) corners: [Pt; 4],
+    pub(super) area: f64,
 }
 
 fn translate(p: Pt, origin: Pt) -> Pt {
@@ -120,17 +120,64 @@ pub fn capture_with_doors(
     sources: Vec<SourceItem>,
     doors: Vec<SourceDoor>,
 ) -> Result<Captured, ServiceError> {
+    capture_shaped(ring, sources, doors, Reference::Room)
+}
+
+/// What the recipes are written against: the reference outline a blueprint starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reference {
+    /// The room's own coarse outline, in the project's orientation.
+    Room,
+    /// **The rectangle round the room, squared up** (the blueprint is turned so the room's walls
+    /// run along the axes, whatever angle that part of the building sits at). The room's real
+    /// outline still rides beside it as `fine`, and a person reshapes the rectangle in the
+    /// blueprint viewer (`blueprint_reshape`). Turning the blueprint changes no recipe: an item
+    /// is a distance along an edge, and its facing is measured from the edge.
+    Box,
+}
+
+/// Capture against the chosen reference outline.
+pub fn capture_shaped(
+    ring: &[Pt],
+    sources: Vec<SourceItem>,
+    doors: Vec<SourceDoor>,
+    reference: Reference,
+) -> Result<Captured, ServiceError> {
     let fine = simplify(ring, FINE_TOLERANCE_MM);
-    let coarse = coarse_outline(ring);
-    if coarse.len() < 3 {
+    let room_coarse = coarse_outline(ring);
+    if room_coarse.len() < 3 {
         return Err(ServiceError::Invalid("the room's outline has fewer than three corners".to_string()));
     }
     // The room's centroid is the blueprint's origin, so a blueprint does not carry the
     // project's survey offset around with it.
     let origin = centroid(&fine);
-    let fine: Vec<Pt> = fine.iter().map(|&p| translate(p, origin)).collect();
-    let coarse: Vec<Pt> = coarse.iter().map(|&p| translate(p, origin)).collect();
+    let turn = match reference {
+        Reference::Room => 0.0,
+        Reference::Box => -dominant_angle_deg(&fine.iter().map(|&p| translate(p, origin)).collect::<Vec<_>>()),
+    };
+    let local = |p: Pt| rotate(translate(p, origin), turn);
+    let fine: Vec<Pt> = fine.iter().map(|&p| local(p)).collect();
+    let coarse: Vec<Pt> = match reference {
+        Reference::Room => room_coarse.iter().map(|&p| local(p)).collect(),
+        Reference::Box => bounding_rect(&fine),
+    };
     let es = edges(&coarse);
+    let sources: Vec<SourceItem> = sources
+        .into_iter()
+        .map(|mut s| {
+            s.footprint = s.footprint.iter().map(|&p| local(p)).collect();
+            s.facing = s.facing.map(|f| rotate(f, turn));
+            s
+        })
+        .collect();
+    let doors: Vec<SourceDoor> = doors
+        .into_iter()
+        .map(|mut d| {
+            d.footprint = d.footprint.iter().map(|&p| local(p)).collect();
+            d
+        })
+        .collect();
+    let origin = (0.0, 0.0);
 
     let mut skipped = Skipped::default();
     let mut items: Vec<(BlueprintItem, Measured)> = Vec::new();
@@ -187,7 +234,7 @@ fn blueprint_doors(doors: Vec<SourceDoor>, origin: Pt, coarse: &[Pt], es: &[Edge
 }
 
 /// One item as a recipe against `coarse`'s edges, plus the figures `find_follows` needs.
-fn place_item(s: SourceItem, origin: Pt, coarse: &[Pt], es: &[Edge]) -> (BlueprintItem, Measured) {
+pub(super) fn place_item(s: SourceItem, origin: Pt, coarse: &[Pt], es: &[Edge]) -> (BlueprintItem, Measured) {
     let pts: Vec<Pt> = s.footprint.iter().map(|&p| translate(p, origin)).collect();
     let c = centroid(&pts);
     let f = s.facing.map_or((1.0, 0.0), unit);
@@ -264,14 +311,14 @@ fn place_item(s: SourceItem, origin: Pt, coarse: &[Pt], es: &[Edge]) -> (Bluepri
     )
 }
 
-fn segment_distance(c: Pt, e: &Edge) -> f64 {
+pub(super) fn segment_distance(c: Pt, e: &Edge) -> f64 {
     let t = dot(sub(c, e.a), e.t).clamp(0.0, e.len);
     dist(c, e.point(t, 0.0))
 }
 
 /// Mark each free item that sits inside another, or abuts the previous one on its edge.
 /// Containment wins: a shelf in a wardrobe is the wardrobe's, not its neighbour's.
-fn find_follows(items: &mut [(BlueprintItem, Measured)]) {
+pub(super) fn find_follows(items: &mut [(BlueprintItem, Measured)]) {
     let n = items.len();
     let mut follows: Vec<Option<Follow>> = vec![None; n];
     // First containment, for every item: a run is then made only of items that are not
@@ -463,7 +510,7 @@ pub fn capture_room(
             });
         }
     }
-    let captured = capture_with_doors(&ring, sources, room_doors(state, project, room)?)?;
+    let captured = capture_shaped(&ring, sources, room_doors(state, project, room)?, Reference::Box)?;
     Ok(Some((captured, room_name)))
 }
 

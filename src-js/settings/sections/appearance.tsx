@@ -30,6 +30,7 @@ const INK = "#222222";
 const FILL = "#dddddd";
 const FILL_HOVER = "#cccccc";
 const ACCENT = "#c8102e";
+const BLUEPRINT_BOX = "#2563eb";
 
 const EMPTY: Appearance = {};
 
@@ -211,6 +212,20 @@ export function AppearanceSection({
             INK,
             "The floor ring. It draws in the room ink by default, like ceilings, and is told apart from both the room outline and the ceiling ring by its DOT, which is not settable here.",
           )}
+          <tr>
+            <th scope="row">Blueprint box</th>
+            <td>
+              <OptionalColour
+                value={appearance.blueprint_box}
+                fallback={BLUEPRINT_BOX}
+                title="The box a blueprint's items are written against: its outline in the blueprint viewer (where its nodes are edited) and over the plan when a blueprint is laid into a room."
+                onChange={(blueprint_box) => editAppearance((a) => ({ ...a, blueprint_box }))}
+              />
+            </td>
+            <td className="cell-absent">&mdash;</td>
+            <td className="cell-absent">&mdash;</td>
+            <td className="cell-absent">&mdash;</td>
+          </tr>
         </tbody>
       </table>
     </Block>

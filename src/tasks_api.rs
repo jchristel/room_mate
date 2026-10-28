@@ -91,6 +91,11 @@ pub enum CreateBody {
         phase: String,
         #[serde(default)]
         overwrite_rls: bool,
+        /// Carry the project's tag rules for the sheet's viewport types. On by default, which is
+        /// what a request written before the field meant; the library page turns it off, because a
+        /// sheet made on its own is the layout and nothing placed on it.
+        #[serde(default = "yes")]
+        with_tags: bool,
     },
     /// Bring rooms populated earlier back in line with their assignments' blueprints.
     UpdateRoom {
@@ -187,7 +192,7 @@ pub async fn http_create_tasks(
                 }
             }
         }
-        CreateBody::CreateRls { sheet_id, room_ids, phase, overwrite_rls } => {
+        CreateBody::CreateRls { sheet_id, room_ids, phase, overwrite_rls, with_tags } => {
             if room_ids.len() > MAX_ROOMS_PER_REQUEST {
                 return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_REQUEST} rooms at a time")));
             }
@@ -205,7 +210,12 @@ pub async fn http_create_tasks(
                     Err(e) => return Err(service_error(e)),
                 };
                 match rls_from_sheet(&state, &projects, &project_id, &sheet_id, &room, &phase, overwrite_rls) {
-                    Ok(new) => out.push(queue(&projects, &project_id, &room_id, new)),
+                    Ok(mut new) => {
+                        if !with_tags {
+                            new.tag_rules.clear();
+                        }
+                        out.push(queue(&projects, &project_id, &room_id, new));
+                    }
                     Err(ServiceError::Invalid(reason)) => out.push(refusal(&room_id, "", reason)),
                     Err(e) => return Err(service_error(e)),
                 }

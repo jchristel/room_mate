@@ -12,6 +12,7 @@ import type {
   BlueprintSummary,
   ItemOverride,
   Mapping,
+  Point,
   ProjectRow,
   ResolveResponse,
   RevisionContent,
@@ -38,6 +39,19 @@ async function send<T>(method: string, url: string, body: unknown): Promise<Sent
  *  be read gets the default, as the viewer does. */
 export const getTagFields = (project: string): Promise<readonly string[]> =>
   apiGet<unknown>(`/api/settings/resolve/${encodeURIComponent(project)}`).then(tagFieldsOf, () => DEFAULT_TAG_FIELDS);
+
+/** The colour the blueprint box is drawn in: `[appearance] blueprint_box`, else a blue. */
+export const DEFAULT_BOX_COLOUR = "#2563eb";
+export const getBoxColour = (project: string): Promise<string> =>
+  apiGet<{ settings?: { appearance?: { blueprint_box?: unknown } } }>(`/api/settings/resolve/${encodeURIComponent(project)}`).then(
+    (r) => (typeof r.settings?.appearance?.blueprint_box === "string" && r.settings.appearance.blueprint_box ? r.settings.appearance.blueprint_box : DEFAULT_BOX_COLOUR),
+    () => DEFAULT_BOX_COLOUR,
+  );
+
+/** The content written again against an edited box: the items and doors keep their place in the room and
+ *  become recipes against the new edges. A read of a draft; nothing is stored. */
+export const reshape = (project: string, content: RevisionContent, target: { nodes: Point[] } | { to: "rectangle" | "room" }) =>
+  send<RevisionContent>("POST", `${base(project)}/blueprints/reshape`, { content, ...target });
 
 export const listProjects = () => apiGet<ProjectRow[]>("/projects");
 export const listBlueprints = (project: string) => apiGet<BlueprintSummary[]>(`${base(project)}/blueprints`);

@@ -715,7 +715,7 @@
   /* The blueprint ghost: strokes and a light tint only, so the plan beneath stays readable; it
      never takes a click, which belongs to the room pick. */
   .bp-room { fill: none; stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; pointer-events: none; }
-  .bp-box { fill: var(--accent); fill-opacity: 0.06; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+  .bp-box { fill: #2563eb; fill-opacity: 0.06; stroke: #2563eb; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
   /* A handle is a short line with a wide, round, non-scaling stroke: a dot that stays one size on screen. */
   .bp-handle { stroke: var(--accent); stroke-width: 13px; stroke-linecap: round; vector-effect: non-scaling-stroke;
                pointer-events: stroke; cursor: grab; touch-action: none; }
