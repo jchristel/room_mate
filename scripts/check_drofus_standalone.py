@@ -18,7 +18,8 @@ FORBIDDEN_CRATES = ("roommate", "roommate_shared")
 def main():
     problems = []
     with open(os.path.join(ROOT, "Cargo.toml"), encoding="utf-8") as f:
-        manifest = f.read()
+        # comments explain the rule and may quote what it forbids
+        manifest = "\n".join(line.split("#", 1)[0] for line in f.read().splitlines())
     if re.search(r"\bpath\s*=", manifest.replace('path = "src/', "")):
         problems.append("Cargo.toml has a path dependency")
     if re.search(r"workspace\s*=\s*true", manifest):
