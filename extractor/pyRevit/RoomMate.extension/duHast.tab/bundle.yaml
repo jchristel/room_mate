@@ -11,6 +11,7 @@
 # with the real one -- and command ids are built from the folder names inside
 # the extension, so identical paths would collide in the generated assembly.
 layout:
+  - RoomMate
   - Export
 
 # bundle tooltip

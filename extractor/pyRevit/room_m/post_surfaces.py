@@ -104,6 +104,7 @@ from room_m.post_entity import (
 
 from room_m.utils.phase_filter import (
     in_selected_phase,
+    in_scope,
 )
 
 
@@ -263,6 +264,8 @@ def post_payload_stream(push, run_envelope, entries):
                     duhast_object_to_plain(element), contribution["offsets"]
                 )
                 if not in_selected_phase(out_element, contribution["allowed_ids"]):
+                    continue
+                if not in_scope(out_element, block):
                     continue
                 out_element["model_id"] = model_id
                 write_ndjson_line(gz, out_element)

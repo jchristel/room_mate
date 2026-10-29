@@ -912,6 +912,68 @@ def apply_tasks_entry(doc, uiapp, output, forms):
     return return_value
 
 
+def export_all_entry(doc, uiapp, output, forms):
+    """Every export in one window: what to push, to which project, under which phase, and how much.
+
+    1. Pick the models (as the other export buttons do).
+    2. Read what the window needs: the server's projects, the phases the models share, and their levels.
+    3. Show the window (`room_m.export_window`): check boxes for the entities, the project and phase, and
+       the whole model or chosen levels. A level choice is by name across the models and becomes a
+       level-scoped push per model (`scope` on the model block; the server keeps the other levels).
+    4. Run the export as the single-entity buttons do (`_run_export`).
+
+    The Revit export itself still reads whole models (duHast has no level filter yet); a level choice
+    narrows what is SENT and replaced, not what Revit reads.
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_docs = pick_document(doc, forms, button_name="Select model(s) to export", multiselect=True)
+        if not selected_docs:
+            return_value.append_message("No document(s) selected")
+            return return_value
+
+        from room_m import export_form, export_window
+        from room_m.post_common import fetch_projects
+        from room_m.utils.generic import common_phase_names, document_levels
+
+        ok, status, payload = fetch_projects()
+        if not ok:
+            forms.alert("Could not load projects from the server.\n\n{}".format(payload),
+                        title="Roommate - export aborted", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: {}".format(payload))
+            return return_value
+        if not payload:
+            return_value.update_sep(False, "Export aborted: the server has no registered projects.")
+            return return_value
+        phases = common_phase_names(selected_docs)
+        if not phases:
+            forms.alert("The selected models share no phase name, so there is no single phase to export. "
+                        "Export them separately.", title="Roommate - export aborted", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: no common phase.")
+            return return_value
+
+        choice = export_window.show(forms, selected_docs, payload, phases, [document_levels(d) for d in selected_docs])
+        if choice is None:
+            return_value.append_message("Export cancelled")
+            return return_value
+
+        return_value.append_message(export_form.summary(
+            choice["entities"], choice["project"]["name"], choice["phase"], selected_docs, choice["levels"]))
+        _run_export(
+            selected_docs, choice["project"], choice["phase"], choice["entities"],
+            return_value, forms, levels=choice["levels"])
+    except Exception as e:
+        return_value.update_sep(False, "Export failed with exception: {}".format(e))
+        print("Export failed with exception: {}".format(e))
+    return return_value
+
+
 def export_entry(doc, uiapp, output, forms, entities):
 
     """
@@ -987,69 +1049,7 @@ def export_entry(doc, uiapp, output, forms, entities):
             return return_value
         return_value.append_message("Pushing phase '{}'".format(phase_name))
 
-        # One envelope for the whole run: one project, one phase, one moment
-        # of reading. Built before the loop so every model in the push shares a
-        # snapshot id -- which is what makes "these documents were read
-        # together" a thing the store can express.
-        run_envelope = build_run_envelope(project, phase_name)
-
-        # get going
-        model_counter = 0
-
-        # One bucket per entity, filled model by model and posted once at the
-        # end. The export is the slow half and happens per document; the push is
-        # one request per entity for the whole run.
-        buckets = dict((entity, []) for entity in entities)
-
-        # Read inside the `with` and acted on outside it, rather than reaching
-        # for `pb.cancelled` after the progress bar has exited.
-        cancelled = False
-
-        # set up a progress bar
-        with forms.ProgressBar(
-            title="Exporting model: {value} of {max_value}", cancellable=True
-        ) as pb:
-
-            # get data for each selected document. Each model's export runs in
-            # its own try: one model failing (an export exception, a broken
-            # envelope) must not abandon the remaining models. It costs that
-            # model's contribution to every bucket and nothing else -- the run
-            # still pushes what it did read, and still ends red.
-            for selected_doc in selected_docs:
-
-                # update progress bar
-                model_counter += 1
-                pb.update_progress(model_counter, max_value=len(selected_docs))
-
-                try:
-                    export_model(
-                        selected_doc, phase_name, return_value, entities, buckets)
-                except Exception as e:
-                    return_value.update_sep(
-                        False, "{}: failed with exception: {}".format(selected_doc.Title, e)
-                    )
-
-                # check for cancel
-                if pb.cancelled:
-                    cancelled = True
-                    return_value.update_sep(False, "User cancelled.")
-                    break
-
-        # A cancelled run pushes nothing. The alternative -- sending the models
-        # read so far -- would store a partial run under one snapshot id, which
-        # reads downstream as "these are the documents that were exported
-        # together" and would be a lie. Someone who cancels wants nothing sent.
-        if cancelled:
-            return return_value
-
-        for entity in entities:
-            entries = buckets[entity]
-            if not entries:
-                # Nothing was read for this entity at all -- every model failed,
-                # and each failure is already on `return_value`. Posting an empty
-                # bucket would only add a second, vaguer complaint.
-                continue
-            ENTITY_EXPORTERS[entity].post_bucket(run_envelope, entries, return_value)
+        _run_export(selected_docs, project, phase_name, entities, return_value, forms)
 
     except Exception as e:
         message = "Failed to export {} data with exception: {}".format(
@@ -1062,7 +1062,99 @@ def export_entry(doc, uiapp, output, forms, entities):
     return return_value
 
 
-def export_model(selected_doc, phase_name, return_value, entities, buckets):
+def _level_ids(levels, selected_doc):
+    """The ids of `selected_doc`'s levels named in `levels` (None for the whole model), or None for no
+    scope. An empty list is a model with none of the chosen levels: the caller leaves it out."""
+    if levels is None:
+        return None
+    from room_m import export_form
+    from room_m.utils.generic import document_levels
+
+    return export_form.scope_for_doc(document_levels(selected_doc), levels)
+
+
+def _run_export(selected_docs, project, phase_name, entities, return_value, forms, levels=None):
+    """Export `entities` from `selected_docs` and push them to `project` under `phase_name`.
+
+    The part of a run that is the same whichever way the choices were made (the buttons that ask in
+    turn, or the export window that asks once). `levels` is None to push whole models, or a list of level
+    NAMES: each model then pushes a level-scoped push of its own ids of those levels
+    (`utils.phase_filter.in_scope`), and a model that has none of them is left out and said so."""
+    # One envelope for the whole run: one project, one phase, one moment
+    # of reading. Built before the loop so every model in the push shares a
+    # snapshot id -- which is what makes "these documents were read
+    # together" a thing the store can express.
+    run_envelope = build_run_envelope(project, phase_name)
+
+    # get going
+    model_counter = 0
+
+    # One bucket per entity, filled model by model and posted once at the
+    # end. The export is the slow half and happens per document; the push is
+    # one request per entity for the whole run.
+    buckets = dict((entity, []) for entity in entities)
+
+    # Read inside the `with` and acted on outside it, rather than reaching
+    # for `pb.cancelled` after the progress bar has exited.
+    cancelled = False
+
+    # set up a progress bar
+    with forms.ProgressBar(
+        title="Exporting model: {value} of {max_value}", cancellable=True
+    ) as pb:
+
+        # get data for each selected document. Each model's export runs in
+        # its own try: one model failing (an export exception, a broken
+        # envelope) must not abandon the remaining models. It costs that
+        # model's contribution to every bucket and nothing else -- the run
+        # still pushes what it did read, and still ends red.
+        for selected_doc in selected_docs:
+
+            # update progress bar
+            model_counter += 1
+            pb.update_progress(model_counter, max_value=len(selected_docs))
+
+            try:
+                level_ids = _level_ids(levels, selected_doc)
+                if level_ids is not None and not level_ids:
+                    # none of the chosen levels exist here: pushing it unscoped would replace the model's
+                    # whole snapshot with nothing, so it is left out
+                    return_value.append_message(
+                        "{}: has none of the chosen level(s), so it was left out".format(selected_doc.Title))
+                else:
+                    export_model(
+                        selected_doc, phase_name, return_value, entities, buckets,
+                        level_ids=level_ids)
+            except Exception as e:
+                return_value.update_sep(
+                    False, "{}: failed with exception: {}".format(selected_doc.Title, e)
+                )
+
+            # check for cancel
+            if pb.cancelled:
+                cancelled = True
+                return_value.update_sep(False, "User cancelled.")
+                break
+
+    # A cancelled run pushes nothing. The alternative -- sending the models
+    # read so far -- would store a partial run under one snapshot id, which
+    # reads downstream as "these are the documents that were exported
+    # together" and would be a lie. Someone who cancels wants nothing sent.
+    if cancelled:
+        return return_value
+
+    for entity in entities:
+        entries = buckets[entity]
+        if not entries:
+            # Nothing was read for this entity at all -- every model failed,
+            # and each failure is already on `return_value`. Posting an empty
+            # bucket would only add a second, vaguer complaint.
+            continue
+        ENTITY_EXPORTERS[entity].post_bucket(run_envelope, entries, return_value)
+
+
+
+def export_model(selected_doc, phase_name, return_value, entities, buckets, level_ids=None):
     """Export one model's `entities` into the run's `buckets`, scoped to
     `phase_name`, recording any failure on `return_value`.
 
@@ -1076,11 +1168,18 @@ def export_model(selected_doc, phase_name, return_value, entities, buckets):
     model with no rooms. It no longer does, so the entities are independent and
     the loop below is genuinely a loop rather than a sequence with a rule in it.
 
+    `level_ids` (the ids of this model's levels to replace, or None for the whole model) is stamped on
+    the block as its `scope`.
+
     Each entity gets its own deep copy of the model's envelope block: a rooms
     push stamps `room_boundary` and `levels` onto its copy and a doors push has
     no key for either, and two entities sharing one nested dict is the exact
     cross-contamination the old per-push deep copy existed to prevent."""
     block = build_model_block(selected_doc, return_value)
+    if level_ids:
+        # a level-scoped push: the server replaces this model's elements on these levels and keeps the
+        # rest. Every exporter's post step drops an element on any other level (`phase_filter.in_scope`).
+        block["scope"] = {"levels": list(level_ids)}
 
     for entity in entities:
         exporter = ENTITY_EXPORTERS[entity]
