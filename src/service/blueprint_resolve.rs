@@ -277,7 +277,7 @@ fn shape_cost(a: &[Edge], ta: &[f64], b: &[Edge], tb: &[f64], shift: usize) -> f
 }
 
 /// The shift with the lowest shape cost, and that cost.
-fn best_shift(a: &[Pt], b: &[Pt]) -> (usize, f64) {
+pub(super) fn best_shift(a: &[Pt], b: &[Pt]) -> (usize, f64) {
     let (ea, eb) = (edges(a), edges(b));
     let (ta, tb) = (turns(a), turns(b));
     (0..ea.len())

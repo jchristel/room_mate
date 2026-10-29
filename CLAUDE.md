@@ -528,6 +528,24 @@ leaves an empty list out of a task, so the page reads a task back with its lists
   room's point, in the plan's own axes (`NewRoomTag` on the room's point, then the head moved). Space and area tag kinds,
   and a tag's own rotation, are not placed yet.
 
+## Create-RLS: what the task says beyond "copy this sheet"
+
+A `create_rls` task carries `rls` (`service::rls_plan`, built in `task_build::rls_from_sheet`): the `sheet_size` asked for
+(`a0`..`a3`, absent = the template's) and, per elevation marker, where it and each of its views go **in this room**, in the
+target model's frame, mm. **The plug-in does not read it yet.**
+
+- **Transfer is by the walls.** Template and target are read at the COARSE outline, the wall each elevation faces
+  (`elevation_facing`) is mapped by the cyclic shift that fits the shapes (`best_shift`, no reflection), and then the marker
+  keeps its fraction along the wall and its distance from it, each view's line ends and direction keep their offsets from the
+  marker in the frame of the wall that view faces, and the **depth keeps its length** (a view shows a stretch of wall, not a
+  share of the room). `depth_to_wall_mm` is how far the faced wall is, for a person who wants "to the room boundary".
+- **A marker is placed once, from its lowest-numbered view**, so its views share one point; placing it from each view's own
+  wall would give four different markers in a room that scaled unevenly.
+- **Different coarse edge counts place nothing** (the blueprint rule) and say so as a finding; the sheet is still made.
+- `POST /projects/{id}/tasks/rls-preview` is the same read for one room and stores nothing, so a preview is the task. A request
+  may override a view's depth (`depths`: `depth_mm`, or `to_wall`). **Not built**: tags assigned by RoomMate per viewport and the
+  task preview on the tasks page (the methodology tab asks for both); tags are still the plug-in's, from the rules.
+
 ## Tag rules: where a tag goes, learned from tags in Revit views
 
 Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`), MCP reads (`list_tag_rules`,

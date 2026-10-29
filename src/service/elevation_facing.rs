@@ -264,7 +264,7 @@ pub fn for_sheet(state: &AppState, project: &str, record: &SheetRecord) -> Resul
     Ok(out)
 }
 
-fn room_ring(state: &AppState, project: &str, room: &SheetRoom) -> Result<Option<Vec<Pt>>, ServiceError> {
+pub(super) fn room_ring(state: &AppState, project: &str, room: &SheetRoom) -> Result<Option<Vec<Pt>>, ServiceError> {
     let target = RoomRef { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
     let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
         return Ok(None);

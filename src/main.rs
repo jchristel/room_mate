@@ -58,8 +58,8 @@ use roommate::sheets_api::{
 };
 use roommate::tag_rules_api::{http_delete_tag_rule, http_get_tag_rule, http_list_tag_rules, http_observe_tags};
 use roommate::tasks_api::{
-    http_claim_tasks, http_create_tasks, http_dismiss_task, http_get_task, http_list_tasks, http_report_tasks,
-    http_resend_task,
+    http_claim_tasks, http_create_tasks, http_dismiss_task, http_get_task, http_list_tasks, http_preview_rls,
+    http_report_tasks, http_resend_task,
 };
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
@@ -334,6 +334,7 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         // Room tasks: work for a Revit session. See `tasks`. `roomtasks` is the session's side
         // (a POST, because asking marks the tasks in progress); `tasks` is the person's.
         .route("/projects/{id}/tasks", get(http_list_tasks).post(http_create_tasks))
+        .route("/projects/{id}/tasks/rls-preview", post(http_preview_rls))
         .route("/projects/{id}/tasks/{task}", get(http_get_task))
         .route("/projects/{id}/tasks/{task}/dismiss", post(http_dismiss_task))
         .route("/projects/{id}/tasks/{task}/resend", post(http_resend_task))

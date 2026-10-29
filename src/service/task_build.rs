@@ -14,7 +14,9 @@
 use serde_json::{json, Value};
 
 use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
+use super::elevation_facing::room_ring;
 use super::placement;
+use super::rls_plan::{check_size, has_elevations, transfer, RlsPlan, RlsRequest};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
 use super::sheet_suggest::{distance, room_summary, Signature};
@@ -23,7 +25,7 @@ use crate::assignments::{Assignment, Mapping};
 use crate::blueprints::{self, BlueprintError};
 use crate::contract::Point2D;
 use crate::service::blueprint_model::BlueprintSheet;
-use crate::sheets::{self, SheetError};
+use crate::sheets::{self, SheetError, SheetRoom};
 use crate::state::AppState;
 use crate::tag_rules::{self, RuleSummary};
 use crate::tasks::{BlueprintRef, NewTask, TaskItem, TaskKind, TaskRoom, UpdateMode};
@@ -190,6 +192,7 @@ pub fn populate_from_assignment(
         Vec::new()
     };
     Ok(NewTask {
+        rls: None,
         kind: TaskKind::PopulateRoom,
         update_mode: None,
         dry_run: false,
@@ -293,8 +296,12 @@ pub fn rls_from_sheet(
     sheet_id: &str,
     room: &RoomRef,
     phase: &str,
-    overwrite_rls: bool,
+    request: &RlsRequest,
 ) -> Result<NewTask, ServiceError> {
+    let sheet_size = match request.sheet_size.as_deref().map(check_size).transpose() {
+        Ok(size) => size,
+        Err(reason) => return refuse(reason),
+    };
     let record = match sheets::load(projects_dir, project, sheet_id) {
         Ok(r) => r,
         Err(SheetError::NotFound(m) | SheetError::Invalid(m)) => return refuse(m),
@@ -331,6 +338,36 @@ pub fn rls_from_sheet(
         )),
         (Some(_), None) => {}
     }
+    // Where the template's elevation markers and views go in this room (`service::rls_plan`).
+    let mut markers = Vec::new();
+    if has_elevations(&record.sheet) {
+        let target = SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
+        let template = match &record.room {
+            Some(r) => room_ring(state, project, r)?,
+            None => None,
+        };
+        match (template, room_ring(state, project, &target)?) {
+            (Some(t), Some(g)) => {
+                let (placed, notes) = transfer(&record.sheet, &t, &g, request);
+                markers = placed;
+                findings.extend(notes.into_iter().map(|n| finding("elevation_not_placed", n)));
+            }
+            (None, _) => findings.push(finding(
+                "elevation_not_placed",
+                "the elevations were not placed: the room the sheet was made for is not on the server".to_string(),
+            )),
+            _ => {}
+        }
+    }
+    for o in &request.depths {
+        if !markers.iter().any(|m| m.views.iter().any(|v| v.view_id == o.view_id)) {
+            findings.push(finding(
+                "depth_override_unused",
+                format!("no placed view {} to change the depth of", o.view_id),
+            ));
+        }
+    }
+    let rls = (sheet_size.is_some() || !markers.is_empty()).then_some(RlsPlan { sheet_size, markers });
     // No items are placed: the rules for every element are carried, for the plug-in to apply to
     // whatever it finds in the room.
     let tag_rules = tag_rules_for(
@@ -341,6 +378,7 @@ pub fn rls_from_sheet(
         &mut findings,
     );
     Ok(NewTask {
+        rls,
         kind: TaskKind::CreateRls,
         update_mode: None,
         dry_run: false,
@@ -349,7 +387,7 @@ pub fn rls_from_sheet(
         phase: phase.to_string(),
         overwrite_layout: false,
         create_rls: true,
-        overwrite_rls,
+        overwrite_rls: request.overwrite_rls,
         blueprint: None,
         library_sheet_id: Some(record.id.clone()),
         items: Vec::new(),

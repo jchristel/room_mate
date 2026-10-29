@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::service::blueprint_model::{BlueprintSheet, ItemClass, Property};
+use crate::service::rls_plan::RlsPlan;
 use crate::state::is_path_safe_component;
 use crate::tag_rules::RuleSummary;
 
@@ -175,6 +176,11 @@ pub struct Task {
     /// The sheet layouts to make (no tags: the Revit side applies the tag rules, decision 24).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<BlueprintSheet>,
+    /// `create_rls`: the sheet size asked for and where each elevation marker and its views go in
+    /// this room (`service::rls_plan`). Absent on a task made before it existed, or for a sheet
+    /// with nothing to place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rls: Option<RlsPlan>,
     /// How to tag what the sheets show, as the rules were when the task was made: one per key
     /// (`tag_rules`), for the viewport types of the sheets and, for a populate task, only the
     /// families and types it places. The plug-in applies them to the items it places or finds.
@@ -261,6 +267,7 @@ pub struct NewTask {
     pub library_sheet_id: Option<String>,
     pub items: Vec<TaskItem>,
     pub sheets: Vec<BlueprintSheet>,
+    pub rls: Option<RlsPlan>,
     pub tag_rules: Vec<RuleSummary>,
     pub findings: Vec<Value>,
 }
@@ -458,6 +465,7 @@ pub fn create(projects_dir: &Path, project: &str, new: NewTask) -> Result<Task, 
         library_sheet_id: new.library_sheet_id,
         items: new.items,
         sheets: new.sheets,
+        rls: new.rls,
         tag_rules: new.tag_rules,
         findings: new.findings,
         created_at: stamp.clone(),
@@ -615,6 +623,7 @@ mod tests {
             library_sheet_id: None,
             items: vec![],
             sheets: vec![],
+            rls: None,
             tag_rules: vec![],
             findings: vec![],
         }
