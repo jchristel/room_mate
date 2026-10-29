@@ -78,6 +78,7 @@ pub mod handlers;
 pub mod network;
 pub mod reference;
 pub mod reports_api;
+pub mod scoped_push;
 pub mod service;
 pub mod settings;
 pub mod settings_api;
