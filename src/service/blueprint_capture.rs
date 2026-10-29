@@ -365,7 +365,7 @@ pub(super) fn find_follows(items: &mut [(BlueprintItem, Measured)]) {
     }
 }
 
-fn properties_of(map: &PropertyMap) -> Vec<Property> {
+pub(super) fn properties_of(map: &PropertyMap) -> Vec<Property> {
     map.iter()
         .map(|(k, v)| Property { name: k.to_string(), value: v.value.clone() })
         .collect()

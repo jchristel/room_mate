@@ -543,8 +543,17 @@ target model's frame, mm. **The plug-in does not read it yet.**
   wall would give four different markers in a room that scaled unevenly.
 - **Different coarse edge counts place nothing** (the blueprint rule) and say so as a finding; the sheet is still made.
 - `POST /projects/{id}/tasks/rls-preview` is the same read for one room and stores nothing, so a preview is the task. A request
-  may override a view's depth (`depths`: `depth_mm`, or `to_wall`). **Not built**: tags assigned by RoomMate per viewport and the
-  task preview on the tasks page (the methodology tab asks for both); tags are still the plug-in's, from the rules.
+  may override a view's depth (`depths`: `depth_mm`, or `to_wall`).
+- **Tags are a PROTOTYPE** (`service::rls_tags`, `rls.tags` in the task and in the preview). Every item attributed to the room
+  (no nested components) is looked up in the library's tag rules for the plan viewport type and tagged in the plan at the rule's
+  offset (paper mm x the view scale, turned with the item). What no rule tags is **offered, per view** (`candidates`) and overall
+  (`items_without_tags`, with the views that show it and why no rule did); a person answers per item in `tags.choices`: `tag` it in a
+  named view (a default head beside it, a rectangle round its footprint, the text of `tags.tag_property`: `$id`, `$type_name`,
+  `$family_name` or a property name, a setting of its own and not the viewer's FF&E tag) or `dismiss` it. **Elevations tag nothing by
+  rule, on purpose**: a rule's offset is measured in plan (`tag_rules::to_offset` drops z), which says nothing about where a tag sits
+  in an elevation, so an elevation needs offsets along the view's right and up and whether the item faces the viewer or is seen from
+  the side. A chosen elevation tag is placed along the line only. Computing it reads the room's FF&E (seconds on RHH), so a request
+  without `with_tags` skips it. The tasks page does not show it yet; the plug-in does not read it.
 
 ## Tag rules: where a tag goes, learned from tags in Revit views
 

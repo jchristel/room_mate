@@ -13,10 +13,13 @@
 
 use serde_json::{json, Value};
 
+use super::blueprint_capture::properties_of;
 use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
 use super::elevation_facing::room_ring;
+use super::items::{assemble_items, ItemScope};
 use super::placement;
-use super::rls_plan::{check_size, has_elevations, transfer, RlsPlan, RlsRequest};
+use super::rls_plan::{check_size, has_elevations, transfer, MarkerPlan, RlsPlan, RlsRequest};
+use super::rls_tags::{plan_tags, RoomItem};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
 use super::sheet_suggest::{distance, room_summary, Signature};
@@ -277,6 +280,42 @@ pub fn update_from_assignment(
     Ok(new)
 }
 
+/// The FF&E attributed to a room, in the room's own model frame: what an RLS can tag. Nested
+/// components are left out (they are parts of a family, not items of the room).
+fn room_items(state: &AppState, project: &str, room: &RoomRef) -> Result<Vec<RoomItem>, ServiceError> {
+    let to_model = project_to_model(state, project, &room.model_id)?;
+    let Some(ffe) = assemble_items(state, &ItemScope { project: Some(project), ..Default::default() })? else {
+        return Ok(Vec::new());
+    };
+    let no_tier = crate::contract::PropertyMap::new();
+    Ok(ffe
+        .ffe
+        .iter()
+        .filter(|it| it.owner_rooms_qualified.contains(room) && it.item.super_component_id.is_none())
+        .map(|it| {
+            let type_props = it
+                .type_properties_ref
+                .and_then(|r| ffe.type_property_sets.get(r as usize))
+                .map_or(&no_tier, |a| a);
+            RoomItem {
+                id: it.item.id.clone(),
+                family: it.item.family_name.clone().unwrap_or_default(),
+                type_name: it.item.type_name.clone(),
+                category: it.item.category.clone(),
+                footprint: it
+                    .item
+                    .loops
+                    .first()
+                    .map(|l| l.points.iter().map(|p| to_model.point((p.x * FT_TO_MM, p.y * FT_TO_MM))).collect())
+                    .unwrap_or_default(),
+                facing: it.item.facing.as_ref().map(|f| to_model.direction((f.x, f.y))),
+                properties: properties_of(&it.item.properties),
+                type_properties: properties_of(type_props),
+            }
+        })
+        .collect())
+}
+
 fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
     BlueprintSheet {
         revit_sheet_id: record.revit_sheet_id.clone(),
@@ -285,6 +324,47 @@ fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
         sheet_name: record.sheet_name.clone(),
         sheet: record.sheet.clone(),
     }
+}
+
+/// Where the template's elevation markers and views go in this room (`service::rls_plan`), with a
+/// finding for whatever could not be placed.
+fn place_elevations(
+    state: &AppState,
+    project: &str,
+    room: &RoomRef,
+    record: &sheets::SheetRecord,
+    request: &RlsRequest,
+    findings: &mut Vec<Value>,
+) -> Result<Vec<MarkerPlan>, ServiceError> {
+    let mut markers = Vec::new();
+    if has_elevations(&record.sheet) {
+        let target = SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
+        let template = match &record.room {
+            Some(r) => room_ring(state, project, r)?,
+            None => None,
+        };
+        match (template, room_ring(state, project, &target)?) {
+            (Some(t), Some(g)) => {
+                let (placed, notes) = transfer(&record.sheet, &t, &g, request);
+                markers = placed;
+                findings.extend(notes.into_iter().map(|n| finding("elevation_not_placed", n)));
+            }
+            (None, _) => findings.push(finding(
+                "elevation_not_placed",
+                "the elevations were not placed: the room the sheet was made for is not on the server".to_string(),
+            )),
+            _ => {}
+        }
+    }
+    for o in &request.depths {
+        if !markers.iter().any(|m| m.views.iter().any(|v| v.view_id == o.view_id)) {
+            findings.push(finding(
+                "depth_override_unused",
+                format!("no placed view {} to change the depth of", o.view_id),
+            ));
+        }
+    }
+    Ok(markers)
 }
 
 /// A create-RLS task: one library sheet's layout for one room. Nothing is placed. A sheet whose
@@ -338,36 +418,7 @@ pub fn rls_from_sheet(
         )),
         (Some(_), None) => {}
     }
-    // Where the template's elevation markers and views go in this room (`service::rls_plan`).
-    let mut markers = Vec::new();
-    if has_elevations(&record.sheet) {
-        let target = SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
-        let template = match &record.room {
-            Some(r) => room_ring(state, project, r)?,
-            None => None,
-        };
-        match (template, room_ring(state, project, &target)?) {
-            (Some(t), Some(g)) => {
-                let (placed, notes) = transfer(&record.sheet, &t, &g, request);
-                markers = placed;
-                findings.extend(notes.into_iter().map(|n| finding("elevation_not_placed", n)));
-            }
-            (None, _) => findings.push(finding(
-                "elevation_not_placed",
-                "the elevations were not placed: the room the sheet was made for is not on the server".to_string(),
-            )),
-            _ => {}
-        }
-    }
-    for o in &request.depths {
-        if !markers.iter().any(|m| m.views.iter().any(|v| v.view_id == o.view_id)) {
-            findings.push(finding(
-                "depth_override_unused",
-                format!("no placed view {} to change the depth of", o.view_id),
-            ));
-        }
-    }
-    let rls = (sheet_size.is_some() || !markers.is_empty()).then_some(RlsPlan { sheet_size, markers });
+    let markers = place_elevations(state, project, room, &record, request, &mut findings)?;
     // No items are placed: the rules for every element are carried, for the plug-in to apply to
     // whatever it finds in the room.
     let tag_rules = tag_rules_for(
@@ -377,6 +428,15 @@ pub fn rls_from_sheet(
         None,
         &mut findings,
     );
+    let tags = match &request.tags {
+        Some(t) => Some(plan_tags(&record.sheet, &room_items(state, project, room)?, &markers, &tag_rules, t)),
+        None => None,
+    };
+    let rls = (sheet_size.is_some() || !markers.is_empty() || tags.is_some()).then_some(RlsPlan {
+        sheet_size,
+        markers,
+        tags,
+    });
     Ok(NewTask {
         rls,
         kind: TaskKind::CreateRls,

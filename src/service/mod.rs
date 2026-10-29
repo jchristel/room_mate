@@ -30,6 +30,7 @@ pub mod reach;
 pub mod reference;
 pub mod reports;
 pub mod rls_plan;
+pub mod rls_tags;
 pub mod room_locator;
 pub mod rooms;
 pub mod routing;

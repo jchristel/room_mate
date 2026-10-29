@@ -32,6 +32,7 @@ use serde_json::Value;
 use super::blueprint_geometry::{coarse_outline, dot, edges, sub, Edge, Pt};
 use super::blueprint_resolve::best_shift;
 use super::elevation_facing::{read_sheet, Elevation};
+use super::rls_tags::{TagPlan, TagRequest};
 
 /// The sizes a sheet can be asked for; the plug-in maps each to a title block family.
 pub const SIZES: [&str; 4] = ["a0", "a1", "a2", "a3"];
@@ -59,6 +60,10 @@ pub struct RlsRequest {
     /// Replace room layout sheets the room already has.
     #[serde(default)]
     pub overwrite_rls: bool,
+    /// Work out which items are tagged where (`rls_tags`) and with what a person decided. Absent:
+    /// no tag plan, which also skips reading the room's FF&E.
+    #[serde(default)]
+    pub tags: Option<TagRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,6 +97,9 @@ pub struct RlsPlan {
     pub sheet_size: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<MarkerPlan>,
+    /// Which items are tagged in which view, and which are left for a person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<TagPlan>,
 }
 
 /// `a1` for ` A1 `, or why it is not a size.
@@ -321,6 +329,7 @@ mod tests {
         let request = RlsRequest {
             sheet_size: None,
             overwrite_rls: false,
+            tags: None,
             depths: vec![
                 DepthOverride { view_id: 1, depth_mm: Some(900.0), to_wall: false },
                 DepthOverride { view_id: 2, depth_mm: None, to_wall: true },

@@ -16,6 +16,7 @@ use crate::assignments;
 use crate::blueprints_api::service_error;
 use crate::service::blueprint_capture::qualify_room;
 use crate::service::rls_plan::{DepthOverride, RlsRequest};
+use crate::service::rls_tags::TagRequest;
 use crate::service::room_locator::RoomRef;
 use crate::service::task_build::{
     populate_from_assignment, rls_from_sheet, update_from_assignment, PopulateParams, UpdateParams,
@@ -80,6 +81,8 @@ pub struct RlsPreviewBody {
     pub sheet_size: Option<String>,
     #[serde(default)]
     pub depths: Vec<DepthOverride>,
+    #[serde(default)]
+    pub tags: Option<TagRequest>,
 }
 
 /// What the task for this room would tell Revit about the sheet size and the elevations, and what
@@ -96,7 +99,12 @@ pub async fn http_preview_rls(
         Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
         Err(e) => return Err(service_error(e)),
     };
-    let request = RlsRequest { sheet_size: body.sheet_size, depths: body.depths, overwrite_rls: false };
+    let request = RlsRequest {
+        sheet_size: body.sheet_size,
+        depths: body.depths,
+        overwrite_rls: false,
+        tags: Some(body.tags.unwrap_or_default()),
+    };
     match rls_from_sheet(&state, &projects, &project_id, &body.sheet_id, &room, "preview", &request) {
         Ok(new) => Ok(Json(serde_json::json!({ "room": new.room, "rls": new.rls, "findings": new.findings }))),
         Err(e) => Err(service_error(e)),
@@ -135,6 +143,9 @@ pub enum CreateBody {
         /// Changes to how far an elevation looks, by the template's view id.
         #[serde(default)]
         depths: Vec<DepthOverride>,
+        /// What a person decided about untagged items (`rls_tags`). Ignored without `with_tags`.
+        #[serde(default)]
+        tags: Option<TagRequest>,
     },
     /// Bring rooms populated earlier back in line with their assignments' blueprints.
     UpdateRoom {
@@ -231,8 +242,13 @@ pub async fn http_create_tasks(
                 }
             }
         }
-        CreateBody::CreateRls { sheet_id, room_ids, phase, overwrite_rls, with_tags, sheet_size, depths } => {
-            let request = RlsRequest { sheet_size, depths, overwrite_rls };
+        CreateBody::CreateRls { sheet_id, room_ids, phase, overwrite_rls, with_tags, sheet_size, depths, tags } => {
+            let request = RlsRequest {
+                sheet_size,
+                depths,
+                overwrite_rls,
+                tags: with_tags.then(|| tags.unwrap_or_default()),
+            };
             if room_ids.len() > MAX_ROOMS_PER_REQUEST {
                 return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_REQUEST} rooms at a time")));
             }
