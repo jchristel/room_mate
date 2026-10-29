@@ -402,7 +402,10 @@ def fetch_projects(url=SERVER_URL_PROJECTS):
     project onboarded yet" (a hard stop for the producer), not a failure; a 2xx
     whose body isn't a JSON list is a genuine failure (unexpected server
     shape)."""
-    url = server_config.url_for(url)
+    try:
+        url = server_config.url_for(url)
+    except server_config.ServerNotSet as e:
+        return (False, None, str(e))
     client = make_client()
     try:
         response = client.GetAsync(url).Result
@@ -500,7 +503,11 @@ def _post_content(url, content):
     print stays for the interactive pyRevit console; the tuple is for the
     caller's `Result` tracking -- a failure must end the run red, not vanish
     into the console scrollback."""
-    url = server_config.url_for(url)
+    try:
+        url = server_config.url_for(url)
+    except server_config.ServerNotSet as e:
+        print(str(e))
+        return (False, None, str(e))
     client = make_client()
     try:
         response = client.PostAsync(url, content).Result

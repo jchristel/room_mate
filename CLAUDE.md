@@ -624,13 +624,20 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
 - **The macOS or Windows firewall is the usual reason a correct setup does not connect**: allow incoming connections
   for the binary, and use a fixed address or the `.local` name. A tunnel (`ssh -N -L 5151:127.0.0.1:5151 user@host`)
   needs none of this and keeps the server on loopback.
-- **The pyRevit side takes the server from `room_m/server_config.py`, resolved when a request is made** (the
-  `ROOMMATE_SERVER` environment variable, else `server.json` in `%APPDATA%\RoomMate`, else `http://127.0.0.1:5151`), and
-  the **Server** button writes it after checking the address answers. A typed address gets the default port 5151 when it
-  has none. **Every `post_*` module holds a PATH** (`/rooms`), joined to the base URL only in `post_common` (the project
-  fetch and `_post_content`): a module constant would freeze the address for a pyRevit session that stays open for hours,
-  and `scripts/check_extension.py` fails on a literal loopback address anywhere but `server_config.py`. Every run prints
-  which server it used and why (`provenance`); an unreachable one names the URL and the usual causes. Not run in Revit.
+- **The pyRevit side takes the server from `room_m/server_config.py`, resolved when a request is made**, first match
+  wins: the `ROOMMATE_SERVER` environment variable, the **open model's own settings** (extensible storage in the project
+  file, one JSON text field with a `version` and a `server` key: `room_m/project_settings.py`), `server.json` in
+  `%APPDATA%\RoomMate`, and then **nothing**: no silent loopback default any more. A computer that has never been told
+  gets `ServerNotSet`, whose message points at the **Server** button (`local` there chooses this computer on purpose;
+  `reset` forgets). The button checks the address answers, then writes the model AND the file, so a model carries its
+  server to whoever opens it and a model without one still works from the file. The model's copy is shared by everyone
+  and travels with a copy of the file, which is why it is only the second source. A typed address gets the default port
+  5151 when it has none. **Every `post_*` module holds a PATH** (`/rooms`), joined to the base URL only in `post_common`
+  (the project fetch and `_post_content`, which report `ServerNotSet` as a failed push, never raise): a module constant
+  would freeze the address for a pyRevit session that stays open for hours, and `scripts/check_extension.py` fails on a
+  literal loopback address anywhere but `server_config.py`. Every run prints which server it used and why
+  (`provenance`); an unreachable one names the URL and the usual causes. Not run in Revit (the extensible-storage
+  read and write are the untested part)
 
 ## Traps in the door export
 

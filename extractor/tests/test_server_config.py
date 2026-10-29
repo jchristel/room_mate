@@ -43,42 +43,73 @@ class Resolve(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.path = os.path.join(self.dir, "RoomMate", "server.json")
         self.addCleanup(shutil.rmtree, self.dir, True)
+        self.addCleanup(sc.set_project_reader, None)
+        sc.set_project_reader(None)
 
     def write(self, text):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         with open(self.path, "w") as f:
             f.write(text)
 
-    def test_the_server_on_this_computer_is_the_default(self):
-        self.assertEqual(("http://127.0.0.1:5151", "default"), sc.resolve({}, self.path))
+    def test_with_nothing_kept_there_is_no_server_and_no_silent_default(self):
+        self.assertEqual((None, "none"), sc.resolve({}, self.path))
+        with self.assertRaises(sc.ServerNotSet) as raised:
+            sc.base_url({}, self.path)
+        self.assertIn("Server button", str(raised.exception))
+        with self.assertRaises(sc.ServerNotSet):
+            sc.url_for("/rooms", {}, self.path)
 
-    def test_a_kept_address_beats_the_default_and_the_environment_beats_both(self):
+    def test_the_model_beats_the_file_and_the_environment_beats_both(self):
         self.write(json.dumps({"url": "192.168.0.97"}))
-        self.assertEqual(("http://192.168.0.97:5151", "file"), sc.resolve({}, self.path))
+        sc.set_project_reader(lambda: "10.0.0.5")
+        self.assertEqual(("http://10.0.0.5:5151", "project"), sc.resolve({}, self.path))
         env = {sc.ENV_VAR: "mac.local:6000"}
         self.assertEqual(("http://mac.local:6000", "env"), sc.resolve(env, self.path))
 
-    def test_a_value_that_does_not_parse_falls_through_to_the_next_source(self):
+    def test_a_model_with_no_address_falls_back_to_the_file_and_then_to_nothing(self):
+        sc.set_project_reader(lambda: None)
+        self.assertEqual((None, "none"), sc.resolve({}, self.path))
         self.write(json.dumps({"url": "192.168.0.97"}))
+        self.assertEqual(("http://192.168.0.97:5151", "file"), sc.resolve({}, self.path))
+
+    def test_a_reader_that_fails_or_a_value_that_does_not_parse_falls_through(self):
+        self.write(json.dumps({"url": "192.168.0.97"}))
+
+        def broken():
+            raise RuntimeError("no document")
+
+        sc.set_project_reader(broken)
+        self.assertEqual("file", sc.resolve({}, self.path)[1])
+        sc.set_project_reader(lambda: "ftp://nope")
+        self.assertEqual("file", sc.resolve({}, self.path)[1])
         self.assertEqual("file", sc.resolve({sc.ENV_VAR: "ftp://nope"}, self.path)[1])
+        sc.set_project_reader(None)
         self.write("{not json")
-        self.assertEqual("default", sc.resolve({}, self.path)[1])
+        self.assertEqual("none", sc.resolve({}, self.path)[1])
         self.write(json.dumps({"url": 5}))
-        self.assertEqual("default", sc.resolve({}, self.path)[1])
+        self.assertEqual("none", sc.resolve({}, self.path)[1])
         self.write(json.dumps(["not", "a", "dict"]))
-        self.assertEqual("default", sc.resolve({}, self.path)[1])
+        self.assertEqual("none", sc.resolve({}, self.path)[1])
 
     def test_it_is_read_every_time_not_once(self):
-        self.assertEqual("http://127.0.0.1:5151", sc.base_url({}, self.path))
+        with self.assertRaises(sc.ServerNotSet):
+            sc.base_url({}, self.path)
         sc.save("192.168.0.97", self.path)
         self.assertEqual("http://192.168.0.97:5151", sc.base_url({}, self.path), "a long-lived session must see the change")
+        kept = ["10.0.0.5"]
+        sc.set_project_reader(lambda: kept[0])
+        self.assertEqual("http://10.0.0.5:5151", sc.base_url({}, self.path))
+        kept[0] = "10.0.0.6"
+        self.assertEqual("http://10.0.0.6:5151", sc.base_url({}, self.path), "the model in front of the person is followed")
 
-    def test_save_keeps_the_normalised_address_and_reset_words_remove_it(self):
+    def test_save_keeps_the_normalised_address_local_words_keep_this_computer_and_reset_forgets(self):
         self.assertEqual("http://192.168.0.97:5151", sc.save("192.168.0.97", self.path))
         self.assertTrue(os.path.isfile(self.path))
-        self.assertEqual("http://127.0.0.1:5151", sc.save("Default", self.path))
+        self.assertEqual(sc.LOCAL_URL, sc.save("Local", self.path), "this computer is chosen on purpose")
+        self.assertEqual((sc.LOCAL_URL, "file"), sc.resolve({}, self.path))
+        self.assertIsNone(sc.save("reset", self.path))
         self.assertFalse(os.path.isfile(self.path))
-        self.assertEqual("http://127.0.0.1:5151", sc.save("reset", self.path), "resetting twice is fine")
+        self.assertIsNone(sc.save("forget", self.path), "forgetting twice is fine")
         with self.assertRaises(ValueError):
             sc.save("ftp://x", self.path)
         self.assertFalse(os.path.isfile(self.path), "a bad address keeps nothing")
@@ -93,9 +124,11 @@ class Resolve(unittest.TestCase):
         self.assertEqual("http://other:1/x", sc.url_for("http://other:1/x", {}, self.path))
 
     def test_the_run_says_which_server_and_why(self):
-        self.assertIn("this computer", sc.describe({}, self.path))
+        self.assertIn("Server button", sc.describe({}, self.path))
         sc.save("192.168.0.97", self.path)
         self.assertIn("server.json", sc.describe({}, self.path))
+        sc.set_project_reader(lambda: "10.0.0.5")
+        self.assertIn("this model", sc.describe({}, self.path))
         self.assertIn(sc.ENV_VAR, sc.describe({sc.ENV_VAR: "x"}, self.path))
 
 
@@ -135,8 +168,13 @@ class Wiring(unittest.TestCase):
             text = f.read()
         self.assertEqual(2, text.count("url = server_config.url_for(url)"), "fetch_projects and _post_content")
 
+    def test_a_run_with_no_server_reports_it_instead_of_raising(self):
+        with open(os.path.join(ROOM_M, "post_common.py")) as f:
+            text = f.read()
+        self.assertEqual(2, text.count("except server_config.ServerNotSet as e:"), "fetch_projects and _post_content")
+
     def test_the_modules_ironpython_loads_are_ascii(self):
-        for name in ("server_config.py", "post_common.py", "room_mate.py"):
+        for name in ("server_config.py", "post_common.py", "room_mate.py", "project_settings.py"):
             with open(os.path.join(ROOM_M, name), "rb") as f:
                 f.read().decode("ascii")
 
