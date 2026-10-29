@@ -3,7 +3,6 @@ layout:
   - Blueprint
   - ApplyTasks
   - RlsSettings
-  - RlsSettingsXaml
   - RlsCreate
   - Server
   - ByCategory

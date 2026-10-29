@@ -573,7 +573,7 @@ target model's frame, mm. **The plug-in does not read it yet.**
 **The RLS create button** (`rls_create_entry`, `room_m/rls_task.py` plans, `room_m/rls_write.py` writes) makes room layout sheets from
 `create_rls` tasks, **not yet run in Revit**. It claims only that kind (`claim_tasks(..., kinds=["create_rls"])`, and the Apply button
 now claims only populate and update tasks, so the two never take each other's work). Order: the model's RLS settings first (extensible
-storage, `rls` key; missing or incomplete ones open the settings page, still incomplete = stop), then the claim, then the WHOLE list is
+storage, `rls` key; missing or incomplete ones open the settings window, still incomplete = stop), then the claim, then the WHOLE list is
 checked before anything is made, then one transaction group per task (`duHast...in_transaction_group`), reported as it finishes.
 
 - **RoomMate decides, Revit applies.** The task carries the size and where each elevation marker and its views go (`rls`); the settings
@@ -673,20 +673,24 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
   side was checked for syntax, ASCII and duHast-import closure only.
 
-## RLS settings: kept in the model, edited on a web page
+## RLS settings: kept in the model, edited in a window
 
-**Proof of concept, not run in Revit.** The settings of how an RLS is made in one model (title block per sheet size,
-view types, schedule base, tags, number/name/view-name templates) live in the **Revit model's extensible storage** under
-the key `rls` of `room_m/project_settings.py` (one JSON text field, so a new setting is a new key). They are edited on
-`/model-settings/` (`src-js/model-settings`), **because a grid built from IronPython (WPF) crashed Revit**: the **RLS
-settings** button posts the current settings plus the choices only Revit knows (`rls_settings.collect_options`) as a
-draft (`POST /projects/{id}/modelsettings`, `src/model_settings.rs`, opaque JSON, one file per model), opens the page in
-the default browser, and on "Yes, I saved" reads the draft back and writes it into the model. A draft is `saved` only by
-the page's Save, and posting starts an unsaved one, so an earlier session's Save never answers this one. The names the
-page and `room_m/rls_settings.py` share are the contract (`model.ts`, `missing` in both): change them together.
-`doc.Title` is the model id, as for every push. The server never types the settings.
+The settings of how an RLS is made in one model (title block per sheet size, view types, schedule base, tags, number/name/view-name
+templates) live in the **Revit model's extensible storage** under the key `rls` of `room_m/project_settings.py` (one JSON text field with a
+`version`, so a new setting is a new key). They are edited in a **XAML window** (`rls_settings.xaml`, drawn by `rls_settings_window.py`
+through pyRevit's `forms.WPFWindow`; every field and rule that is not drawing is `rls_settings_form.py`, tested on CPython). The **RLS
+settings** button opens it; the **RLS create** button opens it when the settings are not complete. It needs no server and no browser, and
+returns its answer straight to the calling function. A status line says what is still to be chosen and which template words are not room
+parameters. `rls_settings.collect_options` reads what the model offers (title blocks, view types, schedules, tags, room parameters); a list
+it cannot read is left out, and the window says so.
 
-**A second proof of concept, the RLS settings window** (`rls_settings.xaml`, `rls_settings_window.py`, `rls_settings_form.py`, the *RLS settings (window)* button): the same settings in a XAML window from `forms.WPFWindow`, no server, no browser, the answer returned straight to the calling function. Built to avoid what crashed the first attempt: no `x:Class`, no `DataGrid` (a test fails if one appears), handlers are plain methods named in the XAML, and everything that is not drawing is `rls_settings_form` (tested on CPython). It writes the same `rls` section, so either button can be used on one model. **Not run in Revit**; whether it survives is the question it exists to answer.
+- **What crashed the first WPF attempt is kept out on purpose, and tests enforce it**: no `x:Class` and no `DataGrid` or `ListView` (only a
+  ScrollViewer, TextBlocks, ComboBoxes and TextBoxes), handlers are plain methods named in the XAML (a test checks each exists), and a
+  field that changes reports to `on_change`. Do not add a grid of rows to it; a long list belongs in a ComboBox.
+- **A stored value the model no longer has stays visible, marked "(not in this model)"**, and saving keeps it; keys the form does not know are
+  kept, so a setting a later version wrote survives this one saving. `doc.Title` is the model id, as for every push.
+- **The window needs the `.xaml` file next to the module**: `build-extension.ps1` copies `room_m` whole, so it travels. An earlier web-page
+  version of this (a server draft endpoint and a React page) was tried and removed in favour of this.
 
 ## Serving a closed network: how Revit on another computer reaches the server
 

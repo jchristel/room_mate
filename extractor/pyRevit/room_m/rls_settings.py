@@ -1,55 +1,25 @@
-"""Room layout sheet settings: the hand-off between a Revit model and the settings page.
+"""Room layout sheet settings: what the model holds, what it offers, and what is still missing.
 
 ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing one. The Revit calls
-are made inside the functions that need them, so the pure half (`page_url`, `missing`) is tested
-on CPython (`extractor/tests/test_rls_settings.py`).
+are made inside the functions that need them, so the pure half (`missing`) is tested on CPython
+(`extractor/tests/test_rls_settings.py`).
 
-**The model is the source of truth; the page is only the form.** The settings live in the model's
-extensible storage under the key `rls` (`room_m.project_settings`). A grid of our own in Revit
-(WPF from IronPython) crashed Revit, so the plug-in posts the current settings and the choices only
-Revit knows (`collect_options`) to the server as a draft (`POST /projects/{id}/modelsettings`),
-opens `/model-settings/` in the default browser, and when the person says they saved reads the
-draft back (`GET`) and writes it into the model. The page's names are the contract in
-`src-js/model-settings/model.ts`; change one and the other in the same commit.
-
-**A list that cannot be read is left out**, not sent empty: the page then says Revit offered no
-list, which is different from a model that has none.
+**The model is the source of truth.** The settings live in the model's extensible storage under the key
+`rls` (`room_m.project_settings`) and are edited in a window (`room_m.rls_settings_window`, drawn from
+`rls_settings.xaml`, its fields in `room_m.rls_settings_form`). `collect_options` reads the choices only
+Revit knows (title blocks, view types, tags ...) for that window. A list that cannot be read is left out,
+not sent empty: the window then says Revit offered no list, which is different from a model that has none.
 
 **Not yet run in Revit.**
 """
 
-import json
-
-try:
-    from urllib import quote
-except ImportError:  # CPython 3
-    from urllib.parse import quote
-
-from room_m import server_config
-
 PROJECT_KEY = "rls"
-PAGE_PATH = "/model-settings/"
-DRAFT_PATH = "/projects/{}/modelsettings"
 SIZES = ("a0", "a1", "a2", "a3")
 
 
-def draft_path(project_id):
-    return DRAFT_PATH.format(quote(project_id, safe=""))
-
-
-def page_url(project_id, model_id, environ=None, path=None):
-    """The address of the settings page for one model, on the server in force."""
-    return "{}?project={}&model={}".format(
-        server_config.url_for(PAGE_PATH, environ, path), quote(project_id, safe=""), quote(model_id, safe=""))
-
-
-def draft_get_path(project_id, model_id):
-    return "{}?model={}".format(draft_path(project_id), quote(model_id, safe=""))
-
-
 def missing(settings):
-    """What stops the settings being used, in words; empty when complete. The same question the page
-    asks (`missing` in model.ts): the tags are left out because without them a task only warns."""
+    """What stops the settings being used, in words; empty when complete. The same question the
+    window asks (`rls_settings_form.problems`): the tags are left out because without them a task only warns."""
     s = settings or {}
     sizes = s.get("sheet_sizes") if isinstance(s.get("sheet_sizes"), dict) else {}
     out = []
@@ -120,48 +90,3 @@ def collect_options(doc):
         except Exception:
             pass
     return options
-
-
-def open_in_browser(url):
-    """Open `url` in the default browser. Raises if the shell cannot."""
-    from System.Diagnostics import Process, ProcessStartInfo
-
-    info = ProcessStartInfo(url)
-    info.UseShellExecute = True
-    Process.Start(info)
-
-
-def draft_body(model_id, settings, options):
-    return {"model_id": model_id, "settings": settings or {}, "options": options or {}}
-
-
-def start_draft(project_id, model_id, settings, options):
-    """POST a fresh, unsaved draft for the page to edit. `(ok, status, text)`."""
-    from System.Net.Http import StringContent
-    from System.Text import Encoding
-    from room_m.post_common import _post_content
-
-    body = json.dumps(draft_body(model_id, settings, options), ensure_ascii=False)
-    return _post_content(draft_path(project_id), StringContent(body, Encoding.UTF8, "application/json"))
-
-
-def read_draft(project_id, model_id):
-    """GET the draft back. `(ok, status, draft or text)`."""
-    from room_m.post_common import fetch_text
-
-    ok, status, text = fetch_text(draft_get_path(project_id, model_id))
-    if not ok:
-        return ok, status, text
-    draft = parse_draft(text)
-    if draft is None:
-        return False, status, "the server's answer was not a settings draft"
-    return True, status, draft
-
-
-def parse_draft(text):
-    """The draft in a server answer, or None."""
-    try:
-        draft = json.loads(text)
-    except (TypeError, ValueError):
-        return None
-    return draft if isinstance(draft, dict) else None

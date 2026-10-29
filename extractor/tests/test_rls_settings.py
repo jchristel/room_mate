@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "pyRevit"))
 
 from room_m import project_settings as ps  # noqa: E402
 from room_m import rls_settings as rs  # noqa: E402
-from room_m import server_config as sc  # noqa: E402
 
 COMPLETE = {
     "sheet_sizes": {"a0": "T : A0", "a1": "T : A1", "a2": "T : A2", "a3": "T : A3"},
@@ -31,32 +30,6 @@ class Missing(unittest.TestCase):
     def test_a_blank_template_is_missing(self):
         self.assertEqual(["sheet name logic"], rs.missing(dict(COMPLETE, sheet_name="  ")))
 
-    def test_it_agrees_with_the_page(self):
-        """The page's `missing` (model.ts) and this one ask the same question: same size keys, same fields."""
-        with open(os.path.join(os.path.dirname(__file__), "..", "..", "src-js", "model-settings", "model.ts")) as f:
-            ts = f.read()
-        for key in ("plan_view_type", "elevation_view_type", "schedule_base", "sheet_number", "sheet_name", "view_name"):
-            self.assertIn(key, ts)
-        self.assertIn('["a0", "a1", "a2", "a3"]', ts)
-
-
-class Urls(unittest.TestCase):
-    def setUp(self):
-        self.addCleanup(sc.set_project_reader, None)
-        sc.set_project_reader(lambda: "192.168.0.97")
-
-    def test_the_page_is_on_the_server_in_force_with_both_ids_escaped(self):
-        url = rs.page_url("House A", "Model 1/x", {}, "/nonexistent/server.json")
-        self.assertEqual("http://192.168.0.97:5151/model-settings/?project=House%20A&model=Model%201%2Fx", url)
-
-    def test_the_draft_paths_are_paths_not_addresses(self):
-        self.assertEqual("/projects/House%20A/modelsettings", rs.draft_path("House A"))
-        self.assertEqual("/projects/p/modelsettings?model=a%20b", rs.draft_get_path("p", "a b"))
-
-    def test_no_server_set_is_reported_not_guessed(self):
-        sc.set_project_reader(None)
-        with self.assertRaises(sc.ServerNotSet):
-            rs.page_url("p", "m", {}, "/nonexistent/server.json")
 
 
 class Sections(unittest.TestCase):
@@ -79,16 +52,6 @@ class Sections(unittest.TestCase):
         gone = ps.with_section(text, "rls", None)
         self.assertIsNone(ps.get_section(gone, "rls"))
         self.assertEqual("x", ps.server_of(gone))
-
-
-class Draft(unittest.TestCase):
-    def test_the_body_always_has_all_three_parts(self):
-        self.assertEqual({"model_id": "m", "settings": {}, "options": {}}, rs.draft_body("m", None, None))
-
-    def test_a_server_answer_that_is_not_a_draft_is_none(self):
-        self.assertIsNone(rs.parse_draft("<html>"))
-        self.assertIsNone(rs.parse_draft("[1]"))
-        self.assertEqual({"saved": True}, rs.parse_draft('{"saved": true}'))
 
 
 class Source(unittest.TestCase):
