@@ -52,6 +52,7 @@ from duHast.Data.Objects.Collectors import data_room as dr
 from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 
+from room_m.export_form import level_kwargs
 from room_m.post_rooms import (
     post_payload_stream,
 )
@@ -72,7 +73,7 @@ from room_m.utils.post_envelope import (
 stamp_envelope = add_room_boundary
 
 
-def export_model(selected_doc, phase_name, return_value):
+def export_model(selected_doc, phase_name, return_value, level_ids=None):
     """Export one model's rooms and levels as this document's contribution to the
     run's rooms bucket, or None when it could not be read.
 
@@ -93,7 +94,7 @@ def export_model(selected_doc, phase_name, return_value):
         # document that doesn't have it fails here rather than contributing an
         # unfiltered, silently-wrong room set.
         allowed_room_ids = rooms_in_phase(selected_doc, phase_name)
-        room_data = get_all_room_data(selected_doc)
+        room_data = get_all_room_data(selected_doc, **level_kwargs(level_ids))
         level_data = get_all_level_data(selected_doc)
 
         # duHast's file wrapper, one per export, exactly as before -- the

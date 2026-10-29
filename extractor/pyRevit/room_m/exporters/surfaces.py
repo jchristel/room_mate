@@ -50,6 +50,7 @@ from duHast.Revit.Levels.Export.to_data_level_building import get_all_level_data
 from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 
+from room_m.export_form import level_kwargs
 from room_m.utils.generic import (
     elements_in_phase,
 )
@@ -82,7 +83,7 @@ SurfaceExport = namedtuple(
 )
 
 
-def export_model(spec, selected_doc, phase_name, return_value):
+def export_model(spec, selected_doc, phase_name, return_value, level_ids=None):
     """Export one model's elements and levels as this document's contribution
     to the run's bucket, or None when it could not be read.
 
@@ -106,7 +107,13 @@ def export_model(spec, selected_doc, phase_name, return_value):
     :rtype: dict
     """
     try:
+        # only the levels asked for (None: all); the count guards below compare against the same set
         collected = list(spec.collect(selected_doc))
+        if level_ids is not None:
+            from duHast.Revit.Common.level_filter import get_level_id_values, is_on_levels
+
+            level_values = get_level_id_values(level_ids)
+            collected = [e for e in collected if is_on_levels(e, level_values)]
 
         # The DOORS range test. See the module docstring for why this is not
         # `rooms_in_phase`.
@@ -116,7 +123,7 @@ def export_model(spec, selected_doc, phase_name, return_value):
         # rounded millimetre STRING. See `room_m.utils.surfaces`.
         offsets = host_offsets(selected_doc, spec.category, spec.offset_parameter)
 
-        element_data = spec.export(selected_doc)
+        element_data = spec.export(selected_doc, **level_kwargs(level_ids))
         level_data = get_all_level_data(selected_doc)
 
         if len(collected) and not len(element_data):
