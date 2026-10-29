@@ -686,6 +686,8 @@ the page's Save, and posting starts an unsaved one, so an earlier session's Save
 page and `room_m/rls_settings.py` share are the contract (`model.ts`, `missing` in both): change them together.
 `doc.Title` is the model id, as for every push. The server never types the settings.
 
+**A second proof of concept, the RLS settings window** (`rls_settings.xaml`, `rls_settings_window.py`, `rls_settings_form.py`, the *RLS settings (window)* button): the same settings in a XAML window from `forms.WPFWindow`, no server, no browser, the answer returned straight to the calling function. Built to avoid what crashed the first attempt: no `x:Class`, no `DataGrid` (a test fails if one appears), handlers are plain methods named in the XAML, and everything that is not drawing is `rls_settings_form` (tested on CPython). It writes the same `rls` section, so either button can be used on one model. **Not run in Revit**; whether it survives is the question it exists to answer.
+
 ## Serving a closed network: how Revit on another computer reaches the server
 
 - **Loopback is the default and leaving it is an explicit opt-in**: `--bind 0.0.0.0` (or `ROOMMATE_BIND`; an
