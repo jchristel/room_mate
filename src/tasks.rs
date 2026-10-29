@@ -485,14 +485,20 @@ pub fn create(projects_dir: &Path, project: &str, new: NewTask) -> Result<Task, 
 
 /// Hand a Revit session every queued task of `model_id`, oldest first, marking each `in_progress`
 /// so another session is not given it. The only call that moves tasks to `in_progress`.
-pub fn claim(projects_dir: &Path, project: &str, model_id: &str) -> Result<Vec<Task>, TaskError> {
+///
+/// `kinds` narrows what is handed over: the RLS script asks only for `create_rls`, so a populate task
+/// queued for the same model is left for the button that does that. Empty means every kind.
+pub fn claim(projects_dir: &Path, project: &str, model_id: &str, kinds: &[TaskKind]) -> Result<Vec<Task>, TaskError> {
     if model_id.trim().is_empty() {
         return bad("name the model the tasks are for".to_string());
     }
     let _guard = SAVE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut claimed = Vec::new();
     for mut task in list_all(projects_dir, project)? {
-        if task.state != TaskState::Queued || task.model_id != model_id {
+        if task.state != TaskState::Queued
+            || task.model_id != model_id
+            || !(kinds.is_empty() || kinds.contains(&task.kind))
+        {
             continue;
         }
         let stamp = now();
@@ -638,11 +644,28 @@ mod tests {
         let dir = temp_dir("claim");
         let a = create(&dir, "p", new_task("m1", "r1")).unwrap();
         create(&dir, "p", new_task("m2", "r2")).unwrap();
-        let got = claim(&dir, "p", "m1").unwrap();
+        let got = claim(&dir, "p", "m1", &[]).unwrap();
         assert_eq!(got.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec![a.id.as_str()]);
         assert_eq!(got[0].state, TaskState::InProgress);
-        assert!(claim(&dir, "p", "m1").unwrap().is_empty(), "a second session is not handed it again");
-        assert_eq!(claim(&dir, "p", "m2").unwrap().len(), 1);
+        assert!(claim(&dir, "p", "m1", &[]).unwrap().is_empty(), "a second session is not handed it again");
+        assert_eq!(claim(&dir, "p", "m2", &[]).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn claim_can_be_narrowed_to_a_kind_and_leaves_the_rest_queued() {
+        let dir = temp_dir("claim-kind");
+        let mut rls = new_task("m1", "r1");
+        rls.kind = TaskKind::CreateRls;
+        rls.create_rls = true;
+        create(&dir, "p", rls).unwrap();
+        create(&dir, "p", new_task("m1", "r2")).unwrap();
+        let got = claim(&dir, "p", "m1", &[TaskKind::CreateRls]).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].kind, TaskKind::CreateRls);
+        let rest = claim(&dir, "p", "m1", &[]).unwrap();
+        assert_eq!(rest.len(), 1, "the populate task was not handed over to the RLS script");
+        assert_eq!(rest[0].kind, TaskKind::PopulateRoom);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -652,7 +675,7 @@ mod tests {
         let t = create(&dir, "p", new_task("m1", "r1")).unwrap();
         let early = report(&dir, "p", vec![report_of(&t.id, TaskState::Completed)]).unwrap();
         assert!(!early[0].recorded, "not handed out yet");
-        claim(&dir, "p", "m1").unwrap();
+        claim(&dir, "p", "m1", &[]).unwrap();
         let bad_status = report(&dir, "p", vec![report_of(&t.id, TaskState::Queued)]).unwrap();
         assert!(!bad_status[0].recorded);
         let ok = report(
@@ -677,11 +700,11 @@ mod tests {
     fn test_dismiss_and_resend_move_a_task_and_keep_its_attempts() {
         let dir = temp_dir("resend");
         let t = create(&dir, "p", new_task("m1", "r1")).unwrap();
-        claim(&dir, "p", "m1").unwrap();
+        claim(&dir, "p", "m1", &[]).unwrap();
         // A session that died holding it: a person puts it back.
         assert_eq!(resend(&dir, "p", &t.id).unwrap().state, TaskState::Queued);
         assert!(matches!(resend(&dir, "p", &t.id), Err(TaskError::Conflict(_))), "already queued");
-        claim(&dir, "p", "m1").unwrap();
+        claim(&dir, "p", "m1", &[]).unwrap();
         report(&dir, "p", vec![report_of(&t.id, TaskState::Failed)]).unwrap();
         assert_eq!(dismiss(&dir, "p", &t.id).unwrap().state, TaskState::Dismissed);
         assert!(matches!(dismiss(&dir, "p", &t.id), Err(TaskError::Conflict(_))));
@@ -710,7 +733,7 @@ mod tests {
         let dir = temp_dir("list");
         create(&dir, "p", new_task("m1", "r1")).unwrap();
         create(&dir, "p", new_task("m2", "r2")).unwrap();
-        claim(&dir, "p", "m2").unwrap();
+        claim(&dir, "p", "m2", &[]).unwrap();
         assert_eq!(list(&dir, "p", Some("m1"), None).unwrap().len(), 1);
         assert_eq!(list(&dir, "p", None, Some(TaskState::InProgress)).unwrap().len(), 1);
         assert_eq!(list(&dir, "p", None, None).unwrap().len(), 2);

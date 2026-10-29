@@ -555,6 +555,31 @@ target model's frame, mm. **The plug-in does not read it yet.**
   the side. A chosen elevation tag is placed along the line only. Computing it reads the room's FF&E (seconds on RHH), so a request
   without `with_tags` skips it. The tasks page does not show it yet; the plug-in does not read it.
 
+## The RLS creation script: settings, task, duHast
+
+**The RLS create button** (`rls_create_entry`, `room_m/rls_task.py` plans, `room_m/rls_write.py` writes) makes room layout sheets from
+`create_rls` tasks, **not yet run in Revit**. It claims only that kind (`claim_tasks(..., kinds=["create_rls"])`, and the Apply button
+now claims only populate and update tasks, so the two never take each other's work). Order: the model's RLS settings first (extensible
+storage, `rls` key; missing or incomplete ones open the settings page, still incomplete = stop), then the claim, then the WHOLE list is
+checked before anything is made, then one transaction group per task (`duHast...in_transaction_group`), reported as it finishes.
+
+- **RoomMate decides, Revit applies.** The task carries the size and where each elevation marker and its views go (`rls`); the settings
+  supply the title block per size, the view types, the base schedule, the tags and the number/name/view-name templates
+  (`{Room Parameter}` tokens, filled from the room). Abort (nothing written, reported): sheet exists, a view name is taken, no title block
+  for the size, a view type or the base schedule not in the model, a template the room cannot fill, room/phase missing, settings
+  incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place.
+- **View names are the view-name template plus ` PLAN` / ` ELEV n` / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
+  The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
+  task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
+- **The Revit-side assumptions are checked at run time, not trusted**: after the markers' views are made the marker is turned by how far the
+  first view's `ViewDirection` is from the plan, and every view whose direction differs from the plan afterwards is a note. Also unverified:
+  the crop box's far extent sits at negative z, and an elevation line is placed by the crop box's width and the far clip, not by an offset from
+  the marker.
+- **The Revit calls live in duHast** (PR in the duHast repo): `Family/family_symbol_lookup`, `Views/views_names`, `viewports_create`,
+  `schedules_create`, `elevation_marker`, `Annotation/independent_tags_create`, `Rooms/room_tags_create` and `Common/transaction.in_transaction_group`,
+  plus fixes to `sheets_create` (unicode text, activate the title block), `plan_view_create` and `elevation_view_create` (optional phase, the crop went to
+  the plan view). **`extractor/duhast.lock` is not bumped**: build with `-DuHastPath` until that PR is tested and merged.
+
 ## Tag rules: where a tag goes, learned from tags in Revit views
 
 Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`), MCP reads (`list_tag_rules`,

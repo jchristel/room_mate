@@ -285,6 +285,9 @@ pub async fn http_create_tasks(
 pub struct ClaimBody {
     /// The model the session has open: tasks are asked for by it.
     pub model_id: String,
+    /// Only tasks of these kinds; absent or empty, every kind.
+    #[serde(default)]
+    pub kinds: Vec<crate::tasks::TaskKind>,
 }
 
 /// A Revit session asks for its model's tasks. Every queued one is handed over, in full, and
@@ -294,7 +297,9 @@ pub async fn http_claim_tasks(
     UrlPath(project_id): UrlPath<String>,
     Json(body): Json<ClaimBody>,
 ) -> Result<Json<Vec<Task>>, (StatusCode, String)> {
-    tasks::claim(&dir(&state)?, &project_id, &body.model_id).map(Json).map_err(to_http)
+    tasks::claim(&dir(&state)?, &project_id, &body.model_id, &body.kinds)
+        .map(Json)
+        .map_err(to_http)
 }
 
 #[derive(Deserialize)]

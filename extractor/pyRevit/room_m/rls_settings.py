@@ -82,20 +82,14 @@ def _names(elements, label):
     return sorted(seen)
 
 
-def _type_name(symbol):
-    return u"{} : {}".format(symbol.FamilyName, symbol.Name)
-
-
 def collect_options(doc):
     """The choices this model offers, as the page's `options`. Each list is read on its own, and
     one that fails is left out."""
     from Autodesk.Revit.DB import (
         BuiltInCategory, ElementId, FilteredElementCollector, ViewFamily, ViewFamilyType, ViewSchedule)
+    from duHast.Revit.Family.family_symbol_lookup import get_symbol_full_names_by_category
 
     options = {}
-
-    def types_of(category):
-        return FilteredElementCollector(doc).OfCategory(category).WhereElementIsElementType()
 
     def view_types(family):
         return [v for v in FilteredElementCollector(doc).OfClass(ViewFamilyType) if v.ViewFamily == family]
@@ -113,12 +107,12 @@ def collect_options(doc):
         return [p.Definition.Name for p in room.Parameters] if room is not None else []
 
     for key, read in (
-        ("title_blocks", lambda: _names(types_of(BuiltInCategory.OST_TitleBlocks), _type_name)),
+        ("title_blocks", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_TitleBlocks)),
         ("plan_view_types", lambda: _names(view_types(ViewFamily.FloorPlan), lambda v: v.Name)),
         ("elevation_view_types", lambda: _names(view_types(ViewFamily.Elevation), lambda v: v.Name)),
         ("schedules", lambda: _names(room_schedules(), lambda v: v.Name)),
-        ("room_tags", lambda: _names(types_of(BuiltInCategory.OST_RoomTags), _type_name)),
-        ("independent_tags", lambda: _names(types_of(BuiltInCategory.OST_MultiCategoryTags), _type_name)),
+        ("room_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_RoomTags)),
+        ("independent_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_MultiCategoryTags)),
         ("room_parameters", lambda: sorted(set(room_parameters()))),
     ):
         try:

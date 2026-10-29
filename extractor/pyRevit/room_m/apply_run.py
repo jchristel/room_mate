@@ -18,13 +18,14 @@ fakes. The order matters and is the point of this module:
 from room_m import task_plan
 
 
-def run(tasks, facts, writer, ask_proceed, send, say):
+def run(tasks, facts, writer, ask_proceed, send, say, planner=None):
     """Returns `(reports, lines)`: every report sent, and what to show.
 
     `writer(verdict)` writes one task and returns its notes (a list of strings); it raises to
     fail the task, and must leave the model as it found it when it does. `ask_proceed(lines)`
     returns True to proceed with warned tasks. `send(reports)` posts reports and returns
-    `(ok, text)`. `say(line)` shows a line as it happens."""
+    `(ok, text)`. `say(line)` shows a line as it happens. `planner(tasks)` returns the verdicts, for a
+    script with its own checks."""
     sent = []
     lines = []
 
@@ -43,7 +44,8 @@ def run(tasks, facts, writer, ask_proceed, send, say):
     if not tasks:
         return sent, lines
 
-    verdicts = task_plan.plan_tasks(tasks, facts)
+    # the planner is `task_plan.plan_tasks` unless a script checks its tasks another way (the RLS script)
+    verdicts = planner(tasks) if planner else task_plan.plan_tasks(tasks, facts)
     clear, warned, aborted = task_plan.summarise(verdicts)
     tell("{} task(s): {} clear, {} with warnings, {} aborted".format(len(tasks), clear, warned, aborted))
 
