@@ -431,6 +431,26 @@ def fetch_projects(url=SERVER_URL_PROJECTS):
         client.Dispose()
 
 
+def fetch_text(url):
+    """GET `url` (a path is joined to the server in force) and report `(ok, status, text)`: `ok` is
+    HTTP 2xx, `status` is None when the server was never reached or none is set, `text` is the body
+    or the failure. For the callers that read a body of their own shape."""
+    try:
+        url = server_config.url_for(url)
+    except server_config.ServerNotSet as e:
+        return (False, None, str(e))
+    client = make_client()
+    try:
+        response = client.GetAsync(url).Result
+        status = int(response.StatusCode)
+        text = response.Content.ReadAsStringAsync().Result
+        return (200 <= status < 300, status, text)
+    except Exception as e:
+        return (False, None, _unreachable(url, e))
+    finally:
+        client.Dispose()
+
+
 def _unreachable(url, error):
     """The message for a request that never got an answer: the address that was tried, what the
     network said, and what usually fixes it."""

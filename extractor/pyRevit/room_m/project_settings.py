@@ -142,3 +142,25 @@ def server_of_active_document():
 def write_server(doc, url):
     """Keep `url` (None removes it) in `doc`, leaving every other setting as it was. `(ok, message)`."""
     return write_text(doc, with_server(read_text(doc), url))
+
+
+def get_section(text, key):
+    """The value kept under `key` in `text` (a settings object for one feature), or None."""
+    value = parse(text).get(key)
+    return value if isinstance(value, dict) else None
+
+
+def with_section(text, key, value):
+    """`text` with `key` set to `value` (a dict; None removes it); every other key is kept."""
+    data = parse(text)
+    data["version"] = max(VERSION, data.get("version") if isinstance(data.get("version"), int) else 0)
+    if value is None:
+        data.pop(key, None)
+    else:
+        data[key] = value
+    return json.dumps(data, sort_keys=True)
+
+
+def write_section(doc, key, value):
+    """Keep `value` under `key` in `doc`'s settings, leaving every other setting as it was. `(ok, message)`."""
+    return write_text(doc, with_section(read_text(doc), key, value))

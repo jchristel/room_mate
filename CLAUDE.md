@@ -608,6 +608,19 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
   side was checked for syntax, ASCII and duHast-import closure only.
 
+## RLS settings: kept in the model, edited on a web page
+
+**Proof of concept, not run in Revit.** The settings of how an RLS is made in one model (title block per sheet size,
+view types, schedule base, tags, number/name/view-name templates) live in the **Revit model's extensible storage** under
+the key `rls` of `room_m/project_settings.py` (one JSON text field, so a new setting is a new key). They are edited on
+`/model-settings/` (`src-js/model-settings`), **because a grid built from IronPython (WPF) crashed Revit**: the **RLS
+settings** button posts the current settings plus the choices only Revit knows (`rls_settings.collect_options`) as a
+draft (`POST /projects/{id}/modelsettings`, `src/model_settings.rs`, opaque JSON, one file per model), opens the page in
+the default browser, and on "Yes, I saved" reads the draft back and writes it into the model. A draft is `saved` only by
+the page's Save, and posting starts an unsaved one, so an earlier session's Save never answers this one. The names the
+page and `room_m/rls_settings.py` share are the contract (`model.ts`, `missing` in both): change them together.
+`doc.Title` is the model id, as for every push. The server never types the settings.
+
 ## Serving a closed network: how Revit on another computer reaches the server
 
 - **Loopback is the default and leaving it is an explicit opt-in**: `--bind 0.0.0.0` (or `ROOMMATE_BIND`; an

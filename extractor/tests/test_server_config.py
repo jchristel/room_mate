@@ -166,12 +166,12 @@ class Wiring(unittest.TestCase):
     def test_the_two_network_calls_resolve_the_address_when_they_are_made(self):
         with open(os.path.join(ROOM_M, "post_common.py")) as f:
             text = f.read()
-        self.assertEqual(2, text.count("url = server_config.url_for(url)"), "fetch_projects and _post_content")
+        self.assertEqual(3, text.count("url = server_config.url_for(url)"), "fetch_projects, fetch_text and _post_content")
 
     def test_a_run_with_no_server_reports_it_instead_of_raising(self):
         with open(os.path.join(ROOM_M, "post_common.py")) as f:
             text = f.read()
-        self.assertEqual(2, text.count("except server_config.ServerNotSet as e:"), "fetch_projects and _post_content")
+        self.assertEqual(3, text.count("except server_config.ServerNotSet as e:"), "fetch_projects, fetch_text and _post_content")
 
     def test_the_modules_ironpython_loads_are_ascii(self):
         for name in ("server_config.py", "post_common.py", "room_mate.py", "project_settings.py"):
