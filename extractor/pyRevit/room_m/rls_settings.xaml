@@ -1,0 +1,65 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="RoomMate - RLS settings" Width="680" Height="720" MinWidth="520" MinHeight="420"
+        WindowStartupLocation="CenterScreen" ShowInTaskbar="False">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" x:Name="tx_model" FontWeight="SemiBold" Margin="0,0,0,10"/>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Text="Title blocks by sheet size" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="A0" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_a0"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="A1" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_a1"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="A2" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_a2"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="A3" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_a3"/></Grid>
+
+                <TextBlock Text="Views" FontWeight="SemiBold" Margin="0,14,0,4"/>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Plan view type" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_plan_view_type"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Elevation view type" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_elevation_view_type"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Schedule base" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_schedule_base"/></Grid>
+                <TextBlock Text="Its first filter must be the room number." Opacity="0.6" Margin="170,0,0,0"/>
+
+                <TextBlock Text="Tags" FontWeight="SemiBold" Margin="0,14,0,4"/>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Room tag" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_room_tag"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Independent tag" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_independent_tag"/></Grid>
+                <TextBlock Text="A multi-category tag. Either left empty: continue with a warning." Opacity="0.6" Margin="170,0,0,0"/>
+
+                <TextBlock Text="Naming" FontWeight="SemiBold" Margin="0,14,0,4"/>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Sheet number" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1" x:Name="tb_sheet_number"/>
+                    <ComboBox Grid.Column="2" x:Name="tk_sheet_number" SelectionChanged="on_token_sheet_number" Margin="6,0,0,0"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Sheet name" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1" x:Name="tb_sheet_name"/>
+                    <ComboBox Grid.Column="2" x:Name="tk_sheet_name" SelectionChanged="on_token_sheet_name" Margin="6,0,0,0"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="View name" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1" x:Name="tb_view_name"/>
+                    <ComboBox Grid.Column="2" x:Name="tk_view_name" SelectionChanged="on_token_view_name" Margin="6,0,0,0"/></Grid>
+                <TextBlock Text="Fixed text and {Room Parameter} in braces, for example RLS-{Number}." Opacity="0.6" Margin="170,0,0,0"/>
+            </StackPanel>
+        </ScrollViewer>
+
+        <DockPanel Grid.Row="2" Margin="0,10,0,0" LastChildFill="False">
+            <TextBlock DockPanel.Dock="Left" x:Name="tx_status" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" MaxWidth="360"/>
+            <Button DockPanel.Dock="Right" Content="Cancel" Width="90" Margin="8,0,0,0" IsCancel="True" Click="on_cancel"/>
+            <Button DockPanel.Dock="Right" Content="Save" Width="90" IsDefault="True" Click="on_save"/>
+        </DockPanel>
+    </Grid>
+</Window>

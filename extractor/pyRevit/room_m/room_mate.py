@@ -781,6 +781,45 @@ def rls_settings_entry(doc, uiapp, output, forms):
     return return_value
 
 
+def rls_settings_window_entry(doc, uiapp, output, forms):
+    """The RLS settings in a Revit window (XAML), the proof-of-concept alternative to the web page.
+
+    Reads the model's settings and the choices it offers, shows the window, and when the person
+    saves stores the result in the model. No server, no project and no browser are involved.
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_doc = _single_document(doc, forms, "Select the model the settings are for")
+        if selected_doc is None:
+            return_value.append_message("No document selected")
+            return return_value
+        from room_m import rls_settings_window
+
+        current = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
+        options = rls_settings.collect_options(selected_doc)
+        saved = rls_settings_window.show(forms, selected_doc.Title, current, options)
+        if saved is None:
+            return_value.append_message("RLS settings unchanged: the window was cancelled")
+            return return_value
+        stored, why = project_settings.write_section(selected_doc, rls_settings.PROJECT_KEY, saved)
+        if not stored:
+            return_value.update_sep(False, "The settings were not stored in the model: {}".format(why))
+            return return_value
+        return_value.append_message("RLS settings stored in the model '{}'".format(selected_doc.Title))
+        todo = rls_settings_window.missing_after(saved)
+        if todo:
+            return_value.append_message("Still to choose before an RLS can be made: {}".format(", ".join(todo)))
+    except Exception as e:
+        return_value.update_sep(False, "RLS settings window failed with exception: {}".format(e))
+    return return_value
+
+
 def rls_create_entry(doc, uiapp, output, forms):
     """Make room layout sheets (RLS) from the server's `create_rls` tasks for this model.
 
