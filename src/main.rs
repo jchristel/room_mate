@@ -538,6 +538,9 @@ fn build_router(state: roommate::state::Shared, hosts: HostPolicy) -> Router {
         // Added before Cors/Trace so it sits innermost (Router::layer wraps
         // outward: the layer added last runs first on the request path), i.e.
         // decompression happens right before the body reaches a handler.
+        // Level-scoped pushes: carries the rest of a model over before the stream handlers read it.
+        // Inside decompression, so it reads the inflated body. See `scoped_push`.
+        .route_layer(axum::middleware::from_fn_with_state(state.clone(), roommate::scoped_push::scope_stream))
         .layer(RequestDecompressionLayer::new())
         // Lets a browser viewer served from elsewhere READ /rooms — and nothing
         // more than read. See `read_only_cors`.

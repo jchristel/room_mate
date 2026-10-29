@@ -508,6 +508,58 @@ pub struct AppState {
     projects_dir: Option<PathBuf>,
 }
 
+/// The elements of a model's latest snapshot that a scoped push leaves alone, as wire lines.
+///
+/// A level-scoped push (`scoped_push`) replaces only some levels of a model: what it carries over
+/// are the OTHER levels' elements of the latest snapshot. They are decoded (the stored property
+/// triples expanded back to plain maps) and written as the lines a producer would have sent, so
+/// they pass through the ordinary ingest -- the same checks, the same encoding -- and the stored
+/// result is a complete snapshot like any other. Lines are made one at a time; the decoded
+/// payload is the only thing held.
+pub struct Carried {
+    /// Elements in the latest snapshot.
+    pub total: usize,
+    /// Elements carried over: those not on the replaced levels.
+    pub kept: usize,
+    lines: Box<dyn Iterator<Item = anyhow::Result<Vec<u8>>> + Send>,
+}
+
+impl Iterator for Carried {
+    type Item = anyhow::Result<Vec<u8>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.lines.next()
+    }
+}
+
+/// One wire line: the element's own object with the model id added.
+fn wire_line<T: serde::Serialize>(model_id: &str, element: &T) -> anyhow::Result<Vec<u8>> {
+    let mut value = serde_json::to_value(element)?;
+    let serde_json::Value::Object(map) = &mut value else {
+        anyhow::bail!("an element must serialise to a JSON object");
+    };
+    map.insert("model_id".to_string(), serde_json::Value::String(model_id.to_string()));
+    let mut bytes = serde_json::to_vec(&value)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+macro_rules! carry {
+    ($bytes:expr, $payload:ty, $field:ident, $model:expr, $levels:expr, $key:expr) => {{
+        let payload: $payload = decode_snapshot($bytes)
+            .with_context(|| format!("malformed snapshot for {}/{}", $key.project_id, $key.model_id))?;
+        let total = payload.$field.len();
+        let model = $model.to_string();
+        let levels: Vec<String> = $levels.to_vec();
+        let kept: Vec<_> = payload.$field.into_iter().filter(|e| !levels.contains(&e.level_id)).collect();
+        Carried {
+            total,
+            kept: kept.len(),
+            lines: Box::new(kept.into_iter().map(move |e| wire_line(&model, &e))),
+        }
+    }};
+}
+
 impl AppState {
     pub fn new(
         store: Box<dyn SnapshotStore>,
@@ -836,6 +888,31 @@ impl AppState {
         } else {
             Ok(None)
         }
+    }
+
+    /// What a level-scoped push carries over from this model's latest snapshot of `kind`: every
+    /// element NOT on `replaced_levels` (Revit level ids, as the elements name them). `None` when the
+    /// model has no snapshot of that kind yet, in which case the push is simply what it sent.
+    pub fn carried_elements(
+        &self,
+        kind: SnapshotKind,
+        key: &ModelKey,
+        replaced_levels: &[String],
+    ) -> anyhow::Result<Option<Carried>> {
+        use crate::contract::{CeilingPayload, FfePayload, FloorPayload, WindowPayload};
+        let Some(bytes) = self.store.get_latest_raw(kind, key)? else {
+            return Ok(None);
+        };
+        let (b, m, l) = (bytes.as_slice(), key.model_id.as_str(), replaced_levels);
+        Ok(Some(match kind {
+            SnapshotKind::Rooms => carry!(b, RoomPayload, rooms, m, l, key),
+            SnapshotKind::Doors => carry!(b, DoorPayload, doors, m, l, key),
+            SnapshotKind::Windows => carry!(b, WindowPayload, windows, m, l, key),
+            SnapshotKind::Ffe => carry!(b, FfePayload, ffe, m, l, key),
+            SnapshotKind::Spaces => carry!(b, SpacePayload, spaces, m, l, key),
+            SnapshotKind::Ceilings => carry!(b, CeilingPayload, ceilings, m, l, key),
+            SnapshotKind::Floors => carry!(b, FloorPayload, floors, m, l, key),
+        }))
     }
 
     /// One model's snapshot ids, ascending — see `SnapshotStore::list_snapshot_ids`.

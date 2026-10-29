@@ -5728,4 +5728,213 @@ mod tests {
         assert!(json.get("doors").is_none(), "and never doors");
         assert_eq!(json["windows"].as_array().unwrap().len(), 1);
     }
+    // ---------- level-scoped pushes (`scoped_push`) ----------
+
+    /// The stream routes behind the scope middleware, as `build_router` wires them.
+    fn scoped_router(state: &Shared) -> axum::Router {
+        use axum::routing::post;
+        axum::Router::new()
+            .route("/rooms/stream", post(ingest_rooms_stream))
+            .route("/doors/stream", post(ingest_doors_stream))
+            .route("/floors/stream", post(ingest_floors_stream))
+            .route("/ffe/stream", post(ingest_ffe_stream))
+            .route_layer(axum::middleware::from_fn_with_state(state.clone(), crate::scoped_push::scope_stream))
+            .with_state(state.clone())
+    }
+
+    async fn send(state: &Shared, path: &str, body: String) -> (StatusCode, String) {
+        use tower::ServiceExt;
+        let response = scoped_router(state)
+            .oneshot(axum::http::Request::builder().method("POST").uri(path).body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    fn stream_body(schema: u32, taken_at: &str, model_extra: &str, lines: &[&str]) -> String {
+        let mut out = format!(
+            r#"{{"schema_version":{schema},"project":{{"id":"p1","name":"P"}},"snapshot":{{"taken_at":"{taken_at}"}},"phase":"New Construction","models":[{{"id":"m1","name":"M","source":"revit",{model_extra}"levels":[{{"id":"L1","name":"Level 1","elevation":0.0}},{{"id":"L2","name":"Level 2","elevation":3000.0}}]}}]}}"#
+        );
+        out.push('\n');
+        for line in lines {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out
+    }
+
+    fn room_ids(state: &Shared) -> Vec<(String, String)> {
+        let stored = state.all_snapshots(None).unwrap();
+        let mut rooms: Vec<(String, String)> =
+            stored[0].1.rooms.iter().map(|r| (r.id.clone(), r.level_id.clone())).collect();
+        rooms.sort();
+        rooms
+    }
+
+    #[tokio::test]
+    async fn test_a_scoped_rooms_push_replaces_its_levels_and_keeps_the_rest() {
+        let state = phase_state();
+        let room = |id: &str, level: &str| {
+            format!(r#"{{"model_id":"m1","id":"{id}","name":"Room {id}","level_id":"{level}","loops":[]}}"#)
+        };
+        let (status, _) = send(
+            &state,
+            "/rooms/stream",
+            stream_body(7, "2026-01-01T00:00:00Z", "", &[&room("a", "L1"), &room("b", "L1"), &room("c", "L2")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Level 1 again: `a` stays, `b` is gone (deleted in Revit), `d` is new. Level 2 is not sent.
+        let scoped = stream_body(
+            7,
+            "2026-01-02T00:00:00Z",
+            r#""scope":{"levels":["L1"]},"#,
+            &[&room("a", "L1"), &room("d", "L1")],
+        );
+        let (status, body) = send(&state, "/rooms/stream", scoped).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            room_ids(&state),
+            vec![
+                ("a".into(), "L1".into()),
+                ("c".into(), "L2".into()),
+                ("d".into(), "L1".into())
+            ],
+            "b was on a replaced level and is gone; c, on another, was carried over whole"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_scoped_push_that_empties_its_level_is_not_an_empty_push() {
+        let state = phase_state();
+        let room = |id: &str, level: &str| {
+            format!(r#"{{"model_id":"m1","id":"{id}","name":"Room {id}","level_id":"{level}","loops":[]}}"#)
+        };
+        send(
+            &state,
+            "/rooms/stream",
+            stream_body(7, "2026-01-01T00:00:00Z", "", &[&room("a", "L1"), &room("c", "L2")]),
+        )
+        .await;
+        let scoped = stream_body(7, "2026-01-02T00:00:00Z", r#""scope":{"levels":["L1"]},"#, &[]);
+        let (status, body) = send(&state, "/rooms/stream", scoped).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(room_ids(&state), vec![("c".into(), "L2".into())]);
+    }
+
+    #[tokio::test]
+    async fn test_an_element_outside_the_scope_refuses_the_push_and_stores_nothing() {
+        let state = phase_state();
+        let room = |id: &str, level: &str| {
+            format!(r#"{{"model_id":"m1","id":"{id}","name":"Room {id}","level_id":"{level}","loops":[]}}"#)
+        };
+        send(
+            &state,
+            "/rooms/stream",
+            stream_body(7, "2026-01-01T00:00:00Z", "", &[&room("a", "L1"), &room("c", "L2")]),
+        )
+        .await;
+        let scoped = stream_body(7, "2026-01-02T00:00:00Z", r#""scope":{"levels":["L1"]},"#, &[&room("c", "L2")]);
+        let (status, body) = send(&state, "/rooms/stream", scoped).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("not in the push's scope"), "{body}");
+        assert_eq!(
+            state
+                .list_snapshot_ids(&ModelKey { project_id: "p1".into(), model_id: "m1".into() })
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_scoped_first_push_is_just_what_it_sent() {
+        let state = phase_state();
+        let scoped = stream_body(
+            7,
+            "2026-01-01T00:00:00Z",
+            r#""scope":{"levels":["L1"]},"#,
+            &[r#"{"model_id":"m1","id":"a","name":"A","level_id":"L1","loops":[]}"#],
+        );
+        let (status, body) = send(&state, "/rooms/stream", scoped).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(room_ids(&state), vec![("a".into(), "L1".into())]);
+    }
+
+    #[tokio::test]
+    async fn test_a_malformed_scope_is_refused_before_anything_is_read() {
+        let state = phase_state();
+        let scoped = stream_body(7, "2026-01-01T00:00:00Z", r#""scope":{"levels":[]},"#, &[]);
+        let (status, body) = send(&state, "/rooms/stream", scoped).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+
+    /// The generic path: a surface entity (floors) and an item entity (FF&E) behave the same, and
+    /// carried-over elements keep their properties through the decode and re-encode.
+    #[tokio::test]
+    async fn test_scoped_floors_and_ffe_carry_the_other_levels_over_intact() {
+        let state = phase_state();
+        let floor = |id: &str, level: &str| {
+            format!(
+                r#"{{"model_id":"m1","id":"{id}","level_id":"{level}","height_offset":0.0,"polygons":[{{"loops":[{{"points":[{{"x":0,"y":0}},{{"x":10,"y":0}},{{"x":10,"y":10}}]}}]}}]}}"#
+            )
+        };
+        send(
+            &state,
+            "/floors/stream",
+            stream_body(1, "2026-01-01T00:00:00Z", "", &[&floor("f1", "L1"), &floor("f2", "L2")]),
+        )
+        .await;
+        let (status, body) = send(
+            &state,
+            "/floors/stream",
+            stream_body(1, "2026-01-02T00:00:00Z", r#""scope":{"levels":["L2"]},"#, &[&floor("f3", "L2")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let key = ModelKey { project_id: "p1".into(), model_id: "m1".into() };
+        let latest: crate::contract::FloorPayload = state
+            .get_opening_snapshot(SnapshotKind::Floors, &key, "2026-01-02T00:00:00Z")
+            .unwrap()
+            .expect("the scoped push is its own snapshot");
+        let mut ids: Vec<&str> = latest.floors.iter().map(|f| f.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["f1", "f3"]);
+        assert_eq!(latest.floors.iter().find(|f| f.id == "f1").unwrap().polygons[0].loops[0].points.len(), 3);
+
+        let item = |id: &str, level: &str, mark: &str| {
+            format!(
+                r#"{{"model_id":"m1","id":"{id}","level_id":"{level}","category":"OST_Furniture","type_id":"t","type_name":"Chair","properties":{{"Mark":{{"storage_type":"String","value":"{mark}"}}}}}}"#
+            )
+        };
+        send(
+            &state,
+            "/ffe/stream",
+            stream_body(1, "2026-01-01T00:00:00Z", "", &[&item("i1", "L1", "M1"), &item("i2", "L2", "M2")]),
+        )
+        .await;
+        let (status, body) = send(
+            &state,
+            "/ffe/stream",
+            stream_body(1, "2026-01-02T00:00:00Z", r#""scope":{"levels":["L1"]},"#, &[&item("i3", "L1", "M3")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let latest: crate::contract::FfePayload = state
+            .get_opening_snapshot(SnapshotKind::Ffe, &key, "2026-01-02T00:00:00Z")
+            .unwrap()
+            .expect("stored");
+        let mut ids: Vec<&str> = latest.ffe.iter().map(|i| i.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["i2", "i3"]);
+        let carried = latest.ffe.iter().find(|i| i.id == "i2").unwrap();
+        assert_eq!(
+            carried.properties.get("Mark").map(|p| p.value.as_str()),
+            Some("M2"),
+            "properties survive the carry"
+        );
+    }
 }
