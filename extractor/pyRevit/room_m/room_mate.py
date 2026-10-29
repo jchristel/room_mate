@@ -50,7 +50,7 @@ from room_m.post_blueprints import describe_outcome, explain_refusal, post_bluep
 from room_m.post_sheets import describe_outcomes, post_sheets
 from room_m.post_tags import all_observations, post_observations
 from room_m.post_tasks import claim_tasks, report_tasks
-from room_m import server_config
+from room_m import project_settings, rls_settings, server_config
 from room_m.post_common import SERVER_URL_PROJECTS, fetch_projects
 from room_m.sheet_tags import describe_outcome as describe_tag_outcome, describe_problems
 
@@ -66,6 +66,10 @@ from room_m.exporters import ffe as ffe_exporter
 from room_m.exporters import spaces as spaces_exporter
 from room_m.exporters import ceilings as ceilings_exporter
 from room_m.exporters import floors as floors_exporter
+
+
+# The address kept in the open model is looked for when a request is made (room_m.server_config).
+server_config.set_project_reader(project_settings.server_of_active_document)
 
 
 ROOMS = "rooms"
@@ -617,15 +621,18 @@ def blueprint_export_entry(doc, uiapp, output, forms):
 
 
 def server_entry(doc, uiapp, output, forms):
-    """Choose which RoomMate server this computer's extractor talks to.
+    """Choose which RoomMate server this model and this computer's extractor talk to.
 
     The server runs on this computer unless it was started to serve a network (`--bind 0.0.0.0`);
     to push from Revit to a server on ANOTHER computer, type the address it printed at startup
     (`192.168.0.97`, or `192.168.0.97:5151`, or its `.local` name). The address is checked by asking
-    that server for its projects BEFORE it is kept, and is kept for every later run, in
-    `server.json` in the RoomMate folder of the user's application data. Typing `default` goes back
-    to the server on this computer. The `ROOMMATE_SERVER` environment variable, when set, wins over
-    the kept address and the run says so (`room_m.server_config`).
+    that server for its projects BEFORE it is kept. It is kept in **two places**: in the open
+    model's extensible storage (`room_m.project_settings`), so anyone opening the model finds it,
+    and in `server.json` in the RoomMate folder of the user's application data, for a computer that
+    opens a model that does not have it yet. Later runs read the model first, then the file, and a
+    computer with neither is told to come here (`room_m.server_config`). Typing `local` chooses the
+    server on this computer; `reset` forgets the kept address in both places. The `ROOMMATE_SERVER`
+    environment variable, when set, wins over both and the run says so.
 
     **Not yet run in Revit.**
 
@@ -637,42 +644,130 @@ def server_entry(doc, uiapp, output, forms):
         report_build(return_value, output)
         current, source = server_config.resolve()
         typed = forms.ask_for_string(
-            default=current,
+            default=current or "",
             prompt="Address of the RoomMate server (for example 192.168.0.97 or mac.local:5151).\n"
-                   "Type 'default' for the server on this computer.",
+                   "Type 'local' for the server on this computer, 'reset' to forget the kept address.",
             title="Roommate - server")
         if typed is None:
             return_value.append_message("Server unchanged: {}".format(server_config.describe()))
             return return_value
         typed = typed.strip()
-        resetting = typed.lower() in server_config._RESET_WORDS
-        candidate = server_config.DEFAULT_URL
+        word = typed.lower()
+        resetting = word in server_config.RESET_WORDS
+        answer = None
+        ok = False
+        candidate = None
         if not resetting:
-            try:
-                candidate = server_config.normalise(typed)
-            except ValueError as e:
-                forms.alert(str(e), title="Roommate - server address", warn_icon=True)
-                return_value.update_sep(False, "Server unchanged: {}".format(e))
-                return return_value
-        ok, status, answer = fetch_projects(candidate + SERVER_URL_PROJECTS)
-        if not ok:
-            keep = forms.alert(
-                "{}\n\nKeep this address anyway?".format(answer),
-                title="Roommate - server not reachable", yes=True, no=True, warn_icon=True)
-            if not keep:
-                return_value.update_sep(False, "Server unchanged: {}".format(answer))
-                return return_value
-        server_config.save(typed)
-        return_value.append_message("Server set to {}".format(server_config.describe()))
+            candidate = server_config.LOCAL_URL
+            if word not in server_config.LOCAL_WORDS:
+                try:
+                    candidate = server_config.normalise(typed)
+                except ValueError as e:
+                    forms.alert(str(e), title="Roommate - server address", warn_icon=True)
+                    return_value.update_sep(False, "Server unchanged: {}".format(e))
+                    return return_value
+            ok, status, answer = fetch_projects(candidate + SERVER_URL_PROJECTS)
+            if not ok:
+                keep = forms.alert(
+                    "{}\n\nKeep this address anyway?".format(answer),
+                    title="Roommate - server not reachable", yes=True, no=True, warn_icon=True)
+                if not keep:
+                    return_value.update_sep(False, "Server unchanged: {}".format(answer))
+                    return return_value
+        kept = server_config.save(typed)
+        # the same address in the model, so whoever opens it next needs no set-up
+        stored, why = project_settings.write_server(doc, kept)
+        if resetting:
+            return_value.append_message("Server forgotten: this computer's address is removed")
+        else:
+            return_value.append_message("Server set to {} (this computer: {})".format(kept, server_config.config_path()))
+            return_value.append_message(
+                "{} project(s) registered there".format(len(answer)) if ok else "Not reachable now: {}".format(answer))
         return_value.append_message(
-            "{} project(s) registered there".format(len(answer)) if ok else "Not reachable now: {}".format(answer))
+            "Model: {}".format(why) if stored else "Model: not stored ({}); the address is kept for this computer only".format(why))
         in_force = server_config.resolve()[0]
-        if in_force != candidate:
+        if kept and in_force != kept:
             return_value.append_message(
                 "NOTE: the {} environment variable is set, so {} is what is used until it is removed".format(
                     server_config.ENV_VAR, in_force))
     except Exception as e:
         return_value.update_sep(False, "Server setting failed with exception: {}".format(e))
+    return return_value
+
+
+def rls_settings_entry(doc, uiapp, output, forms):
+    """Set how room layout sheets are made in a model, on a page in the browser.
+
+    1. Read the settings the model holds now (extensible storage, key `rls`) and the choices the
+       model offers (title blocks, view types, tags ...).
+    2. Post them to the server as a fresh draft and open the settings page for this model.
+    3. When the person says they saved, read the draft back and store it in the model. Nothing is
+       written to the model unless the page's Save was pressed.
+
+    A grid of our own in Revit crashed it, which is why the editing is a web page (`room_m.rls_settings`).
+
+    **Not yet run in Revit.**
+
+    :return: Result object with status and message.
+    :rtype: Result
+    """
+    return_value = Result()
+    try:
+        report_build(return_value, output)
+        selected_doc = _single_document(doc, forms, "Select the model the settings are for")
+        if selected_doc is None:
+            return_value.append_message("No document selected")
+            return return_value
+        project = choose_project(forms)
+        if project is None:
+            return_value.update_sep(False, "RLS settings aborted: no project selected.")
+            return return_value
+        model_id = selected_doc.Title
+
+        current = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
+        options = rls_settings.collect_options(selected_doc)
+        ok, status, text = rls_settings.start_draft(project["id"], model_id, current, options)
+        if not ok:
+            return_value.update_sep(
+                False, "Could not hand the settings to the server ({}): {}".format(status if status is not None else "no response", text))
+            return return_value
+        url = rls_settings.page_url(project["id"], model_id)
+        try:
+            rls_settings.open_in_browser(url)
+            return_value.append_message("Opened {}".format(url))
+        except Exception as e:
+            return_value.append_message("Could not open the browser ({}). Open this address yourself: {}".format(e, url))
+
+        while True:
+            again = forms.alert(
+                "Change the settings in the page that opened in your browser and press Save there.\n\n"
+                "Press Yes here once you have saved, No to leave the model unchanged.",
+                title="Roommate - RLS settings", yes=True, no=True)
+            if not again:
+                return_value.append_message("RLS settings unchanged: not saved in the browser")
+                return return_value
+            ok, status, draft = rls_settings.read_draft(project["id"], model_id)
+            if not ok:
+                return_value.update_sep(
+                    False, "Could not read the settings back ({}): {}".format(status if status is not None else "no response", draft))
+                return return_value
+            if draft.get("saved"):
+                break
+            forms.alert("The page has not been saved yet. Press Save in the browser, then Yes again.",
+                        title="Roommate - RLS settings", warn_icon=True)
+
+        settings = draft.get("settings") or {}
+        stored, why = project_settings.write_section(selected_doc, rls_settings.PROJECT_KEY, settings)
+        if not stored:
+            return_value.update_sep(False, "The settings were saved on the server but not in the model: {}".format(why))
+            return return_value
+        return_value.append_message("RLS settings stored in the model '{}'".format(model_id))
+        todo = rls_settings.missing(settings)
+        if todo:
+            return_value.append_message(
+                "Still to choose before an RLS can be made: {}".format(", ".join(todo)))
+    except Exception as e:
+        return_value.update_sep(False, "RLS settings failed with exception: {}".format(e))
     return return_value
 
 

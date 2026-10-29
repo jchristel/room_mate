@@ -635,6 +635,19 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
   side was checked for syntax, ASCII and duHast-import closure only.
 
+## RLS settings: kept in the model, edited on a web page
+
+**Proof of concept, not run in Revit.** The settings of how an RLS is made in one model (title block per sheet size,
+view types, schedule base, tags, number/name/view-name templates) live in the **Revit model's extensible storage** under
+the key `rls` of `room_m/project_settings.py` (one JSON text field, so a new setting is a new key). They are edited on
+`/model-settings/` (`src-js/model-settings`), **because a grid built from IronPython (WPF) crashed Revit**: the **RLS
+settings** button posts the current settings plus the choices only Revit knows (`rls_settings.collect_options`) as a
+draft (`POST /projects/{id}/modelsettings`, `src/model_settings.rs`, opaque JSON, one file per model), opens the page in
+the default browser, and on "Yes, I saved" reads the draft back and writes it into the model. A draft is `saved` only by
+the page's Save, and posting starts an unsaved one, so an earlier session's Save never answers this one. The names the
+page and `room_m/rls_settings.py` share are the contract (`model.ts`, `missing` in both): change them together.
+`doc.Title` is the model id, as for every push. The server never types the settings.
+
 ## Serving a closed network: how Revit on another computer reaches the server
 
 - **Loopback is the default and leaving it is an explicit opt-in**: `--bind 0.0.0.0` (or `ROOMMATE_BIND`; an
@@ -651,13 +664,20 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
 - **The macOS or Windows firewall is the usual reason a correct setup does not connect**: allow incoming connections
   for the binary, and use a fixed address or the `.local` name. A tunnel (`ssh -N -L 5151:127.0.0.1:5151 user@host`)
   needs none of this and keeps the server on loopback.
-- **The pyRevit side takes the server from `room_m/server_config.py`, resolved when a request is made** (the
-  `ROOMMATE_SERVER` environment variable, else `server.json` in `%APPDATA%\RoomMate`, else `http://127.0.0.1:5151`), and
-  the **Server** button writes it after checking the address answers. A typed address gets the default port 5151 when it
-  has none. **Every `post_*` module holds a PATH** (`/rooms`), joined to the base URL only in `post_common` (the project
-  fetch and `_post_content`): a module constant would freeze the address for a pyRevit session that stays open for hours,
-  and `scripts/check_extension.py` fails on a literal loopback address anywhere but `server_config.py`. Every run prints
-  which server it used and why (`provenance`); an unreachable one names the URL and the usual causes. Not run in Revit.
+- **The pyRevit side takes the server from `room_m/server_config.py`, resolved when a request is made**, first match
+  wins: the `ROOMMATE_SERVER` environment variable, the **open model's own settings** (extensible storage in the project
+  file, one JSON text field with a `version` and a `server` key: `room_m/project_settings.py`), `server.json` in
+  `%APPDATA%\RoomMate`, and then **nothing**: no silent loopback default any more. A computer that has never been told
+  gets `ServerNotSet`, whose message points at the **Server** button (`local` there chooses this computer on purpose;
+  `reset` forgets). The button checks the address answers, then writes the model AND the file, so a model carries its
+  server to whoever opens it and a model without one still works from the file. The model's copy is shared by everyone
+  and travels with a copy of the file, which is why it is only the second source. A typed address gets the default port
+  5151 when it has none. **Every `post_*` module holds a PATH** (`/rooms`), joined to the base URL only in `post_common`
+  (the project fetch and `_post_content`, which report `ServerNotSet` as a failed push, never raise): a module constant
+  would freeze the address for a pyRevit session that stays open for hours, and `scripts/check_extension.py` fails on a
+  literal loopback address anywhere but `server_config.py`. Every run prints which server it used and why
+  (`provenance`); an unreachable one names the URL and the usual causes. Not run in Revit (the extensible-storage
+  read and write are the untested part)
 
 ## Traps in the door export
 

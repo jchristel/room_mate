@@ -14,9 +14,15 @@ address: `scripts/check_extension.py` fails on a literal loopback address anywhe
 **The order, first match wins:**
 
 1. the environment variable `ROOMMATE_SERVER` (a machine-wide or per-launch override),
-2. `server.json` in the RoomMate folder of the user's application data (`{"url": "..."}`), which
-   the Server button writes,
-3. the server on this computer, `http://127.0.0.1:5151`.
+2. the model's own settings, in extensible storage in the Revit project file
+   (`room_m.project_settings`), read through the reader registered with `set_project_reader`,
+3. `server.json` in the RoomMate folder of the user's application data (`{"url": "..."}`),
+4. nothing: there is **no silent default**. A first run on a computer that has never been told
+   where the server is gets `ServerNotSet`, whose message points at the Server button, rather than
+   a request to a loopback address that fails with a network error nobody connects to the setting.
+   Typing `local` in the Server button chooses the server on this computer, on purpose.
+
+The Server button writes 2 and 3 together. A source that does not parse is skipped, not fatal.
 
 A person types an address as they know it (`192.168.0.97`, `mac.local:5151`,
 `http://192.168.0.97:5151/`); `normalise` makes it a base URL and **adds the default port 5151
@@ -27,10 +33,34 @@ import json
 import os
 
 DEFAULT_PORT = 5151
-DEFAULT_URL = "http://127.0.0.1:{}".format(DEFAULT_PORT)
+LOCAL_URL = "http://127.0.0.1:{}".format(DEFAULT_PORT)
 ENV_VAR = "ROOMMATE_SERVER"
 
-_RESET_WORDS = ("default", "local", "reset", "this computer")
+# Words that choose the server on this computer, and the word that forgets every kept address.
+LOCAL_WORDS = ("default", "local", "this computer")
+RESET_WORDS = ("reset", "forget")
+
+NOT_SET_MESSAGE = (
+    "No RoomMate server has been set for this model or this computer. Press the Server button "
+    "and type the address of the server (for example 192.168.0.97, or mac.local:5151)."
+)
+
+
+class ServerNotSet(ValueError):
+    """No source names a server. The message says what to do about it."""
+
+    def __init__(self):
+        ValueError.__init__(self, NOT_SET_MESSAGE)
+
+
+_project_reader = None
+
+
+def set_project_reader(reader):
+    """Register a function returning the address kept in the open model (or None). It is called at
+    the moment a request is made, so a session that stays open follows the model in front of it."""
+    global _project_reader
+    _project_reader = reader
 
 
 def config_path(environ=None):
@@ -110,14 +140,30 @@ def _read_file(path):
     return url if isinstance(url, type(u"")) or isinstance(url, str) else None
 
 
+def _from_project():
+    if _project_reader is None:
+        return None
+    try:
+        return _project_reader()
+    except Exception:
+        return None
+
+
 def resolve(environ=None, path=None):
-    """`(url, source)`: the base URL in force and where it came from (`env`, `file` or `default`).
-    A value that does not parse is skipped, and the next source is used."""
+    """`(url, source)`: the base URL in force and where it came from (`env`, `project`, `file`), or
+    `(None, "none")` when nothing names a server. A value that does not parse is skipped, and the
+    next source is used."""
     environ = os.environ if environ is None else environ
     from_env = (environ.get(ENV_VAR) or "").strip()
     if from_env:
         try:
             return normalise(from_env), "env"
+        except ValueError:
+            pass
+    kept = _from_project()
+    if kept:
+        try:
+            return normalise(kept), "project"
         except ValueError:
             pass
     stored = _read_file(path or config_path(environ))
@@ -126,11 +172,15 @@ def resolve(environ=None, path=None):
             return normalise(stored), "file"
         except ValueError:
             pass
-    return DEFAULT_URL, "default"
+    return None, "none"
 
 
 def base_url(environ=None, path=None):
-    return resolve(environ, path)[0]
+    """The base URL in force, or raises `ServerNotSet`."""
+    url = resolve(environ, path)[0]
+    if url is None:
+        raise ServerNotSet()
+    return url
 
 
 def url_for(url_or_path, environ=None, path=None):
@@ -149,23 +199,28 @@ def describe(environ=None, path=None):
     url, source = resolve(environ, path)
     if source == "env":
         return "{} (from the {} environment variable)".format(url, ENV_VAR)
+    if source == "project":
+        return "{} (kept in this model)".format(url)
     if source == "file":
         return "{} (from {})".format(url, path or config_path(environ))
-    return "{} (this computer; use the Server button to choose another)".format(url)
+    return "not set. " + NOT_SET_MESSAGE
 
 
 def save(text, path=None, environ=None):
-    """Keep `text` as the server address and return the base URL that was kept. The reset words
-    (`default`, `local`, `reset`) remove the stored address instead and return the default. Raises
-    `ValueError` for an address that does not parse."""
+    """Keep `text` as the server address in `server.json` and return the base URL that was kept.
+    The local words (`default`, `local`) keep the server on this computer; the reset words
+    (`reset`, `forget`) remove the stored address and return None. Raises `ValueError` for an
+    address that does not parse. The model's own copy is written by the caller
+    (`room_m.project_settings.write_server`), because it needs a Revit document."""
     target = path or config_path(environ)
-    if (text or "").strip().lower() in _RESET_WORDS:
+    word = (text or "").strip().lower()
+    if word in RESET_WORDS:
         try:
             os.remove(target)
         except OSError:
             pass
-        return DEFAULT_URL
-    url = normalise(text)
+        return None
+    url = LOCAL_URL if word in LOCAL_WORDS else normalise(text)
     folder = os.path.dirname(target)
     if folder and not os.path.isdir(folder):
         os.makedirs(folder)
