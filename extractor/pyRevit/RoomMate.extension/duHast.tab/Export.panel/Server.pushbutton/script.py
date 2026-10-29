@@ -5,8 +5,10 @@ Usage:
 
 - Run this script and type the server's address, for example 192.168.0.97 or
   mac.local:5151 (the port is 5151 unless you typed another).
-- The address is checked before it is kept, and kept for every later run.
-- Type 'default' to go back to the server on this computer.
+- The address is checked before it is kept. It is kept in this model (so whoever opens the
+  model needs no set-up) and on this computer (for a model that does not have it yet).
+- Type 'local' for the server on this computer, 'reset' to forget the kept address.
+- A computer that has never been given an address is sent here by the other buttons.
 
 The server has to have been started so that other computers can reach it
 (its --bind option); it prints the address when it starts.

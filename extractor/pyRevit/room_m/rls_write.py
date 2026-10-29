@@ -1,0 +1,352 @@
+"""Make one room layout sheet in Revit, from a checked task. What `room_m.rls_task` planned, done.
+
+ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing one.
+
+**duHast does the Revit work; this module decides the order and what goes where.** Sheets, views,
+viewports, elevation markers, schedules and tags are made by `duHast.Revit.Views`, `.Annotation`,
+`.Rooms` and `.Family` (the helpers added for this, and the existing ones it fixed). What stays here is the
+arithmetic from the task's millimetres to Revit's feet, and the sequence.
+
+**One task is one transaction group**: when any step fails the group is rolled back and the task is
+reported failed, so a failed task leaves no trace (`in_transaction_group`).
+
+**Assumptions to verify in Revit**, each stated where it is made: an elevation marker turned about
+its point turns the views on it; a view's `ViewDirection` points at the viewer; the crop box of an
+elevation has its far extent at negative z. A view that does not face the way the plan says is
+reported as a note, not hidden.
+
+**Not placed yet**: tags in elevation views (the plan has only an offset along the line), the
+rectangle drawn round an item a person chose to tag, and a tag's own text. Schedule size is Revit's.
+
+**Not yet run in Revit.**
+"""
+
+import math
+
+from Autodesk.Revit.DB import (
+    BuiltInCategory,
+    FilteredElementCollector,
+    Transaction,
+    TransactionGroup,
+    ViewFamily,
+    ViewFamilyType,
+    ViewSchedule,
+    XYZ,
+)
+
+from duHast.Revit.Annotation.independent_tags_create import create_independent_tag_without_transaction_wrapper
+from duHast.Revit.Common.element_id import get_element_id_from_int
+from duHast.Revit.Common.transaction import in_transaction, in_transaction_group
+from duHast.Revit.Family.family_symbol_lookup import (
+    get_family_symbol_by_full_name,
+    get_title_block_symbol_by_name,
+)
+from duHast.Revit.Rooms.room_tags_create import create_room_tag_without_transaction_wrapper
+from duHast.Revit.Views.elevation_marker import (
+    create_elevation_marker_without_transaction_wrapper,
+    create_elevation_on_marker_without_transaction_wrapper,
+    rotate_elevation_marker_without_transaction_wrapper,
+    set_elevation_extent_without_transaction_wrapper,
+)
+from duHast.Revit.Views.plan_view_create import create_view_plan
+from duHast.Revit.Views.schedules_create import (
+    duplicate_schedule_without_transaction_wrapper,
+    place_schedule_on_sheet_without_transaction_wrapper,
+    set_first_filter_value_without_transaction_wrapper,
+)
+from duHast.Revit.Views.sheets_create import create_sheet
+from duHast.Revit.Views.views_crop import apply_view_bounding_box_crop_without_transaction_wrapper
+from duHast.Revit.Views.views_names import get_views_in_name_collision
+from duHast.Revit.Views.viewports_create import create_viewport_without_transaction_wrapper
+
+from room_m import apply_geometry as geo
+from room_m.apply_facts import RevitFacts, name_of
+from room_m.utils.generic import phase_by_name
+
+# How far beyond the room a plan view's crop reaches when the template viewport carried none.
+CROP_MARGIN_MM = 600.0
+# A view whose direction is this close to what the plan said (dot product) faces it.
+FACES_PLAN = 0.9
+
+
+class RlsFacts(RevitFacts):
+    """What the open model can say about an RLS task (the `facts` `room_m.rls_task` asks)."""
+
+    def room_values(self, room):
+        """Every parameter of the room by name, as text, for the naming templates."""
+        values = {}
+        for p in room.Parameters:
+            try:
+                name = p.Definition.Name
+                text = p.AsString()
+                if text is None:
+                    text = p.AsValueString()
+                values.setdefault(name, text if text is not None else "")
+            except Exception:
+                continue
+        return values
+
+    def title_block_exists(self, name):
+        return get_title_block_symbol_by_name(self.doc, name) is not None
+
+    def view_type_exists(self, kind, name):
+        wanted = ViewFamily.FloorPlan if kind == "plan" else ViewFamily.Elevation
+        return self._view_type(wanted, name) is not None
+
+    def _view_type(self, family, name):
+        for t in FilteredElementCollector(self.doc).OfClass(ViewFamilyType):
+            if t.ViewFamily == family and name_of(t) == name:
+                return t
+        return None
+
+    def schedule(self, name):
+        for v in FilteredElementCollector(self.doc).OfClass(ViewSchedule):
+            try:
+                if not v.IsTemplate and name_of(v) == name:
+                    return v
+            except Exception:
+                continue
+        return None
+
+    def schedule_exists(self, name):
+        return self.schedule(name) is not None
+
+    def tag_symbol(self, kind, name):
+        category = BuiltInCategory.OST_RoomTags if kind == "room" else BuiltInCategory.OST_MultiCategoryTags
+        return get_family_symbol_by_full_name(self.doc, category, name)
+
+    def tag_type_exists(self, kind, name):
+        return bool(name) and self.tag_symbol(kind, name) is not None
+
+    def sheet_exists(self, number):
+        return self.rls_exists(number)
+
+    def views_in_use(self, names):
+        return get_views_in_name_collision(self.doc, names)
+
+
+def _ft(mm):
+    return geo.mm_to_ft(mm)
+
+
+class RlsWriter(object):
+    def __init__(self, doc, facts):
+        self.doc = doc
+        self.facts = facts
+
+    def __call__(self, verdict):
+        """Make the sheet of `verdict`; return its notes. Raises, with the model rolled back, when
+        a step fails."""
+        plan = verdict["plan"]
+        notes = []
+        group = TransactionGroup(self.doc, "RoomMate RLS {}".format(plan["number"]))
+        outcome = in_transaction_group(group, lambda: self._write(verdict["task"], plan, notes))
+        self.facts.refresh()
+        if not outcome.status:
+            raise RuntimeError(outcome.message.strip() or "the sheet could not be made")
+        return notes
+
+    # -- the sequence -----------------------------------------------------------------------
+
+    def _write(self, task, plan, notes):
+        from duHast.Utilities.Objects.result import Result
+
+        result = Result()
+        try:
+            room = plan["room"]
+            level = room.Level
+            phase = phase_by_name(self.doc, task["phase"])
+            sheet = self._sheet(plan)
+            plan_view = self._plan_view(plan, room, level, phase, sheet, notes)
+            self._elevations(plan, room, level, phase, plan_view, sheet, notes)
+            self._schedule(plan, room, sheet, notes)
+            self._tags(task, plan, room, plan_view, level, notes)
+            notes.append("sheet {} made".format(plan["number"]))
+        except Exception as e:
+            result.update_sep(False, str(e))
+        return result
+
+    def _step(self, name, work):
+        """Run `work` (returns a duHast Result) in a transaction of its own; a failure raises."""
+        outcome = in_transaction(Transaction(self.doc, name), work)
+        if not outcome.status:
+            raise RuntimeError("{}: {}".format(name, outcome.message.strip()))
+        return outcome
+
+    def _sheet(self, plan):
+        symbol = get_title_block_symbol_by_name(self.doc, plan["title_block"])
+        outcome = create_sheet(self.doc, str(plan["number"]), str(plan["name"]), symbol)
+        if not outcome.status or not outcome.result:
+            raise RuntimeError("sheet {}: {}".format(plan["number"], outcome.message.strip()))
+        return outcome.result[0]
+
+    def _plan_view(self, plan, room, level, phase, sheet, notes):
+        view_type = self.facts._view_type(ViewFamily.FloorPlan, plan["plan_view_type"])
+        outcome = create_view_plan(self.doc, level, view_type, plan["plan_name"], phase)
+        if not outcome.status or not outcome.result:
+            raise RuntimeError("plan view {}: {}".format(plan["plan_name"], outcome.message.strip()))
+        view = outcome.result[0]
+
+        box = room.get_BoundingBox(None)
+        room_w = (box.Max.X - box.Min.X) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
+        room_h = (box.Max.Y - box.Min.Y) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
+        vp = plan["plan_viewport"]
+        size = (geo.crop_size_mm(vp, room_w, room_h) if vp else None) or (room_w, room_h)
+        centre = XYZ((box.Max.X + box.Min.X) / 2.0, (box.Max.Y + box.Min.Y) / 2.0, level.Elevation)
+
+        def crop():
+            from duHast.Utilities.Objects.result import Result
+            from Autodesk.Revit.DB import BoundingBoxXYZ
+
+            view.Scale = int(plan["plan_scale"])
+            crop_box = view.CropBox
+            local = crop_box.Transform.Inverse.OfPoint(centre)
+            new_box = BoundingBoxXYZ()
+            new_box.Transform = crop_box.Transform
+            new_box.Min = XYZ(local.X - _ft(size[0]) / 2.0, local.Y - _ft(size[1]) / 2.0, crop_box.Min.Z)
+            new_box.Max = XYZ(local.X + _ft(size[0]) / 2.0, local.Y + _ft(size[1]) / 2.0, crop_box.Max.Z)
+            view.CropBoxActive = True
+            view.CropBoxVisible = False
+            outcome = apply_view_bounding_box_crop_without_transaction_wrapper(view, new_box)
+            return outcome if isinstance(outcome, Result) else Result()
+
+        self._step("RoomMate: crop {}".format(plan["plan_name"]), crop)
+        self._viewport(sheet, view, vp, notes, "plan")
+        return view
+
+    def _viewport(self, sheet, view, template_vp, notes, label):
+        at = (geo.viewport_centre_ft(template_vp) if template_vp else None)
+        if at is None:
+            at = (0.0, 0.0)
+            notes.append("the {} viewport had no place on the template sheet: put at the sheet's origin".format(label))
+        self.doc.Regenerate()
+        outcome = self._step(
+            "RoomMate: viewport {}".format(view.Name),
+            lambda: create_viewport_without_transaction_wrapper(self.doc, sheet, view, XYZ(at[0], at[1], 0.0)),
+        )
+        return outcome.result[0] if outcome.result else None
+
+    def _elevations(self, plan, room, level, phase, plan_view, sheet, notes):
+        if not plan["elevations"]:
+            return
+        view_type = self.facts._view_type(ViewFamily.Elevation, plan["elevation_view_type"])
+        by_marker = {}
+        order = []
+        for e in plan["elevations"]:
+            key = e["marker_id"]
+            if key not in by_marker:
+                by_marker[key] = []
+                order.append(key)
+            by_marker[key].append(e)
+        for key in order:
+            self._marker(by_marker[key], view_type, level, phase, plan_view, plan, sheet, notes)
+
+    def _marker(self, elevations, view_type, level, phase, plan_view, plan, sheet, notes):
+        first = elevations[0]
+        loc = first["marker_location"]
+        location = XYZ(_ft(loc[0]), _ft(loc[1]), level.Elevation)
+        scale = first["scale"] or plan["plan_scale"]
+        marker = self._step(
+            "RoomMate: elevation marker",
+            lambda: create_elevation_marker_without_transaction_wrapper(self.doc, view_type, location, scale),
+        ).result[0]
+
+        made = []
+        for e in elevations:
+            outcome = self._step(
+                "RoomMate: {}".format(e["name"]),
+                lambda e=e: create_elevation_on_marker_without_transaction_wrapper(
+                    self.doc, marker, plan_view, e["marker_index"], e["name"], phase.Id),
+            )
+            made.append((e, outcome.result[0]))
+
+        # Which way index 0 of a new marker looks is Revit's to say: turn the marker by how far the
+        # first view is from where the plan wants it, then check every view.
+        first_view = made[0][1]
+        wanted = math.atan2(first["looks"][1], first["looks"][0])
+        direction = first_view.ViewDirection
+        actual = math.atan2(-direction.Y, -direction.X)
+        delta = math.atan2(math.sin(wanted - actual), math.cos(wanted - actual))
+        if abs(delta) > 1e-3:
+            self._step(
+                "RoomMate: turn elevation marker",
+                lambda: rotate_elevation_marker_without_transaction_wrapper(self.doc, marker, location, delta),
+            )
+        self.doc.Regenerate()
+
+        for e, view in made:
+            line_start = XYZ(_ft(e["line_start"][0]), _ft(e["line_start"][1]), level.Elevation)
+            line_end = XYZ(_ft(e["line_end"][0]), _ft(e["line_end"][1]), level.Elevation)
+            self._step(
+                "RoomMate: extent of {}".format(e["name"]),
+                lambda view=view, e=e, s=line_start, t=line_end: set_elevation_extent_without_transaction_wrapper(
+                    view, s, t, _ft(e["depth_mm"]) if e.get("depth_mm") else None),
+            )
+            d = view.ViewDirection
+            looks = e["looks"]
+            if (-d.X * looks[0] - d.Y * looks[1]) < FACES_PLAN:
+                notes.append("{} does not face the way the plan says (the marker's other views are at fixed quarter turns)".format(e["name"]))
+            self._viewport(sheet, view, e["viewport"], notes, e["name"])
+
+    def _schedule(self, plan, room, sheet, notes):
+        base = self.facts.schedule(plan["schedule_base"])
+        copy = self._step(
+            "RoomMate: schedule {}".format(plan["schedule_name"]),
+            lambda: duplicate_schedule_without_transaction_wrapper(self.doc, base, plan["schedule_name"]),
+        ).result[0]
+        self._step(
+            "RoomMate: schedule filter",
+            lambda: set_first_filter_value_without_transaction_wrapper(copy, str(room.Number)),
+        )
+        vp = plan["schedule_viewport"]
+        box = (vp or {}).get("bounding_box") or {}
+        try:
+            # the schedule's upper left corner: the template box's smallest x and largest y (mm)
+            at = (_ft(box["min_x"]), _ft(box["max_y"]))
+        except (KeyError, TypeError):
+            at = (0.0, 0.0)
+            notes.append("the schedule had no place on the template sheet: put at the sheet's origin")
+        self._step(
+            "RoomMate: place schedule",
+            lambda: place_schedule_on_sheet_without_transaction_wrapper(self.doc, sheet, copy, XYZ(at[0], at[1], 0.0)),
+        )
+
+    def _tags(self, task, plan, room, plan_view, level, notes):
+        z = level.Elevation
+        independent = self.facts.tag_symbol("independent", plan["independent_tag"]) if plan["independent_tag"] else None
+        room_tag = self.facts.tag_symbol("room", plan["room_tag"]) if plan["room_tag"] else None
+        made, problems = 0, []
+        if independent is not None:
+            for tag in plan["tags"]:
+                try:
+                    element = self.doc.GetElement(get_element_id_from_int(int(tag["item_id"])))
+                    head = XYZ(_ft(tag["head"][0]), _ft(tag["head"][1]), z)
+                    outcome = self._step(
+                        "RoomMate: tag",
+                        lambda element=element, head=head: create_independent_tag_without_transaction_wrapper(
+                            self.doc, plan_view, element, head, independent.Id),
+                    )
+                    made += 1 if outcome.status else 0
+                except Exception as e:
+                    problems.append("tag on item {} not placed: {}".format(tag.get("item_id"), e))
+        if room_tag is not None:
+            head = None
+            for rule in geo.room_rules(task.get("tag_rules") or [], geo.PLAN):
+                point = room.Location.Point
+                placement = geo.tag_placement(
+                    geo.room_like(point.X * geo.MM_PER_FT, point.Y * geo.MM_PER_FT), rule, plan["plan_scale"])
+                if placement:
+                    head = XYZ(_ft(placement["head"][0]), _ft(placement["head"][1]), z)
+                break
+            try:
+                self._step(
+                    "RoomMate: room tag",
+                    lambda: create_room_tag_without_transaction_wrapper(self.doc, plan_view, room, room_tag.Id, head),
+                )
+            except Exception as e:
+                problems.append("room tag not placed: {}".format(e))
+        notes.append("{} tag(s) placed".format(made))
+        for p in problems[:5]:
+            notes.append(p)
+        if len(problems) > 5:
+            notes.append("... and {} more tags not placed".format(len(problems) - 5))

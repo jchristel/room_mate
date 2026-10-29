@@ -38,9 +38,13 @@ def _post_json(url, body):
     return _post_content(url, StringContent(json.dumps(body, ensure_ascii=False), Encoding.UTF8, "application/json"))
 
 
-def claim_tasks(project_id, model_id):
-    """`(ok, status, text, tasks)`: the model's queued tasks, now in progress."""
-    ok, status, text = _post_json(claim_url(project_id), {"model_id": model_id})
+def claim_tasks(project_id, model_id, kinds=None):
+    """`(ok, status, text, tasks)`: the model's queued tasks, now in progress. `kinds` narrows them
+    (`["create_rls"]` for the RLS script, which must not take a populate task); absent, every kind."""
+    body = {"model_id": model_id}
+    if kinds:
+        body["kinds"] = list(kinds)
+    ok, status, text = _post_json(claim_url(project_id), body)
     tasks = []
     if ok:
         try:

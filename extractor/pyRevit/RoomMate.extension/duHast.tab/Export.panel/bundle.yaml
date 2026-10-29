@@ -2,6 +2,8 @@ layout:
   - RoomsAndDoors
   - Blueprint
   - ApplyTasks
+  - RlsSettings
+  - RlsCreate
   - Server
   - ByCategory
 

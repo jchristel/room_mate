@@ -528,6 +528,58 @@ leaves an empty list out of a task, so the page reads a task back with its lists
   room's point, in the plan's own axes (`NewRoomTag` on the room's point, then the head moved). Space and area tag kinds,
   and a tag's own rotation, are not placed yet.
 
+## Create-RLS: what the task says beyond "copy this sheet"
+
+A `create_rls` task carries `rls` (`service::rls_plan`, built in `task_build::rls_from_sheet`): the `sheet_size` asked for
+(`a0`..`a3`, absent = the template's) and, per elevation marker, where it and each of its views go **in this room**, in the
+target model's frame, mm. **The plug-in does not read it yet.**
+
+- **Transfer is by the walls.** Template and target are read at the COARSE outline, the wall each elevation faces
+  (`elevation_facing`) is mapped by the cyclic shift that fits the shapes (`best_shift`, no reflection), and then the marker
+  keeps its fraction along the wall and its distance from it, each view's line ends and direction keep their offsets from the
+  marker in the frame of the wall that view faces, and the **depth keeps its length** (a view shows a stretch of wall, not a
+  share of the room). `depth_to_wall_mm` is how far the faced wall is, for a person who wants "to the room boundary".
+- **A marker is placed once, from its lowest-numbered view**, so its views share one point; placing it from each view's own
+  wall would give four different markers in a room that scaled unevenly.
+- **Different coarse edge counts place nothing** (the blueprint rule) and say so as a finding; the sheet is still made.
+- `POST /projects/{id}/tasks/rls-preview` is the same read for one room and stores nothing, so a preview is the task. A request
+  may override a view's depth (`depths`: `depth_mm`, or `to_wall`).
+- **Tags are a PROTOTYPE** (`service::rls_tags`, `rls.tags` in the task and in the preview). Every item attributed to the room
+  (no nested components) is looked up in the library's tag rules for the plan viewport type and tagged in the plan at the rule's
+  offset (paper mm x the view scale, turned with the item). What no rule tags is **offered, per view** (`candidates`) and overall
+  (`items_without_tags`, with the views that show it and why no rule did); a person answers per item in `tags.choices`: `tag` it in a
+  named view (a default head beside it, a rectangle round its footprint, the text of `tags.tag_property`: `$id`, `$type_name`,
+  `$family_name` or a property name, a setting of its own and not the viewer's FF&E tag) or `dismiss` it. **Elevations tag nothing by
+  rule, on purpose**: a rule's offset is measured in plan (`tag_rules::to_offset` drops z), which says nothing about where a tag sits
+  in an elevation, so an elevation needs offsets along the view's right and up and whether the item faces the viewer or is seen from
+  the side. A chosen elevation tag is placed along the line only. Computing it reads the room's FF&E (seconds on RHH), so a request
+  without `with_tags` skips it. The tasks page does not show it yet; the plug-in does not read it.
+
+## The RLS creation script: settings, task, duHast
+
+**The RLS create button** (`rls_create_entry`, `room_m/rls_task.py` plans, `room_m/rls_write.py` writes) makes room layout sheets from
+`create_rls` tasks, **not yet run in Revit**. It claims only that kind (`claim_tasks(..., kinds=["create_rls"])`, and the Apply button
+now claims only populate and update tasks, so the two never take each other's work). Order: the model's RLS settings first (extensible
+storage, `rls` key; missing or incomplete ones open the settings page, still incomplete = stop), then the claim, then the WHOLE list is
+checked before anything is made, then one transaction group per task (`duHast...in_transaction_group`), reported as it finishes.
+
+- **RoomMate decides, Revit applies.** The task carries the size and where each elevation marker and its views go (`rls`); the settings
+  supply the title block per size, the view types, the base schedule, the tags and the number/name/view-name templates
+  (`{Room Parameter}` tokens, filled from the room). Abort (nothing written, reported): sheet exists, a view name is taken, no title block
+  for the size, a view type or the base schedule not in the model, a template the room cannot fill, room/phase missing, settings
+  incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place.
+- **View names are the view-name template plus ` PLAN` / ` ELEV n` / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
+  The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
+  task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
+- **The Revit-side assumptions are checked at run time, not trusted**: after the markers' views are made the marker is turned by how far the
+  first view's `ViewDirection` is from the plan, and every view whose direction differs from the plan afterwards is a note. Also unverified:
+  the crop box's far extent sits at negative z, and an elevation line is placed by the crop box's width and the far clip, not by an offset from
+  the marker.
+- **The Revit calls live in duHast** (PR in the duHast repo): `Family/family_symbol_lookup`, `Views/views_names`, `viewports_create`,
+  `schedules_create`, `elevation_marker`, `Annotation/independent_tags_create`, `Rooms/room_tags_create` and `Common/transaction.in_transaction_group`,
+  plus fixes to `sheets_create` (unicode text, activate the title block), `plan_view_create` and `elevation_view_create` (optional phase, the crop went to
+  the plan view). **`extractor/duhast.lock` is not bumped**: build with `-DuHastPath` until that PR is tested and merged.
+
 ## Tag rules: where a tag goes, learned from tags in Revit views
 
 Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`), MCP reads (`list_tag_rules`,
@@ -608,6 +660,19 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
   side was checked for syntax, ASCII and duHast-import closure only.
 
+## RLS settings: kept in the model, edited on a web page
+
+**Proof of concept, not run in Revit.** The settings of how an RLS is made in one model (title block per sheet size,
+view types, schedule base, tags, number/name/view-name templates) live in the **Revit model's extensible storage** under
+the key `rls` of `room_m/project_settings.py` (one JSON text field, so a new setting is a new key). They are edited on
+`/model-settings/` (`src-js/model-settings`), **because a grid built from IronPython (WPF) crashed Revit**: the **RLS
+settings** button posts the current settings plus the choices only Revit knows (`rls_settings.collect_options`) as a
+draft (`POST /projects/{id}/modelsettings`, `src/model_settings.rs`, opaque JSON, one file per model), opens the page in
+the default browser, and on "Yes, I saved" reads the draft back and writes it into the model. A draft is `saved` only by
+the page's Save, and posting starts an unsaved one, so an earlier session's Save never answers this one. The names the
+page and `room_m/rls_settings.py` share are the contract (`model.ts`, `missing` in both): change them together.
+`doc.Title` is the model id, as for every push. The server never types the settings.
+
 ## Serving a closed network: how Revit on another computer reaches the server
 
 - **Loopback is the default and leaving it is an explicit opt-in**: `--bind 0.0.0.0` (or `ROOMMATE_BIND`; an
@@ -624,13 +689,20 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
 - **The macOS or Windows firewall is the usual reason a correct setup does not connect**: allow incoming connections
   for the binary, and use a fixed address or the `.local` name. A tunnel (`ssh -N -L 5151:127.0.0.1:5151 user@host`)
   needs none of this and keeps the server on loopback.
-- **The pyRevit side takes the server from `room_m/server_config.py`, resolved when a request is made** (the
-  `ROOMMATE_SERVER` environment variable, else `server.json` in `%APPDATA%\RoomMate`, else `http://127.0.0.1:5151`), and
-  the **Server** button writes it after checking the address answers. A typed address gets the default port 5151 when it
-  has none. **Every `post_*` module holds a PATH** (`/rooms`), joined to the base URL only in `post_common` (the project
-  fetch and `_post_content`): a module constant would freeze the address for a pyRevit session that stays open for hours,
-  and `scripts/check_extension.py` fails on a literal loopback address anywhere but `server_config.py`. Every run prints
-  which server it used and why (`provenance`); an unreachable one names the URL and the usual causes. Not run in Revit.
+- **The pyRevit side takes the server from `room_m/server_config.py`, resolved when a request is made**, first match
+  wins: the `ROOMMATE_SERVER` environment variable, the **open model's own settings** (extensible storage in the project
+  file, one JSON text field with a `version` and a `server` key: `room_m/project_settings.py`), `server.json` in
+  `%APPDATA%\RoomMate`, and then **nothing**: no silent loopback default any more. A computer that has never been told
+  gets `ServerNotSet`, whose message points at the **Server** button (`local` there chooses this computer on purpose;
+  `reset` forgets). The button checks the address answers, then writes the model AND the file, so a model carries its
+  server to whoever opens it and a model without one still works from the file. The model's copy is shared by everyone
+  and travels with a copy of the file, which is why it is only the second source. A typed address gets the default port
+  5151 when it has none. **Every `post_*` module holds a PATH** (`/rooms`), joined to the base URL only in `post_common`
+  (the project fetch and `_post_content`, which report `ServerNotSet` as a failed push, never raise): a module constant
+  would freeze the address for a pyRevit session that stays open for hours, and `scripts/check_extension.py` fails on a
+  literal loopback address anywhere but `server_config.py`. Every run prints which server it used and why
+  (`provenance`); an unreachable one names the URL and the usual causes. Not run in Revit (the extensible-storage
+  read and write are the untested part)
 
 ## Traps in the door export
 

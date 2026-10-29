@@ -146,7 +146,7 @@ def sheet_size_of(sheet):
     """The size the layout asks for, as duHast exported it; None when it did not say."""
     body = sheet.get("sheet") or {}
     size = body.get("sheet_size")
-    return size if isinstance(size, str) and size.strip() else None
+    return size if isinstance(size, (str, type(u""))) and size.strip() else None
 
 
 def viewports_of(sheet):

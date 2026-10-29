@@ -402,7 +402,10 @@ def fetch_projects(url=SERVER_URL_PROJECTS):
     project onboarded yet" (a hard stop for the producer), not a failure; a 2xx
     whose body isn't a JSON list is a genuine failure (unexpected server
     shape)."""
-    url = server_config.url_for(url)
+    try:
+        url = server_config.url_for(url)
+    except server_config.ServerNotSet as e:
+        return (False, None, str(e))
     client = make_client()
     try:
         response = client.GetAsync(url).Result
@@ -422,6 +425,26 @@ def fetch_projects(url=SERVER_URL_PROJECTS):
             if f.get("project_id")
         ]
         return (True, status, projects)
+    except Exception as e:
+        return (False, None, _unreachable(url, e))
+    finally:
+        client.Dispose()
+
+
+def fetch_text(url):
+    """GET `url` (a path is joined to the server in force) and report `(ok, status, text)`: `ok` is
+    HTTP 2xx, `status` is None when the server was never reached or none is set, `text` is the body
+    or the failure. For the callers that read a body of their own shape."""
+    try:
+        url = server_config.url_for(url)
+    except server_config.ServerNotSet as e:
+        return (False, None, str(e))
+    client = make_client()
+    try:
+        response = client.GetAsync(url).Result
+        status = int(response.StatusCode)
+        text = response.Content.ReadAsStringAsync().Result
+        return (200 <= status < 300, status, text)
     except Exception as e:
         return (False, None, _unreachable(url, e))
     finally:
@@ -500,7 +523,11 @@ def _post_content(url, content):
     print stays for the interactive pyRevit console; the tuple is for the
     caller's `Result` tracking -- a failure must end the run red, not vanish
     into the console scrollback."""
-    url = server_config.url_for(url)
+    try:
+        url = server_config.url_for(url)
+    except server_config.ServerNotSet as e:
+        print(str(e))
+        return (False, None, str(e))
     client = make_client()
     try:
         response = client.PostAsync(url, content).Result

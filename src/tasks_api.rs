@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::assignments;
 use crate::blueprints_api::service_error;
 use crate::service::blueprint_capture::qualify_room;
+use crate::service::rls_plan::{DepthOverride, RlsRequest};
+use crate::service::rls_tags::TagRequest;
 use crate::service::room_locator::RoomRef;
 use crate::service::task_build::{
     populate_from_assignment, rls_from_sheet, update_from_assignment, PopulateParams, UpdateParams,
@@ -70,6 +72,45 @@ pub async fn http_get_task(
     tasks::load(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
 }
 
+/// A create-RLS request for ONE room, to look at before it is made.
+#[derive(Deserialize)]
+pub struct RlsPreviewBody {
+    pub sheet_id: String,
+    pub room_id: String,
+    #[serde(default)]
+    pub sheet_size: Option<String>,
+    #[serde(default)]
+    pub depths: Vec<DepthOverride>,
+    #[serde(default)]
+    pub tags: Option<TagRequest>,
+}
+
+/// What the task for this room would tell Revit about the sheet size and the elevations, and what
+/// it would warn about. A read of a draft: nothing is stored, and the answer is built by the same
+/// function the task is made from, so a preview is the task and not a second opinion.
+pub async fn http_preview_rls(
+    State(state): State<Shared>,
+    UrlPath(project_id): UrlPath<String>,
+    Json(body): Json<RlsPreviewBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let projects = dir(&state)?;
+    let room: RoomRef = match qualify_room(&state, &project_id, &body.room_id, None) {
+        Ok(Some(room)) => room,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
+        Err(e) => return Err(service_error(e)),
+    };
+    let request = RlsRequest {
+        sheet_size: body.sheet_size,
+        depths: body.depths,
+        overwrite_rls: false,
+        tags: Some(body.tags.unwrap_or_default()),
+    };
+    match rls_from_sheet(&state, &projects, &project_id, &body.sheet_id, &room, "preview", &request) {
+        Ok(new) => Ok(Json(serde_json::json!({ "room": new.room, "rls": new.rls, "findings": new.findings }))),
+        Err(e) => Err(service_error(e)),
+    }
+}
+
 /// What to make. `populate_room` and `update_room` name assignments (one task per assignment);
 /// `create_rls` names a library sheet and the rooms to make sheets for.
 #[derive(Deserialize)]
@@ -96,6 +137,15 @@ pub enum CreateBody {
         /// sheet made on its own is the layout and nothing placed on it.
         #[serde(default = "yes")]
         with_tags: bool,
+        /// `a0` to `a3`: the size of the sheets made. Absent: the template's own.
+        #[serde(default)]
+        sheet_size: Option<String>,
+        /// Changes to how far an elevation looks, by the template's view id.
+        #[serde(default)]
+        depths: Vec<DepthOverride>,
+        /// What a person decided about untagged items (`rls_tags`). Ignored without `with_tags`.
+        #[serde(default)]
+        tags: Option<TagRequest>,
     },
     /// Bring rooms populated earlier back in line with their assignments' blueprints.
     UpdateRoom {
@@ -192,7 +242,13 @@ pub async fn http_create_tasks(
                 }
             }
         }
-        CreateBody::CreateRls { sheet_id, room_ids, phase, overwrite_rls, with_tags } => {
+        CreateBody::CreateRls { sheet_id, room_ids, phase, overwrite_rls, with_tags, sheet_size, depths, tags } => {
+            let request = RlsRequest {
+                sheet_size,
+                depths,
+                overwrite_rls,
+                tags: with_tags.then(|| tags.unwrap_or_default()),
+            };
             if room_ids.len() > MAX_ROOMS_PER_REQUEST {
                 return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_REQUEST} rooms at a time")));
             }
@@ -209,7 +265,7 @@ pub async fn http_create_tasks(
                     }
                     Err(e) => return Err(service_error(e)),
                 };
-                match rls_from_sheet(&state, &projects, &project_id, &sheet_id, &room, &phase, overwrite_rls) {
+                match rls_from_sheet(&state, &projects, &project_id, &sheet_id, &room, &phase, &request) {
                     Ok(mut new) => {
                         if !with_tags {
                             new.tag_rules.clear();
@@ -229,6 +285,9 @@ pub async fn http_create_tasks(
 pub struct ClaimBody {
     /// The model the session has open: tasks are asked for by it.
     pub model_id: String,
+    /// Only tasks of these kinds; absent or empty, every kind.
+    #[serde(default)]
+    pub kinds: Vec<crate::tasks::TaskKind>,
 }
 
 /// A Revit session asks for its model's tasks. Every queued one is handed over, in full, and
@@ -238,7 +297,9 @@ pub async fn http_claim_tasks(
     UrlPath(project_id): UrlPath<String>,
     Json(body): Json<ClaimBody>,
 ) -> Result<Json<Vec<Task>>, (StatusCode, String)> {
-    tasks::claim(&dir(&state)?, &project_id, &body.model_id).map(Json).map_err(to_http)
+    tasks::claim(&dir(&state)?, &project_id, &body.model_id, &body.kinds)
+        .map(Json)
+        .map_err(to_http)
 }
 
 #[derive(Deserialize)]
