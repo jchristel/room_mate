@@ -2,15 +2,15 @@
 
 ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing one.
 
-**A proof of concept, tried again on purpose.** An earlier attempt at a WPF dialog from IronPython crashed
-Revit with a large grid and fought the language over class names. This one is made to avoid both: the
+**Made to avoid what crashed an earlier WPF dialog** (a large grid, and a fight over class names): the
 window has **no x:Class and no DataGrid** (only a ScrollViewer, TextBlocks, ComboBoxes and TextBoxes), it
 is loaded from a XAML FILE by pyRevit's `forms.WPFWindow`, its handlers are plain methods named in the
-XAML, and everything that is not drawing lives in `room_m.rls_settings_form` (tested without Revit). If it
-works, it has one advantage over the web page: it needs no server and no browser, and returns its answer
-straight to the calling function (`window.settings`, or None when cancelled).
+XAML, and everything that is not drawing lives in `room_m.rls_settings_form` (tested without Revit). It
+needs no server and no browser and returns its answer straight to the calling function (`window.settings`,
+or None when cancelled). A status line under the form says what is still to be chosen and which template
+words are not room parameters, as the person changes things.
 
-**Not yet run in Revit.**
+The window was tried in Revit and opens and saves.
 """
 
 import os
@@ -28,6 +28,7 @@ def show(forms, model_name, settings, options):
         def __init__(self):
             forms.WPFWindow.__init__(self, XAML_PATH)
             self.settings = None
+            self._ready = False
             self._existing = dict(settings or {})
             self._values = {}
             self._parameters = list((options or {}).get("room_parameters") or [])
@@ -43,6 +44,7 @@ def show(forms, model_name, settings, options):
                 token_combo = getattr(self, "tk_" + name[3:])
                 token_combo.ItemsSource = form.token_labels(self._parameters)
                 token_combo.SelectedIndex = 0
+            self._ready = True
             self._status()
 
         # -- handlers, named in the XAML ------------------------------------------------------
@@ -56,12 +58,11 @@ def show(forms, model_name, settings, options):
         def on_token_view_name(self, sender, args):
             self._insert(sender, self.tb_view_name)
 
+        def on_change(self, sender, args):
+            self._status()
+
         def on_save(self, sender, args):
-            self.settings = form.to_settings(
-                self._existing,
-                dict((name, self._values[name][getattr(self, name).SelectedIndex]) for name in self._values),
-                dict((name, getattr(self, name).Text or "") for name, _key in form.TEXTS),
-            )
+            self.settings = self._current()
             self.Close()
 
         def on_cancel(self, sender, args):
@@ -78,8 +79,25 @@ def show(forms, model_name, settings, options):
             combo.SelectedIndex = 0
             self._status()
 
+        def _current(self):
+            """The settings as the form stands now."""
+            picked = {}
+            for name in self._values:
+                index = getattr(self, name).SelectedIndex
+                if index >= 0:
+                    picked[name] = self._values[name][index]
+            return form.to_settings(
+                self._existing,
+                picked,
+                dict((name, getattr(self, name).Text or "") for name, _key in form.TEXTS),
+            )
+
         def _status(self):
-            self.tx_status.Text = ""
+            """What is still missing, and any template word that is not a room parameter."""
+            if not self._ready:
+                return
+            lines = form.problems(self._current(), self._parameters)
+            self.tx_status.Text = "\n".join(lines) if lines else "Complete: a room layout sheet can be made."
 
     window = RlsSettingsWindow()
     window.ShowDialog()

@@ -8,6 +8,8 @@ contract, and a key this form does not know rides along untouched, so a setting 
 survives this one saving.
 """
 
+import re
+
 NOT_SET = "(not set)"
 NOT_IN_MODEL = " (not in this model)"
 TOKEN_PROMPT = "insert room parameter ..."
@@ -81,6 +83,34 @@ def add_token(text, parameters, index):
     if index is None or index < 1 or index > len(parameters or []):
         return text
     return "{}{{{}}}".format(text or "", parameters[index - 1])
+
+
+_TOKEN = re.compile(r"\{([^{}]*)\}")
+
+
+def unknown_tokens(template, parameters):
+    """The `{token}` names of `template` that are not a room parameter the model offered. Empty when
+    the model offered none (a list that could not be read must not make everything look wrong)."""
+    if not parameters:
+        return []
+    known = set(p.strip().lower() for p in parameters)
+    return [t for t in _TOKEN.findall(template or "") if t.strip().lower() not in known]
+
+
+def problems(settings, parameters):
+    """What the person should still look at, as lines for the status text: what is not chosen yet
+    (`rls_settings.missing`), and any template token that is not a room parameter."""
+    from room_m import rls_settings
+
+    lines = []
+    todo = rls_settings.missing(settings)
+    if todo:
+        lines.append("Still to choose: {}".format(", ".join(todo)))
+    for _name, key in TEXTS:
+        bad = unknown_tokens(settings.get(key), parameters)
+        if bad:
+            lines.append("{}: not a room parameter: {}".format(key.replace("_", " "), " ".join("{" + t + "}" for t in bad)))
+    return lines
 
 
 def to_settings(existing, combo_values, texts):

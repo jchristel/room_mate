@@ -695,69 +695,37 @@ def server_entry(doc, uiapp, output, forms):
     return return_value
 
 
-def _edit_rls_settings(selected_doc, project, forms, return_value):
-    """Post the model's RLS settings and the choices it offers to the server, open the settings page,
-    and when the person says they saved it store the result in the model. Returns True when the
-    model now holds settings saved on the page, False when it was left as it was (and says why on
-    `return_value`). Shared by the RLS settings button and the RLS script, which sends a person here
-    when the settings are not there yet."""
-    model_id = selected_doc.Title
+def _edit_rls_settings(selected_doc, forms, return_value):
+    """Show the RLS settings window for a model and store what the person saves in the model.
+
+    Reads the model's settings (extensible storage, key `rls`) and the choices the model offers,
+    shows `room_m.rls_settings_window`, and writes the result back. Returns the saved settings, or
+    None when the window was cancelled or the model could not take them (and says why on
+    `return_value`). Shared by the RLS settings button and the RLS create button, which sends a
+    person here when the settings are not complete."""
+    from room_m import rls_settings_window
 
     current = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
     options = rls_settings.collect_options(selected_doc)
-    ok, status, text = rls_settings.start_draft(project["id"], model_id, current, options)
-    if not ok:
-        return_value.update_sep(
-            False, "Could not hand the settings to the server ({}): {}".format(status if status is not None else "no response", text))
-        return False
-    url = rls_settings.page_url(project["id"], model_id)
-    try:
-        rls_settings.open_in_browser(url)
-        return_value.append_message("Opened {}".format(url))
-    except Exception as e:
-        return_value.append_message("Could not open the browser ({}). Open this address yourself: {}".format(e, url))
-
-    while True:
-        again = forms.alert(
-            "Change the settings in the page that opened in your browser and press Save there.\n\n"
-            "Press Yes here once you have saved, No to leave the model unchanged.",
-            title="Roommate - RLS settings", yes=True, no=True)
-        if not again:
-            return_value.append_message("RLS settings unchanged: not saved in the browser")
-            return False
-        ok, status, draft = rls_settings.read_draft(project["id"], model_id)
-        if not ok:
-            return_value.update_sep(
-                False, "Could not read the settings back ({}): {}".format(status if status is not None else "no response", draft))
-            return False
-        if draft.get("saved"):
-            break
-        forms.alert("The page has not been saved yet. Press Save in the browser, then Yes again.",
-                    title="Roommate - RLS settings", warn_icon=True)
-
-    settings = draft.get("settings") or {}
-    stored, why = project_settings.write_section(selected_doc, rls_settings.PROJECT_KEY, settings)
+    saved = rls_settings_window.show(forms, selected_doc.Title, current, options)
+    if saved is None:
+        return_value.append_message("RLS settings unchanged: the window was cancelled")
+        return None
+    stored, why = project_settings.write_section(selected_doc, rls_settings.PROJECT_KEY, saved)
     if not stored:
-        return_value.update_sep(False, "The settings were saved on the server but not in the model: {}".format(why))
-        return False
-    return_value.append_message("RLS settings stored in the model '{}'".format(model_id))
-    todo = rls_settings.missing(settings)
-    if todo:
-        return_value.append_message(
-            "Still to choose before an RLS can be made: {}".format(", ".join(todo)))
-    return True
+        return_value.update_sep(False, "The settings were not stored in the model: {}".format(why))
+        return None
+    return_value.append_message("RLS settings stored in the model '{}'".format(selected_doc.Title))
+    return saved
 
 
 def rls_settings_entry(doc, uiapp, output, forms):
-    """Set how room layout sheets are made in a model, on a page in the browser.
+    """Set how room layout sheets are made in a model, in a window.
 
-    1. Read the settings the model holds now (extensible storage, key `rls`) and the choices the
-       model offers (title blocks, view types, tags ...).
-    2. Post them to the server as a fresh draft and open the settings page for this model.
-    3. When the person says they saved, read the draft back and store it in the model. Nothing is
-       written to the model unless the page's Save was pressed.
-
-    A grid of our own in Revit crashed it, which is why the editing is a web page (`room_m.rls_settings`).
+    Pick the model, then choose the title block per sheet size, the plan and elevation view types, the
+    base schedule, the tags and the number and name logic (`{Room Parameter}` templates) in the window
+    (`room_m.rls_settings_window`). What is saved goes into the model's extensible storage, where the
+    RLS create button reads it. Nothing is sent to the server.
 
     **Not yet run in Revit.**
 
@@ -771,52 +739,13 @@ def rls_settings_entry(doc, uiapp, output, forms):
         if selected_doc is None:
             return_value.append_message("No document selected")
             return return_value
-        project = choose_project(forms)
-        if project is None:
-            return_value.update_sep(False, "RLS settings aborted: no project selected.")
-            return return_value
-        _edit_rls_settings(selected_doc, project, forms, return_value)
+        saved = _edit_rls_settings(selected_doc, forms, return_value)
+        if saved is not None:
+            todo = rls_settings.missing(saved)
+            if todo:
+                return_value.append_message("Still to choose before an RLS can be made: {}".format(", ".join(todo)))
     except Exception as e:
         return_value.update_sep(False, "RLS settings failed with exception: {}".format(e))
-    return return_value
-
-
-def rls_settings_window_entry(doc, uiapp, output, forms):
-    """The RLS settings in a Revit window (XAML), the proof-of-concept alternative to the web page.
-
-    Reads the model's settings and the choices it offers, shows the window, and when the person
-    saves stores the result in the model. No server, no project and no browser are involved.
-
-    **Not yet run in Revit.**
-
-    :return: Result object with status and message.
-    :rtype: Result
-    """
-    return_value = Result()
-    try:
-        report_build(return_value, output)
-        selected_doc = _single_document(doc, forms, "Select the model the settings are for")
-        if selected_doc is None:
-            return_value.append_message("No document selected")
-            return return_value
-        from room_m import rls_settings_window
-
-        current = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
-        options = rls_settings.collect_options(selected_doc)
-        saved = rls_settings_window.show(forms, selected_doc.Title, current, options)
-        if saved is None:
-            return_value.append_message("RLS settings unchanged: the window was cancelled")
-            return return_value
-        stored, why = project_settings.write_section(selected_doc, rls_settings.PROJECT_KEY, saved)
-        if not stored:
-            return_value.update_sep(False, "The settings were not stored in the model: {}".format(why))
-            return return_value
-        return_value.append_message("RLS settings stored in the model '{}'".format(selected_doc.Title))
-        todo = rls_settings_window.missing_after(saved)
-        if todo:
-            return_value.append_message("Still to choose before an RLS can be made: {}".format(", ".join(todo)))
-    except Exception as e:
-        return_value.update_sep(False, "RLS settings window failed with exception: {}".format(e))
     return return_value
 
 
@@ -824,7 +753,7 @@ def rls_create_entry(doc, uiapp, output, forms):
     """Make room layout sheets (RLS) from the server's `create_rls` tasks for this model.
 
     1. **Settings first.** The model's RLS settings are read (extensible storage). Missing or incomplete
-       ones open the settings page; if they are still incomplete afterwards the script stops.
+       ones open the settings window; if they are still incomplete afterwards the script stops.
     2. **Ask the server** for this model's queued `create_rls` tasks (and only those: a populate task
        is the Apply button's). No answer, or no tasks, is said and the script stops.
     3. **Check the whole list** before anything is made (`room_m.rls_task`): an existing sheet or view, no
@@ -845,23 +774,22 @@ def rls_create_entry(doc, uiapp, output, forms):
         if selected_doc is None:
             return_value.append_message("No document selected")
             return return_value
-        project = choose_project(forms)
-        if project is None:
-            return_value.update_sep(False, "RLS aborted: no project selected.")
-            return return_value
-
         settings = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
         todo = rls_settings.missing(settings)
         if todo:
             forms.alert(
-                "The RLS settings of this model are not complete yet:\n\n{}\n\nThe settings page opens next.".format(", ".join(todo)),
+                "The RLS settings of this model are not complete yet:\n\n{}\n\nThe settings window opens next.".format(", ".join(todo)),
                 title="Roommate - RLS settings")
-            _edit_rls_settings(selected_doc, project, forms, return_value)
-            settings = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
+            settings = _edit_rls_settings(selected_doc, forms, return_value) or {}
             todo = rls_settings.missing(settings)
             if todo:
                 return_value.update_sep(False, "RLS stopped: the settings are still incomplete ({}).".format(", ".join(todo)))
                 return return_value
+
+        project = choose_project(forms)
+        if project is None:
+            return_value.update_sep(False, "RLS aborted: no project selected.")
+            return return_value
 
         ok, status, text, tasks = claim_tasks(project["id"], selected_doc.Title, kinds=["create_rls"])
         if not ok:

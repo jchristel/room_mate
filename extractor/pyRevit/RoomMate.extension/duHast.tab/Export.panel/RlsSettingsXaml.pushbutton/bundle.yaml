@@ -1,9 +1,0 @@
-title: "RLS settings (window)"
-
-tooltip: |
-  Proof of concept: the RLS settings in a Revit window instead of a web page.
-  No server or browser needed. What you save is kept in this model, the same
-  place the web page keeps it.
-
-author:
-  - Jan Christel

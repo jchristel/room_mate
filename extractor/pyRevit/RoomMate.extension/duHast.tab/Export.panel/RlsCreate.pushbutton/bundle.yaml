@@ -2,7 +2,7 @@ title: "RLS create"
 
 tooltip: |
   Make room layout sheets from the queued RLS tasks of this model.
-  Uses the RLS settings stored in the model (opens the settings page when
+  Uses the RLS settings stored in the model (opens the settings window when
   they are not complete). Sheets, views, elevations, the schedule and tags
   are made for each task; a task that fails leaves nothing behind.
 

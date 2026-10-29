@@ -72,6 +72,27 @@ class ToSettings(unittest.TestCase):
         self.assertEqual([], rls_settings.missing(form.to_settings({}, combos, texts)))
 
 
+class Problems(unittest.TestCase):
+    PARAMS = ["Number", "Name"]
+
+    def test_an_unknown_token_is_found_ignoring_case(self):
+        self.assertEqual(["Nmae"], form.unknown_tokens("{number}-{Nmae}", self.PARAMS))
+
+    def test_no_parameter_list_means_no_complaint(self):
+        self.assertEqual([], form.unknown_tokens("{Anything}", []))
+        self.assertEqual([], form.unknown_tokens("{Anything}", None))
+
+    def test_the_status_lines_say_what_is_missing_and_what_is_wrong(self):
+        lines = form.problems({"sheet_number": "{Wing}"}, self.PARAMS)
+        self.assertTrue(lines[0].startswith("Still to choose: "))
+        self.assertIn("{Wing}", lines[1])
+
+    def test_a_complete_form_has_nothing_to_say(self):
+        combos = dict((name, "x") for name, _o, _p in form.COMBOS)
+        texts = dict((name, "{Number}") for name, _k in form.TEXTS)
+        self.assertEqual([], form.problems(form.to_settings({}, combos, texts), self.PARAMS))
+
+
 class Xaml(unittest.TestCase):
     def setUp(self):
         self.root = ET.parse(os.path.join(ROOM_M, "rls_settings.xaml")).getroot()
@@ -94,12 +115,19 @@ class Xaml(unittest.TestCase):
             source = f.read()
         handlers = set()
         for e in self.root.iter():
-            for attribute in ("Click", "SelectionChanged"):
+            for attribute in ("Click", "SelectionChanged", "TextChanged"):
                 if e.get(attribute):
                     handlers.add(e.get(attribute))
         self.assertTrue(handlers)
         for h in handlers:
             self.assertTrue(re.search(r"def {}\(self, sender, args\)".format(h), source), h)
+
+    def test_every_field_reports_its_changes_so_the_status_line_stays_true(self):
+        handlers = dict((e.get(X + "Name"), e) for e in self.root.iter() if e.get(X + "Name"))
+        for name, _o, _p in form.COMBOS:
+            self.assertEqual("on_change", handlers[name].get("SelectionChanged"), name)
+        for name, _k in form.TEXTS:
+            self.assertEqual("on_change", handlers[name].get("TextChanged"), name)
 
     def test_the_files_ironpython_and_wpf_read_are_ascii(self):
         for name in ("rls_settings_form.py", "rls_settings_window.py", "rls_settings.xaml"):

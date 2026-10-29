@@ -75,7 +75,6 @@ pub mod reports {
     pub use roommate_shared::reports::*;
 }
 pub mod handlers;
-pub mod model_settings;
 pub mod network;
 pub mod reference;
 pub mod reports_api;

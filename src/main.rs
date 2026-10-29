@@ -46,9 +46,6 @@ use roommate::handlers::{
     ingest_rooms_stream, ingest_spaces, ingest_spaces_stream, ingest_windows, ingest_windows_stream,
     post_project_reach,
 };
-use roommate::model_settings::{
-    http_get as http_get_model_settings, http_save as http_save_model_settings, http_start as http_start_model_settings,
-};
 use roommate::network::{self, HostPolicy};
 use roommate::reports_api::{http_delete_report, http_get_report, http_list_reports, http_save_report};
 use roommate::settings_api::{
@@ -344,11 +341,6 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         // Tag rules: where a tag goes relative to the element it tags, one rule per key. POST is
         // the extractor's observations. See `tag_rules`.
         .route("/projects/{id}/tagrules", get(http_list_tag_rules))
-        // The RLS settings of one model, edited in the browser and read back by the plug-in. See `model_settings`.
-        .route(
-            "/projects/{id}/modelsettings",
-            get(http_get_model_settings).post(http_start_model_settings).put(http_save_model_settings),
-        )
         .route("/projects/{id}/tagrules/observations", post(http_observe_tags))
         .route("/projects/{id}/tagrules/{rule}", get(http_get_tag_rule).delete(http_delete_tag_rule))
         .route("/projects/{id}/roomtasks", post(http_claim_tasks))
