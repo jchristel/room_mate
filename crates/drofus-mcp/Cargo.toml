@@ -1,0 +1,32 @@
+[package]
+name = "drofus-mcp"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "An MCP server for dRofus. Standalone: it depends on nothing else in this repository, so the folder can be copied out and become its own repository."
+
+# Its own lint table rather than `workspace = true`, so a copy of this folder needs no edit to build
+# under the same rule the rest of the project uses (`too_many_lines` is a discovery aid, never a gate).
+[lints.clippy]
+too_many_lines = "warn"
+
+[lib]
+name = "drofus_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "drofus-mcp"
+path = "src/main.rs"
+
+# Every dependency is spelled out here, none inherited from the workspace, and there is no path
+# dependency: that is what keeps the crate forkable. Versions match the roommate server's own MCP
+# binary (`src/bin/mcp.rs`) so the two behave alike under one client.
+[dependencies]
+rmcp = { version = "2.1.0", features = ["server", "macros", "transport-io", "schemars"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

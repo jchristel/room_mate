@@ -967,6 +967,14 @@ item draws on the wrong level, check which duHast the extension is running
 first. **Snapshots exported before that date still carry the geometric level**
 and will keep drawing on the wrong storey until they are re-exported.
 
+## `crates/drofus-mcp`: a standalone MCP server for dRofus
+
+A workspace member **only so CI builds and tests it**; it depends on nothing else here (no path dependency, no `workspace = true`, its
+own lint table, no import of `roommate` or `roommate-shared`), so the folder can be copied out and become its own repository.
+`scripts/check_drofus_standalone.py` (a CI step) fails if that stops being true. It is **a scaffold**: one tool, `server_info`; the dRofus
+API's shape and the first real tools are undecided. A session working on it follows `crates/drofus-mcp/CLAUDE.md` and touches nothing outside
+the crate. It is separate from `src/bin/mcp.rs` (the roommate data server) and from the `reference` module (dRofus as uploaded CSV).
+
 ## Which document wins
 
 [`docs/README.md`](docs/README.md) indexes everything. **The strategy docs hold
