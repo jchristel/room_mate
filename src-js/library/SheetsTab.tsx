@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
 import { sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
+import { SheetPreview } from "./SheetPreview.js";
 import type { RoomRow, SheetRecord, SheetSummary, Suggestions } from "./types.js";
 
 const message = (e: unknown): string => String((e as Error).message ?? e);
@@ -173,6 +174,9 @@ function SheetDetail({ record, rooms, busy, onDecide, onDelete, onMake }: Detail
         <dt>Last pushed</dt>
         <dd>{shortTime(record.received_at)}</dd>
       </dl>
+
+      <h3>Preview</h3>
+      <SheetPreview record={record} />
 
       <h3>Viewports ({ports.length})</h3>
       {ports.length === 0 ? <p className="hint">None. A sheet with no viewport has no layout to copy.</p> : null}
