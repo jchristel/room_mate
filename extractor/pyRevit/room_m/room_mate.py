@@ -1192,7 +1192,7 @@ def export_model(selected_doc, phase_name, return_value, entities, buckets, leve
         if exporter.stamp_envelope is not None:
             exporter.stamp_envelope(selected_doc, entity_block, return_value)
 
-        contribution = exporter.export_model(selected_doc, phase_name, return_value)
+        contribution = exporter.export_model(selected_doc, phase_name, return_value, level_ids=level_ids)
         if contribution is None:
             continue
         buckets[entity].append((entity_block, contribution))

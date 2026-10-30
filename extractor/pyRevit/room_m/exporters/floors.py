@@ -74,9 +74,9 @@ SPEC = surfaces.SurfaceExport(
 stamp_envelope = None
 
 
-def export_model(selected_doc, phase_name, return_value):
+def export_model(selected_doc, phase_name, return_value, level_ids=None):
     """See `exporters.surfaces.export_model`."""
-    return surfaces.export_model(SPEC, selected_doc, phase_name, return_value)
+    return surfaces.export_model(SPEC, selected_doc, phase_name, return_value, level_ids=level_ids)
 
 
 def post_bucket(run_envelope, entries, return_value):

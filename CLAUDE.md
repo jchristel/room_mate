@@ -124,8 +124,13 @@ whole model or ticked levels. A level choice is by NAME across the selected mode
 (`export_form.scope_for_doc`); a model with none of the chosen levels is left out and said so, never pushed unscoped (that would replace its
 whole snapshot with nothing). Each `post_*` stream drops an element on any other level (`phase_filter.in_scope`), and a scoped run does not
 refuse an empty push (a level with no doors is a legitimate clear; `is_scoped`). The single-entity buttons are unchanged and share
-`_run_export`. **Revit still reads whole models**: duHast has no level filter, so a level choice narrows what is sent and replaced, not what Revit
-reads. A level filter in duHast's `get_all_*_data` is where the Revit-side speed would come from. **Not run in Revit.**
+`_run_export`. **The level choice also narrows what Revit reads**: each exporter hands `level_ids` to duHast's `get_all_*_data` (`duHast.Revit.Common.level_filter`),
+which converts only elements on those levels, before the slow per-element conversion; the count guards in the spaces and surfaces exporters compare
+against the same filtered set. An UNSCOPED push passes duHast no new argument (`export_form.level_kwargs`), so an older duHast still works for
+every push that does not choose levels; a scoped one needs the duHast with the filter (**`duhast.lock` is not bumped**: build with `-DuHastPath`).
+FF&E is filtered on the level the modeller assigned before conversion and on the geometric fallback level after it, so the level an item reports is
+unchanged. Levels are the per-document ids, which each element's own `LevelId` reports (a room's level, a door's host level, a ceiling's host level).
+**Not run in Revit.**
 
 **The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Apply tasks, RLS settings, RLS create and Server; the `Export`
 panel keeps the older single-purpose buttons (Rooms + Doors, By category).

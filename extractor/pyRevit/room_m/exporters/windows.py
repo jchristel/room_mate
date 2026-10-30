@@ -47,6 +47,7 @@ from duHast.Data.Utils.data_to_file import build_json_for_file
 
 from Autodesk.Revit.DB import BuiltInCategory
 
+from room_m.export_form import level_kwargs
 from room_m.post_windows import post_windows_stream
 
 from room_m.utils.openings import (
@@ -62,7 +63,7 @@ from room_m.utils.openings import (
 stamp_envelope = None
 
 
-def export_model(selected_doc, phase_name, return_value):
+def export_model(selected_doc, phase_name, return_value, level_ids=None):
     """Export one model's windows as this document's contribution to the run's
     windows bucket, or None when it could not be read.
 
@@ -87,7 +88,7 @@ def export_model(selected_doc, phase_name, return_value):
         # ids, like room ids, are unique only within a document.
         placements = opening_placements(selected_doc, phase_name, BuiltInCategory.OST_Windows)
 
-        window_data = get_all_window_data(selected_doc)
+        window_data = get_all_window_data(selected_doc, **level_kwargs(level_ids))
         json_formatted_windows = build_json_for_file(
             {dw.DataWindow.data_type: window_data}, "{}".format(selected_doc.Title))
 

@@ -72,3 +72,10 @@ def summary(entities, project_name, phase, docs, names):
     scope = "the whole model" if not names else "level(s) " + ", ".join(names)
     return "Pushing {} from {} model(s) to '{}', phase '{}', {}".format(
         ", ".join(entities), len(docs), project_name, phase, scope)
+
+
+def level_kwargs(level_ids):
+    """The keyword arguments that hand a level choice to a duHast `get_all_*_data`: none when the whole
+    model is wanted, so a duHast older than the level filter still works for every unscoped push (it
+    would refuse the unknown `level_ids`), and `level_ids` only when a scoped push asks for it."""
+    return {} if level_ids is None else {"level_ids": level_ids}

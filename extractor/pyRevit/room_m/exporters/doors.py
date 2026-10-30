@@ -40,6 +40,7 @@ from duHast.Data.Objects.Collectors import data_door as dd
 from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 
+from room_m.export_form import level_kwargs
 from room_m.post_doors import post_doors_stream
 
 from room_m.utils.openings import (
@@ -57,7 +58,7 @@ from Autodesk.Revit.DB import BuiltInCategory
 stamp_envelope = None
 
 
-def export_model(selected_doc, phase_name, return_value):
+def export_model(selected_doc, phase_name, return_value, level_ids=None):
     """Export one model's doors as this document's contribution to the run's
     doors bucket, or None when it could not be read.
 
@@ -82,7 +83,7 @@ def export_model(selected_doc, phase_name, return_value):
         # within a document.
         placements = opening_placements(selected_doc, phase_name, BuiltInCategory.OST_Doors)
 
-        door_data = get_all_door_data(selected_doc)
+        door_data = get_all_door_data(selected_doc, **level_kwargs(level_ids))
         json_formatted_doors = build_json_for_file(
             {dd.DataDoor.data_type: door_data}, "{}".format(selected_doc.Title))
 
