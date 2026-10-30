@@ -45,6 +45,14 @@ class RevitFacts(object):
     def phase_exists(self, phase_name):
         return get_phase_by_name(self.doc, phase_name) is not None
 
+    def room_phase_name(self, room):
+        """The name of the phase a room belongs to, or None when it has none."""
+        from Autodesk.Revit.DB import Element
+        from duHast.Revit.Rooms.rooms import get_room_phase
+
+        phase = get_room_phase(self.doc, room)
+        return None if phase is None else Element.Name.GetValue(phase)
+
     def _placed_rooms(self):
         if self._rooms is None:
             self._rooms = get_all_placed_rooms(self.doc)

@@ -46,8 +46,8 @@ class Facts(object):
     def get(self, key, default):
         return self.over.get(key, default)
 
-    def phase_exists(self, name):
-        return self.get("phase", True)
+    def room_phase_name(self, room):
+        return "New Construction" if self.get("phase", True) else None
 
     def find_room(self, number, room_id):
         return self.get("room", object())

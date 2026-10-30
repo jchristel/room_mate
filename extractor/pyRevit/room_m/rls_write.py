@@ -39,6 +39,7 @@ from duHast.Revit.Family.family_symbol_lookup import (
     get_title_block_symbol_by_name,
 )
 from duHast.Revit.Rooms.room_tags_create import create_room_tag_without_transaction_wrapper
+from duHast.Revit.Rooms.rooms import get_room_phase
 from duHast.Revit.Views.elevation_marker import (
     create_elevation_marker_without_transaction_wrapper,
     create_elevation_on_marker_without_transaction_wrapper,
@@ -60,7 +61,6 @@ from duHast.Revit.Views.viewports_create import create_viewport_without_transact
 
 from room_m import apply_geometry as geo
 from room_m.apply_facts import RevitFacts
-from room_m.utils.generic import phase_by_name
 
 # How far beyond the room a plan view's crop reaches when the template viewport carried none.
 CROP_MARGIN_MM = 600.0
@@ -145,7 +145,8 @@ class RlsWriter(object):
         try:
             room = plan["room"]
             level = room.Level
-            phase = phase_by_name(self.doc, task["phase"])
+            # the views belong to the phase the room does, whatever the task says
+            phase = get_room_phase(self.doc, room)
             sheet = self._sheet(plan)
             plan_view = self._plan_view(plan, room, level, phase, sheet, notes)
             self._elevations(plan, room, level, phase, plan_view, sheet, notes)

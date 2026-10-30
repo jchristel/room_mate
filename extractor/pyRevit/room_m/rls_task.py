@@ -20,7 +20,7 @@ Warnings (written, reported as completed with warnings): no room tag defined, no
 defined, elevations the server could not place.
 
 `facts` answers, for the model open in Revit:
-  phase_exists(phase_name) -> bool
+  room_phase_name(room) -> str or None
   find_room(number, room_id) -> a room handle or None
   room_values(room) -> {parameter name: text} for the naming templates
   title_block_exists(name) -> bool          ("Family : Type")
@@ -214,11 +214,13 @@ def check(task, settings, facts, taken):
     missing = rls_settings.missing(settings)
     if missing:
         return None, [finding(SETTINGS_INCOMPLETE, "the RLS settings are incomplete: {}".format(", ".join(missing)))], []
-    if not facts.phase_exists(task.get("phase")):
-        aborts.append(finding(PHASE_MISSING, "{}: the model has no phase '{}'".format(label, task.get("phase"))))
     room = facts.find_room((task.get("room") or {}).get("number"), (task.get("room") or {}).get("room_id"))
     if room is None:
         return None, aborts + [finding(ROOM_MISSING, "{}: the room is no longer in the model".format(label))], []
+
+    # The views belong to the phase the room does; the task names none.
+    if facts.room_phase_name(room) is None:
+        aborts.append(finding(PHASE_MISSING, "{}: the room has no phase".format(label)))
 
     plan, built = build(task, settings, facts.room_values(room))
     aborts.extend(built)

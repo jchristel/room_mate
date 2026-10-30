@@ -590,6 +590,8 @@ checked before anything is made, then one transaction group per task (`duHast...
   (`{Room Parameter}` tokens, filled from the room). Abort (nothing written, reported): sheet exists, a view name is taken, no title block
   for the size, a view type or the base schedule not in the model, a template the room cannot fill, room/phase missing, settings
   incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place.
+- **The phase is the room's own, never typed.** A `create_rls` task carries `ROOM_OWN_PHASE` as its phase (a label); the planner aborts if the room has
+  none (`PHASE_MISSING`) and `rls_write` makes every view in `get_room_phase(doc, room)`. The request's `phase` is accepted and ignored.
 - **View names are the view-name template plus ` PLAN` / ` ELEV n` / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
   task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.

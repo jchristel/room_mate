@@ -49,5 +49,5 @@ export interface Made {
 
 /** Room layout sheets from one library sheet, one task per room (the server judges each room on its own).
  *  Made without tag rules: a sheet made on its own is the layout and nothing placed on it. */
-export const makeRls = (project: string, sheetId: string, roomIds: string[], phase: string, overwriteRls: boolean) =>
-  send<Made[]>("POST", `${base(project)}/tasks`, { kind: "create_rls", sheet_id: sheetId, room_ids: roomIds, phase, overwrite_rls: overwriteRls, with_tags: false });
+export const makeRls = (project: string, sheetId: string, roomIds: string[], overwriteRls: boolean) =>
+  send<Made[]>("POST", `${base(project)}/tasks`, { kind: "create_rls", sheet_id: sheetId, room_ids: roomIds, overwrite_rls: overwriteRls, with_tags: false });

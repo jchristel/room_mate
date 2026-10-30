@@ -119,7 +119,7 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
             rooms={rooms}
             busy={busy}
             onDecide={(pendingId, accept) => void act(accept ? "Push accepted." : "Push rejected.", (r) => api.decidePush(project, r.id, pendingId, r.taken_at, accept))}
-            onMake={(roomIds, phase, overwrite) => api.makeRls(project, record.id, roomIds, phase, overwrite)}
+            onMake={(roomIds, overwrite) => api.makeRls(project, record.id, roomIds, overwrite)}
             onDelete={() => {
               if (window.confirm(`Delete sheet ${record.sheet_number} from the library? Tasks already made keep their copy.`))
                 void act("Sheet deleted.", async (r) => {
@@ -142,7 +142,7 @@ interface DetailProps {
   busy: boolean;
   onDecide(pendingId: number, accept: boolean): void;
   onDelete(): void;
-  onMake(roomIds: string[], phase: string, overwrite: boolean): Promise<api.Sent<api.Made[]>>;
+  onMake(roomIds: string[], overwrite: boolean): Promise<api.Sent<api.Made[]>>;
 }
 
 function SheetDetail({ record, rooms, busy, onDecide, onDelete, onMake }: DetailProps) {
@@ -240,7 +240,6 @@ function SheetDetail({ record, rooms, busy, onDecide, onDelete, onMake }: Detail
  *  Revit side takes them out before a sheet is sent), so this makes the layout and nothing on it. Each
  *  room is judged on its own by the server and answers with a task or the reason it could not be made. */
 function MakeRls({ record, rooms, onMake }: { record: SheetRecord; rooms: readonly RoomRow[]; onMake: DetailProps["onMake"] }) {
-  const [phase, setPhase] = useState("");
   const [overwrite, setOverwrite] = useState(false);
   const [filter, setFilter] = useState("");
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
@@ -267,7 +266,7 @@ function MakeRls({ record, rooms, onMake }: { record: SheetRecord; rooms: readon
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const r = await onMake([...picked], phase.trim(), overwrite);
+    const r = await onMake([...picked], overwrite);
     setBusy(false);
     if (!r.ok) return setError(r.error);
     setMade(r.value);
@@ -279,10 +278,6 @@ function MakeRls({ record, rooms, onMake }: { record: SheetRecord; rooms: readon
     <>
       <h3>Make room layout sheets from this sheet</h3>
       <p className="hint">Queues a task per room for the Revit session to pick up (Apply tasks). The sheet's layout is copied; no items are placed and no tags.</p>
-      <label className="stack">
-        Phase to work in (the name Revit knows it by)
-        <input type="text" value={phase} onChange={(e) => setPhase(e.target.value)} placeholder="New Construction" />
-      </label>
       <label>
         <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> Overwrite a sheet that already exists (off, it is skipped with a warning)
       </label>
@@ -297,7 +292,7 @@ function MakeRls({ record, rooms, onMake }: { record: SheetRecord; rooms: readon
         ))}
       </ul>
       <div className="actions">
-        <button type="button" disabled={busy || picked.size === 0 || phase.trim() === ""} onClick={() => void submit()}>
+        <button type="button" disabled={busy || picked.size === 0} onClick={() => void submit()}>
           {busy ? "Working…" : `Make ${picked.size} task${picked.size === 1 ? "" : "s"}`}
         </button>
         <button type="button" disabled={picked.size === 0} onClick={() => setPicked(new Set())}>

@@ -251,6 +251,10 @@ impl From<&Task> for TaskSummary {
     }
 }
 
+/// What a `create_rls` task's phase says: the room's own phase, read in Revit when the sheet is made. A
+/// person never types one: the views of a room layout sheet belong to the phase the room does.
+pub const ROOM_OWN_PHASE: &str = "(the room's own phase)";
+
 /// What a person's request makes of a task, before it has an id or a state.
 #[derive(Debug, Clone)]
 pub struct NewTask {

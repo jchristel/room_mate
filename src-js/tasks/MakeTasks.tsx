@@ -62,7 +62,7 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
     setError(null);
   };
 
-  const ready = phase.trim() !== "" && picked.size > 0 && (kind !== "create_rls" || sheetId !== "");
+  const ready = (kind === "create_rls" || phase.trim() !== "") && picked.size > 0 && (kind !== "create_rls" || sheetId !== "");
 
   const submit = async () => {
     setBusy(true);
@@ -73,7 +73,7 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
         ? await api.makePopulate(project, { assignment_ids: ids, phase: phase.trim(), overwrite_layout: overwriteLayout, create_rls: createRls, overwrite_rls: overwriteRls })
         : kind === "update_room"
           ? await api.makeUpdate(project, ids, phase.trim(), mode, dryRun)
-          : await api.makeRls(project, sheetId, ids, phase.trim(), overwriteRls);
+          : await api.makeRls(project, sheetId, ids, overwriteRls);
     setBusy(false);
     if (!r.ok) return setError(r.error);
     setMade(r.value);
@@ -103,10 +103,14 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
         </button>
       </div>
 
-      <label className="stack">
-        Phase to work in (the name Revit knows it by)
-        <input type="text" value={phase} onChange={(e) => setPhase(e.target.value)} placeholder="New Construction" />
-      </label>
+      {kind === "create_rls" ? (
+        <p className="hint">The views are made in each room's own phase; there is nothing to enter.</p>
+      ) : (
+        <label className="stack">
+          Phase to work in (the name Revit knows it by)
+          <input type="text" value={phase} onChange={(e) => setPhase(e.target.value)} placeholder="New Construction" />
+        </label>
+      )}
 
       {kind === "update_room" ? (
         <>
