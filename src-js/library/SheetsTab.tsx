@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
 import { sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
+import { SheetPreview } from "./SheetPreview.js";
 import type { RoomRow, SheetRecord, SheetSummary, Suggestions } from "./types.js";
 
 const message = (e: unknown): string => String((e as Error).message ?? e);
@@ -115,10 +116,8 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
         ) : record ? (
           <SheetDetail
             record={record}
-            rooms={rooms}
             busy={busy}
             onDecide={(pendingId, accept) => void act(accept ? "Push accepted." : "Push rejected.", (r) => api.decidePush(project, r.id, pendingId, r.taken_at, accept))}
-            onMake={(roomIds, phase, overwrite) => api.makeRls(project, record.id, roomIds, phase, overwrite)}
             onDelete={() => {
               if (window.confirm(`Delete sheet ${record.sheet_number} from the library? Tasks already made keep their copy.`))
                 void act("Sheet deleted.", async (r) => {
@@ -137,14 +136,12 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
 
 interface DetailProps {
   record: SheetRecord;
-  rooms: readonly RoomRow[];
   busy: boolean;
   onDecide(pendingId: number, accept: boolean): void;
   onDelete(): void;
-  onMake(roomIds: string[], phase: string, overwrite: boolean): Promise<api.Sent<api.Made[]>>;
 }
 
-function SheetDetail({ record, rooms, busy, onDecide, onDelete, onMake }: DetailProps) {
+function SheetDetail({ record, busy, onDecide, onDelete }: DetailProps) {
   const ports = record.sheet.view_ports ?? [];
   return (
     <div className="detail">
@@ -174,6 +171,9 @@ function SheetDetail({ record, rooms, busy, onDecide, onDelete, onMake }: Detail
         <dd>{shortTime(record.received_at)}</dd>
       </dl>
 
+      <h3>Preview</h3>
+      <SheetPreview record={record} />
+
       <h3>Viewports ({ports.length})</h3>
       {ports.length === 0 ? <p className="hint">None. A sheet with no viewport has no layout to copy.</p> : null}
       {ports.length > 0 ? (
@@ -196,8 +196,6 @@ function SheetDetail({ record, rooms, busy, onDecide, onDelete, onMake }: Detail
           </tbody>
         </table>
       ) : null}
-
-      <MakeRls record={record} rooms={rooms} onMake={onMake} />
 
       <h3>Pushes waiting ({record.pending.length})</h3>
       {record.pending.length === 0 ? <p className="hint">None.</p> : null}
@@ -229,88 +227,6 @@ function SheetDetail({ record, rooms, busy, onDecide, onDelete, onMake }: Detail
         </>
       ) : null}
     </div>
-  );
-}
-
-/** Room layout sheets from this sheet alone: no blueprint and no items. The sheet carries no tags (the
- *  Revit side takes them out before a sheet is sent), so this makes the layout and nothing on it. Each
- *  room is judged on its own by the server and answers with a task or the reason it could not be made. */
-function MakeRls({ record, rooms, onMake }: { record: SheetRecord; rooms: readonly RoomRow[]; onMake: DetailProps["onMake"] }) {
-  const [phase, setPhase] = useState("");
-  const [overwrite, setOverwrite] = useState(false);
-  const [filter, setFilter] = useState("");
-  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [made, setMade] = useState<api.Made[] | null>(null);
-  const f = filter.trim().toLowerCase();
-  const options = rooms.filter((r) => !f || r.name.toLowerCase().includes(f)).slice(0, 200);
-
-  // Another sheet is another request.
-  useEffect(() => {
-    setMade(null);
-    setError(null);
-  }, [record.id]);
-
-  const toggle = (id: string) =>
-    setPicked((p) => {
-      const n = new Set(p);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-
-  const submit = async () => {
-    setBusy(true);
-    setError(null);
-    const r = await onMake([...picked], phase.trim(), overwrite);
-    setBusy(false);
-    if (!r.ok) return setError(r.error);
-    setMade(r.value);
-    // Rooms that got a task are done with; refused ones stay ticked so the reason can be dealt with.
-    setPicked(new Set(r.value.filter((m) => m.refused).map((m) => m.subject)));
-  };
-
-  return (
-    <>
-      <h3>Make room layout sheets from this sheet</h3>
-      <p className="hint">Queues a task per room for the Revit session to pick up (Apply tasks). The sheet's layout is copied; no items are placed and no tags.</p>
-      <label className="stack">
-        Phase to work in (the name Revit knows it by)
-        <input type="text" value={phase} onChange={(e) => setPhase(e.target.value)} placeholder="New Construction" />
-      </label>
-      <label>
-        <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> Overwrite a sheet that already exists (off, it is skipped with a warning)
-      </label>
-      <input type="search" placeholder="Filter rooms" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter rooms to make sheets for" />
-      <ul className="picks">
-        {options.map((r) => (
-          <li key={r.id}>
-            <label>
-              <input type="checkbox" checked={picked.has(r.id)} onChange={() => toggle(r.id)} /> {r.name}
-            </label>
-          </li>
-        ))}
-      </ul>
-      <div className="actions">
-        <button type="button" disabled={busy || picked.size === 0 || phase.trim() === ""} onClick={() => void submit()}>
-          {busy ? "Working…" : `Make ${picked.size} task${picked.size === 1 ? "" : "s"}`}
-        </button>
-        <button type="button" disabled={picked.size === 0} onClick={() => setPicked(new Set())}>
-          Clear
-        </button>
-      </div>
-      {error ? <p className="banner error">{error}</p> : null}
-      {made ? (
-        <ul className="findings">
-          {made.map((m) => (
-            <li key={m.subject} className={m.refused ? "refused" : "made"}>
-              {m.refused ? "✗" : "✓"} <b>{m.room_name || m.subject}</b>: {m.refused ?? "queued"}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </>
   );
 }
 

@@ -58,13 +58,4 @@ export const makeUpdate = (project: string, assignmentIds: string[], phase: stri
     dry_run: dryRun,
   });
 
-export const makeRls = (project: string, sheetId: string, roomIds: string[], phase: string, overwriteRls: boolean) =>
-  send<Made[]>("POST", `${base(project)}/tasks`, {
-    kind: "create_rls",
-    sheet_id: sheetId,
-    room_ids: roomIds,
-    phase,
-    overwrite_rls: overwriteRls,
-  });
-
 export type { TaskState };

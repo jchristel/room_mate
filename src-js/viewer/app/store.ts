@@ -25,6 +25,7 @@ import type { TagEntity } from "../../renderer/elementTags.js";
 import { DEFAULT_TAG_SETTINGS, type TagSettings } from "../elementTags.js";
 import type { Scope } from "../scope.js";
 import { newEdit, pickForEdit, type ConnectionsDoc, type PassageReport, type ZoneEdit } from "../connections.js";
+import { newRlsTool, pickRoom as pickRlsRoom, type RlsToolState } from "../rlsTool.js";
 import { newBlueprintTool, pickRoom as pickBlueprintRoom, type BlueprintToolState } from "../blueprintTool.js";
 import { newReach, pickSource, type ReachState } from "../reach.js";
 import { newRoute, pickEndpoint, type PlanPoint, type RouteResult, type RouteState } from "../route.js";
@@ -57,6 +58,9 @@ export interface ZoneRow {
    *  ghost, to choose its rotation and assign it. Exclusive with the other three tools, which all
    *  claim a room pick. Presentation only; it is not in the SVG export. */
   blueprint: BlueprintToolState | null;
+  /** This zone's RLS tool, or `null` when it is off: rooms clicked on and a library sheet, to queue
+   *  room layout sheet tasks for Revit. Exclusive with the other tools, which all claim a room pick. */
+  rls: RlsToolState | null;
   /** This zone's footprint overlay: on/off and which tier. Per zone because
    *  both are presentation — two zones showing one level at two tiers is a
    *  comparison the overlay exists to make. */
@@ -418,6 +422,7 @@ function newZone(id: string, from?: ZoneRow): ZoneRow {
     edit: null,
     reach: null,
     blueprint: null,
+    rls: null,
   };
 }
 
@@ -571,6 +576,7 @@ export function select(
       else if (zone.edit) patchZoneEdit(target, pickForEdit(zone.edit, id, at));
       else if (zone.reach) patchZoneReach(target, pickSource(zone.reach, id, at));
       else if (zone.blueprint) patchZoneBlueprint(target, pickBlueprintRoom(zone.blueprint, id));
+      else if (zone.rls) patchZoneRls(target, pickRlsRoom(zone.rls, id));
       return;
     }
   }
@@ -579,7 +585,7 @@ export function select(
 
 /** Whether a zone has a room-picking tool on. */
 function hasTool(z: ZoneRow): boolean {
-  return z.route !== null || z.edit !== null || z.reach !== null || z.blueprint !== null;
+  return z.route !== null || z.edit !== null || z.reach !== null || z.blueprint !== null || z.rls !== null;
 }
 
 /** Which zone's tool a room pick is for, or `null` for none.
@@ -602,7 +608,7 @@ function toolTarget(zoneId: string | null): string | null {
 export function setZoneRouteMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
-      z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null, edit: on ? null : z.edit, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint } : z,
+      z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null, edit: on ? null : z.edit, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint, rls: on ? null : z.rls } : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
@@ -612,7 +618,7 @@ export function setZoneRouteMode(id: string, on: boolean): void {
 export function setZoneEditMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
-      z.id === id ? { ...z, edit: on ? (z.edit ?? newEdit()) : null, route: on ? null : z.route, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint } : z,
+      z.id === id ? { ...z, edit: on ? (z.edit ?? newEdit()) : null, route: on ? null : z.route, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint, rls: on ? null : z.rls } : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
@@ -622,7 +628,7 @@ export function setZoneEditMode(id: string, on: boolean): void {
 export function setZoneReachMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
-      z.id === id ? { ...z, reach: on ? (z.reach ?? newReach()) : null, route: on ? null : z.route, edit: on ? null : z.edit, blueprint: on ? null : z.blueprint } : z,
+      z.id === id ? { ...z, reach: on ? (z.reach ?? newReach()) : null, route: on ? null : z.route, edit: on ? null : z.edit, blueprint: on ? null : z.blueprint, rls: on ? null : z.rls } : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
@@ -633,11 +639,28 @@ export function setZoneBlueprintMode(id: string, on: boolean): void {
   setState({
     zones: state.zones.map((z) =>
       z.id === id
-        ? { ...z, blueprint: on ? (z.blueprint ?? newBlueprintTool()) : null, route: on ? null : z.route, edit: on ? null : z.edit, reach: on ? null : z.reach }
+        ? { ...z, blueprint: on ? (z.blueprint ?? newBlueprintTool()) : null, route: on ? null : z.route, edit: on ? null : z.edit, reach: on ? null : z.reach, rls: on ? null : z.rls }
         : z,
     ),
     toolFocus: on ? id : state.toolFocus,
   });
+}
+
+/** Turn one zone's RLS tool on (fresh) or off, and the other tools off. */
+export function setZoneRlsMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id
+        ? { ...z, rls: on ? (z.rls ?? newRlsTool()) : null, route: on ? null : z.route, edit: on ? null : z.edit, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint }
+        : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Replace one zone's RLS tool state; a no-op when the tool is off. */
+export function patchZoneRls(id: string, next: RlsToolState): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.rls ? { ...z, rls: next } : z)) });
 }
 
 /** Replace one zone's blueprint tool state; a no-op when the tool is off. */

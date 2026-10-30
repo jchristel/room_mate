@@ -46,8 +46,8 @@ class Facts(object):
     def get(self, key, default):
         return self.over.get(key, default)
 
-    def phase_exists(self, name):
-        return self.get("phase", True)
+    def room_phase_name(self, room):
+        return "New Construction" if self.get("phase", True) else None
 
     def find_room(self, number, room_id):
         return self.get("room", object())
@@ -184,6 +184,41 @@ class Warnings(unittest.TestCase):
     def test_elevations_the_server_could_not_place_warn(self):
         v = verdict(t=task(findings=[{"kind": "elevation_not_placed", "message": "different edge counts"}]))
         self.assertEqual([rt.ELEVATION_NOT_PLACED], codes(v["warnings"]))
+
+
+def with_three_d(forward, up, t=None):
+    t = t or task()
+    vp = viewport("three d", 99, 400, 300)
+    vp["view"] = {"forward_direction": forward, "up_direction": up}
+    t["sheets"][0]["sheet"]["view_ports"].append(vp)
+    return t
+
+
+class ThreeD(unittest.TestCase):
+    D = {"x": 203.2, "y": 203.2, "z": -101.6}
+    U = {"x": 71.8, "y": 71.8, "z": 287.4}
+
+    def test_each_3d_viewport_of_the_template_gives_a_new_view_with_its_direction(self):
+        v = verdict(with_three_d(self.D, self.U))
+        views = v["plan"]["three_ds"]
+        self.assertEqual(1, len(views))
+        self.assertEqual("01.09 STUDY 3D", views[0]["name"])
+        self.assertEqual([203.2, 203.2, -101.6], views[0]["forward"])
+        self.assertEqual([], v["aborts"])
+
+    def test_the_view_name_is_taken_into_account_for_name_collisions(self):
+        facts = Facts()
+        facts.views_in_use = lambda names: [n for n in names if n.endswith(" 3D")]
+        v = verdict(with_three_d(self.D, self.U), facts=facts)
+        self.assertIn(rt.VIEW_EXISTS, codes(v["aborts"]))
+
+    def test_a_3d_viewport_without_a_direction_warns_and_makes_no_view(self):
+        v = verdict(with_three_d({"x": 0, "y": 0, "z": 0}, self.U))
+        self.assertEqual([], v["plan"]["three_ds"])
+        self.assertIn(rt.THREE_D_NO_DIRECTION, codes(v["warnings"]))
+
+    def test_a_template_with_no_3d_viewport_makes_none(self):
+        self.assertEqual([], verdict()["plan"]["three_ds"])
 
 
 class Source(unittest.TestCase):
