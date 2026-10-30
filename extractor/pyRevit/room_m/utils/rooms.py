@@ -38,7 +38,7 @@ from Autodesk.Revit.DB import BuiltInParameter
 def rooms_in_phase(doc, phase_name):
     """The room ids in `phase_name`.
 
-    **Rooms do NOT go through `exists_in_phase`, and that is the one thing to
+    **Rooms do NOT go through `elements_in_phase`, and that is the one thing to
     understand here.** The design assumed one predicate could serve every
     entity, because `CreatedPhaseId`/`DemolishedPhaseId` are `Element` members.
     Against a real document that produced *zero* rooms, five pushes running --

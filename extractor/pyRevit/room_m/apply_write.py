@@ -20,22 +20,24 @@ calls, one task per `TransactionGroup`, so a task that fails leaves the model as
 """
 
 from Autodesk.Revit.DB import (
-    BuiltInParameter,
-    ElementTransformUtils,
     FamilyPlacementType,
-    FilteredElementCollector,
-    Line,
     Transaction,
     TransactionGroup,
     TransactionStatus,
-    Wall,
     XYZ,
 )
-from Autodesk.Revit.DB.Structure import StructuralType
+
+from duHast.Revit.Family.family_instance_place import (
+    flip_facing_towards_without_transaction_wrapper,
+    place_instance_on_level_without_transaction_wrapper,
+    place_instance_on_nearest_wall_without_transaction_wrapper,
+    set_created_phase_without_transaction_wrapper,
+)
+from duHast.Revit.Family.family_utils import load_family
 
 from room_m import apply_geometry as geo
 from room_m import task_plan
-from room_m.utils.generic import element_id_str, phase_by_name
+from room_m.utils.generic import phase_by_name
 
 # How far from a wall's centre line a hosted item may sit and still be put on that wall.
 WALL_REACH_MM = 450.0
@@ -153,16 +155,13 @@ class TaskWriter(object):
             path = self.facts.library_path(family)
             if path is None:
                 raise ValueError("family is not in the model or the library")
-            loaded = self.doc.LoadFamily(path)
-            if not (loaded[0] if isinstance(loaded, tuple) else loaded):
+            loaded = load_family(self.doc, path, transaction_manager=None)
+            if not loaded.status:
                 raise ValueError("the library family could not be loaded")
             self.facts.forget_symbols()
             symbol = self.facts.symbol_for(family, type_name)
             if symbol is None:
                 raise ValueError("the loaded family has no type '{}'".format(type_name))
-        if not symbol.IsActive:
-            symbol.Activate()
-            self.doc.Regenerate()
         return symbol
 
     def _place_item(self, item, level, phase):
@@ -170,46 +169,17 @@ class TaskWriter(object):
         point = XYZ(geo.mm_to_ft(item["x_mm"]), geo.mm_to_ft(item["y_mm"]), level.Elevation)
         kind = symbol.Family.FamilyPlacementType
         if kind == FamilyPlacementType.OneLevelBased:
-            instance = self.doc.Create.NewFamilyInstance(point, symbol, level, StructuralType.NonStructural)
-            angle = geo.facing_angle(item)
-            if angle:
-                axis = Line.CreateBound(point, XYZ(point.X, point.Y, point.Z + 1.0))
-                ElementTransformUtils.RotateElement(self.doc, instance.Id, axis, angle)
+            instance = place_instance_on_level_without_transaction_wrapper(
+                self.doc, symbol, point, level, geo.facing_angle(item))
         elif kind == FamilyPlacementType.OneLevelBasedHosted:
-            wall = self._nearest_wall(level, point)
-            if wall is None:
+            try:
+                instance = place_instance_on_nearest_wall_without_transaction_wrapper(
+                    self.doc, symbol, point, level, geo.mm_to_ft(WALL_REACH_MM))
+            except ValueError:
                 raise ValueError("no wall within {:.0f} mm to host it".format(WALL_REACH_MM))
-            instance = self.doc.Create.NewFamilyInstance(point, symbol, wall, level, StructuralType.NonStructural)
-            self._face(instance, item)
+            flip_facing_towards_without_transaction_wrapper(
+                instance, item.get("facing_x") or 0.0, item.get("facing_y") or 0.0)
         else:
             raise ValueError("placement type {} is not supported".format(kind))
-        created = instance.get_Parameter(BuiltInParameter.PHASE_CREATED)
-        if created is not None and not created.IsReadOnly:
-            created.Set(phase.Id)
+        set_created_phase_without_transaction_wrapper(instance, phase)
         return instance
-
-    def _nearest_wall(self, level, point):
-        best = None
-        best_distance = geo.mm_to_ft(WALL_REACH_MM)
-        for wall in FilteredElementCollector(self.doc).OfClass(Wall):
-            try:
-                if element_id_str(wall.LevelId) != element_id_str(level.Id):
-                    continue
-                curve = wall.Location.Curve
-                flat = XYZ(point.X, point.Y, curve.GetEndPoint(0).Z)
-                distance = curve.Project(flat).Distance
-            except Exception:
-                continue
-            if distance < best_distance:
-                best, best_distance = wall, distance
-        return best
-
-    def _face(self, instance, item):
-        """Flip a hosted instance whose facing points away from the item's."""
-        try:
-            x = instance.GetTransform().BasisX
-            dot = x.X * (item.get("facing_x") or 0.0) + x.Y * (item.get("facing_y") or 0.0)
-            if dot < 0 and instance.CanFlipFacing:
-                instance.flipFacing()
-        except Exception:
-            pass

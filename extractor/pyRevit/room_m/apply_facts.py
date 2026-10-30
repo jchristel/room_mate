@@ -17,29 +17,15 @@ cached for the life of one run, because a run is one sitting over one model and 
 
 import os
 
-from Autodesk.Revit.DB import (
-    BuiltInCategory,
-    Element,
-    FamilySymbol,
-    FilteredElementCollector,
-)
+from duHast.Revit.Common.phases import get_phase_by_name
+from duHast.Revit.Family.family_instance_facts import get_instances_by_room_id
+from duHast.Revit.Family.family_symbol_lookup import get_family_symbols_by_names
+from duHast.Revit.Rooms.rooms import get_all_placed_rooms
 
 from room_m.utils.generic import element_id_str, phase_by_name
-from room_m.utils.room_refs import room_reference
+from room_m.utils.items import items_in_phase
 
 FAMILY_LIBRARY_DIR = os.environ.get("ROOMMATE_FAMILY_LIBRARY") or None
-
-
-def name_of(element):
-    """An element's name. `Element.Name` is a property that IronPython sometimes cannot reach
-    on a type element, so the class-level getter is the fallback."""
-    try:
-        return str(element.Name)
-    except Exception:
-        try:
-            return str(Element.Name.GetValue(element))
-        except Exception:
-            return ""
 
 
 def _key(family, type_name):
@@ -57,20 +43,11 @@ class RevitFacts(object):
     # -- phases and rooms -------------------------------------------------------------------
 
     def phase_exists(self, phase_name):
-        return any(p.Name == phase_name for p in self.doc.Phases)
+        return get_phase_by_name(self.doc, phase_name) is not None
 
     def _placed_rooms(self):
         if self._rooms is None:
-            found = []
-            collector = FilteredElementCollector(self.doc).OfCategory(BuiltInCategory.OST_Rooms).WhereElementIsNotElementType()
-            for room in collector:
-                try:
-                    if room.Area <= 0:
-                        continue
-                    found.append(room)
-                except Exception:
-                    continue
-            self._rooms = found
+            self._rooms = get_all_placed_rooms(self.doc)
         return self._rooms
 
     def find_room(self, number, room_id):
@@ -100,24 +77,11 @@ class RevitFacts(object):
 
     def _walk_contents(self, phase_name):
         from duHast.Revit.Family.Export.to_data_item import DEFAULT_ITEM_CATEGORIES
-        from Autodesk.Revit.DB import ElementCategoryFilter, FamilyInstance
-        from room_m.utils.items import items_in_phase
 
         phase = phase_by_name(self.doc, phase_name)
-        allowed = items_in_phase(self.doc, phase_name, DEFAULT_ITEM_CATEGORIES)
-        by_room = {}
-        for category in DEFAULT_ITEM_CATEGORIES:
-            collector = FilteredElementCollector(self.doc).OfClass(FamilyInstance).WherePasses(ElementCategoryFilter(category))
-            for instance in collector:
-                try:
-                    if element_id_str(instance.Id) not in allowed:
-                        continue
-                    room_id = room_reference(instance, phase, "Room")
-                except Exception:
-                    continue
-                if room_id is not None:
-                    by_room.setdefault(room_id, []).append(instance)
-        return by_room
+        allowed = set(int(i) for i in items_in_phase(self.doc, phase_name, DEFAULT_ITEM_CATEGORIES))
+        by_room = get_instances_by_room_id(self.doc, phase, DEFAULT_ITEM_CATEGORIES, allowed)
+        return dict((str(room_id), instances) for room_id, instances in by_room.items())
 
     def room_has_content(self, room, phase_name):
         return len(self.room_items(room, phase_name)) > 0
@@ -126,13 +90,7 @@ class RevitFacts(object):
 
     def _symbol_map(self):
         if self._symbols is None:
-            found = {}
-            for symbol in FilteredElementCollector(self.doc).OfClass(FamilySymbol):
-                try:
-                    found.setdefault(_key(symbol.FamilyName, name_of(symbol)), symbol)
-                except Exception:
-                    continue
-            self._symbols = found
+            self._symbols = get_family_symbols_by_names(self.doc)
         return self._symbols
 
     def symbol_for(self, family_name, type_name):

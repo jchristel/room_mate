@@ -28,7 +28,7 @@ What is specific to slabs, and worth knowing before changing anything here:
 **The phase filter is the DOORS range test, not the rooms equality test.** A
 room BELONGS to one phase (`ROOM_PHASE`); a ceiling or a floor is BUILT in one
 and may be demolished in a later one, so it takes `elements_in_phase` /
-`exists_in_phase` over `PHASE_CREATED` and `PHASE_DEMOLISHED`. Running rooms
+the range test (`generic.elements_in_phase`) over `PHASE_CREATED` and `PHASE_DEMOLISHED`. Running rooms
 through the range test returns nothing, silently, and cost five empty pushes to
 find; this is the same trap facing the other way, and House A cannot catch it
 because no ceiling there is demolished -- the two tests agree on that document

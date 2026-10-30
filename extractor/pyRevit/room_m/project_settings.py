@@ -57,33 +57,16 @@ def with_server(text, url):
     return json.dumps(data, sort_keys=True)
 
 
-def _find_storage(doc, schema):
-    from Autodesk.Revit.DB import FilteredElementCollector
-    from Autodesk.Revit.DB.ExtensibleStorage import DataStorage
-
-    for storage in FilteredElementCollector(doc).OfClass(DataStorage):
-        entity = storage.GetEntity(schema)
-        if entity is not None and entity.IsValid():
-            return storage
-    return None
-
-
 def read_text(doc):
     """The JSON text stored in `doc`, or None when the model has none (no schema, no storage
     element, or no document). Never raises: the caller falls through to the next source."""
     if doc is None:
         return None
     try:
-        from System import Guid
-        from Autodesk.Revit.DB.ExtensibleStorage import Schema
+        from duHast.Revit.ExtensibleSchemas.project_text import read_project_text
 
-        schema = Schema.Lookup(Guid(SCHEMA_GUID))
-        if schema is None:
-            return None
-        storage = _find_storage(doc, schema)
-        if storage is None:
-            return None
-        return storage.GetEntity(schema).Get[str](FIELD)
+        outcome = read_project_text(doc, SCHEMA_GUID, FIELD)
+        return outcome.result[0] if outcome.status and outcome.result else None
     except Exception:
         return None
 
@@ -94,38 +77,12 @@ def write_text(doc, text):
     if doc is None:
         return False, "there is no open model to store it in"
     try:
-        if doc.IsFamilyDocument:
-            return False, "a family document cannot hold RoomMate settings"
-        if doc.IsReadOnly:
-            return False, "the model is read only"
-        import clr
-        from System import Guid
-        from Autodesk.Revit.DB import Transaction
-        from Autodesk.Revit.DB.ExtensibleStorage import AccessLevel, DataStorage, Entity, Schema, SchemaBuilder
+        from duHast.Revit.ExtensibleSchemas.project_text import write_project_text
 
-        schema = Schema.Lookup(Guid(SCHEMA_GUID))
-        transaction = Transaction(doc, "RoomMate: store settings")
-        transaction.Start()
-        try:
-            if schema is None:
-                builder = SchemaBuilder(Guid(SCHEMA_GUID))
-                builder.SetReadAccessLevel(AccessLevel.Public)
-                builder.SetWriteAccessLevel(AccessLevel.Public)
-                builder.SetSchemaName(SCHEMA_NAME)
-                builder.SetDocumentation(SCHEMA_DOCUMENTATION)
-                builder.AddSimpleField(FIELD, clr.GetClrType(str))
-                schema = builder.Finish()
-            storage = _find_storage(doc, schema)
-            if storage is None:
-                storage = DataStorage.Create(doc)
-            entity = Entity(schema)
-            entity.Set[str](FIELD, text)
-            storage.SetEntity(entity)
-            transaction.Commit()
-        except Exception:
-            transaction.RollBack()
-            raise
-        return True, "stored in the model"
+        outcome = write_project_text(doc, SCHEMA_GUID, SCHEMA_NAME, SCHEMA_DOCUMENTATION, FIELD, text)
+        if outcome.status:
+            return True, "stored in the model"
+        return False, "could not store it in the model: {}".format(outcome.message)
     except Exception as e:
         return False, "could not store it in the model: {}".format(e)
 

@@ -21,21 +21,20 @@
 #
 
 
-# The direct Revit API use in this module: phase membership needs the document's
-# phase *ordering*, which duHast exposes nowhere, and the range test walks a raw
-# collector so it can serve whichever category the caller names.
-from Autodesk.Revit.DB import (
-    FilteredElementCollector,
+# The Revit work (phase ordering and membership, levels) is duHast's; what is here is the shape
+# the exporters and the windows want it in.
+from duHast.Revit.Common.element_id import get_el_id_int
+from duHast.Revit.Common.phases import (
+    get_all_phases_in_order,
+    get_ids_of_elements_in_phase,
+    get_phase_by_name,
 )
+from duHast.Revit.Levels.levels import get_levels_in_model
+
 
 def element_id_str(element_id):
-    """An ElementId as the string the wire uses. `.Value` is the modern API;
-    `.IntegerValue` is what older Revit exposes, and this script has to run on
-    both, so neither name is hard-coded."""
-    value = getattr(element_id, "Value", None)
-    if value is None:
-        value = getattr(element_id, "IntegerValue", None)
-    return str(value)
+    """An ElementId as the string the wire uses (duHast knows which API name this Revit has)."""
+    return str(get_el_id_int(element_id))
 
 
 def document_phases(doc):
@@ -46,17 +45,15 @@ def document_phases(doc):
     is the only place that sequence exists. Ids are per-document (the same phase
     name has a different id in every model), so the name is what crosses between
     documents and the id is only ever used within one."""
-    return [{"id": element_id_str(p.Id), "name": p.Name} for p in doc.Phases]
+    return [{"id": element_id_str(phase_id), "name": name} for phase_id, name in get_all_phases_in_order(doc)]
 
 
 def document_levels(doc):
     """This document's levels as a list of `{"id", "name", "elevation"}`, lowest first. `id` is the
     per-document Revit id as text, which is what `level_id` on every translated element is, and what a
     level-scoped push names (`utils.phase_filter.in_scope`); `elevation` is in feet."""
-    from Autodesk.Revit.DB import FilteredElementCollector, Level
-
     levels = []
-    for level in FilteredElementCollector(doc).OfClass(Level):
+    for level in get_levels_in_model(doc):
         try:
             levels.append({"id": element_id_str(level.Id), "name": level.Name, "elevation": level.Elevation})
         except Exception:
@@ -73,27 +70,6 @@ def common_phase_names(docs):
     return [name for name in per_doc[0] if all(name in names for names in per_doc[1:])]
 
 
-def exists_in_phase(created, demolished, selected):
-    """Revit's phase-membership rule, on phase *sequence indices*:
-
-        created <= selected AND (demolished invalid OR demolished > selected)
-
-    `None` for `demolished` is the "invalid phase id" case - an element that was
-    never demolished - which is why an unknown index reads as "still standing"
-    rather than as a failure.
-
-    **Not `created == selected`.** Equality would drop every element built in an
-    earlier phase and still standing, which on a phased model is most of them.
-    That mistake will not show up against a single-phase model, where the two
-    agree exactly - which is what makes it worth naming here.
-
-    A `created` that resolves to no known phase excludes the element: it cannot
-    be placed in the sequence, so it cannot be shown to be in scope."""
-    if created is None or created > selected:
-        return False
-    return demolished is None or demolished > selected
-
-
 def phase_by_name(doc, phase_name):
     """This document's `Phase` object for `phase_name`.
 
@@ -101,58 +77,32 @@ def phase_by_name(doc, phase_name):
     name or an id - and the name is what crosses between documents, so the
     lookup has to happen per document. Raises for an unknown name, on the same
     fail-loudly terms as `elements_in_phase`."""
-    for phase in doc.Phases:
-        if phase.Name == phase_name:
-            return phase
-    raise ValueError(
-        "model has no phase named '{}' (it has: {})".format(
-            phase_name, ", ".join(p.Name for p in doc.Phases))
-    )
-    
+    phase = get_phase_by_name(doc, phase_name)
+    if phase is None:
+        raise ValueError(
+            "model has no phase named '{}' (it has: {})".format(
+                phase_name, ", ".join(p.Name for p in doc.Phases))
+        )
+    return phase
+
 
 def elements_in_phase(doc, phase_name, category):
     """The element ids of `doc`'s elements of `category` that exist in
     `phase_name`, as strings matching the ids the export carries.
 
     The filter runs here, client-side, because only the live document has the
-    phase ordering `exists_in_phase` needs - the server never re-evaluates the
+    phase ordering the range test needs - the server never re-evaluates the
     predicate, which is why the ordered phase list is not on the wire at all.
     It also means strictly *less* extraction, the axis that actually pays.
 
-    **Doors only, despite the generic name.** It was written expecting to serve
-    every entity, on the reasoning that `CreatedPhaseId`/`DemolishedPhaseId` are
-    `Element` members so the predicate could not be room-specific. That is true
-    of the API and false of the model: a room does not span a range of phases,
-    it belongs to one, and running rooms through this returned nothing at all
-    (see `room_m.utils.rooms.rooms_in_phase`). The name is kept because the range test genuinely is
-    category-agnostic for anything built-then-demolished; the assumption that
-    every entity works that way is what did not survive.
+    **Not rooms.** A room does not span a range of phases, it belongs to one,
+    and running rooms through the range test returned nothing at all (see
+    `room_m.utils.rooms.rooms_in_phase`). Every other built-then-demolished
+    element uses this.
 
     Raises when the document has no phase of that name: a model that cannot be
     scoped to the chosen phase must fail loudly rather than push everything."""
-    phases = document_phases(doc)
-    order_by_name = dict((p["name"], i) for i, p in enumerate(phases))
-    order_by_id = dict((p["id"], i) for i, p in enumerate(phases))
-
-    if phase_name not in order_by_name:
-        raise ValueError(
-            "model has no phase named '{}' (it has: {})".format(
-                phase_name, ", ".join(p["name"] for p in phases))
-        )
-    selected = order_by_name[phase_name]
-
-    allowed = set()
-    collector = (
-        FilteredElementCollector(doc)
-        .OfCategory(category)
-        .WhereElementIsNotElementType()
-    )
-    for element in collector:
-        created = order_by_id.get(element_id_str(element.CreatedPhaseId))
-        demolished = order_by_id.get(element_id_str(element.DemolishedPhaseId))
-        if exists_in_phase(created, demolished, selected):
-            allowed.add(element_id_str(element.Id))
-    return allowed
+    return set(str(i) for i in get_ids_of_elements_in_phase(doc, phase_name, category))
 
 
 # Entity keys whose label is not "the key minus a trailing s": "ffe" is an

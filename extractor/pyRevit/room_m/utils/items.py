@@ -66,23 +66,11 @@ one, not even inside a docstring.
 """
 
 from room_m.utils.generic import (
-    element_id_str,
     elements_in_phase,
     phase_by_name,
 )
 
-# The direct Revit API use in this module: one collector pass per category,
-# because the room reference is phase-indexed and the category is not in the
-# export at all.
-from Autodesk.Revit.DB import (
-    ElementCategoryFilter,
-    FamilyInstance,
-    FilteredElementCollector,
-)
-
-from room_m.utils.room_refs import (
-    room_reference,
-)
+from duHast.Revit.Family.family_instance_facts import get_item_facts
 
 
 def items_in_phase(doc, phase_name, categories):
@@ -106,130 +94,34 @@ def items_in_phase(doc, phase_name, categories):
     return allowed
 
 
-def family_name_of(instance):
-    """The family this instance's type belongs to, or None.
-
-    `FamilyInstance.Symbol.FamilyName`: two families can share a type name, and the
-    export carries the type name only (a probe of 16,161 RHH items found no family
-    field), so this is what lets a blueprint tell them apart. Read here because there
-    is nothing to disagree with: duHast does not export it at all, so this is a gap
-    filled, the same footing as the category. None when unreadable, never a guess
-    from the type name."""
-    try:
-        symbol = instance.Symbol
-        name = symbol.FamilyName if symbol is not None else None
-        return str(name) if name else None
-    except Exception:
-        return None
-
-
-def host_of(instance):
-    """What this instance is hosted on, as `{"kind", "id", "face_hosted"}`, or None.
-
-    `FamilyInstance.Host` is the host ELEMENT -- a wall, floor or ceiling -- and is
-    None for a level-hosted instance, which is the common case (98% of RHH's items
-    here): the export's `Host` parameter says which level, as a display string. The
-    export names neither the wall nor whether the family is face-hosted, which is what
-    placing a wall-mounted item from a blueprint needs. `kind` is the host's category as
-    Revit shows it. None, not an empty record, when there is nothing to say."""
-    try:
-        host = instance.Host
-    except Exception:
-        return None
-    if host is None:
-        return None
-    try:
-        kind = host.Category.Name if host.Category is not None else None
-    except Exception:
-        kind = None
-    face_hosted = False
-    try:
-        face_hosted = instance.HostFace is not None
-    except Exception:
-        face_hosted = False
-    try:
-        host_id = element_id_str(host.Id)
-    except Exception:
-        return None
-    return {"kind": kind, "id": host_id, "face_hosted": face_hosted}
-
-
 def item_facts(doc, phase_name, categories, identify_by="room"):
     """`{item id: {"room", "owner_spaces", "category", "family_name", "host"}}` for every instance of
-    `categories`.
+    `categories` (duHast `get_item_facts`), with every id as the string the wire uses.
 
-    **One collector pass per category, and ONE spatial reference, not two.**
-    `identify_by` picks which: `"room"` (the default) reads
-    `FamilyInstance.get_Room(phase)`, for a document that holds the rooms FF&E
-    serves -- the entity's premise, see `room_m.exporters.ffe`. `"space"` reads
-    `get_Space(phase)` instead, for a services model that holds Spaces and no
-    Room elements at all, where the room lookup would resolve nothing for every
-    instance. Never both per instance: this walk is already the slow half of a
-    push -- House A alone is 647 Revit calls -- and doubling it for a reference
-    the run's entry point was not asked for would cost every project the same
-    thing `rooms_only_export_entry` exists to avoid paying.
+    **ONE spatial reference, not two.** `identify_by` picks which: `"room"` (the default)
+    reads `get_Room(phase)`, for a document that holds the rooms FF&E serves; `"space"`
+    reads `get_Space(phase)`, for a services model that holds Spaces and no Room elements
+    at all. Never both per instance: this walk is already the slow half of a push (House A
+    alone is 647 Revit calls). `owner_spaces` is a list on the wire even though this only
+    ever populates zero or one, following `owner_rooms`'s shape.
 
-    The facts are gathered together with the category rather than in a second
-    pass, for the reason `opening_placements` gives: a second walk could
-    silently disagree with this one about which elements it saw, and then the
-    category and the spatial reference would describe different sets.
-
-    The room/space is read through the extractor's own `room_reference`, giving
-    it `which="Room"` or `which="Space"` -- the same phase-indexed accessor
-    pattern, since `FamilyInstance.get_Space(phase)` mirrors `get_Room(phase)`
-    exactly and answers exactly one Space. `owner_spaces` is a list on the wire
-    even though this only ever populates zero or one, following `owner_rooms`'s
-    established shape everywhere else in the contract -- see
-    `contract::items::Item::owner_spaces`.
-
-    An item whose lookup raises is recorded with no reference rather than
-    aborting the model: one unreadable instance must not cost the other
-    hundreds, and the server reports it as an item with no room/space --
-    visible, in the place a reader would look. An item with no room at all is
-    ordinary rather than exceptional; measured on House A, 572 of 647 named one
-    in the pushed phase and every one of the rest is a real item.
-
-    The category is `instance.Category.Name` rather than the `BuiltInCategory`
-    the collector was given, because they are not the same string and the one a
-    reader recognises is the one Revit shows: `"Furniture"`, not
-    `"OST_Furniture"`. What goes on the wire is what a `?category=` filter will
-    be written against."""
+    The category is `instance.Category.Name` ("Furniture", not "OST_Furniture"): what a
+    `?category=` filter is written against. Family name and host are read from Revit because
+    the export carries neither (probed on 16,161 RHH items); absent means unread."""
     if identify_by not in ("room", "space"):
         raise ValueError("identify_by must be 'room' or 'space', got {!r}".format(identify_by))
-    which = "Room" if identify_by == "room" else "Space"
-
     phase = phase_by_name(doc, phase_name)
     facts = {}
-    for category in categories:
-        collector = (
-            FilteredElementCollector(doc)
-            .OfClass(FamilyInstance)
-            .WherePasses(ElementCategoryFilter(category))
-        )
-        for instance in collector:
-            try:
-                item_id = element_id_str(instance.Id)
-            except Exception:
-                continue
-
-            reference = None
-            try:
-                reference = room_reference(instance, phase, which)
-            except Exception:
-                reference = None
-
-            name = None
-            try:
-                own = getattr(instance, "Category", None)
-                name = own.Name if own is not None else None
-            except Exception:
-                name = None
-
-            facts[item_id] = {
-                "room": reference if identify_by == "room" else None,
-                "owner_spaces": [reference] if identify_by == "space" and reference else [],
-                "category": name,
-                "family_name": family_name_of(instance),
-                "host": host_of(instance),
-            }
+    for item_id, found in get_item_facts(doc, phase, categories, identify_by).items():
+        reference = None if found["reference"] is None else str(found["reference"])
+        host = found["host"]
+        if host is not None:
+            host = {"kind": host["kind"], "id": str(host["id"]), "face_hosted": host["face_hosted"]}
+        facts[str(item_id)] = {
+            "room": reference if identify_by == "room" else None,
+            "owner_spaces": [reference] if identify_by == "space" and reference else [],
+            "category": found["category"],
+            "family_name": found["family_name"],
+            "host": host,
+        }
     return facts
