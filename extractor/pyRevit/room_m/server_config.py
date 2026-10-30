@@ -32,6 +32,8 @@ when none is given**, because that is the port the server listens on unless it w
 import json
 import os
 
+from room_m.textutil import non_blank_text
+
 DEFAULT_PORT = 5151
 LOCAL_URL = "http://127.0.0.1:{}".format(DEFAULT_PORT)
 ENV_VAR = "ROOMMATE_SERVER"
@@ -137,7 +139,7 @@ def _read_file(path):
     except (IOError, OSError, ValueError):
         return None
     url = data.get("url") if isinstance(data, dict) else None
-    return url if isinstance(url, type(u"")) or isinstance(url, str) else None
+    return non_blank_text(url)
 
 
 def _from_project():

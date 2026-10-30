@@ -8,7 +8,8 @@ contract, and a key this form does not know rides along untouched, so a setting 
 survives this one saving.
 """
 
-import re
+from room_m.rls_template import TOKEN
+from room_m.textutil import is_text
 
 NOT_SET = "(not set)"
 NOT_IN_MODEL = " (not in this model)"
@@ -41,7 +42,7 @@ def get_path(settings, path):
         if not isinstance(node, dict):
             return ""
         node = node.get(key)
-    return node if isinstance(node, (str, type(u""))) else ""
+    return node if is_text(node) else ""
 
 
 def set_path(settings, path, value):
@@ -85,16 +86,13 @@ def add_token(text, parameters, index):
     return "{}{{{}}}".format(text or "", parameters[index - 1])
 
 
-_TOKEN = re.compile(r"\{([^{}]*)\}")
-
-
 def unknown_tokens(template, parameters):
     """The `{token}` names of `template` that are not a room parameter the model offered. Empty when
     the model offered none (a list that could not be read must not make everything look wrong)."""
     if not parameters:
         return []
     known = set(p.strip().lower() for p in parameters)
-    return [t for t in _TOKEN.findall(template or "") if t.strip().lower() not in known]
+    return [t for t in TOKEN.findall(template or "") if t.strip().lower() not in known]
 
 
 def problems(settings, parameters):

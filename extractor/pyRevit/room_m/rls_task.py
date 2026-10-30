@@ -35,6 +35,7 @@ import re
 
 from room_m import apply_geometry as geo
 from room_m import rls_settings
+from room_m.rls_template import TOKEN
 
 CREATE_RLS = "create_rls"
 
@@ -53,7 +54,6 @@ NO_ROOM_TAG = "no_room_tag"
 NO_INDEPENDENT_TAG = "no_independent_tag"
 ELEVATION_NOT_PLACED = "elevation_not_placed"
 
-_TOKEN = re.compile(r"\{([^{}]*)\}")
 _BAD_NUMBER_CHARS = re.compile(r"[\\/:*?\"<>|{}\[\];~`]")
 DEFAULT_SCALE = 50
 
@@ -76,7 +76,7 @@ def render(template, values):
         missing.append(m.group(1))
         return ""
 
-    return _TOKEN.sub(replace, template or ""), missing
+    return TOKEN.sub(replace, template or ""), missing
 
 
 def clean_number(text):

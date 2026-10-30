@@ -749,6 +749,34 @@ def rls_settings_entry(doc, uiapp, output, forms):
     return return_value
 
 
+def _run_claimed_tasks(project, tasks, facts, writer, forms, output, noun, planner=None):
+    """Run a claimed list through `room_m.apply_run.run` with the window's question, the server
+    report and the console line wired in. Shared by Apply and RLS create, which differ only in the
+    planner and writer they hand over and in what the warnings are about (`noun`).
+    Returns the reports sent."""
+    from room_m.apply_run import run
+
+    def ask_proceed(lines):
+        message = "Some {} have warnings:\n\n".format(noun) + "\n".join(lines) + "\n\nProceed with them, or abort those tasks?"
+        return forms.alert(message, title="Roommate - warnings", options=["Proceed", "Abort those tasks"]) == "Proceed"
+
+    def send(reports):
+        ok, status, text, outcomes = report_tasks(project["id"], reports)
+        if not ok:
+            return False, "{}: {}".format(status if status is not None else "no response", text)
+        bad = [o.get("error") or "not recorded" for o in outcomes if not o.get("recorded")]
+        return (not bad), "; ".join(bad)
+
+    def say(line):
+        try:
+            output.print_md(line)
+        except Exception:
+            pass
+
+    sent, _ = run(tasks, facts, writer, ask_proceed, send, say, planner=planner)
+    return sent
+
+
 def rls_create_entry(doc, uiapp, output, forms):
     """Make room layout sheets (RLS) from the server's `create_rls` tasks for this model.
 
@@ -804,31 +832,13 @@ def rls_create_entry(doc, uiapp, output, forms):
         return_value.append_message("{} task(s) claimed for '{}'".format(len(tasks), selected_doc.Title))
 
         from room_m import rls_task
-        from room_m.apply_run import run
         from room_m.rls_write import RlsFacts, RlsWriter
 
         facts = RlsFacts(selected_doc)
         writer = RlsWriter(selected_doc, facts)
 
-        def ask_proceed(lines):
-            message = "Some sheets have warnings:\n\n" + "\n".join(lines) + "\n\nProceed with them, or abort those tasks?"
-            return forms.alert(message, title="Roommate - warnings", options=["Proceed", "Abort those tasks"]) == "Proceed"
-
-        def send(reports):
-            ok, status, text, outcomes = report_tasks(project["id"], reports)
-            if not ok:
-                return False, "{}: {}".format(status if status is not None else "no response", text)
-            bad = [o.get("error") or "not recorded" for o in outcomes if not o.get("recorded")]
-            return (not bad), "; ".join(bad)
-
-        def say(line):
-            try:
-                output.print_md(line)
-            except Exception:
-                pass
-
-        sent, lines = run(
-            tasks, facts, writer, ask_proceed, send, say,
+        sent = _run_claimed_tasks(
+            project, tasks, facts, writer, forms, output, "sheets",
             planner=lambda claimed: rls_task.plan_tasks(claimed, settings, facts))
         failed = [r for r in sent if r["status"] in ("failed", "aborted")]
         return_value.append_message("{} report(s) sent, {} failed or aborted".format(len(sent), len(failed)))
@@ -881,30 +891,11 @@ def apply_tasks_entry(doc, uiapp, output, forms):
 
         from room_m.apply_facts import RevitFacts
         from room_m.apply_write import TaskWriter
-        from room_m.apply_run import run
 
         facts = RevitFacts(selected_doc)
         writer = TaskWriter(selected_doc, facts)
 
-        def ask_proceed(lines):
-            message = "Some tasks have warnings:\n\n" + "\n".join(lines) + "\n\nProceed with them, or abort those tasks?"
-            choice = forms.alert(message, title="Roommate - warnings", options=["Proceed", "Abort those tasks"])
-            return choice == "Proceed"
-
-        def send(reports):
-            ok, status, text, outcomes = report_tasks(project["id"], reports)
-            if not ok:
-                return False, "{}: {}".format(status if status is not None else "no response", text)
-            bad = [o.get("error") or "not recorded" for o in outcomes if not o.get("recorded")]
-            return (not bad), "; ".join(bad)
-
-        def say(line):
-            try:
-                output.print_md(line)
-            except Exception:
-                pass
-
-        sent, lines = run(tasks, facts, writer, ask_proceed, send, say)
+        sent = _run_claimed_tasks(project, tasks, facts, writer, forms, output, "tasks")
         failed = [r for r in sent if r["status"] in ("failed", "aborted")]
         return_value.append_message("{} report(s) sent, {} failed or aborted".format(len(sent), len(failed)))
     except Exception as e:

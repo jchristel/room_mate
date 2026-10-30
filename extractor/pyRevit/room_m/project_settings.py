@@ -19,6 +19,8 @@ and never modifies the model. Writing does, so it happens only when the Server b
 
 import json
 
+from room_m.textutil import non_blank_text
+
 SCHEMA_GUID = "198d3948-6b87-45f7-ad6a-8e285fb9f99c"
 SCHEMA_NAME = "RoomMateProjectSettings"
 SCHEMA_DOCUMENTATION = "RoomMate settings for this model: one JSON object in a single text field."
@@ -40,7 +42,7 @@ def parse(text):
 def server_of(text):
     """The server address kept in `text`, or None."""
     value = parse(text).get("server")
-    return value if isinstance(value, (type(u""), str)) and value.strip() else None
+    return non_blank_text(value)
 
 
 def with_server(text, url):

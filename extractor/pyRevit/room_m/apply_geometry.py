@@ -15,6 +15,8 @@ point plus the rule's offset times the view scale, turned with the facing. See
 
 import math
 
+from room_m.textutil import non_blank_text
+
 MM_PER_FT = 304.8
 
 # The viewport type a plan is exported as.
@@ -93,7 +95,7 @@ def sheet_size_of(sheet):
     """The size the layout asks for, as duHast exported it; None when it did not say."""
     body = sheet.get("sheet") or {}
     size = body.get("sheet_size")
-    return size if isinstance(size, (str, type(u""))) and size.strip() else None
+    return non_blank_text(size)
 
 
 def viewports_of(sheet):
