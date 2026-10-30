@@ -1,6 +1,6 @@
 // Pure helpers for the library page: wording and filtering, with no DOM.
 
-import type { RoomRow, RoomSummary, RuleSummary, Sample, SheetRoom, SheetSummary, Suggestion } from "./types.js";
+import type { RoomSummary, RuleSummary, Sample, SheetSummary, Suggestion } from "./types.js";
 
 const trim = (s: string): string => s.trim();
 
@@ -35,23 +35,21 @@ export const sampleSource = (s: Sample): string => `sheet ${s.source.sheet.sheet
 
 /** "4.0 x 3.9 m, 15.9 m2, 38 items" */
 export function summaryText(s: RoomSummary | undefined): string {
-  if (!s) return "room not summarised";
+  if (!s) return "no room figures";
   return `${(s.x_mm / 1000).toFixed(1)} x ${(s.y_mm / 1000).toFixed(1)} m, ${s.area_m2.toFixed(1)} m2, ${s.items} item${s.items === 1 ? "" : "s"}`;
 }
 
-/** The room's name from the rooms the page read; its id when the room is not among them. */
-export function roomName(room: SheetRoom | null | undefined, rooms: readonly RoomRow[]): string {
-  if (!room) return "no room";
-  return rooms.find((r) => r.id === room.room_id)?.name ?? `room ${room.room_id} (not in the model)`;
+/** "841 x 594 mm", or "not measured". */
+export function sizeText(size: SheetSummary["size_mm"]): string {
+  return size ? `${Math.round(size.width_mm)} x ${Math.round(size.height_mm)} mm` : "not measured";
 }
 
-/** A sheet a person should look at: a push waiting for a decision, or no room chosen. */
-export const sheetNeedsAttention = (s: Pick<SheetSummary, "pending" | "room">): boolean => s.pending > 0 || !s.room;
+/** A sheet a person should look at: a push waiting for a decision. */
+export const sheetNeedsAttention = (s: Pick<SheetSummary, "pending">): boolean => s.pending > 0;
 
-export function sheetReasons(s: Pick<SheetSummary, "pending" | "room">): string[] {
+export function sheetReasons(s: Pick<SheetSummary, "pending">): string[] {
   const out: string[] = [];
   if (s.pending > 0) out.push(`${s.pending} renumbered push${s.pending === 1 ? "" : "es"} to accept or reject`);
-  if (!s.room) out.push("no room chosen");
   return out;
 }
 

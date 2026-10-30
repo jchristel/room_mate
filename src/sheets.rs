@@ -42,6 +42,7 @@ const MAX_SHEETS_PER_PUSH: usize = 500;
 const MAX_PENDING: usize = 20;
 const MAX_SHEET_BYTES: usize = 5_000_000;
 const MAX_TEXT_CHARS: usize = 500;
+const MAX_ROOM_LABELS: usize = 200;
 
 /// The room a sheet was made for. A reference, not validated against the model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +67,14 @@ pub struct RoomSummary {
     pub items: usize,
 }
 
+/// The paper size of a sheet, measured in Revit from its title block's bounding box. Millimetres,
+/// as measured: never snapped to A0..A3 (a sheet that fits none is still a size).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SheetSize {
+    pub width_mm: f64,
+    pub height_mm: f64,
+}
+
 /// A re-push that matched an existing sheet but changed its number, waiting for a person.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingSheet {
@@ -79,6 +88,13 @@ pub struct PendingSheet {
     pub phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_summary: Option<RoomSummary>,
+    /// The sheet's paper size, when the extractor measured one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_mm: Option<SheetSize>,
+    /// The rooms the person said the sheet covers when they exported it ("number name"), a label
+    /// only: the figures in `room_summary` already cover all of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rooms: Vec<String>,
     pub sheet: Value,
 }
 
@@ -109,6 +125,13 @@ pub struct SheetRecord {
     /// before this was stored, or whose room was not on the server then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_summary: Option<RoomSummary>,
+    /// The sheet's paper size, when the extractor measured one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_mm: Option<SheetSize>,
+    /// The rooms the person said the sheet covers when they exported it ("number name"), a label
+    /// only: the figures in `room_summary` already cover all of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rooms: Vec<String>,
     /// When the sheet's data last arrived.
     pub received_at: String,
     /// The sheet as duHast exports it.
@@ -137,6 +160,10 @@ pub struct SheetSummary {
     pub room: Option<SheetRoom>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room_summary: Option<RoomSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_mm: Option<SheetSize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rooms: Vec<String>,
     pub viewports: usize,
     pub pending: usize,
 }
@@ -152,6 +179,8 @@ impl From<&SheetRecord> for SheetSummary {
             sheet_name: r.sheet_name.clone(),
             room: r.room.clone(),
             room_summary: r.room_summary,
+            size_mm: r.size_mm,
+            rooms: r.rooms.clone(),
             viewports: r.sheet.get("view_ports").and_then(Value::as_array).map_or(0, Vec::len),
             pending: r.pending.len(),
         }
@@ -170,9 +199,14 @@ pub struct PushedSheet {
     pub room: Option<SheetRoom>,
     #[serde(default)]
     pub phase: Option<String>,
-    /// Filled in by the server from the rooms and FF&E it holds; whatever the extractor sends is ignored.
-    #[serde(default, skip_deserializing)]
+    /// The figures of the room (or rooms) the sheet covers, measured by the extractor. When it sends
+    /// a `room` and no summary, the server reads them from the rooms it holds instead.
+    #[serde(default)]
     pub room_summary: Option<RoomSummary>,
+    #[serde(default)]
+    pub size_mm: Option<SheetSize>,
+    #[serde(default)]
+    pub rooms: Vec<String>,
     pub sheet: Value,
 }
 
@@ -399,8 +433,40 @@ fn check_pushed(p: &PushedSheet) -> Result<PushedSheet, SheetError> {
         room: p.room.clone(),
         phase: p.phase.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         room_summary: p.room_summary,
+        size_mm: p.size_mm,
+        rooms: p
+            .rooms
+            .iter()
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+            .take(MAX_ROOM_LABELS)
+            .collect(),
         sheet: p.sheet.clone(),
     })
+}
+
+/// A re-push with the same sheet number: the sheet's data replaces the record's. What the
+/// extractor measured (room figures, size) and the phase replace what was there only when this
+/// push sent them; a room link, an explicit choice made in Revit, sets only when named.
+fn refresh_record(record: &mut SheetRecord, p: PushedSheet, received_at: String) {
+    record.taken_at = next_stamp(&record.taken_at);
+    record.sheet_name = p.sheet_name;
+    record.sheet = p.sheet;
+    record.received_at = received_at;
+    if p.room.is_some() {
+        record.room = p.room;
+        record.room_summary = p.room_summary;
+    }
+    if p.phase.is_some() {
+        record.phase = p.phase;
+    }
+    if p.room_summary.is_some() {
+        record.room_summary = p.room_summary;
+        record.rooms = p.rooms;
+    }
+    if p.size_mm.is_some() {
+        record.size_mm = p.size_mm;
+    }
 }
 
 /// Store sheets that arrived from the extractor, by the matching rule in the module header.
@@ -448,6 +514,8 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     room: p.room,
                     phase: p.phase,
                     room_summary: p.room_summary,
+                    size_mm: p.size_mm,
+                    rooms: p.rooms,
                     received_at,
                     sheet: p.sheet,
                     pending: Vec::new(),
@@ -460,18 +528,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
             }
             Some(i) if existing[i].sheet_number == p.sheet_number => {
                 let record = &mut existing[i];
-                record.taken_at = next_stamp(&record.taken_at);
-                record.sheet_name = p.sheet_name;
-                record.sheet = p.sheet;
-                record.received_at = received_at;
-                // The room chosen in Revit is an explicit choice, so it sets; no room keeps what is there.
-                if p.room.is_some() {
-                    record.room = p.room;
-                    record.room_summary = p.room_summary;
-                }
-                if p.phase.is_some() {
-                    record.phase = p.phase;
-                }
+                refresh_record(record, p, received_at);
                 write(projects_dir, project, record)?;
                 outcomes.push(outcome_of(record, Outcome::Updated));
             }
@@ -494,6 +551,8 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     room: p.room,
                     phase: p.phase,
                     room_summary: p.room_summary,
+                    size_mm: p.size_mm,
+                    rooms: p.rooms,
                     sheet: p.sheet,
                 });
                 write(projects_dir, project, record)?;
@@ -567,6 +626,13 @@ pub fn accept(
     if accepted.phase.is_some() {
         record.phase = accepted.phase;
     }
+    if accepted.room_summary.is_some() {
+        record.room_summary = accepted.room_summary;
+        record.rooms = accepted.rooms;
+    }
+    if accepted.size_mm.is_some() {
+        record.size_mm = accepted.size_mm;
+    }
     record.taken_at = next_stamp(&record.taken_at);
     write(projects_dir, project, &record)?;
     Ok(record)
@@ -629,12 +695,41 @@ mod tests {
             room: None,
             phase: None,
             room_summary: None,
+            size_mm: None,
+            rooms: Vec::new(),
             sheet: json!({ "view_ports": [{}, {}, {}] }),
         }
     }
 
     fn summary(items: usize) -> RoomSummary {
         RoomSummary { x_mm: 4000.0, y_mm: 3000.0, area_m2: 12.0, items }
+    }
+
+    /// A sheet needs no room: the figures and size the extractor measured are stored with it, a
+    /// re-push replaces them, and a re-push that sends none keeps what is there.
+    #[test]
+    fn test_measured_figures_and_size_are_stored_without_a_room_and_kept_by_a_bare_re_push() {
+        let dir = temp_dir("measured");
+        let mut s = sheet("1", "Doc", "RLS-01");
+        s.room_summary = Some(summary(5));
+        s.size_mm = Some(SheetSize { width_mm: 841.0, height_mm: 594.0 });
+        s.rooms = vec!["1.01 Bedroom".into(), "1.02 Ensuite".into()];
+        let pushed = push_one(&dir, s);
+        let rec = load(&dir, "p1", &pushed.id).unwrap();
+        assert!(rec.room.is_none());
+        assert_eq!(rec.room_summary, Some(summary(5)));
+        assert_eq!(rec.size_mm, Some(SheetSize { width_mm: 841.0, height_mm: 594.0 }));
+        assert_eq!(rec.rooms.len(), 2);
+
+        push_one(&dir, sheet("1", "Doc", "RLS-01"));
+        let kept = load(&dir, "p1", &pushed.id).unwrap();
+        assert_eq!(kept.room_summary, Some(summary(5)));
+        assert_eq!(kept.size_mm.map(|z| z.width_mm), Some(841.0));
+
+        let mut again = sheet("1", "Doc", "RLS-01");
+        again.room_summary = Some(summary(8));
+        push_one(&dir, again);
+        assert_eq!(load(&dir, "p1", &pushed.id).unwrap().room_summary, Some(summary(8)));
     }
 
     /// The room's summary is stored with the sheet, follows its room, and is dropped with it.

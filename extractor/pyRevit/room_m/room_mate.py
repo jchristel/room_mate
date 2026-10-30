@@ -440,7 +440,7 @@ def _report_tags(project_id, pushed, return_value):
 
 def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
     """Read the chosen sheets with duHast and push them to the sheet library, reporting what
-    the server did with each. `assignments` is a list of `(sheet entry, room or None)`."""
+    the server did with each. `assignments` is a list of `(sheet entry, room or None, rooms)`; see `read_sheets`."""
     pushed, failures = read_sheets(selected_doc, assignments, phase_name)
     for label, reason in failures:
         return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
@@ -460,12 +460,13 @@ def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
 
 
 def sheets_export_entry(doc, uiapp, output, forms):
-    """Push SHEETS you choose to the sheet library, with no room attached.
+    """Push SHEETS you choose to the sheet library, in one window.
 
-    The sheets go in as they are; the room each was made for is set afterwards, in the
-    viewer. Nothing is inferred from sheet names or parameters: the export has no marker
-    for a room layout sheet, so the person picks. Use the Blueprint button to name rooms
-    at the same time.
+    The window (`room_m.sheet_export_window`) lists the open model's sheets; tick the ones to export and,
+    beside each, tick the rooms it covers (none, one, or several). **No room is linked to a sheet**: the
+    rooms only supply the figures the library ranks a sheet on -- the size and proportions of the
+    smallest rectangle round them, their area and their item count (`room_m.room_figures`) -- which are
+    sent with the sheet. The sheet's paper size is measured from its title block and sent too.
 
     Not a snapshot push and not an entry in `ENTITY_EXPORTERS`: the library is authored
     data the server keeps by sheet identity (Revit sheet id plus document title).
@@ -478,26 +479,31 @@ def sheets_export_entry(doc, uiapp, output, forms):
     return_value = Result()
     try:
         report_build(return_value, output)
-        selected_doc = _single_document(doc, forms, "Select the model whose sheets to export")
-        if selected_doc is None:
-            return_value.append_message("No document selected")
-            return return_value
-        project = choose_project(forms)
-        if project is None:
-            return_value.update_sep(False, "Export aborted: no project selected.")
-            return return_value
-
-        sheets = sheets_of(selected_doc)
+        sheets = sheets_of(doc)
         if not sheets:
             forms.alert("This model has no sheets.", title="Roommate - nothing to export", warn_icon=True)
             return_value.update_sep(False, "Export aborted: the model has no sheets.")
             return return_value
-        chosen = pick_items(forms, sheets, "Select the sheets to export", "Export these sheets")
-        if not chosen:
-            return_value.update_sep(False, "Export aborted: no sheets selected.")
+
+        from room_m import sheet_export_window
+        from room_m.post_common import fetch_projects
+        from room_m.utils.sheets import all_placed_rooms
+
+        ok, status, payload = fetch_projects()
+        if not ok:
+            forms.alert("Could not load projects from the server.\n\n{}".format(payload),
+                        title="Roommate - export aborted", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: {}".format(payload))
+            return return_value
+        if not payload:
+            return_value.update_sep(False, "Export aborted: the server has no registered projects.")
             return return_value
 
-        _push_sheets(project, [(entry, None) for entry in chosen], selected_doc, None, return_value)
+        choice = sheet_export_window.show(forms, doc.Title, payload, sheets, all_placed_rooms(doc))
+        if choice is None:
+            return_value.append_message("Export cancelled")
+            return return_value
+        _push_sheets(choice["project"], choice["assignments"], doc, None, return_value)
     except Exception as e:
         return_value.update_sep(False, "Sheet export failed with exception: {}".format(e))
     return return_value

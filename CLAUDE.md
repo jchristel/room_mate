@@ -643,9 +643,12 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
 - **The sheet body is duHast's export, as exported, and opaque to the server.** Tags, view
   scale, view template and view names are not in it. Typing it server-side would pin the
   server to an export that is still changing.
-- **A sheet's room is chosen by a person**, at export (the Blueprint button) or afterwards.
-  Nothing infers it from sheet names or parameters; the export marks neither a room layout
-  sheet nor its room. It is a reference and is never validated on save.
+- **A sheet needs no room.** The Sheets button opens a window (`room_m/sheet_export_window.py`, rules in `sheet_export_form.py`):
+  the model's sheets in one column and, beside each, the rooms it covers (none, one or several). The rooms are **not linked**: the
+  extractor works out one figure from them (`room_figures`: smallest rectangle round all their outlines, summed area and items)
+  and sends it as `room_summary`, with the labels in `rooms` and the paper size measured from the title block's bounding box in
+  `size_mm` (mm as measured, never snapped to A0..A3). A sheet from a blueprint may still carry a `room` link; the library page no
+  longer sets one. **Not run in Revit.**
 - **`suggest` offers and never applies, and only for sheet creation mode.** Area, proportions
   and item count are weighed equally, each as a log-ratio, worked out from today's rooms and
   FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short
@@ -674,9 +677,9 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   replaces a model's whole snapshot, so the blueprint's room is captured on the server from what is
   already pushed, and the button only says which room, which sheets and what name. A room with no sheet
   is skipped, and a blueprint is not pushed unless every chosen sheet could be read.
-- **A library sheet stores a summary of its room** (`RoomSummary`: the enclosing rectangle's long and
-  short sides, area, item count), worked out by the server when the room is set (push or the viewer's
-  set-room), never sent by the extractor. Suggest ranks on it, so a sheet still ranks when its room has
+- **A library sheet stores a summary of the room(s) it covers** (`RoomSummary`: the enclosing rectangle's long and
+  short sides, area, item count), sent by the extractor (the server reads one itself only for a sheet that names a linked room and
+  sent none). Suggest ranks on it, so a sheet still ranks when its room has
   been redrawn or is not on the server; a sheet without one is read from its room as before.
 - **Neither sheet entry point is in `ENTITY_EXPORTERS`.** They are selection-driven, and the
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
