@@ -355,6 +355,30 @@ pub fn load_all(projects_dir: &Path, project: &str) -> Result<Vec<SheetRecord>, 
     Ok(out)
 }
 
+/// Unbind the sheets bound to `blueprint` that a re-push of it no longer carries: they stay in the
+/// library as generic sheets (and get their `room_key`), nothing is deleted. `keep` is the identity
+/// (Revit sheet id, document title) of every sheet the push carried. Returns how many were unbound.
+pub fn unbind_missing(
+    projects_dir: &Path,
+    project: &str,
+    blueprint: &str,
+    keep: &[(String, String)],
+) -> Result<usize, SheetError> {
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let mut changed = 0;
+    for mut record in load_all(projects_dir, project)? {
+        let carried = keep.iter().any(|(id, doc)| *id == record.revit_sheet_id && *doc == record.document_title);
+        if record.blueprint.as_deref() == Some(blueprint) && !carried {
+            record.blueprint = None;
+            settle_room_key(&mut record);
+            record.taken_at = next_stamp(&record.taken_at);
+            write(projects_dir, project, &record)?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
 /// The sheets bound to a room blueprint (plan decision 27), in number order.
 pub fn bound_to(projects_dir: &Path, project: &str, blueprint: &str) -> Result<Vec<SheetRecord>, SheetError> {
     let mut out: Vec<SheetRecord> = load_all(projects_dir, project)?
@@ -936,6 +960,31 @@ mod tests {
             None,
             "a bound sheet is identified by its blueprint"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_sheet_the_blueprint_no_longer_carries_is_unbound_and_becomes_generic() {
+        let dir = temp_dir("unbind");
+        let summary = Some(RoomSummary { x_mm: 4000.0, y_mm: 3000.0, area_m2: 12.0, items: 5 });
+        for (id, number) in [("100", "RLS-01"), ("200", "RLS-02")] {
+            let mut s = sheet(id, "House A", number);
+            s.blueprint = Some("bp".into());
+            s.room_summary = summary;
+            push_one(&dir, s);
+        }
+        assert!(
+            list(&dir, "p1").unwrap().iter().all(|s| s.room_key.is_none()),
+            "bound: identified by the blueprint"
+        );
+        let n = unbind_missing(&dir, "p1", "bp", &[("100".into(), "House A".into())]).unwrap();
+        assert_eq!(n, 1);
+        let rows = list(&dir, "p1").unwrap();
+        let kept = rows.iter().find(|s| s.sheet_number == "RLS-01").unwrap();
+        let dropped = rows.iter().find(|s| s.sheet_number == "RLS-02").unwrap();
+        assert_eq!((kept.blueprint.as_deref(), dropped.blueprint.as_deref()), (Some("bp"), None));
+        assert_eq!(dropped.room_key.as_deref(), Some("4000x3000-5"), "generic now, so it has its key");
+        assert_eq!(unbind_missing(&dir, "p1", "bp", &[("100".into(), "House A".into())]).unwrap(), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 

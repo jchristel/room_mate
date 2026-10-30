@@ -28,10 +28,14 @@ describe("export files", () => {
     expect(back.ok && back.file.name).toBe("1 BED B");
   });
 
-  it("carries the room alone: a blueprint's sheets live in the sheet library", () => {
+  it("carries the room in the file's revision and the sheets and tags in a bundle beside it", () => {
     const f = toFile(bp, 1, "x");
     expect(f && "sheets" in f.revision).toBe(false);
+    expect(f && "bundle" in f).toBe(false);
     expect(parseFile(JSON.stringify(f))).toMatchObject({ ok: true });
+    const bundle = { sheets: [{ revit_sheet_id: "1", document_title: "D", sheet_number: "RLS-01", sheet: {} }], rules: [] };
+    const withBundle = parseFile(JSON.stringify(toFile(bp, 1, "x", bundle)));
+    expect(withBundle.ok && withBundle.file.bundle?.sheets.length).toBe(1);
   });
 
   it("has nothing to export for a revision the blueprint lacks", () => {

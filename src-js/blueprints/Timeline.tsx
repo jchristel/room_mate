@@ -54,8 +54,14 @@ export function Timeline({ blueprint, viewing, busy, onView, onSetCurrent, onVie
             </button>
             {viewingPending === p.pending_id ? (
               <>
-                <button type="button" className="action" disabled={busy} onClick={() => onDecide(p.pending_id, true)}>
-                  Accept as new current
+                <button
+                  type="button"
+                  className="action"
+                  disabled={busy}
+                  title={p.bundle ? "Its sheets and tags are applied too: sheets and tags no longer in it become generic." : undefined}
+                  onClick={() => onDecide(p.pending_id, true)}
+                >
+                  {p.bundle ? "Accept, with its sheets and tags" : "Accept as new current"}
                 </button>
                 <button type="button" className="action danger" disabled={busy} onClick={() => onDecide(p.pending_id, false)}>
                   Reject

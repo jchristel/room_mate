@@ -466,7 +466,13 @@ mod tests {
         blueprints::create(
             dir,
             "p",
-            CreateRequest { name: name.to_string(), note: None, source: None, content: content() },
+            CreateRequest {
+                name: name.to_string(),
+                note: None,
+                source: None,
+                bundle: None,
+                content: content(),
+            },
         )
         .unwrap()
         .id

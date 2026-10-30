@@ -82,6 +82,16 @@ class TypeCodes(unittest.TestCase):
         with open(os.path.join(here, "post_common.py")) as f:
             self.assertIn('"tag_type_code"', f.read())
 
+    def test_a_blueprint_push_carries_its_tags_and_the_sheets_paper_size(self):
+        here = os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m")
+        with open(os.path.join(here, "post_blueprints.py")) as f:
+            text = f.read()
+        self.assertIn('"observations": all_observations(pushed)', text)
+        self.assertIn('"type_code_parameter": type_code_parameter or ""', text)
+        self.assertIn('"size_mm"', text)
+        with open(os.path.join(here, "room_mate.py")) as f:
+            self.assertIn("type_code_parameter=project.get(\"tag_type_code\")", f.read())
+
 
 class Outcome(unittest.TestCase):
     def test_the_server_answer_is_described_with_the_first_reasons(self):

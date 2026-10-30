@@ -312,6 +312,11 @@ fn authored_routes() -> Router<roommate::state::Shared> {
             get(http_get_blueprint).put(http_update_blueprint),
         )
         .route("/projects/{id}/blueprints/{blueprint}/revisions", post(http_add_revision))
+        // The sheets and tag rules bound to a blueprint, for Export (a read).
+        .route(
+            "/projects/{id}/blueprints/{blueprint}/bundle",
+            get(roommate::blueprint_bundle::http_get_bundle),
+        )
         // Where a revision's items go in one room: a read, nothing stored or applied.
         .route("/projects/{id}/blueprints/{blueprint}/resolve", get(http_resolve_blueprint))
         // The Revit push: a room and its sheets, the server captures the room. See `blueprints_api`.

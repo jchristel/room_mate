@@ -271,7 +271,7 @@ write path into Revit. They have very different risk, which drives the staging.
       fits, fraction along, distance from it: decision 24's elevation marker rule), generic ones the nearest side of the room's
       smallest enclosing rectangle (decided 2026-10-31, built in step 3).
     - **A generic sheet is identified by its room's bounding rectangle and item count** (`room_key`, built in step 3).
-    - **Built in four steps** (1, 2 and 3 are built, and the not-in-use marking): (1) the type-code setting and rules keyed by it (old rules discarded); (2) `blueprint` on the
+    - **Built in four steps** (all four are built, and the not-in-use marking): (1) the type-code setting and rules keyed by it (old rules discarded); (2) `blueprint` on the
       sheet record, embedded sheets and `offer_to_library` removed; (3) scope and instance on tag rules and the lookup
       order above; (4) pending payload, reconcile, import and export.
 

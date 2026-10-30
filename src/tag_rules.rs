@@ -348,6 +348,9 @@ pub struct ObservationOutcome {
     /// Samples taken in (new or replacing).
     pub samples: usize,
     pub rules_changed: usize,
+    /// The rules this push wrote (not serialised): what a blueprint's reconcile keeps.
+    #[serde(skip)]
+    pub rule_ids: Vec<String>,
     pub skipped: Vec<Skipped>,
 }
 
@@ -767,9 +770,112 @@ pub fn observe(
         };
         write(projects_dir, project, &rule)?;
         outcome.rules_changed += 1;
+        outcome.rule_ids.push(rule.id.clone());
     }
     outcome.rules_changed += take_moved_samples_out(projects_dir, project, &by_id, &touched, &sources)?;
     Ok(outcome)
+}
+
+/// The rules bound to a room blueprint, samples and all (the export of a blueprint's bundle).
+pub fn bound_to(projects_dir: &Path, project: &str, blueprint: &str) -> Result<Vec<TagRule>, TagRuleError> {
+    Ok(load_all(projects_dir, project)?
+        .into_iter()
+        .filter(|r| r.key.blueprint == blueprint)
+        .collect())
+}
+
+/// Take rules in as bound to `blueprint` (the import of a blueprint's bundle): the key is made over
+/// with this blueprint's id, the answer is worked out again from the samples, and an existing rule
+/// of the same key is replaced. Returns the ids written. Rules that arrive generic stay generic.
+pub fn import_bound(
+    projects_dir: &Path,
+    project: &str,
+    blueprint: &str,
+    rules: Vec<TagRule>,
+) -> Result<Vec<String>, TagRuleError> {
+    if rules.len() > MAX_RULES_PER_PROJECT {
+        return bad(format!("a project holds at most {MAX_RULES_PER_PROJECT} tag rules"));
+    }
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let mut ids = Vec::new();
+    for mut rule in rules {
+        if rule.samples.is_empty() {
+            continue;
+        }
+        if !rule.key.blueprint.is_empty() {
+            rule.key.blueprint = blueprint.to_string();
+        }
+        rule.id = rule.key.id();
+        rule.schema_version = SCHEMA_VERSION;
+        rule.samples.truncate(MAX_SAMPLES_PER_RULE);
+        rule.placement = reduce(&rule.samples);
+        rule.sample_count = rule.samples.len();
+        rule.updated_at = now();
+        write(projects_dir, project, &rule)?;
+        ids.push(rule.id);
+    }
+    Ok(ids)
+}
+
+/// A re-push of a blueprint was accepted and these rules, bound to it, are not among the ones it
+/// wrote (`keep`): their item or room tag no longer exists in it. They are **unlinked** (plan
+/// decision 27): each sample moves to the generic rule with the same key (blueprint and instance
+/// cleared), merged into it by the rule's own reduction, and the bound rule is removed. A sample's
+/// boundary recipe was written against the blueprint's room, so it is dropped on the way: the
+/// generic rule keeps the boundary its other samples give it. Returns how many rules were unlinked.
+pub fn unlink_blueprint(
+    projects_dir: &Path,
+    project: &str,
+    blueprint: &str,
+    keep: &std::collections::HashSet<String>,
+) -> Result<usize, TagRuleError> {
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let all = load_all(projects_dir, project)?;
+    let mut generic: HashMap<String, TagRule> = all
+        .iter()
+        .filter(|r| r.key.blueprint.is_empty())
+        .map(|r| (r.id.clone(), r.clone()))
+        .collect();
+    let mut changed: Vec<String> = Vec::new();
+    let mut orphans: Vec<&TagRule> =
+        all.iter().filter(|r| r.key.blueprint == blueprint && !keep.contains(&r.id)).collect();
+    orphans.sort_by(|a, b| a.id.cmp(&b.id));
+    for orphan in &orphans {
+        let mut key = orphan.key.clone();
+        key.blueprint.clear();
+        key.instance.clear();
+        let id = key.id();
+        let target = generic.entry(id.clone()).or_insert_with(|| TagRule {
+            schema_version: SCHEMA_VERSION,
+            id: id.clone(),
+            key: key.clone(),
+            tag_kind: orphan.tag_kind.clone(),
+            placement: orphan.placement.clone(),
+            sample_count: 0,
+            updated_at: now(),
+            samples: Vec::new(),
+        });
+        for sample in &orphan.samples {
+            let mut moved = sample.clone();
+            moved.boundary = None;
+            target.samples.retain(|e| e.source != moved.source);
+            target.samples.push(moved);
+        }
+        target.samples.truncate(MAX_SAMPLES_PER_RULE);
+        target.placement = reduce(&target.samples);
+        target.sample_count = target.samples.len();
+        target.updated_at = now();
+        if !changed.contains(&id) {
+            changed.push(id);
+        }
+    }
+    for id in &changed {
+        write(projects_dir, project, &generic[id])?;
+    }
+    for orphan in &orphans {
+        remove(projects_dir, project, &orphan.id)?;
+    }
+    Ok(orphans.len())
 }
 
 /// A sample is identified by where it was read, wherever it now lives: a sheet pushed again under
@@ -933,6 +1039,13 @@ mod tests {
         observe(d, "p", request, ctx).unwrap()
     }
 
+    fn bound_as(id: &str, items: &[&str]) -> ObserveContext<'static> {
+        ObserveContext {
+            blueprint: Some((id.to_string(), items.iter().map(|s| s.to_string()).collect())),
+            boundary: None,
+        }
+    }
+
     /// A push for blueprint `bp` whose items are the elements numbered `items` (the bed of `obs(n, ..)` is 100 + n).
     fn bound(items: &[&str]) -> ObserveContext<'static> {
         ObserveContext {
@@ -1045,6 +1158,73 @@ mod tests {
         let b = p.boundary.unwrap();
         assert_eq!((b.of, b.edge), (BoundaryOf::Wall, 2), "the edge most samples agree on");
         assert!((b.along - 0.3).abs() < 1e-9 && (b.off - 12.0).abs() < 1e-9, "{b:?}");
+    }
+
+    #[test]
+    fn test_a_bound_rule_the_push_no_longer_writes_is_unlinked_into_the_generic_rule_of_its_key() {
+        let d = dir();
+        // Two beds of the blueprint are tagged, and another sheet has a generic tag for the same code.
+        let mut generic = obs(9, 0.0, (1.0, 0.0), (100.0, 0.0));
+        generic.sheet.revit_sheet_id = "2".into();
+        push(d.path(), vec![generic]);
+        let out = push_for(
+            d.path(),
+            vec![
+                obs(1, 0.0, (1.0, 0.0), (300.0, 0.0)),
+                obs(2, 0.0, (1.0, 0.0), (500.0, 0.0)),
+            ],
+            Some("bp"),
+            &bound(&["101", "102"]),
+        );
+        assert_eq!(load_all(d.path(), "p").unwrap().len(), 3);
+        // The re-push keeps bed 101 and drops bed 102.
+        let keep: std::collections::HashSet<String> = load_all(d.path(), "p")
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.key.instance == "101")
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(out.rule_ids.len(), 2);
+        let n = unlink_blueprint(d.path(), "p", "bp", &keep).unwrap();
+        assert_eq!(n, 1);
+        let rules = load_all(d.path(), "p").unwrap();
+        assert_eq!(rules.len(), 2, "the bound rule of 101 and the generic one");
+        let generic = rules.iter().find(|r| r.key.blueprint.is_empty()).unwrap();
+        assert_eq!(generic.sample_count, 2, "its own sample and the unlinked one");
+        assert!(generic.samples.iter().all(|s| s.boundary.is_none()));
+        // Nothing to unlink the second time.
+        assert_eq!(unlink_blueprint(d.path(), "p", "bp", &keep).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_an_unlinked_rule_with_no_generic_twin_becomes_the_generic_rule() {
+        let d = dir();
+        push_for(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (300.0, 0.0))], Some("bp"), &bound(&["101"]));
+        assert_eq!(unlink_blueprint(d.path(), "p", "bp", &Default::default()).unwrap(), 1);
+        let rules = load_all(d.path(), "p").unwrap();
+        assert_eq!(
+            (rules.len(), rules[0].key.blueprint.as_str(), rules[0].key.instance.as_str()),
+            (1, "", "")
+        );
+        assert_eq!(rules[0].sample_count, 1);
+    }
+
+    #[test]
+    fn test_imported_rules_are_bound_to_the_new_blueprint_and_worked_out_again() {
+        let d = dir();
+        push_for(
+            d.path(),
+            vec![obs(1, 0.0, (1.0, 0.0), (300.0, 0.0))],
+            Some("old"),
+            &bound_as("old", &["101"]),
+        );
+        let exported = bound_to(d.path(), "p", "old").unwrap();
+        assert_eq!(exported.len(), 1);
+        let ids = import_bound(d.path(), "p", "new", exported).unwrap();
+        assert_eq!(ids.len(), 1);
+        let again = bound_to(d.path(), "p", "new").unwrap();
+        assert_eq!((again.len(), again[0].key.instance.as_str(), again[0].sample_count), (1, "101", 1));
+        assert_eq!(again[0].id, again[0].key.id());
     }
 
     #[test]

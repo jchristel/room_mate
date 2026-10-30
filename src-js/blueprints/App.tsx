@@ -190,9 +190,11 @@ export function App() {
     );
   };
 
-  const exportFile = () => {
+  const exportFile = async () => {
     if (!projectId || !blueprint) return;
-    const file = toFile(blueprint, viewing, projectId);
+    // The room, and the sheets and tag rules bound to it.
+    const bundle = await api.getBundle(projectId, blueprint.id).catch(() => undefined);
+    const file = toFile(blueprint, viewing, projectId, bundle);
     if (!file) return;
     const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
     const a = document.createElement("a");
@@ -288,7 +290,7 @@ export function App() {
             busy={busy}
             onSelect={(id) => void open(id)}
             onImport={() => setPanel("import")}
-            onExport={exportFile}
+            onExport={() => void exportFile()}
             onRename={() => void rename()}
             inUse={blueprint ? blueprint.in_use !== false : true}
             onToggleUse={() => void toggleUse()}

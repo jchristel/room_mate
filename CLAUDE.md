@@ -433,15 +433,24 @@ get wrong:
   the best fit only: a mapping by hand is a decision about one room and stays in the single-room view.
 - **A blueprint comes only from Revit** (`POST .../blueprints/from-revit`). The server captures the room from the
   rooms and FF&E already pushed; a new name creates, an existing name becomes a pending revision. **A blueprint holds
-  no sheets** (plan decision 27): the sheets the user chose go to the sheet library **bound to the blueprint** by id
-  (`SheetRecord::blueprint`, set by `blueprints_api::bind_to_library`), so there is one copy of a sheet. A bound sheet is
-  layout only (no tags) and its number, name and id are never used on assignment. `BlueprintSummary.sheets` is the
-  count of bound sheets, filled from the library (`list_with_sheet_counts`). A blueprint with none is flagged and a
-  populate task with `create_rls` refuses it. The viewer has no "new from a room". **Import/export carry the room
-  alone** for now (outline, items, doors); the bound sheets and tags join the file in step 4 of decision 27. **Until
-  that step the binding happens when the push arrives, also for a revision that is only pending**; accepting a pending
-  revision will be what moves it. A blueprint made before this keeps its old embedded `sheets` in the file, which are
-  ignored: push it again to bind its sheets.
+  no sheets and no tags** (plan decision 27): they live in the sheet library and the tag rules **bound to the blueprint** by
+  id (`SheetRecord::blueprint`, `TagRule.key.blueprint`), so there is one copy of each. A bound sheet is layout only (no
+  tags) and its number, name and id are never used on assignment. `BlueprintSummary.sheets` is the count of bound sheets,
+  filled from the library (`list_with_sheet_counts`). A blueprint with none is flagged and a populate task with
+  `create_rls` refuses it. The viewer has no "new from a room".
+- **Sheets and tags travel with a push as a `Bundle` and are applied on ACCEPTANCE** (`blueprint_bundle`). The Revit push
+  carries the sheets, the tags it read and the type-code parameter; a new blueprint applies them at once, a re-push stores them
+  in the pending revision (`PendingRevision.bundle`, opaque JSON) and changes nothing until it is accepted, and a rejected
+  revision drops them. **Applying reconciles**: the sheets pushed are bound; a sheet bound to the blueprint and not pushed
+  is **unbound** (`sheets::unbind_missing`: generic now, with its `room_key`); the tags pushed are bound and a rule bound to the
+  blueprint and not written by the push is **unlinked** (`tag_rules::unlink_blueprint`): its samples merge into the generic rule
+  with the same key (boundary recipes dropped, they were against the blueprint's room) and the bound rule goes. Tags are only
+  reconciled when the push says it read them (`observations` present), so a push that read none never turns a blueprint's
+  tags generic. Accepting applies after the revision is accepted; if that fails the answer says the revision was accepted and
+  the sheets and tags were not. **Export and Import carry the same bundle** (`GET .../blueprints/{id}/bundle`: the bound
+  sheets and rules with their samples; an import re-binds the rules to the new blueprint, and into an existing name it
+  waits as a pending revision like any other). A blueprint made before this keeps its old embedded `sheets` in the file,
+  which are ignored: push it again to bind its sheets.
 - **A blueprint is never deleted, only marked not in use** (`Blueprint::in_use`, `PUT` with `in_use`; the page's "Mark not in use"). Not in
   use: `assignments::assign` refuses it, `suggest` leaves out the sheets bound to it, and the page stops nagging about it. What is bound to it
   and every assignment already made stay as they are, and it can be marked in use again. There is no delete route; `blueprint_missing` on an
@@ -642,9 +651,9 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
 - **One rule per key**: the median of its samples, recomputed on every push, so a blueprint always tags the same
   way. The samples are kept; the answer is `placement`.
 - **A rule is generic or bound to a room blueprint** (`key.blueprint`, `key.instance`, plan decision 27). A push that names a
-  blueprint (the Blueprint button sends its id with the observations) binds the room tag to it, and an item's tag to the blueprint
+  blueprint (the blueprint push applies its tags with `observe_for`, naming the blueprint) binds the room tag to it, and an item's tag to the blueprint
   ITEM (`instance` = the item id, the Revit element id the blueprint kept) when the item is one of the blueprint's (its current
-  revision or one waiting to be accepted); a tag on any other item stays generic. A bound item rule holds exactly one sample. **A
+  revision: a revision waiting to be accepted brings its tags with it); a tag on any other item stays generic. A bound item rule holds exactly one sample. **A
   sample lives in exactly one rule**: identified by its source (sheet, tag, element), pushing it again under another key moves it
   and a rule left empty is deleted (`take_moved_samples_out`). `rules_for` carries the generic rules and those bound to the
   sheet's blueprint, never another's. For an item, `rls_tags::rule_for` takes the rule bound to the blueprint item the room's

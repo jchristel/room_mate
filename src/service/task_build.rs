@@ -378,6 +378,7 @@ fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
         document_title: record.document_title.clone(),
         sheet_number: record.sheet_number.clone(),
         sheet_name: record.sheet_name.clone(),
+        size_mm: record.size_mm,
         sheet: record.sheet.clone(),
     }
 }
@@ -522,6 +523,7 @@ pub fn rls_from_sheet(
             document_title: record.document_title,
             sheet_number: record.sheet_number,
             sheet_name: record.sheet_name,
+            size_mm: record.size_mm,
             sheet: record.sheet,
         }],
         findings,

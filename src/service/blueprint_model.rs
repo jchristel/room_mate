@@ -200,6 +200,9 @@ pub struct BlueprintSheet {
     pub sheet_number: String,
     #[serde(default)]
     pub sheet_name: String,
+    /// The paper size the extractor measured from the title block, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_mm: Option<crate::sheets::SheetSize>,
     /// The sheet as duHast exports it (viewports with sheet positions and types, schedules),
     /// opaque to the server like a library sheet's body.
     pub sheet: serde_json::Value,

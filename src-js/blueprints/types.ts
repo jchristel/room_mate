@@ -85,6 +85,8 @@ export interface PendingRevision extends RevisionContent {
   received_at: string;
   origin?: string | null;
   note?: string | null;
+  /** The sheets and tags that came with it; applied when it is accepted, dropped if it is rejected. */
+  bundle?: unknown;
 }
 
 export interface RejectedRevision extends PendingRevision {
@@ -95,6 +97,15 @@ export interface SourceRoom {
   model_id: string;
   room_id: string;
   room_name: string;
+}
+
+/** A blueprint's sheets and tag rules, which it does not hold itself: they live in the sheet library and the
+ *  tag rules, bound to it (plan decision 27). This is what Export puts beside the room and Import takes back in. */
+export interface Bundle {
+  sheets: { revit_sheet_id: string; document_title: string; sheet_number: string; sheet_name?: string; size_mm?: { width_mm: number; height_mm: number }; sheet: unknown }[];
+  type_code_parameter?: string;
+  /** Tag rules with their samples, opaque to this page. */
+  rules?: unknown;
 }
 
 export interface Blueprint {

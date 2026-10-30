@@ -14,6 +14,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::blueprint_bundle::{self, Applied, Bundle};
 use crate::blueprints::{
     self, AddRevisionRequest, Blueprint, BlueprintError, BlueprintSummary, CreateRequest, DecideRequest, PushRequest,
     SourceRoom, UpdateRequest,
@@ -21,7 +22,7 @@ use crate::blueprints::{
 use crate::service::blueprint_capture::{capture_room, qualify_room};
 use crate::service::blueprint_model::{BlueprintSheet, RevisionContent, Skipped};
 use crate::service::blueprint_resolve::{resolve_in_room_with, EdgeMap, Resolution};
-use crate::sheets::{PushRequest as SheetsPush, PushedSheet, SheetRoom};
+use crate::sheets::SheetRoom;
 use crate::state::Shared;
 
 pub fn to_http(err: BlueprintError) -> (StatusCode, String) {
@@ -78,9 +79,29 @@ pub async fn http_create_blueprint(
     UrlPath(project_id): UrlPath<String>,
     Json(request): Json<CreateRequest>,
 ) -> Result<(StatusCode, Json<Blueprint>), (StatusCode, String)> {
-    blueprints::create(&dir(&state)?, &project_id, request)
-        .map(|b| (StatusCode::CREATED, Json(b)))
-        .map_err(to_http)
+    let bundle = parse_bundle(request.bundle.clone())?;
+    let created = blueprints::create(&dir(&state)?, &project_id, request).map_err(to_http)?;
+    if let Some(bundle) = bundle {
+        // An imported blueprint: its sheets and rules go with it, bound to the new blueprint.
+        let room = source_sheet_room(&created);
+        blueprint_bundle::apply(&state, &project_id, &created.id, room.as_ref(), &bundle)?;
+    }
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+fn parse_bundle(value: Option<serde_json::Value>) -> Result<Option<Bundle>, (StatusCode, String)> {
+    value
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("the bundle cannot be read: {e}")))
+}
+
+/// The room a blueprint was captured from, as a sheet's room link. An imported blueprint may have
+/// none, and its sheets are then bound without a room link.
+fn source_sheet_room(b: &Blueprint) -> Option<SheetRoom> {
+    b.source
+        .as_ref()
+        .map(|s| SheetRoom { model_id: s.model_id.clone(), room_id: s.room_id.clone() })
 }
 
 pub async fn http_add_revision(
@@ -109,9 +130,27 @@ pub async fn http_accept_pending(
     UrlPath((project_id, id, pending_id)): UrlPath<(String, String, u32)>,
     Json(request): Json<DecideRequest>,
 ) -> Result<Json<Blueprint>, (StatusCode, String)> {
-    blueprints::accept(&dir(&state)?, &project_id, &id, pending_id, request)
-        .map(Json)
-        .map_err(to_http)
+    let projects = dir(&state)?;
+    // The sheets and tags that came with the revision wait with it; read them before it becomes a revision.
+    let waiting = blueprints::load(&projects, &project_id, &id)
+        .map_err(to_http)?
+        .pending
+        .iter()
+        .find(|p| p.pending_id == pending_id)
+        .and_then(|p| p.bundle.clone());
+    let accepted = blueprints::accept(&projects, &project_id, &id, pending_id, request).map_err(to_http)?;
+    if let Some(bundle) = parse_bundle(waiting)? {
+        let room = source_sheet_room(&accepted);
+        blueprint_bundle::apply(&state, &project_id, &accepted.id, room.as_ref(), &bundle).map_err(
+            |(status, message)| {
+                (
+                    status,
+                    format!("the revision was accepted, but its sheets and tags could not be applied: {message}"),
+                )
+            },
+        )?;
+    }
+    Ok(Json(accepted))
 }
 
 pub async fn http_reject_pending(
@@ -311,6 +350,12 @@ pub struct RevitPushBody {
     #[serde(default)]
     pub origin: Option<String>,
     pub sheets: Vec<BlueprintSheet>,
+    /// The tags read from the sheets (`tag_rules::Observation`), or absent when the push did not read
+    /// them; with the parameter their type codes were read from.
+    #[serde(default)]
+    pub observations: Option<serde_json::Value>,
+    #[serde(default)]
+    pub type_code_parameter: String,
 }
 
 #[derive(Serialize)]
@@ -325,53 +370,29 @@ pub struct RevitPushOutcome {
     pub room_name: String,
     pub skipped: Skipped,
     /// How many of the push's sheets the sheet library took, bound to the blueprint (created,
-    /// updated or held for a decision).
+    /// updated or held for a decision). 0 for a pending revision: its sheets and tags wait for it.
     pub library_sheets: usize,
+    /// Sheets that were bound to the blueprint and are not in this push: generic now.
+    pub unlinked_sheets: usize,
+    /// What the tags became, for a new blueprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<crate::tag_rules::ObservationOutcome>,
+    /// Tag rules that were bound and are no longer written: merged into generic.
+    pub unlinked_tag_rules: usize,
+    /// The sheets and tags are held with the pending revision until it is accepted.
+    pub waiting: bool,
 }
 
 fn source_room_of(room: &crate::service::room_locator::RoomRef) -> SheetRoom {
     SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() }
 }
 
-/// The blueprint's sheets go to the sheet library, **bound to the blueprint** (plan decision 27) and
-/// made for its room. The library is their only home: it matches by sheet identity, so a re-push
-/// updates a sheet and a changed number waits for a person. They carry no tags (the extractor
-/// takes those out before a sheet leaves Revit). A library that cannot take them fails the
-/// push: the blueprint is stored, and one without sheets is flagged as needing attention.
-fn bind_to_library(
-    state: &Shared,
-    project: &str,
-    blueprint: &str,
-    room: &SheetRoom,
-    sheets: &[BlueprintSheet],
-) -> Result<usize, (StatusCode, String)> {
-    let projects = dir(state)?;
-    let summary = crate::sheets_api::summary_of(state, project, room);
-    let pushed: Vec<PushedSheet> = sheets
-        .iter()
-        .map(|s| PushedSheet {
-            revit_sheet_id: s.revit_sheet_id.clone(),
-            document_title: s.document_title.clone(),
-            sheet_number: s.sheet_number.clone(),
-            sheet_name: s.sheet_name.clone(),
-            room: Some(room.clone()),
-            blueprint: Some(blueprint.to_string()),
-            phase: None,
-            room_summary: summary,
-            size_mm: None,
-            rooms: Vec::new(),
-            sheet: s.sheet.clone(),
-        })
-        .collect();
-    crate::sheets::push(&projects, project, SheetsPush { sheets: pushed })
-        .map(|outcomes| outcomes.len())
-        .map_err(crate::sheets_api::to_http)
-}
-
 /// A blueprint from Revit: the room as the server holds it, plus the sheets the user chose.
 /// **The only way a blueprint is made** (plan decision 18), so sheets are required; they go to the
-/// sheet library bound to the blueprint (decision 27). A name the project already has becomes a
-/// pending revision of that blueprint, never an overwrite (decision 10); a new name creates one.
+/// sheet library bound to the blueprint, with its tags (`blueprint_bundle`, decision 27). A name the
+/// project already has becomes a pending revision of that blueprint, never an overwrite (decision
+/// 10), and its sheets and tags wait with it until it is accepted; a new name creates the blueprint
+/// and applies them at once.
 pub async fn http_push_from_revit(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
@@ -402,13 +423,25 @@ pub async fn http_push_from_revit(
         .find(|b| b.name == name);
     let sheet_room = source_room_of(&room);
     let source = SourceRoom { model_id: room.model_id, room_id: room.room_id, room_name: room_name.clone() };
+    let bundle = Bundle {
+        sheets: body.sheets,
+        type_code_parameter: body.type_code_parameter,
+        observations: body.observations,
+        rules: None,
+    };
+    let mut applied = Applied::default();
     let (blueprint, outcome, pending_id) = match existing {
         Some(found) => {
             let pushed = blueprints::push(
                 &projects,
                 &project_id,
                 &found.id,
-                PushRequest { origin: body.origin, note: body.note, content },
+                PushRequest {
+                    origin: body.origin,
+                    note: body.note,
+                    bundle: Some(serde_json::to_value(&bundle).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?),
+                    content,
+                },
             )
             .map_err(to_http)?;
             let pending_id = pushed.last_pending_id;
@@ -418,15 +451,13 @@ pub async fn http_push_from_revit(
             let created = blueprints::create(
                 &projects,
                 &project_id,
-                CreateRequest { name, source: Some(source), note: body.note, content },
+                CreateRequest { name, source: Some(source), note: body.note, bundle: None, content },
             )
             .map_err(to_http)?;
+            applied = blueprint_bundle::apply(&state, &project_id, &created.id, Some(&sheet_room), &bundle)?;
             (created, "created", None)
         }
     };
-    // Bound to the blueprint now that it has an id. **Until the reconcile step (plan decision 27,
-    // step 4) this happens on receipt**, also for a revision that is only pending.
-    let library_sheets = bind_to_library(&state, &project_id, &blueprint.id, &sheet_room, &body.sheets)?;
     let status = if outcome == "created" { StatusCode::CREATED } else { StatusCode::ACCEPTED };
     Ok((
         status,
@@ -437,7 +468,11 @@ pub async fn http_push_from_revit(
             pending_id,
             room_name,
             skipped: captured.skipped,
-            library_sheets,
+            library_sheets: applied.sheets,
+            unlinked_sheets: applied.unlinked_sheets,
+            tags: applied.tags,
+            unlinked_tag_rules: applied.unlinked_tag_rules,
+            waiting: pending_id.is_some(),
         }),
     ))
 }
