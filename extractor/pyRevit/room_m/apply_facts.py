@@ -6,13 +6,11 @@ Read only. Nothing here changes the model; `room_m.apply_write` does that. The a
 cached for the life of one run, because a run is one sitting over one model and the walks
 (every furniture instance, every symbol) are the slow part.
 
-**Two things are configured here and are the person's to set, not guessed:**
+**One thing is configured here and is the person's to set, not guessed:**
 
 - `FAMILY_LIBRARY_DIR` (or the environment variable `ROOMMATE_FAMILY_LIBRARY`): a folder of
   `<family name>.rfa` files. A family that is not in the model is looked for there and loaded
   when a task needs it. Unset means the model is the only source.
-- the RLS number, `room_m.apply_geometry.DEFAULT_NUMBER_TEMPLATE` (`RLS-{room}`): the sheet
-  number a room's layout sheet takes. More than one sheet adds `-1`, `-2`.
 
 **Not yet run in Revit.**
 """
@@ -24,10 +22,8 @@ from Autodesk.Revit.DB import (
     Element,
     FamilySymbol,
     FilteredElementCollector,
-    ViewSheet,
 )
 
-from room_m import apply_geometry
 from room_m.utils.generic import element_id_str, phase_by_name
 from room_m.utils.room_refs import room_reference
 
@@ -51,14 +47,10 @@ def _key(family, type_name):
 
 
 class RevitFacts(object):
-    def __init__(self, doc, template=None, library_dir=None):
+    def __init__(self, doc, library_dir=None):
         self.doc = doc
-        self.template = template or apply_geometry.DEFAULT_NUMBER_TEMPLATE
         self.library_dir = library_dir or FAMILY_LIBRARY_DIR
         self._symbols = None
-        self._room_tag_types = None
-        self._titleblocks = None
-        self._sheet_numbers = None
         self._rooms = None
         self._contents = {}
 
@@ -130,50 +122,6 @@ class RevitFacts(object):
     def room_has_content(self, room, phase_name):
         return len(self.room_items(room, phase_name)) > 0
 
-    # -- sheets -----------------------------------------------------------------------------
-
-    def _numbers(self):
-        if self._sheet_numbers is None:
-            self._sheet_numbers = dict(
-                (str(s.SheetNumber), s) for s in FilteredElementCollector(self.doc).OfClass(ViewSheet)
-            )
-        return self._sheet_numbers
-
-    def rls_number(self, task):
-        return apply_geometry.rls_number((task.get("room") or {}).get("number"), 0, 1, self.template)
-
-    def sheet_numbers_for(self, task, count):
-        number = (task.get("room") or {}).get("number")
-        return [apply_geometry.rls_number(number, i, count, self.template) for i in range(count)]
-
-    def rls_exists(self, number):
-        return number in self._numbers()
-
-    def sheet_with_number(self, number):
-        return self._numbers().get(number)
-
-    def titleblocks(self):
-        if self._titleblocks is None:
-            found = []
-            collector = FilteredElementCollector(self.doc).OfCategory(BuiltInCategory.OST_TitleBlocks).WhereElementIsElementType()
-            for symbol in collector:
-                try:
-                    found.append({"family": str(symbol.FamilyName), "type": name_of(symbol), "symbol": symbol})
-                except Exception:
-                    continue
-            self._titleblocks = found
-        return self._titleblocks
-
-    def titleblock_for(self, sheet):
-        """The title block symbol for a task sheet, or None. The size the layout asks for picks
-        among the model's title block types by name (`apply_geometry.titleblock_candidates`)."""
-        size = apply_geometry.sheet_size_of(sheet)
-        found = apply_geometry.titleblock_candidates(size, self.titleblocks())
-        return found[0]["symbol"] if found else None
-
-    def titleblock_available(self, sheet):
-        return self.titleblock_for(sheet) is not None
-
     # -- families ---------------------------------------------------------------------------
 
     def _symbol_map(self):
@@ -186,19 +134,6 @@ class RevitFacts(object):
                     continue
             self._symbols = found
         return self._symbols
-
-    def room_tag_type(self, family_name, type_name):
-        """The room tag type with these names, or None. A room tag type is not read by the
-        family symbol collector, so the room tag category is searched on its own."""
-        if self._room_tag_types is None:
-            found = {}
-            for element_type in FilteredElementCollector(self.doc).OfCategory(BuiltInCategory.OST_RoomTags).WhereElementIsElementType():
-                try:
-                    found.setdefault(_key(element_type.FamilyName, name_of(element_type)), element_type)
-                except Exception:
-                    continue
-            self._room_tag_types = found
-        return self._room_tag_types.get(_key(family_name, type_name))
 
     def symbol_for(self, family_name, type_name):
         return self._symbol_map().get(_key(family_name, type_name))
@@ -220,8 +155,6 @@ class RevitFacts(object):
 
     def refresh(self):
         """After a task wrote (or was rolled back) what was read about the model is stale: the
-        sheet numbers, the symbols, the room contents."""
+        symbols, the room contents."""
         self._symbols = None
-        self._room_tag_types = None
-        self._sheet_numbers = None
         self._contents = {}

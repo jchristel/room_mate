@@ -263,10 +263,10 @@ def check(task, settings, facts, taken):
 
 def plan_tasks(tasks, settings, facts):
     """Check every task. Returns the verdicts in the order given, in the shape `room_m.task_plan`
-    and `room_m.apply_run` use: `{"task", "aborts", "warnings", "skip_sheets", "plan"}`."""
+    and `room_m.apply_run` use: `{"task", "aborts", "warnings", "plan"}`."""
     taken = {"sheets": set(), "views": set()}
     verdicts = []
     for task in tasks:
         plan, aborts, warnings = check(task, settings, facts, taken)
-        verdicts.append({"task": task, "aborts": aborts, "warnings": warnings, "skip_sheets": False, "plan": plan})
+        verdicts.append({"task": task, "aborts": aborts, "warnings": warnings, "plan": plan})
     return verdicts

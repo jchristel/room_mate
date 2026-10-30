@@ -2,7 +2,7 @@
 
 ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing one. Written so
 that CPython runs it too (`extractor/tests/test_apply_geometry.py`): every rule about WHERE a
-thing goes lives here, and `room_m.apply_revit` only turns the answers into Revit calls.
+thing goes lives here, and `room_m.rls_write` and `room_m.apply_write` only turn the answers into Revit calls.
 
 **Frames.** A task's positions are millimetres in the target model's own coordinates (the
 server has already put them back through the inverse of the model's placement), and Revit's
@@ -14,13 +14,11 @@ point plus the rule's offset times the view scale, turned with the facing. See
 """
 
 import math
-import re
 
 MM_PER_FT = 304.8
 
-# A viewport of these types gets a view made for the room; the others are reported, not made.
+# The viewport type a plan is exported as.
 PLAN = "floor plan"
-ELEVATION = "elevation"
 
 
 def mm_to_ft(mm):
@@ -75,30 +73,6 @@ def _norm(s):
     return (s or "").strip().lower()
 
 
-def is_independent(rule):
-    """Whether a rule is for an independent tag (the kind a rule without `tag_kind` is)."""
-    return (rule.get("tag_kind") or "independent") == "independent"
-
-
-def rules_for_item(rules, item, viewport_type):
-    """The independent-tag rules that tag `item` in a viewport of `viewport_type`, matched by
-    names. A rule is one per key, but two keys can differ by the tag only, so an item may get
-    several tags. A room tag rule has no family or type to match and is never an item's."""
-    out = []
-    for r in rules:
-        if not is_independent(r):
-            continue
-        k = r["key"]
-        if _norm(k["viewport_type"]) != _norm(viewport_type):
-            continue
-        if _norm(k["tagged_family"]) != _norm(item.get("family_name")):
-            continue
-        if _norm(k["tagged_type"]) != _norm(item.get("type_name")):
-            continue
-        out.append(r)
-    return out
-
-
 def room_rules(rules, viewport_type):
     """The room tag rules for a viewport of `viewport_type`. A room has no family or type, so
     these are matched by the viewport type alone (the server only carries rules of the task's
@@ -113,33 +87,6 @@ def room_like(x_mm, y_mm):
     """A room as `tag_placement` wants an element: a point, and no orientation of its own, so its
     tag's offset is in the plan's own axes (+x, then +y), as the server learned it."""
     return {"x_mm": x_mm, "y_mm": y_mm, "facing_x": 1.0, "facing_y": 0.0}
-
-
-def rls_number(room_number, index=0, count=1, template=None):
-    """The sheet number for a room's RLS. `{room}` is the room number; with more than one
-    sheet `{n}` is the 1-based position and a `-n` is appended when the template has none.
-    Characters Revit refuses in a sheet number are replaced with a dash."""
-    template = template or DEFAULT_NUMBER_TEMPLATE
-    number = template.replace("{room}", str(room_number or "").strip())
-    if "{n}" in number:
-        number = number.replace("{n}", str(index + 1))
-    elif count > 1:
-        number = "{}-{}".format(number, index + 1)
-    return re.sub(r"[\\/:*?\"<>|{}\[\];~`]", "-", number)
-
-
-DEFAULT_NUMBER_TEMPLATE = "RLS-{room}"
-
-
-def titleblock_candidates(sheet_size, titleblocks):
-    """The title block types that suit `sheet_size` (a string such as "A1"), best first.
-    `titleblocks` is a list of `{family, type, label}`; a type matches when the size appears as a
-    whole token in its family or type name. No size means any will do, in the order given."""
-    if not sheet_size:
-        return list(titleblocks)
-    token = re.compile(r"(^|[^A-Za-z0-9])" + re.escape(str(sheet_size)) + r"([^A-Za-z0-9]|$)", re.I)
-    exact = [t for t in titleblocks if token.search(t.get("type") or "") or token.search(t.get("family") or "")]
-    return exact
 
 
 def sheet_size_of(sheet):

@@ -22,15 +22,6 @@ class Facts(object):
     def room_has_content(self, room, phase):
         return False
 
-    def rls_number(self, task):
-        return "RLS-" + task["room"]["number"]
-
-    def rls_exists(self, number):
-        return False
-
-    def titleblock_available(self, sheet):
-        return True
-
     def family_available(self, family, type_name):
         return self.families is None or (family, type_name) in self.families
 
