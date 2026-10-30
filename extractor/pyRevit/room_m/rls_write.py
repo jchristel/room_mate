@@ -54,7 +54,8 @@ from duHast.Revit.Views.schedules_create import (
 )
 from duHast.Revit.Views.sheets_create import create_sheet
 from duHast.Revit.Views.schedules import get_schedule_by_name
-from duHast.Revit.Views.views import get_view_family_type_by_name
+from duHast.Revit.Views.views import get_view_family_type_by_name, get_view_family_types
+from duHast.Revit.Views.view_3d_create import create_view_3d_around_box_without_transaction_wrapper
 from duHast.Revit.Views.views_crop import set_view_crop_around_point_without_transaction_wrapper
 from duHast.Revit.Views.views_names import get_views_in_name_collision
 from duHast.Revit.Views.viewports_create import create_viewport_without_transaction_wrapper
@@ -64,6 +65,8 @@ from room_m.apply_facts import RevitFacts
 
 # How far beyond the room a plan view's crop reaches when the template viewport carried none.
 CROP_MARGIN_MM = 600.0
+# How far a 3D view's section box stands off the room on every side.
+SECTION_MARGIN_MM = 600.0
 # A view whose direction is this close to what the plan said (dot product) faces it.
 FACES_PLAN = 0.9
 
@@ -150,6 +153,7 @@ class RlsWriter(object):
             sheet = self._sheet(plan)
             plan_view = self._plan_view(plan, room, level, phase, sheet, notes)
             self._elevations(plan, room, level, phase, plan_view, sheet, notes)
+            self._three_ds(plan, room, level, phase, sheet, notes)
             self._schedule(plan, room, sheet, notes)
             self._tags(task, plan, room, plan_view, level, notes)
             notes.append("sheet {} made".format(plan["number"]))
@@ -266,6 +270,27 @@ class RlsWriter(object):
             if (-d.X * looks[0] - d.Y * looks[1]) < FACES_PLAN:
                 notes.append("{} does not face the way the plan says (the marker's other views are at fixed quarter turns)".format(e["name"]))
             self._viewport(sheet, view, e["viewport"], notes, e["name"])
+
+    def _three_ds(self, plan, room, level, phase, sheet, notes):
+        """A new 3D view for each 3D viewport of the template: the template's direction, looking at THIS
+        room, cut to the room plus a margin. The template view itself is never placed."""
+        if not plan["three_ds"]:
+            return
+        types = get_view_family_types(self.doc, ViewFamily.ThreeDimensional)
+        if not types:
+            notes.append("the model has no 3D view type: no 3D view was made")
+            return
+        box = room.get_BoundingBox(None)
+        margin = _ft(SECTION_MARGIN_MM)
+        low = XYZ(box.Min.X - margin, box.Min.Y - margin, min(box.Min.Z, level.Elevation) - margin)
+        high = XYZ(box.Max.X + margin, box.Max.Y + margin, box.Max.Z + margin)
+        for v in plan["three_ds"]:
+            view = self._step(
+                "RoomMate: {}".format(v["name"]),
+                lambda v=v: create_view_3d_around_box_without_transaction_wrapper(
+                    self.doc, types[0], v["name"], v["forward"], v["up"], low, high, phase),
+            ).result[0]
+            self._viewport(sheet, view, v["viewport"], notes, v["name"])
 
     def _schedule(self, plan, room, sheet, notes):
         base = self.facts.schedule(plan["schedule_base"])

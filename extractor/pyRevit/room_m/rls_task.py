@@ -49,6 +49,7 @@ SCHEDULE_MISSING = "schedule_missing"
 TEMPLATE_UNRESOLVED = "template_unresolved"
 ROOM_MISSING = "room_missing"
 PHASE_MISSING = "phase_missing"
+THREE_D_NO_DIRECTION = "three_d_no_direction"
 UNKNOWN_KIND = "unknown_kind"
 NO_ROOM_TAG = "no_room_tag"
 NO_INDEPENDENT_TAG = "no_independent_tag"
@@ -140,6 +141,43 @@ def _elevations(task, template, base):
     return out
 
 
+THREE_D = "three d"
+
+
+def _direction(point):
+    """`[x, y, z]` of an exported direction (any length, so a unit vector in millimetres is fine), or None
+    when it is missing or has no length."""
+    try:
+        v = [float(point["x"]), float(point["y"]), float(point["z"])]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return v if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) > 0 else None
+
+
+def _three_ds(template, base):
+    """The 3D views to make, one per 3D viewport of the template: the direction it looks along and its
+    up, copied from the template's view. **Its eye is not read**: a 3D view looks at a box from as far
+    back along the direction as it takes, so the camera sits at the same pitch above THIS room whatever
+    height the template's room was at. A viewport whose view has no usable direction is left out and
+    said in `skipped`."""
+    views, skipped = [], []
+    ports = [vp for vp in geo.viewports_of(template) if (vp.get("vp_type") or "").lower() == THREE_D]
+    for n, vp in enumerate(ports, 1):
+        view = vp.get("view") or {}
+        forward = _direction(view.get("forward_direction"))
+        up = _direction(view.get("up_direction"))
+        if forward is None or up is None:
+            skipped.append(n)
+            continue
+        views.append({
+            "name": "{} 3D".format(base) if len(ports) == 1 else "{} 3D {}".format(base, n),
+            "forward": forward,
+            "up": up,
+            "viewport": vp,
+        })
+    return views, skipped
+
+
 def _plan_tags(task):
     """The tags the server worked out for the plan view: `[tag]`, each with an item id and a head."""
     tags = (task.get("rls") or {}).get("tags") or {}
@@ -182,6 +220,7 @@ def build(task, settings, values):
     plan_vp = _first_of_type(template, geo.PLAN)
     schedule_vp = _first_of_type(template, "schedule")
     elevations = _elevations(task, template, base)
+    three_ds, three_d_skipped = _three_ds(template, base)
     plan = {
         "number": number,
         "name": rendered["sheet_name"],
@@ -192,6 +231,8 @@ def build(task, settings, values):
         "plan_viewport": plan_vp,
         "plan_scale": (geo.viewport_scale(plan_vp) if plan_vp else None) or DEFAULT_SCALE,
         "elevations": elevations,
+        "three_ds": three_ds,
+        "three_d_skipped": three_d_skipped,
         "schedule_name": "{} SCHEDULE".format(base),
         "schedule_viewport": schedule_vp,
         "plan_view_type": settings.get("plan_view_type"),
@@ -243,7 +284,7 @@ def check(task, settings, facts, taken):
     number = plan["number"]
     if number in taken["sheets"] or facts.sheet_exists(number):
         aborts.append(finding(SHEET_EXISTS, "{}: sheet {} already exists".format(label, number)))
-    names = [plan["plan_name"], plan["schedule_name"]] + [e["name"] for e in plan["elevations"]]
+    names = [plan["plan_name"], plan["schedule_name"]] + [e["name"] for e in plan["elevations"]] + [v["name"] for v in plan["three_ds"]]
     in_use = list(facts.views_in_use(names)) + [n for n in names if n.strip().lower() in taken["views"]]
     if in_use:
         aborts.append(finding(VIEW_EXISTS, "{}: a view named {} already exists".format(
@@ -253,6 +294,8 @@ def check(task, settings, facts, taken):
         warnings.append(finding(NO_ROOM_TAG, "{}: no room tag is defined (or it is not in the model): the room is not tagged".format(label)))
     if plan["independent_tag"] is None or not facts.tag_type_exists("independent", plan["independent_tag"]):
         warnings.append(finding(NO_INDEPENDENT_TAG, "{}: no independent tag is defined (or it is not in the model): no item is tagged".format(label)))
+    for n in plan["three_d_skipped"]:
+        warnings.append(finding(THREE_D_NO_DIRECTION, "{}: the template's 3D view {} has no direction to copy: no 3D view is made for it".format(label, n)))
     for f in task.get("findings") or []:
         if f.get("kind") == "elevation_not_placed":
             warnings.append(finding(ELEVATION_NOT_PLACED, "{}: {}".format(label, f.get("message"))))

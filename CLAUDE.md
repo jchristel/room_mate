@@ -592,6 +592,11 @@ checked before anything is made, then one transaction group per task (`duHast...
   incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place.
 - **The phase is the room's own, never typed.** A `create_rls` task carries `ROOM_OWN_PHASE` as its phase (a label); the planner aborts if the room has
   none (`PHASE_MISSING`) and `rls_write` makes every view in `get_room_phase(doc, room)`. The request's `phase` is accepted and ignored.
+- **A template's 3D viewport gives a NEW 3D view** (`rls_task._three_ds`, `rls_write._three_ds`, duHast `view_3d_create`): named `<view name> 3D`, looking
+  along the template view's `forward_direction`/`up_direction` at THIS room, cut to the room's bounding box plus `SECTION_MARGIN_MM` (600 mm) on every
+  side, in the room's phase, and its viewport goes where the template's was. **The template's eye is not copied** (the export reads zero for a default
+  3D view, and a height measured in another room is wrong in this one): the camera sits back along the direction, so the pitch above the room is the
+  template's. A 3D viewport with no usable direction is a warning. **Not run in Revit.**
 - **View names are the view-name template plus ` PLAN` / ` ELEV n` / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
   task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
