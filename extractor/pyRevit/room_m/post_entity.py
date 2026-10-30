@@ -51,10 +51,6 @@ import json
 
 from collections import namedtuple
 
-from System.IO import MemoryStream
-from System.IO.Compression import GZipStream, CompressionMode
-from System.Net.Http import ByteArrayContent
-from System.Net.Http.Headers import MediaTypeHeaderValue
 
 from room_m.post_common import (
     build_identity_envelope,
@@ -64,7 +60,8 @@ from room_m.post_common import (
     loop_to_points,
     properties_to_map,
     translate_levels,
-    write_ndjson_line,
+    gzip_ndjson_body,
+    post_gzip_ndjson,
     _post_content,
 )
 
@@ -274,59 +271,45 @@ def post_stream(spec, run_envelope, entries, url=None):
         block["levels"] = stamp_levels(contribution)
     envelope = build_envelope(spec, run_envelope, blocks)
 
-    raw = 0
-    no_id = 0
-    nested = 0
-    out_of_phase = 0
-    out_of_scope = 0
-    written = 0
+    count = {"raw": 0, "no_id": 0, "nested": 0, "out_of_phase": 0, "out_of_scope": 0, "written": 0}
 
-    out = MemoryStream()
-    try:
-        # leaveOpen defaults False: closing gz flushes the gzip footer into `out`.
-        gz = GZipStream(out, CompressionMode.Compress)
-        write_ndjson_line(gz, envelope)
+    def lines():
+        yield envelope
         for block, (_, contribution) in zip(blocks, entries):
             model_id = block["id"]
             nested_ids = contribution.get("nested_ids") or set()
             for raw_element in contribution["elements"].get(spec.list_key, []):
-                raw += 1
+                count["raw"] += 1
                 element = spec.translate(duhast_object_to_plain(raw_element), contribution)
                 if element is None:
-                    no_id += 1
+                    count["no_id"] += 1
                     continue
                 # Before the phase test, because a nested component is not an
                 # opening in any phase -- counting it as out-of-phase would
                 # misreport why the export shrank.
                 if element["id"] in nested_ids:
-                    nested += 1
+                    count["nested"] += 1
                     continue
                 if not in_selected_phase(element, contribution["allowed_ids"]):
-                    out_of_phase += 1
+                    count["out_of_phase"] += 1
                     continue
                 if not in_scope(element, block):
-                    out_of_scope += 1
+                    count["out_of_scope"] += 1
                     continue
-                written += 1
+                count["written"] += 1
                 element["model_id"] = model_id
-                write_ndjson_line(gz, element)
-        gz.Close()  # MUST close to flush the gzip footer; do NOT skip
-        body = out.ToArray()
-    finally:
-        out.Dispose()
+                yield element
 
-    if written == 0 and not is_scoped(blocks):
-        return empty_push_refusal(spec.entity, envelope, raw, [
-            (no_id, "carrying no element id"),
-            (nested, spec.nested_reason),
-            (out_of_phase, "outside phase '{}'".format(envelope["phase"])),
+    body = gzip_ndjson_body(lines())
+
+    if count["written"] == 0 and not is_scoped(blocks):
+        return empty_push_refusal(spec.entity, envelope, count["raw"], [
+            (count["no_id"], "carrying no element id"),
+            (count["nested"], spec.nested_reason),
+            (count["out_of_phase"], "outside phase '{}'".format(envelope["phase"])),
         ])
 
-    content = ByteArrayContent(body)
-    content.Headers.ContentType = MediaTypeHeaderValue("application/x-ndjson")
-    content.Headers.Add("Content-Encoding", "gzip")
-
-    return _post_content(url, content)
+    return post_gzip_ndjson(url, body)
 
 
 def post_buffered(spec, run_envelope, entries, url=None):

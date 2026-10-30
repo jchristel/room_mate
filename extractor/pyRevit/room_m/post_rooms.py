@@ -34,15 +34,11 @@ import json
 import clr
 clr.AddReference("System")
 clr.AddReference("System.Net.Http")
-from System.IO import MemoryStream
-from System.IO.Compression import GZipStream, CompressionMode
-from System.Net.Http import StringContent, ByteArrayContent
-from System.Net.Http.Headers import MediaTypeHeaderValue
+from System.Net.Http import StringContent
 from System.Text import Encoding
 
 from room_m.ring_tidy import without_collinear
 from room_m.post_common import (
-    LEVEL_LIST_KEY,
     build_identity_envelope,
     duhast_object_to_plain,
     duhast_objects_to_plain,
@@ -51,7 +47,9 @@ from room_m.post_common import (
     loop_to_points,
     properties_to_map,
     translate_levels,
-    write_ndjson_line,
+    blocks_with_levels,
+    gzip_ndjson_body,
+    post_gzip_ndjson,
     _post_content,
 )
 
@@ -216,58 +214,36 @@ def post_payload_stream(run_envelope, entries, url=SERVER_URL_STREAM):
     The body is built and then discarded in that case -- cheap, since there was
     nothing in it, and it buys a single unambiguous count instead of two
     estimates that could disagree."""
-    # The metadata around each model's room list (file header) is small --
-    # flatten it in one go, leaving the (potentially huge) room lists untouched
-    # as raw duHast objects to be flattened one at a time below. `levels` is
-    # small too and is needed whole, on the model block it belongs to.
-    blocks = []
-    for block, contribution in entries:
-        block = dict(block)
-        block["levels"] = translate_levels(duhast_object_to_plain(contribution["levels"]))
-        blocks.append(block)
+    blocks = blocks_with_levels(entries)
     envelope = build_envelope(run_envelope, blocks)
+    count = {"raw": 0, "unplaced": 0, "out_of_phase": 0, "out_of_scope": 0, "written": 0}
 
-    raw = 0
-    unplaced = 0
-    out_of_phase = 0
-    out_of_scope = 0
-    written = 0
-
-    out = MemoryStream()
-    try:
-        # leaveOpen defaults False: closing gz flushes the gzip footer into `out`.
-        gz = GZipStream(out, CompressionMode.Compress)
-        write_ndjson_line(gz, envelope)
+    def lines():
+        yield envelope
         for block, (_, contribution) in zip(blocks, entries):
             model_id = block["id"]
             for room in contribution["rooms"].get(ROOM_LIST_KEY, []):
-                raw += 1
+                count["raw"] += 1
                 out_room = translate_room(duhast_object_to_plain(room))
                 if out_room is None:
-                    unplaced += 1
+                    count["unplaced"] += 1
                     continue
                 if not in_selected_phase(out_room, contribution["allowed_ids"]):
-                    out_of_phase += 1
+                    count["out_of_phase"] += 1
                     continue
                 if not in_scope(out_room, block):
-                    out_of_scope += 1
+                    count["out_of_scope"] += 1
                     continue
-                written += 1
+                count["written"] += 1
                 out_room["model_id"] = model_id
-                write_ndjson_line(gz, out_room)
-        gz.Close()  # MUST close to flush the gzip footer; do NOT skip
-        body = out.ToArray()
-    finally:
-        out.Dispose()
+                yield out_room
 
-    if written == 0 and not is_scoped(blocks):
-        return empty_push_refusal("rooms", envelope, raw, [
-            (unplaced, "unplaced (no boundary loop)"),
-            (out_of_phase, "outside phase '{}'".format(envelope["phase"])),
+    body = gzip_ndjson_body(lines())
+
+    if count["written"] == 0 and not is_scoped(blocks):
+        return empty_push_refusal("rooms", envelope, count["raw"], [
+            (count["unplaced"], "unplaced (no boundary loop)"),
+            (count["out_of_phase"], "outside phase '{}'".format(envelope["phase"])),
         ])
 
-    content = ByteArrayContent(body)
-    content.Headers.ContentType = MediaTypeHeaderValue("application/x-ndjson")
-    content.Headers.Add("Content-Encoding", "gzip")
-
-    return _post_content(url, content)
+    return post_gzip_ndjson(url, body)

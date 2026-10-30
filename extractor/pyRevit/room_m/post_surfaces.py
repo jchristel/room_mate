@@ -81,10 +81,7 @@ import json
 
 from collections import namedtuple
 
-from System.Net.Http import ByteArrayContent, StringContent
-from System.Net.Http.Headers import MediaTypeHeaderValue
-from System.IO import MemoryStream
-from System.IO.Compression import CompressionMode, GZipStream
+from System.Net.Http import StringContent
 from System.Text import Encoding
 
 from room_m.post_common import (
@@ -94,7 +91,9 @@ from room_m.post_common import (
     duhast_objects_to_plain,
     properties_to_map,
     translate_levels,
-    write_ndjson_line,
+    blocks_with_levels,
+    gzip_ndjson_body,
+    post_gzip_ndjson,
     _post_content,
 )
 
@@ -245,18 +244,11 @@ def post_payload_stream(push, run_envelope, entries):
     attributed against the wrong model's rooms.
 
     Returns `(ok, status, text)`."""
-    blocks = []
-    for block, contribution in entries:
-        block = dict(block)
-        block["levels"] = translate_levels(duhast_object_to_plain(contribution["levels"]))
-        blocks.append(block)
+    blocks = blocks_with_levels(entries)
     envelope = build_envelope(push, run_envelope, blocks)
 
-    out = MemoryStream()
-    try:
-        # leaveOpen defaults False: closing gz flushes the gzip footer into `out`.
-        gz = GZipStream(out, CompressionMode.Compress)
-        write_ndjson_line(gz, envelope)
+    def lines():
+        yield envelope
         for block, (_, contribution) in zip(blocks, entries):
             model_id = block["id"]
             for element in contribution["elements"].get(push.list_key, []):
@@ -268,14 +260,6 @@ def post_payload_stream(push, run_envelope, entries):
                 if not in_scope(out_element, block):
                     continue
                 out_element["model_id"] = model_id
-                write_ndjson_line(gz, out_element)
-        gz.Close()  # MUST close to flush the gzip footer; do NOT skip
-        body = out.ToArray()
-    finally:
-        out.Dispose()
+                yield out_element
 
-    content = ByteArrayContent(body)
-    content.Headers.ContentType = MediaTypeHeaderValue("application/x-ndjson")
-    content.Headers.Add("Content-Encoding", "gzip")
-
-    return _post_content(push.url_stream, content)
+    return post_gzip_ndjson(push.url_stream, gzip_ndjson_body(lines()))

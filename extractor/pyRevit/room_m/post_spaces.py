@@ -46,10 +46,7 @@ import json
 import clr
 clr.AddReference("System")
 clr.AddReference("System.Net.Http")
-from System.IO import MemoryStream
-from System.IO.Compression import GZipStream, CompressionMode
-from System.Net.Http import StringContent, ByteArrayContent
-from System.Net.Http.Headers import MediaTypeHeaderValue
+from System.Net.Http import StringContent
 from System.Text import Encoding
 
 from room_m.post_common import (
@@ -60,7 +57,9 @@ from room_m.post_common import (
     loop_to_points,
     properties_to_map,
     translate_levels,
-    write_ndjson_line,
+    blocks_with_levels,
+    gzip_ndjson_body,
+    post_gzip_ndjson,
     _post_content,
 )
 
@@ -207,18 +206,11 @@ def post_payload_stream(run_envelope, entries, url=SERVER_URL_STREAM):
 
     Sends whatever the translation kept, including nothing. Returns
     `(ok, status, text)`."""
-    blocks = []
-    for block, contribution in entries:
-        block = dict(block)
-        block["levels"] = translate_levels(duhast_object_to_plain(contribution["levels"]))
-        blocks.append(block)
+    blocks = blocks_with_levels(entries)
     envelope = build_envelope(run_envelope, blocks)
 
-    out = MemoryStream()
-    try:
-        # leaveOpen defaults False: closing gz flushes the gzip footer into `out`.
-        gz = GZipStream(out, CompressionMode.Compress)
-        write_ndjson_line(gz, envelope)
+    def lines():
+        yield envelope
         for block, (_, contribution) in zip(blocks, entries):
             model_id = block["id"]
             for space in contribution["spaces"].get(SPACE_LIST_KEY, []):
@@ -234,14 +226,6 @@ def post_payload_stream(run_envelope, entries, url=SERVER_URL_STREAM):
                 if not in_scope(out_space, block):
                     continue
                 out_space["model_id"] = model_id
-                write_ndjson_line(gz, out_space)
-        gz.Close()  # MUST close to flush the gzip footer; do NOT skip
-        body = out.ToArray()
-    finally:
-        out.Dispose()
+                yield out_space
 
-    content = ByteArrayContent(body)
-    content.Headers.ContentType = MediaTypeHeaderValue("application/x-ndjson")
-    content.Headers.Add("Content-Encoding", "gzip")
-
-    return _post_content(url, content)
+    return post_gzip_ndjson(url, gzip_ndjson_body(lines()))
