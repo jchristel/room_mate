@@ -135,8 +135,8 @@ impl Endpoint {
             ),
         }
         d.push_str(
-            " Needs authentication, which is not implemented yet: until then every call stops with an error that \
-             says so, before any request is sent. `db` and `pr` override the configured database and project.",
+            " Needs an API key (DROFUS_API_KEY): without one every call stops with an error that says so, before any \
+             request is sent. `db` and `pr` override the configured database and project.",
         );
         d
     }

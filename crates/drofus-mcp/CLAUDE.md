@@ -40,11 +40,11 @@ cargo fmt --check
 Then drive it over stdio (an `initialize`, `tools/list` and `tools/call` on stdin; see the README) rather than
 trusting the unit tests alone.
 
-## Current task: the read endpoints, with authentication scaffolded and NOT implemented
+## Done: the read endpoints (PR #232), authenticated by an API key
 
-**Do this and only this.** Implement MCP tools for the dRofus Project API's **read** endpoints. The inventory is
+The original brief, kept for its reasoning. It was: implement MCP tools for the dRofus Project API's **read** endpoints. The inventory is
 [`ENDPOINTS.md`](ENDPOINTS.md): 73 `GET` endpoints in 17 groups, plus 16 read-only `OPTIONS` metadata endpoints (which properties can
-be selected). **No write endpoint** (`POST`, `PATCH`, `DELETE`) gets a tool, now or as a convenience.
+be selected). **No write endpoint** (`POST`, `PATCH`, `DELETE`) gets a tool, now or as a convenience (still true).
 
 Source of truth: the OpenAPI definition at `https://api-no.drofus.com/swagger/v1/swagger.json` (public: read it with `curl`, no sign-in).
 The Swagger page `https://api-no.drofus.com/swagger/index.html` renders with JavaScript, so a plain fetch of the page shows nothing: use
@@ -73,19 +73,26 @@ security scheme**, so it does not say how a request is authenticated.
 - **Test against a local mock, not the live service**: a small in-process HTTP server in the tests (a dev-dependency is fine) that checks the
   URL built, the query passed through, the paging cap, the error mapping and that a secret never appears. There is no test database.
 
-### Authentication: scaffold the seam, implement nothing
+### Authentication: the API key is built, OAuth is not
 
-Leave a clear place for it and no behaviour:
+Built (2026-10-30, at the owner's instruction after reading the duHast PushIt client): `auth::ReferenceKey` sends
+`Authorization: Reference {key}`, the key from `DROFUS_API_KEY` / `--api-key` as a `Secret`; `auth::for_config` is the one
+place the scheme is chosen, and with no key `Unauthenticated` refuses every call before any network traffic. **Untested
+against the live service from this crate**; the scheme is PushIt's. `AUTH.md` has what is known.
 
-- A trait (for example `Authenticator`) that, given a request being built, may add what authenticates it, owned by the HTTP client in
-  one place.
-- One implementation, `Unauthenticated`, which makes every call fail **before any network call** with an error that says authentication is
-  not implemented yet and points at the module to fill in. The tools therefore all work end to end up to that error.
-- A `config` slot for whatever credentials turn out to be needed, still as `Secret`s. **Do not guess the scheme.** Do not add a login flow,
-  a token cache, a refresh, a bearer token from an environment variable, or user name and password handling. The Swagger page's Login goes to
-  an interactive sign-in (user name and password, or Microsoft single sign-on); that is a design decision for the owner, not for you.
-- A short `AUTH.md` in the crate listing what you learned about the sign-in (what Login does, any token endpoint you can see from the
-  page, what is unknown) so the next session can decide.
+- **Still not built, and not to be guessed:** the browser OAuth flow the owner prefers. dRofus has published no OAuth endpoints
+  and PushIt's OAuth fields are stubs; it needs a registered client first. Do not add a login flow, token cache or refresh
+  until those exist.
+- **Do not add username and password handling.**
+- **Never attach a credential to plain `http` off loopback** (the client refuses; keep it that way).
+
+### Writes: no tools, and a gate waiting for the first one
+
+Still **no write endpoint gets a tool**. `src/approval` is the gate any future one must pass, decided by the owner: a proposal
+is a dry run, a person approves **out of band** (a surface the model cannot operate), the stored payload is applied once,
+every step is audited, and it is off unless `--allow-writes` (which needs `--audit-log`). What shows the change to a person
+is the `Approver` trait; `WebApprover` (a page on 127.0.0.1) is the only implementation, a native window being the likely
+second. An approver that approves without a person defeats the gate: do not add one outside tests.
 
 ### Done means
 
@@ -95,4 +102,6 @@ a `tools/call` that stops at the authentication error). Report what you did not 
 
 ## Still undecided (ask, do not guess)
 
-How credentials are obtained and supplied in production (see AUTH.md once written), whether a regional host other than `api-no.drofus.com` is needed (the base address is configuration), and which operations beyond reads are ever wanted.
+How OAuth would be obtained (blocked on dRofus: endpoints, client registration, loopback redirect, scopes), whether an API key can be
+issued to a service account rather than a person, whether a regional host other than `api-no.drofus.com` is needed (the base address is
+configuration; PushIt knows `api-{no,eu,us,ca,au}.drofus.com`), and which write operations, if any, are ever wanted.

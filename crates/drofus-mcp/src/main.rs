@@ -2,9 +2,11 @@
 //!
 //! Logs go to stderr, never stdout: stdout is the JSON-RPC transport.
 
+use std::sync::Arc;
+
 use clap::Parser;
 use drofus_mcp::{
-    approval::{Gate, GateConfig, DEFAULT_TTL},
+    approval::{Gate, GateConfig, WebApprover, DEFAULT_TTL},
     config::Config,
     server::DrofusMcp,
 };
@@ -27,7 +29,8 @@ struct Args {
     #[arg(long)]
     project: Option<String>,
 
-    /// A credential slot that nothing reads yet: how dRofus authenticates is undecided (see AUTH.md). Prefer the DROFUS_API_KEY environment variable: a
+    /// The dRofus API key (from the Power Query credentials dialog), sent as `Authorization: Reference <key>`.
+    /// Prefer the DROFUS_API_KEY environment variable: a flag shows up in the process list.
     /// flag shows up in the process list.
     #[arg(long)]
     api_key: Option<String>,
@@ -65,12 +68,10 @@ async fn main() -> anyhow::Result<()> {
             "--allow-writes needs --audit-log (or DROFUS_AUDIT_LOG): a gate that cannot be audited is not started"
         );
     }
-    let gate = Gate::new(GateConfig {
-        enabled: args.allow_writes,
-        audit_log: args.audit_log,
-        ttl: DEFAULT_TTL,
-        open_browser: true,
-    });
+    let gate = Gate::new(
+        GateConfig { enabled: args.allow_writes, audit_log: args.audit_log, ttl: DEFAULT_TTL },
+        Arc::new(WebApprover::new(true)),
+    );
 
     let service = DrofusMcp::new(config).with_gate(gate).serve(stdio()).await.inspect_err(|e| {
         tracing::error!("serving error: {e:?}");

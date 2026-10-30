@@ -9,10 +9,16 @@
 //!
 //! **The flow.** A write tool calls [`Gate::propose`] with a one-line summary and the payload it would
 //! send. That returns a [`Proposal`] (an id, a hash, the expiry) and nothing else happens: this *is*
-//! the dry run. A person opens the approval page (`page`, a local web page on `127.0.0.1` that opens in
-//! the browser by itself), reads the exact change and clicks Approve or Reject. Later the tool calls
+//! the dry run. A person is shown the change by an [`Approver`] (by default [`WebApprover`], a local web
+//! page on `127.0.0.1` that opens in the browser by itself), reads it and clicks Approve or Reject. Later the tool calls
 //! [`Gate::apply`] with the id; if the change is approved, unexpired and unused, the gate hands the
 //! *stored* payload to the closure and marks it used before the closure runs.
+//!
+//! **The approver is the trust boundary, and it is a trait.** The gate owns proposals, expiry, single use and
+//! the audit log; an [`Approver`] only has to put the waiting changes in front of a person and report the
+//! decision through [`Gate::decide`]. So the surface can change (a native window, an OS dialog) without
+//! touching the rules above. An approver that approves without a person defeats the gate: none is provided
+//! beyond the web page, and tests define their own.
 //!
 //! **Why out of band.** An approval inside the tool protocol is something the model can also produce.
 //! A click on a page whose address and key never appear in a tool answer is not. The address goes to the
@@ -32,12 +38,16 @@
 //! - Every step is appended to an audit log (summary and hash, never the payload, never a credential);
 //!   if the "applied" line cannot be written, the change is not run.
 
-mod page;
+mod web;
+
+pub use web::WebApprover;
 
 use std::{
     collections::HashMap,
+    future::Future,
     io::Write,
     path::PathBuf,
+    pin::Pin,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -45,14 +55,11 @@ use std::{
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::sync::OnceCell;
 
 /// How long a proposal can be approved and applied before it lapses.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(10 * 60);
 /// How many unfinished proposals may exist at once.
 pub const MAX_PENDING: usize = 50;
-/// The browser is opened again only if the page has not been fetched for this long.
-const REOPEN_AFTER: Duration = Duration::from_secs(30);
 
 /// A refusal, in words for the caller. Never holds a credential.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,13 +79,11 @@ pub struct GateConfig {
     /// refused for an enabled gate by [`Gate::new`]'s caller (`main`), not here, so tests can run without one.
     pub audit_log: Option<PathBuf>,
     pub ttl: Duration,
-    /// Open the approval page in the browser. Tests turn it off.
-    pub open_browser: bool,
 }
 
 impl GateConfig {
     pub fn disabled() -> Self {
-        Self { enabled: false, audit_log: None, ttl: DEFAULT_TTL, open_browser: false }
+        Self { enabled: false, audit_log: None, ttl: DEFAULT_TTL }
     }
 }
 
@@ -120,19 +125,40 @@ struct Entry {
 #[derive(Default)]
 struct Book {
     entries: HashMap<String, Entry>,
-    /// When the approval page was last fetched, to decide whether to open the browser again.
-    page_seen: Option<Instant>,
-}
-
-struct Ui {
-    port: u16,
-    key: String,
 }
 
 struct Shared {
     cfg: GateConfig,
+    approver: Arc<dyn Approver>,
     book: Mutex<Book>,
-    ui: OnceCell<Ui>,
+}
+
+pub type ApproverFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
+/// Puts waiting changes in front of a person.
+///
+/// **Contract.** [`present`](Approver::present) is called after every accepted proposal and must be
+/// idempotent and quick: start the surface if it is not up, make sure a person can see what
+/// [`Gate::waiting`] lists, return. It must not block on the decision. The decision comes back later,
+/// from whatever the person clicked, as [`Gate::decide`] with the `hash` that was shown.
+///
+/// **Requirement.** The surface must be one the model cannot operate: nothing it can reach through a
+/// tool answer, and no way to approve from the same channel the request came in on. Failures are the
+/// approver's to report (log them); the proposal stays pending and the gate stays safe, since an
+/// unseen change is simply never approved.
+pub trait Approver: Send + Sync {
+    fn present<'a>(&'a self, gate: &'a Gate) -> ApproverFuture<'a>;
+}
+
+/// A change waiting for a decision, as an [`Approver`] shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Waiting {
+    pub id: String,
+    pub summary: String,
+    pub payload: Value,
+    /// What a decision must name: the hash of exactly this summary and payload.
+    pub hash: String,
+    pub expires_in_secs: u64,
 }
 
 #[derive(Clone)]
@@ -169,10 +195,13 @@ impl Entry {
 }
 
 impl Gate {
-    pub fn new(cfg: GateConfig) -> Self {
-        Self {
-            shared: Arc::new(Shared { cfg, book: Mutex::new(Book::default()), ui: OnceCell::new() }),
-        }
+    pub fn new(cfg: GateConfig, approver: Arc<dyn Approver>) -> Self {
+        Self { shared: Arc::new(Shared { cfg, approver, book: Mutex::new(Book::default()) }) }
+    }
+
+    /// A gate that refuses every proposal, so its approver is never asked.
+    pub fn disabled() -> Self {
+        Self::new(GateConfig::disabled(), Arc::new(WebApprover::new(false)))
     }
 
     pub fn enabled(&self) -> bool {
@@ -238,7 +267,7 @@ impl Gate {
             (id, hash)
         };
         self.audit_soft("proposed", &id, summary, &hash);
-        self.show_page().await;
+        self.shared.approver.present(self).await;
         Ok(Proposal {
             id,
             hash,
@@ -262,7 +291,7 @@ impl Gate {
 
     /// Record a person's decision. `hash` is what the page showed; a mismatch refuses, so the approval
     /// is of exactly that change.
-    pub(crate) fn decide(&self, id: &str, hash: &str, approve: bool) -> Result<(), GateError> {
+    pub fn decide(&self, id: &str, hash: &str, approve: bool) -> Result<(), GateError> {
         let ttl = self.shared.cfg.ttl;
         let summary = {
             let mut book = self.book();
@@ -316,58 +345,21 @@ impl Gate {
         Ok(run(payload).await)
     }
 
-    /// Everything waiting for a decision, oldest first, for the page.
-    pub(crate) fn waiting(&self) -> Vec<(String, String, Value, String, u64)> {
+    /// Everything waiting for a decision, oldest first, for an [`Approver`] to show.
+    pub fn waiting(&self) -> Vec<Waiting> {
         let ttl = self.shared.cfg.ttl;
         let book = self.book();
-        let mut rows: Vec<_> = book
-            .entries
-            .iter()
-            .filter(|(_, e)| e.phase_now(ttl) == Phase::Pending)
-            .map(|(id, e)| {
-                (
-                    e.created,
-                    id.clone(),
-                    e.summary.clone(),
-                    e.payload.clone(),
-                    e.hash.clone(),
-                    e.left(ttl).as_secs(),
-                )
+        let mut rows: Vec<_> = book.entries.iter().filter(|(_, e)| e.phase_now(ttl) == Phase::Pending).collect();
+        rows.sort_by_key(|(_, e)| e.created);
+        rows.into_iter()
+            .map(|(id, e)| Waiting {
+                id: id.clone(),
+                summary: e.summary.clone(),
+                payload: e.payload.clone(),
+                hash: e.hash.clone(),
+                expires_in_secs: e.left(ttl).as_secs(),
             })
-            .collect();
-        rows.sort_by_key(|r| r.0);
-        rows.into_iter().map(|(_, id, s, p, h, left)| (id, s, p, h, left)).collect()
-    }
-
-    pub(crate) fn mark_page_seen(&self) {
-        self.book().page_seen = Some(Instant::now());
-    }
-
-    /// Start the page on first use and open it unless it was fetched recently.
-    async fn show_page(&self) {
-        let ui = self.shared.ui.get_or_try_init(|| page::serve(self.clone())).await;
-        let ui = match ui {
-            Ok(ui) => ui,
-            Err(e) => {
-                tracing::error!("the approval page could not start: {e}");
-                return;
-            }
-        };
-        let stale = self.book().page_seen.is_none_or(|t| t.elapsed() > REOPEN_AFTER);
-        if stale && self.shared.cfg.open_browser {
-            let url = format!("http://127.0.0.1:{}/?k={}", ui.port, ui.key);
-            if !page::open_in_browser(&url) {
-                tracing::warn!("could not open a browser; open this address yourself to review the change: {url}");
-            }
-        }
-    }
-
-    /// The page's address and key, for tests.
-    #[cfg(test)]
-    async fn page_address(&self) -> (u16, String) {
-        self.show_page().await;
-        let ui = self.shared.ui.get().expect("started");
-        (ui.port, ui.key.clone())
+            .collect()
     }
 }
 
@@ -375,13 +367,28 @@ impl Gate {
 mod tests {
     use super::*;
 
+    /// Counts how often it is asked to present, and shows nothing: a gate needs no surface to be tested.
+    #[derive(Default)]
+    struct Recorder(Mutex<usize>);
+    impl Approver for Recorder {
+        fn present<'a>(&'a self, _gate: &'a Gate) -> ApproverFuture<'a> {
+            Box::pin(async move { *self.0.lock().unwrap() += 1 })
+        }
+    }
+
     fn gate(ttl: Duration) -> Gate {
-        Gate::new(GateConfig { enabled: true, audit_log: None, ttl, open_browser: false })
+        Gate::new(GateConfig { enabled: true, audit_log: None, ttl }, Arc::new(Recorder::default()))
+    }
+
+    /// A gate whose approver is the real web page (not opened in a browser), and that page.
+    fn web_gate(ttl: Duration) -> (Gate, Arc<WebApprover>) {
+        let web = Arc::new(WebApprover::new(false));
+        (Gate::new(GateConfig { enabled: true, audit_log: None, ttl }, web.clone()), web)
     }
 
     #[tokio::test]
     async fn a_disabled_gate_refuses_every_proposal() {
-        let g = Gate::new(GateConfig::disabled());
+        let g = Gate::disabled();
         let err = g.propose("x", json!({})).await.unwrap_err();
         assert!(err.0.contains("--allow-writes"), "{err}");
     }
@@ -440,12 +447,10 @@ mod tests {
     #[tokio::test]
     async fn the_audit_log_records_each_step_without_the_payload() {
         let path = std::env::temp_dir().join(format!("drofus-mcp-audit-{}.jsonl", random_hex(6)));
-        let g = Gate::new(GateConfig {
-            enabled: true,
-            audit_log: Some(path.clone()),
-            ttl: DEFAULT_TTL,
-            open_browser: false,
-        });
+        let g = Gate::new(
+            GateConfig { enabled: true, audit_log: Some(path.clone()), ttl: DEFAULT_TTL },
+            Arc::new(Recorder::default()),
+        );
         let p = g.propose("rename room 4", json!({"secret_field": "payload-value"})).await.unwrap();
         g.decide(&p.id, &p.hash, true).unwrap();
         g.apply(&p.id, |_| async {}).await.unwrap();
@@ -464,7 +469,10 @@ mod tests {
         let dir = std::env::temp_dir()
             .join(format!("drofus-mcp-nodir-{}", random_hex(6)))
             .join("no/such/dir/log.jsonl");
-        let g = Gate::new(GateConfig { enabled: true, audit_log: Some(dir), ttl: DEFAULT_TTL, open_browser: false });
+        let g = Gate::new(
+            GateConfig { enabled: true, audit_log: Some(dir), ttl: DEFAULT_TTL },
+            Arc::new(Recorder::default()),
+        );
         let p = g.propose("a", json!(1)).await.unwrap();
         g.decide(&p.id, &p.hash, true).unwrap();
         let ran = Arc::new(Mutex::new(false));
@@ -474,10 +482,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_proposal_answer_never_carries_the_page_address() {
+    async fn the_approver_is_asked_to_present_after_each_proposal_and_never_for_a_refusal() {
+        let rec = Arc::new(Recorder::default());
+        let g = Gate::new(GateConfig { enabled: true, audit_log: None, ttl: DEFAULT_TTL }, rec.clone());
+        g.propose("a", json!(1)).await.unwrap();
+        g.propose("b", json!(2)).await.unwrap();
+        assert_eq!(*rec.0.lock().unwrap(), 2);
+        let off = Arc::new(Recorder::default());
+        let g = Gate::new(GateConfig::disabled(), off.clone());
+        assert!(g.propose("a", json!(1)).await.is_err());
+        assert_eq!(*off.0.lock().unwrap(), 0, "a disabled gate never reaches its approver");
+    }
+
+    /// What an approver is given is enough to decide with, and a decision made through the gate is the
+    /// only way anything becomes approved, whatever the surface.
+    #[tokio::test]
+    async fn waiting_lists_what_an_approver_needs_and_a_decision_through_the_gate_is_final() {
         let g = gate(DEFAULT_TTL);
+        let p = g.propose("rename room 4", json!({"id": 4})).await.unwrap();
+        let w = g.waiting();
+        assert_eq!(w.len(), 1);
+        assert_eq!(
+            (w[0].id.as_str(), w[0].summary.as_str(), &w[0].hash),
+            (p.id.as_str(), "rename room 4", &p.hash)
+        );
+        g.decide(&w[0].id, &w[0].hash, true).unwrap();
+        assert!(g.waiting().is_empty(), "a decided change is no longer waiting");
+    }
+
+    #[tokio::test]
+    async fn the_proposal_answer_never_carries_the_page_address() {
+        let (g, web) = web_gate(DEFAULT_TTL);
         let p = g.propose("a", json!(1)).await.unwrap();
-        let (port, key) = g.page_address().await;
+        let (port, key) = web.address().expect("started by the proposal");
         let shown = serde_json::to_string(&p).unwrap();
         assert!(!shown.contains(&key) && !shown.contains(&port.to_string()), "{shown}");
     }
@@ -513,9 +550,9 @@ mod tests {
 
         #[tokio::test]
         async fn the_page_needs_its_key_and_its_own_host_name() {
-            let g = gate(DEFAULT_TTL);
+            let (g, web) = web_gate(DEFAULT_TTL);
             g.propose("a", json!(1)).await.unwrap();
-            let (port, key) = g.page_address().await;
+            let (port, key) = web.address().unwrap();
             let host = format!("127.0.0.1:{port}");
             assert!(raw(port, get(port, "/", &host)).await.starts_with("HTTP/1.1 403"));
             assert!(raw(port, get(port, "/?k=wrong", &host)).await.starts_with("HTTP/1.1 403"));
@@ -529,11 +566,11 @@ mod tests {
 
         #[tokio::test]
         async fn what_the_model_wrote_is_escaped_on_the_page() {
-            let g = gate(DEFAULT_TTL);
+            let (g, web) = web_gate(DEFAULT_TTL);
             g.propose("<script>alert(1)</script>", json!({"name": "<img src=x onerror=y>"}))
                 .await
                 .unwrap();
-            let (port, key) = g.page_address().await;
+            let (port, key) = web.address().unwrap();
             let page = raw(port, get(port, &format!("/?k={key}"), &format!("127.0.0.1:{port}"))).await;
             assert!(!page.contains("<script>alert") && !page.contains("<img src=x"), "{page}");
             assert!(page.contains("&lt;script&gt;") && page.contains("&lt;img"));
@@ -541,9 +578,9 @@ mod tests {
 
         #[tokio::test]
         async fn a_click_approves_and_a_foreign_origin_or_missing_key_does_not() {
-            let g = gate(DEFAULT_TTL);
+            let (g, web) = web_gate(DEFAULT_TTL);
             let p = g.propose("a", json!(1)).await.unwrap();
-            let (port, key) = g.page_address().await;
+            let (port, key) = web.address().unwrap();
             let host = format!("127.0.0.1:{port}");
             let body = format!("k={key}&id={}&hash={}&decision=approve", p.id, p.hash);
             let foreign = raw(port, post("/decide", &host, Some("https://evil.example"), &body)).await;

@@ -2,7 +2,7 @@
 //!
 //! **Order of events, and why it matters.** Arguments are checked, the address is built, and only then
 //! is the request handed to the [`Authenticator`] -- the single place authentication happens -- and
-//! sent. With [`Unauthenticated`] the call therefore ends at the authentication error with no network
+//! sent. With no API key the call therefore ends at the authentication error with no network
 //! traffic, which is how the tools can all be driven end to end before the sign-in is decided.
 //!
 //! **Nothing here retries, follows a redirect or logs a header.** A failed call is reported once. A
@@ -75,6 +75,12 @@ impl Client {
             .as_deref()
             .ok_or_else(|| ToolError("no dRofus address: start the server with --base-url / DROFUS_BASE_URL".into()))?;
         let url = prepared.url(base)?;
+        if url.scheme() != "https" && !is_local(&url) {
+            return Err(ToolError(
+                "refusing to send a credential over plain http to a non-local address; use an https base address"
+                    .into(),
+            ));
+        }
         let accept = if endpoint.kind == Kind::Binary { "image/*" } else { "application/json" };
         let request = self.http.request(endpoint.kind.method(), url).header(header::ACCEPT, accept);
         let request = self.auth.authenticate(request).await?;
@@ -101,6 +107,14 @@ impl Client {
             Kind::Get | Kind::Meta => json_answer(response).await.and_then(bounded).map(Answer::Json),
         }
     }
+}
+
+/// Loopback only: a mock or a tunnel. Anything else must be https before a key is attached.
+fn is_local(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|h| {
+        h.eq_ignore_ascii_case("localhost")
+            || h.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    })
 }
 
 /// `401` and `403` are the caller's sign-in, `404` is the id, the rest is shown as it came (truncated).
@@ -246,7 +260,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        auth::{AuthFuture, Unauthenticated},
+        auth::{AuthFuture, ReferenceKey, Unauthenticated},
         endpoints::ENDPOINTS,
     };
 
@@ -401,8 +415,32 @@ mod tests {
         let m = mock(200, "application/json", b"{}".to_vec()).await;
         let c = client(Some(&m.base), Arc::new(Unauthenticated));
         let err = c.call(ep("drofus_rooms_get"), &args(json!({"id": 1}))).await.unwrap_err();
-        assert!(err.0.contains("authentication is not implemented"), "{err}");
+        assert!(err.0.contains("no API key is configured"), "{err}");
         assert!(m.requests.lock().unwrap().is_empty(), "no request was sent");
+    }
+
+    #[tokio::test]
+    async fn the_reference_key_reaches_the_server_and_never_an_answer() {
+        let m = mock(200, "application/json", b"{\"id\":1}".to_vec()).await;
+        let c = client(Some(&m.base), Arc::new(ReferenceKey::new(crate::config::Secret::new(SECRET))));
+        let Answer::Json(v) = c.call(ep("drofus_rooms_get"), &args(json!({"id": 1}))).await.unwrap() else {
+            panic!()
+        };
+        let head = m.requests.lock().unwrap()[0].to_ascii_lowercase();
+        assert!(head.contains(&format!("authorization: reference {SECRET}")), "{head}");
+        assert!(!v.to_string().contains(SECRET));
+    }
+
+    #[tokio::test]
+    async fn a_credential_is_not_attached_to_plain_http_off_this_machine() {
+        let c = client(Some("http://drofus.example.invalid"), Arc::new(Stamp));
+        let err = c.call(ep("drofus_rooms_get"), &args(json!({"id": 1}))).await.unwrap_err();
+        assert!(err.0.contains("plain http"), "{err}");
+        assert!(
+            is_local(&reqwest::Url::parse("http://[::1]:5/").unwrap())
+                && is_local(&reqwest::Url::parse("http://localhost/").unwrap())
+        );
+        assert!(!is_local(&reqwest::Url::parse("http://10.0.0.5/").unwrap()));
     }
 
     #[tokio::test]

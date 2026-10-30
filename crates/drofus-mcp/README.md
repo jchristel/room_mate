@@ -3,10 +3,12 @@
 An [MCP](https://modelcontextprotocol.io) server for dRofus, over stdio. A client (Claude Desktop, Claude
 Code, any MCP host) starts the binary and calls its tools.
 
-**Status: the read endpoints are in; authentication is not.** 89 tools cover every `GET` and read-only `OPTIONS`
+**Status: the read endpoints are in, authenticated by an API key.** 89 tools cover every `GET` and read-only `OPTIONS`
 operation of the dRofus Project API (`ENDPOINTS.md`), plus `server_info`. No write endpoint has a tool. Every dRofus
-tool currently ends with an error saying authentication is not implemented, before any request is sent: see
-[`AUTH.md`](AUTH.md) for what is known and what the owner has to decide.
+tool sends `Authorization: Reference <key>` (the API key from dRofus's Power Query credentials dialog, as
+`DROFUS_API_KEY`); with no key it stops with an error saying so, before any request is sent. See
+[`AUTH.md`](AUTH.md): the scheme is the one the duHast PushIt client uses, and has not been tried against the live
+service from here.
 
 ## The tools
 
@@ -27,7 +29,8 @@ The table behind them is `src/endpoints/table.rs`, generated from the OpenAPI de
 No tool writes. `src/approval` is the gate any future write tool must pass, built first: a proposal is a **dry run**
 (it returns an id and a hash and changes nothing), a person approves it on a **local page on 127.0.0.1** that opens
 in the browser (the address and key never appear in a tool answer, so the model cannot click it), and only then can it
-be applied, **once**, from the stored payload. It is off unless `--allow-writes` is given, which also needs
+be applied, **once**, from the stored payload. What shows the change to a person is an `Approver` (a trait: the
+web page today, a native window later) and the gate's rules do not depend on which. It is off unless `--allow-writes` is given, which also needs
 `--audit-log <file>`. Its limits are written in the module header.
 
 ## Standalone by design
@@ -43,7 +46,7 @@ wants from the roommate server is copied, never imported.
 | dRofus API base address | `--base-url` | `DROFUS_BASE_URL` |
 | Database (`/api/{db}/...`) | `--database` | `DROFUS_DATABASE` |
 | Project (`/api/{db}/{pr}/...`) | `--project` | `DROFUS_PROJECT` |
-| Credential slot (read by nothing yet) | `--api-key` | `DROFUS_API_KEY` |
+| API key (`Authorization: Reference`) | `--api-key` (shows in the process list: prefer the environment) | `DROFUS_API_KEY` |
 
 A flag wins over the environment. Nothing is read from a file in the repository. A credential is wrapped in
 `config::Secret`, which never prints.
@@ -74,7 +77,8 @@ Logs go to stderr; stdout is the transport.
 - `src/config.rs`: flags and environment to a `Config`, secrets kept out of every `Debug`.
 - `src/endpoints.rs` (+ generated `endpoints/table.rs`): the operations, tool schemas, and arguments to request.
 - `src/client.rs`: the one HTTP path, error mapping, size caps.
-- `src/auth.rs`: the `Authenticator` seam and `Unauthenticated`.
+- `src/auth.rs`: the `Authenticator` seam, `ReferenceKey` (the API key) and `Unauthenticated` (no key).
+- `src/approval/`: the write gate; `Approver` is the trait a surface implements, `WebApprover` is the local page.
 - `src/server.rs`: registers the tools and adapts answers to MCP.
 - `src/main.rs`: parse flags, serve over stdio.
 

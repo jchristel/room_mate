@@ -27,7 +27,7 @@ use serde::Serialize;
 
 use crate::{
     approval::Gate,
-    auth::{Authenticator, Unauthenticated},
+    auth::{self, Authenticator},
     client::{Answer, Client},
     config::Config,
     endpoints::{Endpoint, ToolError, ENDPOINTS},
@@ -66,7 +66,11 @@ pub fn info(config: &Config, gate: &Gate) -> Info {
         database: config.database.clone(),
         project: config.project.clone(),
         api_key_set: config.api_key.is_some(),
-        authentication: "NOT IMPLEMENTED: every dRofus tool stops with an error before any request is sent (see AUTH.md)",
+        authentication: if config.api_key.is_some() {
+            "API key set: sent as `Authorization: Reference <key>` (not checked until a call is made)"
+        } else {
+            "NO API KEY: every dRofus tool stops with an error before any request is sent; set DROFUS_API_KEY (see AUTH.md)"
+        },
         drofus_tools: ENDPOINTS.len(),
         writes: if gate.enabled() {
             "approval gate enabled (--allow-writes), but no write tool exists: every tool is read-only"
@@ -122,10 +126,11 @@ pub struct DrofusMcp {
 
 #[tool_router]
 impl DrofusMcp {
-    /// A server whose requests are authenticated by [`Unauthenticated`]: until the sign-in is decided,
-    /// every dRofus call stops at that error.
+    /// A server authenticated by the configured API key (`auth::for_config`); with no key, every dRofus call
+    /// stops at an error saying so.
     pub fn new(config: Config) -> Self {
-        Self::with_authenticator(config, Arc::new(Unauthenticated))
+        let auth = auth::for_config(&config);
+        Self::with_authenticator(config, auth)
     }
 
     /// The same server with the write gate it was started with. No tool consults it yet.
@@ -148,7 +153,7 @@ impl DrofusMcp {
                 })
             }));
         }
-        Self { config, gate: Gate::new(crate::approval::GateConfig::disabled()), tool_router }
+        Self { config, gate: Gate::disabled(), tool_router }
     }
 
     #[tool(
@@ -169,8 +174,8 @@ impl ServerHandler for DrofusMcp {
             .with_server_info(Implementation::new("drofus-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Read-only access to a dRofus database through its Project API. Call server_info first: it says \
-                 whether the dRofus address, database and project have been configured, and that authentication is \
-                 not implemented yet, so every dRofus tool currently ends with an error saying so."
+                 whether the dRofus address, database, project and API key have been configured; without a key every \
+                 dRofus tool ends with an error saying so."
                     .to_string(),
             )
     }
@@ -184,12 +189,12 @@ mod tests {
 
     #[test]
     fn an_unconfigured_server_says_what_is_missing() {
-        let i = info(&Config::default(), &Gate::new(crate::approval::GateConfig::disabled()));
+        let i = info(&Config::default(), &Gate::disabled());
         assert_eq!(i.name, "drofus-mcp");
         assert!(!i.api_key_set);
         assert_eq!(i.base_url, None);
-        assert_eq!(i.missing.len(), 3);
-        assert!(i.authentication.contains("NOT IMPLEMENTED"));
+        assert_eq!(i.missing.len(), 4);
+        assert!(i.authentication.contains("NO API KEY"));
     }
 
     #[test]
@@ -201,7 +206,7 @@ mod tests {
             Some("pr".into()),
             |_| None,
         );
-        let i = info(&config, &Gate::new(crate::approval::GateConfig::disabled()));
+        let i = info(&config, &Gate::disabled());
         assert_eq!(i.base_url.as_deref(), Some("https://d.example"));
         assert!(i.api_key_set && i.missing.is_empty());
         let json = serde_json::to_string(&i).unwrap();
@@ -235,7 +240,7 @@ mod tests {
         for t in server.tool_router.list_all().iter().filter(|t| t.name != "server_info") {
             assert_eq!(t.annotations.as_ref().and_then(|a| a.read_only_hint), Some(true), "{}", t.name);
             let d = t.description.as_deref().unwrap();
-            assert!(d.contains("Read-only") && d.contains("Needs authentication"), "{}", t.name);
+            assert!(d.contains("Read-only") && d.contains("Needs an API key"), "{}", t.name);
         }
     }
 

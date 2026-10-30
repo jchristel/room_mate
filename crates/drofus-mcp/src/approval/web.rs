@@ -17,36 +17,101 @@
 //! The page has no JavaScript: it reloads itself every few seconds with a meta refresh so a new
 //! proposal appears, and a click is an ordinary form post.
 
-use std::{fmt::Write as _, io, time::Duration};
+use std::{
+    fmt::Write as _,
+    io,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use serde_json::Value;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::OnceCell,
     time::timeout,
 };
 
-use super::{random_hex, Gate, Ui};
+use super::{random_hex, Approver, ApproverFuture, Gate, Waiting};
 
 const MAX_HEAD: usize = 8 * 1024;
 const MAX_BODY: usize = 2 * 1024;
 const PER_CONNECTION: Duration = Duration::from_secs(5);
 const REFRESH_SECS: u32 = 4;
+/// The browser is opened again only if the page has not been fetched for this long.
+const REOPEN_AFTER: Duration = Duration::from_secs(30);
+
+struct Ui {
+    port: u16,
+    key: String,
+}
+
+/// What a connection handler needs: the gate to read and decide through, the page's own address and key,
+/// and where to note that the page was fetched.
+#[derive(Clone)]
+struct Shared {
+    gate: Gate,
+    port: u16,
+    key: String,
+    seen: Arc<Mutex<Option<Instant>>>,
+}
+
+/// The [`Approver`] that is a local web page, opened in the browser on the first proposal.
+pub struct WebApprover {
+    open_browser: bool,
+    ui: OnceCell<Ui>,
+    seen: Arc<Mutex<Option<Instant>>>,
+}
+
+impl WebApprover {
+    /// `open_browser` false starts the page but leaves it to the caller to find (tests).
+    pub fn new(open_browser: bool) -> Self {
+        Self { open_browser, ui: OnceCell::new(), seen: Arc::new(Mutex::new(None)) }
+    }
+
+    /// The page's port and key, once started. Tests only.
+    #[cfg(test)]
+    pub(super) fn address(&self) -> Option<(u16, String)> {
+        self.ui.get().map(|u| (u.port, u.key.clone()))
+    }
+}
+
+impl Approver for WebApprover {
+    fn present<'a>(&'a self, gate: &'a Gate) -> ApproverFuture<'a> {
+        Box::pin(async move {
+            let ui = self.ui.get_or_try_init(|| serve(gate.clone(), self.seen.clone())).await;
+            let ui = match ui {
+                Ok(ui) => ui,
+                Err(e) => {
+                    tracing::error!("the approval page could not start: {e}");
+                    return;
+                }
+            };
+            let stale = self.seen.lock().ok().is_none_or(|s| s.is_none_or(|t| t.elapsed() > REOPEN_AFTER));
+            if stale && self.open_browser {
+                let url = format!("http://127.0.0.1:{}/?k={}", ui.port, ui.key);
+                if !open_in_browser(&url) {
+                    tracing::warn!("could not open a browser; open this address yourself to review the change: {url}");
+                }
+            }
+        })
+    }
+}
 
 /// Bind a free port on loopback and serve until the process ends.
-pub(super) async fn serve(gate: Gate) -> io::Result<Ui> {
+async fn serve(gate: Gate, seen: Arc<Mutex<Option<Instant>>>) -> io::Result<Ui> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     let key = random_hex(16);
-    let state = (gate, port, key.clone());
+    let shared = Shared { gate, port, key: key.clone(), seen };
     tokio::spawn(async move {
         loop {
             let Ok((conn, _)) = listener.accept().await else {
                 continue;
             };
-            let state = state.clone();
+            let shared = shared.clone();
             tokio::spawn(async move {
-                let _ = timeout(PER_CONNECTION, handle(conn, state)).await;
+                let _ = timeout(PER_CONNECTION, handle(conn, shared)).await;
             });
         }
     });
@@ -150,7 +215,7 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-pub(super) fn escape(s: &str) -> String {
+fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -177,7 +242,8 @@ async fn respond(conn: &mut TcpStream, status: &str, extra: &str, body: &str) {
     let _ = conn.shutdown().await;
 }
 
-async fn handle(mut conn: TcpStream, (gate, port, key): (Gate, u16, String)) {
+async fn handle(mut conn: TcpStream, shared: Shared) {
+    let Shared { gate, port, key, seen } = shared;
     let Some(req) = read_request(&mut conn).await else {
         return respond(&mut conn, "400 Bad Request", "", "bad request").await;
     };
@@ -195,7 +261,9 @@ async fn handle(mut conn: TcpStream, (gate, port, key): (Gate, u16, String)) {
             if !form_field(&req.query, "k").is_some_and(|k| same(&k, &key)) {
                 return respond(&mut conn, "403 Forbidden", "", "forbidden").await;
             }
-            gate.mark_page_seen();
+            if let Ok(mut s) = seen.lock() {
+                *s = Some(Instant::now());
+            }
             respond(&mut conn, "200 OK", "", &render(&gate, &key, "")).await;
         }
         ("POST", "/decide") => {
@@ -237,7 +305,7 @@ fn render(gate: &Gate, key: &str, message: &str) -> String {
     if waiting.is_empty() {
         html.push_str("<p>Nothing is waiting.</p>");
     }
-    for (id, summary, payload, hash, left) in waiting {
+    for Waiting { id, summary, payload, hash, expires_in_secs: left } in waiting {
         let pretty = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| Value::Null.to_string());
         let _ = write!(
             html,
@@ -260,7 +328,7 @@ fn render(gate: &Gate, key: &str, message: &str) -> String {
 }
 
 /// Open the address with the system's default browser. `false` when it could not be started.
-pub(super) fn open_in_browser(url: &str) -> bool {
+fn open_in_browser(url: &str) -> bool {
     use std::process::{Command, Stdio};
     let mut cmd = if cfg!(target_os = "macos") {
         Command::new("open")

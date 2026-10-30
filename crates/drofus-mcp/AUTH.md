@@ -1,8 +1,8 @@
-# Authentication: what is known, and what is for the owner to decide
+# Authentication: what is known, and what is still open
 
-**Nothing is implemented.** Every dRofus tool builds its request, hands it to the `Authenticator` in
-`src/auth.rs`, and the only implementation, `Unauthenticated`, refuses before any network traffic. This file is
-what a session found while leaving that seam; it chooses nothing.
+Every dRofus tool builds its request and hands it to the `Authenticator` in `src/auth.rs`. The scheme in use is
+**`Authorization: Reference {key}`** (see "What a working client does" below); the browser OAuth flow the owner
+prefers is **not built** and is blocked on dRofus (no OAuth endpoints are known). This file records what was found.
 
 ## What was observed (2026-10-30, against `https://api-no.drofus.com`)
 
@@ -48,9 +48,12 @@ what a session found while leaving that seam; it chooses nothing.
 - Its connection test is `GET .../rooms`; it pages with `$top`/`$skip` (500 per call) and reads
   `OPTIONS .../rooms` and `GET .../attributeconfigurations` for field metadata.
 
-**So the smallest working authenticator is `Authorization: Reference {key}`**, with the key supplied the way
-`Config::api_key` already is (`DROFUS_API_KEY`). It was not built here (this task scaffolds the seam only) and it is
-untested against the live service from this crate.
+**Implemented: `auth::ReferenceKey`**, `Authorization: Reference {key}`, the key from `DROFUS_API_KEY` (or
+`--api-key`) as a `Secret`. The header is marked sensitive so a debug-printed request hides it, a key that cannot
+be a header value is refused without echoing it, and a key is never attached to plain `http` off this machine
+(loopback is allowed for a tunnel or a mock). With no key, `Unauthenticated` refuses every call before any request
+and says what to set. **Untested against the live service from this crate**: no credentialed call has been made
+here; the scheme is PushIt's.
 
 ## What is not known
 
@@ -67,9 +70,9 @@ untested against the live service from this crate.
 
 1. Write a type implementing `Authenticator` (`src/auth.rs`). It receives the `reqwest::RequestBuilder` and returns
    it with the header or cookie added; it may be asynchronous, for a token that has to be fetched.
-2. Keep its credentials as `config::Secret`s. `Config::api_key` is a slot already wired to `--api-key` /
-   `DROFUS_API_KEY` and read by nothing; use it, replace it, or delete it.
-3. Pass it to `DrofusMcp::with_authenticator` in `src/main.rs` instead of `DrofusMcp::new`.
+2. Keep its credentials as `config::Secret`s.
+3. Return it from `auth::for_config`, the one place the choice is made (or pass it to
+   `DrofusMcp::with_authenticator`).
 4. Keep the rule that an error from it never contains a credential: the client forwards the text to the model.
 5. The tests already stamp a fake secret through a test authenticator and assert it never appears in an error or an
    answer (`client::tests`); extend those rather than writing new ones.

@@ -5,8 +5,7 @@
 //! one `git add` from being published, which is why [`Secret`] exists and why the only way to read one
 //! is to ask for it by name.
 //!
-//! How the API authenticates is **not decided here** (see `AUTH.md`): when it is, keep every credential
-//! a [`Secret`].
+//! Every credential is a [`Secret`] (see `auth` for how the API key is used).
 
 use std::fmt;
 
@@ -49,9 +48,8 @@ pub struct Config {
     pub database: Option<String>,
     /// The project, likewise overridden by a tool's `pr` argument.
     pub project: Option<String>,
-    /// **A slot, read by nothing.** How a caller authenticates is undecided (see `AUTH.md`), so no
-    /// authenticator uses this yet. It is here, as a [`Secret`], so that the day one does it needs no
-    /// new plumbing and the value can never reach a log line.
+    /// The dRofus API key, sent as `Authorization: Reference {key}` (`auth::ReferenceKey`). A [`Secret`], so
+    /// it can never reach a log line.
     pub api_key: Option<Secret>,
 }
 
@@ -77,8 +75,7 @@ impl Config {
         }
     }
 
-    /// The names of what is not set yet, for a tool that says what is missing. The credential is not
-    /// listed: nothing reads it yet, so its absence is not what stops a call.
+    /// The names of what is not set yet, for a tool that says what is missing.
     pub fn missing(&self) -> Vec<&'static str> {
         let mut out = Vec::new();
         if self.base_url.is_none() {
@@ -89,6 +86,9 @@ impl Config {
         }
         if self.project.is_none() {
             out.push("project (--project or DROFUS_PROJECT; or pass `pr` to a tool)");
+        }
+        if self.api_key.is_none() {
+            out.push("api_key (--api-key or DROFUS_API_KEY)");
         }
         out
     }
@@ -121,7 +121,7 @@ mod tests {
     fn blank_values_count_as_not_given() {
         let c = Config::resolve(Some("  ".into()), Some(String::new()), None, None, env_of(&[]));
         assert_eq!(c, Config::default());
-        assert_eq!(c.missing().len(), 3);
+        assert_eq!(c.missing().len(), 4);
     }
 
     #[test]
