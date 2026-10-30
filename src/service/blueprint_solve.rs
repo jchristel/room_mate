@@ -12,7 +12,7 @@
 
 use serde::Serialize;
 
-use super::blueprint_capture::{project_doors, SourceDoor};
+use super::blueprint_capture::{loop_mm, project_doors, SourceDoor};
 use super::blueprint_geometry::Pt;
 use super::blueprint_model::RevisionContent;
 use super::blueprint_resolve::{resolve_with_doors, EdgeMap, Finding, FitKind};
@@ -20,8 +20,6 @@ use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
 use super::ServiceError;
 use crate::state::AppState;
-
-const FT_TO_MM: f64 = super::blueprint_capture::FT_TO_MM;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -145,7 +143,7 @@ pub fn solve_rooms(
             let Some(outer) = first.room.loops.first() else {
                 return refused(id, Some(model), name, "the room has no outline".to_string());
             };
-            let ring: Vec<Pt> = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
+            let ring: Vec<Pt> = loop_mm(outer);
             let room = RoomRef { model_id: model.clone(), room_id: id.clone() };
             let mine: Vec<SourceDoor> = doors.iter().filter(|d| d.opens_onto(&room)).map(|d| d.door.clone()).collect();
             let row = refused(id, Some(model), name, String::new());

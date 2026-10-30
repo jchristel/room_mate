@@ -173,7 +173,7 @@ pub struct Task {
     pub library_sheet_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<TaskItem>,
-    /// The sheet layouts to make (no tags: the Revit side applies the tag rules, decision 24).
+    /// The sheet layouts to make (no tags in them: a tag comes from `rls.tags` and `tag_rules`, decision 24).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<BlueprintSheet>,
     /// `create_rls`: the sheet size asked for and where each elevation marker and its views go in

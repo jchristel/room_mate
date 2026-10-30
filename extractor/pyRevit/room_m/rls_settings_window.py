@@ -15,7 +15,6 @@ The window was tried in Revit and opens and saves.
 
 import os
 
-from room_m import rls_settings
 from room_m import rls_settings_form as form
 
 XAML_PATH = os.path.join(os.path.dirname(__file__), "rls_settings.xaml")
@@ -103,7 +102,3 @@ def show(forms, model_name, settings, options):
     window.ShowDialog()
     return window.settings
 
-
-def missing_after(settings):
-    """What still stops these settings being used, for the line after saving."""
-    return rls_settings.missing(settings)

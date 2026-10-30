@@ -13,9 +13,9 @@
 
 use serde_json::{json, Value};
 
-use super::blueprint_capture::properties_of;
+use super::blueprint_capture::{properties_of, FT_TO_MM};
 use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
-use super::elevation_facing::room_ring;
+use super::elevation_facing::model_room_ring;
 use super::items::{assemble_items, ItemScope};
 use super::placement;
 use super::rls_plan::{check_size, has_elevations, transfer, MarkerPlan, RlsPlan, RlsRequest};
@@ -32,8 +32,6 @@ use crate::sheets::{self, SheetError, SheetRoom};
 use crate::state::AppState;
 use crate::tag_rules::{self, RuleSummary};
 use crate::tasks::{BlueprintRef, NewTask, TaskItem, TaskKind, TaskRoom, UpdateMode};
-
-const FT_TO_MM: f64 = super::blueprint_capture::FT_TO_MM;
 
 /// A sheet whose room differs from the target by more than this (the mean of the three
 /// log-ratios in `sheet_suggest::distance`; 0.3 is about 35% off on each figure) is a warning.
@@ -340,10 +338,10 @@ fn place_elevations(
     if has_elevations(&record.sheet) {
         let target = SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
         let template = match &record.room {
-            Some(r) => room_ring(state, project, r)?,
+            Some(r) => model_room_ring(state, project, r)?,
             None => None,
         };
-        match (template, room_ring(state, project, &target)?) {
+        match (template, model_room_ring(state, project, &target)?) {
             (Some(t), Some(g)) => {
                 let (placed, notes) = transfer(&record.sheet, &t, &g, request);
                 markers = placed;

@@ -48,18 +48,11 @@ use tokio_util::io::StreamReader;
 use crate::state::{Carried, ModelKey, Shared};
 use crate::storage::SnapshotKind;
 
-/// The entity a streamed push route carries, from its path.
+/// The entity a streamed push route carries, from its path (`/<label>/stream`, the label every kind
+/// already names itself by), so a new kind needs no second list here.
 fn kind_of(path: &str) -> Option<SnapshotKind> {
-    Some(match path {
-        "/rooms/stream" => SnapshotKind::Rooms,
-        "/doors/stream" => SnapshotKind::Doors,
-        "/windows/stream" => SnapshotKind::Windows,
-        "/ffe/stream" => SnapshotKind::Ffe,
-        "/spaces/stream" => SnapshotKind::Spaces,
-        "/ceilings/stream" => SnapshotKind::Ceilings,
-        "/floors/stream" => SnapshotKind::Floors,
-        _ => return None,
-    })
+    let label = path.strip_prefix('/')?.strip_suffix("/stream")?;
+    SnapshotKind::ALL.into_iter().find(|k| k.label() == label)
 }
 
 type Refusal = (StatusCode, String);

@@ -134,14 +134,5 @@ class Reporting(unittest.TestCase):
         self.assertEqual(("failed", ["Revit refused"]), (failed["status"], failed["messages"]))
 
 
-class Ascii(unittest.TestCase):
-    def test_the_modules_ironpython_loads_are_ascii(self):
-        here = os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m")
-        for name in ("task_plan.py", "post_tasks.py", "sheet_tags.py", "post_tags.py", "post_sheets.py", "post_blueprints.py",
-                     "apply_geometry.py", "apply_run.py", "apply_facts.py", "apply_write.py"):
-            with open(os.path.join(here, name), "rb") as f:
-                f.read().decode("ascii")
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -26,7 +26,7 @@ use serde::Serialize;
 use crate::sheets::{RoomSummary, SheetRecord, SheetRoom};
 use crate::state::AppState;
 
-use super::blueprint_capture::FT_TO_MM;
+use super::blueprint_capture::loop_mm;
 use super::blueprint_geometry::{coarse_outline, dot, edges, signed_area, Pt};
 use super::items::{assemble_items, ItemScope};
 use super::room_locator::RoomRef;
@@ -152,7 +152,7 @@ pub fn room_summary(state: &AppState, project: &str, room: &RoomRef) -> Result<O
     let Some(outer) = found.room.loops.first() else {
         return Ok(None);
     };
-    let ring: Vec<Pt> = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
+    let ring: Vec<Pt> = loop_mm(outer);
     let Some((x_mm, y_mm)) = enclosing_rectangle(&ring) else {
         return Ok(None);
     };
@@ -232,7 +232,7 @@ pub fn suggest(
     let signature_of = |room: &RoomRef| -> Option<(String, Signature)> {
         let found = rooms.rooms.iter().find(|r| r.model_id == room.model_id && r.room.id == room.room_id)?;
         let outer = found.room.loops.first()?;
-        let ring: Vec<Pt> = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
+        let ring: Vec<Pt> = loop_mm(outer);
         if ring.len() < 3 {
             return None;
         }

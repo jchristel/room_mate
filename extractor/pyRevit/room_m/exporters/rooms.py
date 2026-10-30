@@ -27,9 +27,10 @@ One of the entity exporters `room_mate.ENTITY_EXPORTERS` dispatches over. Every
 module in this package offers the same three names, which is the whole
 interface:
 
-- `export_model(selected_doc, phase_name, return_value)` returning this
+- `export_model(selected_doc, phase_name, return_value, level_ids=None)` returning this
   document's contribution to the run's bucket, or None when it could not be
-  read.
+  read. `level_ids` (the Export window's level choice) narrows what is read to
+  elements on those levels; absent reads the whole model.
 - `post_bucket(run_envelope, entries, return_value)` sending the accumulated
   bucket, returning whether the push landed.
 - `stamp_envelope`, a callable adding this entity's own field to one model's

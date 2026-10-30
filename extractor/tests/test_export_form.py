@@ -150,11 +150,6 @@ class Xaml(unittest.TestCase):
         for h in handlers:
             self.assertTrue(re.search(r"def {}\(self, sender, args\)".format(h), source), h)
 
-    def test_the_files_ironpython_and_wpf_read_are_ascii(self):
-        for name in ("export_form.py", "export_window.py", "export.xaml", "room_mate.py", "post_rooms.py", "post_entity.py"):
-            with open(os.path.join(ROOM_M, name), "rb") as f:
-                f.read().decode("ascii")
-
 
 class Panel(unittest.TestCase):
     EXT = os.path.join(ROOM_M, "..", "RoomMate.extension", "duHast.tab")

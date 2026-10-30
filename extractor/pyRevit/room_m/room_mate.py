@@ -970,7 +970,7 @@ def export_entry(doc, uiapp, output, forms, entities):
     """
     Exports `entities` from the selected Revit document(s) and pushes them.
 
-    The single run driver behind all three entry points: document selection,
+    The single run driver behind every export button: document selection,
     the one project, the one phase, and the per-model loop are identical whether
     a run pushes rooms, doors or both, so they are written once. `entities` is
     the only thing that varies, and it varies in one place -- what

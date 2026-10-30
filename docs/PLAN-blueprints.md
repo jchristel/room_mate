@@ -174,9 +174,8 @@ write path into Revit. They have very different risk, which drives the staging.
     - `phase`: the phase to create content in.
     - `overwrite_layout`: true deletes the room's existing content in that phase; false aborts the
       task if the room already has content in it.
-    - `create_rls` and `overwrite_rls` (default false): if an RLS with the generated number exists
-      and overwrite is true it is deleted and recreated; if false the sheets alone are skipped,
-      with a warning.
+    - `create_rls` and `overwrite_rls` (default false): kept on the record, but the Apply button no
+      longer makes sheets; room layout sheets come from a `create_rls` task and the RLS create button.
     - **items**: family name, family type name, placement type, related data.
     - **RLS data**, from the pinned revision's sheets (decision 18): number and size of sheets,
       each viewport's type and location. **Tags are not in it** (decision 24): they come from the
@@ -190,10 +189,10 @@ write path into Revit. They have very different risk, which drives the staging.
     - Phase name does not exist in the model: **abort**.
     - Room (found by its number) no longer exists: **abort**.
     - Room already has content in the phase and `overwrite_layout` is false: **abort**.
-    - An RLS with the generated number exists and `overwrite_rls` is false: **warning**
-      (that task's sheets are skipped).
     - A specified family or type is in neither the model nor the library location: **warning**.
-    - No sheet family (title block) for the requested RLS size: **abort**.
+    - A populate task that asks for sheets: **warning** (this button places items only).
+    - The sheet checks (number taken, view name taken, no title block for the size, a missing view
+      type or schedule, incomplete settings) belong to the RLS create button, which **aborts** on each.
     A warning is shown to the person with two choices: abort, or ignore and proceed.
 23. **Task transport and states.** A new endpoint, `roomtasks`, takes a **model name**
     and returns that model's queued tasks and marks them *in progress*, so another Revit
