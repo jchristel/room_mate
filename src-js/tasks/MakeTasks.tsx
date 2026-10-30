@@ -1,27 +1,25 @@
-// Making tasks. Three kinds, each with its own input (plan decisions 21 and 26): **populate** and
-// **update** take assignments (a blueprint already placed in a room, its mapping and revision
-// pinned) and **create RLS** takes a library sheet and the rooms to make sheets for. An update
-// is a dry run unless the person turns that off. The server makes each
+// Making tasks. Two kinds (plan decisions 21 and 26): **populate** and **update** take assignments (a
+// blueprint already placed in a room, its mapping and revision pinned). An update is a dry run unless the
+// person turns that off. **Room layout sheet tasks are made in the main viewer** (its RLS tool), from a
+// library sheet and the rooms clicked on the plan. The server makes each
 // room on its own, so the answer is a row per room: the task, or why it could not be made.
 
 import { useMemo, useState } from "react";
 
 import * as api from "./api.js";
 import { UPDATE_MODE_TEXT } from "./model.js";
-import type { AssignmentRow, Made, RoomRow, SheetRow, UpdateMode } from "./types.js";
+import type { AssignmentRow, Made, UpdateMode } from "./types.js";
 
 export interface MakeProps {
   project: string;
   assignments: readonly AssignmentRow[];
-  sheets: readonly SheetRow[];
-  rooms: readonly RoomRow[];
   onMade(made: Made[]): void;
   onClose(): void;
 }
 
-type Kind = "populate_room" | "create_rls" | "update_room";
+type Kind = "populate_room" | "update_room";
 
-export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose }: MakeProps) {
+export function MakeTasks({ project, assignments, onMade, onClose }: MakeProps) {
   const [kind, setKind] = useState<Kind>("populate_room");
   const [phase, setPhase] = useState("");
   const [filter, setFilter] = useState("");
@@ -29,7 +27,6 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
   const [overwriteLayout, setOverwriteLayout] = useState(false);
   const [createRls, setCreateRls] = useState(false);
   const [overwriteRls, setOverwriteRls] = useState(false);
-  const [sheetId, setSheetId] = useState("");
   const [mode, setMode] = useState<UpdateMode>("locations");
   const [dryRun, setDryRun] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -39,12 +36,10 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
   const f = filter.trim().toLowerCase();
   const subjects = useMemo(
     () =>
-      kind !== "create_rls"
-        ? assignments
-            .filter((a) => !a.blueprint_missing && (!f || a.room_name.toLowerCase().includes(f) || (a.blueprint_name ?? "").toLowerCase().includes(f)))
-            .map((a) => ({ id: a.id, label: a.room_name, sub: `${a.blueprint_name ?? "?"} r${a.revision}` }))
-        : rooms.filter((r) => !f || r.name.toLowerCase().includes(f)).slice(0, 200).map((r) => ({ id: r.id, label: r.name, sub: "" })),
-    [kind, assignments, rooms, f],
+      assignments
+        .filter((a) => !a.blueprint_missing && (!f || a.room_name.toLowerCase().includes(f) || (a.blueprint_name ?? "").toLowerCase().includes(f)))
+        .map((a) => ({ id: a.id, label: a.room_name, sub: `${a.blueprint_name ?? "?"} r${a.revision}` })),
+    [assignments, f],
   );
 
   const toggle = (id: string) =>
@@ -62,7 +57,7 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
     setError(null);
   };
 
-  const ready = (kind === "create_rls" || phase.trim() !== "") && picked.size > 0 && (kind !== "create_rls" || sheetId !== "");
+  const ready = phase.trim() !== "" && picked.size > 0;
 
   const submit = async () => {
     setBusy(true);
@@ -71,9 +66,7 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
     const r =
       kind === "populate_room"
         ? await api.makePopulate(project, { assignment_ids: ids, phase: phase.trim(), overwrite_layout: overwriteLayout, create_rls: createRls, overwrite_rls: overwriteRls })
-        : kind === "update_room"
-          ? await api.makeUpdate(project, ids, phase.trim(), mode, dryRun)
-          : await api.makeRls(project, sheetId, ids, overwriteRls);
+        : await api.makeUpdate(project, ids, phase.trim(), mode, dryRun);
     setBusy(false);
     if (!r.ok) return setError(r.error);
     setMade(r.value);
@@ -98,19 +91,12 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
         <button type="button" className={kind === "update_room" ? "on" : ""} onClick={() => switchKind("update_room")}>
           Update rooms from their blueprint
         </button>
-        <button type="button" className={kind === "create_rls" ? "on" : ""} onClick={() => switchKind("create_rls")}>
-          Create RLS from a library sheet
-        </button>
       </div>
 
-      {kind === "create_rls" ? (
-        <p className="hint">The views are made in each room's own phase; there is nothing to enter.</p>
-      ) : (
-        <label className="stack">
-          Phase to work in (the name Revit knows it by)
-          <input type="text" value={phase} onChange={(e) => setPhase(e.target.value)} placeholder="New Construction" />
-        </label>
-      )}
+      <label className="stack">
+        Phase to work in (the name Revit knows it by)
+        <input type="text" value={phase} onChange={(e) => setPhase(e.target.value)} placeholder="New Construction" />
+      </label>
 
       {kind === "update_room" ? (
         <>
@@ -142,28 +128,11 @@ export function MakeTasks({ project, assignments, sheets, rooms, onMade, onClose
             </label>
           ) : null}
         </>
-      ) : (
-        <>
-          <label className="stack">
-            Library sheet
-            <select value={sheetId} onChange={(e) => setSheetId(e.target.value)}>
-              <option value="">Choose a sheet…</option>
-              {sheets.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.sheet_number} {s.sheet_name} ({s.document_title})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <input type="checkbox" checked={overwriteRls} onChange={(e) => setOverwriteRls(e.target.checked)} /> Overwrite a sheet that already exists (off, it is skipped with a warning)
-          </label>
-        </>
-      )}
+      ) : null}
 
-      <h3>{kind !== "create_rls" ? "Assignments" : "Rooms"}</h3>
+      <h3>Assignments</h3>
       <input type="search" placeholder="Filter by name" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter" />
-      {subjects.length === 0 ? <p className="hint">{kind !== "create_rls" ? "No assignments. Assign a blueprint to rooms on the blueprints page first." : "No rooms."}</p> : null}
+      {subjects.length === 0 ? <p className="hint">No assignments. Assign a blueprint to rooms on the blueprints page first.</p> : null}
       <ul className="picks">
         {subjects.map((s) => (
           <li key={s.id}>
