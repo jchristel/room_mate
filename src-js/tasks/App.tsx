@@ -16,7 +16,7 @@ import { persistSelection, seedProjectId } from "./common.js";
 import { MakeTasks } from "./MakeTasks.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { TaskList } from "./TaskList.js";
-import type { AssignmentRow, Made, ProjectRow, RoomRow, SheetRow, Task, TaskState, TaskSummary } from "./types.js";
+import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary } from "./types.js";
 
 const message = (e: unknown): string => String((e as Error).message ?? e);
 const POLL_MS = 8000;
@@ -30,8 +30,6 @@ export function App() {
   const [states, setStates] = useState<ReadonlySet<TaskState>>(new Set());
   const [making, setMaking] = useState(false);
   const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
-  const [sheets, setSheets] = useState<SheetRow[]>([]);
-  const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,8 +70,6 @@ export function App() {
   useEffect(() => {
     if (!making || !projectId) return;
     api.listAssignments(projectId).then(setAssignments).catch((e: unknown) => setError(message(e)));
-    api.listSheets(projectId).then(setSheets).catch((e: unknown) => setError(message(e)));
-    api.listRooms(projectId).then((r) => setRooms(r.rooms)).catch((e: unknown) => setError(message(e)));
   }, [making, projectId]);
 
   // Keep the open task in step with the list: the session may have reported on it.
@@ -167,7 +163,7 @@ export function App() {
           {error ? <p className="banner error">{error}</p> : null}
           {notice && !error ? <p className="banner">{notice}</p> : null}
           {making && projectId ? (
-            <MakeTasks project={projectId} assignments={assignments} sheets={sheets} rooms={rooms} onMade={made} onClose={() => setMaking(false)} />
+            <MakeTasks project={projectId} assignments={assignments} onMade={made} onClose={() => setMaking(false)} />
           ) : selected ? (
             <TaskDetail task={selected} busy={busy} onDismiss={() => void act("dismiss")} onResend={() => void act("resend")} />
           ) : (

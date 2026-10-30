@@ -503,8 +503,8 @@ get wrong:
 
 Built (server side): the task store (`tasks`), making tasks (`service::task_build`), the HTTP and MCP
 surface (`tasks_api`; MCP reads `list_tasks`, `get_task`) and the task list page at `/tasks/` (`src-js/tasks`:
-filters, a task's items, sheets, findings and attempts, dismiss, resend, and a panel that makes tasks of either
-kind; it reads the list again every few seconds to show what a session did). the main viewer's
+filters, a task's items, sheets, findings and attempts, dismiss, resend, and a panel that makes populate and update
+tasks; it reads the list again every few seconds to show what a session did). the main viewer's
 "Room tasks" colouring (`viewer/taskStatus.ts`, a choice in the zone's colour picker: a room draws in the state
 of its newest task that is not dismissed; a task's number must agree with the room's, because a viewer room names no
 model; read only while a zone uses it, every 8 s; not in the SVG export). The Revit side has its checking
@@ -590,6 +590,13 @@ checked before anything is made, then one transaction group per task (`duHast...
   (`{Room Parameter}` tokens, filled from the room). Abort (nothing written, reported): sheet exists, a view name is taken, no title block
   for the size, a view type or the base schedule not in the model, a template the room cannot fill, room/phase missing, settings
   incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place.
+- **The phase is the room's own, never typed.** A `create_rls` task carries `ROOM_OWN_PHASE` as its phase (a label); the planner aborts if the room has
+  none (`PHASE_MISSING`) and `rls_write` makes every view in `get_room_phase(doc, room)`. The request's `phase` is accepted and ignored.
+- **A template's 3D viewport gives a NEW 3D view** (`rls_task._three_ds`, `rls_write._three_ds`, duHast `view_3d_create`): named `<view name> 3D`, looking
+  along the template view's `forward_direction`/`up_direction` at THIS room, cut to the room's bounding box plus `SECTION_MARGIN_MM` (600 mm) on every
+  side, in the room's phase, and its viewport goes where the template's was. **The template's eye is not copied** (the export reads zero for a default
+  3D view, and a height measured in another room is wrong in this one): the camera sits back along the direction, so the pitch above the room is the
+  template's. A 3D viewport with no usable direction is a warning. **Not run in Revit.**
 - **View names are the view-name template plus ` PLAN` / ` ELEV n` / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
   task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
@@ -654,9 +661,9 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short
   side, so a rotated room reads the same.
 - **A blueprint's sheets are also offered to the library** (`blueprints_api::offer_to_library`), made for the
-  blueprint's room, so a room layout sheet can be made from one with no blueprint and no items: the library page's
-  "Make room layout sheets from this sheet" queues a `create_rls` task per room, **with `with_tags: false`** (the tasks
-  page keeps the tag rules). A copy, matched by sheet identity: a re-push updates it and a renumbered one waits for a
+  blueprint's room, so a room layout sheet can be made from one with no blueprint and no items: the main viewer's
+  **RLS tool** (zone toolbar, `viewer/rlsTool.ts`, `app/RlsPanel.tsx`: choose a library sheet with its preview, click rooms on the plan,
+  Make) queues a `create_rls` task per room, **with `with_tags: false`**. The library and tasks pages no longer make RLS tasks. A copy, matched by sheet identity: a re-push updates it and a renumbered one waits for a
   person. A library that cannot take them is logged and never fails the blueprint push.
 - **A room outline sent by the extractor has its collinear vertices dropped** (`room_m/ring_tidy.py`, rooms only).
   Revit puts a vertex wherever the boundary changes wall: 77.5% of RHH's rooms (2,080 of 2,683) have one and 28% of all

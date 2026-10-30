@@ -40,14 +40,3 @@ export const listRules = (project: string) => apiGet<RuleSummary[]>(`${base(proj
 export const getRule = (project: string, id: string) => apiGet<TagRule>(`${base(project)}/tagrules/${enc(id)}`);
 export const deleteRule = (project: string, id: string) => send<null>("DELETE", `${base(project)}/tagrules/${enc(id)}`, null);
 
-/** What happened to one room of a make request: the task made, or why not. */
-export interface Made {
-  subject: string;
-  room_name: string;
-  refused?: string;
-}
-
-/** Room layout sheets from one library sheet, one task per room (the server judges each room on its own).
- *  Made without tag rules: a sheet made on its own is the layout and nothing placed on it. */
-export const makeRls = (project: string, sheetId: string, roomIds: string[], phase: string, overwriteRls: boolean) =>
-  send<Made[]>("POST", `${base(project)}/tasks`, { kind: "create_rls", sheet_id: sheetId, room_ids: roomIds, phase, overwrite_rls: overwriteRls, with_tags: false });

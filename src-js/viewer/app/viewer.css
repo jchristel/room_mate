@@ -716,6 +716,22 @@
      never takes a click, which belongs to the room pick. */
   .bp-room { fill: none; stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; pointer-events: none; }
   .bp-box { fill: #2563eb; fill-opacity: 0.06; stroke: #2563eb; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+  /* The RLS tool: the rooms picked, ringed; and the sheet preview (the library page's drawing). */
+  .rls-room { fill: var(--accent); fill-opacity: 0.18; stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+  .rlsBar .rlsRooms { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; align-items: baseline; }
+  .rlsPreview { padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--rule); background: var(--paper); }
+  .preview { margin: 0; max-width: 26rem; }
+  .preview svg { width: 100%; height: auto; display: block; background: var(--paper); }
+  .preview .paper { fill: none; stroke: var(--ink); stroke-width: 0.8; }
+  .preview .port rect { stroke-width: 0.6; stroke: var(--ink); fill-opacity: 0.35; }
+  .preview .port text { fill: var(--ink); font-family: var(--mono); pointer-events: none; }
+  .preview .port.plan rect, .preview .key.plan::before { fill: var(--accent); background: var(--accent); }
+  .preview .port.elevation rect, .preview .key.elevation::before { fill: var(--ink); background: var(--ink); }
+  .preview .port.three_d rect, .preview .key.three_d::before { fill: var(--ok); background: var(--ok); }
+  .preview .port.schedule rect, .preview .key.schedule::before { fill: var(--rule); background: var(--rule); }
+  .preview .port.other rect, .preview .key.other::before { fill: var(--fill-hover); background: var(--fill-hover); }
+  .preview .key { margin-right: 0.8rem; }
+  .preview .key::before { content: ""; display: inline-block; width: 0.7em; height: 0.7em; margin-right: 0.3em; opacity: 0.6; }
   /* A handle is a short line with a wide, round, non-scaling stroke: a dot that stays one size on screen. */
   .bp-handle { stroke: var(--accent); stroke-width: 13px; stroke-linecap: round; vector-effect: non-scaling-stroke;
                pointer-events: stroke; cursor: grab; touch-action: none; }

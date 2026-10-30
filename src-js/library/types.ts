@@ -53,8 +53,19 @@ export interface PendingSheet {
   phase?: string;
 }
 
+/** A 2D box in millimetres on the sheet, as duHast exports it. */
+export interface PaperBox {
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+}
+
 export interface ViewportInfo {
+  /** "floor plan", "elevation", "three d" or "schedule". */
   vp_type?: string;
+  /** The viewport's outline on the sheet. */
+  bounding_box?: PaperBox;
   view?: { view_scale?: number; name?: string };
 }
 
@@ -62,7 +73,7 @@ export interface SheetRecord extends Omit<SheetSummary, "viewports" | "pending">
   phase?: string;
   received_at: string;
   /** The sheet as duHast exports it: opaque here beyond its viewports. */
-  sheet: { view_ports?: ViewportInfo[]; sheet_size?: string } & Record<string, unknown>;
+  sheet: { view_ports?: ViewportInfo[] } & Record<string, unknown>;
   pending: PendingSheet[];
   rejected: (PendingSheet & { rejected_at: string })[];
 }

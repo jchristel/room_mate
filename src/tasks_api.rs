@@ -129,7 +129,11 @@ pub enum CreateBody {
     CreateRls {
         sheet_id: String,
         room_ids: Vec<String>,
-        phase: String,
+        /// Ignored: the views take the phase of their room, read in Revit. Still accepted so a client
+        /// written before that does not fail.
+        #[serde(default)]
+        #[allow(dead_code)]
+        phase: Option<String>,
         #[serde(default)]
         overwrite_rls: bool,
         /// Carry the project's tag rules for the sheet's viewport types. On by default, which is
@@ -242,7 +246,7 @@ pub async fn http_create_tasks(
                 }
             }
         }
-        CreateBody::CreateRls { sheet_id, room_ids, phase, overwrite_rls, with_tags, sheet_size, depths, tags } => {
+        CreateBody::CreateRls { sheet_id, room_ids, phase: _, overwrite_rls, with_tags, sheet_size, depths, tags } => {
             let request = RlsRequest {
                 sheet_size,
                 depths,
@@ -265,7 +269,15 @@ pub async fn http_create_tasks(
                     }
                     Err(e) => return Err(service_error(e)),
                 };
-                match rls_from_sheet(&state, &projects, &project_id, &sheet_id, &room, &phase, &request) {
+                match rls_from_sheet(
+                    &state,
+                    &projects,
+                    &project_id,
+                    &sheet_id,
+                    &room,
+                    crate::tasks::ROOM_OWN_PHASE,
+                    &request,
+                ) {
                     Ok(mut new) => {
                         if !with_tags {
                             new.tag_rules.clear();
@@ -328,4 +340,21 @@ pub async fn http_resend_task(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<Json<Task>, (StatusCode, String)> {
     tasks::resend(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A create-RLS request names no phase: the views take their room's. One that still sends a
+    /// phase (an older client) is accepted and the phase is ignored.
+    #[test]
+    fn test_a_create_rls_request_needs_no_phase_and_ignores_one() {
+        let bare: CreateBody =
+            serde_json::from_str(r#"{"kind":"create_rls","sheet_id":"s","room_ids":["1"]}"#).unwrap();
+        assert!(matches!(bare, CreateBody::CreateRls { phase: None, .. }));
+        let old: CreateBody =
+            serde_json::from_str(r#"{"kind":"create_rls","sheet_id":"s","room_ids":["1"],"phase":"New"}"#).unwrap();
+        assert!(matches!(old, CreateBody::CreateRls { phase: Some(_), .. }));
+    }
 }

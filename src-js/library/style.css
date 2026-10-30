@@ -72,3 +72,16 @@ th { opacity: 0.65; font-weight: 400; }
 .filter { display: block; font-size: 0.72rem; margin: 0.4rem 0; }
 .actions.inline { display: inline-flex; margin: 0 0 0 0.75rem; }
 .findings li.pending { color: var(--accent); }
+
+.preview { margin: 0.4rem 0; max-width: 42rem; }
+.preview svg { width: 100%; height: auto; display: block; background: var(--paper); }
+.preview .paper { fill: none; stroke: var(--ink); stroke-width: 0.8; }
+.preview .port rect { stroke-width: 0.6; stroke: var(--ink); fill-opacity: 0.35; }
+.preview .port text { fill: var(--ink); font-family: var(--mono); pointer-events: none; }
+.preview .port.plan rect, .preview .key.plan::before { fill: var(--accent); background: var(--accent); }
+.preview .port.elevation rect, .preview .key.elevation::before { fill: var(--ink); background: var(--ink); }
+.preview .port.three_d rect, .preview .key.three_d::before { fill: var(--ok); background: var(--ok); }
+.preview .port.schedule rect, .preview .key.schedule::before { fill: var(--rule); background: var(--rule); }
+.preview .port.other rect, .preview .key.other::before { fill: var(--fill-hover); background: var(--fill-hover); }
+.preview .key { margin-right: 0.8rem; }
+.preview .key::before { content: ""; display: inline-block; width: 0.7em; height: 0.7em; margin-right: 0.3em; opacity: 0.6; }
