@@ -352,6 +352,8 @@ fn offer_to_library(state: &Shared, project: &str, room: &SheetRoom, sheets: &[B
             room: Some(room.clone()),
             phase: None,
             room_summary: summary,
+            size_mm: None,
+            rooms: Vec::new(),
             sheet: s.sheet.clone(),
         })
         .collect();

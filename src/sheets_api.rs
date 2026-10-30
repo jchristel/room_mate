@@ -90,7 +90,10 @@ pub async fn http_push_sheets(
 ) -> Result<Json<Vec<PushOutcome>>, (StatusCode, String)> {
     let mut seen: std::collections::HashMap<(String, String), Option<RoomSummary>> = std::collections::HashMap::new();
     for sheet in &mut request.sheets {
-        if let Some(room) = &sheet.room {
+        // Figures the extractor measured are kept; the server reads them only for a named room without any.
+        if sheet.room_summary.is_none()
+            && let Some(room) = &sheet.room
+        {
             let key = (room.model_id.clone(), room.room_id.clone());
             sheet.room_summary = *seen.entry(key).or_insert_with(|| summary_of(&state, &project_id, room));
         }

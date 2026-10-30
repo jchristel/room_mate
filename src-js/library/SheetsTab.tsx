@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
-import { roomName, sheetNeedsAttention, sheetReasons, shortTime, suggestionText, summaryText } from "./model.js";
+import { sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
 import type { RoomRow, SheetRecord, SheetSummary, Suggestions } from "./types.js";
 
 const message = (e: unknown): string => String((e as Error).message ?? e);
@@ -102,7 +102,7 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
                   ) : null}
                 </b>
                 <span>
-                  {s.document_title} · {roomName(s.room, rooms)} · {s.viewports} viewport{s.viewports === 1 ? "" : "s"}
+                  {s.document_title} · {sizeText(s.size_mm)} · {s.viewports} viewport{s.viewports === 1 ? "" : "s"}
                 </span>
               </button>
             </li>
@@ -117,8 +117,6 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
             record={record}
             rooms={rooms}
             busy={busy}
-            onSetRoom={(roomId) => void act("Room set.", (r) => api.setSheetRoom(project, r.id, r.taken_at, roomId))}
-            onClearRoom={() => void act("Room cleared.", (r) => api.clearSheetRoom(project, r.id, r.taken_at))}
             onDecide={(pendingId, accept) => void act(accept ? "Push accepted." : "Push rejected.", (r) => api.decidePush(project, r.id, pendingId, r.taken_at, accept))}
             onMake={(roomIds, phase, overwrite) => api.makeRls(project, record.id, roomIds, phase, overwrite)}
             onDelete={() => {
@@ -141,19 +139,13 @@ interface DetailProps {
   record: SheetRecord;
   rooms: readonly RoomRow[];
   busy: boolean;
-  onSetRoom(roomId: string): void;
-  onClearRoom(): void;
   onDecide(pendingId: number, accept: boolean): void;
   onDelete(): void;
   onMake(roomIds: string[], phase: string, overwrite: boolean): Promise<api.Sent<api.Made[]>>;
 }
 
-function SheetDetail({ record, rooms, busy, onSetRoom, onClearRoom, onDecide, onDelete, onMake }: DetailProps) {
-  const [pick, setPick] = useState("");
-  const [filter, setFilter] = useState("");
+function SheetDetail({ record, rooms, busy, onDecide, onDelete, onMake }: DetailProps) {
   const ports = record.sheet.view_ports ?? [];
-  const f = filter.trim().toLowerCase();
-  const options = rooms.filter((r) => !f || r.name.toLowerCase().includes(f)).slice(0, 200);
   return (
     <div className="detail">
       <div className="toolbar">
@@ -170,40 +162,17 @@ function SheetDetail({ record, rooms, busy, onSetRoom, onClearRoom, onDecide, on
         <dd>
           {record.document_title} · Revit sheet {record.revit_sheet_id}
         </dd>
-        <dt>Size</dt>
-        <dd>{record.sheet.sheet_size ?? "not stated"}</dd>
+        <dt>Paper size</dt>
+        <dd>{sizeText(record.size_mm)}</dd>
         <dt>Phase</dt>
         <dd>{record.phase ?? "—"}</dd>
-        <dt>Room</dt>
-        <dd>
-          {roomName(record.room, rooms)}
-          {record.room ? <span className="sub"> · model {record.room.model_id}</span> : null}
-        </dd>
+        <dt>Rooms covered</dt>
+        <dd>{record.rooms && record.rooms.length > 0 ? record.rooms.join(", ") : "not said"}</dd>
         <dt>Room figures</dt>
         <dd>{summaryText(record.room_summary)}</dd>
         <dt>Last pushed</dt>
         <dd>{shortTime(record.received_at)}</dd>
       </dl>
-
-      <h3>Set the room it was made for</h3>
-      <p className="hint">A person chooses; nothing is inferred from names. The figures above are worked out again for the new room.</p>
-      <input type="search" placeholder="Filter rooms" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter rooms" />
-      <div className="actions">
-        <select value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Room">
-          <option value="">Choose a room…</option>
-          {options.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
-            </option>
-          ))}
-        </select>
-        <button type="button" disabled={busy || !pick} onClick={() => onSetRoom(pick)}>
-          Set room
-        </button>
-        <button type="button" disabled={busy || !record.room} onClick={onClearRoom}>
-          Clear room
-        </button>
-      </div>
 
       <h3>Viewports ({ports.length})</h3>
       {ports.length === 0 ? <p className="hint">None. A sheet with no viewport has no layout to copy.</p> : null}
@@ -371,7 +340,7 @@ function Suggest({ project, rooms, onError }: { project: string; rooms: readonly
         <strong>Suggest sheets for a room</strong>
       </div>
       <p className="hint">
-        Ranks the library by how close each sheet's room is to this one: area, proportions and item count, weighed equally. It offers; nothing is applied.
+        Ranks the library by how close the room figures of each sheet are to this one: area, proportions and item count, weighed equally. It offers; nothing is applied.
       </p>
       <input type="search" placeholder="Filter rooms" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter rooms" />
       <div className="actions">
@@ -392,7 +361,7 @@ function Suggest({ project, rooms, onError }: { project: string; rooms: readonly
           <p>
             For <b>{answer.target.room_name}</b>: {answer.target.signature.area_m2.toFixed(1)} m2, {answer.target.signature.items} items, proportion {answer.target.signature.proportion.toFixed(2)}.
           </p>
-          {answer.suggestions.length === 0 ? <p className="hint">No sheet in the library has a room to compare.</p> : null}
+          {answer.suggestions.length === 0 ? <p className="hint">No sheet in the library has room figures to compare.</p> : null}
           <table>
             <thead>
               <tr>
@@ -415,7 +384,7 @@ function Suggest({ project, rooms, onError }: { project: string; rooms: readonly
               ))}
             </tbody>
           </table>
-          {answer.unassigned > 0 ? <p className="hint">{answer.unassigned} sheet(s) have no room and cannot be ranked.</p> : null}
+          {answer.unassigned > 0 ? <p className="hint">{answer.unassigned} sheet(s) have no room figures and cannot be ranked.</p> : null}
           {answer.unresolved.map((u) => (
             <p key={u.sheet_id} className="hint">
               {u.sheet_number}: {u.reason}

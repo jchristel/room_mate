@@ -17,7 +17,7 @@ export interface SheetRoom {
   room_id: string;
 }
 
-/** The room a sheet was made for, as it was when the room was set. Millimetres and square metres. */
+/** The room (or rooms) a sheet covers, measured in Revit when it was exported. Millimetres and square metres. */
 export interface RoomSummary {
   x_mm: number;
   y_mm: number;
@@ -32,8 +32,13 @@ export interface SheetSummary {
   document_title: string;
   sheet_number: string;
   sheet_name: string;
+  /** A link to a room: only a sheet that came with a blueprint has one. */
   room: SheetRoom | null;
   room_summary?: RoomSummary;
+  /** Paper size measured from the title block, mm. */
+  size_mm?: { width_mm: number; height_mm: number };
+  /** "number name" of the rooms said at export. */
+  rooms?: string[];
   viewports: number;
   /** Pushes waiting for a decision (the sheet number changed). */
   pending: number;
@@ -67,7 +72,7 @@ export interface Suggestion {
   sheet_number: string;
   sheet_name: string;
   document_title: string;
-  room: SheetRoom;
+  room?: SheetRoom;
   room_name: string;
   signature: { area_m2: number; proportion: number; items: number };
   parts: { area: number; proportion: number; items: number };

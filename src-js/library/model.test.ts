@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { degrees, filterRules, roomName, ruleLabel, sheetNeedsAttention, sheetReasons, suggestionText, summaryText } from "./model.js";
+import { degrees, filterRules, ruleLabel, sheetNeedsAttention, sheetReasons, sizeText, suggestionText, summaryText } from "./model.js";
 import type { RuleSummary, Suggestion } from "./types.js";
 
 const rule = (tagged: [string, string], tag: [string, string], vp = "floor plan"): RuleSummary => ({
@@ -40,21 +40,19 @@ describe("tag rules", () => {
 });
 
 describe("sheets", () => {
-  it("need attention when a push waits or no room is chosen", () => {
-    expect(sheetNeedsAttention({ pending: 0, room: { model_id: "m", room_id: "r" } })).toBe(false);
-    expect(sheetReasons({ pending: 2, room: null })).toEqual(["2 renumbered pushes to accept or reject", "no room chosen"]);
+  it("need attention only when a push waits", () => {
+    expect(sheetNeedsAttention({ pending: 0 })).toBe(false);
+    expect(sheetReasons({ pending: 2 })).toEqual(["2 renumbered pushes to accept or reject"]);
   });
 
-  it("name their room from the rooms read, or admit it is missing", () => {
-    const rooms = [{ id: "r1", name: "BED 01", level_id: "l" }];
-    expect(roomName({ model_id: "m", room_id: "r1" }, rooms)).toBe("BED 01");
-    expect(roomName({ model_id: "m", room_id: "zz" }, rooms)).toBe("room zz (not in the model)");
-    expect(roomName(null, rooms)).toBe("no room");
+  it("state their measured paper size", () => {
+    expect(sizeText({ width_mm: 841.2, height_mm: 593.9 })).toBe("841 x 594 mm");
+    expect(sizeText(undefined)).toBe("not measured");
   });
 
   it("summarise their room", () => {
     expect(summaryText({ x_mm: 4023.5, y_mm: 3940, area_m2: 15.86, items: 1 })).toBe("4.0 x 3.9 m, 15.9 m2, 1 item");
-    expect(summaryText(undefined)).toBe("room not summarised");
+    expect(summaryText(undefined)).toBe("no room figures");
   });
 
   it("say how far a suggestion is in each figure", () => {

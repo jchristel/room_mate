@@ -58,7 +58,10 @@ pub struct Suggestion {
     pub sheet_number: String,
     pub sheet_name: String,
     pub document_title: String,
-    pub room: SheetRoom,
+    /// The room the sheet is linked to, if any: a sheet pushed from the Sheets window has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<SheetRoom>,
+    /// What the sheet covers, for a person to read: the rooms said at export, else its linked room's name.
     pub room_name: String,
     pub signature: Signature,
     pub parts: Parts,
@@ -86,7 +89,7 @@ pub struct Suggestions {
     pub target: Target,
     /// Closest first.
     pub suggestions: Vec<Suggestion>,
-    /// Sheets with no room, which cannot be ranked.
+    /// Sheets with no figures (no room figures were sent and no room is linked), which cannot be ranked.
     pub unassigned: usize,
     /// Sheets whose room is not in the model today.
     pub unresolved: Vec<Unresolved>,
@@ -183,7 +186,10 @@ pub fn distance(target: &Signature, other: &Signature) -> (Parts, f64) {
 
 /// Rank `candidates` (a sheet, with its room's name and signature) against `target`.
 /// Pure, so the ranking is testable without a model.
-pub fn rank(target: &Signature, candidates: Vec<(&SheetRecord, SheetRoom, String, Signature)>) -> Vec<Suggestion> {
+pub fn rank(
+    target: &Signature,
+    candidates: Vec<(&SheetRecord, Option<SheetRoom>, String, Signature)>,
+) -> Vec<Suggestion> {
     let mut out: Vec<Suggestion> = candidates
         .into_iter()
         .map(|(sheet, room, room_name, signature)| {
@@ -251,21 +257,29 @@ pub fn suggest(
 
     let (mut candidates, mut unresolved, mut unassigned) = (Vec::new(), Vec::new(), 0);
     for sheet in sheets {
+        // The figures stored with the sheet win: they are what it was made for, they are all a
+        // sheet pushed without a linked room has, and they still rank when a room has moved on.
+        if let Some(summary) = sheet.room_summary {
+            let name = if !sheet.rooms.is_empty() {
+                sheet.rooms.join("; ")
+            } else {
+                sheet
+                    .room
+                    .as_ref()
+                    .and_then(|r| signature_of(&RoomRef { model_id: r.model_id.clone(), room_id: r.room_id.clone() }))
+                    .map_or_else(String::new, |(name, _)| name)
+            };
+            candidates.push((sheet, sheet.room.clone(), name, Signature::from(summary)));
+            continue;
+        }
+        // No figures: only a linked room can still be read as it is today.
         let Some(sheet_room) = &sheet.room else {
             unassigned += 1;
             continue;
         };
         let room_ref = RoomRef { model_id: sheet_room.model_id.clone(), room_id: sheet_room.room_id.clone() };
-        // The summary stored at push wins: it is what the sheet was made for, and it still ranks
-        // when its room has moved on or is not on the server. Only a sheet without one is read
-        // from its room as it is today.
-        if let Some(summary) = sheet.room_summary {
-            let name = signature_of(&room_ref).map_or_else(String::new, |(name, _)| name);
-            candidates.push((sheet, sheet_room.clone(), name, Signature::from(summary)));
-            continue;
-        }
         match signature_of(&room_ref) {
-            Some((name, sig)) => candidates.push((sheet, sheet_room.clone(), name, sig)),
+            Some((name, sig)) => candidates.push((sheet, Some(sheet_room.clone()), name, sig)),
             None => unresolved.push(Unresolved {
                 sheet_id: sheet.id.clone(),
                 sheet_number: sheet.sheet_number.clone(),
@@ -314,6 +328,8 @@ mod tests {
             room: None,
             phase: None,
             room_summary: None,
+            size_mm: None,
+            rooms: Vec::new(),
             received_at: String::new(),
             sheet: json!({}),
             pending: vec![],
@@ -383,7 +399,7 @@ mod tests {
     fn test_the_closest_room_ranks_first_and_ties_break_by_sheet_number() {
         let target = sig(20.0, 1.5, 10);
         let (a, b, c, d) = (record("a", "RLS-03"), record("b", "RLS-01"), record("c", "RLS-02"), record("d", "RLS-04"));
-        let room = |n: &str| SheetRoom { model_id: "m".into(), room_id: n.into() };
+        let room = |n: &str| Some(SheetRoom { model_id: "m".into(), room_id: n.into() });
         let ranked = rank(
             &target,
             vec![

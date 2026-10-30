@@ -30,11 +30,6 @@ export const getSheet = async (project: string, id: string): Promise<SheetRecord
   return { ...r, pending: r.pending ?? [], rejected: r.rejected ?? [] };
 };
 
-/** Set the sheet's room by id; the server finds the room's model. */
-export const setSheetRoom = (project: string, id: string, taken_at: string, roomId: string) =>
-  send<SheetRecord>("PUT", `${base(project)}/sheets/${enc(id)}`, { base: taken_at, room_id: roomId });
-export const clearSheetRoom = (project: string, id: string, taken_at: string) =>
-  send<SheetRecord>("PUT", `${base(project)}/sheets/${enc(id)}`, { base: taken_at, clear_room: true });
 export const decidePush = (project: string, id: string, pendingId: number, taken_at: string, accept: boolean) =>
   send<SheetRecord>("POST", `${base(project)}/sheets/${enc(id)}/pending/${pendingId}/${accept ? "accept" : "reject"}`, { base: taken_at });
 export const deleteSheet = (project: string, id: string, taken_at: string) =>

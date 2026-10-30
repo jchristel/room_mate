@@ -55,17 +55,27 @@ def sheets_of(doc):
     return _unique_labels(found)
 
 
+def all_placed_rooms(doc):
+    """The placed rooms of every phase, in the shape of `placed_rooms`, for the sheet export window:
+    a sheet's rooms are said by the person and do not depend on a phase."""
+    return _placed(doc, None)
+
+
 def placed_rooms(doc, phase_name):
     """`[{"id", "number", "name", "level", "label"}]` for the PLACED rooms of one phase.
 
     A room with no area is not placed or not enclosed, and no blueprint can be made from it,
     so it is not offered. The phase is the rooms equality test (`rooms_in_phase`), not the
     doors range test."""
-    allowed = rooms_in_phase(doc, phase_name)
+    return _placed(doc, rooms_in_phase(doc, phase_name))
+
+
+def _placed(doc, allowed):
+    """The placed rooms in the pick-list shape; only those whose id is in `allowed` when it is given."""
     found = []
     for room in get_all_placed_rooms(doc):
         room_id = element_id_str(room.Id)
-        if room_id not in allowed:
+        if allowed is not None and room_id not in allowed:
             continue
         try:
             name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString() or ""
@@ -81,6 +91,7 @@ def placed_rooms(doc, phase_name):
             level = ""
         found.append(
             {
+                "element": room,
                 "id": room_id,
                 "number": number,
                 "name": name,
