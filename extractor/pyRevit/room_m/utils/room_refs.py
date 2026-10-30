@@ -31,33 +31,20 @@ none of them need the first, so keeping them apart is what stops `doors.py`
 (and, later, `windows.py` and `ffe.py`) from importing the room extractor to
 reach one helper.
 
-Nothing Revit-specific is imported here: the phase-indexed properties are
-reached by name off whatever instance the caller passes, which is also what makes
-one function serve every category.
+The phase-indexed properties are reached by name off whatever instance the caller
+passes (duHast does the reading), which is also what makes one function serve every category.
 """
 
-from room_m.utils.generic import element_id_str
+from duHast.Revit.Family.family_instance_facts import get_room_or_space_id
 
 
 def room_reference(instance, phase, which):
-    """One of `instance`'s room references for `phase`, as an id string, or None.
+    """One of `instance`'s room references for `phase`, as an id string, or None (duHast
+    `get_room_or_space_id`).
 
     `which` is the property name -- `"FromRoom"` or `"ToRoom"` for the wall-hosted
-    categories (doors, windows), and `"Room"` for an instance that sits *in* one
-    room rather than between two (FF&E). The property name is the only thing that
-    varies between them, which is why this takes it as an argument instead of
-    being written once per category.
-
-    Each of those exists both as a parameterless property (which uses the
-    document's *current* phase - not what we want) and as a phase-indexed one.
-    IronPython reaches the indexed form through the CLR's `get_` accessor;
-    `instance.FromRoom[phase]` binds to the parameterless value first on some
-    versions, so the accessor is tried first and the indexer is the fallback.
-    Same both-names-are-real discipline as
-    `room_m.utils.generic.element_id_str`.
-
-    An element with no room on that side is a normal state (an external door), so
-    None here is data, not a failure."""
-    accessor = getattr(instance, "get_" + which, None)
-    room = accessor(phase) if accessor is not None else getattr(instance, which)[phase]
-    return element_id_str(room.Id) if room is not None else None
+    categories (doors, windows), `"Room"` or `"Space"` for an instance that sits *in* one
+    room or space rather than between two (FF&E). An element with no room on that side is a
+    normal state (an external door), so None here is data, not a failure."""
+    room_id = get_room_or_space_id(instance, phase, which)
+    return None if room_id is None else str(room_id)

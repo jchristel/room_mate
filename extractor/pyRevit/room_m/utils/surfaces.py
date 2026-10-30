@@ -60,23 +60,7 @@ def host_offsets(doc, category, built_in_parameter):
     and zero would be a plausible-looking lie. An in-place floor family is the
     expected case: it is a FamilyInstance, and carries no floor offset parameter.
     """
-    from Autodesk.Revit.DB import FilteredElementCollector
+    from duHast.Revit.Common.parameter_values_by_category import get_built_in_parameter_double_by_element_id
 
-    from room_m.utils.generic import element_id_str
-
-    out = {}
-    collector = (
-        FilteredElementCollector(doc)
-        .OfCategory(category)
-        .WhereElementIsNotElementType()
-    )
-    for element in collector:
-        try:
-            parameter = element.get_Parameter(built_in_parameter)
-            if parameter is None:
-                continue
-            out[element_id_str(element.Id)] = float(parameter.AsDouble())
-        except Exception:
-            # One unreadable element costs its own offset and not the run's.
-            continue
-    return out
+    values = get_built_in_parameter_double_by_element_id(doc, category, built_in_parameter)
+    return dict((str(element_id), value) for element_id, value in values.items())

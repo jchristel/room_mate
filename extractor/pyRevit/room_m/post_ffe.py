@@ -104,7 +104,7 @@ def plan_point_from_mm(translation):
 
     Z is dropped: the contract's geometry is 2D plan space throughout and the
     level already says which floor this is on -- the same thing
-    `opening_insertion_point` does with Revit's `LocationPoint`."""
+    duHast `get_insertion_point` does with Revit's `LocationPoint`."""
     if not isinstance(translation, dict):
         return None
     x = translation.get("x")
@@ -130,7 +130,7 @@ def facing_from_rotation(rotation):
     of a zero-length vector, because the honest answer is that this item has no
     in-plan direction and the contract says a consumer must then draw no
     orientation rather than guess one. Same rule
-    `opening_through_wall_normal` states, for the same reason.
+    duHast `get_through_wall_normal` states, for the same reason.
 
     **Common enough to matter: 44 of 644 House A items have no plan facing.**
     Measured by running this translation over the captured export, which is also
