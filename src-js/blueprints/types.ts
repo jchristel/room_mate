@@ -104,6 +104,8 @@ export interface Blueprint {
   taken_at: string;
   source?: SourceRoom | null;
   current_revision: number;
+  /** A blueprint is never deleted, only marked not in use (plan decision 27). */
+  in_use?: boolean;
   revisions: Revision[];
   pending?: PendingRevision[];
   rejected?: RejectedRevision[];
@@ -115,6 +117,7 @@ export interface BlueprintSummary {
   taken_at: string;
   source: SourceRoom | null;
   current_revision: number;
+  in_use: boolean;
   revisions: number;
   pending: number;
   items: number;

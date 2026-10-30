@@ -355,6 +355,9 @@ pub fn assign(projects_dir: &Path, project: &str, request: AssignRequest) -> Res
         return bad(format!("a note is at most {MAX_NOTE_CHARS} characters"));
     }
     let blueprint = blueprints::load(projects_dir, project, &request.blueprint_id)?;
+    if !blueprint.in_use {
+        return bad(format!("blueprint {:?} is not in use, so it takes no new assignment", blueprint.name));
+    }
     let revision = request.revision.unwrap_or(blueprint.current_revision);
     if blueprint.revision(revision).is_none() {
         return Err(BlueprintError::NotFound(format!("the blueprint has no revision {revision}")));
@@ -524,8 +527,7 @@ mod tests {
         let tmp = temp_dir(&format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
         let a = blueprint(&tmp, "A");
         assign(&tmp, "p", request(&a, "r1")).unwrap();
-        let taken = blueprints::load(&tmp, "p", &a).unwrap().taken_at;
-        blueprints::delete(&tmp, "p", &a, &taken).unwrap();
+        blueprints::remove_for_test(&tmp, "p", &a);
         let rows = list(&tmp, "p").unwrap();
         assert!(rows[0].blueprint_missing && rows[0].blueprint_name.is_none() && !rows[0].newer_revision);
     }

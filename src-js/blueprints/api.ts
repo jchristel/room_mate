@@ -78,11 +78,8 @@ export const updateBlueprint = (
   project: string,
   id: string,
   baseStamp: string,
-  patch: { name?: string; current_revision?: number },
+  patch: { name?: string; current_revision?: number; in_use?: boolean },
 ) => send<Blueprint>("PUT", `${base(project)}/blueprints/${encodeURIComponent(id)}`, { base: baseStamp, ...patch });
-
-export const deleteBlueprint = (project: string, id: string, baseStamp: string) =>
-  send<null>("DELETE", `${base(project)}/blueprints/${encodeURIComponent(id)}?base=${encodeURIComponent(baseStamp)}`, null);
 
 export const pushPending = (project: string, id: string, origin: string, content: RevisionContent, note?: string) =>
   send<Blueprint>("POST", `${base(project)}/blueprints/${encodeURIComponent(id)}/pending`, { origin, note, ...content });

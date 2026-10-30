@@ -177,16 +177,17 @@ export function App() {
     await settle(await api.updateBlueprint(projectId, blueprint.id, blueprint.taken_at, { name: name.trim() }), "Renamed.", viewing);
   };
 
-  const remove = async () => {
+  // A blueprint is never deleted: it is marked not in use, which stops new assignments and suggestions
+  // and keeps everything bound to it.
+  const toggleUse = async () => {
     if (!projectId || !blueprint) return;
-    if (!window.confirm(`Delete "${blueprint.name}" and all its revisions? A copy is kept in the server's backups.`)) return;
+    const inUse = blueprint.in_use !== false;
     setBusy(true);
-    const r = await api.deleteBlueprint(projectId, blueprint.id, blueprint.taken_at);
-    setBusy(false);
-    if (!r.ok) return setError(r.error);
-    setBlueprint(null);
-    setNotice("Deleted.");
-    await refreshRows(projectId);
+    await settle(
+      await api.updateBlueprint(projectId, blueprint.id, blueprint.taken_at, { in_use: !inUse }),
+      inUse ? "Marked not in use: it takes no new assignment and its sheets are not suggested." : "Marked in use.",
+      viewing,
+    );
   };
 
   const exportFile = () => {
@@ -289,7 +290,8 @@ export function App() {
             onImport={() => setPanel("import")}
             onExport={exportFile}
             onRename={() => void rename()}
-            onDelete={() => void remove()}
+            inUse={blueprint ? blueprint.in_use !== false : true}
+            onToggleUse={() => void toggleUse()}
           />
           {projectId && panel === "import" ? (
             <ImportBlueprint project={projectId} projects={projects} existing={rows ?? []} onImported={(r) => void imported(r)} onCancel={() => setPanel("none")} />

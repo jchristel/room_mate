@@ -442,6 +442,10 @@ get wrong:
   that step the binding happens when the push arrives, also for a revision that is only pending**; accepting a pending
   revision will be what moves it. A blueprint made before this keeps its old embedded `sheets` in the file, which are
   ignored: push it again to bind its sheets.
+- **A blueprint is never deleted, only marked not in use** (`Blueprint::in_use`, `PUT` with `in_use`; the page's "Mark not in use"). Not in
+  use: `assignments::assign` refuses it, `suggest` leaves out the sheets bound to it, and the page stops nagging about it. What is bound to it
+  and every assignment already made stay as they are, and it can be marked in use again. There is no delete route; `blueprint_missing` on an
+  assignment remains a reported state for a file removed by hand.
 - **Per-item overrides belong to ONE assignment and are applied by the resolver, never by the page.** An
   `ItemOverride` (leave out, or nudge in whole mm and turn in whole degrees, in the plan frame) is applied to the poses
   the recipes gave, *before* the `outside` and `overlap` findings, so those are judged where the item now is. One per
@@ -536,7 +540,7 @@ leaves an empty list out of a task, so the page reads a task back with its lists
   (any but queued, which is also the way out of a session that died holding tasks). Attempts are kept.
 - **One live task per kind per room.** A second queued or in-progress task of the same kind for a room is
   refused at creation and at resend: both would be handed out together.
-- **Each room of a request stands alone**: a blueprint that was deleted, a room that has gone, a layout
+- **Each room of a request stands alone**: a blueprint whose file has gone, a room that has gone, a layout
   that would place nothing, or `create_rls` on a blueprint with no bound sheet is a row saying why.
 - **The room is found by its `Number` property** (a room has no number field of its own) and the task
   carries the id as well; absent means the room has none.

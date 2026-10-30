@@ -3,7 +3,7 @@
 //!
 //! Reads: the list, one blueprint, and a **capture** of a room, which is a read -- it
 //! stores nothing and answers what a blueprint made from that room would hold.
-//! Writes (create, add a revision, rename or move the current marker, delete) are
+//! Writes (create, add a revision, rename, move the current marker or mark not in use) are
 //! HTTP-only, for the reason settings and connections writes are: the MCP server is a
 //! separate process and reads the same files.
 
@@ -130,21 +130,6 @@ pub async fn http_update_blueprint(
     Json(request): Json<UpdateRequest>,
 ) -> Result<Json<Blueprint>, (StatusCode, String)> {
     blueprints::update(&dir(&state)?, &project_id, &id, request).map(Json).map_err(to_http)
-}
-
-#[derive(Deserialize)]
-pub struct DeleteParams {
-    /// The `taken_at` of the blueprint the caller read.
-    pub base: String,
-}
-
-pub async fn http_delete_blueprint(
-    State(state): State<Shared>,
-    UrlPath((project_id, id)): UrlPath<(String, String)>,
-    Query(params): Query<DeleteParams>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    blueprints::delete(&dir(&state)?, &project_id, &id, &params.base).map_err(to_http)?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
