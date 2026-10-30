@@ -267,10 +267,11 @@ write path into Revit. They have very different risk, which drives the staging.
     - **A pin covers an assignment's ITEMS only.** Sheets and tags follow the latest accepted push; a task copies them when
       made, so a task is unaffected.
     - **Import and export carry the bound sheets and tags**, and an import goes through the same reconcile.
-    - **Open**: a generic room tag has no outline to be relative to. Recommended: bound room tags use the wall recipe
-      (edge by the cyclic shift that fits, fraction along, distance from it: decision 24's elevation marker rule), generic
-      ones are relative to the nearest side of the room's smallest enclosing rectangle.
-    - **Built in four steps** (1 and 2 are built): (1) the type-code setting and rules keyed by it (old rules discarded); (2) `blueprint` on the
+    - **Room tags** are relative to the room boundary in plan: bound ones use the wall recipe (edge by the cyclic shift that
+      fits, fraction along, distance from it: decision 24's elevation marker rule), generic ones the nearest side of the room's
+      smallest enclosing rectangle (decided 2026-10-31, built in step 3).
+    - **A generic sheet is identified by its room's bounding rectangle and item count** (`room_key`, built in step 3).
+    - **Built in four steps** (1, 2 and 3 are built): (1) the type-code setting and rules keyed by it (old rules discarded); (2) `blueprint` on the
       sheet record, embedded sheets and `offer_to_library` removed; (3) scope and instance on tag rules and the lookup
       order above; (4) pending payload, reconcile, import and export.
 

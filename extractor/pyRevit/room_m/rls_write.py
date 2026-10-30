@@ -335,13 +335,18 @@ class RlsWriter(object):
                     problems.append("tag on item {} not placed: {}".format(tag.get("item_id"), e))
         if room_tag is not None:
             head = None
-            for rule in geo.room_rules(task.get("tag_rules") or [], geo.PLAN):
-                point = room.Location.Point
-                placement = geo.tag_placement(
-                    geo.room_like(point.X * geo.MM_PER_FT, point.Y * geo.MM_PER_FT), rule, plan["plan_scale"])
-                if placement:
-                    head = XYZ(_ft(placement["head"][0]), _ft(placement["head"][1]), z)
-                break
+            if plan.get("room_tag_head"):
+                # The server worked the place out against this room's boundary (plan decision 27).
+                head = XYZ(_ft(plan["room_tag_head"][0]), _ft(plan["room_tag_head"][1]), z)
+            else:
+                # A rule learned before its room was on the server: the offset in the plan's axes.
+                for rule in geo.room_rules(task.get("tag_rules") or [], geo.PLAN):
+                    point = room.Location.Point
+                    placement = geo.tag_placement(
+                        geo.room_like(point.X * geo.MM_PER_FT, point.Y * geo.MM_PER_FT), rule, plan["plan_scale"])
+                    if placement:
+                        head = XYZ(_ft(placement["head"][0]), _ft(placement["head"][1]), z)
+                    break
             try:
                 self._step(
                     "RoomMate: room tag",

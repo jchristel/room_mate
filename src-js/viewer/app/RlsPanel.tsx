@@ -60,7 +60,13 @@ export function RlsPanel({ zone }: { zone: ZoneRow }) {
     if (!project || !tool.sheetId) return;
     setBusy(true);
     setNotice(null);
-    const answer = await makeRlsTasks(project, tool.sheetId, tool.roomIds, tool.overwrite);
+    const answer = await makeRlsTasks(
+      project,
+      tool.sheetId,
+      tool.roomIds,
+      tool.overwrite,
+      Boolean(sheets?.find((s) => s.id === tool.sheetId)?.blueprint),
+    );
     setBusy(false);
     if (typeof answer === "string") return setNotice(answer);
     setNotice(madeText(answer));

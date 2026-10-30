@@ -48,6 +48,9 @@ pub struct RoomItem {
     /// The value of the project's type-code parameter for this item's type (`type_code_of`).
     /// `None`: the type has none, so no rule can find the item and it is left untagged.
     pub type_code: Option<String>,
+    /// The blueprint item this one stands for, when an assignment of the sheet's blueprint placed
+    /// it here (`match_instances`): a rule bound to that item is then preferred to a generic one.
+    pub instance: Option<String>,
     pub footprint: Vec<Pt>,
     pub facing: Option<Pt>,
     pub properties: Vec<Property>,
@@ -189,6 +192,47 @@ fn has_code(rule: &RuleSummary, item: &RoomItem) -> bool {
     item.type_code.as_deref().is_some_and(|c| same(&rule.key.type_code, c))
 }
 
+/// The rule that tags `item` in a viewport of type `kind` (plan decision 27): the one bound to the
+/// blueprint item it stands for, else the generic one for its type code. A rule bound to some other
+/// item of the blueprint is not this item's, even when the code is the same.
+fn rule_for<'a>(rules: &'a [RuleSummary], kind: &str, item: &RoomItem) -> Option<&'a RuleSummary> {
+    let of_kind = |r: &&RuleSummary| !is_spatial(&r.tag_kind) && same(&r.key.viewport_type, kind) && has_code(r, item);
+    let bound = item
+        .instance
+        .as_deref()
+        .and_then(|i| rules.iter().filter(of_kind).find(|r| !r.key.instance.is_empty() && r.key.instance == i));
+    bound.or_else(|| rules.iter().filter(of_kind).find(|r| r.key.instance.is_empty()))
+}
+
+/// Which blueprint item each of the room's items stands for: `placements` are the blueprint items
+/// as an assignment puts them in this room (`(blueprint item id, type code, centre)`, in the room's
+/// frame), and an item takes the nearest placement of its own type code within `within_mm`, each
+/// placement at most once (nearest pairs first). An item with no code, or none near enough, stands
+/// for nothing and gets the generic rule.
+pub fn match_instances(items: &mut [RoomItem], placements: &[(String, String, Pt)], within_mm: f64) {
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let (Some(code), Some(c)) = (item.type_code.as_deref(), item.centre()) else {
+            continue;
+        };
+        for (j, (_, pcode, p)) in placements.iter().enumerate() {
+            let d = dist(c, *p);
+            if same(pcode, code) && d <= within_mm {
+                pairs.push((d, i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let (mut taken_items, mut taken_placements) = (vec![false; items.len()], vec![false; placements.len()]);
+    for (_, i, j) in pairs {
+        if !taken_items[i] && !taken_placements[j] {
+            taken_items[i] = true;
+            taken_placements[j] = true;
+            items[i].instance = Some(placements[j].0.clone());
+        }
+    }
+}
+
 /// The footprint's rectangle in the item's own frame (x along its facing), as four corners.
 fn outline_of(item: &RoomItem) -> Option<[[f64; 2]; 4]> {
     let f = unit(item.facing?);
@@ -280,7 +324,7 @@ fn untagged(items: &[RoomItem], views: &[ViewTags], rules: &[RuleSummary], dismi
             Some("it has no facing, so a rule cannot place its tag".to_string())
         } else if item.type_code.is_none() {
             Some("its type has no value for the type-code parameter, so no rule can find it".to_string())
-        } else if !rules.iter().any(|r| has_code(r, item)) {
+        } else if !rules.iter().any(|r| !is_spatial(&r.tag_kind) && has_code(r, item)) {
             Some("the library has no tag for this type code".to_string())
         } else {
             None
@@ -330,13 +374,7 @@ pub fn plan_tags(
             if !shown {
                 continue;
             }
-            let rule = (kind == "floor plan")
-                .then(|| {
-                    rules
-                        .iter()
-                        .find(|r| !is_spatial(&r.tag_kind) && same(&r.key.viewport_type, &kind) && has_code(r, item))
-                })
-                .flatten();
+            let rule = (kind == "floor plan").then(|| rule_for(rules, &kind, item)).flatten();
             match (rule, item.facing) {
                 (Some(r), Some(f)) => {
                     let (f, l) = (unit(f), (-unit(f).1, unit(f).0));
@@ -395,6 +433,7 @@ mod tests {
             type_name: format!("{family} type"),
             category: "Furniture".into(),
             type_code: Some(format!("code-{family}")),
+            instance: None,
             footprint: vec![
                 (c.0 - 400.0, c.1 - 300.0),
                 (c.0 + 400.0, c.1 - 300.0),
@@ -418,6 +457,8 @@ mod tests {
                 tag_family: "T".into(),
                 tag_type: "T".into(),
                 viewport_type: "floor plan".into(),
+                blueprint: String::new(),
+                instance: String::new(),
             },
             tag_kind: "independent".into(),
             placement: Placement {
@@ -428,6 +469,7 @@ mod tests {
                 leader_end_condition: String::new(),
                 elbow: None,
                 end: None,
+                boundary: None,
             },
             sample_count: 3,
             updated_at: String::new(),
@@ -574,5 +616,57 @@ mod tests {
         assert_eq!(type_code_of("Assembly Code", &[p("Assembly Code", " ")], &inst).as_deref(), Some("X"));
         assert_eq!(type_code_of("", &ty, &inst), None);
         assert_eq!(type_code_of("Nope", &ty, &inst), None);
+    }
+
+    fn bound_rule(family: &str, instance: &str, x: f64) -> RuleSummary {
+        let mut r = rule(family, x, 0.0);
+        r.id = format!("tr-{family}-{instance}");
+        r.key.blueprint = "bp".into();
+        r.key.instance = instance.into();
+        r
+    }
+
+    #[test]
+    fn test_an_item_takes_the_rule_bound_to_its_blueprint_item_else_the_generic_one() {
+        let mut bed = item("1", "Bed", (0.0, 0.0), Some((1.0, 0.0)));
+        let rules = [
+            rule("Bed", 10.0, 0.0),
+            bound_rule("Bed", "b1", 30.0),
+            bound_rule("Bed", "b2", 50.0),
+        ];
+        let pick = |item: &RoomItem| rule_for(&rules, "floor plan", item).map(|r| r.placement.head.x);
+        assert_eq!(pick(&bed), Some(10.0), "no blueprint item: the generic rule");
+        bed.instance = Some("b2".into());
+        assert_eq!(pick(&bed), Some(50.0), "the rule of its own blueprint item");
+        bed.instance = Some("b9".into());
+        assert_eq!(pick(&bed), Some(10.0), "a blueprint item with no rule falls back to the generic one");
+        let only_bound = [bound_rule("Bed", "b1", 30.0)];
+        assert!(
+            rule_for(&only_bound, "floor plan", &bed).is_none(),
+            "another item's rule is never this item's"
+        );
+    }
+
+    #[test]
+    fn test_blueprint_items_are_matched_to_the_nearest_item_of_their_type_once_each() {
+        let mut items = vec![
+            item("a", "Bed", (0.0, 0.0), None),
+            item("b", "Bed", (1000.0, 0.0), None),
+            item("c", "Desk", (0.0, 0.0), None),
+        ];
+        let placements = vec![
+            ("p1".to_string(), "code-Bed".to_string(), (950.0, 0.0)),
+            ("p2".to_string(), "code-Bed".to_string(), (60.0, 0.0)),
+            ("p3".to_string(), "code-Bed".to_string(), (5000.0, 0.0)),
+        ];
+        match_instances(&mut items, &placements, 500.0);
+        assert_eq!(items[0].instance.as_deref(), Some("p2"));
+        assert_eq!(items[1].instance.as_deref(), Some("p1"));
+        assert_eq!(items[2].instance, None, "another type code never matches");
+        // One placement stands for one item only.
+        let mut two = vec![item("a", "Bed", (0.0, 0.0), None), item("b", "Bed", (100.0, 0.0), None)];
+        match_instances(&mut two, &[("p".into(), "code-Bed".into(), (40.0, 0.0))], 500.0);
+        assert_eq!(two.iter().filter(|i| i.instance.is_some()).count(), 1);
+        assert_eq!(two[0].instance.as_deref(), Some("p"), "the nearer one");
     }
 }

@@ -152,6 +152,11 @@ pub struct Observation {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ObservationsRequest {
+    /// The room blueprint these tags belong to (the id the blueprint push answered with), or absent for
+    /// a generic push. A tag on an item of that blueprint, and a room tag, is then bound to it
+    /// (plan decision 27); a tag on any other item is generic.
+    #[serde(default)]
+    pub blueprint: Option<String>,
     /// The type parameter `type_code` values were read from (the project's `tag_type_code`). A
     /// rule is keyed by it too, so codes from two parameters never meet. Blank: no element of an
     /// item can be keyed, and only room, space and area tags are taken in.
@@ -179,6 +184,13 @@ pub struct RuleKey {
     pub tag_family: String,
     pub tag_type: String,
     pub viewport_type: String,
+    /// The room blueprint the rule belongs to; empty for a generic rule (plan decision 27).
+    #[serde(default)]
+    pub blueprint: String,
+    /// The blueprint item the rule is for (its id, the Revit element id of the item it was captured
+    /// from), so a rule holds one sample; empty for a generic rule and for a room tag.
+    #[serde(default)]
+    pub instance: String,
 }
 
 impl RuleKey {
@@ -191,6 +203,8 @@ impl RuleKey {
             &self.tag_family,
             &self.tag_type,
             &self.viewport_type,
+            &self.blueprint,
+            &self.instance,
         ]
         .iter()
         .map(|s| s.trim().to_lowercase())
@@ -208,6 +222,28 @@ impl RuleKey {
         }
         format!("tr-{h:016x}")
     }
+}
+
+/// What a room tag is written against (see `service::room_tag_place`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryOf {
+    /// The coarse outline of the room the sheet was made for (a rule that belongs to a blueprint).
+    Wall,
+    /// The smallest rectangle round the room (a generic rule).
+    Rectangle,
+}
+
+/// A room tag head written against the room's boundary: unitless along, paper mm off.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Boundary {
+    pub of: BoundaryOf,
+    /// Which edge of the outline or side of the rectangle (see `of`).
+    pub edge: usize,
+    /// How far along that edge, as a fraction of its length.
+    pub along: f64,
+    /// How far into the room, paper millimetres.
+    pub off: f64,
 }
 
 /// Where one sample was read.
@@ -240,6 +276,9 @@ pub struct Sample {
     pub elbow: Option<Offset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<Offset>,
+    /// For a room tag whose room was on the server: the head written against the room's boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary: Option<Boundary>,
 }
 
 /// The one answer for a key: what a task applies.
@@ -254,6 +293,10 @@ pub struct Placement {
     pub elbow: Option<Offset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<Offset>,
+    /// A room tag's head against the room's boundary, when its samples had one: that, and not
+    /// `head`, is what is applied, so the tag follows the room's walls and not the plan's axes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary: Option<Boundary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -416,6 +459,11 @@ fn write(projects_dir: &Path, project: &str, rule: &TagRule) -> Result<(), TagRu
 
 pub fn delete(projects_dir: &Path, project: &str, id: &str) -> Result<(), TagRuleError> {
     let _guard = SAVE_LOCK.lock().unwrap();
+    remove(projects_dir, project, id)
+}
+
+/// `delete` for a caller already holding the lock.
+fn remove(projects_dir: &Path, project: &str, id: &str) -> Result<(), TagRuleError> {
     let path = rule_path(projects_dir, project, id)?;
     if !path.exists() {
         return Err(TagRuleError::NotFound(format!("no tag rule {id:?} in project {project:?}")));
@@ -464,9 +512,27 @@ fn wrap(angle: f64) -> f64 {
     a
 }
 
+/// What the server knows that the observations do not say (plan decision 27). The store has none of
+/// it, so the API layer fills it in; the default is "no blueprint, no rooms on hand".
+#[derive(Default)]
+pub struct ObserveContext<'a> {
+    /// The room blueprint the push is for, with the ids of the items it holds: a tag on one of those
+    /// is bound to it (and to that item), a tag on any other item is generic.
+    pub blueprint: Option<(String, std::collections::HashSet<String>)>,
+    /// A room tag head written against its room's boundary: `(model id, room id, head in the model's
+    /// frame, mm, bound, view scale)`. `None`: the room is not on the server, and the sample keeps
+    /// only its offset in the plan's axes.
+    #[allow(clippy::type_complexity)]
+    pub boundary: Option<&'a dyn Fn(&str, i64, P3, bool, f64) -> Option<Boundary>>,
+}
+
 /// `(key, kind, sample)` for each tagged element of the observation that can be used, and a
 /// reason for the ones that cannot.
-fn samples_of(obs: &Observation, parameter: &str) -> Vec<Result<(RuleKey, String, Sample), String>> {
+fn samples_of(
+    obs: &Observation,
+    parameter: &str,
+    ctx: &ObserveContext,
+) -> Vec<Result<(RuleKey, String, Sample), String>> {
     let tag = &obs.tag;
     let Some(viewport_type) = obs.viewport_type.as_deref().map(clean).filter(|v| !v.is_empty()) else {
         return vec![Err("the observation names no viewport type".to_string())];
@@ -510,6 +576,14 @@ fn samples_of(obs: &Observation, parameter: &str) -> Vec<Result<(RuleKey, String
                 facing_of(loc).ok_or_else(|| format!("tagged element {}: it has no plan facing", el.host_element_id))?
             };
             let from = loc.translation_coord;
+            let element_id = if el.link_element_id > 0 { el.link_element_id } else { el.host_element_id };
+            // Bound to the push's blueprint: a room tag always, an item's tag only when the item is one of
+            // the blueprint's (its id is the Revit element id, which the blueprint kept).
+            let (blueprint, instance) = match &ctx.blueprint {
+                Some((id, items)) if spatial => (id.clone(), String::new()),
+                Some((id, items)) if items.contains(&element_id.to_string()) => (id.clone(), element_id.to_string()),
+                _ => (String::new(), String::new()),
+            };
             let key = RuleKey {
                 tagged_category: clean(&el.names.category),
                 code_parameter: if spatial { String::new() } else { clean(parameter) },
@@ -518,8 +592,14 @@ fn samples_of(obs: &Observation, parameter: &str) -> Vec<Result<(RuleKey, String
                 tag_family: clean(&tag.tag_type.family_name),
                 tag_type: clean(&tag.tag_type.type_name),
                 viewport_type: viewport_type.clone(),
+                blueprint: blueprint.clone(),
+                instance,
             };
-            let element_id = if el.link_element_id > 0 { el.link_element_id } else { el.host_element_id };
+            let boundary = if spatial {
+                ctx.boundary.and_then(|f| f(&obs.sheet.document_title, element_id, tag.point, !blueprint.is_empty(), scale))
+            } else {
+                None
+            };
             let sample = Sample {
                 source: SampleSource { sheet: obs.sheet.clone(), tag_id: tag.id, element_id },
                 view_scale: scale,
@@ -530,6 +610,7 @@ fn samples_of(obs: &Observation, parameter: &str) -> Vec<Result<(RuleKey, String
                 leader_end_condition: clean(&tag.leader_end_condition),
                 elbow: el.elbow_location.filter(|_| tag.has_leader).map(|p| to_offset(p, from, facing, scale)),
                 end: el.leader_end.filter(|_| tag.has_leader).map(|p| to_offset(p, from, facing, scale)),
+                boundary,
             };
             let kind = if tag.tag_kind.trim().is_empty() {
                 "independent".to_string()
@@ -602,7 +683,32 @@ pub fn reduce(samples: &[Sample]) -> Placement {
         } else {
             None
         },
+        boundary: reduce_boundary(samples),
     }
+}
+
+/// The boundary recipe the samples agree on: the more common kind, then the more common edge of
+/// that kind, then the median of how far along and how far in. `None` when no sample had one.
+fn reduce_boundary(samples: &[Sample]) -> Option<Boundary> {
+    let all: Vec<Boundary> = samples.iter().filter_map(|s| s.boundary).collect();
+    let walls = all.iter().filter(|b| b.of == BoundaryOf::Wall).count();
+    let of = if walls * 2 >= all.len() && walls > 0 {
+        BoundaryOf::Wall
+    } else {
+        BoundaryOf::Rectangle
+    };
+    let same: Vec<Boundary> = all.into_iter().filter(|b| b.of == of).collect();
+    if same.is_empty() {
+        return None;
+    }
+    let edge = mode(same.iter().map(|b| b.edge.to_string())).parse().unwrap_or(0);
+    let on: Vec<&Boundary> = same.iter().filter(|b| b.edge == edge).collect();
+    Some(Boundary {
+        of,
+        edge,
+        along: median(on.iter().map(|b| b.along).collect()),
+        off: median(on.iter().map(|b| b.off).collect()),
+    })
 }
 
 /// Takes a push of observations in. Each sample replaces the one read from the same place.
@@ -610,6 +716,7 @@ pub fn observe(
     projects_dir: &Path,
     project: &str,
     request: ObservationsRequest,
+    ctx: &ObserveContext,
 ) -> Result<ObservationOutcome, TagRuleError> {
     if request.observations.len() > MAX_OBSERVATIONS_PER_PUSH {
         return bad(format!("at most {MAX_OBSERVATIONS_PER_PUSH} observations in one push"));
@@ -618,7 +725,7 @@ pub fn observe(
     let mut outcome = ObservationOutcome::default();
     let mut grouped: HashMap<String, (RuleKey, String, Vec<Sample>)> = HashMap::new();
     for obs in &request.observations {
-        for result in samples_of(obs, &parameter) {
+        for result in samples_of(obs, &parameter, ctx) {
             match result {
                 Ok((key, kind, sample)) => {
                     outcome.samples += 1;
@@ -633,6 +740,8 @@ pub fn observe(
     let by_id: HashMap<String, TagRule> = existing.into_iter().map(|r| (r.id.clone(), r)).collect();
     let mut ids: Vec<String> = grouped.keys().cloned().collect();
     ids.sort();
+    let touched: std::collections::HashSet<String> = ids.iter().cloned().collect();
+    let sources: Vec<SampleSource> = grouped.values().flat_map(|g| g.2.iter().map(|s| s.source.clone())).collect();
     for id in ids {
         let (key, kind, incoming) = grouped.remove(&id).expect("id came from the map");
         if !by_id.contains_key(&id) && by_id.len() >= MAX_RULES_PER_PROJECT {
@@ -659,20 +768,60 @@ pub fn observe(
         write(projects_dir, project, &rule)?;
         outcome.rules_changed += 1;
     }
+    outcome.rules_changed += take_moved_samples_out(projects_dir, project, &by_id, &touched, &sources)?;
     Ok(outcome)
+}
+
+/// A sample is identified by where it was read, wherever it now lives: a sheet pushed again under
+/// another key (bound to a blueprint after being generic, or its type code changed) must not leave
+/// its old sample behind. Every rule not written by this push loses the samples this push carried,
+/// is written again from what is left, or is deleted when nothing is. Returns how many rules changed.
+fn take_moved_samples_out(
+    projects_dir: &Path,
+    project: &str,
+    existing: &HashMap<String, TagRule>,
+    touched: &std::collections::HashSet<String>,
+    sources: &[SampleSource],
+) -> Result<usize, TagRuleError> {
+    let mut changed = 0;
+    let mut others: Vec<&TagRule> = existing.values().filter(|r| !touched.contains(&r.id)).collect();
+    others.sort_by(|a, b| a.id.cmp(&b.id));
+    for rule in others {
+        let samples: Vec<Sample> = rule.samples.iter().filter(|s| !sources.contains(&s.source)).cloned().collect();
+        if samples.len() == rule.samples.len() {
+            continue;
+        }
+        if samples.is_empty() {
+            remove(projects_dir, project, &rule.id)?;
+        } else {
+            let rewritten = TagRule {
+                placement: reduce(&samples),
+                sample_count: samples.len(),
+                updated_at: now(),
+                samples,
+                ..rule.clone()
+            };
+            write(projects_dir, project, &rewritten)?;
+        }
+        changed += 1;
+    }
+    Ok(changed)
 }
 
 /// The rules a task carries: those for these viewport types and, when the items are known, only
 /// for these type codes (a room, space or area tag rule is about the room, so it is carried
 /// whatever the items are). `None` items means any element (a task that finds the items already
 /// in the room). A rule keyed by another parameter than `parameter` is never carried: its codes
-/// mean something else. Compared case-insensitively.
+/// mean something else. **Generic rules, and those bound to `blueprint`** when the sheet is bound to
+/// one (plan decision 27); a rule bound to another blueprint is not the sheet's. Compared
+/// case-insensitively.
 pub fn rules_for(
     projects_dir: &Path,
     project: &str,
     viewport_types: &[String],
     parameter: &str,
     codes: Option<&[String]>,
+    blueprint: Option<&str>,
 ) -> Result<Vec<RuleSummary>, TagRuleError> {
     let wanted = |s: &str| s.trim().to_lowercase();
     let types: Vec<String> = viewport_types.iter().map(|v| wanted(v)).collect();
@@ -681,6 +830,7 @@ pub fn rules_for(
     Ok(load_all(projects_dir, project)?
         .iter()
         .filter(|r| types.contains(&wanted(&r.key.viewport_type)))
+        .filter(|r| r.key.blueprint.is_empty() || blueprint.is_some_and(|b| r.key.blueprint == b))
         .filter(|r| {
             is_spatial(&r.tag_kind)
                 || (!parameter.is_empty()
@@ -771,12 +921,130 @@ mod tests {
     }
 
     fn push(d: &Path, o: Vec<Observation>) -> ObservationOutcome {
-        observe(
-            d,
-            "p",
-            ObservationsRequest { type_code_parameter: "Assembly Code".into(), observations: o },
-        )
-        .unwrap()
+        push_for(d, o, None, &ObserveContext::default())
+    }
+
+    fn push_for(d: &Path, o: Vec<Observation>, blueprint: Option<&str>, ctx: &ObserveContext) -> ObservationOutcome {
+        let request = ObservationsRequest {
+            blueprint: blueprint.map(str::to_string),
+            type_code_parameter: "Assembly Code".into(),
+            observations: o,
+        };
+        observe(d, "p", request, ctx).unwrap()
+    }
+
+    /// A push for blueprint `bp` whose items are the elements numbered `items` (the bed of `obs(n, ..)` is 100 + n).
+    fn bound(items: &[&str]) -> ObserveContext<'static> {
+        ObserveContext {
+            blueprint: Some(("bp".to_string(), items.iter().map(|s| s.to_string()).collect())),
+            boundary: None,
+        }
+    }
+
+    #[test]
+    fn test_a_tag_on_a_blueprint_item_is_bound_to_that_item_and_any_other_is_generic() {
+        let d = dir();
+        // beds 101 and 102 are in the blueprint, bed 103 is not.
+        let out = push_for(
+            d.path(),
+            vec![
+                obs(1, 0.0, (1.0, 0.0), (100.0, 0.0)),
+                obs(2, 0.0, (1.0, 0.0), (300.0, 0.0)),
+                obs(3, 0.0, (1.0, 0.0), (500.0, 0.0)),
+            ],
+            Some("bp"),
+            &bound(&["101", "102"]),
+        );
+        assert_eq!(out.samples, 3);
+        let rules = load_all(d.path(), "p").unwrap();
+        let mut keys: Vec<(String, String)> =
+            rules.iter().map(|r| (r.key.blueprint.clone(), r.key.instance.clone())).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                ("".into(), "".into()),
+                ("bp".into(), "101".into()),
+                ("bp".into(), "102".into())
+            ],
+            "one rule per blueprint item, one holding the sample of the item that is not the blueprint's"
+        );
+        assert!(rules.iter().all(|r| r.sample_count == 1));
+        // And the carried rules: a sheet of that blueprint gets all three, another gets only the generic one.
+        let types = ["floor plan".to_string()];
+        let of = |b: Option<&str>| rules_for(d.path(), "p", &types, "Assembly Code", None, b).unwrap().len();
+        assert_eq!((of(Some("bp")), of(Some("other")), of(None)), (3, 1, 1));
+    }
+
+    #[test]
+    fn test_a_sheet_pushed_again_under_another_scope_takes_its_samples_with_it() {
+        let d = dir();
+        let one = || vec![obs(1, 0.0, (1.0, 0.0), (100.0, 0.0))];
+        push(d.path(), one());
+        assert_eq!(load_all(d.path(), "p").unwrap().len(), 1);
+        // The same sheet, now for a blueprint: the generic rule had only that sample, so it goes.
+        push_for(d.path(), one(), Some("bp"), &bound(&["101"]));
+        let rules = load_all(d.path(), "p").unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].key.blueprint, "bp");
+        // A second generic sheet's sample stays in the generic rule when the first one moves.
+        let mut other = obs(9, 0.0, (1.0, 0.0), (100.0, 0.0));
+        other.sheet.revit_sheet_id = "2".into();
+        push(d.path(), vec![other]);
+        push(d.path(), one());
+        let generic: Vec<_> = load_all(d.path(), "p")
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.key.blueprint.is_empty())
+            .collect();
+        assert_eq!((generic.len(), generic[0].sample_count), (1, 2), "both generic samples, once each");
+        assert_eq!(load_all(d.path(), "p").unwrap().len(), 1, "the bound rule lost its sample and went");
+    }
+
+    #[test]
+    fn test_a_room_tag_keeps_its_boundary_and_a_room_off_the_server_keeps_only_the_axes() {
+        let d = dir();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let f = |model: &str, room: i64, head: P3, bound: bool, scale: f64| -> Option<Boundary> {
+            seen.borrow_mut().push((model.to_string(), room, head.x, bound, scale));
+            Some(Boundary { of: BoundaryOf::Rectangle, edge: 0, along: 0.25, off: 20.0 })
+        };
+        let ctx = ObserveContext { blueprint: None, boundary: Some(&f) };
+        push_for(d.path(), vec![room_obs(1, (1500.0, 250.0))], None, &ctx);
+        let rule = &load_all(d.path(), "p").unwrap()[0];
+        assert_eq!(
+            rule.placement.boundary,
+            Some(Boundary { of: BoundaryOf::Rectangle, edge: 0, along: 0.25, off: 20.0 })
+        );
+        assert_eq!(
+            *seen.borrow(),
+            [("M".to_string(), 101, 1500.0, false, 50.0)],
+            "the room's id, the head, generic, the scale"
+        );
+        // No boundary function (the room is not on the server): the rule is the plan-axes offset as before.
+        let d = dir();
+        push(d.path(), vec![room_obs(1, (1500.0, 250.0))]);
+        assert_eq!(load_all(d.path(), "p").unwrap()[0].placement.boundary, None);
+    }
+
+    #[test]
+    fn test_samples_with_a_boundary_reduce_to_the_common_edge_and_the_median() {
+        let at = |edge, along, off| Sample {
+            source: SampleSource { sheet: SourceSheet::default(), tag_id: 0, element_id: 0 },
+            view_scale: 50.0,
+            head: Offset { x: 0.0, y: 0.0 },
+            rotation: 0.0,
+            orientation: String::new(),
+            has_leader: false,
+            leader_end_condition: String::new(),
+            elbow: None,
+            end: None,
+            boundary: Some(Boundary { of: BoundaryOf::Wall, edge, along, off }),
+        };
+        let p = reduce(&[at(2, 0.2, 10.0), at(2, 0.4, 14.0), at(1, 0.9, 99.0)]);
+        let b = p.boundary.unwrap();
+        assert_eq!((b.of, b.edge), (BoundaryOf::Wall, 2), "the edge most samples agree on");
+        assert!((b.along - 0.3).abs() < 1e-9 && (b.off - 12.0).abs() < 1e-9, "{b:?}");
     }
 
     #[test]
@@ -856,10 +1124,14 @@ mod tests {
         let d = dir();
         push(d.path(), vec![a.clone(), b]);
         assert_eq!(load_all(d.path(), "p").unwrap().len(), 2);
+        // Another tag with the same code, read under another parameter: a rule of its own.
+        let mut c = a;
+        c.tag.id = 7;
         observe(
             d.path(),
             "p",
-            ObservationsRequest { type_code_parameter: "Type Mark".into(), observations: vec![a] },
+            ObservationsRequest { blueprint: None, type_code_parameter: "Type Mark".into(), observations: vec![c] },
+            &ObserveContext::default(),
         )
         .unwrap();
         assert_eq!(
@@ -884,9 +1156,11 @@ mod tests {
             d.path(),
             "p",
             ObservationsRequest {
+                blueprint: None,
                 type_code_parameter: String::new(),
                 observations: vec![obs(3, 0.0, (1.0, 0.0), (1.0, 0.0))],
             },
+            &ObserveContext::default(),
         )
         .unwrap();
         assert_eq!(out.samples, 0);
@@ -956,7 +1230,8 @@ mod tests {
         let d = dir();
         push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (1.0, 0.0)), room_obs(2, (1001.0, 1.0))]);
         let other = ["CHAIR-09".to_string()];
-        let carried = rules_for(d.path(), "p", &["floor plan".to_string()], "Assembly Code", Some(&other)).unwrap();
+        let carried =
+            rules_for(d.path(), "p", &["floor plan".to_string()], "Assembly Code", Some(&other), None).unwrap();
         assert_eq!(carried.len(), 1);
         assert_eq!(carried[0].tag_kind, "room");
     }
@@ -966,18 +1241,25 @@ mod tests {
         let d = dir();
         push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (1.0, 0.0))]);
         let p = "Assembly Code";
-        let all = rules_for(d.path(), "p", &["Floor Plan".to_string()], p, None).unwrap();
+        let all = rules_for(d.path(), "p", &["Floor Plan".to_string()], p, None, None).unwrap();
         assert_eq!(all.len(), 1);
-        assert!(rules_for(d.path(), "p", &["elevation".to_string()], p, None).unwrap().is_empty());
+        assert!(rules_for(d.path(), "p", &["elevation".to_string()], p, None, None).unwrap().is_empty());
         let items = ["bed-01".to_string()];
-        assert_eq!(rules_for(d.path(), "p", &["floor plan".to_string()], p, Some(&items)).unwrap().len(), 1);
+        assert_eq!(
+            rules_for(d.path(), "p", &["floor plan".to_string()], p, Some(&items), None)
+                .unwrap()
+                .len(),
+            1
+        );
         let other = ["DESK-02".to_string()];
-        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], p, Some(&other)).unwrap().is_empty());
-        // Another parameter's codes mean something else, and none named means no item rules at all.
-        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], "Type Mark", None)
+        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], p, Some(&other), None)
             .unwrap()
             .is_empty());
-        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], "", None).unwrap().is_empty());
+        // Another parameter's codes mean something else, and none named means no item rules at all.
+        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], "Type Mark", None, None)
+            .unwrap()
+            .is_empty());
+        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], "", None, None).unwrap().is_empty());
     }
 
     #[test]
@@ -992,6 +1274,7 @@ mod tests {
             leader_end_condition: String::new(),
             elbow: None,
             end: None,
+            boundary: None,
         };
         let p = reduce(&[s(3.1), s(-3.1), s(3.12)]);
         assert!(p.rotation.abs() > 3.0, "{}", p.rotation);

@@ -420,11 +420,12 @@ def _single_document(doc, forms, button_name):
     return picked[0]
 
 
-def _report_tags(project, pushed, return_value):
+def _report_tags(project, pushed, return_value, blueprint_id=None):
     """Say which tags could not be read, then send the ones that were to the tag rules store.
     A failure here is reported and never stops the sheet push: the layout does not need its tags.
     Item tags are keyed by the type code the project's settings name (`tag_type_code`); without
-    one only room tags are taken in, and the output says so."""
+    one only room tags are taken in, and the output says so. `blueprint_id` is the room blueprint the
+    sheets were just pushed for: the server binds its tags to it (plan decision 27)."""
     for p in pushed:
         for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
             return_value.append_message(line)
@@ -436,7 +437,7 @@ def _report_tags(project, pushed, return_value):
         return_value.append_message(
             "No tag type code is set in the project's settings, so tags on items are not kept "
             "(room tags are). Name the type parameter that identifies an item's kind under Tag type code.")
-    ok, status, text, outcome = post_observations(project["id"], observations, parameter)
+    ok, status, text, outcome = post_observations(project["id"], observations, parameter, blueprint_id)
     if not ok:
         return_value.append_message(
             "Tag rules not updated ({}): {}".format(status if status is not None else "no response", text))
@@ -625,7 +626,7 @@ def blueprint_export_entry(doc, uiapp, output, forms):
                 return_value.update_sep(False, "{}: {}".format(name, explain_refusal(status, text)))
                 continue
             return_value.append_message(describe_outcome(name, outcome))
-            _report_tags(project, pushed, return_value)
+            _report_tags(project, pushed, return_value, outcome.get("blueprint_id"))
     except Exception as e:
         return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
     return return_value

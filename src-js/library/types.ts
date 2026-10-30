@@ -36,6 +36,8 @@ export interface SheetSummary {
   room: SheetRoom | null;
   /** The room blueprint the sheet belongs to (its id); absent for a generic sheet. */
   blueprint?: string;
+  /** A generic sheet's identifier: its room's bounding rectangle and item count, like `4000x3000-12`. */
+  room_key?: string;
   room_summary?: RoomSummary;
   /** Paper size measured from the title block, mm. */
   size_mm?: { width_mm: number; height_mm: number };

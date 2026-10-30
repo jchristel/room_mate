@@ -637,6 +637,23 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
   read and are how a re-push replaces its own samples.
 - **One rule per key**: the median of its samples, recomputed on every push, so a blueprint always tags the same
   way. The samples are kept; the answer is `placement`.
+- **A rule is generic or bound to a room blueprint** (`key.blueprint`, `key.instance`, plan decision 27). A push that names a
+  blueprint (the Blueprint button sends its id with the observations) binds the room tag to it, and an item's tag to the blueprint
+  ITEM (`instance` = the item id, the Revit element id the blueprint kept) when the item is one of the blueprint's (its current
+  revision or one waiting to be accepted); a tag on any other item stays generic. A bound item rule holds exactly one sample. **A
+  sample lives in exactly one rule**: identified by its source (sheet, tag, element), pushing it again under another key moves it
+  and a rule left empty is deleted (`take_moved_samples_out`). `rules_for` carries the generic rules and those bound to the
+  sheet's blueprint, never another's. For an item, `rls_tags::rule_for` takes the rule bound to the blueprint item the room's
+  item stands for, else the generic one by type code. **Which blueprint item an item stands for** is matched from the room's
+  assignment of the sheet's blueprint (`rls_tag_place::blueprint_placements`, `rls_tags::match_instances`: same type code, nearest
+  placement within `INSTANCE_MATCH_MM` = 500 mm, one to one); a room with no assignment gets generic rules.
+- **A room tag is written against the room's BOUNDARY, not its middle** (`service::room_tag_place`, `Boundary`). A bound rule uses
+  the wall recipe against the COARSE outline of the room the sheet was made for (`record.room`): the nearest edge, the fraction
+  along it, paper mm into the room, carried to another room by `best_shift` and refusing a different coarse edge count as the
+  elevations do. A generic rule uses the smallest rectangle round the room (four sides in a fixed order, long axis towards +x),
+  which works for any shape. The server turns the recipe into a place in THIS room when the task is made (`rls.room_tag.head`, model
+  frame, mm) and the RLS create button uses it; a rule learned while its room was not on the server has no boundary and keeps the
+  old offset in the plan's axes, applied by the plug-in. Distances are paper mm so the rule holds at any view scale.
 - **A sample is paper millimetres in the element's own frame** (x along its facing, y to its left), the model
   offset divided by the view scale. A rule therefore holds at any scale and turns with the item; the rotation is
   relative to the facing. An element with no point location or no plan facing gives no sample, said in `skipped`.
@@ -675,8 +692,9 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
 - **A blueprint's sheets are in the library, bound to it** (`blueprints_api::bind_to_library`, made for the
   blueprint's room), so a room layout sheet can be made from one with no items: the main viewer's
   **RLS tool** (zone toolbar, `viewer/rlsTool.ts`, `app/RlsPanel.tsx`: choose a library sheet with its preview, click rooms on the plan,
-  Make) queues a `create_rls` task per room, **with `with_tags: false`**. The library and tasks pages no longer make RLS tasks. Matched by sheet identity: a re-push updates the sheet and a renumbered one waits for a
-  person. **A bare re-push (the Sheets button) never unbinds a sheet**; only a push naming a blueprint sets it. A library that cannot take the sheets fails the blueprint push (the blueprint is stored and flagged as having none). The library page shows each sheet's blueprint.
+  Make) queues a `create_rls` task per room, **with tags worked out only for a sheet bound to a blueprint** (`with_tags`). The library and tasks pages no longer make RLS tasks. Matched by sheet identity: a re-push updates the sheet and a renumbered one waits for a
+  person. **A generic sheet carries `room_key`**, an identifier from its room's bounding rectangle and item count (`4000x3000-12`,
+  sides to the nearest 10 mm; none for a bound sheet or one without room figures). **A bare re-push (the Sheets button) never unbinds a sheet**; only a push naming a blueprint sets it. A library that cannot take the sheets fails the blueprint push (the blueprint is stored and flagged as having none). The library page shows each sheet's blueprint.
 - **A room outline sent by the extractor has its collinear vertices dropped** (`room_m/ring_tidy.py`, rooms only).
   Revit puts a vertex wherever the boundary changes wall: 77.5% of RHH's rooms (2,080 of 2,683) have one and 28% of all
   boundary vertices (7,659 of 27,558) are one, nearly all within 0.5 mm of the line. Lossless, so the tolerance is

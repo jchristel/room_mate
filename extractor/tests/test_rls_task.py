@@ -221,6 +221,16 @@ class ThreeD(unittest.TestCase):
         self.assertEqual([], verdict()["plan"]["three_ds"])
 
 
+class RoomTag(unittest.TestCase):
+    def test_a_head_the_server_worked_out_is_in_the_plan(self):
+        t = task()
+        t["rls"]["room_tag"] = {"head": [1200, 3400.5], "rule_id": "tr-1"}
+        self.assertEqual([1200.0, 3400.5], verdict(t)["plan"]["room_tag_head"])
+
+    def test_no_head_means_the_plug_in_applies_the_rules_offset(self):
+        self.assertIsNone(verdict()["plan"]["room_tag_head"])
+
+
 class Source(unittest.TestCase):
     def test_the_apply_button_leaves_the_rls_tasks_alone(self):
         with open(os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m", "room_mate.py")) as f:

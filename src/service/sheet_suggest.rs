@@ -331,6 +331,7 @@ mod tests {
             room_summary: None,
             size_mm: None,
             rooms: Vec::new(),
+            room_key: None,
             received_at: String::new(),
             sheet: json!({}),
             pending: vec![],

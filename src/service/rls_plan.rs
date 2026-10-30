@@ -91,6 +91,15 @@ pub struct MarkerPlan {
     pub views: Vec<ViewPlan>,
 }
 
+/// Where the room tag goes in this room: the model frame, mm. Present when the room tag rule was
+/// written against a room boundary (plan decision 27); otherwise the plug-in applies the rule's
+/// offset in the plan's axes, as before.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoomTagPlan {
+    pub head: [f64; 2],
+    pub rule_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct RlsPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,6 +109,9 @@ pub struct RlsPlan {
     /// Which items are tagged in which view, and which are left for a person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<TagPlan>,
+    /// The room tag's place from its rule's boundary recipe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_tag: Option<RoomTagPlan>,
 }
 
 /// `a1` for ` A1 `, or why it is not a size.
