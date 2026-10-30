@@ -70,6 +70,8 @@ from room_m.post_common import (
 
 from room_m.utils.phase_filter import (
     in_selected_phase,
+    in_scope,
+    is_scoped,
 )
 
 
@@ -276,6 +278,7 @@ def post_stream(spec, run_envelope, entries, url=None):
     no_id = 0
     nested = 0
     out_of_phase = 0
+    out_of_scope = 0
     written = 0
 
     out = MemoryStream()
@@ -301,6 +304,9 @@ def post_stream(spec, run_envelope, entries, url=None):
                 if not in_selected_phase(element, contribution["allowed_ids"]):
                     out_of_phase += 1
                     continue
+                if not in_scope(element, block):
+                    out_of_scope += 1
+                    continue
                 written += 1
                 element["model_id"] = model_id
                 write_ndjson_line(gz, element)
@@ -309,7 +315,7 @@ def post_stream(spec, run_envelope, entries, url=None):
     finally:
         out.Dispose()
 
-    if written == 0:
+    if written == 0 and not is_scoped(blocks):
         return empty_push_refusal(spec.entity, envelope, raw, [
             (no_id, "carrying no element id"),
             (nested, spec.nested_reason),

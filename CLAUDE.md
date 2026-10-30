@@ -108,18 +108,27 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   geometry picks an exterior or circulation space over the served room. Absent
   means the check is **off**, not clean — the QA response says which.
 
-## Level-scoped pushes: the server side is built, the extractor's is not
+## Level-scoped pushes and the single Export window
 
-A streamed push (`/<entity>/stream`, all seven) may name `"scope": {"levels": ["<level id>", ...]}` on a model block: what it
-sends REPLACES that model's elements on those levels and every other level is kept (`scoped_push`, a middleware in front of
-the stream routes). It appends the latest snapshot's elements on the OTHER levels to the request body as ordinary lines
-(`AppState::carried_elements`: decoded, so the property triples expand and re-encode), so the handler is unchanged and cannot
-store what an unscoped push would refuse, and the stored result is a complete snapshot: reads, milestones and the dictionary
-never learn it was partial. **Level ids, not names** (per document, stable between pushes of one model). A scoped model may send
-elements only on its scoped levels (else 400: it would duplicate a carried one). A model's first push carries nothing. Two scoped
-pushes to one model race (the last stored wins whole); not guarded. **Not built: the extractor** (a level picker, filtering each
-exporter's contribution by level, stamping `scope` on the model block) and duHast level filtering, which is where the Revit-side
-speed would come from; the other levels' data is not re-read by the server, only re-written.
+A streamed push (`/<entity>/stream`, all seven) may name `"scope": {"levels": ["<level id>", ...]}` on a model block: what it sends REPLACES
+that model's elements on those levels and every other level is kept (`scoped_push`, a middleware in front of the stream routes). It appends
+the latest snapshot's elements on the OTHER levels to the request body as ordinary lines (`AppState::carried_elements`: decoded, so the
+property triples expand and re-encode), so the handler is unchanged and cannot store what an unscoped push would refuse, and the stored result
+is a complete snapshot: reads, milestones and the dictionary never learn it was partial. **Level ids, not names** (per document, stable between
+pushes of one model). A scoped model may send elements only on its scoped levels (else 400: it would duplicate a carried one). A model's first
+push carries nothing. Two scoped pushes to one model race (the last stored wins whole); not guarded.
+
+**The extractor's side**: the **Export** button (`RoomMate` panel, `export_all_entry`, `export.xaml` / `export_window.py`, every rule in
+`export_form.py`) asks once for what to push (a check box per entity; FF&E by room or by space, not both), the project, the phase, and the
+whole model or ticked levels. A level choice is by NAME across the selected models and becomes, per model, a `scope` of that model's own ids
+(`export_form.scope_for_doc`); a model with none of the chosen levels is left out and said so, never pushed unscoped (that would replace its
+whole snapshot with nothing). Each `post_*` stream drops an element on any other level (`phase_filter.in_scope`), and a scoped run does not
+refuse an empty push (a level with no doors is a legitimate clear; `is_scoped`). The single-entity buttons are unchanged and share
+`_run_export`. **Revit still reads whole models**: duHast has no level filter, so a level choice narrows what is sent and replaced, not what Revit
+reads. A level filter in duHast's `get_all_*_data` is where the Revit-side speed would come from. **Not run in Revit.**
+
+**The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Apply tasks, RLS settings, RLS create and Server; the `Export`
+panel keeps the older single-purpose buttons (Rooms + Doors, By category).
 
 ## Ceilings: the entity where geometry is the only answer
 

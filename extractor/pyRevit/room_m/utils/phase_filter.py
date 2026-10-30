@@ -54,3 +54,25 @@ def in_selected_phase(out_entity, allowed_ids):
     if allowed_ids is None:
         return True
     return out_entity["id"] in allowed_ids
+
+
+def in_scope(out_entity, block):
+    """Whether a translated entity lies on the levels its model's push is scoped to.
+
+    A model block carrying `scope` (`{"levels": [level id, ...]}`) is a level-scoped push: the server
+    replaces that model's elements on those levels and keeps the rest, so an element on ANY other
+    level must not be sent (it would duplicate one the server carries over, and is refused). A block
+    with no scope passes everything. Level ids are the per-document Revit ids as text, which is what
+    `level_id` on a translated element already is."""
+    scope = (block or {}).get("scope")
+    if not scope:
+        return True
+    return str(out_entity.get("level_id")) in scope.get("levels", [])
+
+
+def is_scoped(blocks):
+    """Whether any model block of a push is level-scoped. A scoped push may legitimately send NOTHING
+    for an entity (the level has none): that clears the level, so it is not the empty push the
+    producer refuses."""
+    return any(b.get("scope") for b in blocks)
+

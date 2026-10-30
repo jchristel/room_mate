@@ -66,6 +66,7 @@ from room_m.post_common import (
 
 from room_m.utils.phase_filter import (
     in_selected_phase,
+    in_scope,
 )
 
 SERVER_URL = "/spaces"
@@ -229,6 +230,8 @@ def post_payload_stream(run_envelope, entries, url=SERVER_URL_STREAM):
                 if out_space is None:
                     continue
                 if not in_selected_phase(out_space, contribution["allowed_ids"]):
+                    continue
+                if not in_scope(out_space, block):
                     continue
                 out_space["model_id"] = model_id
                 write_ndjson_line(gz, out_space)

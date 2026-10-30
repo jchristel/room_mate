@@ -1,14 +1,9 @@
 layout:
   - RoomsAndDoors
-  - Blueprint
-  - ApplyTasks
-  - RlsSettings
-  - RlsCreate
-  - Server
   - ByCategory
 
 # bundle tooltip
-tooltip: Rooms and doors together, the blueprint sheet export, or one entity at a time
+tooltip: The single-purpose exports: rooms and doors together, or one entity at a time. The Export button on the RoomMate panel does all of them from one window.
 
 
 # bundle author

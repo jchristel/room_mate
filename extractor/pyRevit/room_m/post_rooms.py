@@ -57,6 +57,8 @@ from room_m.post_common import (
 
 from room_m.utils.phase_filter import (
     in_selected_phase,
+    in_scope,
+    is_scoped,
 )
 
 SERVER_URL = "/rooms"
@@ -228,6 +230,7 @@ def post_payload_stream(run_envelope, entries, url=SERVER_URL_STREAM):
     raw = 0
     unplaced = 0
     out_of_phase = 0
+    out_of_scope = 0
     written = 0
 
     out = MemoryStream()
@@ -246,6 +249,9 @@ def post_payload_stream(run_envelope, entries, url=SERVER_URL_STREAM):
                 if not in_selected_phase(out_room, contribution["allowed_ids"]):
                     out_of_phase += 1
                     continue
+                if not in_scope(out_room, block):
+                    out_of_scope += 1
+                    continue
                 written += 1
                 out_room["model_id"] = model_id
                 write_ndjson_line(gz, out_room)
@@ -254,7 +260,7 @@ def post_payload_stream(run_envelope, entries, url=SERVER_URL_STREAM):
     finally:
         out.Dispose()
 
-    if written == 0:
+    if written == 0 and not is_scoped(blocks):
         return empty_push_refusal("rooms", envelope, raw, [
             (unplaced, "unplaced (no boundary loop)"),
             (out_of_phase, "outside phase '{}'".format(envelope["phase"])),

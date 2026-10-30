@@ -49,6 +49,30 @@ def document_phases(doc):
     return [{"id": element_id_str(p.Id), "name": p.Name} for p in doc.Phases]
 
 
+def document_levels(doc):
+    """This document's levels as a list of `{"id", "name", "elevation"}`, lowest first. `id` is the
+    per-document Revit id as text, which is what `level_id` on every translated element is, and what a
+    level-scoped push names (`utils.phase_filter.in_scope`); `elevation` is in feet."""
+    from Autodesk.Revit.DB import FilteredElementCollector, Level
+
+    levels = []
+    for level in FilteredElementCollector(doc).OfClass(Level):
+        try:
+            levels.append({"id": element_id_str(level.Id), "name": level.Name, "elevation": level.Elevation})
+        except Exception:
+            continue
+    return sorted(levels, key=lambda x: (x["elevation"], x["name"]))
+
+
+def common_phase_names(docs):
+    """The phase names every one of `docs` has, in the first document's order: the only names a run can
+    be scoped to (see `utils.ui.choose_phase`)."""
+    per_doc = [[p["name"] for p in document_phases(d)] for d in docs]
+    if not per_doc or not per_doc[0]:
+        return []
+    return [name for name in per_doc[0] if all(name in names for names in per_doc[1:])]
+
+
 def exists_in_phase(created, demolished, selected):
     """Revit's phase-membership rule, on phase *sequence indices*:
 
