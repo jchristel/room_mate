@@ -187,9 +187,7 @@ def rooms_export_entry(doc, uiapp, output, forms):
     lives in the two siblings below instead, where wiring a new button is what
     opts into it.
 
-    The BUTTON is called "Rooms + Doors" (`RoomsAndDoors.pushbutton`), which is
-    the half of this that a modeller can see. It used to be called Export, over
-    a function named for rooms, in a repository that held neither.
+    Its button has been retired in favour of the Export window.
 
     :return: Result object with status and message.
     :rtype: Result
@@ -707,6 +705,8 @@ def _edit_rls_settings(selected_doc, forms, return_value):
 
     current = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
     options = rls_settings.collect_options(selected_doc)
+    for line in options.get("errors") or []:
+        return_value.append_message("RLS settings: could not list {}".format(line))
     saved = rls_settings_window.show(forms, selected_doc.Title, current, options)
     if saved is None:
         return_value.append_message("RLS settings unchanged: the window was cancelled")
@@ -735,10 +735,8 @@ def rls_settings_entry(doc, uiapp, output, forms):
     return_value = Result()
     try:
         report_build(return_value, output)
-        selected_doc = _single_document(doc, forms, "Select the model the settings are for")
-        if selected_doc is None:
-            return_value.append_message("No document selected")
-            return return_value
+        # the settings belong to the model that is open, so there is nothing to pick
+        selected_doc = doc
         saved = _edit_rls_settings(selected_doc, forms, return_value)
         if saved is not None:
             todo = rls_settings.missing(saved)

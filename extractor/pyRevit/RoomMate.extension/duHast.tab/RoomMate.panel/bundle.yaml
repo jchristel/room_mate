@@ -1,6 +1,7 @@
 layout:
   - ExportAll
   - Blueprint
+  - Sheets
   - ApplyTasks
   - RlsSettings
   - RlsCreate

@@ -54,20 +54,26 @@ def set_path(settings, path, value):
     node[path[-1]] = value
 
 
+def display_name(option):
+    """How a "Family : Type" name reads in a list: "Family [Type]". Anything else as it is."""
+    family, sep, type_name = option.partition(" : ")
+    return "{} [{}]".format(family, type_name) if sep else option
+
+
 def choices(value, options):
     """`(labels, values, selected)` for one combo: a first entry that means "not set", then what the
     model offers, and the stored value kept visible, marked, when the model no longer has it."""
     labels = [NOT_SET]
     values = [""]
     for option in options or []:
-        labels.append(option)
+        labels.append(display_name(option))
         values.append(option)
     selected = 0
     if value:
         if value in values:
             selected = values.index(value)
         else:
-            labels.append(value + NOT_IN_MODEL)
+            labels.append(display_name(value) + NOT_IN_MODEL)
             values.append(value)
             selected = len(values) - 1
     return labels, values, selected

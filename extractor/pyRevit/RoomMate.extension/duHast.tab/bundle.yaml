@@ -12,7 +12,6 @@
 # the extension, so identical paths would collide in the generated assembly.
 layout:
   - RoomMate
-  - Export
 
 # bundle tooltip
 tooltip: Exports Revit model data to a local RoomMate server

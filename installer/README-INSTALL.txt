@@ -59,7 +59,7 @@ a closed network.
     RoomMate.ps1 -Bind 0.0.0.0           (or: roommate.exe ... --bind 0.0.0.0)
 
 The server prints the addresses it can be reached at, for example
-http://192.168.0.97:5151. On the Revit computer, click the Server button (duHast tab, Export panel), type
+http://192.168.0.97:5151. On the Revit computer, click the Server button (duHast tab, RoomMate panel), type
 that address and confirm; it is checked before it is kept, and kept for later runs.
 Type default to go back to the server on the same computer. (The ROOMMATE_SERVER
 environment variable, if set, wins over the button.) Allow incoming
@@ -68,8 +68,8 @@ fixed address (or the computer's .local name) so it does not change. A DNS name
 other than the computer's own must be listed with --allow-host.
 
 If you installed the pyRevit toolbar component, the buttons are on the duHast
-tab, in the Export panel: "Rooms + Doors" pushes both, and the By Category
-pulldown pushes one entity at a time. Restart Revit after installing to see
+tab, in the RoomMate panel: the Export button asks which entities, project,
+phase and levels to push. Restart Revit after installing to see
 them. Revit 2025 or newer, and pyRevit has to be installed already.
 
 The toolbar carries its own copy of duHast, so it does not matter whether you
