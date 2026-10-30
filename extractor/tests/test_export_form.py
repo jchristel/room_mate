@@ -154,14 +154,14 @@ class Xaml(unittest.TestCase):
 class Panel(unittest.TestCase):
     EXT = os.path.join(ROOM_M, "..", "RoomMate.extension", "duHast.tab")
 
-    def test_the_new_buttons_are_on_a_roommate_panel_not_the_export_panel(self):
+    def test_the_buttons_are_on_one_roommate_panel_and_the_old_export_panel_is_gone(self):
         self.assertTrue(os.path.isdir(os.path.join(self.EXT, "RoomMate.panel", "ExportAll.pushbutton")))
         with open(os.path.join(self.EXT, "bundle.yaml")) as f:
             layout = f.read()
-        self.assertRegex(layout, r"layout:\s*\n\s*- RoomMate\s*\n\s*- Export")
-        for button in ("ExportAll", "ApplyTasks", "RlsSettings", "RlsCreate", "Server"):
+        self.assertRegex(layout, r"layout:\s*\n\s*- RoomMate\s*\n")
+        self.assertFalse(os.path.isdir(os.path.join(self.EXT, "Export.panel")))
+        for button in ("ExportAll", "ApplyTasks", "RlsSettings", "RlsCreate", "Server", "Sheets"):
             self.assertTrue(os.path.isdir(os.path.join(self.EXT, "RoomMate.panel", button + ".pushbutton")), button)
-            self.assertFalse(os.path.isdir(os.path.join(self.EXT, "Export.panel", button + ".pushbutton")), button)
 
 
 if __name__ == "__main__":

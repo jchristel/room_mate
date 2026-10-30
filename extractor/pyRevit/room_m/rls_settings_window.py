@@ -30,6 +30,7 @@ def show(forms, model_name, settings, options):
             self._ready = False
             self._existing = dict(settings or {})
             self._values = {}
+            self._errors = list((options or {}).get("errors") or [])
             self._parameters = list((options or {}).get("room_parameters") or [])
             self.tx_model.Text = "Model: {}".format(model_name)
             for name, option_key, path in form.COMBOS:
@@ -96,6 +97,7 @@ def show(forms, model_name, settings, options):
             if not self._ready:
                 return
             lines = form.problems(self._current(), self._parameters)
+            lines.extend("Revit could not list {}".format(e) for e in self._errors)
             self.tx_status.Text = "\n".join(lines) if lines else "Complete: a room layout sheet can be made."
 
     window = RlsSettingsWindow()

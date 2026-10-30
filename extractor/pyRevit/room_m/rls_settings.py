@@ -57,13 +57,18 @@ def _names(elements, label):
 def collect_options(doc):
     """The choices this model offers, as the page's `options`. Each list is read on its own, and
     one that fails is left out."""
-    from Autodesk.Revit.DB import BuiltInCategory, ViewFamily
+    from Autodesk.Revit.DB import BuiltInCategory, Element, ViewFamily
     from duHast.Revit.Family.family_symbol_lookup import get_symbol_full_names_by_category
     from duHast.Revit.Rooms.rooms import get_room_parameter_names
     from duHast.Revit.Views.schedules import get_schedules_by_built_in_category
     from duHast.Revit.Views.views import get_view_family_types
 
     options = {}
+    errors = []
+
+    def name_of(element):
+        # `element.Name` fails on Revit types under IronPython; Element.Name reads it
+        return Element.Name.GetValue(element)
 
     def room_schedules():
         return [
@@ -73,15 +78,17 @@ def collect_options(doc):
 
     for key, read in (
         ("title_blocks", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_TitleBlocks)),
-        ("plan_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.FloorPlan), lambda v: v.Name)),
-        ("elevation_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.Elevation), lambda v: v.Name)),
-        ("schedules", lambda: _names(room_schedules(), lambda v: v.Name)),
+        ("plan_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.FloorPlan), name_of)),
+        ("elevation_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.Elevation), name_of)),
+        ("schedules", lambda: _names(room_schedules(), name_of)),
         ("room_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_RoomTags)),
         ("independent_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_MultiCategoryTags)),
         ("room_parameters", lambda: get_room_parameter_names(doc)),
     ):
         try:
             options[key] = read()
-        except Exception:
-            pass
+        except Exception as e:
+            errors.append("{}: {}".format(key, e))
+    if errors:
+        options["errors"] = errors
     return options

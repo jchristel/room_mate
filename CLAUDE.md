@@ -132,8 +132,8 @@ FF&E is filtered on the level the modeller assigned before conversion and on the
 unchanged. Levels are the per-document ids, which each element's own `LevelId` reports (a room's level, a door's host level, a ceiling's host level).
 **Not run in Revit.**
 
-**The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Apply tasks, RLS settings, RLS create and Server; the `Export`
-panel keeps the older single-purpose buttons (Rooms + Doors, By category).
+**The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Sheets, Apply tasks, RLS settings, RLS create and Server. The older `Export` panel (Rooms + Doors, By category)
+was removed: the Export window covers every entity.
 
 ## Ceilings: the entity where geometry is the only answer
 
@@ -1193,8 +1193,7 @@ Revit, and R4 landed.
 
 `rooms_export_entry` still pushes **rooms and doors**, despite the name, so
 narrowing it to rooms would not fail — it would keep succeeding while quietly no
-longer pushing doors. Its button says what it does (`RoomsAndDoors.pushbutton`,
-titled "Rooms + Doors"); the function name is the one that still reads wrong. The split is in
+longer pushing doors. Its button is gone (the Export window replaced it); the function name still reads wrong. The split is in
 the siblings instead: `rooms_only_export_entry`, `doors_export_entry`,
 `windows_export_entry`, `ffe_export_entry`, `ffe_by_space_export_entry`,
 `spaces_export_entry`, `ceilings_export_entry` and `floors_export_entry`. Each
@@ -1250,8 +1249,6 @@ first. Until then a dev machine loads both, and the panel appears twice.
   EXTENSION name (`cache_<name>`) and builds command ids from the folder names
   inside it, so a second `duHast-2025.extension` would collide with the real
   one in both.
-- The combined button is `RoomsAndDoors.pushbutton`, titled "Rooms + Doors",
-  because `rooms_export_entry` pushes both and the old name said otherwise.
 
 **A run exports every selected model first, then pushes one bucket per entity.**
 So `entities` no longer carries a push *order* — the buckets are independent, and
