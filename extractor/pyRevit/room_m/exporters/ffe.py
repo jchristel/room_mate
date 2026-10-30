@@ -65,6 +65,7 @@ from duHast.Data.Objects.Collectors import data_item as di
 from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 
+from room_m.export_form import level_kwargs
 from room_m.post_ffe import post_ffe_stream
 
 from room_m.utils.items import (
@@ -79,7 +80,7 @@ from room_m.utils.items import (
 stamp_envelope = None
 
 
-def export_model(selected_doc, phase_name, return_value, identify_by="room"):
+def export_model(selected_doc, phase_name, return_value, identify_by="room", level_ids=None):
     """Export one model's FF&E as this document's contribution to the run's FF&E
     bucket, or None when it could not be read.
 
@@ -117,7 +118,7 @@ def export_model(selected_doc, phase_name, return_value, identify_by="room"):
         # without a re-push and where the count of what it removed is reported.
         facts = item_facts(selected_doc, phase_name, DEFAULT_ITEM_CATEGORIES, identify_by=identify_by)
 
-        item_data = get_all_item_data(selected_doc)
+        item_data = get_all_item_data(selected_doc, **level_kwargs(level_ids))
         json_formatted_items = build_json_for_file(
             {di.DataItem.data_type: item_data}, "{}".format(selected_doc.Title))
 
@@ -146,7 +147,7 @@ def export_model(selected_doc, phase_name, return_value, identify_by="room"):
     }
 
 
-def export_model_by_space(selected_doc, phase_name, return_value):
+def export_model_by_space(selected_doc, phase_name, return_value, level_ids=None):
     """`export_model`, identifying each item against its SPACE rather than its
     room -- `ENTITY_EXPORTERS[FFE_BY_SPACE]`'s row, wired to
     `ffe_by_space_export_entry`.
@@ -156,7 +157,7 @@ def export_model_by_space(selected_doc, phase_name, return_value):
     one model's FF&E is identical between the two entries except which
     reference `item_facts` is asked for, so that is the only thing that
     varies."""
-    return export_model(selected_doc, phase_name, return_value, identify_by="space")
+    return export_model(selected_doc, phase_name, return_value, identify_by="space", level_ids=level_ids)
 
 
 def post_bucket(run_envelope, entries, return_value):

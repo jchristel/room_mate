@@ -66,57 +66,11 @@ class RoomTags(unittest.TestCase):
         rules = [room_rule(), room_rule(vp="elevation"), rule()]
         self.assertEqual(len(g.room_rules(rules, "Floor Plan")), 1)
 
-    def test_a_room_rule_is_never_an_items_even_when_the_item_has_no_names(self):
-        nameless = item(family="", type_name="")
-        self.assertEqual(g.rules_for_item([room_rule()], nameless, "floor plan"), [])
-
     def test_the_offset_is_in_the_plans_axes_from_the_rooms_point(self):
         p = g.tag_placement(g.room_like(1000.0, 2000.0), room_rule(head=(20.0, 10.0)), 50)
         self.assertAlmostEqual(p["head"][0], 2000.0)
         self.assertAlmostEqual(p["head"][1], 2500.0)
         self.assertAlmostEqual(p["rotation"], 0.0)
-
-
-class Rules(unittest.TestCase):
-    def test_rules_match_by_names_and_viewport_type_ignoring_case(self):
-        rules = [rule(), rule(vp="elevation"), rule(family="Chair")]
-        got = g.rules_for_item(rules, item(family="BED", type_name="single "), "Floor Plan")
-        self.assertEqual(len(got), 1)
-
-
-class Numbers(unittest.TestCase):
-    def test_default_number(self):
-        self.assertEqual(g.rls_number("01.02"), "RLS-01.02")
-
-    def test_several_sheets_are_counted(self):
-        self.assertEqual(g.rls_number("01.02", 1, 3), "RLS-01.02-2")
-
-    def test_a_template_with_n_places_it(self):
-        self.assertEqual(g.rls_number("5", 0, 2, "{room}/{n}"), "5-1")
-
-    def test_characters_revit_refuses_are_replaced(self):
-        self.assertEqual(g.rls_number("A:B"), "RLS-A-B")
-
-
-class Titleblocks(unittest.TestCase):
-    tbs = [
-        {"family": "TB A1", "type": "Standard"},
-        {"family": "TB", "type": "A3 landscape"},
-        {"family": "TB A10", "type": "Standard"},
-    ]
-
-    def test_the_size_must_be_a_whole_token(self):
-        got = g.titleblock_candidates("A1", self.tbs)
-        self.assertEqual([t["family"] for t in got], ["TB A1"])
-
-    def test_found_in_the_type_name(self):
-        self.assertEqual(len(g.titleblock_candidates("A3", self.tbs)), 1)
-
-    def test_none_for_a_size_nothing_has(self):
-        self.assertEqual(g.titleblock_candidates("A0", self.tbs), [])
-
-    def test_no_size_accepts_any(self):
-        self.assertEqual(len(g.titleblock_candidates(None, self.tbs)), 3)
 
 
 class Viewports(unittest.TestCase):

@@ -6,7 +6,7 @@ that CPython runs it too, which is the point: it imports nothing from Revit, so
 behind a `facts` object (below); the planner decides what the answers MEAN.
 
 **The whole list is checked first; any abort is reported before work starts.** A task is one
-of three things after checking: clear, warned (its sheets or families will be short of what the
+of three things after checking: clear, warned (its families will be short of what the
 task asked for) or aborted (nothing of it will be written). Warnings are put to the person once,
 for the whole list, with two choices: abort those tasks, or ignore the warnings and proceed.
 
@@ -15,9 +15,6 @@ for the whole list, with two choices: abort those tasks, or ignore the warnings 
   find_room(number, room_id) -> a room handle or None. The room is found by its `Number`
       property, and the id is the fallback when the task carries no number.
   room_has_content(room, phase_name) -> bool  (FF&E placed in the room in that phase)
-  rls_number(task) -> the number the task's RLS will take, generated from the target room
-  rls_exists(number) -> bool
-  titleblock_available(sheet) -> bool  (a sheet family for the size the layout asks for)
   family_available(family_name, type_name) -> bool  (in the model or the library location)
 """
 
@@ -28,9 +25,7 @@ CREATE_RLS = "create_rls"
 PHASE_MISSING = "phase_missing"
 ROOM_MISSING = "room_missing"
 ROOM_HAS_CONTENT = "room_has_content"
-NO_TITLEBLOCK = "no_titleblock"
-RLS_EXISTS = "rls_exists"
-RLS_DUPLICATE = "rls_duplicate_in_list"
+SHEETS_ELSEWHERE = "sheets_elsewhere"
 FAMILY_MISSING = "family_missing"
 NO_SHEETS = "no_sheets"
 UNKNOWN_KIND = "unknown_kind"
@@ -45,24 +40,15 @@ def _room_label(task):
     return room.get("number") or room.get("name") or room.get("room_id") or "?"
 
 
-def _wants_rls(task):
-    """Whether the task is to make sheets at all."""
-    if task.get("kind") == CREATE_RLS:
-        return True
-    return bool(task.get("create_rls"))
-
-
-def _check_one(task, facts, rls_taken):
-    """`(aborts, warnings, skip_sheets)` for one task. `rls_taken` holds the numbers earlier
-    tasks of this list will use, so two tasks never both make the same sheet."""
+def _check_one(task, facts):
+    """`(aborts, warnings)` for one task."""
     aborts = []
     warnings = []
-    skip_sheets = False
     kind = task.get("kind")
     label = _room_label(task)
 
     if kind not in (POPULATE, CREATE_RLS):
-        return [finding(UNKNOWN_KIND, "room {}: this plug-in does not know a task of kind '{}'".format(label, kind))], [], False
+        return [finding(UNKNOWN_KIND, "room {}: this plug-in does not know a task of kind '{}'".format(label, kind))], []
 
     phase = task.get("phase")
     if not facts.phase_exists(phase):
@@ -83,35 +69,15 @@ def _check_one(task, facts, rls_taken):
                 )
             )
 
-    if _wants_rls(task):
-        sheets = task.get("sheets") or []
-        if not sheets:
-            # Nothing to make: not a reason to stop the layout, but the person should know.
-            if kind == CREATE_RLS:
-                aborts.append(finding(NO_SHEETS, "room {}: the task carries no sheet layout".format(label)))
-            else:
-                warnings.append(finding(NO_SHEETS, "room {}: the blueprint has no sheets, so no RLS will be made".format(label)))
-                skip_sheets = True
-        else:
-            for sheet in sheets:
-                if not facts.titleblock_available(sheet):
-                    aborts.append(
-                        finding(NO_TITLEBLOCK, "room {}: no sheet family for the size of sheet '{}'".format(label, _sheet_name(sheet)))
-                    )
-            if not aborts and not skip_sheets:
-                number = facts.rls_number(task)
-                if number in rls_taken:
-                    warnings.append(
-                        finding(RLS_DUPLICATE, "room {}: another task in this list makes sheet {}, so this one's sheets are skipped".format(label, number))
-                    )
-                    skip_sheets = True
-                elif facts.rls_exists(number) and not task.get("overwrite_rls"):
-                    warnings.append(
-                        finding(RLS_EXISTS, "room {}: sheet {} already exists, so the sheets are skipped".format(label, number))
-                    )
-                    skip_sheets = True
-                else:
-                    rls_taken.add(number)
+    if kind == CREATE_RLS:
+        if not task.get("sheets"):
+            aborts.append(finding(NO_SHEETS, "room {}: the task carries no sheet layout".format(label)))
+    elif task.get("create_rls"):
+        # Sheets are made by the RLS create button from a create_rls task (room_m.rls_task);
+        # this button places items only.
+        warnings.append(
+            finding(SHEETS_ELSEWHERE, "room {}: this task asks for sheets too; this button places items only, so make the sheets with a create_rls task".format(label))
+        )
 
     if kind == POPULATE:
         seen = set()
@@ -127,21 +93,16 @@ def _check_one(task, facts, rls_taken):
                         "room {}: family '{}' type '{}' is in neither the model nor the library".format(label, key[0] or "?", key[1]),
                     )
                 )
-    return aborts, warnings, skip_sheets
-
-
-def _sheet_name(sheet):
-    return sheet.get("sheet_name") or sheet.get("sheet_number") or sheet.get("revit_sheet_id") or "?"
+    return aborts, warnings
 
 
 def plan_tasks(tasks, facts):
     """Check every task. Returns a list of verdicts in the order given, each
-    `{"task": task, "aborts": [...], "warnings": [...], "skip_sheets": bool}`."""
-    rls_taken = set()
+    `{"task": task, "aborts": [...], "warnings": [...]}`."""
     verdicts = []
     for task in tasks:
-        aborts, warnings, skip_sheets = _check_one(task, facts, rls_taken)
-        verdicts.append({"task": task, "aborts": aborts, "warnings": warnings, "skip_sheets": skip_sheets})
+        aborts, warnings = _check_one(task, facts)
+        verdicts.append({"task": task, "aborts": aborts, "warnings": warnings})
     return verdicts
 
 

@@ -37,6 +37,11 @@ use super::ServiceError;
 /// Feet to millimetres: the wire's plan geometry is decimal feet.
 pub const FT_TO_MM: f64 = 304.8;
 
+/// A contract loop (decimal feet) as a ring in millimetres.
+pub fn loop_mm(l: &crate::contract::Loop) -> Vec<Pt> {
+    l.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect()
+}
+
 /// An item within this of a corner keeps the gap to it.
 pub const CORNER_GAP_MM: f64 = 300.0;
 /// An item within this of its wall keeps the gap to it.
@@ -415,7 +420,7 @@ pub fn room_ring(state: &AppState, project: &str, room: &RoomRef) -> Result<Opti
     let Some(outer) = found.room.loops.first() else {
         return Err(ServiceError::Invalid(format!("room {:?} has no outline", room.room_id)));
     };
-    let ring = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
+    let ring = loop_mm(outer);
     Ok(Some((found.room.name.clone(), ring)))
 }
 
@@ -459,7 +464,7 @@ pub fn project_doors(state: &AppState, project: &str) -> Result<Vec<ProjectDoor>
         .iter()
         .filter_map(|d| {
             let outer = d.door.loops.first()?;
-            let footprint: Vec<Pt> = outer.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect();
+            let footprint: Vec<Pt> = loop_mm(outer);
             (footprint.len() >= 3).then(|| ProjectDoor {
                 model_id: d.model_id.clone(),
                 from_room: d.door.from_room.clone(),
@@ -497,12 +502,7 @@ pub fn capture_room(
                 family_name: it.item.family_name.clone(),
                 type_name: it.item.type_name.clone(),
                 category: it.item.category.clone(),
-                footprint: it
-                    .item
-                    .loops
-                    .first()
-                    .map(|l| l.points.iter().map(|p| (p.x * FT_TO_MM, p.y * FT_TO_MM)).collect())
-                    .unwrap_or_default(),
+                footprint: it.item.loops.first().map(loop_mm).unwrap_or_default(),
                 facing: it.item.facing.as_ref().map(|f| (f.x, f.y)),
                 nested: it.item.super_component_id.is_some(),
                 properties: properties_of(&it.item.properties),

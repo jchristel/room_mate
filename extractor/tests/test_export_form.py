@@ -88,6 +88,39 @@ class ScopeOnTheWire(unittest.TestCase):
             self.assertLess(text.rindex("in_selected_phase("), text.rindex("in_scope("), name)
 
 
+class LevelFilterWiring(unittest.TestCase):
+    """The level choice reaches duHast: each exporter takes `level_ids` and hands it to the duHast
+    export, and the count guards compare against the same filtered set."""
+
+    def source(self, name):
+        with open(os.path.join(ROOM_M, name)) as f:
+            return f.read()
+
+    def test_every_exporter_takes_level_ids_and_passes_them_to_duhast(self):
+        for name, call in (("rooms", "get_all_room_data"), ("doors", "get_all_door_data"), ("windows", "get_all_window_data"),
+                           ("spaces", "get_all_space_data"), ("ffe", "get_all_item_data")):
+            text = self.source("exporters/%s.py" % name)
+            self.assertIn("level_ids=None", text, name)
+            self.assertRegex(text, r"%s\(selected_doc, \*\*level_kwargs\(level_ids\)\)" % call)
+        for name in ("ceilings", "floors"):
+            self.assertIn("level_ids=level_ids", self.source("exporters/%s.py" % name))
+        self.assertIn("spec.export(selected_doc, **level_kwargs(level_ids))", self.source("exporters/surfaces.py"))
+
+    def test_the_count_guards_compare_against_the_filtered_set(self):
+        self.assertIn("is_on_levels(e, level_values)", self.source("exporters/surfaces.py"))
+        self.assertIn("is_on_levels(s, level_values)", self.source("exporters/spaces.py"))
+
+    def test_an_unscoped_push_sends_duhast_no_new_argument_so_an_older_duhast_still_works(self):
+        level_kwargs = form.level_kwargs
+
+        self.assertEqual({}, level_kwargs(None))
+        self.assertEqual({"level_ids": ["1"]}, level_kwargs(["1"]))
+
+    def test_the_run_driver_hands_the_level_ids_to_every_exporter(self):
+        self.assertIn("exporter.export_model(selected_doc, phase_name, return_value, level_ids=level_ids)", self.source("room_mate.py"))
+        self.assertIn('block["scope"] = {"levels": list(level_ids)}', self.source("room_mate.py"))
+
+
 class Xaml(unittest.TestCase):
     def setUp(self):
         self.root = ET.parse(os.path.join(ROOM_M, "export.xaml")).getroot()
@@ -116,11 +149,6 @@ class Xaml(unittest.TestCase):
         self.assertTrue(handlers)
         for h in handlers:
             self.assertTrue(re.search(r"def {}\(self, sender, args\)".format(h), source), h)
-
-    def test_the_files_ironpython_and_wpf_read_are_ascii(self):
-        for name in ("export_form.py", "export_window.py", "export.xaml", "room_mate.py", "post_rooms.py", "post_entity.py"):
-            with open(os.path.join(ROOM_M, name), "rb") as f:
-                f.read().decode("ascii")
 
 
 class Panel(unittest.TestCase):

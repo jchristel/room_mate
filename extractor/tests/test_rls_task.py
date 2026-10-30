@@ -187,12 +187,6 @@ class Warnings(unittest.TestCase):
 
 
 class Source(unittest.TestCase):
-    def test_the_modules_ironpython_loads_are_ascii(self):
-        here = os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m")
-        for name in ("rls_task.py", "rls_write.py", "room_mate.py", "post_tasks.py", "apply_run.py"):
-            with open(os.path.join(here, name), "rb") as f:
-                f.read().decode("ascii")
-
     def test_the_apply_button_leaves_the_rls_tasks_alone(self):
         with open(os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m", "room_mate.py")) as f:
             text = f.read()

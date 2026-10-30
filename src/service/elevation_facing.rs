@@ -250,7 +250,7 @@ pub fn for_sheet(state: &AppState, project: &str, record: &SheetRecord) -> Resul
             out.findings.push("the sheet has no room, so there are no walls to face".into());
             Vec::new()
         }
-        Some(room) => match room_ring(state, project, room)? {
+        Some(room) => match model_room_ring(state, project, room)? {
             Some(r) => r,
             None => {
                 out.findings.push("the sheet's room is not on the server".into());
@@ -264,7 +264,14 @@ pub fn for_sheet(state: &AppState, project: &str, record: &SheetRecord) -> Resul
     Ok(out)
 }
 
-pub(super) fn room_ring(state: &AppState, project: &str, room: &SheetRoom) -> Result<Option<Vec<Pt>>, ServiceError> {
+/// A sheet's room as a ring in the TARGET MODEL's frame (the sheet is read in model coordinates),
+/// counter-clockwise, at the fine tolerance. Not `blueprint_capture::room_ring`, which answers in the
+/// project's plan frame.
+pub(super) fn model_room_ring(
+    state: &AppState,
+    project: &str,
+    room: &SheetRoom,
+) -> Result<Option<Vec<Pt>>, ServiceError> {
     let target = RoomRef { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
     let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
         return Ok(None);

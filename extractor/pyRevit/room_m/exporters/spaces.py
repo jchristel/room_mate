@@ -35,6 +35,7 @@ from duHast.Data.Objects.Collectors import data_space as ds
 from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 
+from room_m.export_form import level_kwargs
 from room_m.post_spaces import (
     post_payload_stream,
 )
@@ -59,7 +60,7 @@ from room_m.utils.post_envelope import (
 stamp_envelope = add_room_boundary
 
 
-def export_model(selected_doc, phase_name, return_value):
+def export_model(selected_doc, phase_name, return_value, level_ids=None):
     """Export one model's spaces and levels as this document's contribution to
     the run's spaces bucket, or None when it could not be read.
 
@@ -97,14 +98,21 @@ def export_model(selected_doc, phase_name, return_value):
         allowed_ids = spaces_in_phase(selected_doc, phase_name, spaces)
         unplaced_ids, zero_area_ids = placement_facts(spaces)
 
-        space_data = get_all_space_data(selected_doc)
+        # only the levels asked for (None: all), and the count guard below compares against the same set
+        expected = spaces
+        if level_ids is not None:
+            from duHast.Revit.Common.level_filter import get_level_id_values, is_on_levels
+
+            level_values = get_level_id_values(level_ids)
+            expected = [s for s in spaces if is_on_levels(s, level_values)]
+        space_data = get_all_space_data(selected_doc, **level_kwargs(level_ids))
         level_data = get_all_level_data(selected_doc)
 
-        if len(spaces) and not len(space_data):
+        if len(expected) and not len(space_data):
             raise ValueError(
                 "duHast exported 0 of {} spaces this document holds; its collector "
                 "swallows exceptions and answers an empty list, so this is a failed "
-                "export rather than a model without spaces".format(len(spaces))
+                "export rather than a model without spaces".format(len(expected))
             )
 
         json_formatted_space = build_json_for_file(

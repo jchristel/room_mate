@@ -124,8 +124,13 @@ whole model or ticked levels. A level choice is by NAME across the selected mode
 (`export_form.scope_for_doc`); a model with none of the chosen levels is left out and said so, never pushed unscoped (that would replace its
 whole snapshot with nothing). Each `post_*` stream drops an element on any other level (`phase_filter.in_scope`), and a scoped run does not
 refuse an empty push (a level with no doors is a legitimate clear; `is_scoped`). The single-entity buttons are unchanged and share
-`_run_export`. **Revit still reads whole models**: duHast has no level filter, so a level choice narrows what is sent and replaced, not what Revit
-reads. A level filter in duHast's `get_all_*_data` is where the Revit-side speed would come from. **Not run in Revit.**
+`_run_export`. **The level choice also narrows what Revit reads**: each exporter hands `level_ids` to duHast's `get_all_*_data` (`duHast.Revit.Common.level_filter`),
+which converts only elements on those levels, before the slow per-element conversion; the count guards in the spaces and surfaces exporters compare
+against the same filtered set. An UNSCOPED push passes duHast no new argument (`export_form.level_kwargs`), so an older duHast still works for
+every push that does not choose levels; a scoped one needs the duHast with the filter (**`duhast.lock` is not bumped**: build with `-DuHastPath`).
+FF&E is filtered on the level the modeller assigned before conversion and on the geometric fallback level after it, so the level an item reports is
+unchanged. Levels are the per-document ids, which each element's own `LevelId` reports (a room's level, a door's host level, a ceiling's host level).
+**Not run in Revit.**
 
 **The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Apply tasks, RLS settings, RLS create and Server; the `Export`
 panel keeps the older single-purpose buttons (Rooms + Doors, By category).
@@ -536,25 +541,20 @@ leaves an empty list out of a task, so the page reads a task back with its lists
 
 ## Applying a task: what the button does and leaves out
 
-- **The RLS number is `RLS-{room number}`** (`apply_geometry.DEFAULT_NUMBER_TEMPLATE`), with `-1`, `-2` when a task has
-  several sheets, and a sheet's **title block is chosen by size**: the layout's `sheet_size` must appear as a whole
-  token in a title block family or type name. Both are guesses at a convention, not rules; change them there.
 - **A family not in the model is loaded from `ROOMMATE_FAMILY_LIBRARY`** (a folder of `<family>.rfa`), else it is a
   warning. Items are placed on the room's level with the facing's rotation; wall-hosted ones go on the nearest wall
   within 450 mm; face and work plane based ones are reported, not placed. Instance and type parameters are not applied.
-- **A viewport is a fresh plan view of the room** at the exported scale, cropped to the exported size (never smaller than
-  the room), placed where it was. Elevation, 3D and schedule viewports are reported, not made.
-- **Tags are read back from the model**, not from the task: each instance in the room (placed now or already there)
-  gets the independent tags whose names have a rule for it, at `apply_geometry.tag_placement`. The **room tag** is made
-  from the room tag rule (`apply_geometry.room_rules`, matched by viewport type alone) at the rule's offset from the
-  room's point, in the plan's own axes (`NewRoomTag` on the room's point, then the head moved). Space and area tag kinds,
-  and a tag's own rotation, are not placed yet.
+- **Sheets, viewports and tags are not made by this button.** A `create_rls` task goes through the RLS create button
+  (below), which numbers, names and sizes everything from the model's RLS settings and the task's `rls` plan. A populate task
+  that still asks for sheets (`create_rls` on it) is warned about (`task_plan.SHEETS_ELSEWHERE`) and places its items only. The
+  earlier sheet-making code in this module (number template, title block by size token, learned tag rules placed from the
+  model) was removed with the settings window, because two sheet makers disagreed on every rule.
 
 ## Create-RLS: what the task says beyond "copy this sheet"
 
 A `create_rls` task carries `rls` (`service::rls_plan`, built in `task_build::rls_from_sheet`): the `sheet_size` asked for
 (`a0`..`a3`, absent = the template's) and, per elevation marker, where it and each of its views go **in this room**, in the
-target model's frame, mm. **The plug-in does not read it yet.**
+target model's frame, mm. The RLS create button reads it (`room_m/rls_task.py`, below).
 
 - **Transfer is by the walls.** Template and target are read at the COARSE outline, the wall each elevation faces
   (`elevation_facing`) is mapped by the cyclic shift that fits the shapes (`best_shift`, no reflection), and then the marker
@@ -608,7 +608,7 @@ Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`)
 `get_tag_rule`), tag rules carried in a task, and the pyRevit side (the sheet read takes tags out of the sheet,
 `room_m/sheet_tags.py`, and `post_tags.py` sends them). The tag classes and their reading from Revit are in duHast
 (`Data/Objects/Collectors/data_tag*.py`, `Revit/Annotation/Export/to_data_tag.py`). **Not run in Revit, and
-the plug-in does not yet place tags** (that is the apply button). Plan decision 24.
+the RLS create button places tags** from the server's tag plan (`rls.tags`), not from these rules directly. Plan decision 24.
 
 - **A rule's key is names only** (tagged category + family + type, tag category + family + type, viewport type),
   never Revit ids: a blueprint places new elements with new ids. **A room, space or area tag is a rule too**
@@ -1189,7 +1189,7 @@ with one, not here.
 Both older items stay closed: the extractor's phase filter is verified against
 Revit, and R4 landed.
 
-## The extractor has nine entry points, and one of them is a trap
+## The extractor's export entry points, and one of them is a trap
 
 `rooms_export_entry` still pushes **rooms and doors**, despite the name, so
 narrowing it to rooms would not fail — it would keep succeeding while quietly no
@@ -1197,9 +1197,10 @@ longer pushing doors. Its button says what it does (`RoomsAndDoors.pushbutton`,
 titled "Rooms + Doors"); the function name is the one that still reads wrong. The split is in
 the siblings instead: `rooms_only_export_entry`, `doors_export_entry`,
 `windows_export_entry`, `ffe_export_entry`, `ffe_by_space_export_entry`,
-`spaces_export_entry`, `ceilings_export_entry` and `floors_export_entry`. All
-nine are one line over `export_entry(..., entities)`; document selection, the
-one project and the one phase never differ.
+`spaces_export_entry`, `ceilings_export_entry` and `floors_export_entry`. Each
+is one line over `export_entry(..., entities)`; document selection, the
+one project and the one phase never differ. The Export window
+(`export_all_entry`) is the same driver with the entities chosen by check boxes.
 
 **FF&E identifies an item against a Room or a Space, never both, and that is
 two entry points rather than a flag that probes the document.** A fit-out

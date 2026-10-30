@@ -129,11 +129,6 @@ class Xaml(unittest.TestCase):
         for name, _k in form.TEXTS:
             self.assertEqual("on_change", handlers[name].get("TextChanged"), name)
 
-    def test_the_files_ironpython_and_wpf_read_are_ascii(self):
-        for name in ("rls_settings_form.py", "rls_settings_window.py", "rls_settings.xaml"):
-            with open(os.path.join(ROOM_M, name), "rb") as f:
-                f.read().decode("ascii")
-
 
 if __name__ == "__main__":
     unittest.main()

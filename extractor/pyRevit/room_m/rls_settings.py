@@ -13,6 +13,8 @@ not sent empty: the window then says Revit offered no list, which is different f
 **Not yet run in Revit.**
 """
 
+from room_m.textutil import non_blank_text
+
 PROJECT_KEY = "rls"
 SIZES = ("a0", "a1", "a2", "a3")
 
@@ -35,7 +37,7 @@ def missing(settings):
         ("view_name", "view name logic"),
     ):
         value = s.get(key)
-        if not (isinstance(value, (type(u""), str)) and value.strip()):
+        if non_blank_text(value) is None:
             out.append(label)
     return out
 

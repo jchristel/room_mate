@@ -31,7 +31,7 @@ EXTENSION = os.path.join(REPO, "extractor", "pyRevit", "RoomMate.extension")
 ROOM_MATE = os.path.join(REPO, "extractor", "pyRevit", "room_m", "room_mate.py")
 
 # .gitattributes stores these LF; .txt is CRLF there, so it is not checked here.
-LF_SUFFIXES = (".py", ".yaml", ".json")
+LF_SUFFIXES = (".py", ".yaml", ".json", ".xaml")
 BUNDLE_SUFFIXES = (".pushbutton", ".pulldown", ".panel")
 
 

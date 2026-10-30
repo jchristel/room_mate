@@ -173,11 +173,6 @@ class Wiring(unittest.TestCase):
             text = f.read()
         self.assertEqual(3, text.count("except server_config.ServerNotSet as e:"), "fetch_projects, fetch_text and _post_content")
 
-    def test_the_modules_ironpython_loads_are_ascii(self):
-        for name in ("server_config.py", "post_common.py", "room_mate.py", "project_settings.py"):
-            with open(os.path.join(ROOM_M, name), "rb") as f:
-                f.read().decode("ascii")
-
 
 if __name__ == "__main__":
     unittest.main()

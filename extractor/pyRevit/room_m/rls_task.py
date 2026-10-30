@@ -35,6 +35,7 @@ import re
 
 from room_m import apply_geometry as geo
 from room_m import rls_settings
+from room_m.rls_template import TOKEN
 
 CREATE_RLS = "create_rls"
 
@@ -53,7 +54,6 @@ NO_ROOM_TAG = "no_room_tag"
 NO_INDEPENDENT_TAG = "no_independent_tag"
 ELEVATION_NOT_PLACED = "elevation_not_placed"
 
-_TOKEN = re.compile(r"\{([^{}]*)\}")
 _BAD_NUMBER_CHARS = re.compile(r"[\\/:*?\"<>|{}\[\];~`]")
 DEFAULT_SCALE = 50
 
@@ -76,7 +76,7 @@ def render(template, values):
         missing.append(m.group(1))
         return ""
 
-    return _TOKEN.sub(replace, template or ""), missing
+    return TOKEN.sub(replace, template or ""), missing
 
 
 def clean_number(text):
@@ -263,10 +263,10 @@ def check(task, settings, facts, taken):
 
 def plan_tasks(tasks, settings, facts):
     """Check every task. Returns the verdicts in the order given, in the shape `room_m.task_plan`
-    and `room_m.apply_run` use: `{"task", "aborts", "warnings", "skip_sheets", "plan"}`."""
+    and `room_m.apply_run` use: `{"task", "aborts", "warnings", "plan"}`."""
     taken = {"sheets": set(), "views": set()}
     verdicts = []
     for task in tasks:
         plan, aborts, warnings = check(task, settings, facts, taken)
-        verdicts.append({"task": task, "aborts": aborts, "warnings": warnings, "skip_sheets": False, "plan": plan})
+        verdicts.append({"task": task, "aborts": aborts, "warnings": warnings, "plan": plan})
     return verdicts

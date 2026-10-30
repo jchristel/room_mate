@@ -44,7 +44,10 @@ import clr
 clr.AddReference("System")
 clr.AddReference("System.Net.Http")
 from System import TimeSpan
-from System.Net.Http import HttpClient
+from System.IO import MemoryStream
+from System.IO.Compression import GZipStream, CompressionMode
+from System.Net.Http import ByteArrayContent, HttpClient
+from System.Net.Http.Headers import MediaTypeHeaderValue
 from System.Text import Encoding
 
 from room_m import server_config
@@ -370,6 +373,43 @@ def write_ndjson_line(gz, obj):
     line = json.dumps(obj, separators=(",", ":"), ensure_ascii=False) + "\n"
     data = Encoding.UTF8.GetBytes(line)
     gz.Write(data, 0, data.Length)
+
+
+def blocks_with_levels(entries):
+    """Each entry's model block, copied, with this document's translated `levels` on it. The
+    levels are small and needed whole on the block they belong to; the element lists are left as
+    raw duHast objects to be converted one at a time. `entries` is `[(model_block, contribution)]`
+    where every contribution holds its raw `levels` export (rooms, spaces and surfaces)."""
+    blocks = []
+    for block, contribution in entries:
+        block = dict(block)
+        block["levels"] = translate_levels(duhast_object_to_plain(contribution["levels"]))
+        blocks.append(block)
+    return blocks
+
+
+def gzip_ndjson_body(lines):
+    """The gzip-compressed NDJSON body of `lines` (the envelope first, then one object per
+    element), written one line at a time so peak memory on the translation side is one element.
+    `lines` is consumed in full before this returns, so counters a generator keeps are final."""
+    out = MemoryStream()
+    try:
+        # leaveOpen defaults False: closing gz flushes the gzip footer into `out`.
+        gz = GZipStream(out, CompressionMode.Compress)
+        for line in lines:
+            write_ndjson_line(gz, line)
+        gz.Close()  # MUST close to flush the gzip footer; do NOT skip
+        return out.ToArray()
+    finally:
+        out.Dispose()
+
+
+def post_gzip_ndjson(url, body):
+    """POST a body from `gzip_ndjson_body` to a streaming ingest. Returns `(ok, status, text)`."""
+    content = ByteArrayContent(body)
+    content.Headers.ContentType = MediaTypeHeaderValue("application/x-ndjson")
+    content.Headers.Add("Content-Encoding", "gzip")
+    return _post_content(url, content)
 
 
 def fetch_projects(url=SERVER_URL_PROJECTS):
