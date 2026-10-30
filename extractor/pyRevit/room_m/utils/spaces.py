@@ -28,6 +28,7 @@ behind -- ask Revit for what the export omits, never re-derive what it already
 holds. The footprint is duHast's and is not touched here.
 """
 
+from duHast.Revit.Spaces.spaces import get_all_spaces_raising_on_failure
 from duHast.Revit.Common import (
     parameter_get_utils as rParaGet,
     phases as rPhase,
@@ -38,29 +39,27 @@ from room_m.utils.generic import (
     document_phases,
 )
 
-# The direct Revit API use in this module. `BuiltInCategory` because the
-# collector is ours rather than duHast's (see `collect_spaces`), and
-# `BuiltInParameter` because a space's phase is named by ROOM_PHASE -- which the
+# The direct Revit API use in this module: `BuiltInParameter` because a space's phase is named by ROOM_PHASE -- which the
 # duHast space export does not carry, exactly as it does not for a room.
-from Autodesk.Revit.DB import BuiltInCategory, BuiltInParameter, FilteredElementCollector
+from Autodesk.Revit.DB import BuiltInParameter
 
 
 def collect_spaces(doc):
     """Every space in the document.
 
-    **Deliberately not duHast's `get_all_spaces`, and this is not tidiness.**
-    That function catches every exception and returns `[]`, so "this model has no
+    **duHast's `get_all_spaces_raising_on_failure`, not `get_all_spaces`.** The
+    latter catches every exception and returns `[]`, so "this model has no
     spaces" and "the collector raised" are the same answer -- in the one place
     the whole entity's first requirement rests on. An empty spaces push is a
     legitimate, *reportable* state here (the server accepts one on purpose), so a
     swallowed failure would not surface as an error anywhere: it would be stored
     and read as a finding.
 
-    Collecting here instead means a failure raises, `export_model` catches it and
-    the model goes red. It also gives `exporters.spaces` a count to check the
-    export against, which is the second half of the same guard.
+    Collecting with a raising function means a failure raises, `export_model`
+    catches it and the model goes red. It also gives `exporters.spaces` a count
+    to check the export against, which is the second half of the same guard.
     """
-    return list(FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_MEPSpaces).ToElements())
+    return get_all_spaces_raising_on_failure(doc)
 
 
 def spaces_in_phase(doc, phase_name, spaces):

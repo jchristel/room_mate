@@ -25,12 +25,9 @@ import math
 
 from Autodesk.Revit.DB import (
     BuiltInCategory,
-    FilteredElementCollector,
     Transaction,
     TransactionGroup,
     ViewFamily,
-    ViewFamilyType,
-    ViewSchedule,
     XYZ,
 )
 
@@ -55,12 +52,14 @@ from duHast.Revit.Views.schedules_create import (
     set_first_filter_value_without_transaction_wrapper,
 )
 from duHast.Revit.Views.sheets_create import create_sheet
-from duHast.Revit.Views.views_crop import apply_view_bounding_box_crop_without_transaction_wrapper
+from duHast.Revit.Views.schedules import get_schedule_by_name
+from duHast.Revit.Views.views import get_view_family_type_by_name
+from duHast.Revit.Views.views_crop import set_view_crop_around_point_without_transaction_wrapper
 from duHast.Revit.Views.views_names import get_views_in_name_collision
 from duHast.Revit.Views.viewports_create import create_viewport_without_transaction_wrapper
 
 from room_m import apply_geometry as geo
-from room_m.apply_facts import RevitFacts, name_of
+from room_m.apply_facts import RevitFacts
 from room_m.utils.generic import phase_by_name
 
 # How far beyond the room a plan view's crop reaches when the template viewport carried none.
@@ -94,19 +93,10 @@ class RlsFacts(RevitFacts):
         return self._view_type(wanted, name) is not None
 
     def _view_type(self, family, name):
-        for t in FilteredElementCollector(self.doc).OfClass(ViewFamilyType):
-            if t.ViewFamily == family and name_of(t) == name:
-                return t
-        return None
+        return get_view_family_type_by_name(self.doc, family, name)
 
     def schedule(self, name):
-        for v in FilteredElementCollector(self.doc).OfClass(ViewSchedule):
-            try:
-                if not v.IsTemplate and name_of(v) == name:
-                    return v
-            except Exception:
-                continue
-        return None
+        return get_schedule_by_name(self.doc, name)
 
     def schedule_exists(self, name):
         return self.schedule(name) is not None
@@ -195,20 +185,8 @@ class RlsWriter(object):
         centre = XYZ((box.Max.X + box.Min.X) / 2.0, (box.Max.Y + box.Min.Y) / 2.0, level.Elevation)
 
         def crop():
-            from duHast.Utilities.Objects.result import Result
-            from Autodesk.Revit.DB import BoundingBoxXYZ
-
             view.Scale = int(plan["plan_scale"])
-            crop_box = view.CropBox
-            local = crop_box.Transform.Inverse.OfPoint(centre)
-            new_box = BoundingBoxXYZ()
-            new_box.Transform = crop_box.Transform
-            new_box.Min = XYZ(local.X - _ft(size[0]) / 2.0, local.Y - _ft(size[1]) / 2.0, crop_box.Min.Z)
-            new_box.Max = XYZ(local.X + _ft(size[0]) / 2.0, local.Y + _ft(size[1]) / 2.0, crop_box.Max.Z)
-            view.CropBoxActive = True
-            view.CropBoxVisible = False
-            outcome = apply_view_bounding_box_crop_without_transaction_wrapper(view, new_box)
-            return outcome if isinstance(outcome, Result) else Result()
+            return set_view_crop_around_point_without_transaction_wrapper(view, centre, _ft(size[0]), _ft(size[1]))
 
         self._step("RoomMate: crop {}".format(plan["plan_name"]), crop)
         self._viewport(sheet, view, vp, notes, "plan")

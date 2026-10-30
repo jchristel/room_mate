@@ -10,12 +10,10 @@ docs/PLAN-blueprints.md). These functions only make the choosing possible: a lab
 to pick from.
 """
 
-from Autodesk.Revit.DB import (
-    BuiltInCategory,
-    BuiltInParameter,
-    FilteredElementCollector,
-    ViewSheet,
-)
+from Autodesk.Revit.DB import BuiltInParameter
+
+from duHast.Revit.Rooms.rooms import get_all_placed_rooms
+from duHast.Revit.Views.sheets import get_all_sheets
 
 from room_m.utils.generic import element_id_str
 from room_m.utils.rooms import rooms_in_phase
@@ -29,7 +27,7 @@ def sheets_of(doc):
     whose number or name cannot be read is still offered, labelled by its id, rather than
     dropped without a word."""
     found = []
-    for sheet in FilteredElementCollector(doc).OfClass(ViewSheet):
+    for sheet in get_all_sheets(doc):
         try:
             if getattr(sheet, "IsPlaceholder", False):
                 continue
@@ -65,14 +63,9 @@ def placed_rooms(doc, phase_name):
     doors range test."""
     allowed = rooms_in_phase(doc, phase_name)
     found = []
-    for room in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Rooms).WhereElementIsNotElementType():
+    for room in get_all_placed_rooms(doc):
         room_id = element_id_str(room.Id)
         if room_id not in allowed:
-            continue
-        try:
-            if room.Area <= 0:
-                continue
-        except Exception:
             continue
         try:
             name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString() or ""

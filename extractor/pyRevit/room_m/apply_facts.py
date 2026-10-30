@@ -18,11 +18,12 @@ cached for the life of one run, because a run is one sitting over one model and 
 import os
 
 from Autodesk.Revit.DB import (
-    BuiltInCategory,
     Element,
     FamilySymbol,
     FilteredElementCollector,
 )
+
+from duHast.Revit.Rooms.rooms import get_all_placed_rooms
 
 from room_m.utils.generic import element_id_str, phase_by_name
 from room_m.utils.room_refs import room_reference
@@ -61,16 +62,7 @@ class RevitFacts(object):
 
     def _placed_rooms(self):
         if self._rooms is None:
-            found = []
-            collector = FilteredElementCollector(self.doc).OfCategory(BuiltInCategory.OST_Rooms).WhereElementIsNotElementType()
-            for room in collector:
-                try:
-                    if room.Area <= 0:
-                        continue
-                    found.append(room)
-                except Exception:
-                    continue
-            self._rooms = found
+            self._rooms = get_all_placed_rooms(self.doc)
         return self._rooms
 
     def find_room(self, number, room_id):
