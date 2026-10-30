@@ -3,20 +3,44 @@
 //! Logs go to stderr, never stdout: stdout is the JSON-RPC transport.
 
 use clap::Parser;
-use drofus_mcp::{config::Config, server::DrofusMcp};
+use drofus_mcp::{
+    approval::{Gate, GateConfig, DEFAULT_TTL},
+    config::Config,
+    server::DrofusMcp,
+};
 use rmcp::{transport::stdio, ServiceExt};
 
 #[derive(Parser)]
 #[command(version, about = "An MCP server for dRofus")]
 struct Args {
-    /// The dRofus server's base address. Falls back to the DROFUS_BASE_URL environment variable.
+    /// The dRofus API's base address, for example https://api-no.drofus.com. Falls back to the DROFUS_BASE_URL environment variable.
     #[arg(long)]
     base_url: Option<String>,
 
-    /// The credential the dRofus API asks for. Prefer the DROFUS_API_KEY environment variable: a
+    /// The database every request is made against (`/api/{db}/{pr}/...`). Falls back to DROFUS_DATABASE;
+    /// a tool's `db` argument overrides it.
+    #[arg(long)]
+    database: Option<String>,
+
+    /// The project every request is made against. Falls back to DROFUS_PROJECT; a tool's `pr` argument
+    /// overrides it.
+    #[arg(long)]
+    project: Option<String>,
+
+    /// A credential slot that nothing reads yet: how dRofus authenticates is undecided (see AUTH.md). Prefer the DROFUS_API_KEY environment variable: a
     /// flag shows up in the process list.
     #[arg(long)]
     api_key: Option<String>,
+
+    /// Turn on the approval gate that any write tool must pass. Off by default. There is no write tool yet,
+    /// so today this changes nothing but what `server_info` says.
+    #[arg(long, env = "DROFUS_ALLOW_WRITES")]
+    allow_writes: bool,
+
+    /// Where the gate appends its audit log (one JSON line per step; summary and hash, never the payload).
+    /// Required with --allow-writes: a gate that cannot be audited is not started.
+    #[arg(long, env = "DROFUS_AUDIT_LOG")]
+    audit_log: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -30,12 +54,25 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
-    let config = Config::resolve(args.base_url, args.api_key, |name| std::env::var(name).ok());
+    let config =
+        Config::resolve(args.base_url, args.api_key, args.database, args.project, |name| std::env::var(name).ok());
     for missing in config.missing() {
         tracing::warn!("not configured yet: {missing}");
     }
 
-    let service = DrofusMcp::new(config).serve(stdio()).await.inspect_err(|e| {
+    if args.allow_writes && args.audit_log.is_none() {
+        anyhow::bail!(
+            "--allow-writes needs --audit-log (or DROFUS_AUDIT_LOG): a gate that cannot be audited is not started"
+        );
+    }
+    let gate = Gate::new(GateConfig {
+        enabled: args.allow_writes,
+        audit_log: args.audit_log,
+        ttl: DEFAULT_TTL,
+        open_browser: true,
+    });
+
+    let service = DrofusMcp::new(config).with_gate(gate).serve(stdio()).await.inspect_err(|e| {
         tracing::error!("serving error: {e:?}");
     })?;
     service.waiting().await?;
