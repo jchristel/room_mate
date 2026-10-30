@@ -10,12 +10,12 @@ describe("blueprints that need attention", () => {
 
   it("one with no sheets does, and says why", () => {
     expect(blueprintNeedsAttention({ sheets: 0, pending: 0 })).toBe(true);
-    expect(attentionReasons({ sheets: 0, pending: 0 })).toEqual(["no room layout sheets"]);
+    expect(attentionReasons({ sheets: 0, pending: 0 })).toEqual(["no room layout sheet bound to it"]);
   });
 
   it("a pending revision does, and both reasons are given when both hold", () => {
     expect(blueprintNeedsAttention({ sheets: 1, pending: 1 })).toBe(true);
-    expect(attentionReasons({ sheets: 0, pending: 2 })).toEqual(["no room layout sheets", "2 pending revisions to accept or reject"]);
+    expect(attentionReasons({ sheets: 0, pending: 2 })).toEqual(["no room layout sheet bound to it", "2 pending revisions to accept or reject"]);
   });
 });
 

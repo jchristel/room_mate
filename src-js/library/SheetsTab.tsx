@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
-import { sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
+import { boundText, sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
 import { SheetPreview } from "./SheetPreview.js";
 import type { RoomRow, SheetRecord, SheetSummary, Suggestions } from "./types.js";
 
@@ -28,6 +28,7 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
   const [onlyAttention, setOnlyAttention] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
 
   const refresh = useCallback(() => api.listSheets(project).then(setRows).catch((e: unknown) => onError(message(e))), [project, onError]);
 
@@ -37,6 +38,7 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
     setRecord(null);
     setSuggesting(false);
     void refresh();
+    api.listBlueprintNames(project).then(setNames).catch(() => setNames(new Map()));
     const timer = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(timer);
   }, [project, refresh]);
@@ -103,7 +105,7 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
                   ) : null}
                 </b>
                 <span>
-                  {s.document_title} · {sizeText(s.size_mm)} · {s.viewports} viewport{s.viewports === 1 ? "" : "s"}
+                  {s.document_title} · {sizeText(s.size_mm)} · {s.viewports} viewport{s.viewports === 1 ? "" : "s"} · {boundText(s.blueprint, names)}
                 </span>
               </button>
             </li>
@@ -116,6 +118,7 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
         ) : record ? (
           <SheetDetail
             record={record}
+            names={names}
             busy={busy}
             onDecide={(pendingId, accept) => void act(accept ? "Push accepted." : "Push rejected.", (r) => api.decidePush(project, r.id, pendingId, r.taken_at, accept))}
             onDelete={() => {
@@ -136,12 +139,13 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
 
 interface DetailProps {
   record: SheetRecord;
+  names: ReadonlyMap<string, string>;
   busy: boolean;
   onDecide(pendingId: number, accept: boolean): void;
   onDelete(): void;
 }
 
-function SheetDetail({ record, busy, onDecide, onDelete }: DetailProps) {
+function SheetDetail({ record, names, busy, onDecide, onDelete }: DetailProps) {
   const ports = record.sheet.view_ports ?? [];
   return (
     <div className="detail">
@@ -161,6 +165,8 @@ function SheetDetail({ record, busy, onDecide, onDelete }: DetailProps) {
         </dd>
         <dt>Paper size</dt>
         <dd>{sizeText(record.size_mm)}</dd>
+        <dt>Room blueprint</dt>
+        <dd>{boundText(record.blueprint, names)}</dd>
         <dt>Phase</dt>
         <dd>{record.phase ?? "—"}</dd>
         <dt>Rooms covered</dt>

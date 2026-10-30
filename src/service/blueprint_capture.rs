@@ -214,7 +214,6 @@ pub fn capture_shaped(
             },
             items: items.into_iter().map(|(item, _)| item).collect(),
             doors: blueprint_doors(doors, origin, &coarse, &es),
-            sheets: Vec::new(),
         },
         skipped,
     })

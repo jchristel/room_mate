@@ -431,13 +431,17 @@ get wrong:
   `POST .../blueprints/{id}/solve`, `POST .../assignments/many`). The rooms and doors are read once for the
   batch; each row is a verdict (`clear`, `check`, `cannot`) that is advice and never a gate. The batch assigns
   the best fit only: a mapping by hand is a decision about one room and stays in the single-room view.
-- **A blueprint comes only from Revit, with its sheets** (`POST .../blueprints/from-revit`). The server
-  captures the room from the rooms and FF&E already pushed and attaches the sheets the user chose;
-  a new name creates, an existing name becomes a pending revision. `create` and `push` refuse content
-  with no sheets; an edit copies the current revision's sheets forward and never changes them. A
-  sheet in a blueprint is layout only (no tags) and its number, name and id are never used on
-  assignment. A blueprint made before this has no sheets, stays valid and says so. The viewer has no
-  "new from a room". Import/export carry sheets and doors; a file without sheets is refused.
+- **A blueprint comes only from Revit** (`POST .../blueprints/from-revit`). The server captures the room from the
+  rooms and FF&E already pushed; a new name creates, an existing name becomes a pending revision. **A blueprint holds
+  no sheets** (plan decision 27): the sheets the user chose go to the sheet library **bound to the blueprint** by id
+  (`SheetRecord::blueprint`, set by `blueprints_api::bind_to_library`), so there is one copy of a sheet. A bound sheet is
+  layout only (no tags) and its number, name and id are never used on assignment. `BlueprintSummary.sheets` is the
+  count of bound sheets, filled from the library (`list_with_sheet_counts`). A blueprint with none is flagged and a
+  populate task with `create_rls` refuses it. The viewer has no "new from a room". **Import/export carry the room
+  alone** for now (outline, items, doors); the bound sheets and tags join the file in step 4 of decision 27. **Until
+  that step the binding happens when the push arrives, also for a revision that is only pending**; accepting a pending
+  revision will be what moves it. A blueprint made before this keeps its old embedded `sheets` in the file, which are
+  ignored: push it again to bind its sheets.
 - **Per-item overrides belong to ONE assignment and are applied by the resolver, never by the page.** An
   `ItemOverride` (leave out, or nudge in whole mm and turn in whole degrees, in the plan frame) is applied to the poses
   the recipes gave, *before* the `outside` and `overlap` findings, so those are judged where the item now is. One per
@@ -533,7 +537,7 @@ leaves an empty list out of a task, so the page reads a task back with its lists
 - **One live task per kind per room.** A second queued or in-progress task of the same kind for a room is
   refused at creation and at resend: both would be handed out together.
 - **Each room of a request stands alone**: a blueprint that was deleted, a room that has gone, a layout
-  that would place nothing, or `create_rls` on a blueprint with no sheets is a row saying why.
+  that would place nothing, or `create_rls` on a blueprint with no bound sheet is a row saying why.
 - **The room is found by its `Number` property** (a room has no number field of its own) and the task
   carries the id as well; absent means the room has none.
 - **`create_rls` compares the sheet's stored room summary with the target's** and warns (never refuses)
@@ -650,8 +654,8 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
 
 - **Their own endpoint (`/projects/{id}/sheets`), apart from blueprints, and not a snapshot
   push.** Rooms, doors and the rest replace a model's state; the library is authored data
-  kept by sheet identity, one file per sheet. The sheets a blueprint is associated with are
-  a separate record (decision 18), stored elsewhere.
+  kept by sheet identity, one file per sheet. A sheet is **generic or bound to one room blueprint**
+  (`blueprint`, plan decision 27): the blueprint holds no copy.
 - **Identity is the Revit sheet id plus the document title.** A match with the same sheet
   number updates the sheet; a match whose number changed is **stashed pending** for a person
   to accept or reject; a match on neither is a new sheet *even if its number is taken*.
@@ -668,11 +672,11 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   and item count are weighed equally, each as a log-ratio, worked out from today's rooms and
   FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short
   side, so a rotated room reads the same.
-- **A blueprint's sheets are also offered to the library** (`blueprints_api::offer_to_library`), made for the
-  blueprint's room, so a room layout sheet can be made from one with no blueprint and no items: the main viewer's
+- **A blueprint's sheets are in the library, bound to it** (`blueprints_api::bind_to_library`, made for the
+  blueprint's room), so a room layout sheet can be made from one with no items: the main viewer's
   **RLS tool** (zone toolbar, `viewer/rlsTool.ts`, `app/RlsPanel.tsx`: choose a library sheet with its preview, click rooms on the plan,
-  Make) queues a `create_rls` task per room, **with `with_tags: false`**. The library and tasks pages no longer make RLS tasks. A copy, matched by sheet identity: a re-push updates it and a renumbered one waits for a
-  person. A library that cannot take them is logged and never fails the blueprint push.
+  Make) queues a `create_rls` task per room, **with `with_tags: false`**. The library and tasks pages no longer make RLS tasks. Matched by sheet identity: a re-push updates the sheet and a renumbered one waits for a
+  person. **A bare re-push (the Sheets button) never unbinds a sheet**; only a push naming a blueprint sets it. A library that cannot take the sheets fails the blueprint push (the blueprint is stored and flagged as having none). The library page shows each sheet's blueprint.
 - **A room outline sent by the extractor has its collinear vertices dropped** (`room_m/ring_tidy.py`, rooms only).
   Revit puts a vertex wherever the boundary changes wall: 77.5% of RHH's rooms (2,080 of 2,683) have one and 28% of all
   boundary vertices (7,659 of 27,558) are one, nearly all within 0.5 mm of the line. Lossless, so the tolerance is

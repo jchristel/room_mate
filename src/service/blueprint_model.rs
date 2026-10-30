@@ -186,9 +186,9 @@ pub struct BlueprintDoor {
     pub width_mm: f64,
 }
 
-/// A room layout sheet a blueprint carries: the layout of the sheets to make for a room that is
-/// assigned the blueprint. **A copy, independent of the sheet library** (plan decision 18), and
-/// **layout only**: no tags (decision 24), and the sheet's number, name and id are kept to
+/// A room layout sheet as a task and a blueprint push carry it: the layout of the sheets to make for
+/// a room. A blueprint no longer stores these (they are library sheets bound to it, plan decision 27);
+/// a task takes a copy when it is made. **Layout only**: no tags (decision 24), and the sheet's number, name and id are kept to
 /// recognise it on a re-push and are never used on assignment (the Revit side generates those
 /// from the target room).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,10 +213,6 @@ pub struct RevisionContent {
     /// Absent in a revision written before doors were captured, which is not "no doors".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub doors: Vec<BlueprintDoor>,
-    /// The room layout sheets the Revit push carried. Empty in a revision made before sheets
-    /// were held, which is not "no sheets wanted": a task from it cannot create sheets.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sheets: Vec<BlueprintSheet>,
 }
 
 /// What capture left out, as numbers: a silence would read as "there was nothing there".

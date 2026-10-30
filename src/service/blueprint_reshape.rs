@@ -155,7 +155,6 @@ pub fn reshape(content: &RevisionContent, target: Target) -> Result<RevisionCont
         },
         items: placed.into_iter().map(|(i, _)| i).collect(),
         doors,
-        sheets: content.sheets.clone(),
     })
 }
 

@@ -1,10 +1,10 @@
 //! The room layout sheet library: sheets a person chose to export from Revit, kept as
 //! exported, so the server can offer the one closest to a room (`docs/PLAN-blueprints.md`,
-//! track B, decisions 18 to 20).
+//! track B, decisions 19, 20 and 27).
 //!
 //! **Their own endpoint and their own files, apart from blueprints.** A sheet in the
-//! library is stored as exported and belongs to no blueprint; a blueprint revision holds its
-//! own copy of its sheets (plan decision 18), a different storage method. One JSON file per sheet, under
+//! library is stored as exported and is **generic or bound to one room blueprint** by id
+//! (`blueprint`, plan decision 27); a blueprint holds no copy. One JSON file per sheet, under
 //! `<projects_dir>/sheets/<project>/<id>.json`, written the way blueprints are (temp then
 //! rename, a copy of the replaced file under `.backups/`, one lock), and this module is the
 //! only code that reads or writes them.
@@ -84,6 +84,10 @@ pub struct PendingSheet {
     pub sheet_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<SheetRoom>,
+    /// The room blueprint this sheet belongs to (plan decision 27), or `None` for a generic
+    /// sheet. Set by a blueprint push and kept by a bare re-push; one blueprint at most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blueprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,6 +122,10 @@ pub struct SheetRecord {
     pub sheet_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<SheetRoom>,
+    /// The room blueprint this sheet belongs to (plan decision 27), or `None` for a generic
+    /// sheet. Set by a blueprint push and kept by a bare re-push; one blueprint at most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blueprint: Option<String>,
     /// The Revit phase the export was run under, when it was run through the blueprint route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
@@ -158,6 +166,9 @@ pub struct SheetSummary {
     pub sheet_number: String,
     pub sheet_name: String,
     pub room: Option<SheetRoom>,
+    /// The room blueprint the sheet belongs to; absent for a generic sheet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blueprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room_summary: Option<RoomSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -178,6 +189,7 @@ impl From<&SheetRecord> for SheetSummary {
             sheet_number: r.sheet_number.clone(),
             sheet_name: r.sheet_name.clone(),
             room: r.room.clone(),
+            blueprint: r.blueprint.clone(),
             room_summary: r.room_summary,
             size_mm: r.size_mm,
             rooms: r.rooms.clone(),
@@ -197,6 +209,10 @@ pub struct PushedSheet {
     pub sheet_name: String,
     #[serde(default)]
     pub room: Option<SheetRoom>,
+    /// Bind the sheet to this room blueprint (the blueprint push does). Absent: a re-push leaves
+    /// the binding as it is, so the Sheets button never unbinds a sheet.
+    #[serde(default)]
+    pub blueprint: Option<String>,
     #[serde(default)]
     pub phase: Option<String>,
     /// The figures of the room (or rooms) the sheet covers, measured by the extractor. When it sends
@@ -331,6 +347,16 @@ pub fn load_all(projects_dir: &Path, project: &str) -> Result<Vec<SheetRecord>, 
     Ok(out)
 }
 
+/// The sheets bound to a room blueprint (plan decision 27), in number order.
+pub fn bound_to(projects_dir: &Path, project: &str, blueprint: &str) -> Result<Vec<SheetRecord>, SheetError> {
+    let mut out: Vec<SheetRecord> = load_all(projects_dir, project)?
+        .into_iter()
+        .filter(|r| r.blueprint.as_deref() == Some(blueprint))
+        .collect();
+    out.sort_by(|a, b| a.sheet_number.cmp(&b.sheet_number));
+    Ok(out)
+}
+
 pub fn list(projects_dir: &Path, project: &str) -> Result<Vec<SheetSummary>, SheetError> {
     Ok(load_all(projects_dir, project)?.iter().map(SheetSummary::from).collect())
 }
@@ -431,6 +457,7 @@ fn check_pushed(p: &PushedSheet) -> Result<PushedSheet, SheetError> {
         sheet_number: check_text("sheet number", &p.sheet_number, true)?,
         sheet_name: check_text("sheet name", &p.sheet_name, false)?,
         room: p.room.clone(),
+        blueprint: p.blueprint.clone().map(|b| b.trim().to_string()).filter(|b| !b.is_empty()),
         phase: p.phase.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         room_summary: p.room_summary,
         size_mm: p.size_mm,
@@ -456,6 +483,9 @@ fn refresh_record(record: &mut SheetRecord, p: PushedSheet, received_at: String)
     if p.room.is_some() {
         record.room = p.room;
         record.room_summary = p.room_summary;
+    }
+    if p.blueprint.is_some() {
+        record.blueprint = p.blueprint;
     }
     if p.phase.is_some() {
         record.phase = p.phase;
@@ -512,6 +542,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     sheet_number: p.sheet_number.clone(),
                     sheet_name: p.sheet_name,
                     room: p.room,
+                    blueprint: p.blueprint,
                     phase: p.phase,
                     room_summary: p.room_summary,
                     size_mm: p.size_mm,
@@ -549,6 +580,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     sheet_number: p.sheet_number,
                     sheet_name: p.sheet_name,
                     room: p.room,
+                    blueprint: p.blueprint,
                     phase: p.phase,
                     room_summary: p.room_summary,
                     size_mm: p.size_mm,
@@ -623,6 +655,9 @@ pub fn accept(
         record.room = accepted.room;
         record.room_summary = accepted.room_summary;
     }
+    if accepted.blueprint.is_some() {
+        record.blueprint = accepted.blueprint;
+    }
     if accepted.phase.is_some() {
         record.phase = accepted.phase;
     }
@@ -693,6 +728,7 @@ mod tests {
             sheet_number: number.into(),
             sheet_name: format!("Layout {number}"),
             room: None,
+            blueprint: None,
             phase: None,
             room_summary: None,
             size_mm: None,
@@ -806,6 +842,44 @@ mod tests {
         let rec = load(&dir, "p1", &first.id).unwrap();
         assert_eq!((rec.sheet_name.as_str(), list(&dir, "p1").unwrap()[0].viewports), ("Renamed", 1));
         assert_eq!(list(&dir, "p1").unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Plan decision 27: a sheet is generic or bound to one room blueprint. A push that names a
+    /// blueprint binds it; a bare re-push (the Sheets button) never unbinds it; a renumbered push
+    /// that names one binds it only when accepted.
+    #[test]
+    fn test_a_blueprint_push_binds_a_sheet_and_a_bare_re_push_keeps_the_binding() {
+        let dir = temp_dir("bound");
+        let mut bound = sheet("100", "House A", "RLS-01");
+        bound.blueprint = Some("bp-1".into());
+        let first = push_one(&dir, bound);
+        push_one(&dir, sheet("200", "House A", "RLS-02"));
+        assert_eq!(
+            bound_to(&dir, "p1", "bp-1").unwrap().iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            [first.id.as_str()]
+        );
+        assert!(bound_to(&dir, "p1", "bp-2").unwrap().is_empty());
+
+        let mut again = sheet("100", "House A", "RLS-01");
+        again.sheet_name = "Renamed".into();
+        push_one(&dir, again);
+        let rec = load(&dir, "p1", &first.id).unwrap();
+        assert_eq!((rec.sheet_name.as_str(), rec.blueprint.as_deref()), ("Renamed", Some("bp-1")));
+
+        let mut moved = sheet("100", "House A", "RLS-09");
+        moved.blueprint = Some("bp-2".into());
+        let out = push_one(&dir, moved);
+        assert_eq!(out.outcome, Outcome::Pending { pending_id: 1 });
+        assert_eq!(
+            load(&dir, "p1", &first.id).unwrap().blueprint.as_deref(),
+            Some("bp-1"),
+            "pending changes nothing"
+        );
+        let rec = load(&dir, "p1", &first.id).unwrap();
+        accept(&dir, "p1", &first.id, 1, DecideRequest { base: rec.taken_at }).unwrap();
+        assert_eq!(load(&dir, "p1", &first.id).unwrap().blueprint.as_deref(), Some("bp-2"));
+        assert_eq!(list(&dir, "p1").unwrap().iter().filter(|r| r.blueprint.is_some()).count(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

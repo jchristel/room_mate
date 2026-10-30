@@ -326,6 +326,7 @@ mod tests {
             sheet_number: number.into(),
             sheet_name: String::new(),
             room: None,
+            blueprint: None,
             phase: None,
             room_summary: None,
             size_mm: None,

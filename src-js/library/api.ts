@@ -25,6 +25,10 @@ export const listRooms = (project: string) => apiGet<{ rooms: RoomRow[] }>(`/roo
 export const listSheets = (project: string) => apiGet<SheetSummary[]>(`${base(project)}/sheets`);
 
 /** The server leaves an empty list out of a record, so read it back with the lists there. */
+/** The project's room blueprints, for naming the one a sheet is bound to. */
+export const listBlueprintNames = (project: string) =>
+  apiGet<{ id: string; name: string }[]>(`${base(project)}/blueprints`).then((rows) => new Map(rows.map((r) => [r.id, r.name])));
+
 export const getSheet = async (project: string, id: string): Promise<SheetRecord> => {
   const r = await apiGet<Partial<SheetRecord> & Omit<SheetRecord, "pending" | "rejected">>(`${base(project)}/sheets/${enc(id)}`);
   return { ...r, pending: r.pending ?? [], rejected: r.rejected ?? [] };

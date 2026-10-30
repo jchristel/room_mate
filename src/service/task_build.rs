@@ -108,6 +108,30 @@ fn finding(kind: &str, message: String) -> Value {
     json!({ "kind": kind, "message": message })
 }
 
+/// The blueprint's sheets: the library sheets bound to it (plan decision 27), as they are now.
+/// Empty when the task makes no sheets; a task that does and finds none is refused.
+fn bound_sheets(
+    projects_dir: &std::path::Path,
+    project: &str,
+    blueprint: &str,
+    create_rls: bool,
+) -> Result<Vec<BlueprintSheet>, ServiceError> {
+    if !create_rls {
+        return Ok(Vec::new());
+    }
+    let bound: Vec<BlueprintSheet> = match sheets::bound_to(projects_dir, project, blueprint) {
+        Ok(records) => records.iter().map(sheet_for_rules).collect(),
+        Err(SheetError::Internal(e)) => return Err(ServiceError::Internal(e)),
+        Err(e) => return refuse(format!("the sheet library cannot be read: {e:?}")),
+    };
+    if bound.is_empty() {
+        return refuse(
+            "no room layout sheet is bound to the blueprint, so sheets cannot be created from it (turn off create RLS, or push the blueprint from Revit with its sheets)",
+        );
+    }
+    Ok(bound)
+}
+
 /// A populate task for one assignment, from the pinned revision and the room as it stands.
 pub fn populate_from_assignment(
     state: &AppState,
@@ -124,11 +148,7 @@ pub fn populate_from_assignment(
     let Some(revision) = blueprint.revision(assignment.revision) else {
         return refuse(format!("the blueprint has no revision {}", assignment.revision));
     };
-    if params.create_rls && revision.content.sheets.is_empty() {
-        return refuse(
-            "the blueprint has no room layout sheets, so sheets cannot be created from it (turn off create RLS, or push the blueprint from Revit with its sheets)",
-        );
-    }
+    let bound = bound_sheets(projects_dir, project, &blueprint.id, params.create_rls)?;
     let room = RoomRef {
         model_id: assignment.room.model_id.clone(),
         room_id: assignment.room.room_id.clone(),
@@ -189,7 +209,7 @@ pub fn populate_from_assignment(
             .iter()
             .filter_map(|i| type_code_of(&parameter, &i.type_properties, &i.properties))
             .collect();
-        tag_rules_for(projects_dir, project, &revision.content.sheets, &parameter, Some(&codes), &mut findings)
+        tag_rules_for(projects_dir, project, &bound, &parameter, Some(&codes), &mut findings)
     } else {
         Vec::new()
     };
@@ -211,7 +231,7 @@ pub fn populate_from_assignment(
         }),
         library_sheet_id: None,
         items,
-        sheets: if params.create_rls { revision.content.sheets.clone() } else { Vec::new() },
+        sheets: bound,
         tag_rules,
         findings,
     })

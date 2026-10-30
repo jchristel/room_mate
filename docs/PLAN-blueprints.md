@@ -134,7 +134,7 @@ write path into Revit. They have very different risk, which drives the staging.
 17. **Platform: pyRevit** (decided 2026-10-19). The Revit side stays in the existing
     pyRevit extension; no C# add-in and no platform spike. Revisit only if a stage 7 or 8
     obstacle forces it.
-18. **Sheets live in two places, and they are two storage methods** (clarified 2026-10-20; **to be replaced by decision 27**).
+18. **Sheets live in two places, and they are two storage methods** (clarified 2026-10-20; **replaced by decision 27, built in step 2: one store, the library, with a `blueprint` binding. The rest of this decision describes what was**).
     - **Inside a blueprint.** A blueprint push always carries the room and its sheets (the
       plugin enforces both, and the server refuses a blueprint push without sheets), so a
       revision holds outline, items, doors **and sheets**. The sheets are layout only:
@@ -270,7 +270,7 @@ write path into Revit. They have very different risk, which drives the staging.
     - **Open**: a generic room tag has no outline to be relative to. Recommended: bound room tags use the wall recipe
       (edge by the cyclic shift that fits, fraction along, distance from it: decision 24's elevation marker rule), generic
       ones are relative to the nearest side of the room's smallest enclosing rectangle.
-    - **Built in four steps**: (1) the type-code setting and rules keyed by it (old rules discarded); (2) `blueprint` on the
+    - **Built in four steps** (1 and 2 are built): (1) the type-code setting and rules keyed by it (old rules discarded); (2) `blueprint` on the
       sheet record, embedded sheets and `offer_to_library` removed; (3) scope and instance on tag rules and the lookup
       order above; (4) pending payload, reconcile, import and export.
 

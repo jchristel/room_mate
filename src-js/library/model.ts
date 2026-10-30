@@ -12,6 +12,13 @@ export function ruleLabel(r: RuleSummary): string {
   return `${tagged} tagged by ${k.tag_family} / ${k.tag_type}`;
 }
 
+/** Where a sheet belongs: its room blueprint's name, or "generic" (plan decision 27). A blueprint that
+ *  is no longer listed keeps its id visible rather than reading as generic. */
+export function boundText(blueprint: string | undefined, names: ReadonlyMap<string, string>): string {
+  if (!blueprint) return "generic";
+  return names.get(blueprint) ?? `blueprint ${blueprint}`;
+}
+
 /** Radians as whole-ish degrees, for people. */
 export const degrees = (rad: number): number => Math.round(((rad * 180) / Math.PI) * 10) / 10;
 

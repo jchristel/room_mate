@@ -8,7 +8,7 @@
 
 import type { Sent } from "./api.js";
 import * as api from "./api.js";
-import type { Blueprint, BlueprintDoor, BlueprintItem, BlueprintSheet, BlueprintSummary, Outline, SourceRoom } from "./types.js";
+import type { Blueprint, BlueprintDoor, BlueprintItem, BlueprintSummary, Outline, SourceRoom } from "./types.js";
 
 export const FILE_FORMAT = "roommate-blueprint";
 
@@ -25,8 +25,6 @@ export interface ExportFile {
     outline: Outline;
     items: BlueprintItem[];
     doors?: BlueprintDoor[];
-    /** The room layout sheets: a blueprint is not complete without them (plan decision 18). */
-    sheets?: BlueprintSheet[];
   };
   exported_from: string;
 }
@@ -39,7 +37,7 @@ export function toFile(blueprint: Blueprint, revisionNumber: number, project: st
     version: 1,
     name: blueprint.name,
     source: blueprint.source ?? null,
-    revision: { number: r.number, note: r.note ?? null, outline: r.outline, items: r.items, doors: r.doors ?? [], sheets: r.sheets ?? [] },
+    revision: { number: r.number, note: r.note ?? null, outline: r.outline, items: r.items, doors: r.doors ?? [] },
     exported_from: project,
   };
 }
@@ -60,9 +58,6 @@ export function parseFile(text: string): { ok: true; file: ExportFile } | { ok: 
   if (!f.name || !r || !Array.isArray(r.items) || !r.outline || !Array.isArray(r.outline.coarse)) {
     return { ok: false, error: "That export is missing its name, outline or items." };
   }
-  if (!Array.isArray(r.sheets) || r.sheets.length === 0) {
-    return { ok: false, error: "That export has no room layout sheets. A blueprint comes from Revit with its sheets, so it cannot be imported without them." };
-  }
   return { ok: true, file: f as ExportFile };
 }
 
@@ -75,8 +70,8 @@ export async function importInto(
   file: ExportFile,
   origin: string,
 ): Promise<Sent<Imported>> {
-  const { outline, items, doors, sheets } = file.revision;
-  const content = { outline, items, doors: doors ?? [], sheets: sheets ?? [] };
+  const { outline, items, doors } = file.revision;
+  const content = { outline, items, doors: doors ?? [] };
   const same = existing.find((b) => b.name.trim().toLowerCase() === file.name.trim().toLowerCase());
   if (same) {
     const r = await api.pushPending(project, same.id, origin, content, file.revision.note ?? undefined);

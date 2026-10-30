@@ -305,8 +305,8 @@ export function App() {
               {notice && !error ? <p className="banner">{notice}</p> : null}
               {blueprint && summary && summary.sheets === 0 ? (
                 <p className="banner attention">
-                  This blueprint has {attentionReasons(summary)[0]}: it was made before sheets were held. It still assigns and populates rooms, but a task cannot create sheets from it.
-                  Push it again from Revit with the Blueprint button, choosing its sheets; the push arrives here as a pending revision to accept.
+                  This blueprint has {attentionReasons(summary)[0]}. It still assigns and populates rooms, but a task cannot create sheets from it.
+                  Push it again from Revit with the Blueprint button, choosing its sheets; they are kept in the sheet library, bound to this blueprint.
                 </p>
               ) : null}
               {blueprint && content ? (
