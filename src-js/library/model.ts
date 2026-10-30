@@ -4,11 +4,11 @@ import type { RoomSummary, RuleSummary, Sample, SheetSummary, Suggestion } from 
 
 const trim = (s: string): string => s.trim();
 
-/** "Bed / Queen tagged by FTag / Std" -- what a rule is about, in the words a modeller uses. */
+/** "BED-01 tagged by FTag / Std" -- what a rule is about: the item's type code. */
 export function ruleLabel(r: RuleSummary): string {
   const k = r.key;
-  // A room, space or area has no family or type: the rule is about the category.
-  const tagged = k.tagged_family || k.tagged_type ? `${k.tagged_family} / ${k.tagged_type}` : k.tagged_category || "element";
+  // A room, space or area has no type code: the rule is about the category.
+  const tagged = k.type_code || k.tagged_category || "element";
   return `${tagged} tagged by ${k.tag_family} / ${k.tag_type}`;
 }
 
@@ -18,10 +18,10 @@ export const degrees = (rad: number): number => Math.round(((rad * 180) / Math.P
 /** Paper millimetres, one decimal. */
 export const mm = (v: number): string => (Math.round(v * 10) / 10).toString();
 
-/** Rules whose names contain every word of `text` (case-insensitive), in a stable order. */
+/** Rules whose key contains every word of `text` (case-insensitive), in a stable order. */
 export function filterRules(rules: readonly RuleSummary[], text: string): RuleSummary[] {
   const words = trim(text).toLowerCase().split(/\s+/).filter(Boolean);
-  const hay = (r: RuleSummary) => [r.key.tagged_category, r.key.tagged_family, r.key.tagged_type, r.key.tag_category, r.key.tag_family, r.key.tag_type, r.key.viewport_type, r.tag_kind].join(" ").toLowerCase();
+  const hay = (r: RuleSummary) => [r.key.tagged_category, r.key.type_code, r.key.tag_category, r.key.tag_family, r.key.tag_type, r.key.viewport_type, r.tag_kind].join(" ").toLowerCase();
   return rules
     .filter((r) => {
       const h = hay(r);

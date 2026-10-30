@@ -617,10 +617,18 @@ Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`)
 (`Data/Objects/Collectors/data_tag*.py`, `Revit/Annotation/Export/to_data_tag.py`). **Not run in Revit, and
 the RLS create button places tags** from the server's tag plan (`rls.tags`), not from these rules directly. Plan decision 24.
 
-- **A rule's key is names only** (tagged category + family + type, tag category + family + type, viewport type),
-  never Revit ids: a blueprint places new elements with new ids. **A room, space or area tag is a rule too**
-  (`tag_rules::is_spatial`): the tagged element has no family, type or facing, so its key is the category alone
-  (`Rooms`, family and type empty), its offsets are in the plan's own axes, and a task carries it for every viewport of its
+- **An item's rule is keyed by the item's TYPE CODE** (plan decision 27): the value of the one type parameter the project
+  names in its settings (`tag_type_code`, under "Tag type code" on the settings page), with the tag's category, family and
+  type and the viewport type. Every instance of a type shares the code, so a tag learned beside one bed is found for that
+  type in any room, whatever the family and type are called; **never Revit ids** (a blueprint places new elements with new
+  ids) **and never family and type names, with no fall-back to them**. An item whose type has no value is skipped with a
+  reason and left untagged (`items_without_tags` says "no value for the type-code parameter"); a project that names no
+  parameter keeps no item tags at all, and the extractor says so. The parameter rides the key (`code_parameter`), so codes
+  read from two parameters never meet and changing the setting leaves the old rules unused (`rules_for` carries only those
+  of the current parameter). A rule file of the name-keyed schema (version 1) is not loaded, only logged. A linked model's
+  element is not read (its type is in another document) and is skipped. **A room, space or area tag is a rule too**
+  (`tag_rules::is_spatial`): the tagged element has no code or facing, so its key is the category alone
+  (`Rooms`, code and parameter empty), its offsets are in the plan's own axes, and a task carries it for every viewport of its
   type whatever items it places. Revit 2026's `RoomTag` names its room by `Room`; it has no `TaggedLocalElementId`. The ids in an observation say where a sample was
   read and are how a re-push replaces its own samples.
 - **One rule per key**: the median of its samples, recomputed on every push, so a blueprint always tags the same
@@ -630,7 +638,7 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
   relative to the facing. An element with no point location or no plan facing gives no sample, said in `skipped`.
 - **Tags never ride in a sheet.** The extractor takes them out of the viewports before a sheet goes to the library
   or a blueprint, and a task carries the rules for its sheets' viewport types (for a populate task only those for
-  the families and types it places) as they were when it was made.
+  the type codes it places) as they were when it was made.
 
 ## Room layout sheets: a library kept by identity, and two buttons that choose
 

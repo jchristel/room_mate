@@ -45,10 +45,28 @@ pub struct RoomItem {
     pub family: String,
     pub type_name: String,
     pub category: String,
+    /// The value of the project's type-code parameter for this item's type (`type_code_of`).
+    /// `None`: the type has none, so no rule can find the item and it is left untagged.
+    pub type_code: Option<String>,
     pub footprint: Vec<Pt>,
     pub facing: Option<Pt>,
     pub properties: Vec<Property>,
     pub type_properties: Vec<Property>,
+}
+
+/// An item's type code: the project's type-code parameter, read from the type's properties and, for
+/// a model that put it on the instance, from the instance's. A blank value is no value, and a
+/// blank type value does not stop a real instance one (the tiering rule, as for doors).
+pub fn type_code_of(parameter: &str, type_properties: &[Property], properties: &[Property]) -> Option<String> {
+    let wanted = parameter.trim();
+    if wanted.is_empty() {
+        return None;
+    }
+    [type_properties, properties]
+        .iter()
+        .flat_map(|tier| tier.iter())
+        .find(|p| p.name.trim().eq_ignore_ascii_case(wanted) && !p.value.trim().is_empty())
+        .map(|p| p.value.trim().to_string())
 }
 
 impl RoomItem {
@@ -165,6 +183,12 @@ fn same(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
+/// Whether a rule is about this item's type code. The caller has already narrowed the rules to
+/// the project's type-code parameter (`tag_rules::rules_for`), so the code alone decides.
+fn has_code(rule: &RuleSummary, item: &RoomItem) -> bool {
+    item.type_code.as_deref().is_some_and(|c| same(&rule.key.type_code, c))
+}
+
 /// The footprint's rectangle in the item's own frame (x along its facing), as four corners.
 fn outline_of(item: &RoomItem) -> Option<[[f64; 2]; 4]> {
     let f = unit(item.facing?);
@@ -254,11 +278,10 @@ fn untagged(items: &[RoomItem], views: &[ViewTags], rules: &[RuleSummary], dismi
             Some("no view of the sheet shows it".to_string())
         } else if item.facing.is_none() {
             Some("it has no facing, so a rule cannot place its tag".to_string())
-        } else if !rules
-            .iter()
-            .any(|r| same(&r.key.tagged_family, &item.family) && same(&r.key.tagged_type, &item.type_name))
-        {
-            Some("the library has no tag for this family and type".to_string())
+        } else if item.type_code.is_none() {
+            Some("its type has no value for the type-code parameter, so no rule can find it".to_string())
+        } else if !rules.iter().any(|r| has_code(r, item)) {
+            Some("the library has no tag for this type code".to_string())
         } else {
             None
         };
@@ -309,12 +332,9 @@ pub fn plan_tags(
             }
             let rule = (kind == "floor plan")
                 .then(|| {
-                    rules.iter().find(|r| {
-                        !is_spatial(&r.tag_kind)
-                            && same(&r.key.viewport_type, &kind)
-                            && same(&r.key.tagged_family, &item.family)
-                            && same(&r.key.tagged_type, &item.type_name)
-                    })
+                    rules
+                        .iter()
+                        .find(|r| !is_spatial(&r.tag_kind) && same(&r.key.viewport_type, &kind) && has_code(r, item))
                 })
                 .flatten();
             match (rule, item.facing) {
@@ -374,6 +394,7 @@ mod tests {
             family: family.into(),
             type_name: format!("{family} type"),
             category: "Furniture".into(),
+            type_code: Some(format!("code-{family}")),
             footprint: vec![
                 (c.0 - 400.0, c.1 - 300.0),
                 (c.0 + 400.0, c.1 - 300.0),
@@ -391,8 +412,8 @@ mod tests {
             id: format!("tr-{family}"),
             key: RuleKey {
                 tagged_category: "Furniture".into(),
-                tagged_family: family.into(),
-                tagged_type: format!("{family} type"),
+                code_parameter: "Assembly Code".into(),
+                type_code: format!("CODE-{family}"),
                 tag_category: "Tags".into(),
                 tag_family: "T".into(),
                 tag_type: "T".into(),
@@ -463,7 +484,7 @@ mod tests {
         );
         let u = &plan.items_without_tags[0];
         assert_eq!(u.in_views, vec![1, 2]);
-        assert!(u.reason.as_deref().unwrap().contains("no tag for this family"));
+        assert!(u.reason.as_deref().unwrap().contains("no tag for this type code"));
     }
 
     #[test]
@@ -532,5 +553,26 @@ mod tests {
         let plan = plan_tags(&sheet(), &items, &markers(), &[rule("Bed", 10.0, 0.0)], &TagRequest::default());
         assert!(plan.views[0].tagged.is_empty());
         assert!(plan.items_without_tags[0].reason.as_deref().unwrap().contains("no facing"));
+    }
+
+    #[test]
+    fn test_an_item_with_no_type_code_is_untagged_and_says_why() {
+        let mut bed = item("1", "Bed", (0.0, 0.0), Some((1.0, 0.0)));
+        bed.type_code = None;
+        let plan = plan_tags(&sheet(), &[bed], &[], &[rule("Bed", 1.0, 1.0)], &TagRequest::default());
+        assert!(plan.views.iter().all(|v| v.tagged.is_empty()));
+        let why = plan.items_without_tags[0].reason.as_deref().unwrap();
+        assert!(why.contains("type-code parameter"), "{why}");
+    }
+
+    #[test]
+    fn test_type_code_of_reads_the_type_then_the_instance_and_ignores_blanks() {
+        let p = |n: &str, v: &str| Property { name: n.into(), value: v.into() };
+        let ty = [p("Assembly Code", "B-01")];
+        let inst = [p("assembly code", "X")];
+        assert_eq!(type_code_of("assembly code", &ty, &inst).as_deref(), Some("B-01"));
+        assert_eq!(type_code_of("Assembly Code", &[p("Assembly Code", " ")], &inst).as_deref(), Some("X"));
+        assert_eq!(type_code_of("", &ty, &inst), None);
+        assert_eq!(type_code_of("Nope", &ty, &inst), None);
     }
 }

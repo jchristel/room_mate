@@ -96,6 +96,29 @@ export function IdentitySection({
       </Block>
 
       <Block
+        title="Tag type code"
+        hint={
+          <>
+            The name of the FF&amp;E <em>type</em> parameter whose value identifies a kind of item (every instance of a
+            type shares it). Tag rules learned from sheets are keyed by it, so a tag placed beside one bed is found for
+            the same bed type in any room, whatever the family and type are called. Blank: no item tags can be learned
+            or applied, and the extractor says so. Changing it leaves the rules keyed by the old parameter unused.
+          </>
+        }
+      >
+        <Row>
+          <Field label="type code parameter">
+            <OptionalText
+              value={settings.tag_type_code}
+              size={28}
+              placeholder="(none: items get no tags)"
+              onChange={(value) => edit((s) => ({ ...s, tag_type_code: value }))}
+            />
+          </Field>
+        </Row>
+      </Block>
+
+      <Block
         title="Milestone comparison"
         hint={
           <>

@@ -215,8 +215,8 @@ write path into Revit. They have very different risk, which drives the staging.
     (`DataTag`, `DataTaggedElement`, `DataTagType`, in `Data/Objects/Collectors`): positions in mm in the
     model's own coordinates, the tag's category, family and type name, and the tagged element's category,
     family and type name. **The ids in them are provenance, never the lookup**: a blueprint places new
-    elements with new ids, so a rule is found by names. **One rule per key** (tagged category + family +
-    type, tag family + type, viewport type): several observations of one key are reduced to a single rule
+    elements with new ids, so a rule is found by the item's type code (built under decision 27; it was names
+    until then). **One rule per key** (type code, tag family + type, viewport type): several observations of one key are reduced to a single rule
     (median offset) when the rules are made, so the same blueprint always tags the same way. Where a tag
     is placed relative to its element is derived from the raw observation, never stored in the export.
     **Built (2026-10-21):** observations endpoint, the rules store (paper mm in the element's own frame, median of

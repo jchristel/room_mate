@@ -8,7 +8,8 @@ the view's `id` and `view_scale`. A sheet pushed to the library or inside a blue
 NO tags (plan decision 24: tags belong to the items of one room and do not travel with a
 layout), so `take_tags` removes them and hands them back as flat observations, one per tag,
 each saying which kind of viewport and which view scale it was read in. Those are what a tag
-rule is made from; the server's rules store is keyed by names and never by the ids in them.
+rule is made from; the server's rules store is keyed by the type code of the tagged item
+(`attach_type_codes`) and never by the ids in them.
 """
 
 
@@ -47,6 +48,30 @@ def take_tags(sheet, identity=None):
                 }
             )
     return observations
+
+
+SPATIAL_KINDS = ("room", "space", "area")
+
+
+def attach_type_codes(observations, read_code):
+    """Put the type code on every tagged element of the observations (in place), and return the
+    number of elements left without one.
+
+    `read_code(tagged_element)` returns the code or None (`room_m.utils.tag_codes.type_code_reader`).
+    A room, space or area tag has no item and needs none. The server skips an element with no code
+    and says why, so this only reports how many there are."""
+    missing = 0
+    for observation in observations:
+        tag = observation.get("tag") or {}
+        if str(tag.get("tag_kind") or "").strip().lower() in SPATIAL_KINDS:
+            continue
+        for element in tag.get("tagged_elements") or []:
+            code = read_code(element)
+            if code:
+                element["type_code"] = code
+            else:
+                missing += 1
+    return missing
 
 
 def describe_problems(label, problems):

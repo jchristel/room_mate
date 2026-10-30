@@ -17,7 +17,8 @@ docs/PLAN-blueprints.md, track B.
 
 from room_m import room_figures
 from room_m.post_common import duhast_to_plain
-from room_m.sheet_tags import take_tags
+from room_m.sheet_tags import attach_type_codes, take_tags
+from room_m.utils.tag_codes import type_code_reader
 
 
 def _tag_problems():
@@ -43,7 +44,7 @@ def _size_mm(doc, entry):
     return {"width_mm": size[0], "height_mm": size[1]}
 
 
-def read_sheet(doc, entry, room=None, phase_name=None, rooms=None):
+def read_sheet(doc, entry, room=None, phase_name=None, rooms=None, type_code_parameter=None):
     """One chosen sheet (an item of `room_m.utils.sheets.sheets_of`) as the pushed shape.
 
     Raises if duHast cannot convert the sheet; the caller reports that sheet and carries on
@@ -63,6 +64,8 @@ def read_sheet(doc, entry, room=None, phase_name=None, rooms=None):
         {"document_title": doc.Title, "revit_sheet_id": entry["id"], "sheet_number": entry["number"]},
     )
     pushed["tag_problems"] = _tag_problems()
+    if type_code_parameter and pushed["tags"]:
+        pushed["tags_without_code"] = attach_type_codes(pushed["tags"], type_code_reader(doc, type_code_parameter))
     if room is not None:
         # The server holds the room as `{model_id, room_id}`; a model is its document's title,
         # as everywhere else in this extractor.
@@ -83,7 +86,7 @@ def read_sheet(doc, entry, room=None, phase_name=None, rooms=None):
     return pushed
 
 
-def read_sheets(doc, assignments, phase_name=None):
+def read_sheets(doc, assignments, phase_name=None, type_code_parameter=None):
     """`assignments` is a list of `(sheet entry, room or None)` or `(sheet entry, room, rooms)`,
     where `rooms` are the placed rooms (`room_m.utils.sheets.placed_rooms`) the sheet covers.
 
@@ -95,7 +98,7 @@ def read_sheets(doc, assignments, phase_name=None):
         entry, room = assignment[0], assignment[1]
         rooms = assignment[2] if len(assignment) > 2 else None
         try:
-            pushed.append(read_sheet(doc, entry, room, phase_name, rooms))
+            pushed.append(read_sheet(doc, entry, room, phase_name, rooms, type_code_parameter))
         except Exception as e:
             failures.append((entry["label"], str(e)))
     return pushed, failures

@@ -45,7 +45,7 @@ export const ROUTING_DEFAULT: RoutingPolicy = {
 /** The settings whose default is NONE, so leaving them out is the default. Every
  *  other key must be listed below: `Required` makes a field added in Rust, and not
  *  here, a type error -- the page cannot silently start a project without it. */
-type NoDefault = "name" | "comparison_key" | "anchor_model";
+type NoDefault = "name" | "comparison_key" | "anchor_model" | "tag_type_code";
 
 /** A project that does not exist yet. Fresh copies each call: the editor edits what
  *  it is given, and two new projects must not share a list. */

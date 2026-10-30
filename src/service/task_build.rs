@@ -19,7 +19,7 @@ use super::elevation_facing::model_room_ring;
 use super::items::{assemble_items, ItemScope};
 use super::placement;
 use super::rls_plan::{check_size, has_elevations, transfer, MarkerPlan, RlsPlan, RlsRequest};
-use super::rls_tags::{plan_tags, RoomItem};
+use super::rls_tags::{plan_tags, type_code_of, RoomItem};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
 use super::sheet_suggest::{distance, room_summary, Signature};
@@ -184,11 +184,12 @@ pub fn populate_from_assignment(
         ));
     }
     let tag_rules = if params.create_rls {
-        let pairs: Vec<(String, String)> = items
+        let parameter = type_code_parameter(state, project);
+        let codes: Vec<String> = items
             .iter()
-            .map(|i| (i.family_name.clone().unwrap_or_default(), i.type_name.clone()))
+            .filter_map(|i| type_code_of(&parameter, &i.type_properties, &i.properties))
             .collect();
-        tag_rules_for(projects_dir, project, &revision.content.sheets, Some(&pairs), &mut findings)
+        tag_rules_for(projects_dir, project, &revision.content.sheets, &parameter, Some(&codes), &mut findings)
     } else {
         Vec::new()
     };
@@ -231,20 +232,37 @@ fn viewport_types(sheets: &[BlueprintSheet]) -> Vec<String> {
     out
 }
 
+/// The project's type-code parameter (`tag_type_code`), blank when it has none.
+fn type_code_parameter(state: &AppState, project: &str) -> String {
+    state
+        .settings()
+        .settings_for(project)
+        .and_then(|b| b.tag_type_code.clone())
+        .map(|p| p.trim().to_string())
+        .unwrap_or_default()
+}
+
 /// The tag rules a task carries (plan decision 24). A rules store that cannot be read is a finding
 /// and no rules, never a refusal: the layout does not depend on them.
 fn tag_rules_for(
     projects_dir: &std::path::Path,
     project: &str,
     sheets: &[BlueprintSheet],
-    items: Option<&[(String, String)]>,
+    parameter: &str,
+    codes: Option<&[String]>,
     findings: &mut Vec<Value>,
 ) -> Vec<RuleSummary> {
     let types = viewport_types(sheets);
     if types.is_empty() {
         return Vec::new();
     }
-    match tag_rules::rules_for(projects_dir, project, &types, items) {
+    if parameter.is_empty() {
+        findings.push(finding(
+            "tag_type_code_unset",
+            "the project's settings name no tag type code, so items get no tags (room tags still do)".to_string(),
+        ));
+    }
+    match tag_rules::rules_for(projects_dir, project, &types, parameter, codes) {
         Ok(rules) => rules,
         Err(_) => {
             findings.push(finding(
@@ -280,7 +298,7 @@ pub fn update_from_assignment(
 
 /// The FF&E attributed to a room, in the room's own model frame: what an RLS can tag. Nested
 /// components are left out (they are parts of a family, not items of the room).
-fn room_items(state: &AppState, project: &str, room: &RoomRef) -> Result<Vec<RoomItem>, ServiceError> {
+fn room_items(state: &AppState, project: &str, room: &RoomRef, parameter: &str) -> Result<Vec<RoomItem>, ServiceError> {
     let to_model = project_to_model(state, project, &room.model_id)?;
     let Some(ffe) = assemble_items(state, &ItemScope { project: Some(project), ..Default::default() })? else {
         return Ok(Vec::new());
@@ -295,11 +313,14 @@ fn room_items(state: &AppState, project: &str, room: &RoomRef) -> Result<Vec<Roo
                 .type_properties_ref
                 .and_then(|r| ffe.type_property_sets.get(r as usize))
                 .map_or(&no_tier, |a| a);
+            let properties = properties_of(&it.item.properties);
+            let type_properties = properties_of(type_props);
             RoomItem {
                 id: it.item.id.clone(),
                 family: it.item.family_name.clone().unwrap_or_default(),
                 type_name: it.item.type_name.clone(),
                 category: it.item.category.clone(),
+                type_code: type_code_of(parameter, &type_properties, &properties),
                 footprint: it
                     .item
                     .loops
@@ -307,8 +328,8 @@ fn room_items(state: &AppState, project: &str, room: &RoomRef) -> Result<Vec<Roo
                     .map(|l| l.points.iter().map(|p| to_model.point((p.x * FT_TO_MM, p.y * FT_TO_MM))).collect())
                     .unwrap_or_default(),
                 facing: it.item.facing.as_ref().map(|f| to_model.direction((f.x, f.y))),
-                properties: properties_of(&it.item.properties),
-                type_properties: properties_of(type_props),
+                properties,
+                type_properties,
             }
         })
         .collect())
@@ -419,15 +440,23 @@ pub fn rls_from_sheet(
     let markers = place_elevations(state, project, room, &record, request, &mut findings)?;
     // No items are placed: the rules for every element are carried, for the plug-in to apply to
     // whatever it finds in the room.
+    let parameter = type_code_parameter(state, project);
     let tag_rules = tag_rules_for(
         projects_dir,
         project,
         std::slice::from_ref(&sheet_for_rules(&record)),
+        &parameter,
         None,
         &mut findings,
     );
     let tags = match &request.tags {
-        Some(t) => Some(plan_tags(&record.sheet, &room_items(state, project, room)?, &markers, &tag_rules, t)),
+        Some(t) => Some(plan_tags(
+            &record.sheet,
+            &room_items(state, project, room, &parameter)?,
+            &markers,
+            &tag_rules,
+            t,
+        )),
         None => None,
     };
     let rls = (sheet_size.is_some() || !markers.is_empty() || tags.is_some()).then_some(RlsPlan {

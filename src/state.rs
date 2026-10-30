@@ -302,6 +302,10 @@ pub struct ProjectSettings {
     /// `service::placement::from_index`.
     pub anchor_model: Option<String>,
 
+    /// The FF&E type parameter whose value keys a tag rule (see `Settings::tag_type_code`),
+    /// or `None` when the project names none. Read by `service::task_build`.
+    pub tag_type_code: Option<String>,
+
     /// The user-chosen room property that identifies "the same room" across
     /// milestones, or `None` when unset (see `Settings::comparison_key`). Read
     /// by `service::comparison`; its own concept, independent of the dRofus

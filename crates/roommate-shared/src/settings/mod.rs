@@ -289,6 +289,16 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_model: Option<String>,
 
+    /// The name of the FF&E TYPE parameter whose value identifies a kind of item for tag
+    /// blueprints (plan decision 27): every instance of a type shares it, so a tag learned from
+    /// one room's item is found for the same type in another, whatever the family and type are
+    /// called. **Absent means no FF&E tag can be learned or applied**: the extractor refuses to
+    /// send tag observations and an RLS task carries no FF&E tag rules, each saying why. A rule
+    /// records the parameter it was keyed by, so changing this leaves the old rules unused
+    /// rather than wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_type_code: Option<String>,
+
     /// How this project's plan is COLOURED, per entity (see `Appearance`).
     /// Defaulted and skipped when empty, so a project file predating it is
     /// unchanged on disk and unchanged in meaning. A table, so it is declared

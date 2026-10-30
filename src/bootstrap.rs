@@ -205,6 +205,7 @@ pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Re
         room_label: settings.room_label,
         milestones: settings.milestones,
         anchor_model: settings.anchor_model,
+        tag_type_code: settings.tag_type_code,
         comparison_key: settings.comparison_key,
         comparison_properties: settings.comparison_properties,
         areas: settings.areas,

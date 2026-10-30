@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { degrees, filterRules, ruleLabel, sheetNeedsAttention, sheetReasons, sizeText, suggestionText, summaryText } from "./model.js";
 import type { RuleSummary, Suggestion } from "./types.js";
 
-const rule = (tagged: [string, string], tag: [string, string], vp = "floor plan"): RuleSummary => ({
-  id: "tr-" + tagged.join("") + tag.join("") + vp,
-  key: { tagged_category: "Furniture", tagged_family: tagged[0], tagged_type: tagged[1], tag_category: "Furniture Tags", tag_family: tag[0], tag_type: tag[1], viewport_type: vp },
+const rule = (code: string, tag: [string, string], vp = "floor plan"): RuleSummary => ({
+  id: "tr-" + code + tag.join("") + vp,
+  key: { tagged_category: "Furniture", code_parameter: "Assembly Code", type_code: code, tag_category: "Furniture Tags", tag_family: tag[0], tag_type: tag[1], viewport_type: vp },
   tag_kind: "independent",
   placement: { head: { x: 1, y: 2 }, rotation: 0, orientation: "Horizontal", has_leader: false, leader_end_condition: "Free" },
   sample_count: 1,
@@ -13,11 +13,11 @@ const rule = (tagged: [string, string], tag: [string, string], vp = "floor plan"
 });
 
 describe("tag rules", () => {
-  const rules = [rule(["Bed", "Queen"], ["FTag", "Std"]), rule(["Chair", "Dining"], ["FTag", "Std"]), rule(["Bed", "Queen"], ["FTag", "Std"], "elevation")];
+  const rules = [rule("BED-01", ["FTag", "Std"]), rule("CHAIR-02", ["FTag", "Std"]), rule("BED-01", ["FTag", "Std"], "elevation")];
 
-  it("are labelled by the names a modeller uses", () => {
-    expect(ruleLabel(rules[0]!)).toBe("Bed / Queen tagged by FTag / Std");
-    const room = { ...rules[0]!, key: { ...rules[0]!.key, tagged_category: "Rooms", tagged_family: "", tagged_type: "" } };
+  it("are labelled by the type code, or the category for a room", () => {
+    expect(ruleLabel(rules[0]!)).toBe("BED-01 tagged by FTag / Std");
+    const room = { ...rules[0]!, key: { ...rules[0]!.key, tagged_category: "Rooms", code_parameter: "", type_code: "" } };
     expect(ruleLabel(room)).toBe("Rooms tagged by FTag / Std");
   });
 
@@ -28,7 +28,7 @@ describe("tag rules", () => {
     expect(filterRules(rules, "sofa").length).toBe(0);
   });
 
-  it("list floor plan before elevation for the same names", () => {
+  it("list floor plan before elevation for the same code", () => {
     const got = filterRules(rules, "bed");
     expect(got.map((r) => r.key.viewport_type)).toEqual(["elevation", "floor plan"]);
   });
