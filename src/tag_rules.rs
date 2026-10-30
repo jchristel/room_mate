@@ -3,9 +3,11 @@
 //!
 //! **Observations in, one rule per key out.** The extractor sends the tags it read from a sheet's
 //! viewports (duHast's `DataTag`, as exported) as observations. Each tagged element of each tag
-//! becomes a *sample* of the rule for its key: the tagged element's category, family name and
-//! type name, the tag's category, family name and type name, and the viewport type. **Names only;
-//! Revit ids are never part of a key**, because a blueprint places new elements with new ids. Each
+//! becomes a *sample* of the rule for its key: the tagged element's category, its **type code** (the
+//! value of the project's `tag_type_code` type parameter, read by the extractor) and that
+//! parameter's name, the tag's category, family name and type name, and the viewport type. **Never
+//! family and type names of the tagged item, and never Revit ids**: a blueprint places new elements
+//! with new ids, and names differ between models and get renamed (plan decision 27). Each
 //! rule stores its samples and the figures worked out from them, so the same blueprint always tags
 //! the same way: the median of the samples, recomputed whenever a sample is added or replaced.
 //!
@@ -17,8 +19,8 @@
 //! worse than none.
 //!
 //! **Room, space and area tags are rules too, for the room.** The tagged element is the room (or space
-//! or area), which has no family or type and no facing, so such a rule is keyed by the category
-//! alone (`Rooms`, family and type empty) and its offsets are in the plan's own axes, +x then +y.
+//! or area), which has no type code and no facing, so such a rule is keyed by the category
+//! alone (`Rooms`, code and parameter empty) and its offsets are in the plan's own axes, +x then +y.
 //! A task carries it for every viewport of its type, whatever items it places, because it is
 //! about the room and not about an item.
 //!
@@ -37,7 +39,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::is_path_safe_component;
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// 2: rules are keyed by the item's type code (plan decision 27). A version-1 file, keyed by family
+/// and type names, is not loaded: those rules come back by pushing the sheets again.
+pub const SCHEMA_VERSION: u32 = 2;
 
 const MAX_RULES_PER_PROJECT: usize = 20_000;
 const MAX_OBSERVATIONS_PER_PUSH: usize = 5_000;
@@ -88,6 +92,10 @@ pub struct TaggedElement {
     pub link_element_id: i64,
     #[serde(flatten)]
     pub names: TypeNames,
+    /// The value of the project's type-code parameter on the element's type, read by the
+    /// extractor. Absent or blank: the element cannot be keyed and its tag is skipped.
+    #[serde(default)]
+    pub type_code: Option<String>,
     #[serde(default)]
     pub location_point: Option<Location>,
     #[serde(default)]
@@ -144,17 +152,29 @@ pub struct Observation {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ObservationsRequest {
+    /// The type parameter `type_code` values were read from (the project's `tag_type_code`). A
+    /// rule is keyed by it too, so codes from two parameters never meet. Blank: no element of an
+    /// item can be keyed, and only room, space and area tags are taken in.
+    #[serde(default)]
+    pub type_code_parameter: String,
     pub observations: Vec<Observation>,
 }
 
 // ---- what is stored ---------------------------------------------------------------------------
 
-/// What a rule is keyed by. Names only.
+/// What a rule is keyed by (plan decision 27). An item's tag is found by the **type code** of the
+/// item (the value of the project's type-code parameter, shared by every instance of the type),
+/// never by family and type names, which differ between models and get renamed. A room, space or
+/// area tag has no code and no parameter: its key is the category alone.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RuleKey {
     pub tagged_category: String,
-    pub tagged_family: String,
-    pub tagged_type: String,
+    /// The type parameter the code was read from; empty for a room, space or area tag.
+    #[serde(default)]
+    pub code_parameter: String,
+    /// The tagged item's type code; empty for a room, space or area tag.
+    #[serde(default)]
+    pub type_code: String,
     pub tag_category: String,
     pub tag_family: String,
     pub tag_type: String,
@@ -165,8 +185,8 @@ impl RuleKey {
     fn canonical(&self) -> String {
         [
             &self.tagged_category,
-            &self.tagged_family,
-            &self.tagged_type,
+            &self.code_parameter,
+            &self.type_code,
             &self.tag_category,
             &self.tag_family,
             &self.tag_type,
@@ -326,7 +346,8 @@ fn read(path: &Path) -> Result<TagRule, TagRuleError> {
         .map_err(|e| TagRuleError::Internal(anyhow::anyhow!("{} is not a tag rule: {e}", path.display())))
 }
 
-/// Every rule of the project, by key. A file that cannot be read is an error, not a gap.
+/// Every rule of the project, by key. A file that cannot be read is an error, not a gap; a file of
+/// an older schema is left on disk and not loaded, and said once in the log.
 pub fn load_all(projects_dir: &Path, project: &str) -> Result<Vec<TagRule>, TagRuleError> {
     let dir = project_dir(projects_dir, project)?;
     let entries = match std::fs::read_dir(&dir) {
@@ -335,12 +356,21 @@ pub fn load_all(projects_dir: &Path, project: &str) -> Result<Vec<TagRule>, TagR
         Err(e) => return Err(internal(e)),
     };
     let mut out = Vec::new();
+    let mut old = 0usize;
     for entry in entries {
         let path = entry.map_err(internal)?.path();
         if path.extension().is_none_or(|x| x != "json") {
             continue;
         }
-        out.push(read(&path)?);
+        let rule = read(&path)?;
+        if rule.schema_version < SCHEMA_VERSION {
+            old += 1;
+        } else {
+            out.push(rule);
+        }
+    }
+    if old > 0 {
+        tracing::warn!("{old} tag rule(s) of project {project:?} are keyed by family and type names and are not used; push the sheets again to learn them by type code");
     }
     out.sort_by_key(|r| r.key.canonical());
     Ok(out)
@@ -436,7 +466,7 @@ fn wrap(angle: f64) -> f64 {
 
 /// `(key, kind, sample)` for each tagged element of the observation that can be used, and a
 /// reason for the ones that cannot.
-fn samples_of(obs: &Observation) -> Vec<Result<(RuleKey, String, Sample), String>> {
+fn samples_of(obs: &Observation, parameter: &str) -> Vec<Result<(RuleKey, String, Sample), String>> {
     let tag = &obs.tag;
     let Some(viewport_type) = obs.viewport_type.as_deref().map(clean).filter(|v| !v.is_empty()) else {
         return vec![Err("the observation names no viewport type".to_string())];
@@ -458,8 +488,16 @@ fn samples_of(obs: &Observation) -> Vec<Result<(RuleKey, String, Sample), String
                 if el.names.category.trim().is_empty() {
                     return Err(format!("tagged element {}: its category was not read", el.host_element_id));
                 }
-            } else if el.names.family_name.trim().is_empty() || el.names.type_name.trim().is_empty() {
-                return Err(format!("tagged element {}: its family or type name was not read", el.host_element_id));
+            } else if parameter.is_empty() {
+                return Err(format!(
+                    "tagged element {}: the push names no type-code parameter (set `tag_type_code` in the project's settings)",
+                    el.host_element_id
+                ));
+            } else if el.type_code.as_deref().map(clean).is_none_or(|c| c.is_empty()) {
+                return Err(format!(
+                    "tagged element {}: its type has no value for the type-code parameter {parameter:?}",
+                    el.host_element_id
+                ));
             }
             let loc = el
                 .location_point
@@ -474,8 +512,8 @@ fn samples_of(obs: &Observation) -> Vec<Result<(RuleKey, String, Sample), String
             let from = loc.translation_coord;
             let key = RuleKey {
                 tagged_category: clean(&el.names.category),
-                tagged_family: if spatial { String::new() } else { clean(&el.names.family_name) },
-                tagged_type: if spatial { String::new() } else { clean(&el.names.type_name) },
+                code_parameter: if spatial { String::new() } else { clean(parameter) },
+                type_code: if spatial { String::new() } else { el.type_code.as_deref().map(clean).unwrap_or_default() },
                 tag_category: clean(&tag.tag_type.category),
                 tag_family: clean(&tag.tag_type.family_name),
                 tag_type: clean(&tag.tag_type.type_name),
@@ -576,10 +614,11 @@ pub fn observe(
     if request.observations.len() > MAX_OBSERVATIONS_PER_PUSH {
         return bad(format!("at most {MAX_OBSERVATIONS_PER_PUSH} observations in one push"));
     }
+    let parameter = clean(&request.type_code_parameter);
     let mut outcome = ObservationOutcome::default();
     let mut grouped: HashMap<String, (RuleKey, String, Vec<Sample>)> = HashMap::new();
     for obs in &request.observations {
-        for result in samples_of(obs) {
+        for result in samples_of(obs, &parameter) {
             match result {
                 Ok((key, kind, sample)) => {
                     outcome.samples += 1;
@@ -624,26 +663,29 @@ pub fn observe(
 }
 
 /// The rules a task carries: those for these viewport types and, when the items are known, only
-/// for these `(family, type)` pairs (a room, space or area tag rule is about the room, so it is
-/// carried whatever the items are). `None` items means any element (a task that finds the items
-/// already in the room). Compared as names, case-insensitively.
+/// for these type codes (a room, space or area tag rule is about the room, so it is carried
+/// whatever the items are). `None` items means any element (a task that finds the items already
+/// in the room). A rule keyed by another parameter than `parameter` is never carried: its codes
+/// mean something else. Compared case-insensitively.
 pub fn rules_for(
     projects_dir: &Path,
     project: &str,
     viewport_types: &[String],
-    items: Option<&[(String, String)]>,
+    parameter: &str,
+    codes: Option<&[String]>,
 ) -> Result<Vec<RuleSummary>, TagRuleError> {
     let wanted = |s: &str| s.trim().to_lowercase();
     let types: Vec<String> = viewport_types.iter().map(|v| wanted(v)).collect();
-    let pairs: Option<Vec<(String, String)>> = items.map(|i| i.iter().map(|(f, t)| (wanted(f), wanted(t))).collect());
+    let codes: Option<Vec<String>> = codes.map(|c| c.iter().map(|s| wanted(s)).collect());
+    let parameter = wanted(parameter);
     Ok(load_all(projects_dir, project)?
         .iter()
         .filter(|r| types.contains(&wanted(&r.key.viewport_type)))
         .filter(|r| {
             is_spatial(&r.tag_kind)
-                || pairs
-                    .as_ref()
-                    .is_none_or(|p| p.contains(&(wanted(&r.key.tagged_family), wanted(&r.key.tagged_type))))
+                || (!parameter.is_empty()
+                    && wanted(&r.key.code_parameter) == parameter
+                    && codes.as_ref().is_none_or(|c| c.contains(&wanted(&r.key.type_code))))
         })
         .map(RuleSummary::from)
         .collect())
@@ -719,6 +761,7 @@ mod tests {
                         family_name: "Bed".into(),
                         type_name: "Queen".into(),
                     },
+                    type_code: Some("BED-01".into()),
                     location_point: Some(location(x, 0.0, facing)),
                     ..Default::default()
                 }],
@@ -728,7 +771,25 @@ mod tests {
     }
 
     fn push(d: &Path, o: Vec<Observation>) -> ObservationOutcome {
-        observe(d, "p", ObservationsRequest { observations: o }).unwrap()
+        observe(
+            d,
+            "p",
+            ObservationsRequest { type_code_parameter: "Assembly Code".into(), observations: o },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_a_rule_of_the_name_keyed_schema_is_not_loaded() {
+        let d = dir();
+        push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (100.0, 0.0))]);
+        let rule = load_all(d.path(), "p").unwrap().remove(0);
+        let old = TagRule { schema_version: 1, ..rule };
+        write(d.path(), "p", &old).unwrap();
+        assert!(load_all(d.path(), "p").unwrap().is_empty());
+        // The sheet pushed again makes the rule afresh, under the same key.
+        push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (100.0, 0.0))]);
+        assert_eq!(load_all(d.path(), "p").unwrap()[0].schema_version, SCHEMA_VERSION);
     }
 
     #[test]
@@ -772,13 +833,64 @@ mod tests {
     }
 
     #[test]
-    fn test_the_key_ignores_ids_and_case() {
+    fn test_the_key_is_the_type_code_so_names_and_case_do_not_matter() {
         let a = obs(1, 0.0, (1.0, 0.0), (1.0, 0.0));
+        // Another family and type name, the same code in another case: the same kind of item.
         let mut b = obs(2, 0.0, (1.0, 0.0), (1.0, 0.0));
-        b.tag.tagged_elements[0].names.family_name = "BED".into();
+        b.tag.tagged_elements[0].names.family_name = "Divan".into();
+        b.tag.tagged_elements[0].names.type_name = "Double".into();
+        b.tag.tagged_elements[0].type_code = Some("bed-01".into());
         let d = dir();
         push(d.path(), vec![a, b]);
-        assert_eq!(load_all(d.path(), "p").unwrap().len(), 1);
+        let rules = load_all(d.path(), "p").unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].sample_count, 2);
+        assert_eq!(rules[0].key.code_parameter, "Assembly Code");
+    }
+
+    #[test]
+    fn test_two_codes_are_two_rules_and_two_parameters_never_meet() {
+        let a = obs(1, 0.0, (1.0, 0.0), (1.0, 0.0));
+        let mut b = obs(2, 0.0, (1.0, 0.0), (1.0, 0.0));
+        b.tag.tagged_elements[0].type_code = Some("DESK-02".into());
+        let d = dir();
+        push(d.path(), vec![a.clone(), b]);
+        assert_eq!(load_all(d.path(), "p").unwrap().len(), 2);
+        observe(
+            d.path(),
+            "p",
+            ObservationsRequest { type_code_parameter: "Type Mark".into(), observations: vec![a] },
+        )
+        .unwrap();
+        assert_eq!(
+            load_all(d.path(), "p").unwrap().len(),
+            3,
+            "the same code under another parameter is its own rule"
+        );
+    }
+
+    #[test]
+    fn test_an_item_with_no_code_is_skipped_and_so_is_a_push_naming_no_parameter() {
+        let mut none = obs(1, 0.0, (1.0, 0.0), (1.0, 0.0));
+        none.tag.tagged_elements[0].type_code = None;
+        let mut blank = obs(2, 0.0, (1.0, 0.0), (1.0, 0.0));
+        blank.tag.tagged_elements[0].type_code = Some("  ".into());
+        let out = push(dir().path(), vec![none, blank]);
+        assert_eq!((out.samples, out.skipped.len()), (0, 2));
+        assert!(out.skipped[0].reason.contains("Assembly Code"), "{}", out.skipped[0].reason);
+
+        let d = dir();
+        let out = observe(
+            d.path(),
+            "p",
+            ObservationsRequest {
+                type_code_parameter: String::new(),
+                observations: vec![obs(3, 0.0, (1.0, 0.0), (1.0, 0.0))],
+            },
+        )
+        .unwrap();
+        assert_eq!(out.samples, 0);
+        assert!(out.skipped[0].reason.contains("tag_type_code"));
     }
 
     #[test]
@@ -821,8 +933,8 @@ mod tests {
         assert_eq!(
             (
                 rule.key.tagged_category.as_str(),
-                rule.key.tagged_family.as_str(),
-                rule.key.tagged_type.as_str()
+                rule.key.code_parameter.as_str(),
+                rule.key.type_code.as_str()
             ),
             ("Rooms", "", "")
         );
@@ -843,8 +955,8 @@ mod tests {
     fn test_a_room_rule_rides_with_every_task_whatever_items_it_places() {
         let d = dir();
         push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (1.0, 0.0)), room_obs(2, (1001.0, 1.0))]);
-        let other = [("Chair".to_string(), "Std".to_string())];
-        let carried = rules_for(d.path(), "p", &["floor plan".to_string()], Some(&other)).unwrap();
+        let other = ["CHAIR-09".to_string()];
+        let carried = rules_for(d.path(), "p", &["floor plan".to_string()], "Assembly Code", Some(&other)).unwrap();
         assert_eq!(carried.len(), 1);
         assert_eq!(carried[0].tag_kind, "room");
     }
@@ -853,13 +965,19 @@ mod tests {
     fn test_rules_for_filters_by_viewport_type_and_items() {
         let d = dir();
         push(d.path(), vec![obs(1, 0.0, (1.0, 0.0), (1.0, 0.0))]);
-        let all = rules_for(d.path(), "p", &["Floor Plan".to_string()], None).unwrap();
+        let p = "Assembly Code";
+        let all = rules_for(d.path(), "p", &["Floor Plan".to_string()], p, None).unwrap();
         assert_eq!(all.len(), 1);
-        assert!(rules_for(d.path(), "p", &["elevation".to_string()], None).unwrap().is_empty());
-        let items = [("bed".to_string(), "queen".to_string())];
-        assert_eq!(rules_for(d.path(), "p", &["floor plan".to_string()], Some(&items)).unwrap().len(), 1);
-        let other = [("Desk".to_string(), "S".to_string())];
-        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], Some(&other)).unwrap().is_empty());
+        assert!(rules_for(d.path(), "p", &["elevation".to_string()], p, None).unwrap().is_empty());
+        let items = ["bed-01".to_string()];
+        assert_eq!(rules_for(d.path(), "p", &["floor plan".to_string()], p, Some(&items)).unwrap().len(), 1);
+        let other = ["DESK-02".to_string()];
+        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], p, Some(&other)).unwrap().is_empty());
+        // Another parameter's codes mean something else, and none named means no item rules at all.
+        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], "Type Mark", None)
+            .unwrap()
+            .is_empty());
+        assert!(rules_for(d.path(), "p", &["floor plan".to_string()], "", None).unwrap().is_empty());
     }
 
     #[test]

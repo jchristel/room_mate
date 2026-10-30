@@ -779,6 +779,7 @@ mod tests {
             room_label: vec![],
             milestones,
             anchor_model: None,
+            tag_type_code: None,
             comparison_key: None,
             comparison_properties: vec![],
             areas: Default::default(),

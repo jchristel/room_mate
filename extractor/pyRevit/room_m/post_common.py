@@ -460,7 +460,12 @@ def fetch_projects(url=SERVER_URL_PROJECTS):
         if not isinstance(files, list):
             return (False, status, "unexpected {} shape: {}".format(url, text))
         projects = [
-            {"id": f["project_id"], "name": f.get("name") or f["project_id"]}
+            {
+                "id": f["project_id"],
+                "name": f.get("name") or f["project_id"],
+                # The type parameter tag rules are keyed by (settings `tag_type_code`); None when unset.
+                "tag_type_code": (f.get("tag_type_code") or "").strip() or None,
+            }
             for f in files
             if f.get("project_id")
         ]

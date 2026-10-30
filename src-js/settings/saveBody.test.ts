@@ -13,8 +13,8 @@ const wire = (s: Settings): Record<string, unknown> => JSON.parse(JSON.stringify
 
 describe("saveBody", () => {
   it("sends every cleared scalar as null, so the server's merge cannot restore it", () => {
-    const body = wire(settings({ name: "", comparison_key: "   ", anchor_model: null }));
-    for (const key of ["name", "comparison_key", "anchor_model"]) {
+    const body = wire(settings({ name: "", comparison_key: "   ", anchor_model: null, tag_type_code: " " }));
+    for (const key of ["name", "comparison_key", "anchor_model", "tag_type_code"]) {
       expect(Object.hasOwn(body, key), key).toBe(true);
       expect(body[key], key).toBeNull();
     }
@@ -27,9 +27,10 @@ describe("saveBody", () => {
   });
 
   it("trims the values that are set", () => {
-    const body = wire(settings({ name: "  House A ", anchor_model: " ARCH-01 " }));
+    const body = wire(settings({ name: "  House A ", anchor_model: " ARCH-01 ", tag_type_code: " Assembly Code " }));
     expect(body["name"]).toBe("House A");
     expect(body["anchor_model"]).toBe("ARCH-01");
+    expect(body["tag_type_code"]).toBe("Assembly Code");
   });
 
   it("carries whole sections back exactly as they came", () => {

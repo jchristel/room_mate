@@ -2,10 +2,12 @@
 
 ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing one.
 
-`POST /projects/{id}/tagrules/observations {"observations": [...]}`: each observation is one tag
-as `room_m.sheet_tags.take_tags` made it. The server keeps one rule per key (names only) and
-works out where a tag goes relative to its element; the extractor sends what it read and decides
-nothing. Pushing the same sheet again replaces its samples.
+`POST /projects/{id}/tagrules/observations {"type_code_parameter": "...", "observations": [...]}`:
+each observation is one tag as `room_m.sheet_tags.take_tags` made it, its tagged elements carrying
+the type code `attach_type_codes` read. The server keeps one rule per key (the tagged item's type
+code, under the project's `tag_type_code` parameter, which is sent with them) and works out where a
+tag goes relative to its element; the extractor sends what it read and decides nothing. Pushing
+the same sheet again replaces its samples.
 """
 
 import json
@@ -35,7 +37,7 @@ def all_observations(pushed):
     return out
 
 
-def post_observations(project_id, observations):
+def post_observations(project_id, observations, type_code_parameter=None):
     """POST in batches and return `(ok, status, text, outcome)`. `outcome` adds the batches'
     answers up (`samples`, `rules_changed`, `skipped`); it stops at the first batch that fails."""
     from System.Net.Http import StringContent
@@ -43,7 +45,10 @@ def post_observations(project_id, observations):
 
     total = {"samples": 0, "rules_changed": 0, "skipped": []}
     for start in range(0, len(observations), BATCH):
-        body = json.dumps({"observations": observations[start:start + BATCH]}, ensure_ascii=False)
+        body = json.dumps(
+            {"type_code_parameter": type_code_parameter or "", "observations": observations[start:start + BATCH]},
+            ensure_ascii=False,
+        )
         # ensure_ascii=False, as every other push here does (IronPython 2.7 and the code page).
         ok, status, text = _post_content(
             observations_url(project_id), StringContent(body, Encoding.UTF8, "application/json")

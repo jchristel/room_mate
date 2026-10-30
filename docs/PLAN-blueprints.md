@@ -134,7 +134,7 @@ write path into Revit. They have very different risk, which drives the staging.
 17. **Platform: pyRevit** (decided 2026-10-19). The Revit side stays in the existing
     pyRevit extension; no C# add-in and no platform spike. Revisit only if a stage 7 or 8
     obstacle forces it.
-18. **Sheets live in two places, and they are two storage methods** (clarified 2026-10-20).
+18. **Sheets live in two places, and they are two storage methods** (clarified 2026-10-20; **to be replaced by decision 27**).
     - **Inside a blueprint.** A blueprint push always carries the room and its sheets (the
       plugin enforces both, and the server refuses a blueprint push without sheets), so a
       revision holds outline, items, doors **and sheets**. The sheets are layout only:
@@ -202,7 +202,7 @@ write path into Revit. They have very different risk, which drives the staging.
     **dismiss** a task, or **resend** one (back into the queue, which is also the way out of a
     session that died holding tasks *in progress*). Ideally a room's last task status is
     drawn on the plan viewer through a colouring option.
-24. **Tags are not part of a sheet.** A task may put a library sheet into a room whose items
+24. **Tags are not part of a sheet.** (Their key and scope are to be replaced by decision 27.) A task may put a library sheet into a room whose items
     differ from those the sheet was made for, so tags tied to items cannot travel with it. Tag
     placement is a **separate store, future work**, keyed by family name and type name plus
     viewport type, holding where the tag goes relative to the element. A task applies those
@@ -215,14 +215,14 @@ write path into Revit. They have very different risk, which drives the staging.
     (`DataTag`, `DataTaggedElement`, `DataTagType`, in `Data/Objects/Collectors`): positions in mm in the
     model's own coordinates, the tag's category, family and type name, and the tagged element's category,
     family and type name. **The ids in them are provenance, never the lookup**: a blueprint places new
-    elements with new ids, so a rule is found by names. **One rule per key** (tagged category + family +
-    type, tag family + type, viewport type): several observations of one key are reduced to a single rule
+    elements with new ids, so a rule is found by the item's type code (built under decision 27; it was names
+    until then). **One rule per key** (type code, tag family + type, viewport type): several observations of one key are reduced to a single rule
     (median offset) when the rules are made, so the same blueprint always tags the same way. Where a tag
     is placed relative to its element is derived from the raw observation, never stored in the export.
     **Built (2026-10-21):** observations endpoint, the rules store (paper mm in the element's own frame, median of
     samples, a re-pushed sheet replaces its samples), rules carried in a task, and the extractor sending tags. The
     plug-in does not place tags yet (the apply button), and none of it has run in Revit.
-25. **A library sheet carries a stored summary of its room** (decided 2026-10-20, replacing
+25. **A library sheet carries a stored summary of its room** (kept by decision 27) (decided 2026-10-20, replacing
     "worked out at read time, never stored"): the room's bounding box X and Y dimensions and
     its number of items, as at push. They make a sheet comparable with a task's room without
     the sheet's own room being on the server, or unchanged. No room geometry is stored. The
@@ -239,6 +239,40 @@ write path into Revit. They have very different risk, which drives the staging.
     - **Populate room from blueprint, and create RLS** (decision 21). Input: an assignment
       (revision and mapping), the phase, `overwrite_layout`, `create_rls`, `overwrite_rls`; the
       sheets come from the pinned revision.
+
+27. **Three kinds of blueprint, one scope rule** (decided 2026-10-31; **not built**, replaces decisions 18, 24 and 25 where
+    they differ). Supersedes the embedded sheets and the name-keyed tag rules.
+    - **RBP (room blueprint)**: outline, items, doors, as now. It holds no sheets and no tags. An RBP is never deleted, only
+      marked **not in use** (it leaves suggestions and new assignments; what is bound to it stays bound).
+    - **SBP (sheet blueprint)**: the sheet library record, kept by sheet identity, with `blueprint: Option<id>`. `None` is
+      generic. A sheet belongs to at most one RBP. Size, viewports and their boxes are as exported.
+    - **TBP (tag blueprint)**, two kinds, each with the same `blueprint: Option<id>`:
+      - **FFE tag**: keyed by the item's **type code** (a project setting names the type parameter; every instance of the
+        type shares it), the tag type and the viewport type. Location and orientation are in paper mm in the item's frame
+        (the rule store as built). A **bound** tag also names its **instance** (the blueprint item id, which is the Revit
+        element id and survives a re-capture), so a bound tag holds exactly one sample; a generic tag has no instance and
+        holds the median of its samples. **Code only, no fall-back to family and type names**: an item with no code is
+        untagged and reported (`skipped`, `items_without_tags`).
+      - **Room tag**: keyed by the viewport type; its location is relative to the room **boundary** in plan.
+    - **Invariant**: bound means `blueprint` set and, for an FFE tag, `instance` set; generic means both empty.
+    - **A re-push of an RBP is pending, as ever (decision 10); its sheets and observations wait in the pending revision.**
+      **Accepting reconciles**: the bound SBPs and TBPs become the pushed ones; one that is no longer in the push is
+      **unlinked** (`blueprint` and `instance` cleared) and **merged into the generic rule with its key**; a sheet that
+      disappears is unlinked the same way. A first push has nothing pending and reconciles at once. Rejecting drops the
+      payload. A sample's identity is its source sheet plus the tagged element, so a sheet pushed again replaces its own
+      samples wherever they now are and a merged orphan is never counted twice.
+    - **Looking tags up for an RLS**: bound room tags (the chosen sheet is bound; they need no assignment); bound FFE
+      tags by instance, for the items an assignment placed; generic FFE tags by type code for every other item. A room with
+      no assignment of the sheet's RBP gets generic tags for its items.
+    - **A pin covers an assignment's ITEMS only.** Sheets and tags follow the latest accepted push; a task copies them when
+      made, so a task is unaffected.
+    - **Import and export carry the bound sheets and tags**, and an import goes through the same reconcile.
+    - **Open**: a generic room tag has no outline to be relative to. Recommended: bound room tags use the wall recipe
+      (edge by the cyclic shift that fits, fraction along, distance from it: decision 24's elevation marker rule), generic
+      ones are relative to the nearest side of the room's smallest enclosing rectangle.
+    - **Built in four steps**: (1) the type-code setting and rules keyed by it (old rules discarded); (2) `blueprint` on the
+      sheet record, embedded sheets and `offer_to_library` removed; (3) scope and instance on tag rules and the lookup
+      order above; (4) pending payload, reconcile, import and export.
 
 ### Constraint grammar (sketch; stage 0 added `follows` and `class`)
 

@@ -47,6 +47,42 @@ class TakeTags(unittest.TestCase):
         self.assertIn("boom", lines[1])
 
 
+def observation(kind, *elements):
+    return {"tag": {"tag_kind": kind, "tagged_elements": [dict(e) for e in elements]}}
+
+
+class TypeCodes(unittest.TestCase):
+    CODES = {1: "BED-01", 2: "DESK-02"}
+
+    def read(self, element):
+        return self.CODES.get(element.get("host_element_id"))
+
+    def test_each_tagged_item_gets_its_types_code(self):
+        found = [observation("independent", {"host_element_id": 1}, {"host_element_id": 2})]
+        self.assertEqual(0, st.attach_type_codes(found, self.read))
+        self.assertEqual(["BED-01", "DESK-02"], [e["type_code"] for e in found[0]["tag"]["tagged_elements"]])
+
+    def test_an_item_with_no_code_is_counted_and_left_without_one(self):
+        found = [observation("independent", {"host_element_id": 1}, {"host_element_id": 9})]
+        self.assertEqual(1, st.attach_type_codes(found, self.read))
+        self.assertNotIn("type_code", found[0]["tag"]["tagged_elements"][1])
+
+    def test_a_room_space_or_area_tag_needs_no_code_and_is_not_read(self):
+        asked = []
+        found = [observation(kind, {"host_element_id": 5}) for kind in ("room", "Space", "area")]
+        self.assertEqual(0, st.attach_type_codes(found, lambda e: asked.append(e)))
+        self.assertEqual([], asked)
+
+    def test_the_sheet_reader_hands_the_parameter_to_the_code_reader_and_the_push_sends_it(self):
+        here = os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m")
+        with open(os.path.join(here, "exporters", "sheets.py")) as f:
+            self.assertIn("type_code_reader(doc, type_code_parameter)", f.read())
+        with open(os.path.join(here, "post_tags.py")) as f:
+            self.assertIn('"type_code_parameter": type_code_parameter or ""', f.read())
+        with open(os.path.join(here, "post_common.py")) as f:
+            self.assertIn('"tag_type_code"', f.read())
+
+
 class Outcome(unittest.TestCase):
     def test_the_server_answer_is_described_with_the_first_reasons(self):
         skipped = [{"tag_id": i, "reason": "no facing"} for i in range(7)]

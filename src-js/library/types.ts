@@ -105,8 +105,10 @@ export interface Offset {
 
 export interface RuleKey {
   tagged_category: string;
-  tagged_family: string;
-  tagged_type: string;
+  /** The type parameter the code was read from; empty for a room, space or area tag. */
+  code_parameter: string;
+  /** The item's type code; empty for a room, space or area tag. */
+  type_code: string;
   tag_category: string;
   tag_family: string;
   tag_type: string;

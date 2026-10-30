@@ -2,7 +2,7 @@ import type { Settings } from "./types.js";
 
 /** The top-level fields a user can *clear*, and therefore the ones that must go
  *  over the wire as an explicit `null`. See `saveBody`. */
-const CLEARABLE = ["name", "comparison_key", "anchor_model"] as const;
+const CLEARABLE = ["name", "comparison_key", "anchor_model", "tag_type_code"] as const;
 
 /**
  * The PUT body for a save: the whole settings object as it was read, with the
@@ -20,7 +20,7 @@ const CLEARABLE = ["name", "comparison_key", "anchor_model"] as const;
  * **Only TOP-LEVEL fields need this.** The merge is deliberately top-level only,
  * so a section this page edits — `[areas]`, `[doors]`, a milestone — is replaced
  * whole, and an absent key *inside* it simply deserializes to its serde default.
- * That is why the list is three scalars rather than every `Option` in the tree.
+ * That is why the list is four scalars rather than every `Option` in the tree.
  */
 export function saveBody(settings: Settings): Settings {
   const body: Settings = { ...settings };

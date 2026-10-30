@@ -137,7 +137,7 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
       {t.tag_rules.length > 0 ? (
         <>
           <h3>Tag rules ({t.tag_rules.length})</h3>
-          <p className="hint">One rule per tagged family and type, tag type and viewport type, the median of the tags it was learned from. Offsets are in millimetres on the sheet, in the element's own frame (along its facing, then to its left).</p>
+          <p className="hint">One rule per tagged type code, tag type and viewport type, the median of the tags it was learned from. Offsets are in millimetres on the sheet, in the element's own frame (along its facing, then to its left).</p>
           <table>
             <thead>
               <tr>
@@ -152,7 +152,7 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
             <tbody>
               {t.tag_rules.map((r) => (
                 <tr key={r.id}>
-                  <td>{r.key.tagged_family} : {r.key.tagged_type}</td>
+                  <td>{r.key.type_code || r.key.tagged_category}</td>
                   <td>{r.key.tag_family} : {r.key.tag_type}</td>
                   <td>{r.key.viewport_type}</td>
                   <td>{r.placement.head.x.toFixed(1)}, {r.placement.head.y.toFixed(1)}</td>

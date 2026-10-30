@@ -91,13 +91,13 @@ export interface Offset {
   y: number;
 }
 
-/** One tag rule a task carries: names only, offsets in paper millimetres in the element's frame. */
+/** One tag rule a task carries: keyed by the item's type code, offsets in paper millimetres in the element's frame. */
 export interface TagRule {
   id: string;
   key: {
     tagged_category: string;
-    tagged_family: string;
-    tagged_type: string;
+    code_parameter: string;
+    type_code: string;
     tag_category: string;
     tag_family: string;
     tag_type: string;

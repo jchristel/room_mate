@@ -86,7 +86,8 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
             <dl className="facts">
               <dt>Tagged</dt>
               <dd>
-                {rule.key.tagged_category} · {rule.key.tagged_family} · {rule.key.tagged_type}
+                {rule.key.tagged_category} · {rule.key.type_code || "(no code)"}
+                {rule.key.code_parameter ? ` (${rule.key.code_parameter})` : ""}
               </dd>
               <dt>Tag</dt>
               <dd>
