@@ -16,7 +16,6 @@ const bp: Blueprint = {
       note: "moved",
       outline: { coarse: [{ x: 0, y: 0 }], fine: [] },
       items: [],
-      sheets: [{ revit_sheet_id: "1", document_title: "D", sheet_number: "RLS-01", sheet: {} }],
     },
   ],
 };
@@ -27,13 +26,12 @@ describe("export files", () => {
     expect(f?.revision.note).toBe("moved");
     const back = parseFile(JSON.stringify(f));
     expect(back.ok && back.file.name).toBe("1 BED B");
-    expect(back.ok && back.file.revision.sheets?.length).toBe(1);
   });
 
-  it("refuses a file with no sheets: a blueprint is not complete without them", () => {
-    const r = parseFile(JSON.stringify(toFile(bp, 1, "x")));
-    expect(r).toMatchObject({ ok: false });
-    expect(!r.ok && r.error).toContain("sheets");
+  it("carries the room alone: a blueprint's sheets live in the sheet library", () => {
+    const f = toFile(bp, 1, "x");
+    expect(f && "sheets" in f.revision).toBe(false);
+    expect(parseFile(JSON.stringify(f))).toMatchObject({ ok: true });
   });
 
   it("has nothing to export for a revision the blueprint lacks", () => {

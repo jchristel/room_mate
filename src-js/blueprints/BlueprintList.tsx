@@ -1,6 +1,6 @@
 // The left pane: the project's blueprints, one selected at a time, and what can be done with the
 // selected one. Import opens a panel in place of the list's footer. There is no "new from a room": a blueprint
-// comes only from Revit, with its sheets (plan decision 18).
+// comes only from Revit; its sheets are kept in the sheet library, bound to it (plan decision 27).
 
 import { useState } from "react";
 
@@ -38,7 +38,7 @@ export function BlueprintList({ rows, selectedId, busy, onSelect, onImport, onEx
       ) : null}
       {rows === null ? <p className="hint">Reading the blueprints…</p> : null}
       {rows && rows.length > 0 && shown?.length === 0 ? <p className="hint">No blueprint matches.</p> : null}
-      {rows?.length === 0 ? <p className="hint">No blueprints yet. A blueprint is pushed from Revit with its room layout sheets; Import reads an export of one.</p> : null}
+      {rows?.length === 0 ? <p className="hint">No blueprints yet. A blueprint is pushed from Revit, and its room layout sheets go to the sheet library bound to it; Import reads an export of one (the room alone).</p> : null}
       <ul>
         {shown?.map((b) => (
           <li key={b.id}>

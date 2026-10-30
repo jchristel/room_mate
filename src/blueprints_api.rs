@@ -44,11 +44,26 @@ fn dir(state: &Shared) -> Result<std::path::PathBuf, (StatusCode, String)> {
     state.projects_dir().cloned().ok_or(BlueprintError::NotFileBacked).map_err(to_http)
 }
 
+/// The project's blueprints with the number of sheets bound to each: the store holds no sheets
+/// (plan decision 27), so the count is read from the library. Shared by the HTTP list and MCP.
+pub fn list_with_sheet_counts(
+    projects_dir: &std::path::Path,
+    project: &str,
+) -> Result<Vec<BlueprintSummary>, BlueprintError> {
+    let mut rows = blueprints::list(projects_dir, project)?;
+    let sheets = crate::sheets::list(projects_dir, project)
+        .map_err(|e| BlueprintError::Internal(anyhow::anyhow!("the sheet library cannot be read: {e:?}")))?;
+    for row in &mut rows {
+        row.sheets = sheets.iter().filter(|s| s.blueprint.as_deref() == Some(row.id.as_str())).count();
+    }
+    Ok(rows)
+}
+
 pub async fn http_list_blueprints(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
 ) -> Result<Json<Vec<BlueprintSummary>>, (StatusCode, String)> {
-    blueprints::list(&dir(&state)?, &project_id).map(Json).map_err(to_http)
+    list_with_sheet_counts(&dir(&state)?, &project_id).map(Json).map_err(to_http)
 }
 
 pub async fn http_get_blueprint(
@@ -324,8 +339,8 @@ pub struct RevitPushOutcome {
     pub pending_id: Option<u32>,
     pub room_name: String,
     pub skipped: Skipped,
-    /// How many of the push's sheets were also offered to the sheet library (created, updated or
-    /// held for a decision), so they can be used for a room layout sheet on their own.
+    /// How many of the push's sheets the sheet library took, bound to the blueprint (created,
+    /// updated or held for a decision).
     pub library_sheets: usize,
 }
 
@@ -333,14 +348,19 @@ fn source_room_of(room: &crate::service::room_locator::RoomRef) -> SheetRoom {
     SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() }
 }
 
-/// The blueprint's sheets also go to the sheet library, made for the blueprint's room, so the
-/// Library page can make a room layout sheet from one with no blueprint and no items (they carry
-/// no tags either way: the extractor takes them out before a sheet leaves Revit). **A copy**, as
-/// the blueprint's own is (plan decision 18): the library matches by sheet identity, so a re-push
-/// updates it and a changed number waits for a person. A library that cannot take them is logged
-/// and never fails the blueprint push, which is the thing that was asked for.
-fn offer_to_library(state: &Shared, project: &str, room: &SheetRoom, sheets: &[BlueprintSheet]) -> usize {
-    let Ok(projects) = dir(state) else { return 0 };
+/// The blueprint's sheets go to the sheet library, **bound to the blueprint** (plan decision 27) and
+/// made for its room. The library is their only home: it matches by sheet identity, so a re-push
+/// updates a sheet and a changed number waits for a person. They carry no tags (the extractor
+/// takes those out before a sheet leaves Revit). A library that cannot take them fails the
+/// push: the blueprint is stored, and one without sheets is flagged as needing attention.
+fn bind_to_library(
+    state: &Shared,
+    project: &str,
+    blueprint: &str,
+    room: &SheetRoom,
+    sheets: &[BlueprintSheet],
+) -> Result<usize, (StatusCode, String)> {
+    let projects = dir(state)?;
     let summary = crate::sheets_api::summary_of(state, project, room);
     let pushed: Vec<PushedSheet> = sheets
         .iter()
@@ -350,6 +370,7 @@ fn offer_to_library(state: &Shared, project: &str, room: &SheetRoom, sheets: &[B
             sheet_number: s.sheet_number.clone(),
             sheet_name: s.sheet_name.clone(),
             room: Some(room.clone()),
+            blueprint: Some(blueprint.to_string()),
             phase: None,
             room_summary: summary,
             size_mm: None,
@@ -357,19 +378,15 @@ fn offer_to_library(state: &Shared, project: &str, room: &SheetRoom, sheets: &[B
             sheet: s.sheet.clone(),
         })
         .collect();
-    match crate::sheets::push(&projects, project, SheetsPush { sheets: pushed }) {
-        Ok(outcomes) => outcomes.len(),
-        Err(e) => {
-            tracing::warn!("a blueprint's sheets could not be offered to the library: {e:?}");
-            0
-        }
-    }
+    crate::sheets::push(&projects, project, SheetsPush { sheets: pushed })
+        .map(|outcomes| outcomes.len())
+        .map_err(crate::sheets_api::to_http)
 }
 
 /// A blueprint from Revit: the room as the server holds it, plus the sheets the user chose.
-/// **The only way a blueprint is made** (plan decision 18), so sheets are required. A name the
-/// project already has becomes a pending revision of that blueprint, never an overwrite
-/// (decision 10); a new name creates one.
+/// **The only way a blueprint is made** (plan decision 18), so sheets are required; they go to the
+/// sheet library bound to the blueprint (decision 27). A name the project already has becomes a
+/// pending revision of that blueprint, never an overwrite (decision 10); a new name creates one.
 pub async fn http_push_from_revit(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
@@ -391,15 +408,14 @@ pub async fn http_push_from_revit(
         Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
         Err(e) => return Err(service_error(e)),
     };
-    let mut content = captured.content;
-    content.sheets = body.sheets;
-    let library_sheets = offer_to_library(&state, &project_id, &source_room_of(&room), &content.sheets);
+    let content = captured.content;
     let projects = dir(&state)?;
     let name = body.name.trim().to_string();
     let existing = blueprints::list(&projects, &project_id)
         .map_err(to_http)?
         .into_iter()
         .find(|b| b.name == name);
+    let sheet_room = source_room_of(&room);
     let source = SourceRoom { model_id: room.model_id, room_id: room.room_id, room_name: room_name.clone() };
     let (blueprint, outcome, pending_id) = match existing {
         Some(found) => {
@@ -423,6 +439,9 @@ pub async fn http_push_from_revit(
             (created, "created", None)
         }
     };
+    // Bound to the blueprint now that it has an id. **Until the reconcile step (plan decision 27,
+    // step 4) this happens on receipt**, also for a revision that is only pending.
+    let library_sheets = bind_to_library(&state, &project_id, &blueprint.id, &sheet_room, &body.sheets)?;
     let status = if outcome == "created" { StatusCode::CREATED } else { StatusCode::ACCEPTED };
     Ok((
         status,

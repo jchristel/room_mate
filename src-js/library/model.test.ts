@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { degrees, filterRules, ruleLabel, sheetNeedsAttention, sheetReasons, sizeText, suggestionText, summaryText } from "./model.js";
+import { boundText, degrees, filterRules, ruleLabel, sheetNeedsAttention, sheetReasons, sizeText, suggestionText, summaryText } from "./model.js";
 import type { RuleSummary, Suggestion } from "./types.js";
 
 const rule = (code: string, tag: [string, string], vp = "floor plan"): RuleSummary => ({
@@ -10,6 +10,15 @@ const rule = (code: string, tag: [string, string], vp = "floor plan"): RuleSumma
   placement: { head: { x: 1, y: 2 }, rotation: 0, orientation: "Horizontal", has_leader: false, leader_end_condition: "Free" },
   sample_count: 1,
   updated_at: "2026-10-21T00:00:00Z",
+});
+
+describe("sheet binding", () => {
+  it("is the blueprint's name, generic when there is none, and never silently generic for an unknown id", () => {
+    const names = new Map([["bp-1", "1 BED B"]]);
+    expect(boundText("bp-1", names)).toBe("1 BED B");
+    expect(boundText(undefined, names)).toBe("generic");
+    expect(boundText("bp-9", names)).toBe("blueprint bp-9");
+  });
 });
 
 describe("tag rules", () => {

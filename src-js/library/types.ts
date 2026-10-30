@@ -34,6 +34,8 @@ export interface SheetSummary {
   sheet_name: string;
   /** A link to a room: only a sheet that came with a blueprint has one. */
   room: SheetRoom | null;
+  /** The room blueprint the sheet belongs to (its id); absent for a generic sheet. */
+  blueprint?: string;
   room_summary?: RoomSummary;
   /** Paper size measured from the title block, mm. */
   size_mm?: { width_mm: number; height_mm: number };
