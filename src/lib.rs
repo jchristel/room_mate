@@ -81,6 +81,8 @@ pub mod http_error;
 pub mod network;
 pub mod reference;
 pub mod reports_api;
+#[cfg(test)]
+mod sample_data;
 pub mod scoped_push;
 pub mod service;
 pub mod settings;

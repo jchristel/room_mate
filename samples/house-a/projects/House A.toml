@@ -1,0 +1,133 @@
+project_id = "House A"
+is_default = false
+# Rooms are matched across pushes by their Revit id; Area is compared.
+comparison_key = "$id"
+comparison_properties = ["Area"]
+builtin_properties = []
+room_label = [
+    "$name",
+    "$id",
+]
+colour_plans = []
+hierarchy_exclusions = []
+
+# The FF&E TYPE parameter whose value identifies a kind of item. Tag rules are keyed by it (CLAUDE.md,
+# 'Tag rules'); set it to a parameter your models fill in.
+tag_type_code = "Assembly Code"
+
+[sources]
+
+[areas]
+max_wall_thickness = 1.5
+
+# Doors, the project's second primary entity. This project is the doors sample:
+# its rooms and its doors come from the same Revit model, so every door's
+# from_room/to_room resolves against rooms already in the store.
+#
+# `$id` as the comparison key, which is the right answer HERE and worth saying
+# why, because it is the wrong answer for rooms: a door's ElementId is stable
+# across pushes of the same model, so it identifies the same physical leaf. A
+# project that renumbers doors between milestones would want `Mark` instead.
+#
+# Comparing the two room references is the point -- a door that moved between
+# rooms shows up as a `$to_room` difference, and one that lost a reference
+# entirely as a missing property.
+[doors]
+comparison_key = "$id"
+# A door belongs to the room it opens into, else the one it opens from, else it
+# is homeless. The default, stated explicitly here because this is the sample.
+room_attribution = "to_room_then_from_room"
+room_resolution = "off"
+# Reconcile the modeller's authored reference against the attributed room.
+room_reference_property = "Door Room Reference"
+comparison_properties = [
+    "$to_room",
+    "$from_room",
+    "Mark",
+]
+
+[windows]
+room_attribution = "to_room_then_from_room"
+room_resolution = "off"
+comparison_properties = []
+
+[ffe]
+nested_components = "exclude"
+room_resolution = "off"
+comparison_properties = []
+
+[spaces]
+room_models = []
+compared_properties = []
+
+[routing]
+room_height_property = "Ceiling Height"
+room_height_from_ceilings = true
+door_height_from_type_name = true
+door_frame_allowance_mm = 150.0
+door_height_properties = [
+    "Height",
+    "Door Height",
+]
+
+[[hierarchy]]
+name = "Department"
+name_property = "Department"
+
+# Two milestones over the snapshots in this sample: an earlier push, and the current one. The earlier set
+# has no spaces, ceilings or floors (they were not exported yet), which the comparison reports as added.
+[[milestones]]
+name = "Earlier push"
+date = "2026-09-05"
+
+[milestones.reference_snapshots]
+
+[milestones.attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-08-23T00:44:17.490000Z"
+
+[milestones.door_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-08-23T00:44:17.490000Z"
+
+[milestones.window_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-09-04T12:41:04.924000Z"
+
+[milestones.ffe_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-09-05T12:57:49.149000Z"
+
+[milestones.space_attachments]
+
+[milestones.ceiling_attachments]
+
+[milestones.floor_attachments]
+[[milestones]]
+name = "Current push"
+date = "2026-10-30"
+
+[milestones.reference_snapshots]
+
+[milestones.attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+
+[milestones.door_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+
+[milestones.window_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+
+[milestones.ffe_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+
+[milestones.space_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+
+[milestones.ceiling_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+
+[milestones.floor_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+[appearance.rooms]
+line = "#f0c800"
+fill = "#f60404"
+hover = "#3649d3"
+
+[hover]

@@ -26,6 +26,7 @@ it belongs to:
 | [`src/`](src) | The **Rust server** — ingest, storage, the reference join, classification, and the geometry services (`areas`, `adjacency`, `room_locator`). Two binaries: the axum HTTP server and an MCP server over the same read logic. |
 | [`static/`](static) | What the server serves: four **generated and committed** builds — the viewer (`index.html`, `viewer.js`, `viewer.css`), `vendor/renderer.bundle.js`, `settings/` and `reports/` — so a fresh clone runs with no node installed. Nothing here is hand-written any more except `common.js` and `tokens.css`; edit `src-js/` and rebuild. |
 | [`src-js/`](src-js) | The frontend source, built by Vite: the **viewer** (`viewer/`), its **WebGL plan renderer** (`renderer/`), the **settings page** (`settings/`) and the **reports page** (`reports/`), all React where they are not the renderer. Where new frontend code lands; see [Coding Conventions](docs/CODING-CONVENTIONS.md). |
+| [`samples/house-a/`](samples/house-a) | **A sample project to run the server against**: a small house as Revit pushed it, with a blueprint and its assignment. Built by `scripts/make_sample.py` and read by a test, so it stays in the current format. |
 | [`settings/`](settings) | Server config, and one TOML per project (classification tiers, sources, area policy). Every available setting, with a sample of each, is in the [settings reference](docs/SETTINGS.md). |
 | [`scripts/`](scripts) | Dev tooling run *against* this repo: fixture generators, `fixtures/` (sample data to push or upload), `check_areas.py` (the areas diagnostic), `weekly_review.py` (the docs-vs-code drift check), `module_stats.py` (measures the module plan's cells; `--check` reports drift), and the `probe_*`/`analyse_*` pairs that settle an entity's open questions before it is built. Not shipped. |
 | [`docs/`](docs) | Strategy docs, coding conventions, and handovers (landed ones in `docs/Superseded/`). |
@@ -66,6 +67,12 @@ Two constraints follow from where the extractor runs:
 
 ```bash
 cargo run -- --server-settings settings/server.toml --project-settings settings/projects
+```
+
+To try it on the sample (copy `samples/house-a` first if you will write to it):
+
+```bash
+cargo run -- --server-settings samples/house-a/server.toml --project-settings samples/house-a/projects
 ```
 
 Serves the three pages and the API on `http://127.0.0.1:5151` (`--port`, or
