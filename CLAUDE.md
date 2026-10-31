@@ -1074,6 +1074,11 @@ All three are CI gates; clippy runs with `-D warnings`, so a warning is a
 failure. Frontend changes are verified by driving the page, not by reading the
 diff — a bug shipped this week was only visible after expanding a panel.
 
+**The sample project is `samples/house-a/`, and a test keeps it current** (`src/sample_data.rs` boots the server on a copy and reads
+every entity, both milestones, the blueprint and the task its assignment makes). Nothing in it is edited by hand: the snapshots are what Revit
+pushed and the authored data is made by calling the server (`scripts/make_sample.py`). If that test fails after you changed a stored format,
+re-run the script and commit what it writes. `data/` and the authored folders under `settings/projects/` are local runtime data and ignored.
+
 **Stop every server you start, as soon as you no longer need it.** That covers
 `preview_start`, a background `roommate.exe`, and `npm run dev`. Nobody else
 starts them: a server still running on :5151 was started by *some* session,

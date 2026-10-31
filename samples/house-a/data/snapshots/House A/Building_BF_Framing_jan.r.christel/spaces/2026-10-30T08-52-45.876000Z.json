@@ -1,0 +1,4 @@
+{"levels":[{"elevation":110250.0,"id":"1483","name":"LEVEL 00"},{"elevation":113195.0,"id":"290501","name":"LEVEL 01"},{"elevation":116645.0,"id":"1693144","name":"LEVEL 02"}],"model":{"id":"Building_BF_Framing_jan.r.christel","name":"Building_BF_Framing_jan.r.christel","source":"revit"},"model_to_shared":{"matrix":[-0.09572694300782712,-0.9954076312658935,0.9954076312658935,-0.09572694300782712,1094986.9519356785,20547804.362634644]},"phase":"New Construction","project":{"id":"House A","name":"House A"},"room_boundary":"finish_face","schema_version":1,"snapshot":{"taken_at":"2026-10-30T08:52:45.876000Z"},"spaces":[
+
+]
+,"property_codec":1,"property_keys":[],"storage_types":[],"type_property_sets":[]}
