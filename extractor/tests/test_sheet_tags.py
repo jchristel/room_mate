@@ -82,6 +82,11 @@ class TypeCodes(unittest.TestCase):
         with open(os.path.join(here, "post_common.py")) as f:
             self.assertIn('"tag_type_code"', f.read())
 
+    def test_the_chosen_project_keeps_the_type_code_parameter(self):
+        here = os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m")
+        with open(os.path.join(here, "utils", "ui.py")) as f:
+            self.assertIn('"tag_type_code": project.get("tag_type_code")', f.read())
+
     def test_a_blueprint_push_carries_its_tags_and_the_sheets_paper_size(self):
         here = os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m")
         with open(os.path.join(here, "post_blueprints.py")) as f:

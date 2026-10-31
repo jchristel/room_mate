@@ -32,7 +32,7 @@ from room_m.post_common import (
 def choose_project(forms):
     """Force a choice of which SERVER-REGISTERED project to push to, from the
     server's registered settings bundles (`fetch_projects`). Returns
-    `{"id", "name"}`, or `None` to abort the whole run.
+    `{"id", "name", "tag_type_code"}`, or `None` to abort the whole run.
 
     The project id must match a registered settings bundle on the server or the
     push 422s (and the id becomes a storage path key), so it can't be derived
@@ -85,7 +85,9 @@ def choose_project(forms):
     if project is None:
         return None
 
-    return {"id": project["id"], "name": project["name"]}
+    # `tag_type_code` rides along: the sheet and blueprint pushes key their item tags by it, and a
+    # project cut down to id and name made every push say the project named none.
+    return {"id": project["id"], "name": project["name"], "tag_type_code": project.get("tag_type_code")}
 
 
 def choose_phase(selected_docs, forms):
