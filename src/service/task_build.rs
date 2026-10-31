@@ -18,7 +18,7 @@ use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
 use super::elevation_facing::model_room_ring;
 use super::items::{assemble_items, ItemScope};
 use super::placement;
-use super::rls_plan::{check_size, has_elevations, transfer, MarkerPlan, RlsPlan, RlsRequest};
+use super::rls_plan::{check_size, has_elevations, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};
 use super::rls_tag_place::{blueprint_placements, room_tag_head, INSTANCE_MATCH_MM};
 use super::rls_tags::{match_instances, plan_tags, type_code_of, RoomItem};
 use super::room_locator::RoomRef;
@@ -446,6 +446,12 @@ pub fn rls_from_sheet(
         Err(SheetError::Internal(e)) => return Err(ServiceError::Internal(e)),
         Err(e) => return refuse(format!("the sheet library cannot be read: {e:?}")),
     };
+    // The sheet asked for none: the size it was measured at says which one it is (duHast's own
+    // `sheet_size` is blank on these sheets).
+    let sheet_size = sheet_size.or_else(|| {
+        let size = record.size_mm.as_ref()?;
+        size_token(size.width_mm, size.height_mm).map(str::to_string)
+    });
     let Some(task_room) = room_facts(state, project, room)? else {
         return refuse("the room is not in the model");
     };

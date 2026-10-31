@@ -124,6 +124,27 @@ pub fn check_size(size: &str) -> Result<String, String> {
     }
 }
 
+/// The ISO size a measured sheet is, as `a0`..`a3`: the title block's bounding box is a few mm off
+/// its nominal paper (A3 measured 425.8 x 297), so each side may be this share away.
+const SIZE_TOLERANCE: f64 = 0.03;
+
+pub fn size_token(width_mm: f64, height_mm: f64) -> Option<&'static str> {
+    let (long, short) = if width_mm >= height_mm {
+        (width_mm, height_mm)
+    } else {
+        (height_mm, width_mm)
+    };
+    [
+        ("a0", 1189.0, 841.0),
+        ("a1", 841.0, 594.0),
+        ("a2", 594.0, 420.0),
+        ("a3", 420.0, 297.0),
+    ]
+    .into_iter()
+    .find(|(_, l, sh)| (long - l).abs() <= l * SIZE_TOLERANCE && (short - sh).abs() <= sh * SIZE_TOLERANCE)
+    .map(|(token, _, _)| token)
+}
+
 /// Whether a sheet shows any elevation viewport.
 pub fn has_elevations(sheet: &Value) -> bool {
     sheet
@@ -264,6 +285,16 @@ impl Elevation {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The measured A3 of the Rumpus sheet (425.8 x 297) is A3, either way round; a size between
+    /// two papers is none.
+    #[test]
+    fn test_a_measured_sheet_is_the_nearest_iso_size_or_none() {
+        assert_eq!(size_token(425.8, 297.0), Some("a3"));
+        assert_eq!(size_token(297.0, 420.0), Some("a3"));
+        assert_eq!(size_token(841.0, 1189.0), Some("a0"));
+        assert_eq!(size_token(500.0, 350.0), None);
+    }
 
     fn rect(w: f64, h: f64) -> Vec<Pt> {
         vec![(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
