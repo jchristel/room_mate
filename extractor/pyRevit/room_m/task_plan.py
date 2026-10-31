@@ -73,7 +73,7 @@ def _check_one(task, facts):
         if not task.get("sheets"):
             aborts.append(finding(NO_SHEETS, "room {}: the task carries no sheet layout".format(label)))
     elif task.get("create_rls"):
-        # Sheets are made by the RLS create button from a create_rls task (room_m.rls_task);
+        # Sheets are made by the Tasks button from a create_rls task (room_m.rls_task);
         # this button places items only.
         warnings.append(
             finding(SHEETS_ELSEWHERE, "room {}: this task asks for sheets too; this button places items only, so make the sheets with a create_rls task".format(label))

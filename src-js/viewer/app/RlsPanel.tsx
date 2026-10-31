@@ -102,7 +102,7 @@ export function RlsPanel({ zone }: { zone: ZoneRow }) {
         <label title="Replace a sheet that already exists (off, it is skipped with a warning)">
           <input type="checkbox" checked={tool.overwrite} onChange={(e) => patchZoneRls(zoneId, { ...tool, overwrite: e.target.checked })} /> overwrite
         </label>
-        <button className="chip on" disabled={busy || blocked !== null} title={blocked ?? "Queue a room layout sheet task per room, for the Revit session to make (RLS create)"} onClick={() => void make()}>
+        <button className="chip on" disabled={busy || blocked !== null} title={blocked ?? "Queue a room layout sheet task per room, for the Revit session to make (the Tasks button)"} onClick={() => void make()}>
           {busy ? "Working…" : `Make ${tool.roomIds.length} task${tool.roomIds.length === 1 ? "" : "s"}`}
         </button>
         {notice ? <span className="meta">{notice}</span> : null}

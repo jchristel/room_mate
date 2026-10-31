@@ -61,6 +61,7 @@ from duHast.Revit.Views.views_names import get_views_in_name_collision
 from duHast.Revit.Views.viewports_create import create_viewport_without_transaction_wrapper
 
 from room_m import apply_geometry as geo
+from room_m import task_log
 from room_m.apply_facts import RevitFacts
 
 # How far beyond the room a plan view's crop reaches when the template viewport carried none.
@@ -132,11 +133,14 @@ class RlsWriter(object):
         a step fails."""
         plan = verdict["plan"]
         notes = []
+        task_log.step("sheet {} {}: transaction group".format(plan["number"], plan["name"]))
         group = TransactionGroup(self.doc, "RoomMate RLS {}".format(plan["number"]))
         outcome = in_transaction_group(group, lambda: self._write(verdict["task"], plan, notes))
         self.facts.refresh()
         if not outcome.status:
+            task_log.error("sheet {}: rolled back: {}".format(plan["number"], outcome.message.strip()))
             raise RuntimeError(outcome.message.strip() or "the sheet could not be made")
+        task_log.info("sheet {}: made".format(plan["number"]))
         return notes
 
     # -- the sequence -----------------------------------------------------------------------
@@ -146,25 +150,35 @@ class RlsWriter(object):
 
         result = Result()
         try:
+            task_log.step("find the room, its level and phase")
             room = plan["room"]
             level = room.Level
             # the views belong to the phase the room does, whatever the task says
             phase = get_room_phase(self.doc, room)
+            task_log.step("sheet {}".format(plan["number"]))
             sheet = self._sheet(plan)
+            task_log.step("plan view")
             plan_view = self._plan_view(plan, room, level, phase, sheet, notes)
+            task_log.step("elevations")
             self._elevations(plan, room, level, phase, plan_view, sheet, notes)
+            task_log.step("3D views")
             self._three_ds(plan, room, level, phase, sheet, notes)
+            task_log.step("schedule")
             self._schedule(plan, room, sheet, notes)
+            task_log.step("tags")
             self._tags(task, plan, room, plan_view, level, notes)
             notes.append("sheet {} made".format(plan["number"]))
         except Exception as e:
+            task_log.exception("sheet {} failed".format(plan.get("number")))
             result.update_sep(False, str(e))
         return result
 
     def _step(self, name, work):
         """Run `work` (returns a duHast Result) in a transaction of its own; a failure raises."""
+        task_log.step(name)
         outcome = in_transaction(Transaction(self.doc, name), work)
         if not outcome.status:
+            task_log.error("{}: {}".format(name, outcome.message.strip()))
             raise RuntimeError("{}: {}".format(name, outcome.message.strip()))
         return outcome
 

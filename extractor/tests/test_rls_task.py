@@ -232,11 +232,12 @@ class RoomTag(unittest.TestCase):
 
 
 class Source(unittest.TestCase):
-    def test_the_apply_button_leaves_the_rls_tasks_alone(self):
-        with open(os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m", "room_mate.py")) as f:
-            text = f.read()
-        self.assertIn('kinds=["populate_room", "update_room"]', text)
-        self.assertIn('kinds=["create_rls"]', text)
+    def test_sheets_and_items_go_to_their_own_handlers(self):
+        from room_m import task_dispatch
+
+        self.assertEqual(task_dispatch.HANDLER_OF["create_rls"], task_dispatch.RLS)
+        self.assertEqual(task_dispatch.HANDLER_OF["populate_room"], task_dispatch.APPLY)
+        self.assertEqual(task_dispatch.HANDLER_OF["update_room"], task_dispatch.APPLY)
 
 
 if __name__ == "__main__":

@@ -160,7 +160,7 @@ class Panel(unittest.TestCase):
             layout = f.read()
         self.assertRegex(layout, r"layout:\s*\n\s*- RoomMate\s*\n")
         self.assertFalse(os.path.isdir(os.path.join(self.EXT, "Export.panel")))
-        for button in ("ExportAll", "ApplyTasks", "RlsSettings", "RlsCreate", "Server", "Sheets"):
+        for button in ("ExportAll", "Tasks", "RlsSettings", "Server", "Sheets"):
             self.assertTrue(os.path.isdir(os.path.join(self.EXT, "RoomMate.panel", button + ".pushbutton")), button)
 
 

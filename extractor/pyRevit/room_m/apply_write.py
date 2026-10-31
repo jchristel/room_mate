@@ -13,7 +13,7 @@ calls, one task per `TransactionGroup`, so a task that fails leaves the model as
   nearest wall within `WALL_REACH_MM` and flipped to face the right way. Anything else (face
   or work plane based) is reported and left out. The task's instance and type parameters are
   NOT applied yet, and the height is the level's.
-- Sheets are not made here: a `create_rls` task goes through the RLS create button (`room_m.rls_task`,
+- Sheets are not made here: a `create_rls` task goes through the Tasks button (`room_m.rls_task`,
   `room_m.rls_write`); a populate task that asks for sheets is warned about and places items only.
 
 **Not yet run in Revit.**
@@ -36,6 +36,7 @@ from duHast.Revit.Family.family_instance_place import (
 from duHast.Revit.Family.family_utils import load_family
 
 from room_m import apply_geometry as geo
+from room_m import task_log
 from room_m import task_plan
 from room_m.utils.generic import phase_by_name
 
@@ -55,12 +56,14 @@ class TaskWriter(object):
         """Write the task of `verdict`; return its notes. Raises, with the model rolled back,
         when it cannot."""
         task = verdict["task"]
+        task_log.step("task {}: transaction group".format(task.get("id")))
         group = TransactionGroup(self.doc, "RoomMate task {}".format((task.get("room") or {}).get("number", "")))
         group.Start()
         try:
             notes = self._write(task)
             group.Assimilate()
         except Exception:
+            task_log.exception("task {}: rolled back".format(task.get("id")))
             group.RollBack()
             self.facts.refresh()
             raise
@@ -85,6 +88,7 @@ class TaskWriter(object):
     # -- helpers ----------------------------------------------------------------------------
 
     def _in_transaction(self, name, work):
+        task_log.step(name)
         t = Transaction(self.doc, name)
         t.Start()
         try:

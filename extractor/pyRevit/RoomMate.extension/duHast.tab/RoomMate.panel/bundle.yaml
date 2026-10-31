@@ -2,13 +2,12 @@ layout:
   - ExportAll
   - Blueprint
   - Sheets
-  - ApplyTasks
+  - Tasks
   - RlsSettings
-  - RlsCreate
   - Server
 
 # bundle tooltip
-tooltip: Push Revit model data to the RoomMate server, and make the layout sheets and rooms it queues
+tooltip: Push Revit model data to the RoomMate server, and run the tasks it queues
 
 
 # bundle author

@@ -2,7 +2,7 @@
 //
 // A room layout sheet is made from a LIBRARY SHEET and the rooms it is made for, so the tool is a sheet
 // choice and a set of rooms: a click on a room adds it, a second click takes it off. Making it queues a
-// `create_rls` task per room for the Revit session (the RLS create button). **Nothing here places
+// `create_rls` task per room for the Revit session (the Tasks button). **Nothing here places
 // anything**: the server works out where the elevation markers and views go from the walls, and the
 // views take their room's phase in Revit, so there is no phase to enter.
 
