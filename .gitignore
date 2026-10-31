@@ -41,7 +41,7 @@ node_modules/
 # the project settings: blueprints, sheets, tag rules, tasks, assignments and
 # their .backups are one person's testing, not the repo's. Only the TOML files
 # directly in settings/projects are tracked.
-data/
+/data/
 settings/projects/*/
 settings/projects/.backups/
 samples/**/.backups/
