@@ -1,45 +1,64 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="RoomMate - export to the server" Width="640" Height="700" MinWidth="520" MinHeight="460"
+        Title="RoomMate - export to the server" Width="640" Height="740" MinWidth="520" MinHeight="460"
         WindowStartupLocation="CenterScreen" ShowInTaskbar="False">
-    <Grid Margin="16">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" x:Name="tx_models" TextWrapping="Wrap" Margin="0,0,0,10"/>
-
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+        <!-- header: the models being read go in the subtitle -->
+        <Border Grid.Row="0" Background="#2196F3" Padding="15,10">
             <StackPanel>
-                <TextBlock Text="Push to" FontWeight="SemiBold" Margin="0,4,0,4"/>
-                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <TextBlock Text="Project" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_project" SelectionChanged="on_change"/></Grid>
-                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <TextBlock Text="Phase" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_phase" SelectionChanged="on_change"/></Grid>
+                <TextBlock Text="Export" FontSize="20" FontWeight="Bold" Foreground="White"/>
+                <TextBlock x:Name="tx_models" FontSize="12" Foreground="White" Opacity="0.9" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
 
-                <TextBlock Text="What to export" FontWeight="SemiBold" Margin="0,14,0,4"/>
-                <CheckBox x:Name="cb_rooms" Content="Rooms" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                <CheckBox x:Name="cb_doors" Content="Doors" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                <CheckBox x:Name="cb_windows" Content="Windows" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                <CheckBox x:Name="cb_ffe" Content="FF&amp;E (identified by room)" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                <CheckBox x:Name="cb_ffe_by_space" Content="FF&amp;E (identified by space: services models)" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                <CheckBox x:Name="cb_spaces" Content="Spaces" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                <CheckBox x:Name="cb_ceilings" Content="Ceilings" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                <CheckBox x:Name="cb_floors" Content="Floors" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-
-                <TextBlock Text="How much" FontWeight="SemiBold" Margin="0,14,0,4"/>
-                <RadioButton x:Name="rb_whole" Content="The whole model" GroupName="scope" IsChecked="True" Margin="0,2,0,2" Checked="on_scope"/>
-                <RadioButton x:Name="rb_levels" Content="Only these levels (the other levels stay as the server holds them)" GroupName="scope" Margin="0,2,0,2" Checked="on_scope"/>
-                <StackPanel x:Name="sp_levels" Margin="22,4,0,0" IsEnabled="False"/>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="10,6,10,0">
+            <StackPanel>
+                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="0,4,0,4">
+                    <StackPanel>
+                        <TextBlock Text="Push to" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Project" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_project" SelectionChanged="on_change"/></Grid>
+                        <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Phase" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_phase" SelectionChanged="on_change"/></Grid>
+                    </StackPanel>
+                </Border>
+                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="0,4,0,4">
+                    <StackPanel>
+                        <TextBlock Text="What to export" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <CheckBox x:Name="cb_rooms" Content="Rooms" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                        <CheckBox x:Name="cb_doors" Content="Doors" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                        <CheckBox x:Name="cb_windows" Content="Windows" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                        <CheckBox x:Name="cb_ffe" Content="FF&amp;E (identified by room)" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                        <CheckBox x:Name="cb_ffe_by_space" Content="FF&amp;E (identified by space: services models)" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                        <CheckBox x:Name="cb_spaces" Content="Spaces" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                        <CheckBox x:Name="cb_ceilings" Content="Ceilings" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                        <CheckBox x:Name="cb_floors" Content="Floors" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                    </StackPanel>
+                </Border>
+                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="0,4,0,4">
+                    <StackPanel>
+                        <TextBlock Text="How much" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <RadioButton x:Name="rb_whole" Content="The whole model" GroupName="scope" IsChecked="True" Margin="0,2,0,2" Checked="on_scope"/>
+                        <RadioButton x:Name="rb_levels" Content="Only these levels (the other levels stay as the server holds them)" GroupName="scope" Margin="0,2,0,2" Checked="on_scope"/>
+                        <StackPanel x:Name="sp_levels" Margin="22,4,0,0" IsEnabled="False"/>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
 
-        <DockPanel Grid.Row="2" Margin="0,10,0,0" LastChildFill="False">
-            <TextBlock DockPanel.Dock="Left" x:Name="tx_status" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" MaxWidth="400"/>
-            <Button DockPanel.Dock="Right" Content="Cancel" Width="90" Margin="8,0,0,0" IsCancel="True" Click="on_cancel"/>
-            <Button DockPanel.Dock="Right" x:Name="bt_export" Content="Export" Width="90" IsDefault="True" Click="on_export"/>
-        </DockPanel>
+        <!-- status and buttons -->
+        <Border Grid.Row="2" BorderBrush="Gray" BorderThickness="0,1,0,0" Padding="10" Margin="0,6,0,0">
+            <DockPanel LastChildFill="False">
+                <TextBlock DockPanel.Dock="Left" x:Name="tx_status" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" MaxWidth="400"/>
+                <Button DockPanel.Dock="Right" Content="Cancel" Width="90" Margin="8,0,0,0" IsCancel="True" Click="on_cancel"/>
+                <Button DockPanel.Dock="Right" x:Name="bt_export" Content="Export" Width="90" IsDefault="True" Click="on_export"/>
+            </DockPanel>
+        </Border>
     </Grid>
 </Window>
