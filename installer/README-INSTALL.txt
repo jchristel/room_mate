@@ -81,6 +81,21 @@ first thing to quote when reporting it.
 Uninstalling removes the toolbar. Your settings and pushed data stay.
 
 
+Claude Code
+-----------
+
+If Claude Code is installed, the setup registers the RoomMate data server with it
+(the "Register ... with Claude Code" box, ticked by default), so it is there the
+next time Claude Code starts. Nothing to configure. It is removed again on
+uninstall. To redo it, or if Claude Code was installed afterwards:
+
+  powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Programs\RoomMate\Register-ClaudeMcp.ps1"
+
+The dRofus server needs three things only you have (database, project, API key).
+The last page of the setup offers to ask for them; or run the same script with
+-Drofus. To use a RoomMate server somebody else runs on the network, run it with
+-Url http://<address>:5152/mcp and -Token <secret>.
+
 The MCP server
 --------------
 
