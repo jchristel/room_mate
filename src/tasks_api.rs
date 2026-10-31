@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::assignments;
 use crate::blueprints_api::service_error;
+use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_capture::qualify_room;
 use crate::service::rls_plan::{DepthOverride, RlsRequest};
 use crate::service::rls_tags::TagRequest;
@@ -23,29 +24,9 @@ use crate::service::task_build::{
 };
 use crate::service::ServiceError;
 use crate::state::Shared;
-use crate::tasks::{self, Report, ReportOutcome, Task, TaskError, TaskState, TaskSummary, UpdateMode};
+use crate::tasks::{self, Report, ReportOutcome, Task, TaskState, TaskSummary, UpdateMode};
 
 const MAX_ROOMS_PER_REQUEST: usize = 200;
-
-fn to_http(err: TaskError) -> (StatusCode, String) {
-    match err {
-        TaskError::NotFileBacked => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "this server was not started from a settings directory".to_string(),
-        ),
-        TaskError::Invalid(m) => (StatusCode::BAD_REQUEST, m),
-        TaskError::NotFound(m) => (StatusCode::NOT_FOUND, m),
-        TaskError::Conflict(m) => (StatusCode::CONFLICT, m),
-        TaskError::Internal(e) => {
-            tracing::error!("tasks error: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
-        }
-    }
-}
-
-fn dir(state: &Shared) -> Result<std::path::PathBuf, (StatusCode, String)> {
-    state.projects_dir().cloned().ok_or(TaskError::NotFileBacked).map_err(to_http)
-}
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -60,7 +41,7 @@ pub async fn http_list_tasks(
     UrlPath(project_id): UrlPath<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<TaskSummary>>, (StatusCode, String)> {
-    tasks::list(&dir(&state)?, &project_id, params.model_id.as_deref(), params.state)
+    tasks::list(&projects_dir(&state)?, &project_id, params.model_id.as_deref(), params.state)
         .map(Json)
         .map_err(to_http)
 }
@@ -69,7 +50,7 @@ pub async fn http_get_task(
     State(state): State<Shared>,
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<Json<Task>, (StatusCode, String)> {
-    tasks::load(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
+    tasks::load(&projects_dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
 }
 
 /// A create-RLS request for ONE room, to look at before it is made.
@@ -93,7 +74,7 @@ pub async fn http_preview_rls(
     UrlPath(project_id): UrlPath<String>,
     Json(body): Json<RlsPreviewBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let projects = dir(&state)?;
+    let projects = projects_dir(&state)?;
     let room: RoomRef = match qualify_room(&state, &project_id, &body.room_id, None) {
         Ok(Some(room)) => room,
         Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
@@ -207,14 +188,14 @@ pub async fn http_create_tasks(
     UrlPath(project_id): UrlPath<String>,
     Json(body): Json<CreateBody>,
 ) -> Result<(StatusCode, Json<Vec<Made>>), (StatusCode, String)> {
-    let projects = dir(&state)?;
+    let projects = projects_dir(&state)?;
     let mut out = Vec::new();
     match body {
         CreateBody::PopulateRoom { assignment_ids, phase, overwrite_layout, create_rls, overwrite_rls } => {
             if assignment_ids.len() > MAX_ROOMS_PER_REQUEST {
                 return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_REQUEST} rooms at a time")));
             }
-            let all = assignments::list_raw(&projects, &project_id).map_err(crate::blueprints_api::to_http)?;
+            let all = assignments::list_raw(&projects, &project_id).map_err(to_http)?;
             let params = PopulateParams { phase, overwrite_layout, create_rls, overwrite_rls };
             for id in assignment_ids {
                 let Some(assignment) = all.iter().find(|a| a.id == id) else {
@@ -232,7 +213,7 @@ pub async fn http_create_tasks(
             if assignment_ids.len() > MAX_ROOMS_PER_REQUEST {
                 return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_REQUEST} rooms at a time")));
             }
-            let all = assignments::list_raw(&projects, &project_id).map_err(crate::blueprints_api::to_http)?;
+            let all = assignments::list_raw(&projects, &project_id).map_err(to_http)?;
             let params = UpdateParams { phase, mode, dry_run };
             for id in assignment_ids {
                 let Some(assignment) = all.iter().find(|a| a.id == id) else {
@@ -309,7 +290,7 @@ pub async fn http_claim_tasks(
     UrlPath(project_id): UrlPath<String>,
     Json(body): Json<ClaimBody>,
 ) -> Result<Json<Vec<Task>>, (StatusCode, String)> {
-    tasks::claim(&dir(&state)?, &project_id, &body.model_id, &body.kinds)
+    tasks::claim(&projects_dir(&state)?, &project_id, &body.model_id, &body.kinds)
         .map(Json)
         .map_err(to_http)
 }
@@ -325,21 +306,23 @@ pub async fn http_report_tasks(
     UrlPath(project_id): UrlPath<String>,
     Json(body): Json<ReportBody>,
 ) -> Result<Json<Vec<ReportOutcome>>, (StatusCode, String)> {
-    tasks::report(&dir(&state)?, &project_id, body.reports).map(Json).map_err(to_http)
+    tasks::report(&projects_dir(&state)?, &project_id, body.reports)
+        .map(Json)
+        .map_err(to_http)
 }
 
 pub async fn http_dismiss_task(
     State(state): State<Shared>,
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<Json<Task>, (StatusCode, String)> {
-    tasks::dismiss(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
+    tasks::dismiss(&projects_dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
 }
 
 pub async fn http_resend_task(
     State(state): State<Shared>,
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<Json<Task>, (StatusCode, String)> {
-    tasks::resend(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
+    tasks::resend(&projects_dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
 }
 
 #[cfg(test)]

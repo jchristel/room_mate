@@ -661,6 +661,10 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
   item stands for, else the generic one by type code. **Which blueprint item an item stands for** is matched from the room's
   assignment of the sheet's blueprint (`rls_tag_place::blueprint_placements`, `rls_tags::match_instances`: same type code, nearest
   placement within `INSTANCE_MATCH_MM` = 500 mm, one to one); a room with no assignment gets generic rules.
+- **Room tags: two kinds by scope, and one fallback that is neither.** A rule bound to a blueprint is written against the wall of the room the
+  sheet was made for; a generic rule against the sides of the room's rectangle. A rule whose room was not on the server when it was learned
+  has no boundary at all and keeps only the old offset in the plan's axes: that is not a third kind of rule, it is what is left when the room
+  cannot be read, and the plug-in applies it as it always did.
 - **A room tag is written against the room's BOUNDARY, not its middle** (`service::room_tag_place`, `Boundary`). A bound rule uses
   the wall recipe against the COARSE outline of the room the sheet was made for (`record.room`): the nearest edge, the fraction
   along it, paper mm into the room, carried to another room by `best_shift` and refusing a different coarse edge count as the
@@ -1135,6 +1139,9 @@ with one, not here.
 - **`service/` is transport-agnostic** — never imports `axum` or `rmcp`.
   `handlers.rs` and `bin/mcp.rs` are thin adapters over it, and `bin/mcp.rs`
   keeps one tool per HTTP *read* route (update its count when you add one).
+- **A store's error becomes an HTTP answer in one place** (`http_error`): a store implements `StoreError` (what its error IS: not file
+  backed, invalid, not found, conflict, internal) and its adapter calls `to_http` and `projects_dir`; do not write a per-adapter `match`.
+  `settings_api` keeps its own mapping on purpose (404/422 and an internal error that shows its text).
 - **"Signal, not error"** — an unresolved cross-reference is usually a reported
   state, not a failure.
 - **Line endings are LF**; see Traps below for the one way that goes wrong here.

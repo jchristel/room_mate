@@ -15,24 +15,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::assignments::{self, AssignRequest, Assignment, AssignmentRow, ItemOverride, Mapping, RoomKey};
 use crate::blueprints;
-use crate::blueprints_api::{service_error, to_http};
+use crate::blueprints_api::service_error;
+use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_capture::{qualify_room, room_ring};
 use crate::service::blueprint_solve::{solve_rooms, RoomSolve};
 use crate::state::Shared;
-
-fn dir(state: &Shared) -> Result<std::path::PathBuf, (StatusCode, String)> {
-    state
-        .projects_dir()
-        .cloned()
-        .ok_or(crate::blueprints::BlueprintError::NotFileBacked)
-        .map_err(to_http)
-}
 
 pub async fn http_list_assignments(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
 ) -> Result<Json<Vec<AssignmentRow>>, (StatusCode, String)> {
-    assignments::list(&dir(&state)?, &project_id).map(Json).map_err(to_http)
+    assignments::list(&projects_dir(&state)?, &project_id).map(Json).map_err(to_http)
 }
 
 #[derive(Deserialize)]
@@ -78,14 +71,16 @@ pub async fn http_assign(
         overrides: body.overrides,
         note: body.note,
     };
-    assignments::assign(&dir(&state)?, &project_id, request).map(Json).map_err(to_http)
+    assignments::assign(&projects_dir(&state)?, &project_id, request)
+        .map(Json)
+        .map_err(to_http)
 }
 
 pub async fn http_delete_assignment(
     State(state): State<Shared>,
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    assignments::delete(&dir(&state)?, &project_id, &id).map_err(to_http)?;
+    assignments::delete(&projects_dir(&state)?, &project_id, &id).map_err(to_http)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -108,7 +103,7 @@ pub async fn http_solve_blueprint(
     if body.room_ids.len() > MAX_ROOMS_PER_BATCH {
         return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_BATCH} rooms at a time")));
     }
-    let blueprint = blueprints::load(&dir(&state)?, &project_id, &id).map_err(to_http)?;
+    let blueprint = blueprints::load(&projects_dir(&state)?, &project_id, &id).map_err(to_http)?;
     let number = body.revision.unwrap_or(blueprint.current_revision);
     let Some(revision) = blueprint.revision(number) else {
         return Err((StatusCode::NOT_FOUND, format!("the blueprint has no revision {number}")));
@@ -150,7 +145,7 @@ pub async fn http_assign_many(
     if body.room_ids.len() > MAX_ROOMS_PER_BATCH {
         return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_BATCH} rooms at a time")));
     }
-    let projects = dir(&state)?;
+    let projects = projects_dir(&state)?;
     let mut out = Vec::new();
     for room_id in body.room_ids {
         let one = async {

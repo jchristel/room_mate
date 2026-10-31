@@ -34,6 +34,7 @@ use axum::{
     Json,
 };
 
+use crate::http_error::{projects_dir, to_http};
 use crate::reports::{SavedReport, SavedReportSummary};
 use crate::state::{is_path_safe_component, Shared};
 
@@ -157,30 +158,11 @@ pub fn delete_report(projects_dir: &Path, project_id: &str, report_id: &str) -> 
 // Axum adapters
 // ---------------------------------------------------------------------------
 
-fn projects_dir(state: &Shared) -> Result<PathBuf, ReportsError> {
-    state.projects_dir().cloned().ok_or(ReportsError::NotFileBacked)
-}
-
-fn to_http(err: ReportsError) -> (StatusCode, String) {
-    match err {
-        ReportsError::NotFileBacked => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "this server was not started from a settings directory".to_string(),
-        ),
-        ReportsError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-        ReportsError::Invalid(msg) => (StatusCode::BAD_REQUEST, msg),
-        ReportsError::Internal(e) => {
-            tracing::error!("saved reports error: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
-        }
-    }
-}
-
 pub async fn http_list_reports(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
 ) -> Result<Json<Vec<SavedReportSummary>>, (StatusCode, String)> {
-    let dir = projects_dir(&state).map_err(to_http)?;
+    let dir = projects_dir(&state)?;
     list_reports(&dir, &project_id).map(Json).map_err(to_http)
 }
 
@@ -188,7 +170,7 @@ pub async fn http_get_report(
     State(state): State<Shared>,
     UrlPath((project_id, report_id)): UrlPath<(String, String)>,
 ) -> Result<Json<SavedReport>, (StatusCode, String)> {
-    let dir = projects_dir(&state).map_err(to_http)?;
+    let dir = projects_dir(&state)?;
     get_report(&dir, &project_id, &report_id).map(Json).map_err(to_http)
 }
 
@@ -197,7 +179,7 @@ pub async fn http_save_report(
     UrlPath((project_id, report_id)): UrlPath<(String, String)>,
     Json(report): Json<SavedReport>,
 ) -> Result<Json<SavedReport>, (StatusCode, String)> {
-    let dir = projects_dir(&state).map_err(to_http)?;
+    let dir = projects_dir(&state)?;
     save_report(&dir, &project_id, &report_id, &report).map_err(to_http)?;
     Ok(Json(report))
 }
@@ -206,7 +188,7 @@ pub async fn http_delete_report(
     State(state): State<Shared>,
     UrlPath((project_id, report_id)): UrlPath<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let dir = projects_dir(&state).map_err(to_http)?;
+    let dir = projects_dir(&state)?;
     delete_report(&dir, &project_id, &report_id).map_err(to_http)?;
     Ok(StatusCode::NO_CONTENT)
 }
