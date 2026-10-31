@@ -106,6 +106,8 @@ export interface Bundle {
   type_code_parameter?: string;
   /** Tag rules with their samples, opaque to this page. */
   rules?: unknown;
+  /** Bind the sheets even when another blueprint holds them. The server refuses an import without it. */
+  take_over_sheets?: boolean;
 }
 
 export interface Blueprint {

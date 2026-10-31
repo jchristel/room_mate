@@ -449,7 +449,9 @@ get wrong:
   tags generic. Accepting applies after the revision is accepted; if that fails the answer says the revision was accepted and
   the sheets and tags were not. **Export and Import carry the same bundle** (`GET .../blueprints/{id}/bundle`: the bound
   sheets and rules with their samples; an import re-binds the rules to the new blueprint, and into an existing name it
-  waits as a pending revision like any other). A blueprint made before this keeps its old embedded `sheets` in the file,
+  waits as a pending revision like any other). **A sheet belongs to one blueprint, so an import is refused (409, before anything is stored) when
+  its sheets are bound to another blueprint of the project** (`blueprint_bundle::refuse_conflicts`); the page offers "Move the sheets here and
+  import" (`take_over_sheets`). The Revit push sets it itself: choosing a sheet for a room in Revit is the decision. A blueprint made before this keeps its old embedded `sheets` in the file,
   which are ignored: push it again to bind its sheets.
 - **A blueprint is never deleted, only marked not in use** (`Blueprint::in_use`, `PUT` with `in_use`; the page's "Mark not in use"). Not in
   use: `assignments::assign` refuses it, `suggest` leaves out the sheets bound to it, and the page stops nagging about it. What is bound to it
@@ -656,7 +658,9 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
   ITEM (`instance` = the item id, the Revit element id the blueprint kept) when the item is one of the blueprint's (its current
   revision: a revision waiting to be accepted brings its tags with it); a tag on any other item stays generic. A bound item rule holds exactly one sample. **A
   sample lives in exactly one rule**: identified by its source (sheet, tag, element), pushing it again under another key moves it
-  and a rule left empty is deleted (`tag_rule_binding::take_moved_samples_out`). `rules_for` carries the generic rules and those bound to the
+  and a rule left empty is deleted (`tag_rule_binding::take_moved_samples_out`). **A sheet's binding decides its tags' scope**: a push that
+  names no blueprint (the Sheets button) keeps the tags of a sheet already bound to one bound to it (`ObserveContext::sheet_blueprints`), so
+  re-sending a bound sheet never leaves it bound with generic tags; a named blueprint wins. `rules_for` carries the generic rules and those bound to the
   sheet's blueprint, never another's. For an item, `rls_tags::rule_for` takes the rule bound to the blueprint item the room's
   item stands for, else the generic one by type code. **Which blueprint item an item stands for** is matched from the room's
   assignment of the sheet's blueprint (`rls_tag_place::blueprint_placements`, `rls_tags::match_instances`: same type code, nearest

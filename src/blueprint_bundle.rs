@@ -46,6 +46,12 @@ pub struct Bundle {
     /// Tag rules of an exported bundle (`tag_rules::TagRule`, samples included).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Value>,
+    /// Bind the sheets even when they are bound to ANOTHER blueprint, taking them from it. A sheet is one
+    /// library record and belongs to at most one blueprint, so an import into the project the bundle came
+    /// from would otherwise move them without a word. The Revit push sets it (choosing a sheet for this
+    /// room in Revit is the decision); an import does not, and is refused until a person says so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub take_over_sheets: bool,
 }
 
 /// What applying a bundle did.
@@ -98,6 +104,62 @@ pub fn bind_to_library(
         .map_err(to_http)
 }
 
+/// The sheets of a bundle that are already bound to a blueprint other than `blueprint` (`None`: one not yet
+/// made), each as "number (bound to name)". Matched by sheet identity, as the library does.
+pub fn sheet_conflicts(
+    projects_dir: &std::path::Path,
+    project: &str,
+    blueprint: Option<&str>,
+    sheets_in: &[BlueprintSheet],
+) -> Result<Vec<String>, (StatusCode, String)> {
+    let records = sheets::load_all(projects_dir, project).map_err(to_http)?;
+    let names: std::collections::HashMap<String, String> = crate::blueprints::list(projects_dir, project)
+        .map_err(to_http)?
+        .into_iter()
+        .map(|b| (b.id, b.name))
+        .collect();
+    Ok(sheets_in
+        .iter()
+        .filter_map(|s| {
+            let held = records
+                .iter()
+                .find(|r| r.revit_sheet_id == s.revit_sheet_id && r.document_title == s.document_title)?;
+            let other = held.blueprint.as_deref().filter(|b| Some(*b) != blueprint)?;
+            Some(format!(
+                "{} (bound to {:?})",
+                s.sheet_number,
+                names.get(other).map_or(other, String::as_str)
+            ))
+        })
+        .collect())
+}
+
+/// Refuse a bundle whose sheets would be taken from another blueprint, unless it says to (`take_over_sheets`).
+/// A 409 that names the sheets. Checked before anything is written, and again by `apply`.
+pub fn refuse_conflicts(
+    projects_dir: &std::path::Path,
+    project: &str,
+    blueprint: Option<&str>,
+    bundle: &Bundle,
+) -> Result<(), (StatusCode, String)> {
+    if bundle.take_over_sheets {
+        return Ok(());
+    }
+    let held = sheet_conflicts(projects_dir, project, blueprint, &bundle.sheets)?;
+    if held.is_empty() {
+        return Ok(());
+    }
+    Err((
+        StatusCode::CONFLICT,
+        format!(
+            "{} of the sheets are already bound to another blueprint ({}); a sheet belongs to one blueprint, so importing would move {}. Import again and choose to move them, or leave them out.",
+            held.len(),
+            held.join(", "),
+            if held.len() == 1 { "it" } else { "them" }
+        ),
+    ))
+}
+
 /// Apply a bundle to a blueprint that exists and whose revision is current: bind its sheets and tags
 /// and unlink what it no longer carries. `room` is the blueprint's source room, when it has one.
 pub fn apply(
@@ -108,6 +170,7 @@ pub fn apply(
     bundle: &Bundle,
 ) -> Result<Applied, (StatusCode, String)> {
     let projects = projects_dir(state)?;
+    refuse_conflicts(&projects, project, Some(blueprint), bundle)?;
     let mut applied = Applied::default();
     if !bundle.sheets.is_empty() {
         applied.sheets = bind_to_library(state, project, blueprint, room, &bundle.sheets)?;
@@ -168,6 +231,7 @@ pub fn export(state: &Shared, project: &str, blueprint: &str) -> Result<Bundle, 
         type_code_parameter,
         observations: None,
         rules: Some(serde_json::to_value(&rules).map_err(|e| invalid("tag rules", e))?),
+        take_over_sheets: false,
     })
 }
 
@@ -346,7 +410,7 @@ mod tests {
             sheets,
             type_code_parameter: "Assembly Code".into(),
             observations: Some(Value::Array(tags)),
-            rules: None,
+            ..Default::default()
         }
     }
 
@@ -470,8 +534,7 @@ mod tests {
         let silent = Bundle {
             sheets: vec![sheet("100", "RLS-1")],
             type_code_parameter: String::new(),
-            observations: None,
-            rules: None,
+            ..Default::default()
         };
         let applied = apply(&state, "p1", &bp.id, Some(&room_link()), &silent).unwrap();
         assert_eq!((applied.unlinked_tag_rules, applied.tags.is_none()), (0, true));
@@ -530,6 +593,131 @@ mod tests {
             apply(&bare, "p1", "x", None, &Bundle::default()).unwrap_err().0,
             StatusCode::SERVICE_UNAVAILABLE
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn pushed_bound(dir: &std::path::Path, id: &str, blueprint: &str) {
+        let pushed = sheets::PushedSheet {
+            revit_sheet_id: id.into(),
+            document_title: "m1".into(),
+            sheet_number: format!("RLS-{id}"),
+            sheet_name: String::new(),
+            room: None,
+            blueprint: Some(blueprint.into()),
+            phase: None,
+            room_summary: None,
+            size_mm: None,
+            rooms: vec![],
+            sheet: json!({ "view_ports": [] }),
+        };
+        sheets::push(dir, "p1", SheetsPush { sheets: vec![pushed] }).unwrap();
+    }
+
+    #[test]
+    fn test_an_import_refuses_sheets_bound_to_another_blueprint_until_told_to_take_them() {
+        let dir = temp_dir("conflict");
+        let state = state(&dir, &["p1"]);
+        push_room(&state);
+        let a = make_blueprint(&dir, "p1", "1 BED A", &["101"]);
+        let b = make_blueprint(&dir, "p1", "1 BED B", &["101"]);
+        pushed_bound(&dir, "100", &a.id);
+
+        // Applying the same sheet to blueprint B, as an import does (no take-over): refused, nothing moved.
+        let import = Bundle { sheets: vec![sheet("100", "RLS-100")], ..Default::default() };
+        let (status, message) = apply(&state, "p1", &b.id, Some(&room_link()), &import).unwrap_err();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(
+            message.contains("already bound to another blueprint") && message.contains("1 BED A"),
+            "{message}"
+        );
+        assert_eq!(sheets::bound_to(&dir, "p1", &a.id).unwrap().len(), 1, "still A's");
+        assert!(sheets::bound_to(&dir, "p1", &b.id).unwrap().is_empty());
+
+        // The same blueprint's own sheets are not a conflict, so a re-apply to A goes through.
+        assert!(apply(&state, "p1", &a.id, Some(&room_link()), &import).is_ok());
+
+        // Told to take them, B gets the sheet and A loses it.
+        let take = Bundle { take_over_sheets: true, ..import };
+        apply(&state, "p1", &b.id, Some(&room_link()), &take).unwrap();
+        assert_eq!(sheets::bound_to(&dir, "p1", &b.id).unwrap().len(), 1);
+        assert!(sheets::bound_to(&dir, "p1", &a.id).unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_sheet_conflicts_name_each_sheet_and_ignore_generic_ones_and_other_projects() {
+        let dir = temp_dir("conflict-list");
+        let state = state(&dir, &["p1", "p2"]);
+        push_room(&state);
+        let a = make_blueprint(&dir, "p1", "1 BED A", &["101"]);
+        pushed_bound(&dir, "100", &a.id);
+        // sheet 300 is generic: in the library, bound to nothing.
+        let generic = sheets::PushedSheet {
+            revit_sheet_id: "300".into(),
+            document_title: "m1".into(),
+            sheet_number: "RLS-300".into(),
+            sheet_name: String::new(),
+            room: None,
+            blueprint: None,
+            phase: None,
+            room_summary: None,
+            size_mm: None,
+            rooms: vec![],
+            sheet: json!({ "view_ports": [] }),
+        };
+        sheets::push(&dir, "p1", SheetsPush { sheets: vec![generic] }).unwrap();
+        let wanted = [
+            sheet("100", "RLS-100"),
+            sheet("300", "RLS-300"),
+            sheet("400", "RLS-400"),
+        ];
+        let held = sheet_conflicts(&dir, "p1", None, &wanted).unwrap();
+        assert_eq!(
+            held,
+            ["RLS-100 (bound to \"1 BED A\")"],
+            "only the bound one; a generic or unknown sheet is free to take"
+        );
+        assert!(
+            sheet_conflicts(&dir, "p2", None, &wanted).unwrap().is_empty(),
+            "another project has its own library"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_creating_or_pushing_a_revision_with_a_conflicting_bundle_is_refused_before_anything_is_stored() {
+        use crate::blueprints_api::{http_create_blueprint, http_push_revision};
+        use axum::extract::Path as UrlPath;
+        let dir = temp_dir("handlers");
+        let state = state(&dir, &["p1"]);
+        push_room(&state);
+        let a = make_blueprint(&dir, "p1", "1 BED A", &["101"]);
+        pushed_bound(&dir, "100", &a.id);
+        let content = crate::blueprints::load(&dir, "p1", &a.id).unwrap().current().unwrap().content.clone();
+        let bundle =
+            serde_json::to_value(Bundle { sheets: vec![sheet("100", "RLS-100")], ..Default::default() }).unwrap();
+
+        // A new blueprint: refused, and it was not made.
+        let create = CreateRequest {
+            name: "copy".into(),
+            source: None,
+            note: None,
+            bundle: Some(bundle.clone()),
+            content: content.clone(),
+        };
+        let refused = http_create_blueprint(State(state.clone()), UrlPath("p1".into()), Json(create))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.0, StatusCode::CONFLICT);
+        assert_eq!(blueprints::list(&dir, "p1").unwrap().len(), 1, "no half-made blueprint");
+
+        // A revision of another blueprint: refused, and nothing is pending.
+        let b = make_blueprint(&dir, "p1", "1 BED B", &["101"]);
+        let push = crate::blueprints::PushRequest { origin: None, note: None, bundle: Some(bundle), content };
+        let refused = http_push_revision(State(state.clone()), UrlPath(("p1".into(), b.id.clone())), Json(push))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.0, StatusCode::CONFLICT);
+        assert!(blueprints::load(&dir, "p1", &b.id).unwrap().pending.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -63,7 +63,12 @@ pub async fn http_create_blueprint(
     Json(request): Json<CreateRequest>,
 ) -> Result<(StatusCode, Json<Blueprint>), (StatusCode, String)> {
     let bundle = parse_bundle(request.bundle.clone())?;
-    let created = blueprints::create(&projects_dir(&state)?, &project_id, request).map_err(to_http)?;
+    let projects = projects_dir(&state)?;
+    if let Some(bundle) = &bundle {
+        // Before the blueprint exists: a refusal leaves nothing behind.
+        blueprint_bundle::refuse_conflicts(&projects, &project_id, None, bundle)?;
+    }
+    let created = blueprints::create(&projects, &project_id, request).map_err(to_http)?;
     if let Some(bundle) = bundle {
         // An imported blueprint: its sheets and rules go with it, bound to the new blueprint.
         let room = source_sheet_room(&created);
@@ -103,7 +108,12 @@ pub async fn http_push_revision(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
     Json(request): Json<PushRequest>,
 ) -> Result<(StatusCode, Json<Blueprint>), (StatusCode, String)> {
-    blueprints::push(&projects_dir(&state)?, &project_id, &id, request)
+    let projects = projects_dir(&state)?;
+    if let Some(bundle) = parse_bundle(request.bundle.clone())? {
+        // Refuse now, not when it is accepted: by then the revision would be in and the sheets not.
+        blueprint_bundle::refuse_conflicts(&projects, &project_id, Some(&id), &bundle)?;
+    }
+    blueprints::push(&projects, &project_id, &id, request)
         .map(|b| (StatusCode::ACCEPTED, Json(b)))
         .map_err(to_http)
 }
@@ -409,6 +419,8 @@ pub async fn http_push_from_revit(
         type_code_parameter: body.type_code_parameter,
         observations: body.observations,
         rules: None,
+        // Choosing this sheet for this room in Revit is the decision to bind it here.
+        take_over_sheets: true,
     };
     let mut applied = Applied::default();
     let (blueprint, outcome, pending_id) = match existing {

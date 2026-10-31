@@ -531,11 +531,30 @@ pub struct ObserveContext<'a> {
     /// The room blueprint the push is for, with the ids of the items it holds: a tag on one of those
     /// is bound to it (and to that item), a tag on any other item is generic.
     pub blueprint: Option<(String, std::collections::HashSet<String>)>,
+    /// For a push that names no blueprint (the Sheets button): the blueprint each SHEET is already bound to,
+    /// by `(document title, Revit sheet id)`, and the items of each such blueprint. A sheet bound to a
+    /// blueprint keeps its tags bound whichever button pushed them; without this the second push would
+    /// move the sheet's tag samples out of the blueprint's rules into the generic ones while the sheet
+    /// stayed bound. An explicit `blueprint` wins over this.
+    pub sheet_blueprints: std::collections::HashMap<(String, String), String>,
+    pub blueprint_items: std::collections::HashMap<String, std::collections::HashSet<String>>,
     /// A room tag head written against its room's boundary: `(model id, room id, head in the model's
     /// frame, mm, bound, view scale)`. `None`: the room is not on the server, and the sample keeps
     /// only its offset in the plan's axes.
     #[allow(clippy::type_complexity)]
     pub boundary: Option<&'a dyn Fn(&str, i64, P3, bool, f64) -> Option<Boundary>>,
+}
+
+impl ObserveContext<'_> {
+    /// The blueprint a sheet's tags belong to and its items: the push's own blueprint if it names one,
+    /// else the one the sheet is already bound to. `None`: the tags are generic.
+    fn scope_of(&self, sheet: &SourceSheet) -> Option<(&str, &std::collections::HashSet<String>)> {
+        if let Some((id, items)) = &self.blueprint {
+            return Some((id, items));
+        }
+        let id = self.sheet_blueprints.get(&(sheet.document_title.clone(), sheet.revit_sheet_id.clone()))?;
+        Some((id, self.blueprint_items.get(id)?))
+    }
 }
 
 /// `(key, kind, sample)` for each tagged element of the observation that can be used, and a
@@ -591,9 +610,9 @@ fn samples_of(
             let element_id = if el.link_element_id > 0 { el.link_element_id } else { el.host_element_id };
             // Bound to the push's blueprint: a room tag always, an item's tag only when the item is one of
             // the blueprint's (its id is the Revit element id, which the blueprint kept).
-            let (blueprint, instance) = match &ctx.blueprint {
-                Some((id, items)) if spatial => (id.clone(), String::new()),
-                Some((id, items)) if items.contains(&element_id.to_string()) => (id.clone(), element_id.to_string()),
+            let (blueprint, instance) = match ctx.scope_of(&obs.sheet) {
+                Some((id, _)) if spatial => (id.to_string(), String::new()),
+                Some((id, items)) if items.contains(&element_id.to_string()) => (id.to_string(), element_id.to_string()),
                 _ => (String::new(), String::new()),
             };
             let key = RuleKey {
@@ -916,7 +935,7 @@ mod tests {
     fn bound_as(id: &str, items: &[&str]) -> ObserveContext<'static> {
         ObserveContext {
             blueprint: Some((id.to_string(), items.iter().map(|s| s.to_string()).collect())),
-            boundary: None,
+            ..Default::default()
         }
     }
 
@@ -924,7 +943,7 @@ mod tests {
     fn bound(items: &[&str]) -> ObserveContext<'static> {
         ObserveContext {
             blueprint: Some(("bp".to_string(), items.iter().map(|s| s.to_string()).collect())),
-            boundary: None,
+            ..Default::default()
         }
     }
 
@@ -996,7 +1015,7 @@ mod tests {
             seen.borrow_mut().push((model.to_string(), room, head.x, bound, scale));
             Some(Boundary { of: BoundaryOf::Rectangle, edge: 0, along: 0.25, off: 20.0 })
         };
-        let ctx = ObserveContext { blueprint: None, boundary: Some(&f) };
+        let ctx = ObserveContext { boundary: Some(&f), ..Default::default() };
         push_for(d.path(), vec![room_obs(1, (1500.0, 250.0))], None, &ctx);
         let rule = &load_all(d.path(), "p").unwrap()[0];
         assert_eq!(

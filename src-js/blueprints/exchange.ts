@@ -64,6 +64,13 @@ export function parseFile(text: string): { ok: true; file: ExportFile } | { ok: 
   return { ok: true, file: f as ExportFile };
 }
 
+/** The server refuses an import whose sheets another blueprint holds (a sheet belongs to one). */
+export const isSheetConflict = (error: string): boolean => error.includes("already bound to another blueprint");
+
+/** The same file, told to take the sheets from the blueprint that holds them. */
+export const takingTheSheets = (file: ExportFile): ExportFile =>
+  file.bundle ? { ...file, bundle: { ...file.bundle, take_over_sheets: true } } : file;
+
 export type Imported = { kind: "created"; blueprint: Blueprint } | { kind: "pending"; blueprint: Blueprint; into: string };
 
 /** Put an exported revision into `project`. See the module header for the rule. */

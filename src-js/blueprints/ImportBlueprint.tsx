@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 
 import * as api from "./api.js";
-import { importInto, parseFile, toFile, type ExportFile, type Imported } from "./exchange.js";
+import { importInto, isSheetConflict, parseFile, takingTheSheets, toFile, type ExportFile, type Imported } from "./exchange.js";
 import type { BlueprintSummary, ProjectRow } from "./types.js";
 
 export interface ImportProps {
@@ -36,13 +36,19 @@ export function ImportBlueprint({ project, projects, existing, onImported, onCan
       .catch((e: unknown) => setError(String((e as Error).message ?? e)));
   }, [source]);
 
+  // An import whose sheets another blueprint holds is refused; the person can say to move them, and this is
+  // the file waiting for that answer.
+  const [held, setHeld] = useState<{ file: ExportFile; origin: string } | null>(null);
+
   const run = async (file: ExportFile, origin: string) => {
     setBusy(true);
     setError(null);
+    setHeld(null);
     const r = await importInto(project, existing, file, origin);
     setBusy(false);
-    if (r.ok) onImported(r.value);
-    else setError(r.error);
+    if (r.ok) return onImported(r.value);
+    setError(r.error);
+    if (isSheetConflict(r.error)) setHeld({ file, origin });
   };
 
   const fromProject = async () => {
@@ -74,6 +80,13 @@ export function ImportBlueprint({ project, projects, existing, onImported, onCan
         to accept or reject.
       </p>
       {error ? <p className="error">{error}</p> : null}
+      {held ? (
+        <div className="actions">
+          <button type="button" disabled={busy} onClick={() => void run(takingTheSheets(held.file), held.origin)}>
+            Move the sheets here and import
+          </button>
+        </div>
+      ) : null}
       {others.length > 0 ? (
         <fieldset>
           <legend>From another project on this server</legend>
