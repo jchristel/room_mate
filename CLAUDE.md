@@ -1189,7 +1189,8 @@ with one, not here.
 
 - **Shipped binaries are x64, and they come from CI, not a dev machine.**
   `release.yml` builds on `windows-latest` (x64), and that is the only source of
-  an installer anyone is given. A dev VM may be Windows on arm64 (this one has
+  an installer anyone is given. The Mac/Linux tarball (`installer/unix`, servers only) is likewise built by
+  `release-unix.yml`, never by hand. A dev VM may be Windows on arm64 (this one has
   been since 2026-10-05), where `cargo build --release` yields arm64 exes that
   will not run on Intel. That is fine for `cargo test`/`clippy`/running the
   viewer locally, and the reason **not** to hand out a local

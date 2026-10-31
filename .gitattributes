@@ -48,6 +48,10 @@ LICENSE        text eol=lf
 *.iss text eol=crlf
 *.txt text eol=crlf
 
+# The Mac/Linux package is the exception to the rules above: shell scripts and their readme must be
+# LF, and a later, more specific pattern wins over the *.txt line.
+installer/unix/* text eol=lf
+
 # Never touch: binary assets git's auto-detection should not second-guess.
 # Revit families/templates are plausible test fixtures for this pipeline, and
 # images are plausible in docs/.
