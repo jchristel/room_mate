@@ -1,8 +1,10 @@
 //! HTTP adapters for blueprints -- the thin half of `crate::blueprints`, as
 //! `connections_api` is of `connections`.
 //!
-//! Reads: the list, one blueprint, and a **capture** of a room, which is a read -- it
-//! stores nothing and answers what a blueprint made from that room would hold.
+//! Reads: the list (with the count of sheets bound to each), one blueprint, and a **capture** of a
+//! room, which is a read -- it stores nothing and answers what a blueprint made from that room
+//! would hold. The Revit push captures the room here and hands the sheets and tags on as a bundle
+//! (`blueprint_bundle`): applied at once for a new blueprint, kept with a pending revision otherwise.
 //! Writes (create, add a revision, rename, move the current marker or mark not in use) are
 //! HTTP-only, for the reason settings and connections writes are: the MCP server is a
 //! separate process and reads the same files.
@@ -383,10 +385,6 @@ pub struct RevitPushOutcome {
     pub waiting: bool,
 }
 
-fn source_room_of(room: &crate::service::room_locator::RoomRef) -> SheetRoom {
-    SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() }
-}
-
 /// A blueprint from Revit: the room as the server holds it, plus the sheets the user chose.
 /// **The only way a blueprint is made** (plan decision 18), so sheets are required; they go to the
 /// sheet library bound to the blueprint, with its tags (`blueprint_bundle`, decision 27). A name the
@@ -421,7 +419,7 @@ pub async fn http_push_from_revit(
         .map_err(to_http)?
         .into_iter()
         .find(|b| b.name == name);
-    let sheet_room = source_room_of(&room);
+    let sheet_room = SheetRoom::from(&room);
     let source = SourceRoom { model_id: room.model_id, room_id: room.room_id, room_name: room_name.clone() };
     let bundle = Bundle {
         sheets: body.sheets,

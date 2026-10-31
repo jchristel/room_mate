@@ -1,5 +1,7 @@
 // The shapes the tasks page reads, as the server writes them (`src/tasks.rs`, `tasks_api.rs`).
 
+import type { RuleKey } from "../library/types.js";
+
 export type TaskKind = "populate_room" | "create_rls" | "update_room";
 
 /** What an update changes: the items (add, remove, change, move) or only where they are. */

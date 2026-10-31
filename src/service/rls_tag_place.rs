@@ -4,7 +4,7 @@
 //! Both read the world (rooms, an assignment's resolution), so they live apart from the pure
 //! pieces they use (`room_tag_place`, `rls_tags::match_instances`). Used by `task_build`.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::blueprint_geometry::Pt;
 use super::blueprint_resolve::resolve_in_room_with;
@@ -13,7 +13,7 @@ use super::rls_plan::RoomTagPlan;
 use super::rls_tags::type_code_of;
 use super::room_locator::RoomRef;
 use super::room_tag_place::head_in;
-use super::task_build::{blueprint_error, edge_map_of, project_to_model};
+use super::task_build::{blueprint_error, edge_map_of, finding, project_to_model};
 use super::ServiceError;
 use crate::assignments;
 use crate::blueprints::{self, BlueprintError};
@@ -23,10 +23,6 @@ use crate::tag_rules::RuleSummary;
 
 /// A blueprint item and a room item are the same when they have the same type code and lie this close.
 pub const INSTANCE_MATCH_MM: f64 = 500.0;
-
-fn finding(kind: &str, message: String) -> Value {
-    json!({ "kind": kind, "message": message })
-}
 
 /// The scale of the sheet's first plan viewport, which is the one a room tag's distance is written in.
 fn plan_scale(sheet: &Value) -> Option<f64> {
@@ -62,7 +58,7 @@ pub fn room_tag_head(
     let Some(boundary) = rule.placement.boundary else {
         return Ok(None);
     };
-    let target = SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
+    let target = SheetRoom::from(room);
     let Some(target_ring) = model_room_ring(state, project, &target)? else {
         return Ok(None);
     };

@@ -27,7 +27,7 @@ use crate::sheets::{RoomSummary, SheetRecord, SheetRoom};
 use crate::state::AppState;
 
 use super::blueprint_capture::loop_mm;
-use super::blueprint_geometry::{coarse_outline, dot, edges, signed_area, Pt};
+use super::blueprint_geometry::{dist, oriented_rectangle, signed_area, Pt};
 use super::items::{assemble_items, ItemScope};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
@@ -106,31 +106,8 @@ pub fn proportion_of(ring: &[Pt]) -> f64 {
 /// The long and short sides, mm, of the smallest rectangle (over the outline's own edge
 /// directions) that encloses the outline. `None` for an outline with no area.
 pub fn enclosing_rectangle(ring: &[Pt]) -> Option<(f64, f64)> {
-    let ring = coarse_outline(ring);
-    if ring.len() < 3 {
-        return None;
-    }
-    let mut best: Option<(f64, f64, f64)> = None; // (area, long, short)
-    for e in edges(&ring) {
-        let n = (-e.t.1, e.t.0);
-        let (mut lo_t, mut hi_t, mut lo_n, mut hi_n) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-        for &p in &ring {
-            let (a, b) = (dot(p, e.t), dot(p, n));
-            lo_t = lo_t.min(a);
-            hi_t = hi_t.max(a);
-            lo_n = lo_n.min(b);
-            hi_n = hi_n.max(b);
-        }
-        let (w, h) = (hi_t - lo_t, hi_n - lo_n);
-        if w <= 0.0 || h <= 0.0 {
-            continue;
-        }
-        let area = w * h;
-        if best.is_none_or(|(a, _, _)| area < a) {
-            best = Some((area, w.max(h), w.min(h)));
-        }
-    }
-    best.map(|(_, long, short)| (long, short))
+    let r = oriented_rectangle(ring)?;
+    Some((dist(r[0], r[1]), dist(r[1], r[2])))
 }
 
 impl From<RoomSummary> for Signature {

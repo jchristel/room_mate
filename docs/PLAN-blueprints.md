@@ -58,8 +58,8 @@ Grounded in the code as of 2026-10-18; rows marked *now* were true then and have
 | Units of parameter values | Display strings (`"0.0"`, `"420.0"`), not typed. The trap `CLAUDE.md` records for the ceiling height offset. |
 | Doors: position, `through_wall_normal`, width | Have. |
 | Authored, per-project, user-made data | Precedent: connections document (zones, passages, saved routes, reaches): one JSON per project, optimistic concurrency, replace-whole-list, "authored data outlives geometry; a stale reference is a finding, never an error". |
-| Revit extractor | pyRevit, **one-way** (Revit → server). |
-| Anything that sends work **to** Revit | **Does not exist** (still true). A new channel, not an extension. |
+| Revit extractor | pyRevit, one-way (Revit → server) for every export. *Now:* it also claims tasks from the server (the `roomtasks` channel) and writes them (Apply tasks, RLS create); built, not run in Revit. |
+| Anything that sends work **to** Revit | **Did not exist.** *Now:* tasks (stage 7): a record the server holds, claimed by a session; built, not run in Revit. |
 | Room layout sheet data | duHast has rudimentary IronPython exports, surveyed in B0 (below). *Now:* the sheet library holds them as exported, on its own endpoint. |
 
 So blueprints are three products in one: a constraint model, an editor, and the first

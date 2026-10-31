@@ -420,6 +420,21 @@ def _single_document(doc, forms, button_name):
     return picked[0]
 
 
+def _report_tag_problems(pushed, return_value):
+    """The tags duHast could not read, per sheet: a warning and never a stop."""
+    for p in pushed:
+        for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
+            return_value.append_message(line)
+
+
+def _warn_no_type_code(project, return_value):
+    """Item tags are keyed by the type code the project's settings name; say so when none is named."""
+    if not project.get("tag_type_code"):
+        return_value.append_message(
+            "No tag type code is set in the project's settings, so tags on items are not kept "
+            "(room tags are). Name the type parameter that identifies an item's kind under Tag type code.")
+
+
 def _report_tags(project, pushed, return_value):
     """Say which tags could not be read, then send the ones that were to the tag rules store.
     A failure here is reported and never stops the sheet push: the layout does not need its tags.
@@ -427,17 +442,12 @@ def _report_tags(project, pushed, return_value):
     one only room tags are taken in, and the output says so.
     These are the Sheets button's tags, generic ones; a blueprint push carries its tags with it
     (`_report_blueprint_tags`)."""
-    for p in pushed:
-        for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
-            return_value.append_message(line)
+    _report_tag_problems(pushed, return_value)
     observations = all_observations(pushed)
     if not observations:
         return
     parameter = project.get("tag_type_code")
-    if not parameter:
-        return_value.append_message(
-            "No tag type code is set in the project's settings, so tags on items are not kept "
-            "(room tags are). Name the type parameter that identifies an item's kind under Tag type code.")
+    _warn_no_type_code(project, return_value)
     ok, status, text, outcome = post_observations(project["id"], observations, parameter)
     if not ok:
         return_value.append_message(
@@ -450,15 +460,10 @@ def _report_tags(project, pushed, return_value):
 def _report_blueprint_tags(project, pushed, outcome, return_value):
     """What happened to the tags of a blueprint push. They travel with the push, so the server's
     answer says it: taken in at once for a new blueprint, or waiting with a pending revision."""
-    for p in pushed:
-        for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
-            return_value.append_message(line)
+    _report_tag_problems(pushed, return_value)
     if not all_observations(pushed):
         return
-    if not project.get("tag_type_code"):
-        return_value.append_message(
-            "No tag type code is set in the project's settings, so tags on items are not kept "
-            "(room tags are). Name the type parameter that identifies an item's kind under Tag type code.")
+    _warn_no_type_code(project, return_value)
     if outcome.get("waiting"):
         return_value.append_message("Tags wait with the pending revision.")
     elif outcome.get("tags"):

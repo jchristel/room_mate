@@ -263,28 +263,6 @@ pub struct PushOutcome {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct UpdateRequest {
-    pub base: String,
-    /// Set the sheet's room.
-    #[serde(default)]
-    pub room: Option<SheetRoom>,
-    /// Set the sheet's room by id alone, for a client that does not know the room's model (the
-    /// viewer's room rows name none). Qualified by the handler, as `suggest` does; ignored when
-    /// `room` is given.
-    #[serde(default)]
-    pub room_id: Option<String>,
-    /// With `room_id`, when two models hold a room of that id.
-    #[serde(default)]
-    pub model_id: Option<String>,
-    /// Remove it. Wins over `room`.
-    #[serde(default)]
-    pub clear_room: bool,
-    /// Filled in by the server for the new room; never read from the request.
-    #[serde(default, skip_deserializing)]
-    pub room_summary: Option<RoomSummary>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct DecideRequest {
     pub base: String,
 }
@@ -659,28 +637,6 @@ fn outcome_of(r: &SheetRecord, outcome: Outcome) -> PushOutcome {
     }
 }
 
-/// Set or clear the sheet's room link. No page does this any more (a sheet needs no room); it stays for
-/// a client that wants to name one.
-pub fn update(projects_dir: &Path, project: &str, id: &str, request: UpdateRequest) -> Result<SheetRecord, SheetError> {
-    check_room(&request.room)?;
-    let _guard = SAVE_LOCK.lock().unwrap();
-    let mut record = load(projects_dir, project, id)?;
-    if record.taken_at != request.base {
-        return Err(conflict(&request.base, &record.taken_at));
-    }
-    if request.clear_room {
-        record.room = None;
-        record.room_summary = None;
-    } else if request.room.is_some() {
-        record.room = request.room;
-        record.room_summary = request.room_summary;
-    }
-    settle_room_key(&mut record);
-    record.taken_at = next_stamp(&record.taken_at);
-    write(projects_dir, project, &record)?;
-    Ok(record)
-}
-
 fn take_pending(record: &mut SheetRecord, pending_id: u32) -> Result<PendingSheet, SheetError> {
     match record.pending.iter().position(|p| p.pending_id == pending_id) {
         Some(i) => Ok(record.pending.remove(i)),
@@ -822,49 +778,6 @@ mod tests {
         again.room_summary = Some(summary(8));
         push_one(&dir, again);
         assert_eq!(load(&dir, "p1", &pushed.id).unwrap().room_summary, Some(summary(8)));
-    }
-
-    /// The room's summary is stored with the sheet, follows its room, and is dropped with it.
-    #[test]
-    fn test_the_room_summary_is_stored_replaced_with_the_room_and_cleared_with_it() {
-        let dir = temp_dir("summary");
-        let mut s = sheet("1", "Doc", "RLS-01");
-        s.room = room("m", "r1");
-        s.room_summary = Some(summary(7));
-        let pushed = push_one(&dir, s);
-        let rec = load(&dir, "p1", &pushed.id).unwrap();
-        assert_eq!(rec.room_summary, Some(summary(7)));
-        let moved = update(
-            &dir,
-            "p1",
-            &rec.id,
-            UpdateRequest {
-                base: rec.taken_at.clone(),
-                room: room("m", "r2"),
-                clear_room: false,
-                room_id: None,
-                model_id: None,
-                room_summary: Some(summary(9)),
-            },
-        )
-        .unwrap();
-        assert_eq!(moved.room_summary, Some(summary(9)));
-        let cleared = update(
-            &dir,
-            "p1",
-            &rec.id,
-            UpdateRequest {
-                base: moved.taken_at,
-                room: None,
-                clear_room: true,
-                room_id: None,
-                model_id: None,
-                room_summary: None,
-            },
-        )
-        .unwrap();
-        assert_eq!((cleared.room, cleared.room_summary), (None, None));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     fn push_one(dir: &Path, s: PushedSheet) -> PushOutcome {
@@ -1058,58 +971,6 @@ mod tests {
         moved.room = room("m", "r2");
         push_one(&dir, moved);
         assert_eq!(load(&dir, "p1", &first.id).unwrap().room, room("m", "r2"));
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn test_a_room_can_be_set_and_cleared_afterwards() {
-        let dir = temp_dir("set-room");
-        let first = push_one(&dir, sheet("100", "House A", "RLS-01"));
-        let rec = load(&dir, "p1", &first.id).unwrap();
-        let set = update(
-            &dir,
-            "p1",
-            &first.id,
-            UpdateRequest {
-                base: rec.taken_at.clone(),
-                room: room("m", "r1"),
-                clear_room: false,
-                room_id: None,
-                model_id: None,
-                room_summary: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(set.room, room("m", "r1"));
-        let stale = update(
-            &dir,
-            "p1",
-            &first.id,
-            UpdateRequest {
-                base: rec.taken_at,
-                room: room("m", "r2"),
-                clear_room: false,
-                room_id: None,
-                model_id: None,
-                room_summary: None,
-            },
-        );
-        assert!(matches!(stale, Err(SheetError::Conflict(_))));
-        let cleared = update(
-            &dir,
-            "p1",
-            &first.id,
-            UpdateRequest {
-                base: set.taken_at,
-                room: None,
-                clear_room: true,
-                room_id: None,
-                model_id: None,
-                room_summary: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(cleared.room, None);
         std::fs::remove_dir_all(&dir).ok();
     }
 
