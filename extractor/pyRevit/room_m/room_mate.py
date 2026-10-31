@@ -33,6 +33,7 @@ from room_m.utils.ui import (
 )
 
 from room_m.utils.generic import (
+    document_phases,
     entities_label,
 )
 
@@ -43,7 +44,6 @@ from room_m.utils.provenance import (
 from room_m.utils.sheets import (
     placed_rooms,
     sheets_of,
-    pick as pick_items,
 )
 from room_m.exporters.sheets import read_sheets
 from room_m.post_blueprints import describe_outcome, explain_refusal, post_blueprint
@@ -546,16 +546,15 @@ def sheets_export_entry(doc, uiapp, output, forms):
 
 
 def blueprint_export_entry(doc, uiapp, output, forms):
-    """The BLUEPRINT push: a phase, then the rooms, then the sheets that belong to each.
+    """The BLUEPRINT push, in one window (`room_m.blueprint_export_window`).
 
-    1. **Phase.** The rooms offered are the placed rooms of the phase you pick.
-    2. **Rooms.** The rooms you want a blueprint from.
-    3. **Sheets, room by room.** For each chosen room, its room layout sheets. **A room with
-       no sheet is not pushed**: a blueprint is a room and its sheets together, and the server
-       refuses one without. A sheet is offered once: one given to an earlier room is not
-       offered again.
-    4. **Name.** One per room, defaulting to the room's name. A name the project already has
-       becomes a pending revision of that blueprint, to accept or reject in the viewer.
+    1. **Project and phase.** The rooms listed are the placed rooms of the phase you pick.
+    2. **Rooms.** Tick the rooms you want a blueprint from.
+    3. **Name and sheets, beside each room.** The blueprint's name defaults to the room's name; a name
+       the project already has becomes a pending revision of that blueprint, to accept or reject in the
+       viewer. **A room with no sheet is not pushed**: a blueprint is a room and its sheets together,
+       and the server refuses one without. A sheet is offered once: one ticked for a room is greyed
+       for the others.
 
     The room's contents are NOT sent: the server captures them from the rooms and FF&E it
     already holds, so push those first with the Rooms and FFE buttons. A sheets-only push to the
@@ -573,71 +572,40 @@ def blueprint_export_entry(doc, uiapp, output, forms):
         if selected_doc is None:
             return_value.append_message("No document selected")
             return return_value
-        project = choose_project(forms)
-        if project is None:
-            return_value.update_sep(False, "Export aborted: no project selected.")
-            return return_value
-
-        # 1. phase
-        phase_name = choose_phase([selected_doc], forms)
-        if phase_name is None:
-            return_value.update_sep(False, "Export aborted: no phase selected.")
-            return return_value
-        return_value.append_message("Phase '{}'".format(phase_name))
-
-        # 2. rooms
-        rooms = placed_rooms(selected_doc, phase_name)
-        if not rooms:
-            forms.alert("No placed rooms in phase '{}'.".format(phase_name),
-                        title="Roommate - nothing to export", warn_icon=True)
-            return_value.update_sep(False, "Export aborted: no placed rooms in that phase.")
-            return return_value
-        chosen_rooms = pick_items(forms, rooms, "Select the rooms to make blueprints from", "Use these rooms")
-        if not chosen_rooms:
-            return_value.update_sep(False, "Export aborted: no rooms selected.")
-            return return_value
-
-        # 3. sheets, room by room
         available = sheets_of(selected_doc)
         if not available:
             forms.alert("This model has no sheets, and a blueprint needs its room layout sheets.",
                         title="Roommate - nothing to export", warn_icon=True)
             return_value.update_sep(False, "Export aborted: the model has no sheets.")
             return return_value
-        plan = []
-        taken = set()
-        for room in chosen_rooms:
-            remaining = [s for s in available if s["id"] not in taken]
-            chosen = pick_items(
-                forms, remaining,
-                "Sheets for room {} (at least one)".format(room["label"]),
-                "Use for this room") if remaining else []
-            if chosen is None:
-                return_value.update_sep(False, "Export aborted at room {}.".format(room["label"]))
-                return return_value
-            if not chosen:
-                return_value.append_message(
-                    "{}: skipped, a blueprint needs at least one room layout sheet".format(room["label"]))
-                continue
-            for entry in chosen:
-                taken.add(entry["id"])
-            # 4. name
-            name = forms.ask_for_string(
-                default=room["name"] or room["label"],
-                prompt="Blueprint name for room {}".format(room["label"]),
-                title="Roommate - blueprint name")
-            if name is None:
-                return_value.update_sep(False, "Export aborted at room {}.".format(room["label"]))
-                return return_value
-            name = name.strip()
-            if not name:
-                return_value.append_message("{}: skipped, no blueprint name".format(room["label"]))
-                continue
-            plan.append((room, name, chosen))
-
-        if not plan:
-            return_value.update_sep(False, "Nothing to push: no room had both a sheet and a name.")
+        phases = [p["name"] for p in document_phases(selected_doc)]
+        if not phases:
+            forms.alert("No phases found in the model.", title="Roommate - nothing to export", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: the model has no phases.")
             return return_value
+
+        from room_m import blueprint_export_window
+
+        ok, status, payload = fetch_projects()
+        if not ok:
+            forms.alert("Could not load projects from the server.\n\n{}".format(payload),
+                        title="Roommate - export aborted", warn_icon=True)
+            return_value.update_sep(False, "Export aborted: {}".format(payload))
+            return return_value
+        if not payload:
+            return_value.update_sep(False, "Export aborted: the server has no registered projects.")
+            return return_value
+
+        # one window: project, phase, then per room its blueprint name and sheets
+        choice = blueprint_export_window.show(
+            forms, selected_doc.Title, payload, phases,
+            lambda phase: placed_rooms(selected_doc, phase), available)
+        if choice is None:
+            return_value.append_message("Export cancelled")
+            return return_value
+        project = choice["project"]
+        return_value.append_message("Phase '{}'".format(choice["phase"]))
+        plan = choice["plan"]
 
         for room, name, chosen in plan:
             pushed, failures = read_sheets(selected_doc, [(entry, None) for entry in chosen], None, project.get("tag_type_code"))

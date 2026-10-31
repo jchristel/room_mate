@@ -1,0 +1,67 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="RoomMate - blueprint export" Width="900" Height="760" MinWidth="680" MinHeight="480"
+        WindowStartupLocation="CenterScreen" ShowInTaskbar="False">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- header: the model the rooms and sheets are read from goes in the subtitle -->
+        <Border Grid.Row="0" Background="#2196F3" Padding="15,10">
+            <StackPanel>
+                <TextBlock Text="Blueprint Export" FontSize="20" FontWeight="Bold" Foreground="White"/>
+                <TextBlock x:Name="tx_model" FontSize="12" Foreground="White" Opacity="0.9" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <!-- where the blueprints go and which phase the rooms are read in -->
+        <Border Grid.Row="1" BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="10,10,10,4">
+            <StackPanel>
+                <TextBlock Text="Push to" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Project" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_project" SelectionChanged="on_change"/></Grid>
+                <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Phase" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_phase" SelectionChanged="on_phase"/></Grid>
+                <TextBlock Text="The rooms listed are the placed rooms of the phase." Opacity="0.6" Margin="110,2,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <!-- one row per room is made in code: a check box with the room, the blueprint's name, and a button that opens a list of sheets -->
+        <Border Grid.Row="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="10,4,10,4">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Rooms" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1" x:Name="tb_find" TextChanged="on_find"/>
+                </Grid>
+                <Grid Grid.Row="1" Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="260"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Room" FontWeight="SemiBold"/>
+                    <TextBlock Grid.Column="1" Text="Blueprint name" FontWeight="SemiBold" Margin="6,0,0,0"/>
+                    <TextBlock Grid.Column="2" Text="Room layout sheets" FontWeight="SemiBold" Margin="6,0,0,0"/>
+                </Grid>
+                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="sp_rooms"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- status and buttons -->
+        <Border Grid.Row="3" BorderBrush="Gray" BorderThickness="0,1,0,0" Padding="10" Margin="0,6,0,0">
+            <DockPanel LastChildFill="False">
+                <TextBlock DockPanel.Dock="Left" x:Name="tx_status" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" MaxWidth="560"/>
+                <Button DockPanel.Dock="Right" Content="Cancel" Width="90" Margin="8,0,0,0" IsCancel="True" Click="on_cancel"/>
+                <Button DockPanel.Dock="Right" x:Name="bt_export" Content="Export" Width="90" IsDefault="True" Click="on_export"/>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>
