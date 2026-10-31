@@ -1032,11 +1032,14 @@ and will keep drawing on the wrong storey until they are re-exported.
 
 ## `crates/drofus-mcp`: a standalone MCP server for dRofus
 
-A workspace member **only so CI builds and tests it**; it depends on nothing else here (no path dependency, no `workspace = true`, its
-own lint table, no import of `roommate` or `roommate-shared`), so the folder can be copied out and become its own repository.
-`scripts/check_drofus_standalone.py` (a CI step) fails if that stops being true. It is **a scaffold**: one tool, `server_info`; the dRofus
-API's shape and the first real tools are undecided. A session working on it follows `crates/drofus-mcp/CLAUDE.md` and touches nothing outside
-the crate. It is separate from `src/bin/mcp.rs` (the roommate data server) and from the `reference` module (dRofus as uploaded CSV).
+A workspace member so CI builds and tests it, and **the installer ships its `drofus-mcp.exe`** beside `mcp.exe` (`installer/build.ps1`,
+`roommate.iss`, `README-INSTALL.txt`). Shipping it is the only coupling: it depends on nothing else here (no path dependency, no
+`workspace = true`, its own lint table, no import of `roommate` or `roommate-shared`), so the folder can be copied out and become its own
+repository. `scripts/check_drofus_standalone.py` (a CI step) fails if that stops being true. It has 89 read tools over the dRofus Project API,
+API-key authentication and a write-approval gate that no tool uses; **untested against the live service**. Like `mcp.exe` the installer
+does not register it with a host, and the API key is the user's, supplied in the host's env. A session working on it follows
+`crates/drofus-mcp/CLAUDE.md` and touches nothing outside the crate. It is separate from `src/bin/mcp.rs` (the roommate data server) and from
+the `reference` module (dRofus as uploaded CSV).
 
 ## Which document wins
 

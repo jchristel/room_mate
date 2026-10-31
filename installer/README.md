@@ -78,7 +78,7 @@ widely.
 
 | | |
 |---|---|
-| `%LOCALAPPDATA%\Programs\RoomMate` | `roommate.exe`, `mcp.exe`, `static/`, the launcher, the settings template |
+| `%LOCALAPPDATA%\Programs\RoomMate` | `roommate.exe`, `mcp.exe`, `drofus-mcp.exe`, `static/`, the launcher, the settings template |
 | `%LOCALAPPDATA%\RoomMate` | `settings/` (edited by the settings UI) and `data/snapshots/` (the store) |
 | `%APPDATA%\pyRevit\Extensions\RoomMate.extension` | the pyRevit toolbar, optional component |
 
@@ -192,7 +192,9 @@ server looked healthy while the website was missing. Anything that relocates
 
 ## What is deliberately not in here
 
-- **No MCP host registration.** `mcp.exe` ships, but nothing writes to
+- **No MCP host registration.** `mcp.exe` and `drofus-mcp.exe` ship (the second is
+  `crates/drofus-mcp`: it reads the dRofus service and needs an API key the user
+  puts in the host's env), but nothing writes to
   `claude_desktop_config.json` — an installer editing another application's
   config file is a surprise, and the paths are in `README-INSTALL.txt` for
   anyone who wants it. See [mcp-host-setup.md](../docs/mcp-host-setup.md).
