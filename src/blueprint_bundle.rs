@@ -9,7 +9,7 @@
 //!   longer carries is **unbound** and stays in the library as a generic sheet;
 //! - the tags (observations from Revit, or the rules of an exported bundle) are bound to it; a rule
 //!   bound to it that the push no longer writes is **unlinked**: its samples are merged into the
-//!   generic rule with the same key and it is removed (`tag_rules::unlink_blueprint`).
+//!   generic rule with the same key and it is removed (`tag_rule_binding::unlink_blueprint`).
 //!
 //! Tags are only reconciled when the bundle says it carries them (`observations` or `rules` present),
 //! so a push that did not read tags never turns a blueprint's tags generic.
@@ -28,7 +28,8 @@ use serde_json::Value;
 use crate::service::blueprint_model::BlueprintSheet;
 use crate::sheets::{self, PushRequest as SheetsPush, PushedSheet, SheetRoom};
 use crate::state::Shared;
-use crate::tag_rules::{self, Observation, ObservationOutcome, ObservationsRequest, TagRule};
+use crate::tag_rule_binding;
+use crate::tag_rules::{Observation, ObservationOutcome, ObservationsRequest, TagRule};
 
 /// What travels with a blueprint push. `observations` and `rules` are kept as JSON until they are applied.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -139,13 +140,13 @@ pub fn apply(
     }
     if let Some(rules) = &bundle.rules {
         let rules: Vec<TagRule> = serde_json::from_value(rules.clone()).map_err(|e| invalid("tag rules", e))?;
-        let ids =
-            tag_rules::import_bound(&projects, project, blueprint, rules).map_err(crate::tag_rules_api::to_http)?;
+        let ids = tag_rule_binding::import_bound(&projects, project, blueprint, rules)
+            .map_err(crate::tag_rules_api::to_http)?;
         written.get_or_insert_with(Default::default).extend(ids);
     }
     if let Some(keep) = written {
-        applied.unlinked_tag_rules =
-            tag_rules::unlink_blueprint(&projects, project, blueprint, &keep).map_err(crate::tag_rules_api::to_http)?;
+        applied.unlinked_tag_rules = tag_rule_binding::unlink_blueprint(&projects, project, blueprint, &keep)
+            .map_err(crate::tag_rules_api::to_http)?;
     }
     Ok(applied)
 }
@@ -154,7 +155,7 @@ pub fn apply(
 pub fn export(state: &Shared, project: &str, blueprint: &str) -> Result<Bundle, (StatusCode, String)> {
     let projects = dir(state)?;
     let records = sheets::bound_to(&projects, project, blueprint).map_err(crate::sheets_api::to_http)?;
-    let rules = tag_rules::bound_to(&projects, project, blueprint).map_err(crate::tag_rules_api::to_http)?;
+    let rules = tag_rule_binding::bound_to(&projects, project, blueprint).map_err(crate::tag_rules_api::to_http)?;
     let type_code_parameter = rules
         .iter()
         .map(|r| r.key.code_parameter.clone())

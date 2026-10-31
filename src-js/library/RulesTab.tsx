@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
-import { degrees, filterRules, mm, ruleLabel, sampleSource, shortTime } from "./model.js";
+import { boundaryText, degrees, filterRules, mm, ruleLabel, sampleSource, scopeText, shortTime } from "./model.js";
 import type { TabProps } from "./SheetsTab.js";
 import type { RuleSummary, TagRule } from "./types.js";
 
@@ -19,6 +19,7 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
   const [rule, setRule] = useState<TagRule | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
 
   const refresh = useCallback(() => api.listRules(project).then(setRows).catch((e: unknown) => onError(message(e))), [project, onError]);
 
@@ -26,6 +27,7 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
     setRows(null);
     setRule(null);
     void refresh();
+    api.listBlueprintNames(project).then(setNames).catch(() => setNames(new Map()));
   }, [project, refresh]);
 
   const shown = useMemo(() => filterRules(rows ?? [], text), [rows, text]);
@@ -55,7 +57,7 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
   return (
     <div className="page">
       <aside className="left" aria-label="Tag rules">
-        <input type="search" placeholder="Filter: family, type, tag, view" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter rules" />
+        <input type="search" placeholder="Filter: type code, tag, view" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter rules" />
         {rows === null ? <p className="hint">Reading the rules…</p> : null}
         {rows?.length === 0 ? <p className="hint">No rules yet. Rules are learned from the tags on sheets exported with the Sheets or Blueprint button.</p> : null}
         {rows && rows.length > 0 && shown.length === 0 ? <p className="hint">No rule matches.</p> : null}
@@ -65,7 +67,7 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
               <button type="button" className={r.id === rule?.id ? "on" : ""} aria-pressed={r.id === rule?.id} onClick={() => void open(r.id)}>
                 <b>{ruleLabel(r)}</b>
                 <span>
-                  {r.key.viewport_type} · {r.tag_kind} · {r.sample_count} sample{r.sample_count === 1 ? "" : "s"}
+                  {r.key.viewport_type} · {r.tag_kind} · {scopeText(r.key, names)} · {r.sample_count} sample{r.sample_count === 1 ? "" : "s"}
                 </span>
               </button>
             </li>
@@ -89,6 +91,8 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
                 {rule.key.tagged_category} · {rule.key.type_code || "(no code)"}
                 {rule.key.code_parameter ? ` (${rule.key.code_parameter})` : ""}
               </dd>
+              <dt>Scope</dt>
+              <dd>{scopeText(rule.key, names)}</dd>
               <dt>Tag</dt>
               <dd>
                 {rule.key.tag_category} · {rule.key.tag_family} · {rule.key.tag_type} ({rule.tag_kind})
@@ -97,6 +101,12 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
               <dd>
                 {mm(rule.placement.head.x)} mm along, {mm(rule.placement.head.y)} mm left (paper)
               </dd>
+              {rule.placement.boundary ? (
+                <>
+                  <dt>Against the room</dt>
+                  <dd>{boundaryText(rule.placement.boundary)}</dd>
+                </>
+              ) : null}
               <dt>Rotation</dt>
               <dd>
                 {degrees(rule.placement.rotation)}° from the facing · {rule.placement.orientation}

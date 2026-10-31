@@ -443,7 +443,7 @@ get wrong:
   in the pending revision (`PendingRevision.bundle`, opaque JSON) and changes nothing until it is accepted, and a rejected
   revision drops them. **Applying reconciles**: the sheets pushed are bound; a sheet bound to the blueprint and not pushed
   is **unbound** (`sheets::unbind_missing`: generic now, with its `room_key`); the tags pushed are bound and a rule bound to the
-  blueprint and not written by the push is **unlinked** (`tag_rules::unlink_blueprint`): its samples merge into the generic rule
+  blueprint and not written by the push is **unlinked** (`tag_rule_binding::unlink_blueprint`): its samples merge into the generic rule
   with the same key (boundary recipes dropped, they were against the blueprint's room) and the bound rule goes. Tags are only
   reconciled when the push says it read them (`observations` present), so a push that read none never turns a blueprint's
   tags generic. Accepting applies after the revision is accepted; if that fails the answer says the revision was accepted and
@@ -584,7 +584,8 @@ target model's frame, mm. The RLS create button reads it (`room_m/rls_task.py`, 
 - `POST /projects/{id}/tasks/rls-preview` is the same read for one room and stores nothing, so a preview is the task. A request
   may override a view's depth (`depths`: `depth_mm`, or `to_wall`).
 - **Tags are a PROTOTYPE** (`service::rls_tags`, `rls.tags` in the task and in the preview). Every item attributed to the room
-  (no nested components) is looked up in the library's tag rules for the plan viewport type and tagged in the plan at the rule's
+  (no nested components) is looked up in the library's tag rules by its type code for the plan viewport type (the rule bound to the
+  blueprint item it stands for first, else the generic one) and tagged in the plan at the rule's
   offset (paper mm x the view scale, turned with the item). What no rule tags is **offered, per view** (`candidates`) and overall
   (`items_without_tags`, with the views that show it and why no rule did); a person answers per item in `tags.choices`: `tag` it in a
   named view (a default head beside it, a rectangle round its footprint, the text of `tags.tag_property`: `$id`, `$type_name`,
@@ -655,7 +656,7 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
   ITEM (`instance` = the item id, the Revit element id the blueprint kept) when the item is one of the blueprint's (its current
   revision: a revision waiting to be accepted brings its tags with it); a tag on any other item stays generic. A bound item rule holds exactly one sample. **A
   sample lives in exactly one rule**: identified by its source (sheet, tag, element), pushing it again under another key moves it
-  and a rule left empty is deleted (`take_moved_samples_out`). `rules_for` carries the generic rules and those bound to the
+  and a rule left empty is deleted (`tag_rule_binding::take_moved_samples_out`). `rules_for` carries the generic rules and those bound to the
   sheet's blueprint, never another's. For an item, `rls_tags::rule_for` takes the rule bound to the blueprint item the room's
   item stands for, else the generic one by type code. **Which blueprint item an item stands for** is matched from the room's
   assignment of the sheet's blueprint (`rls_tag_place::blueprint_placements`, `rls_tags::match_instances`: same type code, nearest
@@ -671,7 +672,7 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
   offset divided by the view scale. A rule therefore holds at any scale and turns with the item; the rotation is
   relative to the facing. An element with no point location or no plan facing gives no sample, said in `skipped`.
 - **Tags never ride in a sheet.** The extractor takes them out of the viewports before a sheet goes to the library
-  or a blueprint, and a task carries the rules for its sheets' viewport types (for a populate task only those for
+  or a blueprint (a blueprint's tags travel beside its sheets in the bundle), and a task carries the rules for its sheets' viewport types (for a populate task only those for
   the type codes it places) as they were when it was made.
 
 ## Room layout sheets: a library kept by identity, and two buttons that choose
@@ -679,8 +680,7 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
 Built: the sheet library on the server (`sheets`, `sheets_api`, `service::sheet_suggest`),
 two pyRevit buttons, MCP reads, and a page for the library and the tag rules at `/library/` (`src-js/library`: each
 sheet's paper size, preview, rooms covered and blueprint or generic key, accept or reject a renumbered push, suggest, browse
-and delete rules). The server can still set a sheet's room by `PUT` (a bare `room_id` is qualified as `suggest` does), but no page
-does. **Not built: view template in the export (tags and view
+and delete rules). A sheet's room link comes only with a blueprint push; no endpoint sets it afterwards. **Not built: view template in the export (tags and view
 scale are read: see Tag rules).** Rules that are expensive to get wrong:
 
 - **Their own endpoint (`/projects/{id}/sheets`), apart from blueprints, and not a snapshot

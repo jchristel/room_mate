@@ -2,6 +2,10 @@
 //!
 //! The extractor `POST`s observations (the tags it read from a sheet's viewports); everyone else
 //! reads. Reads are also MCP tools; writes are HTTP-only, as for blueprints and sheets.
+//!
+//! `observe_for` is the one way tags are taken in: the Sheets button's route calls it directly, and a
+//! blueprint's bundle calls it when its revision is accepted (`blueprint_bundle::apply`), so both
+//! see the same blueprint items and the same room boundaries.
 
 use axum::{
     extract::{Path as UrlPath, State},

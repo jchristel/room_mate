@@ -64,6 +64,7 @@ pub mod classify;
 pub mod connections;
 pub mod connections_api;
 pub mod contract;
+pub mod tag_rule_binding;
 pub mod tag_rules;
 pub mod tag_rules_api;
 pub mod tasks;

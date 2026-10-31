@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { boundText, degrees, filterRules, ruleLabel, sheetNeedsAttention, sheetReasons, sizeText, suggestionText, summaryText } from "./model.js";
+import { boundaryText, boundText, degrees, filterRules, ruleLabel, scopeText, sheetNeedsAttention, sheetReasons, sizeText, suggestionText, summaryText } from "./model.js";
 import type { RuleSummary, Suggestion } from "./types.js";
 
 const rule = (code: string, tag: [string, string], vp = "floor plan"): RuleSummary => ({
   id: "tr-" + code + tag.join("") + vp,
-  key: { tagged_category: "Furniture", code_parameter: "Assembly Code", type_code: code, tag_category: "Furniture Tags", tag_family: tag[0], tag_type: tag[1], viewport_type: vp },
+  key: { tagged_category: "Furniture", code_parameter: "Assembly Code", type_code: code, tag_category: "Furniture Tags", tag_family: tag[0], tag_type: tag[1], viewport_type: vp, blueprint: "", instance: "" },
   tag_kind: "independent",
   placement: { head: { x: 1, y: 2 }, rotation: 0, orientation: "Horizontal", has_leader: false, leader_end_condition: "Free" },
   sample_count: 1,
@@ -18,6 +18,20 @@ describe("sheet binding", () => {
     expect(boundText("bp-1", names)).toBe("1 BED B");
     expect(boundText(undefined, names)).toBe("generic");
     expect(boundText("bp-9", names)).toBe("blueprint bp-9");
+  });
+});
+
+describe("rule scope", () => {
+  const names = new Map([["bp-1", "1 BED B"]]);
+  it("is generic, or the blueprint and the item it is for", () => {
+    expect(scopeText({ blueprint: "", instance: "" }, names)).toBe("generic");
+    expect(scopeText({ blueprint: "bp-1", instance: "" }, names)).toBe("1 BED B");
+    expect(scopeText({ blueprint: "bp-1", instance: "2618110" }, names)).toBe("1 BED B · item 2618110");
+  });
+
+  it("describes a room tag's boundary recipe", () => {
+    expect(boundaryText({ of: "wall", edge: 2, along: 0.5, off: 10 })).toBe("50% along wall 3 of the template room, 10 mm in (paper)");
+    expect(boundaryText({ of: "rectangle", edge: 0, along: 0.25, off: 20 })).toBe("25% along side 1 of the room's rectangle, 20 mm in (paper)");
   });
 });
 

@@ -19,6 +19,18 @@ export function boundText(blueprint: string | undefined, names: ReadonlyMap<stri
   return names.get(blueprint) ?? `blueprint ${blueprint}`;
 }
 
+/** Which scope a rule is in: generic, or the blueprint it is bound to (and the item, for an item's tag). */
+export function scopeText(key: { blueprint: string; instance: string }, names: ReadonlyMap<string, string>): string {
+  if (!key.blueprint) return "generic";
+  return `${boundText(key.blueprint, names)}${key.instance ? ` · item ${key.instance}` : ""}`;
+}
+
+/** A room tag's boundary recipe in words. */
+export function boundaryText(b: { of: string; edge: number; along: number; off: number }): string {
+  const where = b.of === "wall" ? `wall ${b.edge + 1} of the template room` : `side ${b.edge + 1} of the room's rectangle`;
+  return `${Math.round(b.along * 100)}% along ${where}, ${mm(b.off)} mm in (paper)`;
+}
+
 /** Radians as whole-ish degrees, for people. */
 export const degrees = (rad: number): number => Math.round(((rad * 180) / Math.PI) * 10) / 10;
 

@@ -6,10 +6,12 @@ ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing on
 returns (properties, viewports with their positions on the sheet, crop boxes, schedules) is
 sent as it stands: this module does not re-measure a viewport. What it ADDS is the
 identity the server needs and duHast does not carry as one thing -- the Revit sheet id and
-the document title, together -- and the room the person chose.
+the document title, together -- the paper size measured from the title block, and the figures of the
+rooms the person ticked (`room_m.room_figures`). No room is linked to the sheet.
 
 **Tags are taken out of the sheet** (`room_m.sheet_tags`): the sheet that goes to the library
-or a blueprint has none, and they come back as `pushed["tags"]` (observations) with what could
+or a blueprint has none, and they come back as `pushed["tags"]` (observations, each tagged item
+carrying the type code read from its type when the project names a parameter) with what could
 not be read in `pushed["tag_problems"]`. Both are the extractor's own keys: the pushers drop
 them. Not in duHast's export, so not here: view template, view names. See
 docs/PLAN-blueprints.md, track B.

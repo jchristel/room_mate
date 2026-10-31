@@ -199,6 +199,61 @@ pub fn is_simple(ring: &[Pt]) -> bool {
     true
 }
 
+/// The smallest rectangle (over the outline's own edge directions) round `ring`, as a counter-
+/// clockwise ring of four corners whose first edge runs along the LONG axis towards +x (or +y when
+/// it is vertical). **The one rectangle algorithm**: the long and short sides that sheet suggestion
+/// ranks on are its first two edges, and the four sides a generic room tag is written against are
+/// its edges in order (`room_tag_place`).
+pub fn oriented_rectangle(ring: &[Pt]) -> Option<Vec<Pt>> {
+    let ring = coarse_outline(ring);
+    if ring.len() < 3 {
+        return None;
+    }
+    // (area, origin, u, w, h): the smallest by area, the first winning a tie.
+    let mut best: Option<(f64, Pt, Pt, f64, f64)> = None;
+    for e in edges(&ring) {
+        let (u, v) = (e.t, (-e.t.1, e.t.0));
+        let (mut lo_u, mut hi_u, mut lo_v, mut hi_v) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for &p in &ring {
+            let (a, b) = (dot(p, u), dot(p, v));
+            lo_u = lo_u.min(a);
+            hi_u = hi_u.max(a);
+            lo_v = lo_v.min(b);
+            hi_v = hi_v.max(b);
+        }
+        let (w, h) = (hi_u - lo_u, hi_v - lo_v);
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        if best.is_none_or(|(a, ..)| w * h < a - 1e-9) {
+            let origin = (u.0 * lo_u + v.0 * lo_v, u.1 * lo_u + v.1 * lo_v);
+            best = Some((w * h, origin, u, w, h));
+        }
+    }
+    let (_, origin, mut u, mut w, mut h) = best?;
+    let v = (-u.1, u.0);
+    let corner = |o: Pt, u: Pt, v: Pt, w: f64, h: f64| -> Vec<Pt> {
+        vec![
+            o,
+            (o.0 + u.0 * w, o.1 + u.1 * w),
+            (o.0 + u.0 * w + v.0 * h, o.1 + u.1 * w + v.1 * h),
+            (o.0 + v.0 * h, o.1 + v.1 * h),
+        ]
+    };
+    let mut ring = corner(origin, u, v, w, h);
+    // The long axis first: turn a quarter so that edge 0 is the long one.
+    if h > w {
+        ring.rotate_left(1);
+        u = v;
+        std::mem::swap(&mut w, &mut h);
+    }
+    // And towards +x (or +y when it is vertical): turn half a turn, which keeps it counter-clockwise.
+    if u.0 < -1e-9 || (u.0.abs() <= 1e-9 && u.1 < 0.0) {
+        ring.rotate_left(2);
+    }
+    Some(ring)
+}
+
 /// One side of an outline, with the frame a recipe is written in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Edge {
@@ -443,5 +498,35 @@ mod tests {
         assert!(inside((0.0, 1000.0), &ring, 20.0));
         assert!(!inside((-200.0, 1000.0), &ring, 20.0));
         assert!(inside((2000.0, 1500.0), &ring, 20.0));
+    }
+
+    fn close(a: Pt, b: Pt) -> bool {
+        dist(a, b) < 1e-6
+    }
+
+    fn rect_at(x0: f64, y0: f64, w: f64, h: f64) -> Vec<Pt> {
+        vec![(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)]
+    }
+
+    #[test]
+    fn test_the_rectangle_starts_on_the_long_axis_towards_plus_x_whatever_the_ring_started_with() {
+        // 4 x 3 starting at the other corner, going the same way round, and the same room turned a quarter.
+        let a = oriented_rectangle(&rect_at(0.0, 0.0, 4000.0, 3000.0)).unwrap();
+        assert!(close(a[0], (0.0, 0.0)) && close(a[1], (4000.0, 0.0)), "{a:?}");
+        let tall = oriented_rectangle(&rect_at(0.0, 0.0, 3000.0, 4000.0)).unwrap();
+        assert!(
+            dist(tall[0], tall[1]) > dist(tall[1], tall[2]),
+            "the first edge is the long one: {tall:?}"
+        );
+        assert!(
+            tall[1].0 > tall[0].0 || (tall[1].0 - tall[0].0).abs() < 1e-9,
+            "it runs towards +x: {tall:?}"
+        );
+        let mut shifted = rect_at(0.0, 0.0, 4000.0, 3000.0);
+        shifted.rotate_left(2);
+        let b = oriented_rectangle(&shifted).unwrap();
+        for (p, q) in a.iter().zip(&b) {
+            assert!(close(*p, *q), "the starting corner of the ring does not matter: {a:?} {b:?}");
+        }
     }
 }

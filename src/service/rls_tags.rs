@@ -2,9 +2,11 @@
 //! **A prototype** (the RLS methodology tab): the shape of the answer is what is being tried.
 //!
 //! **The library tags what it can.** Every item attributed to the room is looked up in the tag
-//! rules the library has learned (`tag_rules`) for the plan viewport type. An item with a rule is
-//! tagged in the plan, at the rule's offset in the item's own frame (paper millimetres times the
-//! view's scale, turned with the item's facing). That is the plug-in's rule for placing tags
+//! rules the library has learned (`tag_rules`) by its type code, for the plan viewport type: the rule
+//! bound to the blueprint item it stands for (`match_instances`) if the room has an assignment of the
+//! sheet's blueprint, else the generic rule (`rule_for`). An item with a rule is tagged in the
+//! plan, at the rule's offset in the item's own frame (paper millimetres times the view's scale,
+//! turned with the item's facing). An item whose type has no code is left out and says why. That is the plug-in's rule for placing tags
 //! (decision 24) done on the server, so a person can see the result before a task is made.
 //!
 //! **Everything else is offered, per view, never guessed.** `ViewTags::candidates` lists the items

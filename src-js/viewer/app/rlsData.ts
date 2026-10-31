@@ -2,25 +2,14 @@
 // one write it makes (queue a `create_rls` task per room).
 
 import type { Made } from "../rlsTool.js";
+import type { SheetRecord, SheetSummary } from "../../library/types.js";
 import { fetchJson } from "./api.js";
 
-export interface LibrarySheet {
-  id: string;
-  sheet_number: string;
-  sheet_name: string;
-  document_title: string;
-  size_mm?: { width_mm: number; height_mm: number };
-  rooms?: string[];
-  /** The room blueprint the sheet belongs to; absent for a generic sheet. */
-  blueprint?: string;
-  viewports: number;
-}
+/** The library's own types, so the viewer cannot drift from the page that owns them. */
+export type LibrarySheet = SheetSummary;
 
 /** The parts of a library sheet the preview draws. */
-export interface LibrarySheetRecord {
-  size_mm?: { width_mm: number; height_mm: number };
-  sheet: { view_ports?: { vp_type?: string; bounding_box?: { min_x: number; min_y: number; max_x: number; max_y: number }; view?: { view_scale?: number } }[] };
-}
+export type LibrarySheetRecord = Pick<SheetRecord, "size_mm" | "sheet">;
 
 const base = (project: string) => `/projects/${encodeURIComponent(project)}`;
 

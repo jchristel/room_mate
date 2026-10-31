@@ -117,6 +117,18 @@ export interface RuleKey {
   tag_family: string;
   tag_type: string;
   viewport_type: string;
+  /** The room blueprint the rule belongs to; empty for a generic rule (plan decision 27). */
+  blueprint: string;
+  /** The blueprint item a bound item rule is for; empty otherwise. */
+  instance: string;
+}
+
+/** A room tag's place against the room's boundary: a fraction along an edge, paper mm into the room. */
+export interface Boundary {
+  of: "wall" | "rectangle";
+  edge: number;
+  along: number;
+  off: number;
 }
 
 export interface Placement {
@@ -128,6 +140,7 @@ export interface Placement {
   leader_end_condition: string;
   elbow?: Offset;
   end?: Offset;
+  boundary?: Boundary;
 }
 
 export interface RuleSummary {

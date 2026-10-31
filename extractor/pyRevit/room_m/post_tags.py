@@ -2,14 +2,14 @@
 
 ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing one.
 
-`POST /projects/{id}/tagrules/observations {"type_code_parameter": "...", "blueprint": id or null, "observations": [...]}`:
+`POST /projects/{id}/tagrules/observations {"type_code_parameter": "...", "observations": [...]}`:
 each observation is one tag as `room_m.sheet_tags.take_tags` made it, its tagged elements carrying
 the type code `attach_type_codes` read. The server keeps one rule per key (the tagged item's type
 code, under the project's `tag_type_code` parameter, which is sent with them) and works out where a
-tag goes relative to its element; the extractor sends what it read and decides nothing. A push for a
-room blueprint names it, and the server binds the tags on the blueprint's items (and the room tag)
-to it (plan decision 27); the Sheets button names none, so its tags are generic. Pushing
-the same sheet again replaces its samples.
+tag goes relative to its element; the extractor sends what it read and decides nothing. **This is
+the Sheets button's route, so its tags are generic**: a blueprint push carries its tags inside the
+blueprint bundle (`room_m.post_blueprints`) and the server binds them to the blueprint when the
+revision is accepted (plan decision 27). Pushing the same sheet again replaces its samples.
 """
 
 import json
@@ -39,7 +39,7 @@ def all_observations(pushed):
     return out
 
 
-def post_observations(project_id, observations, type_code_parameter=None, blueprint_id=None):
+def post_observations(project_id, observations, type_code_parameter=None):
     """POST in batches and return `(ok, status, text, outcome)`. `outcome` adds the batches'
     answers up (`samples`, `rules_changed`, `skipped`); it stops at the first batch that fails."""
     from System.Net.Http import StringContent
@@ -50,7 +50,6 @@ def post_observations(project_id, observations, type_code_parameter=None, bluepr
         body = json.dumps(
             {
                 "type_code_parameter": type_code_parameter or "",
-                "blueprint": blueprint_id or None,
                 "observations": observations[start:start + BATCH],
             },
             ensure_ascii=False,

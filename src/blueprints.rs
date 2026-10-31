@@ -119,7 +119,7 @@ pub struct Blueprint {
     /// not in use**: it then takes no new assignment and is left out of suggestions, while what is bound
     /// to it (its sheets, its tags) and every assignment already made stay as they are. A file written
     /// before this is in use.
-    #[serde(default = "in_use_by_default")]
+    #[serde(default = "yes")]
     pub in_use: bool,
     pub revisions: Vec<Revision>,
     /// Pushed revisions waiting for review. Absent in a file written before pushes existed.
@@ -131,10 +131,6 @@ pub struct Blueprint {
     /// because an accepted revision leaves the pending list and its id must not come back.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub last_pending_id: u32,
-}
-
-fn in_use_by_default() -> bool {
-    true
 }
 
 fn is_zero(n: &u32) -> bool {

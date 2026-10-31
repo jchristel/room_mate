@@ -105,7 +105,8 @@ pub(super) fn edge_map_of(mapping: &Mapping) -> EdgeMap {
     }
 }
 
-fn finding(kind: &str, message: String) -> Value {
+/// A finding on a task: what the plug-in and the tasks page show beside it.
+pub(super) fn finding(kind: &str, message: String) -> Value {
     json!({ "kind": kind, "message": message })
 }
 
@@ -395,7 +396,7 @@ fn place_elevations(
 ) -> Result<Vec<MarkerPlan>, ServiceError> {
     let mut markers = Vec::new();
     if has_elevations(&record.sheet) {
-        let target = SheetRoom { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
+        let target = SheetRoom::from(room);
         let template = match &record.room {
             Some(r) => model_room_ring(state, project, r)?,
             None => None,

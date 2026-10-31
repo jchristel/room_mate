@@ -96,6 +96,13 @@ pub struct RoomRef {
     pub room_id: String,
 }
 
+/// The same room as a sheet's link to it (the two records name a room by the same pair).
+impl From<&RoomRef> for crate::sheets::SheetRoom {
+    fn from(room: &RoomRef) -> Self {
+        Self { model_id: room.model_id.clone(), room_id: room.room_id.clone() }
+    }
+}
+
 /// Both sides of one wall-hosted element.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sides {
