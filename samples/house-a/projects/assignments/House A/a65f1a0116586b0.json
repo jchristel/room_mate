@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "id": "a65f195180bbad0",
-  "blueprint_id": "bp-65f1951807ec4-0",
+  "id": "a65f1a0116586b0",
+  "blueprint_id": "bp-65f1a01161ec9-0",
   "revision": 1,
   "room": {
     "model_id": "Building_BF_Framing_jan.r.christel",
@@ -10,5 +10,5 @@
   "room_name": "BED 02 01.02",
   "mapping": {},
   "note": "Sample: the blueprint of BED 01 01.06 placed in BED 02 01.02",
-  "taken_at": "2026-10-31T02:03:26.476208Z"
+  "taken_at": "2026-10-31T02:52:32.293998Z"
 }
