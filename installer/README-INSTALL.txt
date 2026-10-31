@@ -97,6 +97,16 @@ The read-only tools work with no server running. Add
 --server-url http://127.0.0.1:5151 for the one tool that uploads reference
 data, which forwards to the running server.
 
+To share one MCP server with colleagues on a closed network, run it yourself on the
+computer that holds the data (the host does not launch this one):
+
+  set ROOMMATE_MCP_TOKEN=<a shared secret>
+  mcp.exe --server-settings <...\server.toml> --project-settings <...\projects> --http 5152 --bind 0.0.0.0
+
+It prints the address to give out. Each person adds it by URL with the header
+"Authorization: Bearer <the secret>". Restart it after saving settings in the UI.
+See docs/mcp-host-setup.md in the repository, section 2b.
+
 The dRofus MCP server
 ---------------------
 

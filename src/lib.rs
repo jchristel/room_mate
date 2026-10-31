@@ -78,6 +78,7 @@ pub mod reports {
 }
 pub mod handlers;
 pub mod http_error;
+pub mod mcp_http;
 pub mod network;
 pub mod reference;
 pub mod reports_api;
