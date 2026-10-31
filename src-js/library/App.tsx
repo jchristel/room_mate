@@ -42,7 +42,7 @@ export function App() {
       .catch((e: unknown) => setError(message(e)));
   }, []);
 
-  // The rooms name a sheet's room; a project with none pushed just has no names.
+  // The rooms the suggest panel offers; a project with none pushed just has none.
   useEffect(() => {
     setRooms([]);
     if (!projectId) return;

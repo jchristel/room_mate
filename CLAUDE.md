@@ -677,9 +677,10 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
 ## Room layout sheets: a library kept by identity, and two buttons that choose
 
 Built: the sheet library on the server (`sheets`, `sheets_api`, `service::sheet_suggest`),
-two pyRevit buttons, MCP reads, and a page for the library and the tag rules at `/library/` (`src-js/library`: set or
-clear a sheet's room, accept or reject a renumbered push, suggest, browse and delete rules; setting a room sends a bare
-`room_id` and the server finds the model, as `suggest` does). **Not built: view template in the export (tags and view
+two pyRevit buttons, MCP reads, and a page for the library and the tag rules at `/library/` (`src-js/library`: each
+sheet's paper size, preview, rooms covered and blueprint or generic key, accept or reject a renumbered push, suggest, browse
+and delete rules). The server can still set a sheet's room by `PUT` (a bare `room_id` is qualified as `suggest` does), but no page
+does. **Not built: view template in the export (tags and view
 scale are read: see Tag rules).** Rules that are expensive to get wrong:
 
 - **Their own endpoint (`/projects/{id}/sheets`), apart from blueprints, and not a snapshot

@@ -22,9 +22,10 @@
 //! the server to a rough export that is still changing; the figures the server does use
 //! (identity, number, name, room) are separate fields.
 //!
-//! **A sheet's room is a reference that is never validated on save.** It is chosen at export
-//! (through the blueprint route) or afterwards in the viewer; authored data outlives the
-//! geometry, so a room that has gone is a reported state at read time, not an error.
+//! **A sheet's room link is a reference that is never validated on save.** A sheet pushed with a
+//! blueprint is made for the blueprint's room; a sheet from the Sheets button has no link, only the
+//! figures of the rooms the person said it covers. Authored data outlives the geometry, so a room
+//! that has gone is a reported state at read time, not an error.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -129,7 +130,7 @@ pub struct SheetRecord {
     /// The Revit phase the export was run under, when it was run through the blueprint route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
-    /// The room as it was when the sheet's room was set (decision 25). Absent for a sheet pushed
+    /// The figures of the room(s) the sheet covers as they were when it was pushed (decision 25). Absent for a sheet pushed
     /// before this was stored, or whose room was not on the server then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_summary: Option<RoomSummary>,
@@ -658,7 +659,8 @@ fn outcome_of(r: &SheetRecord, outcome: Outcome) -> PushOutcome {
     }
 }
 
-/// Set or clear the sheet's room (the viewer's step for rooms no blueprint covers).
+/// Set or clear the sheet's room link. No page does this any more (a sheet needs no room); it stays for
+/// a client that wants to name one.
 pub fn update(projects_dir: &Path, project: &str, id: &str, request: UpdateRequest) -> Result<SheetRecord, SheetError> {
     check_room(&request.room)?;
     let _guard = SAVE_LOCK.lock().unwrap();

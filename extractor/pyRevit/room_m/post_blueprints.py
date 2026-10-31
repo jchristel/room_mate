@@ -6,8 +6,10 @@ ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing on
 captures the room from the rooms and FF&E it already holds (one capture rule, in Rust), so
 this posts only which room, the name, and the sheets: `{"name", "room_id", "model_id",
 "origin", "sheets": [...]}` to `/projects/{id}/blueprints/from-revit`. A blueprint comes only
-from here, always with its sheets (docs/PLAN-blueprints.md, decision 18): the server refuses a
-push with none, and so does the button before it asks.
+from here, always with its sheets (docs/PLAN-blueprints.md, decisions 18 and 27): the server refuses a
+push with none, and so does the button before it asks. The sheets are kept in the sheet library bound
+to the blueprint, and the tags read from them travel in the same push; both wait with a pending
+revision until a person accepts it.
 
 A name the project already has becomes a PENDING revision of that blueprint, for a person to
 accept or reject in the blueprint viewer; a new name creates the blueprint.
