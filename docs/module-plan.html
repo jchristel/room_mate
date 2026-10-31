@@ -575,99 +575,154 @@
   // with Rust's inline #[cfg(test)] modules taken out. Widths follow this number
   // and nothing else, so a cell means the same thing in every language.
   const STATS = {
-    bootstrap: [243, 743, 144, 323],
+    apply_tasks: [435, 710, 134, 0],
+    assign_api: [151, 183, 18, 0],
+    assignments: [328, 634, 75, 197],
+    backups: [40, 68, 20, 0],
+    blueprints: [545, 1123, 90, 438],
+    bootstrap: [245, 745, 144, 323],
+    bp_api: [416, 508, 61, 0],
+    bp_bundle: [144, 188, 33, 0],
+    bp_capture: [404, 721, 76, 205],
+    bp_edit: [244, 474, 51, 158],
+    bp_geom: [216, 448, 66, 139],
+    bp_model: [121, 229, 89, 0],
+    bp_resolve: [600, 1375, 130, 600],
     check_areas: [311, 496, 99, 0],
     classify: [42, 263, 56, 155],
+    connections: [793, 1580, 176, 550],
     contract: [379, 1603, 544, 617],
+    contract_codec: [299, 477, 88, 52],
     contract_doors: [106, 415, 127, 163],
     contract_ffe: [106, 365, 99, 141],
-    contract_items: [37, 419, 235, 128],
+    contract_items: [51, 545, 282, 189],
     contract_openings: [36, 482, 261, 167],
     contract_spaces: [105, 395, 115, 156],
+    contract_surfaces: [268, 610, 252, 38],
     contract_windows: [106, 371, 116, 130],
-    docsdir: [2018, 2392, 0, 0],
-    ex_doors: [51, 146, 71, 0],
-    ex_ffe: [50, 160, 84, 0],
-    ex_rooms: [54, 159, 79, 0],
-    ex_spaces: [71, 177, 77, 0],
-    ex_windows: [51, 153, 77, 0],
+    docsdir: [2008, 2380, 0, 0],
+    elev_facing: [217, 381, 53, 92],
+    ex_doors: [52, 147, 71, 0],
+    ex_ffe: [53, 193, 109, 0],
+    ex_rooms: [55, 161, 80, 0],
+    ex_sheets: [357, 548, 96, 0],
+    ex_spaces: [77, 185, 78, 0],
+    ex_surfaces: [152, 389, 166, 0],
+    ex_windows: [52, 154, 77, 0],
+    export_ui: [113, 186, 34, 0],
     gen: [434, 712, 158, 0],
-    handlers: [2085, 5443, 849, 2306],
+    handlers: [2279, 5942, 888, 2564],
     js_app: [20, 182, 55, 88],
-    js_colour: [60, 170, 46, 44],
+    js_colour: [58, 169, 46, 44],
     js_door: [176, 747, 271, 239],
     js_fills: [144, 220, 45, 0],
     js_geom: [90, 275, 55, 103],
-    js_gl: [718, 1290, 487, 0],
-    js_index: [47, 73, 22, 0],
+    js_gl: [777, 1362, 497, 0],
+    js_index: [53, 79, 22, 0],
     js_item: [163, 572, 219, 137],
-    js_labels: [66, 123, 42, 0],
+    js_labels: [109, 176, 50, 0],
     js_lines: [190, 319, 96, 0],
-    js_paint: [99, 316, 84, 91],
-    js_poll: [96, 563, 147, 259],
+    js_paint: [149, 469, 110, 154],
+    js_poll: [117, 686, 177, 317],
     js_proj: [11, 40, 25, 0],
-    js_seam: [61, 278, 194, 0],
+    js_reach: [253, 399, 106, 0],
+    js_seam: [74, 320, 220, 0],
     js_spatial: [180, 674, 202, 231],
-    js_types: [109, 317, 189, 0],
+    js_storey: [65, 215, 136, 0],
+    js_style: [62, 126, 53, 0],
+    js_text: [275, 377, 69, 0],
+    js_types: [110, 320, 191, 0],
     js_viewport: [17, 262, 87, 127],
     js_window: [176, 567, 204, 133],
-    lib: [19, 75, 50, 0],
-    main: [193, 765, 257, 292],
-    mcp: [830, 1315, 323, 92],
-    p_bundle: [918, 1122, 45, 0],
+    lib: [36, 91, 49, 0],
+    main: [278, 983, 294, 386],
+    mcp: [1331, 1960, 431, 94],
+    network: [84, 224, 37, 90],
+    p_blueprints: [2529, 3641, 315, 441],
+    p_bundle: [930, 1134, 45, 0],
     p_common: [44, 112, 56, 0],
-    p_generated: [165, 1414, 1177, 0],
+    p_generated: [187, 1573, 1306, 0],
     p_graph: [506, 1101, 264, 224],
-    p_index: [5208, 8646, 1416, 1238],
-    p_reports: [2170, 3121, 254, 409],
-    p_settings: [2944, 3276, 79, 65],
+    p_index: [9169, 16911, 3251, 2977],
+    p_library: [842, 1143, 77, 90],
+    p_reports: [2062, 3124, 365, 409],
+    p_settings: [2956, 3658, 409, 78],
+    p_tasks: [808, 1034, 55, 58],
     p_tokens: [20, 22, 0, 0],
-    post_common: [181, 504, 240, 0],
+    post_authored: [246, 437, 100, 0],
+    post_common: [237, 589, 258, 0],
     post_doors: [28, 111, 67, 0],
-    post_entity: [143, 348, 149, 0],
-    post_ffe: [89, 270, 138, 0],
-    post_rooms: [129, 266, 97, 0],
-    post_spaces: [118, 245, 82, 0],
+    post_entity: [133, 337, 148, 0],
+    post_ffe: [92, 281, 146, 0],
+    post_rooms: [118, 250, 93, 0],
+    post_spaces: [107, 232, 81, 0],
+    post_surfaces: [125, 434, 226, 0],
     post_windows: [28, 122, 73, 0],
     probes: [5189, 8614, 2199, 0],
     reference: [85, 310, 93, 112],
     reports_api: [143, 332, 50, 119],
-    room_mate: [149, 508, 266, 0],
-    settings: [602, 2071, 1047, 300],
-    settings_api: [365, 1448, 201, 830],
-    settings_load: [67, 287, 37, 170],
+    rls_create: [727, 1036, 141, 0],
+    rls_place: [103, 125, 14, 0],
+    rls_plan: [184, 390, 58, 127],
+    rls_tags: [325, 673, 68, 250],
+    room_mate: [588, 1226, 446, 0],
+    room_tag: [104, 222, 30, 80],
+    scoped_push: [157, 275, 39, 65],
+    server_config: [162, 257, 50, 0],
+    settings: [740, 2384, 1140, 360],
+    settings_api: [374, 1513, 208, 878],
+    settings_check: [151, 261, 33, 64],
+    settings_load: [71, 291, 37, 170],
     settings_validate: [80, 340, 57, 195],
-    shared: [63, 205, 108, 20],
-    state: [451, 1240, 467, 235],
+    shared: [74, 231, 122, 20],
+    sheet_suggest: [237, 420, 48, 114],
+    sheets: [615, 1160, 100, 392],
+    sheets_api: [172, 205, 16, 0],
+    state: [521, 1341, 489, 235],
     storage: [156, 766, 511, 48],
     storage_fs: [570, 1866, 263, 955],
     storage_mem: [217, 552, 94, 211],
-    svc_adj: [402, 1270, 313, 497],
-    svc_areas: [531, 2060, 485, 972],
-    svc_cmp: [387, 1559, 261, 860],
-    svc_items: [255, 719, 184, 244],
+    svc_adj: [427, 1315, 328, 499],
+    svc_areas: [531, 2062, 485, 974],
+    svc_cmp: [387, 1561, 261, 862],
+    svc_connectivity: [1615, 4049, 399, 1922],
+    svc_items: [255, 727, 184, 252],
     svc_locator: [102, 443, 159, 165],
-    svc_mile: [34, 148, 21, 84],
-    svc_mod: [54, 273, 71, 137],
-    svc_openings: [318, 1792, 265, 1165],
-    svc_proj: [102, 394, 60, 214],
-    svc_ref: [57, 163, 26, 72],
-    svc_reports: [1023, 2185, 341, 729],
-    svc_rooms: [666, 2949, 670, 1521],
-    svc_scope: [387, 986, 310, 243],
-    svc_snap: [107, 394, 67, 206],
-    svc_spaces: [529, 1380, 283, 493],
-    svc_val: [965, 3599, 795, 1726],
+    svc_mile: [34, 150, 21, 86],
+    svc_mod: [72, 293, 71, 139],
+    svc_openings: [318, 1887, 265, 1260],
+    svc_placement: [98, 434, 109, 211],
+    svc_proj: [102, 396, 60, 216],
+    svc_reach: [504, 1005, 143, 317],
+    svc_ref: [57, 165, 26, 74],
+    svc_reports: [1023, 2187, 341, 731],
+    svc_rooms: [666, 2951, 670, 1523],
+    svc_routing: [725, 1166, 210, 161],
+    svc_scope: [395, 1010, 324, 245],
+    svc_snap: [107, 396, 67, 208],
+    svc_spaces: [529, 1382, 283, 495],
+    svc_stacking: [201, 447, 60, 162],
+    svc_surf_attr: [90, 598, 141, 354],
+    svc_surfaces: [215, 353, 105, 0],
+    svc_type_table: [33, 105, 28, 38],
+    svc_val: [965, 3610, 795, 1737],
+    tag_rules: [762, 1473, 122, 523],
+    tag_rules_api: [102, 128, 13, 0],
+    task_build: [502, 603, 43, 29],
+    tasks: [477, 768, 85, 162],
+    tasks_api: [290, 361, 31, 16],
     u_envelope: [62, 227, 133, 0],
-    u_generic: [46, 138, 65, 0],
-    u_items: [45, 164, 93, 0],
-    u_openings: [78, 255, 138, 0],
-    u_phase: [4, 57, 43, 0],
-    u_refs: [5, 64, 47, 0],
+    u_generic: [40, 123, 57, 0],
+    u_items: [28, 128, 80, 0],
+    u_openings: [25, 106, 59, 0],
+    u_phase: [11, 79, 52, 0],
+    u_refs: [4, 51, 37, 0],
+    u_revit_state: [182, 384, 119, 0],
     u_rooms: [31, 84, 42, 0],
-    u_spaces: [50, 153, 80, 0],
+    u_spaces: [51, 152, 78, 0],
+    u_tidy: [27, 59, 18, 0],
     u_ui: [65, 136, 51, 0],
-    weekly: [282, 552, 177, 0]
+    weekly: [286, 556, 177, 0]
   };
 
   const LAYERS = [
@@ -697,6 +752,7 @@
     { id: "service", n: "F", t: "Domain services", d: "Transport-agnostic derive logic", layer: "server" },
     { id: "core", n: "G", t: "Shape, state & joins", d: "The load-bearing type layer", layer: "server" },
     { id: "store", n: "H", t: "Persistence", d: "Swappable behind one trait", layer: "server" },
+    { id: "authored", n: "I", t: "Authored data", d: "Blueprints, sheets, tag rules, tasks: kept by a person, not read from the model", layer: "server" },
     { id: "config", n: "J", t: "Configuration", d: "TOML a human hand-edits", layer: "server" },
     { id: "renderer", n: "K", t: "Plan renderer", d: "The committed bundle's sources", layer: "browser" },
     { id: "pages", n: "L", t: "Viewer pages", d: "Served from ./static", layer: "browser" },
@@ -709,7 +765,7 @@
       id: "room_mate", name: "room_mate.py", path: "extractor/pyRevit/room_m/room_mate.py", zone: "run",
       lang: "IronPython",
       blurb: "The six entry points, each one line over <strong>export_entry(…, entities)</strong>. <strong>rooms_export_entry still pushes rooms and doors</strong>, despite the name — its pyRevit button lives outside this repo, so narrowing it would keep succeeding while quietly pushing nothing. The split lives in the five siblings instead. A run exports every selected model first, then pushes one bucket per entity, so the buckets are independent and a cancelled run pushes nothing at all. <strong>The buttons live outside this repository, over a COPY of this package</strong> — an edit here is inert until it is copied there, and only <code>diff -rq</code> checks the two are in step.",
-      deps: ["ex_rooms", "ex_doors", "ex_windows", "ex_ffe", "ex_spaces", "u_generic", "u_envelope", "u_ui"]
+      deps: ["ex_rooms", "ex_doors", "ex_windows", "ex_ffe", "ex_spaces", "u_generic", "u_envelope", "u_ui", "ex_sheets", "ex_surfaces", "export_ui", "rls_create", "apply_tasks", "post_authored", "post_surfaces", "server_config"]
     },
     {
       id: "ex_rooms", name: "exporters/rooms.py", path: "extractor/pyRevit/room_m/exporters/rooms.py", zone: "run",
@@ -851,12 +907,12 @@
     {
       id: "main", name: "main.rs", path: "src/main.rs", zone: "entry", lang: "Rust",
       blurb: "The Axum HTTP binary, deliberately thin: parse args, build state, wire the router. <code>build_router</code> is split out of main so the CORS policy is reachable from a test — a security control with no regression test is one refactor from reverting to permissive.",
-      deps: ["bootstrap", "handlers", "settings_api", "state"]
+      deps: ["bootstrap", "handlers", "settings_api", "state", "bp_api", "assign_api", "sheets_api", "tag_rules_api", "tasks_api", "scoped_push", "network"]
     },
     {
       id: "mcp", name: "bin/mcp.rs", path: "src/bin/mcp.rs", zone: "entry", lang: "Rust",
       blurb: "The MCP stdio server: eighteen tools, one per HTTP <em>read</em> route plus three settings reads and one forwarded mutation. Writes stay HTTP-only — a separate process could not hot-swap this one's registry, which is instant split-brain.",
-      deps: ["bootstrap", "svc_mod", "svc_rooms", "svc_openings", "svc_items", "svc_spaces", "settings_api", "state"]
+      deps: ["bootstrap", "svc_mod", "svc_rooms", "svc_openings", "svc_items", "svc_spaces", "settings_api", "state", "blueprints", "assignments", "sheets", "tag_rules", "tasks", "connections", "svc_connectivity", "svc_reach"]
     },
     {
       id: "bootstrap", name: "bootstrap.rs", path: "src/bootstrap.rs", zone: "entry", lang: "Rust",
@@ -948,7 +1004,7 @@
       deps: ["settings", "state", "storage"]
     },
     {
-      id: "reports_api", name: "reports_api.rs", path: "src/reports_api.rs", zone: "server", lang: "Rust",
+      id: "reports_api", name: "reports_api.rs", path: "src/reports_api.rs", zone: "transport", lang: "Rust",
       blurb: "Saved reports as JSON documents beside the project settings, never inside them: a saved report changes no other answer in the system, so it is a document rather than a setting. Keeps a malformed report out of the boot-validated settings file and a report save off the whole-file rewrite that once emptied every milestone pin. Temp-then-rename; a rotten file is skipped rather than failing the list.",
       deps: ["shared", "state"]
     },
@@ -1152,7 +1208,7 @@
     {
       id: "p_index", name: "viewer/ (React)", path: "src-js/viewer/", zone: "pages", lang: "TypeScript + React",
       blurb: "The viewer, served at /: zones, levels, layers, colour plans, selection and its seven inspectors, search, the grid, the QA/areas/adjacency bands, the routes and reach tools (heat map, saved reaches, tags) and the SVG export. React since 2026-09-20, ported slice by slice against the hand-written page it replaced (docs/Superseded/PLAN-viewer-react.md). Its rules — scope, levels, element URLs, colour, properties, grid, search, validation, areas, pan-to-room — are tested modules beside the components; the state is one store, with a zone's view rect deliberately outside it because it changes per pointer move. Selection grew to the whole plan on 2026-09-20 (docs/Superseded/PLAN-viewer-selection.md): a left click lists what is stacked under it, filtered per zone; visibility, pickability and the room panel's contents are menus over one DropMenu; every panel and the grid choose which properties they show; a grid row selects its room and pans to it; and the outline layers' selection colour and every entity's hover property come from project settings.",
-      deps: ["p_common", "p_tokens", "p_bundle", "p_graph"]
+      deps: ["p_common", "p_tokens", "p_bundle", "p_graph", "p_library"]
     },
     {
       id: "p_settings", name: "settings/ (React)", path: "src-js/settings/", zone: "pages", lang: "TypeScript + React",
@@ -1215,6 +1271,283 @@
       id: "docsdir", name: "docs/", path: "docs/STRATEGY-*.md · CODING-CONVENTIONS.md", zone: "bench", lang: "Markdown",
       blurb: "<strong>The strategy docs hold only what is not built; the code documents what is.</strong> Shipping a feature includes deleting its description from the strategy doc. <code>docs/Superseded/</code> is an archive — nothing there is live.",
       deps: []
+    },
+
+    // ---- added 2026-10-31: the blueprint, sheet, tag-rule and task family, and the modules that had no cell
+    {
+      id: "ex_sheets", name: "exporters/sheets.py", path: "extractor/pyRevit/room_m/exporters/sheets.py", zone: "run", lang: "IronPython",
+      blurb: "The Sheets button's half: a window with the model's sheets in one column and a check-box list of rooms beside each, the figures worked out from the rooms ticked (<strong>smallest enclosing rectangle, summed area, item count</strong>), and each sheet read through duHast with its paper size measured from the title block bounding box, in mm, never snapped. <strong>No room is linked to a sheet</strong>: the figures travel with it. Not run in Revit.",
+      deps: ["post_authored", "post_common", "u_revit_state", "u_generic", "u_rooms"]
+    },
+    {
+      id: "ex_surfaces", name: "exporters/surfaces.py", path: "extractor/pyRevit/room_m/exporters/surfaces.py", zone: "run", lang: "IronPython",
+      blurb: "Ceilings and floors as one stack: duHast's two exports are the same shape, so one exporter is bound to an entity and the two entry points are a line each. A level choice narrows what Revit reads before the slow per-element conversion.",
+      deps: ["export_ui"]
+    },
+    {
+      id: "export_ui", name: "export_window.py", path: "extractor/pyRevit/room_m/export_window.py", zone: "run", lang: "IronPython",
+      blurb: "The single Export window: a check box per entity, the project, the phase, the whole model or ticked levels. <strong>Every rule is in export_form.py</strong>, which imports nothing from Revit and is tested on CPython; the window only draws export.xaml (no x:Class, no grid control, handlers are plain methods a test checks exist).",
+      deps: []
+    },
+    {
+      id: "rls_create", name: "rls_task.py + rls_write.py", path: "extractor/pyRevit/room_m/rls_task.py", zone: "run", lang: "IronPython",
+      blurb: "RLS create. The settings window (title block per size, view types, schedule base, tags, name templates, kept in the model), the planner that checks every task before anything is written (pure, CPython-tested), and the writer that makes the sheet, plan and elevation views, <strong>a new 3D view per 3D viewport of the template</strong>, the schedule and the tags through duHast. <strong>RoomMate decides, Revit applies</strong>: the phase is the room's own, and the room tag goes where the server put it. Not run in Revit.",
+      deps: ["apply_tasks", "u_tidy"]
+    },
+    {
+      id: "apply_tasks", name: "apply_*.py + task_plan.py", path: "extractor/pyRevit/room_m/apply_run.py", zone: "run", lang: "IronPython",
+      blurb: "Apply tasks: claim the model's queued populate and update tasks, check them all (<strong>task_plan, pure</strong>), report aborts before any work, ask once about warnings, write each task in its own transaction group and report. Only the facts and the writer touch Revit. Not run in Revit.",
+      deps: ["u_generic", "u_items", "u_tidy"]
+    },
+    {
+      id: "post_authored", name: "post_blueprints.py + post_tags.py", path: "extractor/pyRevit/room_m/post_blueprints.py", zone: "push", lang: "IronPython",
+      blurb: "The pushes of authored data, each to its own endpoint and not a snapshot bucket: the blueprint push (the room is captured on the server; the sheets and the tags read from them travel together as a bundle), sheets alone, tag observations, and the task claim and report channel. <strong>Tags are taken out of a sheet before it travels</strong> (sheet_tags) and sent as observations carrying each tagged item's type code.",
+      deps: ["post_common"]
+    },
+    {
+      id: "post_surfaces", name: "post_surfaces.py", path: "extractor/pyRevit/room_m/post_surfaces.py", zone: "push", lang: "IronPython",
+      blurb: "Ceilings and floors onto their v1 contract, written once and bound to an entity. A height offset is read from Revit because duHast carries it as a rounded display string; the level stays duHast's.",
+      deps: []
+    },
+    {
+      id: "server_config", name: "server_config.py", path: "extractor/pyRevit/room_m/server_config.py", zone: "push", lang: "IronPython",
+      blurb: "Which server the extractor talks to, <strong>resolved when a request is made</strong> and never frozen at import: the environment, then the open model's own settings, then a file, then nothing. A machine never told gets ServerNotSet rather than a silent loopback.",
+      deps: ["u_tidy"]
+    },
+    {
+      id: "u_revit_state", name: "project_settings.py", path: "extractor/pyRevit/room_m/project_settings.py", zone: "readers", lang: "IronPython",
+      blurb: "What the session knows about itself and the model: settings kept in the project file's extensible storage, which RoomMate and which duHast are actually loaded (the check that decides, in memory not on disk), and the type code of a tagged element read from its type.",
+      deps: ["u_tidy", "server_config"]
+    },
+    {
+      id: "u_tidy", name: "ring_tidy.py", path: "extractor/pyRevit/room_m/ring_tidy.py", zone: "readers", lang: "IronPython",
+      blurb: "Small pure helpers. ring_tidy drops the collinear vertices Revit puts wherever a boundary changes wall (77.5% of RHH's rooms have one); losslessly, at 0.5 mm. Rooms only.",
+      deps: []
+    },
+    {
+      id: "bp_api", name: "blueprints_api.rs", path: "src/blueprints_api.rs", zone: "transport", lang: "Rust",
+      blurb: "HTTP for blueprints, including <strong>the Revit push</strong>: the room is captured here from what is already pushed, the sheets and tags go on as a bundle, a new name creates and an existing one becomes a pending revision. Accepting applies what waited with it.",
+      deps: ["assignments", "blueprints", "bp_bundle", "bp_capture", "bp_edit", "bp_model", "bp_resolve", "sheets", "state", "svc_locator", "svc_mod", "tag_rules"]
+    },
+    {
+      id: "assign_api", name: "assignments_api.rs", path: "src/assignments_api.rs", zone: "transport", lang: "Rust",
+      blurb: "HTTP for assignments, one and many rooms at once; writes are HTTP-only, reads are also MCP tools.",
+      deps: ["assignments", "blueprints", "bp_api", "bp_capture", "bp_edit", "state"]
+    },
+    {
+      id: "sheets_api", name: "sheets_api.rs", path: "src/sheets_api.rs", zone: "transport", lang: "Rust",
+      blurb: "HTTP for the sheet library, suggest (leaving out sheets bound to a blueprint not in use) and the elevation-facing read.",
+      deps: ["blueprints", "bp_capture", "elev_facing", "sheet_suggest", "sheets", "state", "svc_locator", "svc_mod"]
+    },
+    {
+      id: "tag_rules_api", name: "tag_rules_api.rs", path: "src/tag_rules_api.rs", zone: "transport", lang: "Rust",
+      blurb: "Observations in, rules out. It supplies what the store cannot know: the blueprint a push is for and its items, and the room each room tag was placed in, read once per push.",
+      deps: ["blueprints", "bp_geom", "elev_facing", "room_tag", "sheets", "state", "tag_rules"]
+    },
+    {
+      id: "tasks_api", name: "tasks_api.rs", path: "src/tasks_api.rs", zone: "transport", lang: "Rust",
+      blurb: "Making tasks (populate, update, create RLS, with a preview that stores nothing), the roomtasks ask and report channel, dismiss and resend.",
+      deps: ["assignments", "bp_api", "bp_capture", "rls_plan", "rls_tags", "state", "svc_locator", "svc_mod", "task_build", "tasks"]
+    },
+    {
+      id: "scoped_push", name: "scoped_push.rs", path: "src/scoped_push.rs", zone: "transport", lang: "Rust",
+      blurb: "A middleware in front of the stream routes: a model block that names levels replaces only those, and the other levels' elements are appended to the request body so what is stored is a complete snapshot and nothing downstream learns it was partial.",
+      deps: ["state", "storage"]
+    },
+    {
+      id: "network", name: "network.rs", path: "src/network.rs", zone: "entry", lang: "Rust",
+      blurb: "Serving beyond this machine: which interface to bind, which Host names to answer to, which address to tell a person to type. Loopback stays the default and leaving it is an explicit opt-in; the Host guard stays on.",
+      deps: []
+    },
+    {
+      id: "backups", name: "backups.rs", path: "src/backups.rs", zone: "store", lang: "Rust",
+      blurb: "Copies of the files a hostile or mistaken save would otherwise overwrite, shared by every mutable document beside the project settings.",
+      deps: []
+    },
+    {
+      id: "settings_check", name: "settings_check.rs", path: "src/settings_check.rs", zone: "config", lang: "Rust",
+      blurb: "Does each property a setting names still exist in the project's data? Logged once at startup and returned as findings; <strong>cannot tell is never a finding</strong>.",
+      deps: ["settings", "shared", "state", "storage"]
+    },
+    {
+      id: "blueprints", name: "blueprints.rs", path: "src/blueprints.rs", zone: "authored", lang: "Rust",
+      blurb: "Authored blueprints, one JSON file each: append-only revisions, pushed revisions held <strong>pending</strong> with the sheets and tags that came with them, import and export. <strong>A blueprint holds only its room</strong> and is never deleted, only marked not in use.",
+      deps: ["backups", "bp_capture", "bp_model", "state"]
+    },
+    {
+      id: "bp_bundle", name: "blueprint_bundle.rs", path: "src/blueprint_bundle.rs", zone: "authored", lang: "Rust",
+      blurb: "The reconcile. A bundle (sheets, tags) is applied when a revision is accepted: sheets pushed are bound to the blueprint, a sheet no longer carried is unbound and generic again, tags pushed are bound, and a rule no longer written is <strong>unlinked into the generic rule of its key</strong>. Also what Export and Import move.",
+      deps: ["bp_model", "sheets", "sheets_api", "state", "tag_rules", "tag_rules_api"]
+    },
+    {
+      id: "assignments", name: "assignments.rs", path: "src/assignments.rs", zone: "authored", lang: "Rust",
+      blurb: "Which blueprint is placed in which room: a request and a choice, never a result. The placements are the resolver's answer worked out on every read, so a room that moves is followed. Refuses a blueprint not in use.",
+      deps: ["backups", "blueprints", "bp_model", "state"]
+    },
+    {
+      id: "sheets", name: "sheets.rs", path: "src/sheets.rs", zone: "authored", lang: "Rust",
+      blurb: "The sheet library, one file per sheet, kept by identity (Revit sheet id plus document title). A sheet is <strong>generic or bound to one room blueprint</strong>; it carries its measured paper size, the figures of the rooms it covers and, when generic, a key built from their size and item count. A renumbered push waits for a person.",
+      deps: ["backups", "state"]
+    },
+    {
+      id: "tag_rules", name: "tag_rules.rs", path: "src/tag_rules.rs", zone: "authored", lang: "Rust",
+      blurb: "Where a tag goes, learned from tags in Revit views. <strong>Keyed by the item's type code</strong>, never names or ids; generic or bound to a blueprint and one of its items; one rule per key as the median of its samples, a sample living in exactly one rule. A room tag also carries its place against the room boundary.",
+      deps: ["backups", "state"]
+    },
+    {
+      id: "tasks", name: "tasks.rs", path: "src/tasks.rs", zone: "authored", lang: "Rust",
+      blurb: "Room tasks: a RECORD of what a Revit session is told, as it was when made (placements in the target model's frame, the sheets, the rules, the findings). States queued, in progress and the four outcomes; one live task per kind per room.",
+      deps: ["backups", "bp_model", "rls_plan", "state", "tag_rules"]
+    },
+    {
+      id: "connections", name: "connections.rs", path: "src/connections.rs", zone: "authored", lang: "Rust",
+      blurb: "Authored connections: open zones, passages, vertical links, saved routes and saved reaches in one document per project. A save that leaves a list out keeps it; only an explicit empty list clears.",
+      deps: ["backups", "state", "storage", "svc_locator", "svc_mod", "svc_reach", "svc_rooms"]
+    },
+    {
+      id: "bp_geom", name: "service/blueprint_geometry.rs", path: "src/service/blueprint_geometry.rs", zone: "service", lang: "Rust",
+      blurb: "Plan geometry for blueprints, all millimetres: an outline held at a coarse and a fine tolerance, the edges a recipe is written against, and the arithmetic from an edge, a distance along and a distance in back to a point.",
+      deps: []
+    },
+    {
+      id: "bp_model", name: "service/blueprint_model.rs", path: "src/service/blueprint_model.rs", zone: "service", lang: "Rust",
+      blurb: "What a blueprint revision holds: the outline, doors and each item as a <strong>recipe</strong> (which edge, how far along, how far in, which way it faces) with the mode that says how another room reads it. Nothing derived is stored.",
+      deps: ["bp_geom", "sheets"]
+    },
+    {
+      id: "bp_capture", name: "service/blueprint_capture.rs", path: "src/service/blueprint_capture.rs", zone: "service", lang: "Rust",
+      blurb: "Capture: a room and the FF&E in it written as recipes, with the rules measured on House A and RHH (an item belongs to the edge it lies beside; nested components are left out).",
+      deps: ["bp_geom", "bp_model", "shared", "state", "svc_items", "svc_locator", "svc_openings", "svc_rooms"]
+    },
+    {
+      id: "bp_resolve", name: "service/blueprint_resolve.rs", path: "src/service/blueprint_resolve.rs", zone: "service", lang: "Rust",
+      blurb: "The resolver, <strong>one function for every consumer</strong>: a revision and a target room to where each item goes. It always returns what it could place and reports the rest as findings.",
+      deps: ["assignments", "bp_capture", "bp_geom", "bp_model", "state", "svc_locator"]
+    },
+    {
+      id: "bp_edit", name: "service/blueprint_reshape.rs + solve", path: "src/service/blueprint_reshape.rs", zone: "service", lang: "Rust",
+      blurb: "Two reads on the resolver. Reshape writes a draft's items against an edited reference outline so they do not move; solve asks the resolver once per room for the assign-many view and boils each answer down to a verdict that is advice, never a gate.",
+      deps: ["bp_capture", "bp_geom", "bp_model", "bp_resolve", "state", "svc_locator", "svc_rooms"]
+    },
+    {
+      id: "sheet_suggest", name: "service/sheet_suggest.rs", path: "src/service/sheet_suggest.rs", zone: "service", lang: "Rust",
+      blurb: "Which library sheet is closest to a room: area, proportions and item count weighed equally, each as a log-ratio, ranked on the sheet's stored figures so a sheet still ranks when its room has been redrawn. It offers; it never applies.",
+      deps: ["bp_capture", "bp_geom", "sheets", "state", "svc_items", "svc_locator", "svc_rooms"]
+    },
+    {
+      id: "elev_facing", name: "service/elevation_facing.rs", path: "src/service/elevation_facing.rs", zone: "service", lang: "Rust",
+      blurb: "Which wall each elevation on a sheet looks at, worked out at read time and stored nowhere. Also reads a room as a ring in a model's own frame, which several of the RLS pieces need.",
+      deps: ["bp_capture", "bp_geom", "sheets", "state", "svc_locator", "svc_rooms", "task_build"]
+    },
+    {
+      id: "rls_plan", name: "service/rls_plan.rs", path: "src/service/rls_plan.rs", zone: "service", lang: "Rust",
+      blurb: "What a create-RLS task says beyond copy this sheet: where each elevation marker and its views go in THIS room. <strong>Transfer is by the walls</strong>, by the cyclic shift that fits the two coarse outlines; a different edge count places nothing and says so.",
+      deps: ["bp_geom", "bp_resolve", "elev_facing", "rls_tags"]
+    },
+    {
+      id: "rls_tags", name: "service/rls_tags.rs", path: "src/service/rls_tags.rs", zone: "service", lang: "Rust",
+      blurb: "Which items of a room an RLS tags, in which view, and which it leaves for a person. A prototype. An item takes the rule of the blueprint item it stands for, else the generic rule of its type code; an item with no code is left out and says why.",
+      deps: ["bp_geom", "bp_model", "rls_plan", "tag_rules"]
+    },
+    {
+      id: "rls_place", name: "service/rls_tag_place.rs", path: "src/service/rls_tag_place.rs", zone: "service", lang: "Rust",
+      blurb: "What a create-RLS task needs from the world about tags: where the room tag goes in this room, and which blueprint item each of the room's items stands for (from the room's assignment, by type code and distance).",
+      deps: ["assignments", "blueprints", "bp_geom", "bp_resolve", "elev_facing", "rls_plan", "rls_tags", "room_tag", "sheets", "state", "svc_locator", "tag_rules", "task_build"]
+    },
+    {
+      id: "room_tag", name: "service/room_tag_place.rs", path: "src/service/room_tag_place.rs", zone: "service", lang: "Rust",
+      blurb: "A room tag written against the room's <strong>boundary</strong>. A bound tag uses the wall recipe against the coarse outline; a generic one the four sides of the smallest rectangle round the room, which works for any shape. Distances are paper mm so a rule holds at any scale.",
+      deps: ["bp_geom", "bp_resolve", "tag_rules"]
+    },
+    {
+      id: "task_build", name: "service/task_build.rs", path: "src/service/task_build.rs", zone: "service", lang: "Rust",
+      blurb: "Making a task: the resolver's answer and the sheets frozen as what a Revit session is told. Placements leave in the target model's own frame, undone from the project frame in this one place.",
+      deps: ["assignments", "blueprints", "bp_capture", "bp_model", "bp_resolve", "elev_facing", "rls_place", "rls_plan", "rls_tags", "shared", "sheet_suggest", "sheets", "state", "svc_items", "svc_locator", "svc_placement", "svc_rooms", "tag_rules", "tasks"]
+    },
+    {
+      id: "svc_placement", name: "service/placement.rs", path: "src/service/placement.rs", zone: "service", lang: "Rust",
+      blurb: "Linked models into ONE project-local frame without putting survey coordinates on the wire: anchor-inverse composed with each model's placement in f64, so the GL renderer's Float32 world stays small.",
+      deps: ["shared", "state"]
+    },
+    {
+      id: "svc_connectivity", name: "service/connectivity.rs", path: "src/service/connectivity.rs", zone: "service", lang: "Rust",
+      blurb: "Door connectivity and routes: the graph of rooms joined by doors, open zones, passages and vertical links, and the shortest route between two rooms. The graph is shared with reach.",
+      deps: ["connections", "settings", "shared", "state", "storage", "svc_adj", "svc_locator", "svc_openings", "svc_rooms", "svc_routing", "svc_surfaces"]
+    },
+    {
+      id: "svc_routing", name: "service/routing.rs + geodesic.rs", path: "src/service/routing.rs", zone: "service", lang: "Rust",
+      blurb: "How a route is computed once the graph is known (the method) and the shortest walk between two points inside one room; the geometry under the door-to-door method.",
+      deps: ["shared", "svc_connectivity"]
+    },
+    {
+      id: "svc_reach", name: "service/reach.rs", path: "src/service/reach.rs", zone: "service", lang: "Rust",
+      blurb: "How far a walk reaches from one or more start points, as a grid over the plan: the router's own graph and walk, never a second one. Three cell states: no room, beyond the limit, or whole millimetres.",
+      deps: ["connections", "shared", "state", "storage", "svc_connectivity", "svc_locator", "svc_routing"]
+    },
+    {
+      id: "svc_stacking", name: "service/stacking.rs", path: "src/service/stacking.rs", zone: "service", lang: "Rust",
+      blurb: "Stack candidates: the rooms above and below one room that sit over or under it, ranked for a person to confirm as a vertical link. A suggestion, never a write.",
+      deps: ["shared", "state", "storage", "svc_locator", "svc_rooms"]
+    },
+    {
+      id: "svc_surfaces", name: "service/surfaces.rs", path: "src/service/surfaces.rs", zone: "service", lang: "Rust",
+      blurb: "/ceilings and /floors fetch-side logic: scoping, placement, and the geometric room attribution these entities exist for.",
+      deps: ["settings", "shared", "state", "storage", "svc_locator", "svc_placement", "svc_rooms", "svc_surf_attr", "svc_type_table"]
+    },
+    {
+      id: "svc_surf_attr", name: "service/surface_attribution.rs", path: "src/service/surface_attribution.rs", zone: "service", lang: "Rust",
+      blurb: "The geometric room attribution for ceilings and floors: which rooms a surface lies over and how much of each, many-to-many, area-weighted, with one width tolerance for imprecision and no sliver rules.",
+      deps: ["shared", "svc_locator"]
+    },
+    {
+      id: "svc_type_table", name: "service/type_table.rs", path: "src/service/type_table.rs", zone: "service", lang: "Rust",
+      blurb: "Each distinct type-property bag sent once per read, every element pointing at its row: 279.6 MB to 133.2 MB for RHH's FF&E.",
+      deps: ["shared"]
+    },
+    {
+      id: "contract_surfaces", name: "contract/surfaces.rs", path: "src/contract/surfaces.rs", zone: "core", lang: "Rust",
+      blurb: "The surface record: one ceiling or one floor, a list of polygons the consumer unions. Both entities are this one record, so a third slab is a variant, not a copy.",
+      deps: ["contract_codec"]
+    },
+    {
+      id: "contract_codec", name: "contract/property_codec.rs", path: "src/contract/property_codec.rs", zone: "core", lang: "Rust",
+      blurb: "How property maps are held and written: each distinct key once, each distinct type bag once, the dictionary the last line of a stored snapshot. The push wire is unchanged.",
+      deps: []
+    },
+    {
+      id: "p_blueprints", name: "blueprints/ (React)", path: "src-js/blueprints/", zone: "pages", lang: "TypeScript + React",
+      blurb: "The blueprint page at /blueprints/, drawn in SVG: the list (with not-in-use marking), the revision timeline with pending revisions and their sheets and tags, the box editor, the inspector, the assign views and Export and Import of a blueprint with its bundle.",
+      deps: ["p_common", "p_tokens"]
+    },
+    {
+      id: "p_library", name: "library/ (React)", path: "src-js/library/", zone: "pages", lang: "TypeScript + React",
+      blurb: "The sheet library and tag rules at /library/: each sheet's paper size, outline-and-viewport preview, rooms covered and blueprint or generic key, renumbered pushes to accept or reject, suggest, and the rules by type code.",
+      deps: ["p_common", "p_tokens"]
+    },
+    {
+      id: "p_tasks", name: "tasks/ (React)", path: "src-js/tasks/", zone: "pages", lang: "TypeScript + React",
+      blurb: "The task list at /tasks/: filters, a task's items, sheets, rules, findings and attempts, dismiss and resend, and the panel that makes populate and update tasks. Create-RLS tasks are made from the viewer's RLS tool.",
+      deps: ["p_common", "p_tokens"]
+    },
+    {
+      id: "js_text", name: "renderer/labelPlacement.ts + elementTags.ts", path: "src-js/renderer/labelPlacement.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "Where text goes: a room's label from its real outline (pole of inaccessibility, shrunk until inside), and element tags placed the same way on the element's own outline. Both painters share it.",
+      deps: ["js_geom", "js_types", "js_door", "js_item"]
+    },
+    {
+      id: "js_storey", name: "renderer/storey.ts", path: "src-js/renderer/storey.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "An element joins a storey by NAME plus ELEVATION, never by level id (ids are per document). The server's storey filter must stay a superset of this.",
+      deps: ["js_types"]
+    },
+    {
+      id: "js_reach", name: "renderer/reach.ts + svg", path: "src-js/renderer/reach.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "The reach heat map and the SVG overlays: one translucent quad per covered cell on the screen, 24 bands in the file, drawn from the answer already in hand.",
+      deps: ["js_seam", "js_types", "js_door", "js_geom", "js_item", "js_window"]
+    },
+    {
+      id: "js_style", name: "renderer/style.ts", path: "src-js/renderer/style.ts", zone: "renderer", lang: "TypeScript",
+      blurb: "How a layer LOOKS (dashes, footprint alpha, theme fallback, the override test), read by both painters so the file and the screen cannot disagree.",
+      deps: ["js_seam"]
     }
   ];
 

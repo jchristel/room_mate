@@ -180,6 +180,63 @@ MODULES = {
     "gen": sorted(glob.glob("scripts/gen_*.py")),
     "probes": sorted(glob.glob("scripts/probe_*.py")) + sorted(glob.glob("scripts/analyse_*.py")),
     "docsdir": sorted(glob.glob("docs/STRATEGY*.md")) + ["docs/CODING-CONVENTIONS.md"],
+    # ---- added with the blueprint, sheet, tag-rule and task work (2026-10-31): every cell below
+    # is a module or a small GROUP of modules that had no cell. Page groups are globbed.
+    "ex_sheets": ["extractor/pyRevit/room_m/exporters/sheets.py", "extractor/pyRevit/room_m/utils/sheets.py", "extractor/pyRevit/room_m/room_figures.py", "extractor/pyRevit/room_m/sheet_export_form.py", "extractor/pyRevit/room_m/sheet_export_window.py"],
+    "ex_surfaces": ["extractor/pyRevit/room_m/exporters/surfaces.py", "extractor/pyRevit/room_m/exporters/ceilings.py", "extractor/pyRevit/room_m/exporters/floors.py"],
+    "export_ui": ["extractor/pyRevit/room_m/export_form.py", "extractor/pyRevit/room_m/export_window.py"],
+    "rls_create": ["extractor/pyRevit/room_m/rls_task.py", "extractor/pyRevit/room_m/rls_write.py", "extractor/pyRevit/room_m/rls_template.py", "extractor/pyRevit/room_m/rls_settings.py", "extractor/pyRevit/room_m/rls_settings_form.py", "extractor/pyRevit/room_m/rls_settings_window.py"],
+    "apply_tasks": ["extractor/pyRevit/room_m/apply_facts.py", "extractor/pyRevit/room_m/apply_geometry.py", "extractor/pyRevit/room_m/apply_run.py", "extractor/pyRevit/room_m/apply_write.py", "extractor/pyRevit/room_m/task_plan.py"],
+    "post_authored": ["extractor/pyRevit/room_m/post_blueprints.py", "extractor/pyRevit/room_m/post_sheets.py", "extractor/pyRevit/room_m/post_tags.py", "extractor/pyRevit/room_m/post_tasks.py", "extractor/pyRevit/room_m/sheet_tags.py"],
+    "post_surfaces": ["extractor/pyRevit/room_m/post_surfaces.py", "extractor/pyRevit/room_m/post_ceilings.py", "extractor/pyRevit/room_m/post_floors.py", "extractor/pyRevit/room_m/utils/surfaces.py"],
+    "server_config": ["extractor/pyRevit/room_m/server_config.py"],
+    "u_revit_state": ["extractor/pyRevit/room_m/project_settings.py", "extractor/pyRevit/room_m/utils/provenance.py", "extractor/pyRevit/room_m/utils/tag_codes.py"],
+    "u_tidy": ["extractor/pyRevit/room_m/ring_tidy.py", "extractor/pyRevit/room_m/textutil.py"],
+    "bp_api": ["src/blueprints_api.rs"],
+    "assign_api": ["src/assignments_api.rs"],
+    "sheets_api": ["src/sheets_api.rs"],
+    "tag_rules_api": ["src/tag_rules_api.rs"],
+    "tasks_api": ["src/tasks_api.rs"],
+    "scoped_push": ["src/scoped_push.rs"],
+    "network": ["src/network.rs"],
+    "backups": ["src/backups.rs"],
+    "settings_check": ["src/settings_check.rs"],
+    "blueprints": ["src/blueprints.rs"],
+    "bp_bundle": ["src/blueprint_bundle.rs"],
+    "assignments": ["src/assignments.rs"],
+    "sheets": ["src/sheets.rs"],
+    "tag_rules": ["src/tag_rules.rs"],
+    "tasks": ["src/tasks.rs"],
+    "connections": ["src/connections.rs", "src/connections_api.rs"],
+    "bp_geom": ["src/service/blueprint_geometry.rs"],
+    "bp_model": ["src/service/blueprint_model.rs"],
+    "bp_capture": ["src/service/blueprint_capture.rs"],
+    "bp_resolve": ["src/service/blueprint_resolve.rs"],
+    "bp_edit": ["src/service/blueprint_reshape.rs", "src/service/blueprint_solve.rs"],
+    "sheet_suggest": ["src/service/sheet_suggest.rs"],
+    "elev_facing": ["src/service/elevation_facing.rs"],
+    "rls_plan": ["src/service/rls_plan.rs"],
+    "rls_tags": ["src/service/rls_tags.rs"],
+    "rls_place": ["src/service/rls_tag_place.rs"],
+    "room_tag": ["src/service/room_tag_place.rs"],
+    "task_build": ["src/service/task_build.rs"],
+    "svc_placement": ["src/service/placement.rs"],
+    "svc_connectivity": ["src/service/connectivity.rs"],
+    "svc_routing": ["src/service/routing.rs", "src/service/geodesic.rs"],
+    "svc_reach": ["src/service/reach.rs"],
+    "svc_stacking": ["src/service/stacking.rs"],
+    "svc_surfaces": ["src/service/surfaces.rs"],
+    "svc_surf_attr": ["src/service/surface_attribution.rs"],
+    "svc_type_table": ["src/service/type_table.rs"],
+    "contract_surfaces": ["src/contract/surfaces.rs", "src/contract/ceilings.rs", "src/contract/floors.rs"],
+    "contract_codec": ["src/contract/property_codec.rs"],
+    "p_blueprints": sorted(glob.glob("src-js/blueprints/*.ts")) + sorted(glob.glob("src-js/blueprints/*.tsx")),
+    "p_library": sorted(glob.glob("src-js/library/*.ts")) + sorted(glob.glob("src-js/library/*.tsx")),
+    "p_tasks": sorted(glob.glob("src-js/tasks/*.ts")) + sorted(glob.glob("src-js/tasks/*.tsx")),
+    "js_text": ["src-js/renderer/labelPlacement.ts", "src-js/renderer/elementTags.ts"],
+    "js_storey": ["src-js/renderer/storey.ts"],
+    "js_reach": ["src-js/renderer/reach.ts", "src-js/renderer/svg/reach.ts", "src-js/renderer/svg/overlays.ts"],
+    "js_style": ["src-js/renderer/style.ts", "src-js/renderer/svg/style.ts"],
 }
 
 # A renderer module's tests live in a sibling `.test.ts` rather than inline, so
@@ -291,7 +348,7 @@ def measure_python(text):
 def measure_typescript(text, path):
     lines = text.split("\n")
     code, comments = _count_slash_comments(lines)
-    if path.endswith(".test.ts"):
+    if path.endswith((".test.ts", ".test.tsx")):
         return [0, len(lines), comments, code]
     return [code, len(lines), comments, 0]
 
@@ -309,7 +366,7 @@ def measure(path):
         return measure_rust(text)
     if path.endswith(".py"):
         return measure_python(text)
-    if path.endswith((".ts", ".js")):
+    if path.endswith((".ts", ".tsx", ".js")):
         return measure_typescript(text, path)
     lines = text.split("\n")
     return [sum(1 for line in lines if line.strip()), len(lines), 0, 0]
