@@ -97,6 +97,7 @@ pub fn list_project_files(projects_dir: &Path) -> Result<Vec<ProjectFileSummary>
                 name: settings.name,
                 is_default: settings.is_default,
                 reference_sources: settings.sources.reference.keys().cloned().collect(),
+                tag_type_code: settings.tag_type_code,
                 error: None,
             }),
             Err(e) => out.push(ProjectFileSummary {
@@ -105,6 +106,7 @@ pub fn list_project_files(projects_dir: &Path) -> Result<Vec<ProjectFileSummary>
                 name: None,
                 is_default: false,
                 reference_sources: vec![],
+                tag_type_code: None,
                 error: Some(format!("{e:#}")),
             }),
         }
@@ -945,6 +947,21 @@ ids = ["12345", "67890"]
         let (file, settings) = get_project_file(&dir, "p1").unwrap();
         assert_eq!(file, "p1.toml");
         assert_eq!(settings.project_id, "p1");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The pyRevit push picker reads the type-code parameter from this list; a summary without it
+    /// made every push say the project named none.
+    #[test]
+    fn test_the_list_carries_the_tag_type_code() {
+        let dir = temp_dir("list-type-code");
+        let state = file_backed_state(&dir);
+        let mut settings = minimal_settings("p1");
+        settings.tag_type_code = Some("ItemCode".to_string());
+        save_project(&state, None, settings).unwrap();
+
+        assert_eq!(list_project_files(&dir).unwrap()[0].tag_type_code.as_deref(), Some("ItemCode"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

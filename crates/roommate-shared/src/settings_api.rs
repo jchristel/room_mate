@@ -37,6 +37,11 @@ pub struct ProjectFileSummary {
     /// A bool could only ever say "is dRofus there", which was already the
     /// wrong question once a project could configure several.
     pub reference_sources: Vec<String>,
+    /// The FF&E type parameter whose value keys a tag rule (`Settings::tag_type_code`). On the
+    /// summary because the pyRevit push picker reads it from this one call, and a push that
+    /// names no parameter cannot key its item tags.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_type_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
