@@ -92,14 +92,14 @@ if (-not $SkipBuild) {
     Write-Host 'Building release binaries...' -ForegroundColor Cyan
     Push-Location $RepoRoot
     try {
-        cargo build --release --bin roommate --bin mcp
+        cargo build --release --bin roommate --bin mcp --bin drofus-mcp
         if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
     } finally {
         Pop-Location
     }
 }
 
-foreach ($exe in 'roommate.exe', 'mcp.exe') {
+foreach ($exe in 'roommate.exe', 'mcp.exe', 'drofus-mcp.exe') {
     $path = Join-Path $RepoRoot "target\release\$exe"
     if (-not (Test-Path $path)) { throw "Missing $path -- run without -SkipBuild." }
 }

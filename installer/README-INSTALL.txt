@@ -96,3 +96,20 @@ Use full expanded paths -- most hosts do not expand environment variables.
 The read-only tools work with no server running. Add
 --server-url http://127.0.0.1:5151 for the one tool that uploads reference
 data, which forwards to the running server.
+
+The dRofus MCP server
+---------------------
+
+drofus-mcp.exe in the program folder lets an MCP host read live dRofus data
+(rooms, items, systems and the rest; read-only, nothing is ever written). The
+host launches it, like mcp.exe, and the two can run side by side. Point the
+host at:
+
+  Command:  %LOCALAPPDATA%\Programs\RoomMate\drofus-mcp.exe
+  Args:     --base-url https://api-no.drofus.com --database <db> --project <project>
+  Env:      DROFUS_API_KEY=<your dRofus API key>
+
+Use full expanded paths. Put the key in the host's env setting, not in Args:
+arguments show up in process listings. The region host (api-no, api-eu, api-us,
+api-ca, api-au) is yours to choose. With no key every call is refused before
+anything is sent, and the tool "server_info" says what is missing.
