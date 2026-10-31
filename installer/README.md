@@ -190,6 +190,19 @@ was the expensive kind: the API kept answering and only the pages 404'd, so the
 server looked healthy while the website was missing. Anything that relocates
 `static/` away from `roommate.exe` reintroduces exactly that.
 
+## Mac and Linux: a servers-only tarball
+
+`installer/unix/` builds `roommate-<version>-<os>-<arch>.tar.gz` (Linux x86_64, macOS Apple silicon)
+with `roommate`, `mcp`, `drofus-mcp`, the viewer and an `install.sh`. **No pyRevit toolbar and nothing
+for Revit**: the producer is Windows-only, so this is for a machine that serves (a shared server) or
+reads (Claude Code on a Mac). It lays out the same way as the Windows install and for the same
+reason: `~/.local/share/roommate/app` is replaced on every install, `settings/` is seeded once and
+`data/` is never touched. `register-claude-mcp.sh` is the twin of `Register-ClaudeMcp.ps1`.
+`release-unix.yml` builds it on both platforms, runs `smoke.sh` (install, start, ask the server, check
+an upgrade keeps the settings) and attaches it to the tag's release beside the Windows setup. Not
+code-signed; `install.sh` clears the macOS download quarantine. No service/launchd unit yet: `roommate`
+runs in the foreground.
+
 ## What is deliberately not in here
 
 - **Claude Code is registered; Claude Desktop is not.** `mcp.exe` and
