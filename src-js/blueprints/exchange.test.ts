@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fileNameFor, parseFile, toFile } from "./exchange.js";
+import { fileNameFor, isSheetConflict, parseFile, takingTheSheets, toFile } from "./exchange.js";
 import type { Blueprint } from "./types.js";
 
 const bp: Blueprint = {
@@ -36,6 +36,18 @@ describe("export files", () => {
     const bundle = { sheets: [{ revit_sheet_id: "1", document_title: "D", sheet_number: "RLS-01", sheet: {} }], rules: [] };
     const withBundle = parseFile(JSON.stringify(toFile(bp, 1, "x", bundle)));
     expect(withBundle.ok && withBundle.file.bundle?.sheets.length).toBe(1);
+  });
+
+  it("recognises the server's refusal of sheets another blueprint holds, and answers it by taking them", () => {
+    const refusal = "1 of the sheets are already bound to another blueprint (RLS-1 (bound to \"A\")); a sheet belongs to one blueprint";
+    expect(isSheetConflict(refusal)).toBe(true);
+    expect(isSheetConflict("a blueprint holds at most 200 revisions")).toBe(false);
+    const bundle = { sheets: [{ revit_sheet_id: "1", document_title: "D", sheet_number: "RLS-1", sheet: {} }] };
+    const file = toFile(bp, 1, "x", bundle)!;
+    expect(file.bundle?.take_over_sheets).toBeUndefined();
+    expect(takingTheSheets(file).bundle?.take_over_sheets).toBe(true);
+    const roomOnly = toFile(bp, 1, "x")!;
+    expect(takingTheSheets(roomOnly)).toBe(roomOnly);
   });
 
   it("has nothing to export for a revision the blueprint lacks", () => {

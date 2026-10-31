@@ -27,6 +27,10 @@ use crate::tag_rules::{
     self, Boundary, ObservationOutcome, ObservationsRequest, ObserveContext, RuleSummary, TagRule, P3,
 };
 
+/// Which blueprint each sheet of a push is bound to (by document title and Revit sheet id), and each such
+/// blueprint's item ids.
+type BoundSheets = (HashMap<(String, String), String>, HashMap<String, HashSet<String>>);
+
 /// Rooms read for one push, by `(model id, room id)`; `None` is a room the server does not hold.
 type RoomRings = RefCell<HashMap<(String, i64), Option<Vec<Pt>>>>;
 
@@ -67,6 +71,12 @@ pub fn observe_for(
         Some(id) => Some((id.to_string(), blueprint_item_ids(&projects, project_id, id)?)),
         None => None,
     };
+    // A push that names no blueprint still keeps the tags of a sheet that is bound to one bound.
+    let (sheet_blueprints, blueprint_items) = if blueprint.is_some() {
+        Default::default()
+    } else {
+        bound_sheets_of(&projects, project_id, &request)
+    };
     // A room is read from the server once per push, however many tags are on it.
     let rooms: RoomRings = RefCell::default();
     let boundary = |model: &str, room: i64, head: P3, bound: bool, scale: f64| -> Option<Boundary> {
@@ -80,8 +90,38 @@ pub fn observe_for(
             .as_deref()?;
         boundary_of(ring, (head.x, head.y), bound, scale)
     };
-    let ctx = ObserveContext { blueprint, boundary: Some(&boundary) };
+    let ctx = ObserveContext { blueprint, sheet_blueprints, blueprint_items, boundary: Some(&boundary) };
     tag_rules::observe(&projects, project_id, request, &ctx).map_err(to_http)
+}
+
+/// The blueprint each sheet of a push is bound to in the library, and those blueprints' items. A blueprint
+/// that cannot be read is skipped: its sheets' tags are then taken in as generic, as they were before.
+fn bound_sheets_of(projects: &std::path::Path, project: &str, request: &ObservationsRequest) -> BoundSheets {
+    let wanted: HashSet<(&str, &str)> = request
+        .observations
+        .iter()
+        .map(|o| (o.sheet.document_title.as_str(), o.sheet.revit_sheet_id.as_str()))
+        .collect();
+    let mut by_sheet = HashMap::new();
+    let mut items: HashMap<String, HashSet<String>> = HashMap::new();
+    for record in crate::sheets::load_all(projects, project).unwrap_or_default() {
+        let Some(blueprint) = record.blueprint.clone() else {
+            continue;
+        };
+        if !wanted.contains(&(record.document_title.as_str(), record.revit_sheet_id.as_str())) {
+            continue;
+        }
+        if !items.contains_key(&blueprint) {
+            match blueprint_item_ids(projects, project, &blueprint) {
+                Ok(ids) => {
+                    items.insert(blueprint.clone(), ids);
+                }
+                Err(_) => continue,
+            }
+        }
+        by_sheet.insert((record.document_title, record.revit_sheet_id), blueprint);
+    }
+    (by_sheet, items)
 }
 
 /// The ids of the items a room blueprint holds in its current revision: a tag on one of them is bound
@@ -365,5 +405,120 @@ mod tests {
         let state = state(None);
         let (status, _) = observe_for(&state, "p1", request(None, "Assembly Code", vec![])).unwrap_err();
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    fn bind_sheet(dir: &Path, sheet_id: &str, blueprint: Option<&str>) {
+        let pushed = crate::sheets::PushedSheet {
+            revit_sheet_id: sheet_id.into(),
+            document_title: "m1".into(),
+            sheet_number: format!("RLS-{sheet_id}"),
+            sheet_name: String::new(),
+            room: None,
+            blueprint: blueprint.map(str::to_string),
+            phase: None,
+            room_summary: None,
+            size_mm: None,
+            rooms: vec![],
+            sheet: json!({ "view_ports": [] }),
+        };
+        crate::sheets::push(dir, "p1", crate::sheets::PushRequest { sheets: vec![pushed] }).unwrap();
+    }
+
+    fn on_sheet(mut o: Observation, sheet_id: &str) -> Observation {
+        o.sheet.revit_sheet_id = sheet_id.into();
+        o
+    }
+
+    #[test]
+    fn test_the_sheets_button_after_a_blueprint_push_keeps_a_bound_sheets_tags_bound() {
+        let dir = temp_dir("sheets-button");
+        let state = state(Some(&dir));
+        push_room(&state);
+        let id = make_blueprint(&dir, &["101"]);
+        bind_sheet(&dir, "100", Some(&id));
+        bind_sheet(&dir, "200", None);
+
+        // One push, naming no blueprint (the Sheets button): sheet 100 is bound, sheet 200 is generic.
+        let tags = vec![item_tag(1, 101), on_sheet(item_tag(2, 101), "200"), room_tag(3, 5)];
+        let out = observe_for(&state, "p1", request(None, "Assembly Code", tags)).unwrap();
+        assert_eq!((out.samples, out.skipped.len()), (3, 0));
+
+        let all = rules(&dir);
+        let bound_item = all
+            .iter()
+            .find(|r| r.key.tag_category == "Furniture Tags" && !r.key.blueprint.is_empty())
+            .expect("sheet 100's tag stayed bound");
+        assert_eq!(
+            (bound_item.key.blueprint.as_str(), bound_item.key.instance.as_str()),
+            (id.as_str(), "101")
+        );
+        assert_eq!(
+            bound_item
+                .samples
+                .iter()
+                .map(|s| s.source.sheet.revit_sheet_id.as_str())
+                .collect::<Vec<_>>(),
+            ["100"]
+        );
+        let generic_item = all
+            .iter()
+            .find(|r| r.key.tag_category == "Furniture Tags" && r.key.blueprint.is_empty())
+            .expect("sheet 200's tag is generic");
+        assert_eq!(
+            generic_item
+                .samples
+                .iter()
+                .map(|s| s.source.sheet.revit_sheet_id.as_str())
+                .collect::<Vec<_>>(),
+            ["200"]
+        );
+        // The room tag came from sheet 100 too, so it is bound and written against the wall.
+        let room = all.iter().find(|r| r.key.tag_category == "Room Tags").unwrap();
+        assert_eq!(
+            (room.key.blueprint.as_str(), room.placement.boundary.map(|b| b.of)),
+            (id.as_str(), Some(BoundaryOf::Wall))
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_pushing_a_bound_sheets_tags_again_does_not_move_them_and_a_named_blueprint_wins() {
+        let dir = temp_dir("again");
+        let state = state(Some(&dir));
+        let id = make_blueprint(&dir, &["101"]);
+        bind_sheet(&dir, "100", Some(&id));
+        observe_for(&state, "p1", request(Some(&id), "Assembly Code", vec![item_tag(1, 101)])).unwrap();
+        let before: Vec<String> = rules(&dir).into_iter().map(|r| r.id).collect();
+
+        observe_for(&state, "p1", request(None, "Assembly Code", vec![item_tag(1, 101)])).unwrap();
+        let after = rules(&dir);
+        assert_eq!(
+            after.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+            before,
+            "the same rule, not a generic copy"
+        );
+        assert_eq!(after[0].sample_count, 1, "replaced, not doubled");
+
+        // A sheet bound to a blueprint that is named explicitly in the push is that blueprint's, whatever the library says.
+        let other = {
+            let source = SourceRoom { model_id: "m1".into(), room_id: "5".into(), room_name: "Bed".into() };
+            blueprints::create(
+                &dir,
+                "p1",
+                CreateRequest {
+                    name: "2 BED".into(),
+                    source: Some(source),
+                    note: None,
+                    bundle: None,
+                    content: content(&["101"]),
+                },
+            )
+            .unwrap()
+            .id
+        };
+        observe_for(&state, "p1", request(Some(&other), "Assembly Code", vec![item_tag(1, 101)])).unwrap();
+        let moved = rules(&dir);
+        assert_eq!((moved.len(), moved[0].key.blueprint.as_str()), (1, other.as_str()));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
