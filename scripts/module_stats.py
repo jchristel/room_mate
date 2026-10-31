@@ -180,6 +180,8 @@ MODULES = {
     "gen": sorted(glob.glob("scripts/gen_*.py")),
     "probes": sorted(glob.glob("scripts/probe_*.py")) + sorted(glob.glob("scripts/analyse_*.py")),
     "docsdir": sorted(glob.glob("docs/STRATEGY*.md")) + ["docs/CODING-CONVENTIONS.md"],
+    "tag_rule_binding": ["src/tag_rule_binding.rs"],
+    "http_error": ["src/http_error.rs"],
     # ---- added with the blueprint, sheet, tag-rule and task work (2026-10-31): every cell below
     # is a module or a small GROUP of modules that had no cell. Page groups are globbed.
     "ex_sheets": ["extractor/pyRevit/room_m/exporters/sheets.py", "extractor/pyRevit/room_m/utils/sheets.py", "extractor/pyRevit/room_m/room_figures.py", "extractor/pyRevit/room_m/sheet_export_form.py", "extractor/pyRevit/room_m/sheet_export_window.py"],
