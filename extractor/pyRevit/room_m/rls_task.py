@@ -187,6 +187,17 @@ def _plan_tags(task):
     return []
 
 
+def _room_tag_head(task):
+    """Where the server put the room tag in this room, `[x, y]` in the model's frame (mm), when its
+    rule was written against a room boundary; None when the plug-in is to apply the rule's offset in
+    the plan's axes instead."""
+    placed = (task.get("rls") or {}).get("room_tag") or {}
+    head = placed.get("head")
+    if isinstance(head, (list, tuple)) and len(head) == 2:
+        return [float(head[0]), float(head[1])]
+    return None
+
+
 def build(task, settings, values):
     """`(plan, aborts)`: what to make for `task`, and what stops it. The plan is plain data (names,
     sizes, template viewports, markers, tags), so the writer only has to do it."""
@@ -241,6 +252,7 @@ def build(task, settings, values):
         "room_tag": settings.get("room_tag") or None,
         "independent_tag": settings.get("independent_tag") or None,
         "tags": _plan_tags(task),
+        "room_tag_head": _room_tag_head(task),
     }
     return plan, aborts
 

@@ -30,9 +30,9 @@ use roommate::assignments_api::{
     http_assign, http_assign_many, http_delete_assignment, http_list_assignments, http_solve_blueprint,
 };
 use roommate::blueprints_api::{
-    http_accept_pending, http_add_revision, http_capture_blueprint, http_create_blueprint, http_delete_blueprint,
-    http_get_blueprint, http_list_blueprints, http_push_from_revit, http_push_revision, http_reject_pending,
-    http_reshape_blueprint, http_resolve_blueprint, http_update_blueprint,
+    http_accept_pending, http_add_revision, http_capture_blueprint, http_create_blueprint, http_get_blueprint,
+    http_list_blueprints, http_push_from_revit, http_push_revision, http_reject_pending, http_reshape_blueprint,
+    http_resolve_blueprint, http_update_blueprint,
 };
 use roommate::bootstrap::build_state;
 use roommate::connections_api::{http_get_connections, http_put_connections};
@@ -309,9 +309,14 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         .route("/projects/{id}/blueprints/reshape", post(http_reshape_blueprint))
         .route(
             "/projects/{id}/blueprints/{blueprint}",
-            get(http_get_blueprint).put(http_update_blueprint).delete(http_delete_blueprint),
+            get(http_get_blueprint).put(http_update_blueprint),
         )
         .route("/projects/{id}/blueprints/{blueprint}/revisions", post(http_add_revision))
+        // The sheets and tag rules bound to a blueprint, for Export (a read).
+        .route(
+            "/projects/{id}/blueprints/{blueprint}/bundle",
+            get(roommate::blueprint_bundle::http_get_bundle),
+        )
         // Where a revision's items go in one room: a read, nothing stored or applied.
         .route("/projects/{id}/blueprints/{blueprint}/resolve", get(http_resolve_blueprint))
         // The Revit push: a room and its sheets, the server captures the room. See `blueprints_api`.

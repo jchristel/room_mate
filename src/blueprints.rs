@@ -88,6 +88,10 @@ pub struct PendingRevision {
     pub origin: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The sheets and tags that came with the revision, kept opaque here (`blueprint_bundle::Bundle`):
+    /// they wait with it and are applied when it is accepted (plan decision 27). Dropped on rejection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<serde_json::Value>,
     #[serde(flatten)]
     pub content: RevisionContent,
 }
@@ -111,6 +115,12 @@ pub struct Blueprint {
     pub source: Option<SourceRoom>,
     /// The revision new assignments use. Always one of `revisions`.
     pub current_revision: u32,
+    /// Whether the blueprint is in use (plan decision 27). **A blueprint is never deleted, only marked
+    /// not in use**: it then takes no new assignment and is left out of suggestions, while what is bound
+    /// to it (its sheets, its tags) and every assignment already made stay as they are. A file written
+    /// before this is in use.
+    #[serde(default = "in_use_by_default")]
+    pub in_use: bool,
     pub revisions: Vec<Revision>,
     /// Pushed revisions waiting for review. Absent in a file written before pushes existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -121,6 +131,10 @@ pub struct Blueprint {
     /// because an accepted revision leaves the pending list and its id must not come back.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub last_pending_id: u32,
+}
+
+fn in_use_by_default() -> bool {
+    true
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -145,6 +159,7 @@ pub struct BlueprintSummary {
     pub taken_at: String,
     pub source: Option<SourceRoom>,
     pub current_revision: u32,
+    pub in_use: bool,
     pub revisions: usize,
     /// Pushed revisions waiting for review.
     pub pending: usize,
@@ -163,6 +178,7 @@ impl From<&Blueprint> for BlueprintSummary {
             taken_at: b.taken_at.clone(),
             source: b.source.clone(),
             current_revision: b.current_revision,
+            in_use: b.in_use,
             revisions: b.revisions.len(),
             pending: b.pending.len(),
             items: b.current().map_or(0, |r| r.content.items.iter().filter(|i| !i.excluded).count()),
@@ -178,6 +194,9 @@ pub struct CreateRequest {
     pub source: Option<SourceRoom>,
     #[serde(default)]
     pub note: Option<String>,
+    /// Sheets and tags to apply once the blueprint exists. The store ignores it: the API layer applies it.
+    #[serde(default)]
+    pub bundle: Option<serde_json::Value>,
     #[serde(flatten)]
     pub content: RevisionContent,
 }
@@ -208,6 +227,9 @@ pub struct PushRequest {
     pub origin: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
+    /// The revision's sheets and tags, kept with it until it is accepted.
+    #[serde(default)]
+    pub bundle: Option<serde_json::Value>,
     #[serde(flatten)]
     pub content: RevisionContent,
 }
@@ -225,6 +247,9 @@ pub struct UpdateRequest {
     pub name: Option<String>,
     #[serde(default)]
     pub current_revision: Option<u32>,
+    /// Mark the blueprint in use or not in use.
+    #[serde(default)]
+    pub in_use: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -489,6 +514,7 @@ pub fn create(projects_dir: &Path, project: &str, request: CreateRequest) -> Res
         taken_at: taken_at.clone(),
         source: request.source,
         current_revision: 1,
+        in_use: true,
         revisions: vec![Revision { number: 1, created_at: taken_at, note, content: request.content }],
         pending: Vec::new(),
         rejected: Vec::new(),
@@ -554,6 +580,7 @@ pub fn push(projects_dir: &Path, project: &str, id: &str, request: PushRequest) 
         received_at: blueprint.taken_at.clone(),
         origin,
         note,
+        bundle: request.bundle,
         content: request.content,
     });
     write(projects_dir, project, &blueprint)?;
@@ -611,7 +638,8 @@ pub fn reject(
     if blueprint.taken_at != request.base {
         return Err(conflict(&request.base, &blueprint.taken_at));
     }
-    let declined = take_pending(&mut blueprint, pending_id)?;
+    let mut declined = take_pending(&mut blueprint, pending_id)?;
+    declined.bundle = None; // a rejected revision's sheets and tags are never applied, so are not kept
     blueprint.taken_at = next_stamp(&blueprint.taken_at);
     blueprint
         .rejected
@@ -642,25 +670,20 @@ pub fn update(
     if let Some(name) = name {
         blueprint.name = name;
     }
+    if let Some(in_use) = request.in_use {
+        blueprint.in_use = in_use;
+    }
     blueprint.taken_at = next_stamp(&blueprint.taken_at);
     write(projects_dir, project, &blueprint)?;
     Ok(blueprint)
 }
 
-/// Remove a blueprint. The file is copied under `.backups/` first, so this is the one
-/// destructive operation and also a recoverable one.
-pub fn delete(projects_dir: &Path, project: &str, id: &str, base: &str) -> Result<(), BlueprintError> {
-    let _guard = SAVE_LOCK.lock().unwrap();
-    let blueprint = load(projects_dir, project, id)?;
-    if blueprint.taken_at != base {
-        return Err(conflict(base, &blueprint.taken_at));
-    }
-    let path = blueprint_path(projects_dir, project, id)?;
-    let stem = format!("blueprint-{project}-{id}");
-    crate::backups::back_up(projects_dir, &stem, "json", &path).map_err(BlueprintError::Internal)?;
-    std::fs::remove_file(&path).map_err(internal)?;
-    tracing::info!("deleted blueprint {id} from project {project}");
-    Ok(())
+/// Remove a blueprint's file, for the tests that need a blueprint that has gone (an assignment then
+/// reports `blueprint_missing`). **There is no such operation in the product**: a blueprint is marked
+/// not in use, never deleted (plan decision 27).
+#[cfg(test)]
+pub(crate) fn remove_for_test(projects_dir: &Path, project: &str, id: &str) {
+    std::fs::remove_file(blueprint_path(projects_dir, project, id).unwrap()).unwrap();
 }
 
 #[cfg(test)]
@@ -702,7 +725,32 @@ mod tests {
     }
 
     fn create_req(name: &str, items: usize) -> CreateRequest {
-        CreateRequest { name: name.into(), source: None, note: None, content: content(items) }
+        CreateRequest {
+            name: name.into(),
+            source: None,
+            note: None,
+            bundle: None,
+            content: content(items),
+        }
+    }
+
+    #[test]
+    fn test_a_pending_revision_keeps_its_bundle_until_rejected_and_accepting_hands_it_on() {
+        let dir = temp_dir("bundle");
+        let v1 = create(&dir, "p1", create_req("A", 1)).unwrap();
+        let bundle = serde_json::json!({ "sheets": [] });
+        let with = |n| PushRequest { origin: None, note: None, bundle: Some(bundle.clone()), content: content(n) };
+        let a = push(&dir, "p1", &v1.id, with(2)).unwrap();
+        let b = push(&dir, "p1", &v1.id, with(3)).unwrap();
+        assert!(b.pending.iter().all(|p| p.bundle.as_ref() == Some(&bundle)), "waits with the revision");
+        let rejected =
+            reject(&dir, "p1", &v1.id, a.pending[0].pending_id, DecideRequest { base: b.taken_at.clone() }).unwrap();
+        assert!(
+            rejected.rejected[0].revision.bundle.is_none(),
+            "a rejected revision's sheets and tags are dropped"
+        );
+        assert!(rejected.pending[0].bundle.is_some(), "the other one still waits");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -768,7 +816,7 @@ mod tests {
             &dir,
             "p1",
             &v1.id,
-            UpdateRequest { base: v2.taken_at.clone(), name: None, current_revision: Some(2) },
+            UpdateRequest { base: v2.taken_at.clone(), name: None, current_revision: Some(2), in_use: None },
         )
         .unwrap();
         assert_eq!(moved.current_revision, 2);
@@ -776,7 +824,12 @@ mod tests {
             &dir,
             "p1",
             &v1.id,
-            UpdateRequest { base: moved.taken_at.clone(), name: None, current_revision: Some(1) },
+            UpdateRequest {
+                base: moved.taken_at.clone(),
+                name: None,
+                current_revision: Some(1),
+                in_use: None,
+            },
         )
         .unwrap();
         assert_eq!(
@@ -788,7 +841,7 @@ mod tests {
             &dir,
             "p1",
             &v1.id,
-            UpdateRequest { base: back.taken_at, name: None, current_revision: Some(9) }
+            UpdateRequest { base: back.taken_at, name: None, current_revision: Some(9), in_use: None }
         )
         .is_err());
         std::fs::remove_dir_all(&dir).ok();
@@ -802,30 +855,62 @@ mod tests {
             &dir,
             "p1",
             &v1.id,
-            UpdateRequest { base: v1.taken_at.clone(), name: Some("B".into()), current_revision: None },
+            UpdateRequest {
+                base: v1.taken_at.clone(),
+                name: Some("B".into()),
+                current_revision: None,
+                in_use: None,
+            },
         )
         .unwrap();
         let stale = update(
             &dir,
             "p1",
             &v1.id,
-            UpdateRequest { base: v1.taken_at.clone(), name: Some("C".into()), current_revision: None },
+            UpdateRequest {
+                base: v1.taken_at.clone(),
+                name: Some("C".into()),
+                current_revision: None,
+                in_use: None,
+            },
         );
         assert!(matches!(stale, Err(BlueprintError::Conflict(_))));
         assert_eq!(load(&dir, "p1", &v1.id).unwrap(), first, "the earlier write is untouched");
-        let stale_delete = delete(&dir, "p1", &v1.id, &v1.taken_at);
-        assert!(matches!(stale_delete, Err(BlueprintError::Conflict(_))));
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn test_delete_keeps_a_backup_and_then_the_blueprint_is_gone() {
-        let dir = temp_dir("delete");
+    fn test_a_blueprint_is_marked_not_in_use_and_back_and_keeps_everything() {
+        let dir = temp_dir("in-use");
         let v1 = create(&dir, "p1", create_req("A", 1)).unwrap();
-        delete(&dir, "p1", &v1.id, &v1.taken_at).unwrap();
-        assert!(matches!(load(&dir, "p1", &v1.id), Err(BlueprintError::NotFound(_))));
-        let kept = std::fs::read_dir(dir.join(".backups")).unwrap().count();
-        assert_eq!(kept, 1, "the deleted file survives under .backups/");
+        assert!(v1.in_use && list(&dir, "p1").unwrap()[0].in_use);
+        let off = update(
+            &dir,
+            "p1",
+            &v1.id,
+            UpdateRequest {
+                base: v1.taken_at.clone(),
+                name: None,
+                current_revision: None,
+                in_use: Some(false),
+            },
+        )
+        .unwrap();
+        assert!(!off.in_use && !list(&dir, "p1").unwrap()[0].in_use);
+        assert_eq!(off.revisions, v1.revisions, "nothing else changes");
+        let on = update(
+            &dir,
+            "p1",
+            &v1.id,
+            UpdateRequest {
+                base: off.taken_at.clone(),
+                name: None,
+                current_revision: None,
+                in_use: Some(true),
+            },
+        )
+        .unwrap();
+        assert!(on.in_use);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -889,7 +974,7 @@ mod tests {
             &dir,
             "p1",
             &v1.id,
-            PushRequest { origin: Some("project Q".into()), note: None, content: content(5) },
+            PushRequest { origin: Some("project Q".into()), note: None, bundle: None, content: content(5) },
         )
         .unwrap();
         assert_eq!(pushed.current_revision, 1);
@@ -910,7 +995,7 @@ mod tests {
             &dir,
             "p1",
             &v1.id,
-            PushRequest { origin: None, note: Some("from Q".into()), content: content(5) },
+            PushRequest { origin: None, note: Some("from Q".into()), bundle: None, content: content(5) },
         )
         .unwrap();
         let accepted = accept(&dir, "p1", &v1.id, 1, DecideRequest { base: pushed.taken_at.clone() }).unwrap();
@@ -918,7 +1003,13 @@ mod tests {
         assert_eq!(accepted.revision(2).unwrap().content.items.len(), 5);
         assert_eq!(accepted.revision(2).unwrap().note.as_deref(), Some("from Q"));
         assert_eq!(accepted.revision(1).unwrap(), v1.revision(1).unwrap());
-        let next = push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: content(1) }).unwrap();
+        let next = push(
+            &dir,
+            "p1",
+            &v1.id,
+            PushRequest { origin: None, note: None, bundle: None, content: content(1) },
+        )
+        .unwrap();
         assert_eq!(next.pending[0].pending_id, 2, "an accepted revision's id is not handed out again");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -927,13 +1018,25 @@ mod tests {
     fn test_rejecting_a_pending_revision_keeps_it_and_leaves_the_history_alone() {
         let dir = temp_dir("reject");
         let v1 = create(&dir, "p1", create_req("A", 2)).unwrap();
-        let pushed = push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: content(5) }).unwrap();
+        let pushed = push(
+            &dir,
+            "p1",
+            &v1.id,
+            PushRequest { origin: None, note: None, bundle: None, content: content(5) },
+        )
+        .unwrap();
         let rejected = reject(&dir, "p1", &v1.id, 1, DecideRequest { base: pushed.taken_at.clone() }).unwrap();
         assert_eq!((rejected.current_revision, rejected.revisions.len(), rejected.pending.len()), (1, 1, 0));
         assert_eq!(rejected.rejected.len(), 1, "kept, not deleted");
         assert_eq!(rejected.rejected[0].revision.content.items.len(), 5);
         // A later push does not reuse the rejected one's id, nor an accepted one's.
-        let again = push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: content(1) }).unwrap();
+        let again = push(
+            &dir,
+            "p1",
+            &v1.id,
+            PushRequest { origin: None, note: None, bundle: None, content: content(1) },
+        )
+        .unwrap();
         assert_eq!(again.pending[0].pending_id, 2);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -942,7 +1045,13 @@ mod tests {
     fn test_deciding_needs_the_current_version_and_a_pending_revision_that_exists() {
         let dir = temp_dir("decide");
         let v1 = create(&dir, "p1", create_req("A", 1)).unwrap();
-        let pushed = push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: content(2) }).unwrap();
+        let pushed = push(
+            &dir,
+            "p1",
+            &v1.id,
+            PushRequest { origin: None, note: None, bundle: None, content: content(2) },
+        )
+        .unwrap();
         let stale = accept(&dir, "p1", &v1.id, 1, DecideRequest { base: v1.taken_at.clone() });
         assert!(matches!(stale, Err(BlueprintError::Conflict(_))), "read before the push");
         assert!(accept(&dir, "p1", &v1.id, 9, DecideRequest { base: pushed.taken_at.clone() }).is_err());
@@ -957,9 +1066,20 @@ mod tests {
         let v1 = create(&dir, "p1", create_req("A", 1)).unwrap();
         let mut bad_content = content(1);
         bad_content.items[0].placement.edge = 42;
-        assert!(push(&dir, "p1", &v1.id, PushRequest { origin: None, note: None, content: bad_content }).is_err());
+        assert!(push(
+            &dir,
+            "p1",
+            &v1.id,
+            PushRequest { origin: None, note: None, bundle: None, content: bad_content }
+        )
+        .is_err());
         assert!(matches!(
-            push(&dir, "p1", "nope", PushRequest { origin: None, note: None, content: content(1) }),
+            push(
+                &dir,
+                "p1",
+                "nope",
+                PushRequest { origin: None, note: None, bundle: None, content: content(1) }
+            ),
             Err(BlueprintError::NotFound(_))
         ));
         std::fs::remove_dir_all(&dir).ok();

@@ -267,11 +267,7 @@ pub fn for_sheet(state: &AppState, project: &str, record: &SheetRecord) -> Resul
 /// A sheet's room as a ring in the TARGET MODEL's frame (the sheet is read in model coordinates),
 /// counter-clockwise, at the fine tolerance. Not `blueprint_capture::room_ring`, which answers in the
 /// project's plan frame.
-pub(super) fn model_room_ring(
-    state: &AppState,
-    project: &str,
-    room: &SheetRoom,
-) -> Result<Option<Vec<Pt>>, ServiceError> {
+pub fn model_room_ring(state: &AppState, project: &str, room: &SheetRoom) -> Result<Option<Vec<Pt>>, ServiceError> {
     let target = RoomRef { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
     let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
         return Ok(None);

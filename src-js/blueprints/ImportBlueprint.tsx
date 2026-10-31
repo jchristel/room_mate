@@ -49,7 +49,8 @@ export function ImportBlueprint({ project, projects, existing, onImported, onCan
     setBusy(true);
     try {
       const b = await api.getBlueprint(source, pick);
-      const file = toFile(b, b.current_revision, source);
+      const bundle = await api.getBundle(source, pick).catch(() => undefined);
+      const file = toFile(b, b.current_revision, source, bundle);
       if (!file) throw new Error("that blueprint has no current revision");
       await run(file, `project ${projects.find((p) => p.id === source)?.name ?? source}`);
     } catch (e) {

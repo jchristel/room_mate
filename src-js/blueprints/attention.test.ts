@@ -40,4 +40,9 @@ describe("filtering the blueprint list", () => {
     expect(filterBlueprints(rows, "wc office")).toEqual([]);
     expect(filterBlueprints(rows, "imp").map((b) => b.name)).toEqual(["Imported"]);
   });
+
+  it("a blueprint not in use is not nagged about, whatever it lacks", () => {
+    expect(blueprintNeedsAttention({ sheets: 0, pending: 2, in_use: false })).toBe(false);
+    expect(attentionReasons({ sheets: 0, pending: 2, in_use: false })).toEqual([]);
+  });
 });

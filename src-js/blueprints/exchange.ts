@@ -8,7 +8,7 @@
 
 import type { Sent } from "./api.js";
 import * as api from "./api.js";
-import type { Blueprint, BlueprintDoor, BlueprintItem, BlueprintSummary, Outline, SourceRoom } from "./types.js";
+import type { Blueprint, BlueprintDoor, BlueprintItem, BlueprintSummary, Bundle, Outline, SourceRoom } from "./types.js";
 
 export const FILE_FORMAT = "roommate-blueprint";
 
@@ -27,9 +27,11 @@ export interface ExportFile {
     doors?: BlueprintDoor[];
   };
   exported_from: string;
+  /** The sheets and tag rules bound to the blueprint (plan decision 27). A file without one is the room alone. */
+  bundle?: Bundle;
 }
 
-export function toFile(blueprint: Blueprint, revisionNumber: number, project: string): ExportFile | null {
+export function toFile(blueprint: Blueprint, revisionNumber: number, project: string, bundle?: Bundle): ExportFile | null {
   const r = blueprint.revisions.find((x) => x.number === revisionNumber);
   if (!r) return null;
   return {
@@ -39,6 +41,7 @@ export function toFile(blueprint: Blueprint, revisionNumber: number, project: st
     source: blueprint.source ?? null,
     revision: { number: r.number, note: r.note ?? null, outline: r.outline, items: r.items, doors: r.doors ?? [] },
     exported_from: project,
+    ...(bundle ? { bundle } : {}),
   };
 }
 
@@ -74,10 +77,10 @@ export async function importInto(
   const content = { outline, items, doors: doors ?? [] };
   const same = existing.find((b) => b.name.trim().toLowerCase() === file.name.trim().toLowerCase());
   if (same) {
-    const r = await api.pushPending(project, same.id, origin, content, file.revision.note ?? undefined);
+    const r = await api.pushPending(project, same.id, origin, content, file.revision.note ?? undefined, file.bundle);
     return r.ok ? { ok: true, value: { kind: "pending", blueprint: r.value, into: same.name } } : r;
   }
-  const r = await api.createBlueprint(project, file.name, file.source, content, file.revision.note ?? undefined);
+  const r = await api.createBlueprint(project, file.name, file.source, content, file.revision.note ?? undefined, file.bundle);
   return r.ok ? { ok: true, value: { kind: "created", blueprint: r.value } } : r;
 }
 

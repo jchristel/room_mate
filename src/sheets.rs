@@ -22,9 +22,10 @@
 //! the server to a rough export that is still changing; the figures the server does use
 //! (identity, number, name, room) are separate fields.
 //!
-//! **A sheet's room is a reference that is never validated on save.** It is chosen at export
-//! (through the blueprint route) or afterwards in the viewer; authored data outlives the
-//! geometry, so a room that has gone is a reported state at read time, not an error.
+//! **A sheet's room link is a reference that is never validated on save.** A sheet pushed with a
+//! blueprint is made for the blueprint's room; a sheet from the Sheets button has no link, only the
+//! figures of the rooms the person said it covers. Authored data outlives the geometry, so a room
+//! that has gone is a reported state at read time, not an error.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -129,7 +130,7 @@ pub struct SheetRecord {
     /// The Revit phase the export was run under, when it was run through the blueprint route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
-    /// The room as it was when the sheet's room was set (decision 25). Absent for a sheet pushed
+    /// The figures of the room(s) the sheet covers as they were when it was pushed (decision 25). Absent for a sheet pushed
     /// before this was stored, or whose room was not on the server then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_summary: Option<RoomSummary>,
@@ -140,6 +141,11 @@ pub struct SheetRecord {
     /// only: the figures in `room_summary` already cover all of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rooms: Vec<String>,
+    /// A GENERIC sheet's identifier: the size of its room's bounding rectangle and the number of
+    /// items in it (`room_key`), so sheets made for alike rooms share one. Absent for a sheet
+    /// bound to a blueprint (the blueprint is its identity) and for one with no room figures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_key: Option<String>,
     /// When the sheet's data last arrived.
     pub received_at: String,
     /// The sheet as duHast exports it.
@@ -170,6 +176,8 @@ pub struct SheetSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blueprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub room_summary: Option<RoomSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_mm: Option<SheetSize>,
@@ -190,6 +198,7 @@ impl From<&SheetRecord> for SheetSummary {
             sheet_name: r.sheet_name.clone(),
             room: r.room.clone(),
             blueprint: r.blueprint.clone(),
+            room_key: r.room_key.clone(),
             room_summary: r.room_summary,
             size_mm: r.size_mm,
             rooms: r.rooms.clone(),
@@ -347,6 +356,30 @@ pub fn load_all(projects_dir: &Path, project: &str) -> Result<Vec<SheetRecord>, 
     Ok(out)
 }
 
+/// Unbind the sheets bound to `blueprint` that a re-push of it no longer carries: they stay in the
+/// library as generic sheets (and get their `room_key`), nothing is deleted. `keep` is the identity
+/// (Revit sheet id, document title) of every sheet the push carried. Returns how many were unbound.
+pub fn unbind_missing(
+    projects_dir: &Path,
+    project: &str,
+    blueprint: &str,
+    keep: &[(String, String)],
+) -> Result<usize, SheetError> {
+    let _guard = SAVE_LOCK.lock().unwrap();
+    let mut changed = 0;
+    for mut record in load_all(projects_dir, project)? {
+        let carried = keep.iter().any(|(id, doc)| *id == record.revit_sheet_id && *doc == record.document_title);
+        if record.blueprint.as_deref() == Some(blueprint) && !carried {
+            record.blueprint = None;
+            settle_room_key(&mut record);
+            record.taken_at = next_stamp(&record.taken_at);
+            write(projects_dir, project, &record)?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
 /// The sheets bound to a room blueprint (plan decision 27), in number order.
 pub fn bound_to(projects_dir: &Path, project: &str, blueprint: &str) -> Result<Vec<SheetRecord>, SheetError> {
     let mut out: Vec<SheetRecord> = load_all(projects_dir, project)?
@@ -472,6 +505,23 @@ fn check_pushed(p: &PushedSheet) -> Result<PushedSheet, SheetError> {
     })
 }
 
+/// A generic sheet's identifier from its room's figures: the bounding rectangle's long and short
+/// sides to the nearest 10 mm, then the item count (`4000x3000-12`). The figures are the extractor's
+/// (the smallest enclosing rectangle, so a rotated room reads the same).
+pub fn room_key(summary: &RoomSummary) -> String {
+    let tens = |mm: f64| ((mm / 10.0).round() * 10.0) as i64;
+    format!("{}x{}-{}", tens(summary.x_mm), tens(summary.y_mm), summary.items)
+}
+
+/// Keep `room_key` in step with what the record now holds: set for a generic sheet with room
+/// figures, absent for a bound one or one without.
+fn settle_room_key(record: &mut SheetRecord) {
+    record.room_key = match (&record.blueprint, record.room_summary) {
+        (None, Some(summary)) => Some(room_key(&summary)),
+        _ => None,
+    };
+}
+
 /// A re-push with the same sheet number: the sheet's data replaces the record's. What the
 /// extractor measured (room figures, size) and the phase replace what was there only when this
 /// push sent them; a room link, an explicit choice made in Revit, sets only when named.
@@ -497,6 +547,7 @@ fn refresh_record(record: &mut SheetRecord, p: PushedSheet, received_at: String)
     if p.size_mm.is_some() {
         record.size_mm = p.size_mm;
     }
+    settle_room_key(record);
 }
 
 /// Store sheets that arrived from the extractor, by the matching rule in the module header.
@@ -533,7 +584,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                 if existing.len() >= MAX_SHEETS_PER_PROJECT {
                     return bad(format!("a project holds at most {MAX_SHEETS_PER_PROJECT} sheets"));
                 }
-                let record = SheetRecord {
+                let mut record = SheetRecord {
                     schema_version: SCHEMA_VERSION,
                     id: new_id(&dir),
                     taken_at: received_at.clone(),
@@ -547,12 +598,14 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     room_summary: p.room_summary,
                     size_mm: p.size_mm,
                     rooms: p.rooms,
+                    room_key: None,
                     received_at,
                     sheet: p.sheet,
                     pending: Vec::new(),
                     rejected: Vec::new(),
                     last_pending_id: 0,
                 };
+                settle_room_key(&mut record);
                 write(projects_dir, project, &record)?;
                 outcomes.push(outcome_of(&record, Outcome::Created));
                 existing.push(record);
@@ -606,7 +659,8 @@ fn outcome_of(r: &SheetRecord, outcome: Outcome) -> PushOutcome {
     }
 }
 
-/// Set or clear the sheet's room (the viewer's step for rooms no blueprint covers).
+/// Set or clear the sheet's room link. No page does this any more (a sheet needs no room); it stays for
+/// a client that wants to name one.
 pub fn update(projects_dir: &Path, project: &str, id: &str, request: UpdateRequest) -> Result<SheetRecord, SheetError> {
     check_room(&request.room)?;
     let _guard = SAVE_LOCK.lock().unwrap();
@@ -621,6 +675,7 @@ pub fn update(projects_dir: &Path, project: &str, id: &str, request: UpdateReque
         record.room = request.room;
         record.room_summary = request.room_summary;
     }
+    settle_room_key(&mut record);
     record.taken_at = next_stamp(&record.taken_at);
     write(projects_dir, project, &record)?;
     Ok(record)
@@ -668,6 +723,7 @@ pub fn accept(
     if accepted.size_mm.is_some() {
         record.size_mm = accepted.size_mm;
     }
+    settle_room_key(&mut record);
     record.taken_at = next_stamp(&record.taken_at);
     write(projects_dir, project, &record)?;
     Ok(record)
@@ -880,6 +936,57 @@ mod tests {
         accept(&dir, "p1", &first.id, 1, DecideRequest { base: rec.taken_at }).unwrap();
         assert_eq!(load(&dir, "p1", &first.id).unwrap().blueprint.as_deref(), Some("bp-2"));
         assert_eq!(list(&dir, "p1").unwrap().iter().filter(|r| r.blueprint.is_some()).count(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A generic sheet is identified by its room's bounding rectangle and item count; binding it to a
+    /// blueprint takes the identifier away (the blueprint is its identity), and a sheet with no room
+    /// figures has none.
+    #[test]
+    fn test_a_generic_sheet_gets_a_key_from_its_rooms_size_and_items() {
+        let dir = temp_dir("room-key");
+        let mut generic = sheet("100", "House A", "RLS-01");
+        generic.room_summary = Some(RoomSummary { x_mm: 4003.0, y_mm: 2998.0, area_m2: 12.0, items: 12 });
+        let first = push_one(&dir, generic.clone());
+        assert_eq!(load(&dir, "p1", &first.id).unwrap().room_key.as_deref(), Some("4000x3000-12"));
+        assert_eq!(list(&dir, "p1").unwrap()[0].room_key.as_deref(), Some("4000x3000-12"));
+        push_one(&dir, sheet("200", "House A", "RLS-02"));
+        let none = list(&dir, "p1").unwrap().into_iter().find(|s| s.sheet_number == "RLS-02").unwrap();
+        assert_eq!(none.room_key, None, "no room figures, no key");
+
+        let mut bound = generic;
+        bound.blueprint = Some("bp-1".into());
+        push_one(&dir, bound);
+        assert_eq!(
+            load(&dir, "p1", &first.id).unwrap().room_key,
+            None,
+            "a bound sheet is identified by its blueprint"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_sheet_the_blueprint_no_longer_carries_is_unbound_and_becomes_generic() {
+        let dir = temp_dir("unbind");
+        let summary = Some(RoomSummary { x_mm: 4000.0, y_mm: 3000.0, area_m2: 12.0, items: 5 });
+        for (id, number) in [("100", "RLS-01"), ("200", "RLS-02")] {
+            let mut s = sheet(id, "House A", number);
+            s.blueprint = Some("bp".into());
+            s.room_summary = summary;
+            push_one(&dir, s);
+        }
+        assert!(
+            list(&dir, "p1").unwrap().iter().all(|s| s.room_key.is_none()),
+            "bound: identified by the blueprint"
+        );
+        let n = unbind_missing(&dir, "p1", "bp", &[("100".into(), "House A".into())]).unwrap();
+        assert_eq!(n, 1);
+        let rows = list(&dir, "p1").unwrap();
+        let kept = rows.iter().find(|s| s.sheet_number == "RLS-01").unwrap();
+        let dropped = rows.iter().find(|s| s.sheet_number == "RLS-02").unwrap();
+        assert_eq!((kept.blueprint.as_deref(), dropped.blueprint.as_deref()), (Some("bp"), None));
+        assert_eq!(dropped.room_key.as_deref(), Some("4000x3000-5"), "generic now, so it has its key");
+        assert_eq!(unbind_missing(&dir, "p1", "bp", &[("100".into(), "House A".into())]).unwrap(), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 

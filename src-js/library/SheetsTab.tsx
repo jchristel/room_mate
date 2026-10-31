@@ -167,6 +167,12 @@ function SheetDetail({ record, names, busy, onDecide, onDelete }: DetailProps) {
         <dd>{sizeText(record.size_mm)}</dd>
         <dt>Room blueprint</dt>
         <dd>{boundText(record.blueprint, names)}</dd>
+        {record.room_key ? (
+          <>
+            <dt>Room key</dt>
+            <dd>{record.room_key}</dd>
+          </>
+        ) : null}
         <dt>Phase</dt>
         <dd>{record.phase ?? "—"}</dd>
         <dt>Rooms covered</dt>

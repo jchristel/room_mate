@@ -2,7 +2,7 @@ title: "Apply tasks"
 
 tooltip: |
   Writes the room tasks the RoomMate server holds for this model:
-  places the items and makes the layout sheets with their tags.
+  places the items. Layout sheets are made by RLS create.
   Checks every task first and asks once about warnings.
 
 author:

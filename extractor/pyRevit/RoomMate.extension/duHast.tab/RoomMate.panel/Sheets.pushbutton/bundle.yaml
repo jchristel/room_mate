@@ -2,7 +2,7 @@ title: "Sheets"
 
 tooltip: |
   Exports the sheets you choose to the RoomMate sheet library.
-  The room each belongs to is set afterwards, in the viewer.
+  Tick the rooms each covers (none, one or several); their size and item count go with it. No room is linked.
 
 author:
   - Jan Christel

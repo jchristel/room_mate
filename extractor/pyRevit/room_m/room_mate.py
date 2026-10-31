@@ -424,7 +424,9 @@ def _report_tags(project, pushed, return_value):
     """Say which tags could not be read, then send the ones that were to the tag rules store.
     A failure here is reported and never stops the sheet push: the layout does not need its tags.
     Item tags are keyed by the type code the project's settings name (`tag_type_code`); without
-    one only room tags are taken in, and the output says so."""
+    one only room tags are taken in, and the output says so.
+    These are the Sheets button's tags, generic ones; a blueprint push carries its tags with it
+    (`_report_blueprint_tags`)."""
     for p in pushed:
         for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
             return_value.append_message(line)
@@ -443,6 +445,28 @@ def _report_tags(project, pushed, return_value):
         return
     for line in describe_tag_outcome(outcome):
         return_value.append_message(line)
+
+
+def _report_blueprint_tags(project, pushed, outcome, return_value):
+    """What happened to the tags of a blueprint push. They travel with the push, so the server's
+    answer says it: taken in at once for a new blueprint, or waiting with a pending revision."""
+    for p in pushed:
+        for line in describe_problems(p.get("sheet_number", "?"), p.get("tag_problems")):
+            return_value.append_message(line)
+    if not all_observations(pushed):
+        return
+    if not project.get("tag_type_code"):
+        return_value.append_message(
+            "No tag type code is set in the project's settings, so tags on items are not kept "
+            "(room tags are). Name the type parameter that identifies an item's kind under Tag type code.")
+    if outcome.get("waiting"):
+        return_value.append_message("Tags wait with the pending revision.")
+    elif outcome.get("tags"):
+        for line in describe_tag_outcome(outcome["tags"]):
+            return_value.append_message(line)
+    if outcome.get("unlinked_tag_rules"):
+        return_value.append_message(
+            "{} tag rule(s) of this blueprint are no longer written and are generic now".format(outcome["unlinked_tag_rules"]))
 
 
 def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
@@ -620,12 +644,13 @@ def blueprint_export_entry(doc, uiapp, output, forms):
                     False, "{}: not pushed, because not every chosen sheet could be read.".format(name))
                 continue
             ok, status, text, outcome = post_blueprint(
-                project["id"], name, room["id"], selected_doc.Title, selected_doc.Title, pushed)
+                project["id"], name, room["id"], selected_doc.Title, selected_doc.Title, pushed,
+                type_code_parameter=project.get("tag_type_code"))
             if not ok:
                 return_value.update_sep(False, "{}: {}".format(name, explain_refusal(status, text)))
                 continue
             return_value.append_message(describe_outcome(name, outcome))
-            _report_tags(project, pushed, return_value)
+            _report_blueprint_tags(project, pushed, outcome, return_value)
     except Exception as e:
         return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
     return return_value

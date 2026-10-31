@@ -16,7 +16,7 @@ def item(x=1000.0, y=2000.0, fx=1.0, fy=0.0, family="Bed", type_name="Single"):
 
 def rule(head=(10.0, 4.0), rotation=0.0, leader=True, vp="floor plan", family="Bed", type_name="Single"):
     return {
-        "key": {"tagged_family": family, "tagged_type": type_name, "viewport_type": vp},
+        "key": {"type_code": family, "viewport_type": vp},
         "placement": {"head": {"x": head[0], "y": head[1]}, "rotation": rotation, "has_leader": leader},
     }
 
@@ -56,7 +56,7 @@ class TagPlacement(unittest.TestCase):
 def room_rule(head=(20.0, 10.0), vp="floor plan"):
     return {
         "tag_kind": "room",
-        "key": {"tagged_family": "", "tagged_type": "", "viewport_type": vp},
+        "key": {"type_code": "", "viewport_type": vp},
         "placement": {"head": {"x": head[0], "y": head[1]}, "rotation": 0.0, "has_leader": False},
     }
 

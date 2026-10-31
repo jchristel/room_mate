@@ -19,7 +19,8 @@ use super::elevation_facing::model_room_ring;
 use super::items::{assemble_items, ItemScope};
 use super::placement;
 use super::rls_plan::{check_size, has_elevations, transfer, MarkerPlan, RlsPlan, RlsRequest};
-use super::rls_tags::{plan_tags, type_code_of, RoomItem};
+use super::rls_tag_place::{blueprint_placements, room_tag_head, INSTANCE_MATCH_MM};
+use super::rls_tags::{match_instances, plan_tags, type_code_of, RoomItem};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
 use super::sheet_suggest::{distance, room_summary, Signature};
@@ -60,7 +61,7 @@ fn refuse<T>(reason: impl Into<String>) -> Result<T, ServiceError> {
     Err(ServiceError::Invalid(reason.into()))
 }
 
-fn blueprint_error(e: BlueprintError) -> ServiceError {
+pub(super) fn blueprint_error(e: BlueprintError) -> ServiceError {
     match e {
         BlueprintError::Internal(e) => ServiceError::Internal(e),
         BlueprintError::NotFileBacked => {
@@ -95,7 +96,7 @@ fn room_facts(state: &AppState, project: &str, room: &RoomRef) -> Result<Option<
 }
 
 /// What a stored mapping asks of the resolver.
-fn edge_map_of(mapping: &Mapping) -> EdgeMap {
+pub(super) fn edge_map_of(mapping: &Mapping) -> EdgeMap {
     match mapping {
         Mapping { frame: Some(f), .. } => EdgeMap::Frame(*f),
         Mapping { edge_map: Some(map), .. } => EdgeMap::Explicit(map.clone()),
@@ -204,12 +205,7 @@ pub fn populate_from_assignment(
         ));
     }
     let tag_rules = if params.create_rls {
-        let parameter = type_code_parameter(state, project);
-        let codes: Vec<String> = items
-            .iter()
-            .filter_map(|i| type_code_of(&parameter, &i.type_properties, &i.properties))
-            .collect();
-        tag_rules_for(projects_dir, project, &bound, &parameter, Some(&codes), &mut findings)
+        item_tag_rules(state, projects_dir, project, &bound, &items, &blueprint.id, &mut findings)
     } else {
         Vec::new()
     };
@@ -262,6 +258,25 @@ fn type_code_parameter(state: &AppState, project: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The tag rules a populate task carries: those for the type codes of the items it places, generic and
+/// bound to the blueprint (plan decision 27).
+fn item_tag_rules(
+    state: &AppState,
+    projects_dir: &std::path::Path,
+    project: &str,
+    sheets: &[BlueprintSheet],
+    items: &[TaskItem],
+    blueprint: &str,
+    findings: &mut Vec<Value>,
+) -> Vec<RuleSummary> {
+    let parameter = type_code_parameter(state, project);
+    let codes: Vec<String> = items
+        .iter()
+        .filter_map(|i| type_code_of(&parameter, &i.type_properties, &i.properties))
+        .collect();
+    tag_rules_for(projects_dir, project, sheets, &parameter, Some(&codes), Some(blueprint), findings)
+}
+
 /// The tag rules a task carries (plan decision 24). A rules store that cannot be read is a finding
 /// and no rules, never a refusal: the layout does not depend on them.
 fn tag_rules_for(
@@ -270,6 +285,7 @@ fn tag_rules_for(
     sheets: &[BlueprintSheet],
     parameter: &str,
     codes: Option<&[String]>,
+    blueprint: Option<&str>,
     findings: &mut Vec<Value>,
 ) -> Vec<RuleSummary> {
     let types = viewport_types(sheets);
@@ -282,7 +298,7 @@ fn tag_rules_for(
             "the project's settings name no tag type code, so items get no tags (room tags still do)".to_string(),
         ));
     }
-    match tag_rules::rules_for(projects_dir, project, &types, parameter, codes) {
+    match tag_rules::rules_for(projects_dir, project, &types, parameter, codes, blueprint) {
         Ok(rules) => rules,
         Err(_) => {
             findings.push(finding(
@@ -341,6 +357,7 @@ fn room_items(state: &AppState, project: &str, room: &RoomRef, parameter: &str) 
                 type_name: it.item.type_name.clone(),
                 category: it.item.category.clone(),
                 type_code: type_code_of(parameter, &type_properties, &properties),
+                instance: None,
                 footprint: it
                     .item
                     .loops
@@ -361,6 +378,7 @@ fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
         document_title: record.document_title.clone(),
         sheet_number: record.sheet_number.clone(),
         sheet_name: record.sheet_name.clone(),
+        size_mm: record.size_mm,
         sheet: record.sheet.clone(),
     }
 }
@@ -467,23 +485,24 @@ pub fn rls_from_sheet(
         std::slice::from_ref(&sheet_for_rules(&record)),
         &parameter,
         None,
+        record.blueprint.as_deref(),
         &mut findings,
     );
     let tags = match &request.tags {
-        Some(t) => Some(plan_tags(
-            &record.sheet,
-            &room_items(state, project, room, &parameter)?,
-            &markers,
-            &tag_rules,
-            t,
-        )),
+        Some(t) => {
+            let mut items = room_items(state, project, room, &parameter)?;
+            // A sheet bound to a blueprint knows which of the room's items the blueprint placed.
+            if let Some(blueprint) = record.blueprint.as_deref() {
+                let placements = blueprint_placements(state, projects_dir, project, blueprint, room, &parameter)?;
+                match_instances(&mut items, &placements, INSTANCE_MATCH_MM);
+            }
+            Some(plan_tags(&record.sheet, &items, &markers, &tag_rules, t))
+        }
         None => None,
     };
-    let rls = (sheet_size.is_some() || !markers.is_empty() || tags.is_some()).then_some(RlsPlan {
-        sheet_size,
-        markers,
-        tags,
-    });
+    let room_tag = room_tag_head(state, project, room, &record, &tag_rules, &mut findings)?;
+    let rls = (sheet_size.is_some() || !markers.is_empty() || tags.is_some() || room_tag.is_some())
+        .then_some(RlsPlan { sheet_size, markers, tags, room_tag });
     Ok(NewTask {
         rls,
         kind: TaskKind::CreateRls,
@@ -504,6 +523,7 @@ pub fn rls_from_sheet(
             document_title: record.document_title,
             sheet_number: record.sheet_number,
             sheet_name: record.sheet_name,
+            size_mm: record.size_mm,
             sheet: record.sheet,
         }],
         findings,

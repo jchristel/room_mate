@@ -6,6 +6,7 @@
 import { apiGet, apiSend } from "./common.js";
 import { DEFAULT_TAG_FIELDS, tagFieldsOf } from "./tagText.js";
 import type {
+  Bundle,
   AssignmentRow,
   AssignOutcome,
   Blueprint,
@@ -63,8 +64,12 @@ export const getBlueprint = (project: string, id: string) =>
 export const listRooms = (project: string) =>
   apiGet<{ rooms: RoomRow[]; levels: { id: string; name: string }[] }>(`/rooms?project=${encodeURIComponent(project)}`);
 
-export const createBlueprint = (project: string, name: string, source: SourceRoom | null, content: RevisionContent, note?: string) =>
-  send<Blueprint>("POST", `${base(project)}/blueprints`, { name, source, note, ...content });
+export const createBlueprint = (project: string, name: string, source: SourceRoom | null, content: RevisionContent, note?: string, bundle?: Bundle) =>
+  send<Blueprint>("POST", `${base(project)}/blueprints`, { name, source, note, bundle, ...content });
+
+/** The sheets and tag rules bound to a blueprint, for Export. */
+export const getBundle = (project: string, id: string) =>
+  apiGet<Bundle>(`${base(project)}/blueprints/${encodeURIComponent(id)}/bundle`);
 
 export const addRevision = (project: string, id: string, baseStamp: string, content: RevisionContent, note: string | null) =>
   send<Blueprint>("POST", `${base(project)}/blueprints/${encodeURIComponent(id)}/revisions`, {
@@ -78,14 +83,11 @@ export const updateBlueprint = (
   project: string,
   id: string,
   baseStamp: string,
-  patch: { name?: string; current_revision?: number },
+  patch: { name?: string; current_revision?: number; in_use?: boolean },
 ) => send<Blueprint>("PUT", `${base(project)}/blueprints/${encodeURIComponent(id)}`, { base: baseStamp, ...patch });
 
-export const deleteBlueprint = (project: string, id: string, baseStamp: string) =>
-  send<null>("DELETE", `${base(project)}/blueprints/${encodeURIComponent(id)}?base=${encodeURIComponent(baseStamp)}`, null);
-
-export const pushPending = (project: string, id: string, origin: string, content: RevisionContent, note?: string) =>
-  send<Blueprint>("POST", `${base(project)}/blueprints/${encodeURIComponent(id)}/pending`, { origin, note, ...content });
+export const pushPending = (project: string, id: string, origin: string, content: RevisionContent, note?: string, bundle?: Bundle) =>
+  send<Blueprint>("POST", `${base(project)}/blueprints/${encodeURIComponent(id)}/pending`, { origin, note, bundle, ...content });
 
 export const decidePending = (project: string, id: string, pendingId: number, baseStamp: string, accept: boolean) =>
   send<Blueprint>(

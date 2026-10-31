@@ -6,8 +6,10 @@ ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing on
 captures the room from the rooms and FF&E it already holds (one capture rule, in Rust), so
 this posts only which room, the name, and the sheets: `{"name", "room_id", "model_id",
 "origin", "sheets": [...]}` to `/projects/{id}/blueprints/from-revit`. A blueprint comes only
-from here, always with its sheets (docs/PLAN-blueprints.md, decision 18): the server refuses a
-push with none, and so does the button before it asks.
+from here, always with its sheets (docs/PLAN-blueprints.md, decisions 18 and 27): the server refuses a
+push with none, and so does the button before it asks. The sheets are kept in the sheet library bound
+to the blueprint, and the tags read from them travel in the same push; both wait with a pending
+revision until a person accepts it.
 
 A name the project already has becomes a PENDING revision of that blueprint, for a person to
 accept or reject in the blueprint viewer; a new name creates the blueprint.
@@ -21,13 +23,14 @@ except ImportError:  # CPython 3
     from urllib.parse import quote
 
 from room_m.post_common import _post_content
+from room_m.post_tags import all_observations
 from room_m.sheet_tags import take_tags
 
 SERVER_URL = "/projects/{}/blueprints/from-revit"
 
 # What the server keeps of a sheet in a blueprint: its identity (to recognise it on a re-push)
 # and duHast's layout. Not the room and not the phase, which belong to the library's records.
-_SHEET_KEYS = ("revit_sheet_id", "document_title", "sheet_number", "sheet_name", "sheet")
+_SHEET_KEYS = ("revit_sheet_id", "document_title", "sheet_number", "sheet_name", "size_mm", "sheet")
 
 
 def blueprint_url(project_id):
@@ -53,9 +56,14 @@ def blueprint_sheets(pushed):
     return out
 
 
-def post_blueprint(project_id, name, room_id, model_id, origin, pushed, note=None):
+def post_blueprint(project_id, name, room_id, model_id, origin, pushed, note=None, type_code_parameter=None):
     """POST one room's blueprint and return `(ok, status, text, outcome)`; `outcome` is the
-    server's answer (`created` or `pending`), or `{}` when it could not be read."""
+    server's answer (`created` or `pending`), or `{}` when it could not be read.
+
+    The tags read from the sheets go in the same push (plan decision 27), so they wait with the
+    sheets while a revision is pending and are applied when it is accepted. With no
+    `type_code_parameter` (the project's `tag_type_code` setting) the item tags cannot be keyed, so
+    tags are sent as read and the server skips the items' with a reason; room tags are still kept."""
     from System.Net.Http import StringContent
     from System.Text import Encoding
 
@@ -65,6 +73,8 @@ def post_blueprint(project_id, name, room_id, model_id, origin, pushed, note=Non
         "model_id": model_id,
         "origin": origin,
         "sheets": blueprint_sheets(pushed),
+        "type_code_parameter": type_code_parameter or "",
+        "observations": all_observations(pushed),
     }
     if note:
         body["note"] = note
@@ -87,11 +97,14 @@ def describe_outcome(name, outcome):
     """One line for the run's output. A pending revision says what to do next."""
     what = outcome.get("outcome")
     if what == "created":
-        return "{}: blueprint created".format(name)
+        line = "{}: blueprint created, {} sheet(s) bound to it".format(name, outcome.get("library_sheets", 0))
+        if outcome.get("unlinked_sheets"):
+            line += ", {} no longer carried (generic now)".format(outcome["unlinked_sheets"])
+        return line
     if what == "pending":
         return (
-            "{}: a blueprint of this name exists, so this is a PENDING revision; accept or "
-            "reject it in the blueprint viewer".format(name)
+            "{}: a blueprint of this name exists, so this is a PENDING revision; its sheets and tags wait "
+            "with it. Accept or reject it in the blueprint viewer".format(name)
         )
     return "{}: {}".format(name, what)
 

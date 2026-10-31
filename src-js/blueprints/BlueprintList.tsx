@@ -15,10 +15,12 @@ export interface ListProps {
   onImport(): void;
   onExport(): void;
   onRename(): void;
-  onDelete(): void;
+  /** Whether the selected blueprint is in use; the button flips it. */
+  inUse: boolean;
+  onToggleUse(): void;
 }
 
-export function BlueprintList({ rows, selectedId, busy, onSelect, onImport, onExport, onRename, onDelete }: ListProps) {
+export function BlueprintList({ rows, selectedId, busy, onSelect, onImport, onExport, onRename, inUse, onToggleUse }: ListProps) {
   const [onlyAttention, setOnlyAttention] = useState(false);
   const [text, setText] = useState("");
   const attention = rows?.filter(blueprintNeedsAttention).length ?? 0;
@@ -52,6 +54,7 @@ export function BlueprintList({ rows, selectedId, busy, onSelect, onImport, onEx
                 ) : null}
               </b>
               <span>
+                {b.in_use ? "" : "not in use · "}
                 {b.items} items · {b.sheets > 0 ? `${b.sheets} sheet${b.sheets === 1 ? "" : "s"}` : "no sheets"} · r{b.current_revision}
                 {b.pending > 0 ? ` · ${b.pending} pending` : ""}
               </span>
@@ -67,8 +70,8 @@ export function BlueprintList({ rows, selectedId, busy, onSelect, onImport, onEx
           <button type="button" disabled={busy} onClick={onRename}>
             Rename
           </button>
-          <button type="button" className="danger" disabled={busy} onClick={onDelete}>
-            Delete
+          <button type="button" disabled={busy} onClick={onToggleUse} title="A blueprint is never deleted. Not in use: no new assignments, its sheets are not suggested; everything bound to it stays.">
+            {inUse ? "Mark not in use" : "Mark in use"}
           </button>
         </div>
       ) : null}

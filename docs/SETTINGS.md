@@ -109,6 +109,19 @@ each other; it matters only for exported coordinates.
 anchor_model = "ARCH-MAIN"
 ```
 
+### `tag_type_code`
+
+The name of the FF&E **type** parameter whose value identifies a kind of item for
+tag rules. Every instance of a type shares it, so a tag learned beside one bed is
+found for that type in any room, whatever the family and type are called. Absent
+means item tags cannot be learned or applied (room tags still can): the extractor
+says so on a push, and an RLS task carries no item tag rules. A rule records the
+parameter it was keyed by, so changing this leaves the old rules unused, not wrong.
+
+```toml
+tag_type_code = "Assembly Code"
+```
+
 ### `[[hierarchy]]` — classification tiers
 
 Ordered, outermost first. Each tier names the room property holding its code,

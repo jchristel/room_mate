@@ -2,7 +2,8 @@ title: "Blueprint"
 
 tooltip: |
   Phase, then rooms, then the room layout sheets of each room.
-  Pushes the sheets with their rooms. Push rooms and FF&E first.
+  Pushes the room and its sheets, with their tags: the sheets are kept in the library bound to the blueprint.
+  Push rooms and FF&E first.
 
 author:
   - Jan Christel
