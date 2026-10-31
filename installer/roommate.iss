@@ -93,6 +93,9 @@ Name: "toolbar"; Description: "pyRevit toolbar (exports from Revit 2025+)"; Type
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+; On by default, because the point is that it works without a step by hand. It runs `claude mcp add`
+; for the signed-in Windows user and does nothing, harmlessly, when Claude Code is not installed.
+Name: "claudemcp"; Description: "Register the RoomMate data server with Claude Code (if installed)"; GroupDescription: "Claude Code:"
 
 [Files]
 ; The two binaries. mcp.exe is not launched by any shortcut -- an MCP host
@@ -112,6 +115,7 @@ Source: "..\target\release\drofus-mcp.exe"; DestDir: "{app}"; Flags: ignoreversi
 Source: "..\static\*"; DestDir: "{app}\static"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 Source: "RoomMate.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "Register-ClaudeMcp.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README-INSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 ; The settings template, kept in the app directory as well as seeded below.
@@ -182,10 +186,28 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powers
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Run]
+; Before the "start now" line so a person who starts RoomMate has both. Visible, because it can have
+; something to say (Claude Code not found); it closes itself when it has nothing.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Register-ClaudeMcp.ps1"""; \
+    WorkingDir: "{app}"; StatusMsg: "Registering with Claude Code..."; Tasks: claudemcp; \
+    Flags: waituntilterminated skipifsilent
+; Needs three values only the person has (database, project, API key), so it is offered, not run.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Register-ClaudeMcp.ps1"" -Drofus"; \
+    WorkingDir: "{app}"; Description: "Set up the dRofus MCP server (asks for your database, project and API key)"; \
+    Flags: postinstall nowait skipifsilent unchecked
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\RoomMate.ps1"""; \
     WorkingDir: "{app}"; Description: "Start {#AppName} now"; \
     Flags: postinstall nowait skipifsilent unchecked
+
+[UninstallRun]
+; Takes the registrations back out so Claude Code is not left pointing at a program that is gone.
+; Harmless when there were none or Claude Code is absent.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Register-ClaudeMcp.ps1"" -Remove"; \
+    RunOnceId: "UnregisterClaudeMcp"; Flags: runhidden
 
 [Code]
 { Everything below only WARNS. Nothing it finds changes what is installed, and

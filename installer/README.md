@@ -192,9 +192,14 @@ server looked healthy while the website was missing. Anything that relocates
 
 ## What is deliberately not in here
 
-- **No MCP host registration.** `mcp.exe` and `drofus-mcp.exe` ship (the second is
-  `crates/drofus-mcp`: it reads the dRofus service and needs an API key the user
-  puts in the host's env), but nothing writes to
+- **Claude Code is registered; Claude Desktop is not.** `mcp.exe` and
+  `drofus-mcp.exe` ship (the second is `crates/drofus-mcp`: it reads the dRofus
+  service and needs an API key the user supplies). Claude *Code* is registered by
+  `Register-ClaudeMcp.ps1`, run from the "claudemcp" task (ticked by default, so it
+  works out of the box) and undone by the uninstaller; it uses `claude mcp add
+  --scope user`, the supported route, and does nothing when `claude` is not found.
+  The dRofus server is offered on the last page, unticked, because it needs a
+  database, project and API key that only the user has. Nothing writes to
   `claude_desktop_config.json` — an installer editing another application's
   config file is a surprise, and the paths are in `README-INSTALL.txt` for
   anyone who wants it. See [mcp-host-setup.md](../docs/mcp-host-setup.md).
