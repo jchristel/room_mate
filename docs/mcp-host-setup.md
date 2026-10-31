@@ -76,6 +76,34 @@ claude mcp add roommate -- cargo run -q --bin mcp -- \
   --server-settings settings/server.toml --project-settings settings/projects
 ```
 
+## 2b. One shared server for a closed network
+
+Instead of every person launching their own `mcp.exe`, run one on the machine that holds the
+store and give people a URL:
+
+```sh
+ROOMMATE_MCP_TOKEN=<a shared secret> mcp.exe --server-settings <server.toml> \
+  --project-settings <projects-dir> --http 5152 --bind 0.0.0.0
+```
+
+It prints the address to give out (`http://<ip>:5152/mcp`). Each person adds it to their client:
+
+```sh
+claude mcp add --transport http roommate http://<ip>:5152/mcp \
+  --header "Authorization: Bearer <the shared secret>"
+```
+
+- **Loopback unless `--bind` says otherwise**, and the `Host` check is the HTTP server's: an IP
+  address and this machine's own name are answered, other names need `--allow-host`.
+- **The token is a shared secret, not an account.** It keeps a stray page or script out; it does
+  not tell colleagues apart. With no token a network bind warns that anyone who can reach the port
+  can read every project. Set it through the environment, not `--token`.
+- **It is one long-lived process**: settings are read once at start, so restart it after saving
+  settings in the UI. Snapshots are read from disk per call and need no restart.
+- **`upload_reference` is off** over HTTP unless `--allow-upload`, since any caller could use it to
+  replace reference data. Over stdio it stays on.
+- It needs the same store the HTTP server uses, so run it on that machine.
+
 ## 3. Verify
 
 Any host: after wiring, the tool list should show `get_rooms`,

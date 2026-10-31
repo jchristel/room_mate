@@ -32,6 +32,11 @@
 //! frameworks (`mcp.rs` still never imports `axum`), and `main.rs` still
 //! never imports `rmcp` or `reqwest`.
 //!
+//! `--http <port>` serves the same tools at `/mcp` for several people on a closed network, instead of
+//! one client-spawned process each; the framework side is `roommate::mcp_http`. One long-lived process,
+//! so settings are read once at start (restart it after a settings save); `upload_reference` is off
+//! there unless `--allow-upload`.
+//!
 //! Run as a client-spawned subprocess (e.g. from an MCP host's config) --
 //! stdout is reserved for the JSON-RPC stream, so all logging goes to
 //! stderr. This is a distinct OS process from any running HTTP server: it
@@ -760,13 +765,21 @@ struct UploadReferenceParams {
 struct RoommateMcp {
     state: Shared,
     server_url: String,
+    /// Whether `upload_reference` may run. On for a client-spawned process (it is the
+    /// user's own), off by default over HTTP, where any caller could use it.
+    allow_upload: bool,
     tool_router: ToolRouter<RoommateMcp>,
 }
 
 #[tool_router]
 impl RoommateMcp {
     fn new(state: Shared, server_url: String) -> Self {
-        Self { state, server_url, tool_router: Self::tool_router() }
+        Self { state, server_url, allow_upload: true, tool_router: Self::tool_router() }
+    }
+
+    fn with_upload(mut self, allow: bool) -> Self {
+        self.allow_upload = allow;
+        self
     }
 
     /// Lists every project with at least one stored model -- see
@@ -1662,6 +1675,12 @@ impl RoommateMcp {
         &self,
         Parameters(p): Parameters<UploadReferenceParams>,
     ) -> Result<CallToolResult, McpError> {
+        if !self.allow_upload {
+            return Err(McpError::invalid_params(
+                "upload_reference is turned off on this server (start it with --allow-upload to enable it)",
+                None,
+            ));
+        }
         let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
         let bytes = std::fs::read(&p.path)
             .map_err(|e| McpError::invalid_params(format!("could not read CSV file {:?}: {e}", p.path), None))?;
@@ -1837,6 +1856,35 @@ struct Args {
     /// whatever the server actually did.
     #[arg(long, default_value_t = format!("http://{}", default_http_addr()))]
     server_url: String,
+
+    /// Serve MCP over HTTP at `/mcp` on this port instead of over stdio, so several people on a
+    /// closed network can use one server (they add it to their client by URL). One long-lived
+    /// process: it reads settings once at start, so restart it after saving settings in the UI.
+    /// `--bind` decides who can reach it; read the warning there.
+    #[arg(long)]
+    http: Option<u16>,
+
+    /// The interface to listen on with `--http`. Loopback by default; `0.0.0.0` is every
+    /// interface. Also read from `ROOMMATE_BIND`, like the HTTP server's.
+    #[arg(long, env = "ROOMMATE_BIND", default_value = roommate::DEFAULT_HTTP_HOST)]
+    bind: std::net::IpAddr,
+
+    /// An extra `Host` name to answer to with `--http` on a network (repeat or comma-separate;
+    /// also `ROOMMATE_ALLOW_HOSTS`), as for the HTTP server.
+    #[arg(long = "allow-host", env = "ROOMMATE_ALLOW_HOSTS", value_delimiter = ',')]
+    allow_host: Vec<String>,
+
+    /// A shared secret clients must send as `Authorization: Bearer <token>` with `--http`. Read
+    /// it from `ROOMMATE_MCP_TOKEN` rather than the command line, which other users of the
+    /// machine can see. Without one, anyone who can reach the port can read every project.
+    #[arg(long, env = "ROOMMATE_MCP_TOKEN", hide_env_values = true)]
+    token: Option<String>,
+
+    /// Let `upload_reference` run. Always on over stdio (the process is the user's own); over
+    /// `--http` it is off unless this is given, because any caller could use it to replace a
+    /// project's reference data.
+    #[arg(long)]
+    allow_upload: bool,
 }
 
 #[tokio::main]
@@ -1847,7 +1895,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("roommate=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("roommate=info,mcp=info")),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -1855,12 +1903,43 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let state = build_state(&args.server_settings, &args.project_settings)?;
 
+    if let Some(port) = args.http {
+        return serve_http(state, &args, port).await;
+    }
+
     let service = RoommateMcp::new(state, args.server_url).serve(stdio()).await.inspect_err(|e| {
         tracing::error!("serving error: {e:?}");
     })?;
     service.waiting().await?;
 
     Ok(())
+}
+
+/// `--http`: the same tools behind `/mcp`. See `roommate::mcp_http` for what stands in front.
+async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()> {
+    use roommate::network::{self, HostPolicy};
+
+    let hostname = network::machine_hostname();
+    let hosts = HostPolicy::for_bind(args.bind, hostname.as_deref(), &args.allow_host);
+    let (url, allow_upload) = (args.server_url.clone(), args.allow_upload);
+    let app = roommate::mcp_http::router(
+        move || Ok(RoommateMcp::new(state.clone(), url.clone()).with_upload(allow_upload)),
+        hosts,
+        args.token.clone().filter(|t| !t.is_empty()),
+    );
+    let addr = std::net::SocketAddr::new(args.bind, port);
+    for base in network::reachable_urls(addr, hostname.as_deref()) {
+        tracing::info!("MCP endpoint: {base}{}", roommate::mcp_http::MCP_PATH);
+    }
+    if network::serves_network(args.bind) && args.token.as_deref().is_none_or(str::is_empty) {
+        tracing::warn!(
+            "serving a network with no token: anyone who can reach this port can read every project. Set ROOMMATE_MCP_TOKEN."
+        );
+    }
+    if !allow_upload {
+        tracing::info!("upload_reference is off over HTTP (--allow-upload turns it on)");
+    }
+    roommate::mcp_http::serve(addr, app).await
 }
 
 #[cfg(test)]
@@ -1945,6 +2024,57 @@ mod tests {
     fn test_no_configured_source_is_an_error() {
         assert!(resolve_source(&state_with(&[]), "p1", None).is_err());
         assert!(resolve_source(&state_with(&["drofus"]), "ghost", None).is_err());
+    }
+
+    fn http_app(allow_upload: bool, token: Option<&str>) -> roommate::mcp_http::Router {
+        let state = state_with(&["drofus"]);
+        roommate::mcp_http::router(
+            move || Ok(RoommateMcp::new(state.clone(), "http://127.0.0.1:1".into()).with_upload(allow_upload)),
+            roommate::network::HostPolicy::loopback_only(),
+            token.map(String::from),
+        )
+    }
+
+    async fn rpc(app: roommate::mcp_http::Router, token: Option<&str>, body: serde_json::Value) -> (u16, String) {
+        roommate::mcp_http::call(app, token, &body.to_string()).await
+    }
+
+    fn init() -> serde_json::Value {
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}})
+    }
+
+    /// The tools answer over HTTP as they do over stdio: the handshake works and a call returns
+    /// what the service returns. One POST per message, so nothing depends on a session surviving.
+    #[tokio::test]
+    async fn test_http_answers_initialize_and_a_tool_call() {
+        let (status, body) = rpc(http_app(false, None), None, init()).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("roommate-mcp"), "{body}");
+
+        let call = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"list_projects","arguments":{}}});
+        let (status, body) = rpc(http_app(false, None), None, call).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("\"result\""), "{body}");
+    }
+
+    /// With a token set, a call without it never reaches a tool.
+    #[tokio::test]
+    async fn test_http_refuses_a_call_without_the_token() {
+        assert_eq!(rpc(http_app(false, Some("s3cret")), None, init()).await.0, 401);
+        assert_eq!(rpc(http_app(false, Some("s3cret")), Some("s3cret"), init()).await.0, 200);
+    }
+
+    /// Over HTTP the one mutating tool is off unless asked for, and says so rather than failing
+    /// on the network call it would otherwise make.
+    #[tokio::test]
+    async fn test_upload_is_off_over_http_by_default() {
+        let call = serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name":"upload_reference","arguments":{"project_id":"p1","path":"/nope.csv"}}});
+        let (status, body) = rpc(http_app(false, None), None, call).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("turned off"), "{body}");
     }
 
     /// Path and query components are percent-encoded before they reach the
