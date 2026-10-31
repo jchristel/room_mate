@@ -24,4 +24,10 @@ name?: string | null, is_default: boolean,
  * A bool could only ever say "is dRofus there", which was already the
  * wrong question once a project could configure several.
  */
-reference_sources: Array<string>, error?: string | null, };
+reference_sources: Array<string>, 
+/**
+ * The FF&E type parameter whose value keys a tag rule (`Settings::tag_type_code`). On the
+ * summary because the pyRevit push picker reads it from this one call, and a push that
+ * names no parameter cannot key its item tags.
+ */
+tag_type_code?: string | null, error?: string | null, };
