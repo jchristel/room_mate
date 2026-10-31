@@ -1139,6 +1139,9 @@ with one, not here.
 - **`service/` is transport-agnostic** — never imports `axum` or `rmcp`.
   `handlers.rs` and `bin/mcp.rs` are thin adapters over it, and `bin/mcp.rs`
   keeps one tool per HTTP *read* route (update its count when you add one).
+- **A store's error becomes an HTTP answer in one place** (`http_error`): a store implements `StoreError` (what its error IS: not file
+  backed, invalid, not found, conflict, internal) and its adapter calls `to_http` and `projects_dir`; do not write a per-adapter `match`.
+  `settings_api` keeps its own mapping on purpose (404/422 and an internal error that shows its text).
 - **"Signal, not error"** — an unresolved cross-reference is usually a reported
   state, not a failure.
 - **Line endings are LF**; see Traps below for the one way that goes wrong here.

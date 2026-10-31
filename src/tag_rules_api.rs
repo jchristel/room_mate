@@ -17,49 +17,31 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::blueprints;
+use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_geometry::Pt;
 use crate::service::elevation_facing::model_room_ring;
 use crate::service::room_tag_place::boundary_of;
 use crate::sheets::SheetRoom;
 use crate::state::Shared;
 use crate::tag_rules::{
-    self, Boundary, ObservationOutcome, ObservationsRequest, ObserveContext, RuleSummary, TagRule, TagRuleError, P3,
+    self, Boundary, ObservationOutcome, ObservationsRequest, ObserveContext, RuleSummary, TagRule, P3,
 };
-
-pub fn to_http(err: TagRuleError) -> (StatusCode, String) {
-    match err {
-        TagRuleError::NotFileBacked => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "this server was not started from a settings directory".to_string(),
-        ),
-        TagRuleError::Invalid(msg) => (StatusCode::BAD_REQUEST, msg),
-        TagRuleError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-        TagRuleError::Internal(e) => {
-            tracing::error!("tag rules error: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
-        }
-    }
-}
 
 /// Rooms read for one push, by `(model id, room id)`; `None` is a room the server does not hold.
 type RoomRings = RefCell<HashMap<(String, i64), Option<Vec<Pt>>>>;
-
-fn dir(state: &Shared) -> Result<std::path::PathBuf, (StatusCode, String)> {
-    state.projects_dir().cloned().ok_or(TagRuleError::NotFileBacked).map_err(to_http)
-}
 
 pub async fn http_list_tag_rules(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
 ) -> Result<Json<Vec<RuleSummary>>, (StatusCode, String)> {
-    tag_rules::list(&dir(&state)?, &project_id).map(Json).map_err(to_http)
+    tag_rules::list(&projects_dir(&state)?, &project_id).map(Json).map_err(to_http)
 }
 
 pub async fn http_get_tag_rule(
     State(state): State<Shared>,
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<Json<TagRule>, (StatusCode, String)> {
-    tag_rules::load(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
+    tag_rules::load(&projects_dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
 }
 
 /// The extractor's push: observations in, rules out. 200 with how many samples were taken in and
@@ -80,7 +62,7 @@ pub fn observe_for(
     project_id: &str,
     request: ObservationsRequest,
 ) -> Result<ObservationOutcome, (StatusCode, String)> {
-    let projects = dir(state)?;
+    let projects = projects_dir(state)?;
     let blueprint = match request.blueprint.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
         Some(id) => Some((id.to_string(), blueprint_item_ids(&projects, project_id, id)?)),
         None => None,
@@ -126,7 +108,7 @@ pub async fn http_delete_tag_rule(
     State(state): State<Shared>,
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    tag_rules::delete(&dir(&state)?, &project_id, &id).map_err(to_http)?;
+    tag_rules::delete(&projects_dir(&state)?, &project_id, &id).map_err(to_http)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

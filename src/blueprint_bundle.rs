@@ -25,6 +25,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_model::BlueprintSheet;
 use crate::sheets::{self, PushRequest as SheetsPush, PushedSheet, SheetRoom};
 use crate::state::Shared;
@@ -60,13 +61,6 @@ pub struct Applied {
     pub unlinked_tag_rules: usize,
 }
 
-fn dir(state: &Shared) -> Result<std::path::PathBuf, (StatusCode, String)> {
-    state.projects_dir().cloned().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "this server was not started from a settings directory".to_string(),
-    ))
-}
-
 fn invalid(what: &str, e: serde_json::Error) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, format!("the bundle's {what} cannot be read: {e}"))
 }
@@ -81,7 +75,7 @@ pub fn bind_to_library(
     room: Option<&SheetRoom>,
     sheets: &[BlueprintSheet],
 ) -> Result<usize, (StatusCode, String)> {
-    let projects = dir(state)?;
+    let projects = projects_dir(state)?;
     let summary = room.and_then(|r| crate::sheets_api::summary_of(state, project, r));
     let pushed: Vec<PushedSheet> = sheets
         .iter()
@@ -101,7 +95,7 @@ pub fn bind_to_library(
         .collect();
     sheets::push(&projects, project, SheetsPush { sheets: pushed })
         .map(|outcomes| outcomes.len())
-        .map_err(crate::sheets_api::to_http)
+        .map_err(to_http)
 }
 
 /// Apply a bundle to a blueprint that exists and whose revision is current: bind its sheets and tags
@@ -113,7 +107,7 @@ pub fn apply(
     room: Option<&SheetRoom>,
     bundle: &Bundle,
 ) -> Result<Applied, (StatusCode, String)> {
-    let projects = dir(state)?;
+    let projects = projects_dir(state)?;
     let mut applied = Applied::default();
     if !bundle.sheets.is_empty() {
         applied.sheets = bind_to_library(state, project, blueprint, room, &bundle.sheets)?;
@@ -122,8 +116,7 @@ pub fn apply(
             .iter()
             .map(|s| (s.revit_sheet_id.clone(), s.document_title.clone()))
             .collect();
-        applied.unlinked_sheets =
-            sheets::unbind_missing(&projects, project, blueprint, &keep).map_err(crate::sheets_api::to_http)?;
+        applied.unlinked_sheets = sheets::unbind_missing(&projects, project, blueprint, &keep).map_err(to_http)?;
     }
     let mut written: Option<std::collections::HashSet<String>> = None;
     if let Some(observations) = &bundle.observations {
@@ -140,22 +133,21 @@ pub fn apply(
     }
     if let Some(rules) = &bundle.rules {
         let rules: Vec<TagRule> = serde_json::from_value(rules.clone()).map_err(|e| invalid("tag rules", e))?;
-        let ids = tag_rule_binding::import_bound(&projects, project, blueprint, rules)
-            .map_err(crate::tag_rules_api::to_http)?;
+        let ids = tag_rule_binding::import_bound(&projects, project, blueprint, rules).map_err(to_http)?;
         written.get_or_insert_with(Default::default).extend(ids);
     }
     if let Some(keep) = written {
-        applied.unlinked_tag_rules = tag_rule_binding::unlink_blueprint(&projects, project, blueprint, &keep)
-            .map_err(crate::tag_rules_api::to_http)?;
+        applied.unlinked_tag_rules =
+            tag_rule_binding::unlink_blueprint(&projects, project, blueprint, &keep).map_err(to_http)?;
     }
     Ok(applied)
 }
 
 /// A blueprint's bound sheets and rules, as a bundle to export.
 pub fn export(state: &Shared, project: &str, blueprint: &str) -> Result<Bundle, (StatusCode, String)> {
-    let projects = dir(state)?;
-    let records = sheets::bound_to(&projects, project, blueprint).map_err(crate::sheets_api::to_http)?;
-    let rules = tag_rule_binding::bound_to(&projects, project, blueprint).map_err(crate::tag_rules_api::to_http)?;
+    let projects = projects_dir(state)?;
+    let records = sheets::bound_to(&projects, project, blueprint).map_err(to_http)?;
+    let rules = tag_rule_binding::bound_to(&projects, project, blueprint).map_err(to_http)?;
     let type_code_parameter = rules
         .iter()
         .map(|r| r.key.code_parameter.clone())
