@@ -21,31 +21,12 @@ use crate::blueprints::{
     self, AddRevisionRequest, Blueprint, BlueprintError, BlueprintSummary, CreateRequest, DecideRequest, PushRequest,
     SourceRoom, UpdateRequest,
 };
+use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_capture::{capture_room, qualify_room};
 use crate::service::blueprint_model::{BlueprintSheet, RevisionContent, Skipped};
 use crate::service::blueprint_resolve::{resolve_in_room_with, EdgeMap, Resolution};
 use crate::sheets::SheetRoom;
 use crate::state::Shared;
-
-pub fn to_http(err: BlueprintError) -> (StatusCode, String) {
-    match err {
-        BlueprintError::NotFileBacked => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "this server was not started from a settings directory".to_string(),
-        ),
-        BlueprintError::Invalid(msg) => (StatusCode::BAD_REQUEST, msg),
-        BlueprintError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
-        BlueprintError::Conflict(msg) => (StatusCode::CONFLICT, msg),
-        BlueprintError::Internal(e) => {
-            tracing::error!("blueprints error: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())
-        }
-    }
-}
-
-fn dir(state: &Shared) -> Result<std::path::PathBuf, (StatusCode, String)> {
-    state.projects_dir().cloned().ok_or(BlueprintError::NotFileBacked).map_err(to_http)
-}
 
 /// The project's blueprints with the number of sheets bound to each: the store holds no sheets
 /// (plan decision 27), so the count is read from the library. Shared by the HTTP list and MCP.
@@ -66,14 +47,14 @@ pub async fn http_list_blueprints(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
 ) -> Result<Json<Vec<BlueprintSummary>>, (StatusCode, String)> {
-    list_with_sheet_counts(&dir(&state)?, &project_id).map(Json).map_err(to_http)
+    list_with_sheet_counts(&projects_dir(&state)?, &project_id).map(Json).map_err(to_http)
 }
 
 pub async fn http_get_blueprint(
     State(state): State<Shared>,
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<Json<Blueprint>, (StatusCode, String)> {
-    blueprints::load(&dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
+    blueprints::load(&projects_dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
 }
 
 pub async fn http_create_blueprint(
@@ -82,7 +63,7 @@ pub async fn http_create_blueprint(
     Json(request): Json<CreateRequest>,
 ) -> Result<(StatusCode, Json<Blueprint>), (StatusCode, String)> {
     let bundle = parse_bundle(request.bundle.clone())?;
-    let created = blueprints::create(&dir(&state)?, &project_id, request).map_err(to_http)?;
+    let created = blueprints::create(&projects_dir(&state)?, &project_id, request).map_err(to_http)?;
     if let Some(bundle) = bundle {
         // An imported blueprint: its sheets and rules go with it, bound to the new blueprint.
         let room = source_sheet_room(&created);
@@ -111,7 +92,7 @@ pub async fn http_add_revision(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
     Json(request): Json<AddRevisionRequest>,
 ) -> Result<Json<Blueprint>, (StatusCode, String)> {
-    blueprints::add_revision(&dir(&state)?, &project_id, &id, request)
+    blueprints::add_revision(&projects_dir(&state)?, &project_id, &id, request)
         .map(Json)
         .map_err(to_http)
 }
@@ -122,7 +103,7 @@ pub async fn http_push_revision(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
     Json(request): Json<PushRequest>,
 ) -> Result<(StatusCode, Json<Blueprint>), (StatusCode, String)> {
-    blueprints::push(&dir(&state)?, &project_id, &id, request)
+    blueprints::push(&projects_dir(&state)?, &project_id, &id, request)
         .map(|b| (StatusCode::ACCEPTED, Json(b)))
         .map_err(to_http)
 }
@@ -132,7 +113,7 @@ pub async fn http_accept_pending(
     UrlPath((project_id, id, pending_id)): UrlPath<(String, String, u32)>,
     Json(request): Json<DecideRequest>,
 ) -> Result<Json<Blueprint>, (StatusCode, String)> {
-    let projects = dir(&state)?;
+    let projects = projects_dir(&state)?;
     // The sheets and tags that came with the revision wait with it; read them before it becomes a revision.
     let waiting = blueprints::load(&projects, &project_id, &id)
         .map_err(to_http)?
@@ -160,7 +141,7 @@ pub async fn http_reject_pending(
     UrlPath((project_id, id, pending_id)): UrlPath<(String, String, u32)>,
     Json(request): Json<DecideRequest>,
 ) -> Result<Json<Blueprint>, (StatusCode, String)> {
-    blueprints::reject(&dir(&state)?, &project_id, &id, pending_id, request)
+    blueprints::reject(&projects_dir(&state)?, &project_id, &id, pending_id, request)
         .map(Json)
         .map_err(to_http)
 }
@@ -170,7 +151,9 @@ pub async fn http_update_blueprint(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
     Json(request): Json<UpdateRequest>,
 ) -> Result<Json<Blueprint>, (StatusCode, String)> {
-    blueprints::update(&dir(&state)?, &project_id, &id, request).map(Json).map_err(to_http)
+    blueprints::update(&projects_dir(&state)?, &project_id, &id, request)
+        .map(Json)
+        .map_err(to_http)
 }
 
 #[derive(Deserialize)]
@@ -299,7 +282,7 @@ pub async fn http_resolve_blueprint(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
     Query(params): Query<ResolveParams>,
 ) -> Result<Json<ResolveResponse>, (StatusCode, String)> {
-    let blueprint = blueprints::load(&dir(&state)?, &project_id, &id).map_err(to_http)?;
+    let blueprint = blueprints::load(&projects_dir(&state)?, &project_id, &id).map_err(to_http)?;
     let number = params.revision.unwrap_or(blueprint.current_revision);
     let Some(revision) = blueprint.revision(number) else {
         return Err((StatusCode::NOT_FOUND, format!("the blueprint has no revision {number}")));
@@ -413,7 +396,7 @@ pub async fn http_push_from_revit(
         Err(e) => return Err(service_error(e)),
     };
     let content = captured.content;
-    let projects = dir(&state)?;
+    let projects = projects_dir(&state)?;
     let name = body.name.trim().to_string();
     let existing = blueprints::list(&projects, &project_id)
         .map_err(to_http)?
