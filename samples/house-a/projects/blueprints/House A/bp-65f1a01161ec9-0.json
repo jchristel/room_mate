@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "id": "bp-65f1951807ec4-0",
+  "id": "bp-65f1a01161ec9-0",
   "name": "Bedroom layout",
-  "taken_at": "2026-10-31T02:03:26.460599Z",
+  "taken_at": "2026-10-31T02:52:32.279230Z",
   "source": {
     "model_id": "Building_BF_Framing_jan.r.christel",
     "room_id": "2620294",
@@ -13,7 +13,7 @@
   "revisions": [
     {
       "number": 1,
-      "created_at": "2026-10-31T02:03:26.460599Z",
+      "created_at": "2026-10-31T02:52:32.279230Z",
       "note": "Sample: captured from BED 01 01.06",
       "outline": {
         "coarse": [

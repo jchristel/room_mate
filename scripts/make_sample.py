@@ -115,6 +115,32 @@ def project_settings(source_toml):
     return text.replace("[sources]", note + "[sources]", 1)
 
 
+# The manifest's list for each entity, and the folder those snapshots are in ("" is the model folder itself).
+MANIFEST_LISTS = (
+    ("snapshots", ""), ("doors", "doors"), ("windows", "windows"), ("ffe", "ffe"),
+    ("spaces", "spaces"), ("ceilings", "ceilings"), ("floors", "floors"),
+)
+
+
+def manifest(source_manifest, model_dir):
+    """The store's index (`project.toml`) for what this sample actually holds.
+
+    The source store's manifest lists every snapshot that store ever took, so copying it names dozens of files
+    that are not here and the server logs a warning for each ("filesystem wins"). The model's name, phase and
+    placement are kept; the lists are rebuilt from the files present.
+    """
+    text = open(source_manifest, encoding="utf-8").read()
+    start = text.index("snapshots = [")
+    end = text.index("\n[", start)  # the next table: [reference_snapshots]
+    lines = []
+    for key, folder in MANIFEST_LISTS:
+        folder_path = os.path.join(model_dir, folder)
+        names = sorted(n for n in os.listdir(folder_path) if n.endswith(".json")) if os.path.isdir(folder_path) else []
+        ids = ", ".join('"%s"' % stamp(n) for n in names)
+        lines.append(f"{key} = [{ids}]" if names else f"{key} = []")
+    return text[:start] + "\n".join(lines) + "\n" + text[end:]
+
+
 SERVER_TOML = """# The sample server settings: snapshots under ./data/snapshots, projects under ./projects.
 # Relative paths resolve against THIS file's directory, so it runs from anywhere:
 #   cargo run --bin roommate -- --server-settings samples/house-a/server.toml --project-settings samples/house-a/projects
@@ -203,7 +229,8 @@ def build(args, work):
             dst = os.path.join(model_dir, entity, name)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copyfile(src, dst)
-    shutil.copyfile(os.path.join(args.source, "project.toml"), os.path.join(work, "data", "snapshots", PROJECT, "project.toml"))
+    with open(os.path.join(work, "data", "snapshots", PROJECT, "project.toml"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(manifest(os.path.join(args.source, "project.toml"), model_dir))
     os.makedirs(os.path.join(work, "projects"), exist_ok=True)
     with open(os.path.join(work, "server.toml"), "w", encoding="utf-8", newline="\n") as f:
         f.write(SERVER_TOML)
@@ -265,6 +292,10 @@ def main():
             if os.path.exists(path):
                 os.remove(path)
         shutil.rmtree(os.path.join(work, "projects", ".backups"), ignore_errors=True)
+        # The one hand-written file in the sample survives a rebuild.
+        readme = os.path.join(args.out, "README.md")
+        if os.path.exists(readme):
+            shutil.copyfile(readme, os.path.join(work, "README.md"))
         if os.path.exists(args.out):
             shutil.rmtree(args.out)
         shutil.copytree(work, args.out)
