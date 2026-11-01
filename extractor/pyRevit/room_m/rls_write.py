@@ -27,7 +27,6 @@ from Autodesk.Revit.DB import (
     BuiltInCategory,
     BuiltInParameter,
     Element,
-    FilteredElementCollector,
     Transaction,
     TransactionGroup,
     ViewFamily,
@@ -106,8 +105,8 @@ class RlsFacts(RevitFacts):
         return self._view_type(wanted, name) is not None
 
     def viewport_type(self, name):
-        """The viewport type (an element type of the Viewports category) with this name, or None."""
-        for t in FilteredElementCollector(self.doc).OfCategory(BuiltInCategory.OST_Viewports).WhereElementIsElementType():
+        """The viewport type with this name, or None (see `rls_settings.viewport_types`)."""
+        for t in rls_settings.viewport_types(self.doc):
             if Element.Name.GetValue(t) == name:
                 return t
         return None

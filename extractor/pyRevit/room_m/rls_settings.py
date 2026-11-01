@@ -119,11 +119,19 @@ def first_filter_is_room_number(schedule):
     return get_el_id_int(field.ParameterId) == int(BuiltInParameter.ROOM_NUMBER)
 
 
-def _viewport_types(doc):
-    """The viewport types of the model (the element types of the Viewports category: 'Title w Line', 'No Title')."""
-    from Autodesk.Revit.DB import BuiltInCategory, FilteredElementCollector
+def viewport_types(doc):
+    """The viewport types of the model ('Title w Line', 'No Title'), as element types.
 
-    return list(FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Viewports).WhereElementIsElementType())
+    A viewport type has NO category (so a collector by category finds none, measured in Revit): the way to list
+    them is to ask a viewport which types it accepts. Any viewport will do, and a model with none (no sheet has
+    a view on it) lists none."""
+    from Autodesk.Revit.DB import FilteredElementCollector, Viewport
+
+    viewport = FilteredElementCollector(doc).OfClass(Viewport).FirstElement()
+    if viewport is None:
+        return []
+    found = [doc.GetElement(type_id) for type_id in viewport.GetValidTypes()]
+    return [t for t in found if t is not None]
 
 
 def collect_options(doc):
@@ -157,7 +165,7 @@ def collect_options(doc):
         ("title_blocks", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_TitleBlocks)),
         ("plan_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.FloorPlan), name_of)),
         ("elevation_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.Elevation), name_of)),
-        ("viewport_types", lambda: _names(_viewport_types(doc), name_of)),
+        ("viewport_types", lambda: _names(viewport_types(doc), name_of)),
         ("three_d_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.ThreeDimensional), name_of)),
         ("schedules", lambda: _names(room_number_schedules(), name_of)),
         ("room_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_RoomTags)),
