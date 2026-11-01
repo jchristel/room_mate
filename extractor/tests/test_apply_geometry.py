@@ -95,6 +95,17 @@ class Viewports(unittest.TestCase):
         self.assertIsNone(g.viewport_scale({"view": {"view_scale": 0}}))
 
 
+class AnnotationCrop(unittest.TestCase):
+    def test_on_with_its_offsets_off_with_none_and_unread_as_none(self):
+        offsets = {"left": 3.0, "right": 3.0, "top": 3.0, "bottom": 3.0}
+        on = {"view": {"annotation_crop_active": True, "annotation_crop_offsets": offsets}}
+        self.assertEqual((True, offsets), g.annotation_crop_of(on))
+        off = {"view": {"annotation_crop_active": False, "annotation_crop_offsets": None}}
+        self.assertEqual((False, None), g.annotation_crop_of(off))
+        self.assertIsNone(g.annotation_crop_of({"view": {"view_scale": 50}}), "a template exported before it was read")
+        self.assertIsNone(g.annotation_crop_of(None))
+
+
 class ViewportLabel(unittest.TestCase):
     def test_the_title_offset_and_line_length_come_back_in_feet(self):
         offset, length = g.viewport_label_ft({"label_offset": {"x": 304.8, "y": 609.6}, "label_line_length": 152.4})

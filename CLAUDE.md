@@ -629,6 +629,11 @@ checked before anything is made, then one transaction group per task (`duHast...
   room the sheet was made for (`section_z_above_floor_mm`, on the 3D view: the first ticked room on the Sheets button, the blueprint's room on the Blueprint button), the level's z being
   the room's own (`utils.rooms.level_z_ft`), never `Level.Elevation`. A new 3D view's box then runs those heights above THIS room's level; its x and y stay the room's bounding box plus
   `SECTION_MARGIN_MM`. A sheet with no room, or exported before, gets the room's box plus the margin all round, as before. **Not run in Revit.**
+- **The annotation crop is exported and applied** (plan and elevation views): `annotation_crop_active` and `annotation_crop_offsets` (`left`/`right`/`top`/`bottom` from the
+  view crop, **mm on paper**, because Revit keeps them in view units so they hold at any scale) ride each view of the sheet export (duHast `view_ports_to_data._get_annotation_crop`, via
+  the parameter `VIEWER_ANNOTATION_CROP_ACTIVE` and `ViewCropRegionShapeManager`). A new plan or elevation view gets the same after its own crop is final
+  (`rls_write._annotation_crop`, duHast `annotation_crop.set_annotation_crop_without_transaction_wrapper`). A template exported before carries neither and the view keeps Revit's
+  default. The annotation crop cannot be smaller than the view crop (least offset 1/8 inch on paper). The preview does not draw it. **Not run in Revit.**
 - **The viewport type is a setting** (`viewport_type`, "Viewport type": the model's viewport element types, e.g. "Title w Line"), optional, applied to the plan, elevation and 3D
   viewports (the schedule is a different kind of sheet item); not set means Revit's default type. **A viewport type has no category** (a collector by category finds none, measured in Revit): they are listed by asking existing viewports for their valid types (`rls_settings.viewport_types`: the union over the first viewport of each kind of view, since what is offered can depend on the view), so a model with no viewport at all lists none. A chosen one the model lacks aborts a task and is flagged by `validate`.
 - **`Level.Elevation` is a SHARED coordinate, not the model's own** (confirmed in Revit on the Rumpus model: `Elevation` 110250 mm, `ProjectElevation` 450 mm, the shared elevation
