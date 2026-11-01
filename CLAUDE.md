@@ -132,7 +132,7 @@ FF&E is filtered on the level the modeller assigned before conversion and on the
 unchanged. Levels are the per-document ids, which each element's own `LevelId` reports (a room's level, a door's host level, a ceiling's host level).
 **Not run in Revit.**
 
-**The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Sheets, Apply tasks, RLS settings, RLS create and Server. The older `Export` panel (Rooms + Doors, By category)
+**The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Sheets, Tasks, RLS settings and Server. The older `Export` panel (Rooms + Doors, By category)
 was removed: the Export window covers every entity.
 
 ## Ceilings: the entity where geometry is the only answer
@@ -528,8 +528,8 @@ tasks; it reads the list again every few seconds to show what a session did). th
 of its newest task that is not dismissed; a task's number must agree with the room's, because a viewer room names no
 model; read only while a zone uses it, every 8 s; not in the SVG export). The Revit side has its checking
 (`room_m/task_plan.py`: every task checked before any is written, aborts reported first, one question for the
-warnings; pure, tested on CPython in `extractor/tests`) and its transport (`post_tasks.py`). The **Apply tasks** button
-is written (`apply_tasks_entry`): `apply_run` is the sequence (claim, check, ask once, report aborts before any work,
+warnings; pure, tested on CPython in `extractor/tests`) and its transport (`post_tasks.py`). The **Tasks** button
+is written (`tasks_entry`, below): `apply_run` is the sequence (claim, check, ask once, report aborts before any work,
 write and report each task, report any stranded one failed; tested with fakes), `apply_facts` answers the planner from
 Revit, `apply_write` writes one task per `TransactionGroup` so a failed task leaves no trace, `apply_geometry` is the
 pure arithmetic. **Not run in Revit.** The `update_room` kind is built on the server and the tasks page (items or
@@ -563,7 +563,7 @@ leaves an empty list out of a task, so the page reads a task back with its lists
 - **A family not in the model is loaded from `ROOMMATE_FAMILY_LIBRARY`** (a folder of `<family>.rfa`), else it is a
   warning. Items are placed on the room's level with the facing's rotation; wall-hosted ones go on the nearest wall
   within 450 mm; face and work plane based ones are reported, not placed. Instance and type parameters are not applied.
-- **Sheets, viewports and tags are not made by this button.** A `create_rls` task goes through the RLS create button
+- **Sheets, viewports and tags are not made by this button.** A `create_rls` task goes to the sheet handler of the Tasks button
   (below), which numbers, names and sizes everything from the model's RLS settings and the task's `rls` plan. A populate task
   that still asks for sheets (`create_rls` on it) is warned about (`task_plan.SHEETS_ELSEWHERE`) and places its items only. The
   earlier sheet-making code in this module (number template, title block by size token, learned tag rules placed from the
@@ -573,7 +573,7 @@ leaves an empty list out of a task, so the page reads a task back with its lists
 
 A `create_rls` task carries `rls` (`service::rls_plan`, built in `task_build::rls_from_sheet`): the `sheet_size` asked for
 (`a0`..`a3`, absent = the template's) and, per elevation marker, where it and each of its views go **in this room**, in the
-target model's frame, mm. The RLS create button reads it (`room_m/rls_task.py`, below).
+target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls_task.py`, below).
 
 - **Transfer is by the walls.** Template and target are read at the COARSE outline, the wall each elevation faces
   (`elevation_facing`) is mapped by the cyclic shift that fits the shapes (`best_shift`, no reflection), and then the marker
@@ -599,9 +599,14 @@ target model's frame, mm. The RLS create button reads it (`room_m/rls_task.py`, 
 
 ## The RLS creation script: settings, task, duHast
 
-**The RLS create button** (`rls_create_entry`, `room_m/rls_task.py` plans, `room_m/rls_write.py` writes) makes room layout sheets from
-`create_rls` tasks, **not yet run in Revit**. It claims only that kind (`claim_tasks(..., kinds=["create_rls"])`, and the Apply button
-now claims only populate and update tasks, so the two never take each other's work). Order: the model's RLS settings first (extensible
+**One Tasks button runs every kind of task** (`tasks_entry`). It claims all kinds in one request (`task_dispatch.claim_kinds`) and hands each
+kind to its handler through `task_dispatch.HANDLER_OF`: populate and update tasks place the items (`_apply_group`, `apply_write`), then
+`create_rls` tasks make the sheets (`_rls_group`, below). **A new kind of task is a line in that table and a function, not another button.**
+A kind nobody handles, a handler that raises and any task never reached are reported failed (`_free_tasks`), so the server never holds a
+claimed task `in_progress` for a run that ended. **Every step is logged** (`room_m/task_log.py`: `RoomMate\RoomMate.log` in the application data,
+written line by line so the last one says where a run that died silently stopped; duHast's `LoggerObject` when the loaded duHast has one,
+the standard library otherwise; it never raises, and does nothing until `tasks_entry` starts it). The sheet handler (`room_m/rls_task.py`
+plans, `room_m/rls_write.py` writes) makes room layout sheets from `create_rls` tasks, **not yet run in Revit**. Order: the model's RLS settings first (extensible
 storage, `rls` key; missing or incomplete ones open the settings window, still incomplete = stop), then the claim, then the WHOLE list is
 checked before anything is made, then one transaction group per task (`duHast...in_transaction_group`), reported as it finishes.
 
@@ -635,7 +640,7 @@ Built: the observations endpoint, the rules store (`tag_rules`, `tag_rules_api`)
 `get_tag_rule`), tag rules carried in a task, and the pyRevit side (the sheet read takes tags out of the sheet,
 `room_m/sheet_tags.py`, and `post_tags.py` sends them). The tag classes and their reading from Revit are in duHast
 (`Data/Objects/Collectors/data_tag*.py`, `Revit/Annotation/Export/to_data_tag.py`). **Not run in Revit, and
-the RLS create button places tags** from the server's tag plan (`rls.tags`), not from these rules directly. Plan decision 24.
+the Tasks button's sheet handler places tags** from the server's tag plan (`rls.tags`), not from these rules directly. Plan decision 24.
 
 - **An item's rule is keyed by the item's TYPE CODE** (plan decision 27): the value of the one type parameter the project
   names in its settings (`tag_type_code`, under "Tag type code" on the settings page), with the tag's category, family and
@@ -674,7 +679,7 @@ the RLS create button places tags** from the server's tag plan (`rls.tags`), not
   along it, paper mm into the room, carried to another room by `best_shift` and refusing a different coarse edge count as the
   elevations do. A generic rule uses the smallest rectangle round the room (four sides in a fixed order, long axis towards +x),
   which works for any shape. The server turns the recipe into a place in THIS room when the task is made (`rls.room_tag.head`, model
-  frame, mm) and the RLS create button uses it; a rule learned while its room was not on the server has no boundary and keeps the
+  frame, mm) and the sheet handler uses it; a rule learned while its room was not on the server has no boundary and keeps the
   old offset in the plan's axes, applied by the plug-in. Distances are paper mm so the rule holds at any view scale.
 - **A sample is paper millimetres in the element's own frame** (x along its facing, y to its left), the model
   offset divided by the view scale. A rule therefore holds at any scale and turns with the item; the rotation is
@@ -750,7 +755,7 @@ The settings of how an RLS is made in one model (title block per sheet size, vie
 templates) live in the **Revit model's extensible storage** under the key `rls` of `room_m/project_settings.py` (one JSON text field with a
 `version`, so a new setting is a new key). They are edited in a **XAML window** (`rls_settings.xaml`, drawn by `rls_settings_window.py`
 through pyRevit's `forms.WPFWindow`; every field and rule that is not drawing is `rls_settings_form.py`, tested on CPython). The **RLS
-settings** button opens it; the **RLS create** button opens it when the settings are not complete. It needs no server and no browser, and
+settings** button opens it; the Tasks button opens it when a `create_rls` task finds the settings incomplete. It needs no server and no browser, and
 returns its answer straight to the calling function. A status line says what is still to be chosen and which template words are not room
 parameters. `rls_settings.collect_options` reads what the model offers (title blocks, view types, schedules, tags, room parameters); a list
 it cannot read is left out, and the window says so.

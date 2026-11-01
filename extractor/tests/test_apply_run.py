@@ -109,6 +109,39 @@ class Run(unittest.TestCase):
         sent, _ = h.go(tasks)
         self.assertEqual(sorted(r["task_id"] for r in sent), ["a", "c", "x"])
 
+    def test_a_check_that_raises_frees_every_claimed_task_with_the_reason(self):
+        h = Harness()
+        lines = []
+
+        def planner(tasks):
+            raise RuntimeError("settings unreadable")
+
+        sent, told = apply_run.run(
+            [task("a"), task("b", "2")], Facts(), h.writer, h.ask, h.send, lambda line: None,
+            planner=planner, log=lines.append)
+        self.assertEqual([(r["task_id"], r["status"]) for r in sent], [("a", "failed"), ("b", "failed")])
+        self.assertIn("settings unreadable", sent[0]["messages"][0])
+        self.assertEqual(h.written, [])
+        self.assertTrue(any("check of the tasks failed" in line for line in lines))
+
+    def test_the_log_gets_each_step_including_a_writers_traceback(self):
+        h = Harness(fail={"a"})
+        lines = []
+        apply_run.run([task("a")], Facts(), h.writer, h.ask, h.send, lambda line: None, log=lines.append)
+        text = "\n".join(lines)
+        self.assertIn("task a (1): writing", text)
+        self.assertIn("RuntimeError: boom", text)
+        self.assertIn("1 task(s): 1 clear", text)
+
+    def test_a_log_that_raises_never_fails_the_run(self):
+        h = Harness()
+
+        def broken(line):
+            raise IOError("disk full")
+
+        sent, _ = apply_run.run([task("a")], Facts(), h.writer, h.ask, h.send, lambda line: None, log=broken)
+        self.assertEqual([r["status"] for r in sent], ["completed"])
+
     def test_no_tasks_does_nothing(self):
         h = Harness()
         self.assertEqual(h.go([]), ([], []))

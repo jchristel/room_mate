@@ -1,7 +1,7 @@
 # Plan: blueprints (room layouts that travel)
 
 **Status: stages 0 to 6 built (PR #215), and the server half of stages 7 and 8; the Revit side is written
-(the Apply tasks button) but has never run in Revit. Revised 2026-10-20 after the author's review of the Revit task
+(the Tasks button) but has never run in Revit. Revised 2026-10-20 after the author's review of the Revit task
 design and of how sheets are stored; first written 2026-10-19 from the stage 0 results
 ([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
 
@@ -58,7 +58,7 @@ Grounded in the code as of 2026-10-18; rows marked *now* were true then and have
 | Units of parameter values | Display strings (`"0.0"`, `"420.0"`), not typed. The trap `CLAUDE.md` records for the ceiling height offset. |
 | Doors: position, `through_wall_normal`, width | Have. |
 | Authored, per-project, user-made data | Precedent: connections document (zones, passages, saved routes, reaches): one JSON per project, optimistic concurrency, replace-whole-list, "authored data outlives geometry; a stale reference is a finding, never an error". |
-| Revit extractor | pyRevit, one-way (Revit → server) for every export. *Now:* it also claims tasks from the server (the `roomtasks` channel) and writes them (Apply tasks, RLS create); built, not run in Revit. |
+| Revit extractor | pyRevit, one-way (Revit → server) for every export. *Now:* it also claims tasks from the server (the `roomtasks` channel) and writes them (the Tasks button); built, not run in Revit. |
 | Anything that sends work **to** Revit | **Did not exist.** *Now:* tasks (stage 7): a record the server holds, claimed by a session; built, not run in Revit. |
 | Room layout sheet data | duHast has rudimentary IronPython exports, surveyed in B0 (below). *Now:* the sheet library holds them as exported, on its own endpoint. |
 
@@ -167,8 +167,8 @@ write path into Revit. They have very different risk, which drives the staging.
     - `phase`: the phase to create content in.
     - `overwrite_layout`: true deletes the room's existing content in that phase; false aborts the
       task if the room already has content in it.
-    - `create_rls` and `overwrite_rls` (default false): kept on the record, but the Apply button no
-      longer makes sheets; room layout sheets come from a `create_rls` task and the RLS create button.
+    - `create_rls` and `overwrite_rls` (default false): kept on the record, but the populate handler no
+      longer makes sheets; room layout sheets come from a `create_rls` task and the sheet handler of the Tasks button.
     - **items**: family name, family type name, placement type, related data.
     - **RLS data**, from the sheets bound to the blueprint (decision 27): number and size of sheets,
       each viewport's type and location. **Tags are not in it** (decision 24): they come from the
@@ -185,7 +185,7 @@ write path into Revit. They have very different risk, which drives the staging.
     - A specified family or type is in neither the model nor the library location: **warning**.
     - A populate task that asks for sheets: **warning** (this button places items only).
     - The sheet checks (number taken, view name taken, no title block for the size, a missing view
-      type or schedule, incomplete settings) belong to the RLS create button, which **aborts** on each.
+      type or schedule, incomplete settings) belong to the sheet handler of the Tasks button, which **aborts** on each.
     A warning is shown to the person with two choices: abort, or ignore and proceed.
 23. **Task transport and states.** A new endpoint, `roomtasks`, takes a **model name**
     and returns that model's queued tasks and marks them *in progress*, so another Revit
@@ -465,7 +465,7 @@ project's own templates and title block (named in the spec, never invented), vie
 tags, schedule. Reuses the validation, marker and per-task status rules (decisions 22 and 23).
 
 **B5 — Tag rules. Built.** A store of tag placement by type code and viewport type (decisions 24 and 27), applied by
-the RLS create button.
+the Tasks button's sheet handler.
 
 **Open for this track:** whether title block, view templates and sheet naming are common
 across projects; whether the duHast exports are a base to extend or a prototype to

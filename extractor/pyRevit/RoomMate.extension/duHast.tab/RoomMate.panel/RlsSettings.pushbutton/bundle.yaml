@@ -3,7 +3,7 @@ title: "RLS settings"
 tooltip: |
   Set how a room layout sheet is made in this model: title blocks by sheet size,
   view types, the schedule, tags and the naming logic. What you save is kept in
-  this model, where the RLS create button reads it.
+  this model, where the Tasks button reads it.
 
 author:
   - Jan Christel

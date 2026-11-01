@@ -50,7 +50,7 @@ from room_m.post_blueprints import describe_outcome, explain_refusal, post_bluep
 from room_m.post_sheets import describe_outcomes, post_sheets
 from room_m.post_tags import all_observations, post_observations
 from room_m.post_tasks import claim_tasks, report_tasks
-from room_m import project_settings, rls_settings, server_config
+from room_m import project_settings, rls_settings, server_config, task_dispatch, task_log
 from room_m.post_common import SERVER_URL_PROJECTS, fetch_projects
 from room_m.sheet_tags import describe_outcome as describe_tag_outcome, describe_problems
 
@@ -710,7 +710,7 @@ def _edit_rls_settings(selected_doc, forms, return_value):
     Reads the model's settings (extensible storage, key `rls`) and the choices the model offers,
     shows `room_m.rls_settings_window`, and writes the result back. Returns the saved settings, or
     None when the window was cancelled or the model could not take them (and says why on
-    `return_value`). Shared by the RLS settings button and the RLS create button, which sends a
+    `return_value`). Shared by the RLS settings button and the Tasks button, which sends a
     person here when the settings are not complete."""
     from room_m import rls_settings_window
 
@@ -736,7 +736,7 @@ def rls_settings_entry(doc, uiapp, output, forms):
     Pick the model, then choose the title block per sheet size, the plan and elevation view types, the
     base schedule, the tags and the number and name logic (`{Room Parameter}` templates) in the window
     (`room_m.rls_settings_window`). What is saved goes into the model's extensible storage, where the
-    RLS create button reads it. Nothing is sent to the server.
+    Tasks button reads it. Nothing is sent to the server.
 
     **Not yet run in Revit.**
 
@@ -760,8 +760,8 @@ def rls_settings_entry(doc, uiapp, output, forms):
 
 def _run_claimed_tasks(project, tasks, facts, writer, forms, output, noun, planner=None):
     """Run a claimed list through `room_m.apply_run.run` with the window's question, the server
-    report and the console line wired in. Shared by Apply and RLS create, which differ only in the
-    planner and writer they hand over and in what the warnings are about (`noun`).
+    report and the console line wired in. Shared by both handlers of the Tasks button, which differ
+    only in the planner and writer they hand over and in what the warnings are about (`noun`).
     Returns the reports sent."""
     from room_m.apply_run import run
 
@@ -782,92 +782,86 @@ def _run_claimed_tasks(project, tasks, facts, writer, forms, output, noun, plann
         except Exception:
             pass
 
-    sent, _ = run(tasks, facts, writer, ask_proceed, send, say, planner=planner)
+    sent, _ = run(tasks, facts, writer, ask_proceed, send, say, planner=planner, log=task_log.info)
     return sent
 
 
-def rls_create_entry(doc, uiapp, output, forms):
-    """Make room layout sheets (RLS) from the server's `create_rls` tasks for this model.
+def _free_tasks(project, tasks, status, message):
+    """Report `tasks` (claimed, so held `in_progress` by the server) with `status` and `message`, so
+    none is left stuck. Returns the reports; a failure to send is logged and never raised."""
+    reports = [{"task_id": t.get("id"), "status": status, "messages": [message]} for t in tasks]
+    if reports:
+        try:
+            report_tasks(project["id"], reports)
+        except Exception:
+            task_log.exception("could not report {} task(s) as {}".format(len(reports), status))
+    return reports
 
-    1. **Settings first.** The model's RLS settings are read (extensible storage). Missing or incomplete
-       ones open the settings window; if they are still incomplete afterwards the script stops.
-    2. **Ask the server** for this model's queued `create_rls` tasks (and only those: a populate task
-       is the Apply button's). No answer, or no tasks, is said and the script stops.
-    3. **Check the whole list** before anything is made (`room_m.rls_task`): an existing sheet or view, no
-       title block for the size, a view type or the base schedule missing are aborts reported first;
-       a missing room or independent tag is a warning, put to the person once.
-    4. **Make each sheet** in one transaction group, so a failed one leaves no trace, and report it as
-       soon as it is done (`room_m.rls_write`, which calls duHast for the Revit work).
 
-    **Not yet run in Revit.**
+def _apply_group(project, selected_doc, tasks, forms, output):
+    """The `apply` handler: place the items of populate and update tasks (`room_m.apply_write`).
+    Returns the reports sent."""
+    from room_m.apply_facts import RevitFacts
+    from room_m.apply_write import TaskWriter
 
-    :return: Result object with status and message.
-    :rtype: Result
-    """
+    task_log.step("apply: reading the model for {} task(s)".format(len(tasks)))
+    facts = RevitFacts(selected_doc)
+    writer = TaskWriter(selected_doc, facts)
+    return _run_claimed_tasks(project, tasks, facts, writer, forms, output, "tasks")
+
+
+def _rls_group(project, selected_doc, tasks, forms, output):
+    """The `rls` handler: make a room layout sheet for each create_rls task.
+
+    The model's RLS settings come first (extensible storage). Missing or incomplete ones open the
+    settings window; if they are still incomplete the tasks are reported aborted, never left claimed.
+    Returns the reports sent."""
+    from room_m import rls_task
+    from room_m.rls_write import RlsFacts, RlsWriter
+
+    task_log.step("rls: reading the model's RLS settings")
     return_value = Result()
-    try:
-        report_build(return_value, output)
-        selected_doc = _single_document(doc, forms, "Select the model to make room layout sheets in")
-        if selected_doc is None:
-            return_value.append_message("No document selected")
-            return return_value
-        settings = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
+    settings = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
+    todo = rls_settings.missing(settings)
+    if todo:
+        forms.alert(
+            "The RLS settings of this model are not complete yet:\n\n{}\n\nThe settings window opens next.".format(", ".join(todo)),
+            title="Roommate - RLS settings")
+        settings = _edit_rls_settings(selected_doc, forms, return_value) or {}
         todo = rls_settings.missing(settings)
         if todo:
-            forms.alert(
-                "The RLS settings of this model are not complete yet:\n\n{}\n\nThe settings window opens next.".format(", ".join(todo)),
-                title="Roommate - RLS settings")
-            settings = _edit_rls_settings(selected_doc, forms, return_value) or {}
-            todo = rls_settings.missing(settings)
-            if todo:
-                return_value.update_sep(False, "RLS stopped: the settings are still incomplete ({}).".format(", ".join(todo)))
-                return return_value
+            message = "RLS settings are incomplete ({})".format(", ".join(todo))
+            task_log.warning("rls: {}; {} task(s) aborted".format(message, len(tasks)))
+            return _free_tasks(project, tasks, "aborted", message)
 
-        project = choose_project(forms)
-        if project is None:
-            return_value.update_sep(False, "RLS aborted: no project selected.")
-            return return_value
-
-        ok, status, text, tasks = claim_tasks(project["id"], selected_doc.Title, kinds=["create_rls"])
-        if not ok:
-            return_value.update_sep(
-                False, "The server did not answer ({}): {}".format(status if status is not None else "no response", text))
-            return return_value
-        if not tasks:
-            forms.alert("There are no queued room layout sheet tasks for model '{}'.".format(selected_doc.Title),
-                        title="Roommate - nothing to make")
-            return_value.append_message("No queued create_rls tasks for '{}'".format(selected_doc.Title))
-            return return_value
-        return_value.append_message("{} task(s) claimed for '{}'".format(len(tasks), selected_doc.Title))
-
-        from room_m import rls_task
-        from room_m.rls_write import RlsFacts, RlsWriter
-
-        facts = RlsFacts(selected_doc)
-        writer = RlsWriter(selected_doc, facts)
-
-        sent = _run_claimed_tasks(
-            project, tasks, facts, writer, forms, output, "sheets",
-            planner=lambda claimed: rls_task.plan_tasks(claimed, settings, facts))
-        failed = [r for r in sent if r["status"] in ("failed", "aborted")]
-        return_value.append_message("{} report(s) sent, {} failed or aborted".format(len(sent), len(failed)))
-    except Exception as e:
-        return_value.update_sep(False, "RLS creation failed with exception: {}".format(e))
-    return return_value
+    task_log.step("rls: reading the model for {} task(s)".format(len(tasks)))
+    facts = RlsFacts(selected_doc)
+    writer = RlsWriter(selected_doc, facts)
+    return _run_claimed_tasks(
+        project, tasks, facts, writer, forms, output, "sheets",
+        planner=lambda claimed: rls_task.plan_tasks(claimed, settings, facts))
 
 
-def apply_tasks_entry(doc, uiapp, output, forms):
-    """APPLY the room tasks the server holds for this model.
+# handler name (`room_m.task_dispatch`) -> the function that runs that group of tasks
+_GROUP_HANDLERS = {
+    task_dispatch.APPLY: _apply_group,
+    task_dispatch.RLS: _rls_group,
+}
 
-    1. **Claim.** Every queued task for this model is handed over and marked in progress.
-    2. **Check the whole list** before anything is written (`room_m.task_plan`). A task that
-       cannot run is reported aborted straight away.
-    3. **Ask once** if some tasks only have warnings: proceed with them, or abort those.
-    4. **Write each task** in one Revit transaction group, so a task that fails leaves no trace,
-       and report it as soon as it is done.
 
-    The plug-in only validates and writes; it never resolves a layout (the task already holds
-    the placements). See `room_m.apply_run`, `room_m.apply_write` and docs/PLAN-blueprints.md.
+def tasks_entry(doc, uiapp, output, forms):
+    """Run the room tasks the server holds for this model: one button for every kind.
+
+    1. **Claim.** One request brings every queued task of the model, whatever its kind
+       (`room_m.task_dispatch.claim_kinds`), and marks them in progress.
+    2. **Hand each kind to its code** (`room_m.task_dispatch`): populate and update tasks place the
+       items (`room_m.apply_write`), then create_rls tasks make the sheets (`room_m.rls_write`). Each
+       group checks its whole list first, asks once about warnings and writes one task per
+       transaction group (`room_m.apply_run`). A kind nothing handles is reported failed.
+    3. **Nothing stays claimed.** A group that raises, and any task never reached, is reported
+       failed with the reason, so the server never holds a task `in_progress` for a run that ended.
+    4. **A log** (`room_m.task_log`, `RoomMate\\RoomMate.log` in the application data) records every
+       step as it happens; its last line says where a run that stopped without a word was.
 
     **Not yet run in Revit.**
 
@@ -875,40 +869,67 @@ def apply_tasks_entry(doc, uiapp, output, forms):
     :rtype: Result
     """
     return_value = Result()
+    claimed = []
+    project = None
+    reported = set()
     try:
+        log_path = task_log.start("Tasks")
         report_build(return_value, output)
+        if log_path:
+            return_value.append_message("Log: {}".format(log_path))
         selected_doc = _single_document(doc, forms, "Select the model the tasks are for")
         if selected_doc is None:
             return_value.append_message("No document selected")
             return return_value
         project = choose_project(forms)
         if project is None:
-            return_value.update_sep(False, "Apply aborted: no project selected.")
+            return_value.update_sep(False, "Tasks aborted: no project selected.")
             return return_value
+        task_log.info("model '{}', project '{}'".format(selected_doc.Title, project["id"]))
 
-        ok, status, text, tasks = claim_tasks(project["id"], selected_doc.Title, kinds=["populate_room", "update_room"])
+        task_log.step("claiming the queued tasks")
+        ok, status, text, claimed = claim_tasks(project["id"], selected_doc.Title, kinds=task_dispatch.claim_kinds())
         if not ok:
+            task_log.error("claim failed: {} {}".format(status, text))
             return_value.update_sep(
                 False, "Could not ask the server for tasks ({}): {}".format(status if status is not None else "no response", text))
             return return_value
-        if not tasks:
-            forms.alert("There are no queued populate or update tasks for model '{}'.".format(selected_doc.Title),
-                        title="Roommate - nothing to apply")
+        if not claimed:
+            forms.alert("There are no queued tasks for model '{}'.".format(selected_doc.Title),
+                        title="Roommate - nothing to do")
             return_value.append_message("No queued tasks for '{}'".format(selected_doc.Title))
             return return_value
-        return_value.append_message("{} task(s) claimed for '{}'".format(len(tasks), selected_doc.Title))
+        summary = task_dispatch.count_by_kind(claimed)
+        task_log.info("claimed {}".format(summary))
+        return_value.append_message("{} task(s) claimed for '{}': {}".format(len(claimed), selected_doc.Title, summary))
 
-        from room_m.apply_facts import RevitFacts
-        from room_m.apply_write import TaskWriter
+        groups, unhandled = task_dispatch.split(claimed)
+        for report in _free_tasks(project, unhandled, "failed", "this plug-in has no handler for this kind of task"):
+            reported.add(report["task_id"])
+        if unhandled:
+            return_value.update_sep(False, "{} task(s) of a kind this plug-in does not know were reported failed.".format(len(unhandled)))
 
-        facts = RevitFacts(selected_doc)
-        writer = TaskWriter(selected_doc, facts)
-
-        sent = _run_claimed_tasks(project, tasks, facts, writer, forms, output, "tasks")
-        failed = [r for r in sent if r["status"] in ("failed", "aborted")]
-        return_value.append_message("{} report(s) sent, {} failed or aborted".format(len(sent), len(failed)))
+        for handler, group in groups:
+            task_log.step("{}: {} task(s)".format(handler, len(group)))
+            try:
+                sent = _GROUP_HANDLERS[handler](project, selected_doc, group, forms, output)
+            except Exception as e:
+                task_log.exception("{} failed".format(handler))
+                return_value.update_sep(False, "{} failed with exception: {}".format(handler, e))
+                sent = []
+            reported.update(r["task_id"] for r in sent)
+            failed = [r for r in sent if r["status"] in ("failed", "aborted")]
+            return_value.append_message("{}: {} report(s) sent, {} failed or aborted".format(handler, len(sent), len(failed)))
     except Exception as e:
-        return_value.update_sep(False, "Apply failed with exception: {}".format(e))
+        task_log.exception("Tasks failed")
+        return_value.update_sep(False, "Tasks failed with exception: {} (the log has the steps)".format(e))
+    finally:
+        # whatever happened, a claimed task nobody reported is freed rather than left in progress
+        stranded = [t for t in claimed if t.get("id") not in reported]
+        if stranded and project is not None:
+            task_log.warning("{} claimed task(s) were never reported; reporting them failed".format(len(stranded)))
+            _free_tasks(project, stranded, "failed", "the session ended before this task was reached")
+        task_log.info("run ended")
     return return_value
 
 

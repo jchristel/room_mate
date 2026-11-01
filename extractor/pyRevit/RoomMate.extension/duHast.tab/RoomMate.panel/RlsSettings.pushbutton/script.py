@@ -5,7 +5,7 @@ Usage:
 
 - Run this script and pick the model.
 - Choose the title blocks, view types, schedule, tags and naming, then press Save.
-- The settings are stored in the model, where the RLS create button reads them.
+- The settings are stored in the model, where the Tasks button reads them.
 """
 
 from pyrevit import revit, script, forms
