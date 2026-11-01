@@ -183,6 +183,15 @@ class RlsWriter(object):
             raise RuntimeError("{}: {}".format(name, outcome.message.strip()))
         return outcome
 
+    def _regenerate(self):
+        """Bring the document up to date. Revit refuses `Regenerate` outside a transaction, so it gets one."""
+        def work():
+            result = Result()
+            self.doc.Regenerate()
+            return result
+
+        self._step("RoomMate: regenerate", work)
+
     def _sheet(self, plan):
         symbol = get_title_block_symbol_by_name(self.doc, plan["title_block"])
         outcome = create_sheet(self.doc, str(plan["number"]), str(plan["name"]), symbol)
@@ -217,7 +226,7 @@ class RlsWriter(object):
         if at is None:
             at = (0.0, 0.0)
             notes.append("the {} viewport had no place on the template sheet: put at the sheet's origin".format(label))
-        self.doc.Regenerate()
+        self._regenerate()
         outcome = self._step(
             "RoomMate: viewport {}".format(view.Name),
             lambda: create_viewport_without_transaction_wrapper(self.doc, sheet, view, XYZ(at[0], at[1], 0.0)),
@@ -270,7 +279,7 @@ class RlsWriter(object):
                 "RoomMate: turn elevation marker",
                 lambda: rotate_elevation_marker_without_transaction_wrapper(self.doc, marker, location, delta),
             )
-        self.doc.Regenerate()
+        self._regenerate()
 
         for e, view in made:
             line_start = XYZ(_ft(e["line_start"][0]), _ft(e["line_start"][1]), level.Elevation)
