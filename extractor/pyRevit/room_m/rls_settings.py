@@ -25,9 +25,9 @@ def missing(settings):
     s = settings or {}
     sizes = s.get("sheet_sizes") if isinstance(s.get("sheet_sizes"), dict) else {}
     out = []
-    for size in SIZES:
-        if not sizes.get(size):
-            out.append("title block for {}".format(size.upper()))
+    # one size in use through the whole project is ordinary: a task for a size with none aborts on its own
+    if not any(sizes.get(size) for size in SIZES):
+        out.append("a title block for at least one sheet size")
     for key, label in (
         ("plan_view_type", "plan view type"),
         ("elevation_view_type", "elevation view type"),

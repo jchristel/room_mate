@@ -767,6 +767,7 @@ it cannot read is left out, and the window says so.
 - **What crashed the first WPF attempt is kept out on purpose, and tests enforce it**: no `x:Class` and no `DataGrid` or `ListView` (only a
   ScrollViewer, TextBlocks, ComboBoxes and TextBoxes), handlers are plain methods named in the XAML (a test checks each exists), and a
   field that changes reports to `on_change`. Do not add a grid of rows to it; a long list belongs in a ComboBox.
+- **Only one title block is required.** A project may use one sheet size throughout, so settings are complete with a title block for any one size; a task for a size with none aborts (`NO_TITLE_BLOCK`).
 - **Stored settings are validated against the model** (`rls_settings.validate`, a pure function over what `collect_options` read): a title block,
   view type or schedule the model lacks, a template word that is not a room parameter or a bad numbering style is an ERROR; a stale tag only a
   warning (a task without tags only warns). A list Revit did not offer is not checked ("cannot tell"). It runs when the settings window opens and
