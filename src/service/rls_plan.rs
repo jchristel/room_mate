@@ -220,7 +220,10 @@ pub fn transfer(sheet: &Value, template: &[Pt], target: &[Pt], request: &RlsRequ
             .iter()
             .find(|sm| sm.marker_id == marker_id)
             .and_then(|sm| sm.location)
-            .map_or_else(|| first.line_midpoint(), |l| (l[0], l[1]));
+            .map_or_else(
+                || marker_from_view_axes(&views.iter().map(|p| p.0).collect::<Vec<_>>(), first),
+                |l| (l[0], l[1]),
+            );
         let t_edge = &te[first_edge];
         let g_edge = &ge[(first_edge + shift) % ge.len()];
         let (along, off) = in_frame(m, t_edge);
@@ -268,6 +271,37 @@ pub fn transfer(sheet: &Value, template: &[Pt], target: &[Pt], request: &RlsRequ
         markers.push(MarkerPlan { marker_id, location: [location.0, location.1], views: plans });
     }
     (markers, notes)
+}
+
+/// Where a marker whose own point was not exported must be: on the axis of every view it carries (the line
+/// through the middle of the elevation line, along the way the view looks), so the point nearest all the
+/// axes in the least-squares sense. Views at different angles pin it down (a four-view marker exactly, however
+/// far each line was dragged from the marker); with only parallel axes (one view, or two facing each other)
+/// the position along them is unknown and the middle of the first view's line stands in.
+fn marker_from_view_axes(views: &[&Elevation], first: &Elevation) -> Pt {
+    let (mut a, mut b, mut d) = (0.0, 0.0, 0.0); // normal matrix [[a, b], [b, d]]
+    let (mut rx, mut ry) = (0.0, 0.0);
+    for ev in views {
+        let Some(l) = ev.looks else { continue };
+        let len = l[0].hypot(l[1]);
+        if len == 0.0 {
+            continue;
+        }
+        // n: unit normal to the axis; the axis passes through the middle of the line
+        let n = (-l[1] / len, l[0] / len);
+        let m = ev.line_midpoint();
+        a += n.0 * n.0;
+        b += n.0 * n.1;
+        d += n.1 * n.1;
+        let k = n.0 * m.0 + n.1 * m.1;
+        rx += n.0 * k;
+        ry += n.1 * k;
+    }
+    let det = a * d - b * b;
+    if det.abs() < 1e-6 {
+        return first.line_midpoint();
+    }
+    ((d * rx - b * ry) / det, (a * ry - b * rx) / det)
 }
 
 impl Elevation {
@@ -345,6 +379,19 @@ mod tests {
         );
         // The line keeps its 2 m width, centred on the marker.
         assert!((bottom.line_end[0] - bottom.line_start[0] - 2000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_marker_with_no_exported_point_is_found_where_its_view_axes_cross() {
+        // The template's four lines are dragged by different amounts from a marker at (2000, 1500).
+        let mut s = sheet();
+        for vp in s["view_ports"].as_array_mut().unwrap() {
+            vp["view"].as_object_mut().unwrap().remove("marker_location");
+        }
+        let (markers, _) = transfer(&s, &rect(4000.0, 3000.0), &rect(4000.0, 3000.0), &RlsRequest::default());
+        let m = &markers[0];
+        assert!((m.location[0] - 2000.0).abs() < 1e-6, "{:?}", m.location);
+        assert!((m.location[1] - 1500.0).abs() < 1e-6, "{:?}", m.location);
     }
 
     #[test]
