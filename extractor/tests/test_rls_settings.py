@@ -20,9 +20,13 @@ COMPLETE = {
 class Missing(unittest.TestCase):
     def test_nothing_chosen_lists_everything_that_stops_it(self):
         todo = rs.missing({})
-        self.assertIn("title block for A0", todo)
+        self.assertIn("a title block for at least one sheet size", todo)
         self.assertIn("schedule base", todo)
-        self.assertEqual(4 + 6, len(todo))
+        self.assertEqual(1 + 6, len(todo))
+
+    def test_one_title_block_is_enough(self):
+        only_a3 = dict(COMPLETE, sheet_sizes={"a3": "tb"})
+        self.assertEqual([], rs.missing(only_a3))
 
     def test_a_complete_set_needs_no_tags(self):
         self.assertEqual([], rs.missing(COMPLETE))
