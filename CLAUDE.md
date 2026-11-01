@@ -580,7 +580,7 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
   keeps its fraction along the wall and its distance from it, each view's line ends and direction keep their offsets from the
   marker in the frame of the wall that view faces, and the **depth keeps its length** (a view shows a stretch of wall, not a
   share of the room). `depth_to_wall_mm` is how far the faced wall is, for a person who wants "to the room boundary".
-- **A marker whose point the sheet did not export (`marker_location` null: seen on a real export) is found where its views' axes cross** (`rls_plan::marker_from_view_axes`: the line through the middle of each elevation line along the way it looks, least squares), not at the middle of one line, which is wherever that line was dragged to. Parallel axes only (one view) fall back to that middle.
+- **A marker's position is read from its view pointers, not from `Location`.** Revit gives an `ElevationMarker` no point: its `Location` is the bare `Location` class and it has no bounding box outside a plan view, so `marker_location` was always null. duHast (`elevation.get_marker_centre_from_pointers`) takes each view's pointer (a dependent element of category `OST_Viewers`, which Revit names "Views"; the one with the largest id below the view's), its bounding box in a plan view, and fits the lines through those centres along the view directions: the circle's centre, measured in Revit. The elevation lines' own middles are NOT the marker (a line can be cropped off-centre: 280 mm out on the Rumpus sheet). A marker with one view answers none. **A sheet exported without it** (an old push, or a one-view marker) falls back on the server (`rls_plan::marker_from_view_axes`): where the views' axes cross through the middles of their lines, which is approximate, and for one view the middle of that line.
 - **A marker is placed once, from its lowest-numbered view**, so its views share one point; placing it from each view's own
   wall would give four different markers in a room that scaled unevenly.
 - **Different coarse edge counts place nothing** (the blueprint rule) and say so as a finding; the sheet is still made.
@@ -743,7 +743,7 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   between the line's ends and within the depth; the sheet's model-frame numbers are compared with the room put back
   through the inverse placement. **Occlusion is not judged.** Front-on versus side-on is the same `square_on`
   (1 front, near 0 side); tag rules do not yet key on it. **Not run in Revit**: the depth is read as minus the crop
-  box's `Min.Z` and the marker's `Location` is assumed to be a point.
+  box's `Min.Z`. (The marker's own point is read from its view pointers: see Create-RLS.)
 - **The Blueprint button pushes a room and its sheets to `.../blueprints/from-revit`; the Sheets button
   pushes sheets alone to the library.** The Blueprint button sends NO room contents: a rooms or FF&E push
   replaces a model's whole snapshot, so the blueprint's room is captured on the server from what is
