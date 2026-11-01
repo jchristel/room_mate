@@ -24,7 +24,7 @@ defined, elevations the server could not place.
   find_room(number, room_id) -> a room handle or None
   room_values(room) -> {parameter name: text} for the naming templates
   title_block_exists(name) -> bool          ("Family : Type")
-  view_type_exists(kind, name) -> bool      (kind "plan", "elevation" or "three_d")
+  view_type_exists(kind, name) -> bool      (kind "plan", "elevation", "three_d" or "viewport")
   schedule_exists(name) -> bool
   schedule_filters_on_room_number(name) -> bool   (its FIRST filter is on the room number)
   tag_type_exists(kind, name) -> bool       (kind "room" or "independent")
@@ -252,6 +252,7 @@ def build(task, settings, values):
         "plan_view_type": settings.get("plan_view_type"),
         "elevation_view_type": settings.get("elevation_view_type"),
         "three_d_view_type": settings.get("three_d_view_type"),
+        "viewport_type": settings.get("viewport_type") or None,
         "schedule_base": settings.get("schedule_base"),
         "room_tag": settings.get("room_tag") or None,
         "independent_tag": settings.get("independent_tag") or None,
@@ -297,6 +298,8 @@ def check(task, settings, facts, taken):
     ):
         if not facts.view_type_exists(kind, name):
             aborts.append(finding(VIEW_TYPE_MISSING, "{}: the {} '{}' is not in the model".format(label, what, name)))
+    if plan["viewport_type"] and not facts.view_type_exists("viewport", plan["viewport_type"]):
+        aborts.append(finding(VIEW_TYPE_MISSING, "{}: the viewport type '{}' is not in the model".format(label, plan["viewport_type"])))
     if plan["three_ds"]:
         # only a sheet with a 3D view needs the type: the settings do not demand one of every project
         if not plan["three_d_view_type"]:

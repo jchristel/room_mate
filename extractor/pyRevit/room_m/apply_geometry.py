@@ -124,6 +124,19 @@ def viewport_centre_ft(viewport):
     return (mm_to_ft(x), mm_to_ft(y))
 
 
+def viewport_label_ft(viewport):
+    """`(offset, length)` of the template viewport's title, in feet: `offset` is `(x, y)` from the bottom left
+    corner of the viewport box to the left end of the title line, `length` the line's length. Either is None
+    when the export (a duHast before the title was exported) did not carry it."""
+    offset = (viewport or {}).get("label_offset")
+    length = (viewport or {}).get("label_line_length")
+    try:
+        at = (mm_to_ft(offset["x"]), mm_to_ft(offset["y"]))
+    except (KeyError, TypeError):
+        at = None
+    return at, (mm_to_ft(length) if length is not None else None)
+
+
 def crop_size_mm(viewport, room_width_mm=0.0, room_height_mm=0.0):
     """The crop box a made view takes: the size the source view had, but never smaller than the
     target room's own extent (a bigger room must not be cut off by a small room's crop).

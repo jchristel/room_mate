@@ -71,6 +71,7 @@ class Validate(unittest.TestCase):
         "plan_view_types": ["Plan"],
         "elevation_view_types": ["Elev"],
         "three_d_view_types": ["3D"],
+        "viewport_types": ["Title w Line"],
         "schedules": ["Sched"],
         "room_tags": ["RT"],
         "independent_tags": ["IT"],
@@ -90,6 +91,11 @@ class Validate(unittest.TestCase):
     def test_a_chosen_3d_view_type_the_model_lacks_is_an_error(self):
         errors, _ = rs.validate(self.settings(three_d_view_type="Old"), self.OPTIONS)
         self.assertEqual(["3D view type 'Old' is not in this model"], errors)
+
+    def test_a_chosen_viewport_type_the_model_lacks_is_an_error(self):
+        errors, _ = rs.validate(self.settings(viewport_type="Old"), self.OPTIONS)
+        self.assertEqual(["viewport type 'Old' is not in this model"], errors)
+        self.assertEqual(([], []), rs.validate(self.settings(viewport_type="Title w Line"), self.OPTIONS))
 
     def test_good_settings_have_nothing_to_report(self):
         self.assertEqual(([], []), rs.validate(self.settings(), self.OPTIONS))

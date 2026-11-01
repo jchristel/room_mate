@@ -95,5 +95,17 @@ class Viewports(unittest.TestCase):
         self.assertIsNone(g.viewport_scale({"view": {"view_scale": 0}}))
 
 
+class ViewportLabel(unittest.TestCase):
+    def test_the_title_offset_and_line_length_come_back_in_feet(self):
+        offset, length = g.viewport_label_ft({"label_offset": {"x": 304.8, "y": 609.6}, "label_line_length": 152.4})
+        self.assertAlmostEqual(1.0, offset[0])
+        self.assertAlmostEqual(2.0, offset[1])
+        self.assertAlmostEqual(0.5, length)
+
+    def test_a_viewport_exported_before_the_title_was_has_neither(self):
+        self.assertEqual((None, None), g.viewport_label_ft({"centre_point": {"x": 1, "y": 2}}))
+        self.assertEqual((None, None), g.viewport_label_ft(None))
+
+
 if __name__ == "__main__":
     unittest.main()
