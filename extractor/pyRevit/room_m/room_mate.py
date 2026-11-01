@@ -609,7 +609,7 @@ def blueprint_export_entry(doc, uiapp, output, forms):
         plan = choice["plan"]
 
         for room, name, chosen in plan:
-            pushed, failures = read_sheets(selected_doc, [(entry, None) for entry in chosen], None, project.get("tag_type_code"))
+            pushed, failures = read_sheets(selected_doc, [(entry, None, None, room) for entry in chosen], None, project.get("tag_type_code"))
             for label, reason in failures:
                 return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
             if failures or not pushed:
