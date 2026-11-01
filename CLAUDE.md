@@ -580,6 +580,7 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
   keeps its fraction along the wall and its distance from it, each view's line ends and direction keep their offsets from the
   marker in the frame of the wall that view faces, and the **depth keeps its length** (a view shows a stretch of wall, not a
   share of the room). `depth_to_wall_mm` is how far the faced wall is, for a person who wants "to the room boundary".
+- **A marker whose point the sheet did not export (`marker_location` null: seen on a real export) is found where its views' axes cross** (`rls_plan::marker_from_view_axes`: the line through the middle of each elevation line along the way it looks, least squares), not at the middle of one line, which is wherever that line was dragged to. Parallel axes only (one view) fall back to that middle.
 - **A marker is placed once, from its lowest-numbered view**, so its views share one point; placing it from each view's own
   wall would give four different markers in a room that scaled unevenly.
 - **Different coarse edge counts place nothing** (the blueprint rule) and say so as a finding; the sheet is still made.
