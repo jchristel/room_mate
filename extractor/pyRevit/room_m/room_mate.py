@@ -753,6 +753,9 @@ def rls_settings_entry(doc, uiapp, output, forms):
             todo = rls_settings.missing(saved)
             if todo:
                 return_value.append_message("Still to choose before an RLS can be made: {}".format(", ".join(todo)))
+            errors, warnings = rls_settings.validate(saved, rls_settings.collect_options(selected_doc))
+            for line in errors + warnings:
+                return_value.append_message("RLS settings: {}".format(line))
     except Exception as e:
         return_value.update_sep(False, "RLS settings failed with exception: {}".format(e))
     return return_value
@@ -810,6 +813,14 @@ def _apply_group(project, selected_doc, tasks, forms, output):
     return _run_claimed_tasks(project, tasks, facts, writer, forms, output, "tasks")
 
 
+def _settings_state(settings, options):
+    """`(still to choose, errors, warnings)` for the RLS settings: what is not set (`rls_settings.missing`),
+    and what is set and wrong in this model (`rls_settings.validate`)."""
+    errors, warnings = rls_settings.validate(settings, options)
+    todo = ["not chosen: {}".format(t) for t in rls_settings.missing(settings)]
+    return todo, errors, warnings
+
+
 def _rls_group(project, selected_doc, tasks, forms, output):
     """The `rls` handler: make a room layout sheet for each create_rls task.
 
@@ -822,17 +833,21 @@ def _rls_group(project, selected_doc, tasks, forms, output):
     task_log.step("rls: reading the model's RLS settings")
     return_value = Result()
     settings = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
-    todo = rls_settings.missing(settings)
-    if todo:
+    options = rls_settings.collect_options(selected_doc)
+    todo, errors, warnings = _settings_state(settings, options)
+    if todo or errors:
         forms.alert(
-            "The RLS settings of this model are not complete yet:\n\n{}\n\nThe settings window opens next.".format(", ".join(todo)),
+            "The RLS settings of this model need attention:\n\n{}\n\nThe settings window opens next.".format(
+                "\n".join(todo + errors)),
             title="Roommate - RLS settings")
         settings = _edit_rls_settings(selected_doc, forms, return_value) or {}
-        todo = rls_settings.missing(settings)
-        if todo:
-            message = "RLS settings are incomplete ({})".format(", ".join(todo))
+        todo, errors, warnings = _settings_state(settings, rls_settings.collect_options(selected_doc))
+        if todo or errors:
+            message = "RLS settings are not usable ({})".format("; ".join(todo + errors))
             task_log.warning("rls: {}; {} task(s) aborted".format(message, len(tasks)))
             return _free_tasks(project, tasks, "aborted", message)
+    for line in warnings:
+        task_log.warning("rls settings: {}".format(line))
 
     task_log.step("rls: reading the model for {} task(s)".format(len(tasks)))
     facts = RlsFacts(selected_doc)

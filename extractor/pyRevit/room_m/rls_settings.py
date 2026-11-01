@@ -1,7 +1,7 @@
 """Room layout sheet settings: what the model holds, what it offers, and what is still missing.
 
 ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing one. The Revit calls
-are made inside the functions that need them, so the pure half (`missing`) is tested on CPython
+are made inside the functions that need them, so the pure half (`missing`, `validate`) is tested on CPython
 (`extractor/tests/test_rls_settings.py`).
 
 **The model is the source of truth.** The settings live in the model's extensible storage under the key
@@ -40,6 +40,53 @@ def missing(settings):
         if non_blank_text(value) is None:
             out.append(label)
     return out
+
+
+# (settings path, the option list that must hold it, what to call it, whether a stored value not in the model stops a task)
+_CHECKED = [
+    (("sheet_sizes", "a0"), "title_blocks", "title block for A0", True),
+    (("sheet_sizes", "a1"), "title_blocks", "title block for A1", True),
+    (("sheet_sizes", "a2"), "title_blocks", "title block for A2", True),
+    (("sheet_sizes", "a3"), "title_blocks", "title block for A3", True),
+    (("plan_view_type",), "plan_view_types", "plan view type", True),
+    (("elevation_view_type",), "elevation_view_types", "elevation view type", True),
+    (("schedule_base",), "schedules", "base schedule", True),
+    # without a tag a task only warns, so a stale tag does too
+    (("room_tag",), "room_tags", "room tag", False),
+    (("independent_tag",), "independent_tags", "independent tag", False),
+]
+_TEMPLATES = (("sheet_number", "sheet number logic"), ("sheet_name", "sheet name logic"), ("view_name", "view name logic"))
+
+
+def validate(settings, options):
+    """`(errors, warnings)`: every stored setting the model cannot honour, in words.
+
+    `missing` asks what is not chosen; this asks what IS chosen and is wrong: a title block, view type,
+    schedule or tag the model does not have (`options` are what `collect_options` read), a template word
+    that is not a room parameter, a numbering style that is not one of the two. **An option list the model
+    did not offer is not checked** (the window says Revit could not list it): that is "cannot tell", never a
+    finding. Errors stop a task; warnings (the tags) only warn, as a task does without them. Asked when the
+    settings window opens and changes, and before the Tasks button claims anything."""
+    from room_m import detail_numbers, rls_settings_form
+
+    s = settings or {}
+    errors, warnings = [], []
+    for path, list_key, label, blocking in _CHECKED:
+        node = s
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if non_blank_text(node) is None or list_key not in (options or {}):
+            continue
+        if node not in options[list_key]:
+            (errors if blocking else warnings).append("{} '{}' is not in this model".format(label, node))
+    for key, label in _TEMPLATES:
+        bad = rls_settings_form.unknown_tokens(s.get(key), (options or {}).get("room_parameters"))
+        if bad:
+            errors.append("{}: not a room parameter: {}".format(label, " ".join("{" + t + "}" for t in bad)))
+    for key in detail_numbers.SETTING_OF.values():
+        if s.get(key) is not None and s.get(key) not in detail_numbers.STYLES:
+            errors.append("{} '{}' is not numeric or alphabetic".format(key.replace("_", " "), s.get(key)))
+    return errors, warnings
 
 
 def _names(elements, label):

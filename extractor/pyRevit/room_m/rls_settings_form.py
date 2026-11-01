@@ -117,19 +117,22 @@ def unknown_tokens(template, parameters):
     return [t for t in TOKEN.findall(template or "") if t.strip().lower() not in known]
 
 
-def problems(settings, parameters):
+def problems(settings, parameters, options=None):
     """What the person should still look at, as lines for the status text: what is not chosen yet
-    (`rls_settings.missing`), and any template token that is not a room parameter."""
+    (`rls_settings.missing`) and what is chosen and wrong (`rls_settings.validate`: not in this model, not a
+    room parameter). `options` are the model's choices; without them only the room parameters are known."""
     from room_m import rls_settings
 
+    offered = dict(options or {})
+    if "room_parameters" not in offered and parameters:
+        offered["room_parameters"] = list(parameters)
     lines = []
     todo = rls_settings.missing(settings)
     if todo:
         lines.append("Still to choose: {}".format(", ".join(todo)))
-    for _name, key in TEXTS:
-        bad = unknown_tokens(settings.get(key), parameters)
-        if bad:
-            lines.append("{}: not a room parameter: {}".format(key.replace("_", " "), " ".join("{" + t + "}" for t in bad)))
+    errors, warnings = rls_settings.validate(settings, offered)
+    lines.extend(errors)
+    lines.extend("{} (a task only warns)".format(w) for w in warnings)
     return lines
 
 
