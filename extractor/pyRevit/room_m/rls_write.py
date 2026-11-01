@@ -66,6 +66,8 @@ from duHast.Revit.Views.annotation_crop import set_annotation_crop_without_trans
 from duHast.Revit.Views.viewports_create import create_viewport_without_transaction_wrapper
 
 from room_m import apply_geometry as geo
+from room_m import section_box
+from room_m.utils.rooms import level_z_ft
 from room_m import detail_numbers
 from room_m import rls_settings
 from room_m import task_log
@@ -181,7 +183,7 @@ class RlsWriter(object):
             task_log.step("find the room, its level and phase")
             room = plan["room"]
             level = room.Level
-            self._level_z = self._level_z_of(room, level)
+            self._level_z = level_z_ft(room, level)
             # the views belong to the phase the room does, whatever the task says
             phase = get_room_phase(self.doc, room)
             task_log.step("sheet {}".format(plan["number"]))
@@ -205,18 +207,6 @@ class RlsWriter(object):
             task_log.exception("sheet {} failed".format(plan.get("number")))
             result.update_sep(False, str(e))
         return result
-
-    @staticmethod
-    def _level_z_of(room, level):
-        """Where the room's level is in the model's own coordinates, feet. **`Level.Elevation` is not that**: on
-        a model whose project base point is above the internal origin it is the elevation in the project's frame
-        (110250 mm against a floor at 450 mm: measured), while views, crop boxes and geometry are in the internal
-        frame. The room's bounding box is: its bottom is the level plus the room's base offset."""
-        try:
-            base = room.get_Parameter(BuiltInParameter.ROOM_LOWER_OFFSET)
-            return room.get_BoundingBox(None).Min.Z - (base.AsDouble() if base is not None else 0.0)
-        except Exception:
-            return level.Elevation
 
     def _step(self, name, work):
         """Run `work` (returns a duHast Result) in a transaction of its own; a failure raises."""
@@ -418,6 +408,11 @@ class RlsWriter(object):
         low = XYZ(box.Min.X - margin, box.Min.Y - margin, min(box.Min.Z, self._level_z) - margin)
         high = XYZ(box.Max.X + margin, box.Max.Y + margin, box.Max.Z + margin)
         for v in plan["three_ds"]:
+            # the template's section box height, above THIS room's level, where the template carried one
+            heights = section_box.above_floor_ft(v["viewport"], geo.mm_to_ft)
+            if heights is not None:
+                low = XYZ(low.X, low.Y, self._level_z + heights[0])
+                high = XYZ(high.X, high.Y, self._level_z + heights[1])
             view = self._step(
                 "RoomMate: {}".format(v["name"]),
                 lambda v=v: create_view_3d_around_box_without_transaction_wrapper(

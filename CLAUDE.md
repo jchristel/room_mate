@@ -624,6 +624,11 @@ checked before anything is made, then one transaction group per task (`duHast...
   and `label_line_length` (mm), and a new viewport gets both from its template viewport (`Viewport.LabelOffset`/`LabelLineLength`, after its type). A sheet exported before
   that carries neither and the viewport keeps Revit's default title place. The sheet preview does not draw the title.
   **A viewport is placed by its box centre**: duHast's `create_viewport` calls `SetBoxCenter` after `Viewport.Create`, because Autodesk documents Create's point only as "a location" (a plan view came out left of the original sheet's when it was passed the exported centre alone).
+- **A 3D view's section box height follows the template's, above the room's level** (`room_m/section_box.py`). duHast exports the box (`section_box_active`, `section_box_min`/`max`, mm,
+  the model's own frame, the extent of its corners with the box transform applied). When the extractor reads a sheet it turns the box's z range into heights ABOVE THE LEVEL of the
+  room the sheet was made for (`section_z_above_floor_mm`, on the 3D view: the first ticked room on the Sheets button, the blueprint's room on the Blueprint button), the level's z being
+  the room's own (`utils.rooms.level_z_ft`), never `Level.Elevation`. A new 3D view's box then runs those heights above THIS room's level; its x and y stay the room's bounding box plus
+  `SECTION_MARGIN_MM`. A sheet with no room, or exported before, gets the room's box plus the margin all round, as before. **Not run in Revit.**
 - **The annotation crop is exported and applied** (plan and elevation views): `annotation_crop_active` and `annotation_crop_offsets` (`left`/`right`/`top`/`bottom` from the
   view crop, **mm on paper**, because Revit keeps them in view units so they hold at any scale) ride each view of the sheet export (duHast `view_ports_to_data._get_annotation_crop`, via
   the parameter `VIEWER_ANNOTATION_CROP_ACTIVE` and `ViewCropRegionShapeManager`). A new plan or elevation view gets the same after its own crop is final

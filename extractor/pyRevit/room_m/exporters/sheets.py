@@ -17,10 +17,13 @@ them. Not in duHast's export, so not here: view template, view names. See
 docs/PLAN-blueprints.md, track B.
 """
 
-from room_m import room_figures
+from room_m import room_figures, section_box
 from room_m.post_common import duhast_to_plain
 from room_m.sheet_tags import attach_type_codes, take_tags
 from room_m.utils.tag_codes import type_code_reader
+
+
+MM_PER_FT = 304.8
 
 
 def _tag_problems():
@@ -46,7 +49,15 @@ def _size_mm(doc, entry):
     return {"width_mm": size[0], "height_mm": size[1]}
 
 
-def read_sheet(doc, entry, room=None, phase_name=None, rooms=None, type_code_parameter=None):
+def _attach_section_boxes(pushed, floor_room):
+    """Give each 3D view of the sheet its section box as heights above the level of `floor_room` (an entry of
+    `room_m.utils.sheets.placed_rooms`), so another room can be given the same heights above ITS level."""
+    from room_m.utils.rooms import level_z_ft
+
+    section_box.attach(pushed["sheet"], level_z_ft(floor_room["element"]) * MM_PER_FT)
+
+
+def read_sheet(doc, entry, room=None, phase_name=None, rooms=None, type_code_parameter=None, floor_room=None):
     """One chosen sheet (an item of `room_m.utils.sheets.sheets_of`) as the pushed shape.
 
     Raises if duHast cannot convert the sheet; the caller reports that sheet and carries on
@@ -66,6 +77,13 @@ def read_sheet(doc, entry, room=None, phase_name=None, rooms=None, type_code_par
         {"document_title": doc.Title, "revit_sheet_id": entry["id"], "sheet_number": entry["number"]},
     )
     pushed["tag_problems"] = _tag_problems()
+    # the room whose level the section box heights are measured from: the one given, else the first ticked
+    source = floor_room or (rooms[0] if rooms else None)
+    if source is not None:
+        try:
+            _attach_section_boxes(pushed, source)
+        except Exception:
+            pass  # a sheet without them still travels; the 3D view then gets the room plus a margin
     if type_code_parameter and pushed["tags"]:
         pushed["tags_without_code"] = attach_type_codes(pushed["tags"], type_code_reader(doc, type_code_parameter))
     if room is not None:
@@ -89,8 +107,10 @@ def read_sheet(doc, entry, room=None, phase_name=None, rooms=None, type_code_par
 
 
 def read_sheets(doc, assignments, phase_name=None, type_code_parameter=None):
-    """`assignments` is a list of `(sheet entry, room or None)` or `(sheet entry, room, rooms)`,
-    where `rooms` are the placed rooms (`room_m.utils.sheets.placed_rooms`) the sheet covers.
+    """`assignments` is a list of `(sheet entry, room or None)`, `(sheet entry, room, rooms)` or
+    `(sheet entry, room, rooms, floor_room)`, where `rooms` are the placed rooms (`room_m.utils.sheets.placed_rooms`)
+    the sheet covers and `floor_room` is the one whose level the 3D views' section box heights are measured from
+    (the first of `rooms` when not given).
 
     Returns `(pushed, failures)`: the sheets that converted, and `(label, reason)` for each
     that did not."""
@@ -99,8 +119,9 @@ def read_sheets(doc, assignments, phase_name=None, type_code_parameter=None):
     for assignment in assignments:
         entry, room = assignment[0], assignment[1]
         rooms = assignment[2] if len(assignment) > 2 else None
+        floor_room = assignment[3] if len(assignment) > 3 else None
         try:
-            pushed.append(read_sheet(doc, entry, room, phase_name, rooms, type_code_parameter))
+            pushed.append(read_sheet(doc, entry, room, phase_name, rooms, type_code_parameter, floor_room))
         except Exception as e:
             failures.append((entry["label"], str(e)))
     return pushed, failures

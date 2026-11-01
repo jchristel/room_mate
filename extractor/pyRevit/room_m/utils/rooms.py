@@ -35,6 +35,19 @@ from room_m.utils.generic import (
 # ROOM_PHASE built-in parameter, which the duHast room export does not carry.
 from Autodesk.Revit.DB import BuiltInParameter
 
+def level_z_ft(room, level=None):
+    """Where the room's level is in the model's own coordinates, feet. **`Level.Elevation` is not that**: on a
+    model whose survey point is above the internal origin it is the elevation in shared coordinates (110250 mm
+    against a floor at 450 mm: measured), while views, crop boxes and geometry are in the internal frame. The
+    room's bounding box is: its bottom is the level plus the room's base offset. `level` is the fallback when
+    the box cannot be read."""
+    try:
+        base = room.get_Parameter(BuiltInParameter.ROOM_LOWER_OFFSET)
+        return room.get_BoundingBox(None).Min.Z - (base.AsDouble() if base is not None else 0.0)
+    except Exception:
+        return level.Elevation
+
+
 def rooms_in_phase(doc, phase_name):
     """The room ids in `phase_name`.
 
