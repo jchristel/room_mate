@@ -532,7 +532,7 @@ warnings; pure, tested on CPython in `extractor/tests`) and its transport (`post
 is written (`tasks_entry`, below): `apply_run` is the sequence (claim, check, ask once, report aborts before any work,
 write and report each task, report any stranded one failed; tested with fakes), `apply_facts` answers the planner from
 Revit, `apply_write` writes one task per `TransactionGroup` so a failed task leaves no trace, `apply_geometry` is the
-pure arithmetic. **Not run in Revit.** The `update_room` kind is built on the server and the tasks page (items or
+pure arithmetic. **The item-placing half (`apply_*`) has not been run in Revit**; the sheet handler has (below). The `update_room` kind is built on the server and the tasks page (items or
 locations only, a dry run unless turned off, made from an assignment, carrying the layout as it resolves now with no
 sheets or tags); **the plug-in does not know it yet, so the planner aborts one as an unknown kind.** The server
 leaves an empty list out of a task, so the page reads a task back with its lists filled in. Plan decisions 21 to 26.
@@ -608,7 +608,7 @@ A kind nobody handles, a handler that raises and any task never reached are repo
 claimed task `in_progress` for a run that ended. **Every step is logged** (`room_m/task_log.py`: `RoomMate\RoomMate.log` in the application data,
 written line by line so the last one says where a run that died silently stopped; duHast's `LoggerObject` when the loaded duHast has one,
 the standard library otherwise; it never raises, and does nothing until `tasks_entry` starts it). The sheet handler (`room_m/rls_task.py`
-plans, `room_m/rls_write.py` writes) makes room layout sheets from `create_rls` tasks, **not yet run in Revit**. Order: the model's RLS settings first (extensible
+plans, `room_m/rls_write.py` writes) makes room layout sheets from `create_rls` tasks, **and has run in Revit end to end (2026-11-01)**; the item-placing handler (`apply_write`) has not. Order: the model's RLS settings first (extensible
 storage, `rls` key; missing or incomplete ones open the settings window, still incomplete = stop), then the claim, then the WHOLE list is
 checked before anything is made, then one transaction group per task (`duHast...in_transaction_group`), reported as it finishes.
 
@@ -624,15 +624,22 @@ checked before anything is made, then one transaction group per task (`duHast...
   along the template view's `forward_direction`/`up_direction` at THIS room, cut to the room's bounding box plus `SECTION_MARGIN_MM` (600 mm) on every
   side, in the room's phase, and its viewport goes where the template's was. **The template's eye is not copied** (the export reads zero for a default
   3D view, and a height measured in another room is wrong in this one): the camera sits back along the direction, so the pitch above the room is the
-  template's. A 3D viewport with no usable direction is a warning. **Not run in Revit.**
+  template's. A 3D viewport with no usable direction is a warning. The view has Crop View on and is made with the chosen 3D view type. **Run in Revit.**
 - **Detail numbers** (`room_m/detail_numbers.py`, settings `elevation_/plan_/three_d_detail_numbering`, `numeric` or `alphabetic`, default numeric):
   kinds with the same style share one run, numbered elevations, then the plan, then 3D; a kind with its own style starts again at 1 or A. Revit
   numbers a new viewport itself and allows each number once per sheet, so after every viewport exists the writer parks them all on
-  `place holder n` and only then sets the real numbers (`rls_write._number_details`). **Not run in Revit.**
+  `place holder n` and only then sets the real numbers (`rls_write._number_details`). **Run in Revit** as part of the first RLS.
 - **View names are the view-name template plus ` PLAN` / ` ELEV m-n` (marker, then view on it, both from 1) / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
   task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
 - **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
+- **What Revit does with an elevation marker, measured (2026-11-01, all of it matters to `rls_write` and duHast).** The marker has NO point (`Location` is the
+  bare class, a bounding box exists only in a plan view). Each view has a **pointer** (a dependent element of `OST_Viewers`, shown as "Views"; the one with the
+  largest id below the view's). **The elevation line is a different place from the marker** and is moved by **moving the pointer** (`ElementTransformUtils.MoveElement` or
+  `Location.Move`) along the view direction, which moves that view's plane and nothing else; setting the crop box `Transform` is ignored (only Min and Max are
+  honoured), `View.Origin` is read-only and `MoveElement` on the view does nothing. A freshly made view's line passes through the marker, so
+  `elevation_marker.set_elevation_extent` moves the pointer by the distance from that plane to the middle of the task's line, then sets the width, height (the
+  template view's crop height) and far clip. A marker has 8 index slots (a view on 0, 2, 4, 6, or all 8 at 45 degrees).
 - **The Revit-side assumptions are checked at run time, not trusted**: after the markers' views are made the marker is turned by how far the
   first view's `ViewDirection` is from the plan, and every view whose direction differs from the plan afterwards is a note. Also unverified:
   the crop box's far extent sits at negative z, and an elevation line is placed by the crop box's width and the far clip, not by an offset from
@@ -640,7 +647,7 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **The Revit calls live in duHast** (PR in the duHast repo): `Family/family_symbol_lookup`, `Views/views_names`, `viewports_create`,
   `schedules_create`, `elevation_marker`, `Annotation/independent_tags_create`, `Rooms/room_tags_create` and `Common/transaction.in_transaction_group`,
   plus fixes to `sheets_create` (unicode text, activate the title block), `plan_view_create` and `elevation_view_create` (optional phase, the crop went to
-  the plan view). **`extractor/duhast.lock` is not bumped**: build with `-DuHastPath` until that PR is tested and merged.
+  the plan view). **`extractor/duhast.lock` is not bumped**: build with `-DuHastPath`. The RLS creation script now works end to end against these duHast changes (marker and elevation helpers, 3D view create, sheets, schedules, tags), so bumping the lock is the next step, not a wait.
 
 ## Tag rules: where a tag goes, learned from tags in Revit views
 

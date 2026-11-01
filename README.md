@@ -58,10 +58,12 @@ Two constraints follow from where the extractor runs:
 - **CI does not cover it.** `.github/workflows/rust.yml` builds and tests the
   Rust crate only; there is no Python check. Changes there are verified by
   running them against a real model.
-- **Its pyRevit buttons live outside this repository, over a *copy* of
-  `extractor/pyRevit/room_m`.** So a change here is inert until it is copied
-  there, and nothing checks the two are in step — `diff -rq` between them is the
-  only check there is.
+- **Its pyRevit buttons live in this repository**
+  (`extractor/pyRevit/RoomMate.extension`, the `RoomMate` panel on the duHast tab) and the installer ships them.
+  A checkout is not loadable as it stands: `installer\build-extension.ps1 -Deploy`
+  assembles an extension (`room_m` plus a pinned duHast, or a local one with `-DuHastPath`) into
+  `%APPDATA%\pyRevit\Extensions`. The Tasks button, which makes room layout sheets
+  from the server's tasks, has run in Revit end to end (2026-11-01); see [`CLAUDE.md`](CLAUDE.md) for what has and has not.
 
 ## Running it
 

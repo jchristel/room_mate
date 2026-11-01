@@ -1293,8 +1293,13 @@
     },
     {
       id: "rls_create", name: "rls_task.py + rls_write.py", path: "extractor/pyRevit/room_m/rls_task.py", zone: "run", lang: "IronPython",
-      blurb: "RLS create. The settings window (title block per size, view types, schedule base, tags, name templates, kept in the model), the planner that checks every task before anything is written (pure, CPython-tested), and the writer that makes the sheet, plan and elevation views, <strong>a new 3D view per 3D viewport of the template</strong>, the schedule and the tags through duHast. <strong>RoomMate decides, Revit applies</strong>: the phase is the room's own, and the room tag goes where the server put it. Not run in Revit.",
+      blurb: "RLS create. The settings window (title block per size, view types, schedule base, tags, name templates, kept in the model), the planner that checks every task before anything is written (pure, CPython-tested), and the writer that makes the sheet, plan and elevation views, <strong>a new 3D view per 3D viewport of the template</strong>, the schedule and the tags through duHast. <strong>RoomMate decides, Revit applies</strong>: the phase is the room's own, and the room tag goes where the server put it. <strong>The elevation line is placed by moving the view's pointer</strong> (the crop box transform is ignored by Revit), and the marker by its pointers. Run in Revit end to end (2026-11-01).",
       deps: ["apply_tasks", "u_tidy"]
+    },
+    {
+      id: "tasks_ui", name: "tasks_window.py + tasks_form.py", path: "extractor/pyRevit/room_m/tasks_window.py", zone: "run", lang: "IronPython",
+      blurb: "The Tasks button's chooser: the open model's <strong>queued</strong> tasks (read without claiming) as a check box each, filterable by room or name, kind and level. Only the ticked tasks are claimed (<strong>task_dispatch</strong> hands each kind to its handler; <strong>task_log</strong> writes every step to RoomMate.log). Every rule is in tasks_form.py, tested on CPython; the window only draws tasks.xaml.",
+      deps: ["rls_create", "apply_tasks"]
     },
     {
       id: "apply_tasks", name: "apply_*.py + task_plan.py", path: "extractor/pyRevit/room_m/apply_run.py", zone: "run", lang: "IronPython",
