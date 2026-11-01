@@ -625,7 +625,7 @@ checked before anything is made, then one transaction group per task (`duHast...
   that carries neither and the viewport keeps Revit's default title place. The sheet preview does not draw the title.
   **A viewport is placed by its box centre**: duHast's `create_viewport` calls `SetBoxCenter` after `Viewport.Create`, because Autodesk documents Create's point only as "a location" (a plan view came out left of the original sheet's when it was passed the exported centre alone).
 - **The viewport type is a setting** (`viewport_type`, "Viewport type": the model's viewport element types, e.g. "Title w Line"), optional, applied to the plan, elevation and 3D
-  viewports (the schedule is a different kind of sheet item); not set means Revit's default type. A chosen one the model lacks aborts a task and is flagged by `validate`.
+  viewports (the schedule is a different kind of sheet item); not set means Revit's default type. **A viewport type has no category** (a collector by category finds none, measured in Revit): they are listed by asking an existing viewport for its valid types (`rls_settings.viewport_types`), so a model with no viewport at all lists none. A chosen one the model lacks aborts a task and is flagged by `validate`.
 - **An elevation's crop box is bottom-aligned with THIS room's floor** (the room's level elevation plus its Base Offset, `ROOM_LOWER_OFFSET`), and its top is that plus the template
   view's crop height. The writer reads the crop box back and says in the notes when the bottom or the height is not what was asked. A new 3D view's crop box is fitted tightly
   round the section box as the camera sees it (the extent of its eight corners on the view's right and up axes).
