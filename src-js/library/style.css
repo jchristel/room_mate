@@ -83,5 +83,7 @@ th { opacity: 0.65; font-weight: 400; }
 .preview .port.three_d rect, .preview .key.three_d::before { fill: var(--ok); background: var(--ok); }
 .preview .port.schedule rect, .preview .key.schedule::before { fill: var(--rule); background: var(--rule); }
 .preview .port.other rect, .preview .key.other::before { fill: var(--fill-hover); background: var(--fill-hover); }
+.preview .elevation-line line { stroke: var(--danger, #c0392b); stroke-width: 1.2; }
+.preview .elevation-line text { fill: var(--danger, #c0392b); font-family: var(--mono); pointer-events: none; }
 .preview .key { margin-right: 0.8rem; }
 .preview .key::before { content: ""; display: inline-block; width: 0.7em; height: 0.7em; margin-right: 0.3em; opacity: 0.6; }

@@ -34,4 +34,32 @@ describe("sheet preview", () => {
   it("has nothing to draw without a size or an outline", () => {
     expect(previewOf({ sheet: { view_ports: [{ vp_type: "floor plan" }] } })).toBeNull();
   });
+
+  it("counts the items of a schedule and names the index an elevation has on its marker", () => {
+    const sched = { ...port("schedule", [0, 0, 100, 50]), view: { view_scale: 0, total_number_of_rows: 12 } };
+    const elev = { ...port("elevation", [0, 60, 100, 160]), view: { view_scale: 50, marker_index: 2 } };
+    const p = previewOf({ sheet: { view_ports: [sched, elev] } })!;
+    expect(p.boxes[0]!.label).toBe("Schedule · 12 items");
+    expect(p.boxes[1]!.label).toBe("Elevation 1:50 · #2");
+  });
+
+  it("draws each elevation's line on the plan, scaled from the plan's crop to its viewport", () => {
+    const plan = {
+      ...port("floor plan", [0, 0, 100, 100]),
+      centre_point: { x: 50, y: 50 },
+      view: { view_scale: 50, bounding_box: { min_x: 0, min_y: 0, max_x: 5000, max_y: 5000 } },
+    };
+    const elev = {
+      ...port("elevation", [200, 0, 300, 100]),
+      view: { view_scale: 50, marker_index: 1, line_start: { x: 0, y: 0 }, line_end: { x: 5000, y: 0 } },
+    };
+    const p = previewOf({ size_mm: { width_mm: 400, height_mm: 300 }, sheet: { view_ports: [plan, elev] } })!;
+    // the crop's centre (2500, 2500) is the viewport's centre (50, 50); 2500 mm is 50 mm on paper
+    expect(p.lines).toEqual([{ x1: 0, y1: 300 - 0, x2: 100, y2: 300 - 0, label: "1" }]);
+  });
+
+  it("draws no lines when the plan has no crop or no elevation has a line", () => {
+    const plan = { ...port("floor plan", [0, 0, 100, 100]), view: { view_scale: 50 } };
+    expect(previewOf({ size_mm: { width_mm: 400, height_mm: 300 }, sheet: { view_ports: [plan] } })!.lines).toEqual([]);
+  });
 });

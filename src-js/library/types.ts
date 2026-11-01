@@ -65,12 +65,35 @@ export interface PaperBox {
   max_y: number;
 }
 
+export interface Point3 {
+  x: number;
+  y: number;
+  z?: number;
+}
+
+/** What a viewport's view carries beyond its scale; each kind of view fills its own. */
+export interface ViewInfo {
+  view_scale?: number;
+  name?: string;
+  /** Schedule: rows in the schedule. */
+  total_number_of_rows?: number;
+  /** Elevation: which index of its marker the view is. */
+  marker_index?: number | null;
+  /** Elevation: the line in the model, mm; start to end runs to the viewer's right. */
+  line_start?: Point3 | null;
+  line_end?: Point3 | null;
+  /** Plan: the crop box in the model's frame, mm. */
+  bounding_box?: PaperBox;
+}
+
 export interface ViewportInfo {
   /** "floor plan", "elevation", "three d" or "schedule". */
   vp_type?: string;
   /** The viewport's outline on the sheet. */
   bounding_box?: PaperBox;
-  view?: { view_scale?: number; name?: string };
+  /** Where the viewport sits on the sheet, mm. */
+  centre_point?: { x: number; y: number };
+  view?: ViewInfo;
 }
 
 export interface SheetRecord extends Omit<SheetSummary, "viewports" | "pending"> {
