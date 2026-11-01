@@ -395,6 +395,37 @@ mod tests {
     }
 
     #[test]
+    fn a_marker_with_eight_views_is_still_found_where_their_axes_cross() {
+        // Views every 45 degrees round a marker at (2000, 1500), each line a different distance in front
+        // of it and centred on its axis: eight axes through one point, however far each line was dragged.
+        let marker = (2000.0_f64, 1500.0_f64);
+        let views: Vec<Elevation> = (0..8)
+            .map(|k| {
+                let a = f64::from(k) * std::f64::consts::FRAC_PI_4;
+                let looks = [a.cos(), a.sin()];
+                let along = [-a.sin(), a.cos()];
+                let dist = 400.0 + 150.0 * f64::from(k);
+                let centre = (marker.0 + looks[0] * dist, marker.1 + looks[1] * dist);
+                Elevation {
+                    view_id: i64::from(k),
+                    sheet_centre: None,
+                    marker_id: Some(7),
+                    marker_index: Some(i64::from(k)),
+                    line_start: Some([centre.0 - along[0] * 900.0, centre.1 - along[1] * 900.0, 0.0]),
+                    line_end: Some([centre.0 + along[0] * 900.0, centre.1 + along[1] * 900.0, 0.0]),
+                    looks: Some(looks),
+                    depth_mm: None,
+                    faces: Vec::new(),
+                    findings: Vec::new(),
+                }
+            })
+            .collect();
+        let refs: Vec<&Elevation> = views.iter().collect();
+        let found = marker_from_view_axes(&refs, &views[0]);
+        assert!((found.0 - marker.0).abs() < 1e-6 && (found.1 - marker.1).abs() < 1e-6, "{found:?}");
+    }
+
+    #[test]
     fn a_room_turned_a_quarter_turn_turns_the_views_with_it() {
         // The same 4 x 3 room, wound from another corner and turned 90 degrees: the views still
         // face the walls they faced, whatever their coordinates.
