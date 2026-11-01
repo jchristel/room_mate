@@ -622,7 +622,7 @@ checked before anything is made, then one transaction group per task (`duHast...
   side, in the room's phase, and its viewport goes where the template's was. **The template's eye is not copied** (the export reads zero for a default
   3D view, and a height measured in another room is wrong in this one): the camera sits back along the direction, so the pitch above the room is the
   template's. A 3D viewport with no usable direction is a warning. **Not run in Revit.**
-- **View names are the view-name template plus ` PLAN` / ` ELEV n` / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
+- **View names are the view-name template plus ` PLAN` / ` ELEV m-n` (marker, then view on it, both from 1) / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
   task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
 - **The Revit-side assumptions are checked at run time, not trusted**: after the markers' views are made the marker is turned by how far the
