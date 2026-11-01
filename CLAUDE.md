@@ -626,6 +626,12 @@ checked before anything is made, then one transaction group per task (`duHast...
   **A viewport is placed by its box centre**: duHast's `create_viewport` calls `SetBoxCenter` after `Viewport.Create`, because Autodesk documents Create's point only as "a location" (a plan view came out left of the original sheet's when it was passed the exported centre alone).
 - **The viewport type is a setting** (`viewport_type`, "Viewport type": the model's viewport element types, e.g. "Title w Line"), optional, applied to the plan, elevation and 3D
   viewports (the schedule is a different kind of sheet item); not set means Revit's default type. **A viewport type has no category** (a collector by category finds none, measured in Revit): they are listed by asking existing viewports for their valid types (`rls_settings.viewport_types`: the union over the first viewport of each kind of view, since what is offered can depend on the view), so a model with no viewport at all lists none. A chosen one the model lacks aborts a task and is flagged by `validate`.
+- **`Level.Elevation` is a SHARED coordinate, not the model's own** (confirmed in Revit on the Rumpus model: `Elevation` 110250 mm, `ProjectElevation` 450 mm, the shared elevation
+  at the internal origin 109800 mm). Views, crop boxes (origin z 0, so a crop's y is a height in the model) and geometry are in the internal frame: the room's floor and the template
+  elevations' crops are at 450 mm. An elevation bottom built from `level.Elevation` came out 109.8 m too high. `rls_write` therefore takes the level's z from the room
+  (`_level_z_of`: its bounding box bottom minus its Base Offset, which is the internal frame whatever the survey point) for every z it writes; `Level.ProjectElevation` is the
+  documented alternative ("relative to project origin"), not used because that origin is not defined as the internal one. `apply_write` (item placement) still uses
+  `level.Elevation` and has not been checked against this; neither has the level elevation duHast puts in the rooms export.
 - **An elevation's crop box is bottom-aligned with THIS room's floor** (the room's level elevation plus its Base Offset, `ROOM_LOWER_OFFSET`), and its top is that plus the template
   view's crop height. The writer reads the crop box back and says in the notes when the bottom or the height is not what was asked. A new 3D view's crop box is fitted tightly
   round the section box as the camera sees it (the extent of its eight corners on the view's right and up axes).
