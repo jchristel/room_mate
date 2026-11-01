@@ -56,7 +56,7 @@ from duHast.Revit.Views.schedules_create import (
 from duHast.Revit.Views.sheets import get_sheet_num_to_elem_dict
 from duHast.Revit.Views.sheets_create import create_sheet
 from duHast.Revit.Views.schedules import get_schedule_by_name
-from duHast.Revit.Views.views import get_view_family_type_by_name, get_view_family_types
+from duHast.Revit.Views.views import get_view_family_type_by_name
 from duHast.Revit.Views.view_3d_create import create_view_3d_around_box_without_transaction_wrapper
 from duHast.Revit.Views.views_crop import set_view_crop_around_point_without_transaction_wrapper
 from duHast.Revit.Views.views_names import get_views_in_name_collision
@@ -98,7 +98,7 @@ class RlsFacts(RevitFacts):
         return get_title_block_symbol_by_name(self.doc, name) is not None
 
     def view_type_exists(self, kind, name):
-        wanted = ViewFamily.FloorPlan if kind == "plan" else ViewFamily.Elevation
+        wanted = {"plan": ViewFamily.FloorPlan, "three_d": ViewFamily.ThreeDimensional}.get(kind, ViewFamily.Elevation)
         return self._view_type(wanted, name) is not None
 
     def _view_type(self, family, name):
@@ -342,9 +342,9 @@ class RlsWriter(object):
         room, cut to the room plus a margin. The template view itself is never placed."""
         if not plan["three_ds"]:
             return
-        types = get_view_family_types(self.doc, ViewFamily.ThreeDimensional)
-        if not types:
-            notes.append("the model has no 3D view type: no 3D view was made")
+        view_type = self.facts._view_type(ViewFamily.ThreeDimensional, plan["three_d_view_type"])
+        if view_type is None:
+            notes.append("the model has no 3D view type '{}': no 3D view was made".format(plan["three_d_view_type"]))
             return
         box = room.get_BoundingBox(None)
         margin = _ft(SECTION_MARGIN_MM)
@@ -354,7 +354,7 @@ class RlsWriter(object):
             view = self._step(
                 "RoomMate: {}".format(v["name"]),
                 lambda v=v: create_view_3d_around_box_without_transaction_wrapper(
-                    self.doc, types[0], v["name"], v["forward"], v["up"], low, high, phase),
+                    self.doc, view_type, v["name"], v["forward"], v["up"], low, high, phase),
             ).result[0]
             self._viewport(sheet, view, v["viewport"], notes, v["name"], "three_d")
 

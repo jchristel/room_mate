@@ -25,6 +25,7 @@ def missing(settings):
     s = settings or {}
     sizes = s.get("sheet_sizes") if isinstance(s.get("sheet_sizes"), dict) else {}
     out = []
+    # (the 3D view type is not here: only a task with a 3D view needs one, and says so)
     # one size in use through the whole project is ordinary: a task for a size with none aborts on its own
     if not any(sizes.get(size) for size in SIZES):
         out.append("a title block for at least one sheet size")
@@ -50,6 +51,7 @@ _CHECKED = [
     (("sheet_sizes", "a3"), "title_blocks", "title block for A3", True),
     (("plan_view_type",), "plan_view_types", "plan view type", True),
     (("elevation_view_type",), "elevation_view_types", "elevation view type", True),
+    (("three_d_view_type",), "three_d_view_types", "3D view type", True),
     (("schedule_base",), "schedules", "base schedule", True),
     # without a tag a task only warns, so a stale tag does too
     (("room_tag",), "room_tags", "room tag", False),
@@ -147,6 +149,7 @@ def collect_options(doc):
         ("title_blocks", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_TitleBlocks)),
         ("plan_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.FloorPlan), name_of)),
         ("elevation_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.Elevation), name_of)),
+        ("three_d_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.ThreeDimensional), name_of)),
         ("schedules", lambda: _names(room_number_schedules(), name_of)),
         ("room_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_RoomTags)),
         ("independent_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_MultiCategoryTags)),
