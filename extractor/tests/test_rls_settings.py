@@ -56,3 +56,48 @@ class Sections(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Validate(unittest.TestCase):
+    OPTIONS = {
+        "title_blocks": ["TB : A1"],
+        "plan_view_types": ["Plan"],
+        "elevation_view_types": ["Elev"],
+        "schedules": ["Sched"],
+        "room_tags": ["RT"],
+        "independent_tags": ["IT"],
+        "room_parameters": ["Number", "Name"],
+    }
+
+    def settings(self, **over):
+        s = {
+            "sheet_sizes": {"a0": "TB : A1", "a1": "TB : A1", "a2": "TB : A1", "a3": "TB : A1"},
+            "plan_view_type": "Plan", "elevation_view_type": "Elev", "schedule_base": "Sched",
+            "room_tag": "RT", "independent_tag": "IT",
+            "sheet_number": "{Number}", "sheet_name": "{Name}", "view_name": "{Number}",
+        }
+        s.update(over)
+        return s
+
+    def test_good_settings_have_nothing_to_report(self):
+        self.assertEqual(([], []), rs.validate(self.settings(), self.OPTIONS))
+
+    def test_a_stored_value_the_model_lacks_is_an_error_and_a_stale_tag_only_a_warning(self):
+        errors, warnings = rs.validate(self.settings(schedule_base="Old", room_tag="Gone"), self.OPTIONS)
+        self.assertEqual(["base schedule 'Old' is not in this model"], errors)
+        self.assertEqual(["room tag 'Gone' is not in this model"], warnings)
+
+    def test_a_title_block_per_size_is_checked(self):
+        s = self.settings()
+        s["sheet_sizes"]["a2"] = "Nope"
+        self.assertEqual(["title block for A2 'Nope' is not in this model"], rs.validate(s, self.OPTIONS)[0])
+
+    def test_a_list_the_model_did_not_offer_is_not_checked(self):
+        options = dict(self.OPTIONS)
+        del options["schedules"]
+        self.assertEqual(([], []), rs.validate(self.settings(schedule_base="Old"), options))
+
+    def test_template_words_and_numbering_styles_are_checked(self):
+        errors, _w = rs.validate(self.settings(sheet_name="{Wing}", plan_detail_numbering="roman"), self.OPTIONS)
+        self.assertEqual(2, len(errors))
+        self.assertIn("{Wing}", errors[0])
