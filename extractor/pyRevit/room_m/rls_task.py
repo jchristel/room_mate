@@ -26,6 +26,7 @@ defined, elevations the server could not place.
   title_block_exists(name) -> bool          ("Family : Type")
   view_type_exists(kind, name) -> bool      (kind "plan" or "elevation")
   schedule_exists(name) -> bool
+  schedule_filters_on_room_number(name) -> bool   (its FIRST filter is on the room number)
   tag_type_exists(kind, name) -> bool       (kind "room" or "independent")
   sheet_exists(number) -> bool
   views_in_use(names) -> [names that are the name of a view already]
@@ -47,6 +48,7 @@ NO_SIZE = "no_sheet_size"
 SETTINGS_INCOMPLETE = "settings_incomplete"
 VIEW_TYPE_MISSING = "view_type_missing"
 SCHEDULE_MISSING = "schedule_missing"
+SCHEDULE_NOT_ROOM_FILTERED = "schedule_not_room_filtered"
 TEMPLATE_UNRESOLVED = "template_unresolved"
 ROOM_MISSING = "room_missing"
 PHASE_MISSING = "phase_missing"
@@ -295,6 +297,10 @@ def check(task, settings, facts, taken):
             aborts.append(finding(VIEW_TYPE_MISSING, "{}: the {} '{}' is not in the model".format(label, what, name)))
     if not facts.schedule_exists(plan["schedule_base"]):
         aborts.append(finding(SCHEDULE_MISSING, "{}: the base schedule '{}' is not in the model".format(label, plan["schedule_base"])))
+    elif not facts.schedule_filters_on_room_number(plan["schedule_base"]):
+        # the writer sets the FIRST filter to the room number: on any other filter it would list the wrong items
+        aborts.append(finding(SCHEDULE_NOT_ROOM_FILTERED, "{}: the base schedule '{}' does not have the room number as its first filter".format(
+            label, plan["schedule_base"])))
 
     number = plan["number"]
     if number in taken["sheets"] or facts.sheet_exists(number):

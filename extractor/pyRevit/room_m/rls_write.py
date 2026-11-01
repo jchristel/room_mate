@@ -65,6 +65,7 @@ from duHast.Revit.Views.viewports_create import create_viewport_without_transact
 
 from room_m import apply_geometry as geo
 from room_m import detail_numbers
+from room_m import rls_settings
 from room_m import task_log
 from room_m.apply_facts import RevitFacts
 
@@ -108,6 +109,13 @@ class RlsFacts(RevitFacts):
 
     def schedule_exists(self, name):
         return self.schedule(name) is not None
+
+    def schedule_filters_on_room_number(self, name):
+        schedule = self.schedule(name)
+        try:
+            return schedule is not None and rls_settings.first_filter_is_room_number(schedule)
+        except Exception:
+            return False
 
     def tag_symbol(self, kind, name):
         category = BuiltInCategory.OST_RoomTags if kind == "room" else BuiltInCategory.OST_MultiCategoryTags
