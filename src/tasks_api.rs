@@ -281,6 +281,9 @@ pub struct ClaimBody {
     /// Only tasks of these kinds; absent or empty, every kind.
     #[serde(default)]
     pub kinds: Vec<crate::tasks::TaskKind>,
+    /// Only these tasks (the ones a person ticked); absent or empty, all of them.
+    #[serde(default)]
+    pub task_ids: Vec<String>,
 }
 
 /// A Revit session asks for its model's tasks. Every queued one is handed over, in full, and
@@ -290,7 +293,7 @@ pub async fn http_claim_tasks(
     UrlPath(project_id): UrlPath<String>,
     Json(body): Json<ClaimBody>,
 ) -> Result<Json<Vec<Task>>, (StatusCode, String)> {
-    tasks::claim(&projects_dir(&state)?, &project_id, &body.model_id, &body.kinds)
+    tasks::claim_chosen(&projects_dir(&state)?, &project_id, &body.model_id, &body.kinds, &body.task_ids)
         .map(Json)
         .map_err(to_http)
 }
