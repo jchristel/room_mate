@@ -328,7 +328,8 @@ class RlsWriter(object):
             self._step(
                 "RoomMate: extent of {}".format(e["name"]),
                 lambda view=view, e=e, s=line_start, t=line_end: set_elevation_extent_without_transaction_wrapper(
-                    view, s, t, _ft(e["depth_mm"]) if e.get("depth_mm") else None),
+                    view, s, t, _ft(e["depth_mm"]) if e.get("depth_mm") else None,
+                    _ft(e["height_mm"]) if e.get("height_mm") else None),
             )
             d = view.ViewDirection
             looks = e["looks"]

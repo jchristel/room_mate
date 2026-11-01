@@ -629,6 +629,7 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **View names are the view-name template plus ` PLAN` / ` ELEV m-n` (marker, then view on it, both from 1) / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
   task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
+- **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
 - **The Revit-side assumptions are checked at run time, not trusted**: after the markers' views are made the marker is turned by how far the
   first view's `ViewDirection` is from the plan, and every view whose direction differs from the plan afterwards is a note. Also unverified:
   the crop box's far extent sits at negative z, and an elevation line is placed by the crop box's width and the far clip, not by an offset from

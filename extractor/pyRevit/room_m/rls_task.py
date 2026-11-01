@@ -136,6 +136,7 @@ def _elevations(task, template, base):
                 "line_end": view.get("line_end"),
                 "looks": view.get("looks"),
                 "depth_mm": view.get("depth_mm"),
+                "height_mm": geo.crop_height_mm(vp),
                 "faces_edge": view.get("faces_edge"),
                 "viewport": vp,
                 "scale": geo.viewport_scale(vp) if vp else None,

@@ -16,17 +16,17 @@ SETTINGS = {
 }
 
 
-def viewport(vp_type, view_id, x, y, scale=None, box=None):
+def viewport(vp_type, view_id, x, y, scale=None, box=None, crop=None):
     return {"vp_type": vp_type, "view_id": view_id, "centre_point": {"x": x, "y": y},
             "bounding_box": box or {"min_x": x - 100, "max_x": x + 100, "min_y": y - 100, "max_y": y + 100},
-            "view": {"view_scale": scale} if scale else {}}
+            "view": dict({"view_scale": scale} if scale else {}, **({"bounding_box": crop} if crop else {}))}
 
 
 def task(**changes):
     t = {
         "id": "t1", "kind": "create_rls", "phase": "New Construction", "room": {"room_id": "9", "number": "01.09", "name": "STUDY"},
         "sheets": [{"sheet_number": "A5", "sheet": {"view_ports": [
-            viewport("floor plan", 10, 300, 200, 50), viewport("elevation", 1, 100, 100, 50),
+            viewport("floor plan", 10, 300, 200, 50), viewport("elevation", 1, 100, 100, 50, crop={"min_x": 0, "max_x": 5000, "min_y": 3395, "max_y": 6695}),
             viewport("elevation", 2, 500, 100, 50), viewport("schedule", 3, 400, 50)]}}],
         "rls": {"sheet_size": "a1", "markers": [{"marker_id": 7, "location": [1000.0, 2000.0], "views": [
             {"view_id": 2, "marker_index": 1, "line_start": [0, 0], "line_end": [2000, 0], "looks": [1, 0], "depth_mm": 2500.0},
@@ -115,6 +115,7 @@ class Plan(unittest.TestCase):
         self.assertEqual([1, 2], [e["view_id"] for e in p["elevations"]], "index 0 first")
         self.assertEqual(100, p["elevations"][0]["viewport"]["centre_point"]["x"])
         self.assertEqual(50, p["elevations"][0]["scale"])
+        self.assertEqual(3300, p["elevations"][0]["height_mm"], "cropped to the height the template's view had")
 
     def test_every_viewport_kind_gets_its_detail_numbers_from_the_settings(self):
         d = verdict()["plan"]["detail_numbers"]

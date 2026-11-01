@@ -136,6 +136,13 @@ def crop_size_mm(viewport, room_width_mm=0.0, room_height_mm=0.0):
     return (max(w, room_width_mm), max(h, room_height_mm))
 
 
+def crop_height_mm(viewport):
+    """How tall the template's view is cropped, mm; None when the export carried no crop. An elevation
+    made in another room is cut to this, so a tall room beside it does not make the view tall."""
+    extent = _extent(((viewport or {}).get("view") or {}).get("bounding_box") or {})
+    return extent[1] if extent else None
+
+
 def _extent(box):
     """`(width, height)` of an exported 2D box, whichever way duHast spelt its corners
     (`min`/`max` points, or `min_x`/`max_x` fields); None when it holds neither."""
