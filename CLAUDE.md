@@ -619,6 +619,16 @@ checked before anything is made, then one transaction group per task (`duHast...
   incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place.
 - **The phase is the room's own, never typed.** A `create_rls` task carries `ROOM_OWN_PHASE` as its phase (a label); the planner aborts if the room has
   none (`PHASE_MISSING`) and `rls_write` makes every view in `get_room_phase(doc, room)`. The request's `phase` is accepted and ignored.
+- **A viewport's size and centre EXCLUDE its title** (Revit: `GetBoxOutline`/`GetBoxCenter` leave the label out; `GetLabelOutline` is separate and read-only). So the exported
+  `bounding_box` and `centre_point` are the view's box alone. The title is exported as `label_offset` (from the box's bottom left corner to the left end of the title line, mm)
+  and `label_line_length` (mm), and a new viewport gets both from its template viewport (`Viewport.LabelOffset`/`LabelLineLength`, after its type). A sheet exported before
+  that carries neither and the viewport keeps Revit's default title place. The sheet preview does not draw the title.
+  **A viewport is placed by its box centre**: duHast's `create_viewport` calls `SetBoxCenter` after `Viewport.Create`, because Autodesk documents Create's point only as "a location" (a plan view came out left of the original sheet's when it was passed the exported centre alone).
+- **The viewport type is a setting** (`viewport_type`, "Viewport type": the model's viewport element types, e.g. "Title w Line"), optional, applied to the plan, elevation and 3D
+  viewports (the schedule is a different kind of sheet item); not set means Revit's default type. A chosen one the model lacks aborts a task and is flagged by `validate`.
+- **An elevation's crop box is bottom-aligned with THIS room's floor** (the room's level elevation plus its Base Offset, `ROOM_LOWER_OFFSET`), and its top is that plus the template
+  view's crop height. The writer reads the crop box back and says in the notes when the bottom or the height is not what was asked. A new 3D view's crop box is fitted tightly
+  round the section box as the camera sees it (the extent of its eight corners on the view's right and up axes).
 - **The 3D view type is a setting** (`three_d_view_type`, "3D view type" in the settings window). It is not part of "complete settings" (a project with no 3D views never needs one), but a task whose template has a 3D viewport aborts if none is chosen or the model lacks it.
 - **A template's 3D viewport gives a NEW 3D view** (`rls_task._three_ds`, `rls_write._three_ds`, duHast `view_3d_create`): named `<view name> 3D`, looking
   along the template view's `forward_direction`/`up_direction` at THIS room, cut to the room's bounding box plus `SECTION_MARGIN_MM` (600 mm) on every

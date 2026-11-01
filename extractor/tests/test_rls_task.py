@@ -244,6 +244,15 @@ class ThreeD(unittest.TestCase):
         facts.view_type_exists = lambda kind, name: kind != "three_d"
         self.assertIn(rt.VIEW_TYPE_MISSING, codes(verdict(with_three_d(self.D, self.U), facts=facts)["aborts"]))
 
+    def test_the_viewport_type_is_optional_but_must_exist_when_chosen(self):
+        self.assertIsNone(verdict()["plan"]["viewport_type"])
+        chosen = dict(SETTINGS, viewport_type="Title w Line")
+        self.assertEqual("Title w Line", verdict(settings=chosen)["plan"]["viewport_type"])
+        facts = Facts()
+        facts.view_type_exists = lambda kind, name: kind != "viewport"
+        self.assertIn(rt.VIEW_TYPE_MISSING, codes(verdict(settings=chosen, facts=facts)["aborts"]))
+        self.assertEqual([], verdict(facts=facts)["aborts"], "none chosen: nothing to check")
+
     def test_a_template_with_no_3d_viewport_makes_none(self):
         self.assertEqual([], verdict()["plan"]["three_ds"])
 

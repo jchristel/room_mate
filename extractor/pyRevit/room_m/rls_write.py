@@ -26,6 +26,8 @@ import math
 from Autodesk.Revit.DB import (
     BuiltInCategory,
     BuiltInParameter,
+    Element,
+    FilteredElementCollector,
     Transaction,
     TransactionGroup,
     ViewFamily,
@@ -98,8 +100,17 @@ class RlsFacts(RevitFacts):
         return get_title_block_symbol_by_name(self.doc, name) is not None
 
     def view_type_exists(self, kind, name):
+        if kind == "viewport":
+            return self.viewport_type(name) is not None
         wanted = {"plan": ViewFamily.FloorPlan, "three_d": ViewFamily.ThreeDimensional}.get(kind, ViewFamily.Elevation)
         return self._view_type(wanted, name) is not None
+
+    def viewport_type(self, name):
+        """The viewport type (an element type of the Viewports category) with this name, or None."""
+        for t in FilteredElementCollector(self.doc).OfCategory(BuiltInCategory.OST_Viewports).WhereElementIsElementType():
+            if Element.Name.GetValue(t) == name:
+                return t
+        return None
 
     def _view_type(self, family, name):
         return get_view_family_type_by_name(self.doc, family, name)
@@ -131,6 +142,9 @@ class RlsFacts(RevitFacts):
         return get_views_in_name_collision(self.doc, names)
 
 
+MM_PER_FT = geo.MM_PER_FT
+
+
 def _ft(mm):
     return geo.mm_to_ft(mm)
 
@@ -140,6 +154,7 @@ class RlsWriter(object):
         self.doc = doc
         self.facts = facts
         self._ports = {}
+        self._viewport_type_id = None
 
     def __call__(self, verdict):
         """Make the sheet of `verdict`; return its notes. Raises, with the model rolled back, when
@@ -168,6 +183,8 @@ class RlsWriter(object):
             # the views belong to the phase the room does, whatever the task says
             phase = get_room_phase(self.doc, room)
             task_log.step("sheet {}".format(plan["number"]))
+            vp_type = self.facts.viewport_type(plan["viewport_type"]) if plan.get("viewport_type") else None
+            self._viewport_type_id = vp_type.Id if vp_type is not None else None
             sheet = self._sheet(plan)
             task_log.step("plan view")
             plan_view = self._plan_view(plan, room, level, phase, sheet, notes)
@@ -240,9 +257,13 @@ class RlsWriter(object):
             at = (0.0, 0.0)
             notes.append("the {} viewport had no place on the template sheet: put at the sheet's origin".format(label))
         self._regenerate()
+        type_id = self._viewport_type_id
+        label_offset, label_length = geo.viewport_label_ft(template_vp)
         outcome = self._step(
             "RoomMate: viewport {}".format(view.Name),
-            lambda: create_viewport_without_transaction_wrapper(self.doc, sheet, view, XYZ(at[0], at[1], 0.0)),
+            lambda: create_viewport_without_transaction_wrapper(
+                self.doc, sheet, view, XYZ(at[0], at[1], 0.0), type_id,
+                XYZ(label_offset[0], label_offset[1], 0.0) if label_offset else None, label_length),
         )
         port = outcome.result[0] if outcome.result else None
         if port is not None:
@@ -278,6 +299,9 @@ class RlsWriter(object):
         if not plan["elevations"]:
             return
         view_type = self.facts._view_type(ViewFamily.Elevation, plan["elevation_view_type"])
+        # the bottom of every elevation is the floor of THIS room: its level plus its base offset
+        base = room.get_Parameter(BuiltInParameter.ROOM_LOWER_OFFSET)
+        bottom = level.Elevation + (base.AsDouble() if base is not None else 0.0)
         by_marker = {}
         order = []
         for e in plan["elevations"]:
@@ -287,9 +311,9 @@ class RlsWriter(object):
                 order.append(key)
             by_marker[key].append(e)
         for key in order:
-            self._marker(by_marker[key], view_type, level, phase, plan_view, plan, sheet, notes)
+            self._marker(by_marker[key], view_type, level, phase, plan_view, plan, sheet, notes, bottom)
 
-    def _marker(self, elevations, view_type, level, phase, plan_view, plan, sheet, notes):
+    def _marker(self, elevations, view_type, level, phase, plan_view, plan, sheet, notes, bottom):
         first = elevations[0]
         loc = first["marker_location"]
         location = XYZ(_ft(loc[0]), _ft(loc[1]), level.Elevation)
@@ -329,13 +353,29 @@ class RlsWriter(object):
                 "RoomMate: extent of {}".format(e["name"]),
                 lambda view=view, e=e, s=line_start, t=line_end: set_elevation_extent_without_transaction_wrapper(
                     view, s, t, _ft(e["depth_mm"]) if e.get("depth_mm") else None,
-                    _ft(e["height_mm"]) if e.get("height_mm") else None),
+                    _ft(e["height_mm"]) if e.get("height_mm") else None, bottom),
             )
+            self._check_vertical_extent(view, e, bottom, notes)
             d = view.ViewDirection
             looks = e["looks"]
             if (-d.X * looks[0] - d.Y * looks[1]) < FACES_PLAN:
                 notes.append("{} does not face the way the plan says (the marker's other views are at fixed quarter turns)".format(e["name"]))
             self._viewport(sheet, view, e["viewport"], notes, e["name"], "elevation")
+
+    def _check_vertical_extent(self, view, e, bottom, notes):
+        """Say so when the crop box is not where it was asked to be: its bottom the room's floor, its top the
+        template's height above that."""
+        try:
+            crop = view.CropBox
+            low = crop.Min.Y + crop.Transform.Origin.Z
+            high = crop.Max.Y + crop.Transform.Origin.Z
+        except Exception:
+            return
+        if abs(low - bottom) > _ft(2.0):
+            notes.append("{}: the crop box starts {:.0f} mm from the room's floor".format(e["name"], abs(low - bottom) * MM_PER_FT))
+        if e.get("height_mm") and abs((high - low) - _ft(e["height_mm"])) > _ft(2.0):
+            notes.append("{}: the crop box is {:.0f} mm tall, the template's is {:.0f} mm".format(
+                e["name"], (high - low) * MM_PER_FT, e["height_mm"]))
 
     def _three_ds(self, plan, room, level, phase, sheet, notes):
         """A new 3D view for each 3D viewport of the template: the template's direction, looking at THIS

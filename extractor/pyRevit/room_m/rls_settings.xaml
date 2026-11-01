@@ -44,6 +44,9 @@
                     <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                         <TextBlock Text="3D view type" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_three_d_view_type" SelectionChanged="on_change"/></Grid>
                     <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Viewport type" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_viewport_type" SelectionChanged="on_change"/></Grid>
+                    <TextBlock Text="The type of every plan, elevation and 3D viewport on the sheet (title style). Not set: Revit's default." Opacity="0.6" Margin="170,2,0,0" TextWrapping="Wrap"/>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                         <TextBlock Text="Schedule base" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_schedule_base" SelectionChanged="on_change"/></Grid>
                     <TextBlock Text="Any schedule whose first filter is on the room number." Opacity="0.6" Margin="170,2,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
