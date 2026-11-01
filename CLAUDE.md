@@ -623,6 +623,7 @@ checked before anything is made, then one transaction group per task (`duHast...
   `bounding_box` and `centre_point` are the view's box alone. The title is exported as `label_offset` (from the box's bottom left corner to the left end of the title line, mm)
   and `label_line_length` (mm), and a new viewport gets both from its template viewport (`Viewport.LabelOffset`/`LabelLineLength`, after its type). A sheet exported before
   that carries neither and the viewport keeps Revit's default title place. The sheet preview does not draw the title.
+  **A viewport is placed by its box centre**: duHast's `create_viewport` calls `SetBoxCenter` after `Viewport.Create`, because Autodesk documents Create's point only as "a location" (a plan view came out left of the original sheet's when it was passed the exported centre alone).
 - **The viewport type is a setting** (`viewport_type`, "Viewport type": the model's viewport element types, e.g. "Title w Line"), optional, applied to the plan, elevation and 3D
   viewports (the schedule is a different kind of sheet item); not set means Revit's default type. A chosen one the model lacks aborts a task and is flagged by `validate`.
 - **An elevation's crop box is bottom-aligned with THIS room's floor** (the room's level elevation plus its Base Offset, `ROOM_LOWER_OFFSET`), and its top is that plus the template
