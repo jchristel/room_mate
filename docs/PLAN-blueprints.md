@@ -1,7 +1,8 @@
 # Plan: blueprints (room layouts that travel)
 
 **Status: stages 0 to 6 built (PR #215), and the server half of stages 7 and 8; the Revit side is written
-(the Tasks button) but has never run in Revit. Revised 2026-10-20 after the author's review of the Revit task
+(the Tasks button). **Creating a room layout sheet from a `create_rls` task has run in Revit end to end (2026-11-01);
+placing items (populate and update tasks) has not.** Revised 2026-10-20 after the author's review of the Revit task
 design and of how sheets are stored; first written 2026-10-19 from the stage 0 results
 ([PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md)).**
 
@@ -58,8 +59,8 @@ Grounded in the code as of 2026-10-18; rows marked *now* were true then and have
 | Units of parameter values | Display strings (`"0.0"`, `"420.0"`), not typed. The trap `CLAUDE.md` records for the ceiling height offset. |
 | Doors: position, `through_wall_normal`, width | Have. |
 | Authored, per-project, user-made data | Precedent: connections document (zones, passages, saved routes, reaches): one JSON per project, optimistic concurrency, replace-whole-list, "authored data outlives geometry; a stale reference is a finding, never an error". |
-| Revit extractor | pyRevit, one-way (Revit → server) for every export. *Now:* it also claims tasks from the server (the `roomtasks` channel) and writes them (the Tasks button); built, not run in Revit. |
-| Anything that sends work **to** Revit | **Did not exist.** *Now:* tasks (stage 7): a record the server holds, claimed by a session; built, not run in Revit. |
+| Revit extractor | pyRevit, one-way (Revit → server) for every export. *Now:* it also claims tasks from the server (the `roomtasks` channel) and writes them (the Tasks button, which now lists the queued tasks and claims only the ones ticked); room layout sheets have run in Revit, item placement has not. |
+| Anything that sends work **to** Revit | **Did not exist.** *Now:* tasks (stage 7): a record the server holds, claimed by a session; `create_rls` has run in Revit, item placement has not. |
 | Room layout sheet data | duHast has rudimentary IronPython exports, surveyed in B0 (below). *Now:* the sheet library holds them as exported, on its own endpoint. |
 
 So blueprints are three products in one: a constraint model, an editor, and the first
