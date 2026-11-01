@@ -54,13 +54,28 @@ def _names(elements, label):
     return sorted(seen)
 
 
+def first_filter_is_room_number(schedule):
+    """True when the schedule's FIRST filter is on the room number. **Judged by the built-in parameter, never
+    by a name**: the field's `ParameterId` is `BuiltInParameter.ROOM_NUMBER` whatever language Revit runs in,
+    and whether the schedule lists rooms or, as a multi-category schedule can, anything with a room's number.
+    Revit calls only (made here so the pure half of this module imports without it)."""
+    from Autodesk.Revit.DB import BuiltInParameter
+    from duHast.Revit.Common.element_id import get_el_id_int
+
+    definition = schedule.Definition
+    if definition.GetFilterCount() < 1:
+        return False
+    field = definition.GetField(definition.GetFilter(0).FieldId)
+    return get_el_id_int(field.ParameterId) == int(BuiltInParameter.ROOM_NUMBER)
+
+
 def collect_options(doc):
     """The choices this model offers, as the page's `options`. Each list is read on its own, and
     one that fails is left out."""
     from Autodesk.Revit.DB import BuiltInCategory, Element, ViewFamily
     from duHast.Revit.Family.family_symbol_lookup import get_symbol_full_names_by_category
     from duHast.Revit.Rooms.rooms import get_room_parameter_names
-    from duHast.Revit.Views.schedules import get_schedules_by_built_in_category
+    from duHast.Revit.Views.schedules import get_schedules
     from duHast.Revit.Views.views import get_view_family_types
 
     options = {}
@@ -70,17 +85,22 @@ def collect_options(doc):
         # `element.Name` fails on Revit types under IronPython; Element.Name reads it
         return Element.Name.GetValue(element)
 
-    def room_schedules():
-        return [
-            v for v in get_schedules_by_built_in_category(doc, BuiltInCategory.OST_Rooms)
-            if not v.IsTemplate and not v.IsInternalKeynoteSchedule
-        ]
+    def room_number_schedules():
+        """Any schedule, of one category or several, filtered first on the room number."""
+        found = []
+        for v in get_schedules(doc):
+            try:
+                if not v.IsTemplate and not v.IsInternalKeynoteSchedule and first_filter_is_room_number(v):
+                    found.append(v)
+            except Exception:
+                continue  # a schedule that cannot be read is not offered
+        return found
 
     for key, read in (
         ("title_blocks", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_TitleBlocks)),
         ("plan_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.FloorPlan), name_of)),
         ("elevation_view_types", lambda: _names(get_view_family_types(doc, ViewFamily.Elevation), name_of)),
-        ("schedules", lambda: _names(room_schedules(), name_of)),
+        ("schedules", lambda: _names(room_number_schedules(), name_of)),
         ("room_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_RoomTags)),
         ("independent_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_MultiCategoryTags)),
         ("room_parameters", lambda: get_room_parameter_names(doc)),
