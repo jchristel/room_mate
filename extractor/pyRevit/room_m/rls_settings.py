@@ -119,19 +119,37 @@ def first_filter_is_room_number(schedule):
     return get_el_id_int(field.ParameterId) == int(BuiltInParameter.ROOM_NUMBER)
 
 
+# how many viewports are looked at for their valid types: one per kind of view is enough, this only bounds a huge model
+_VIEWPORTS_LOOKED_AT = 500
+
+
 def viewport_types(doc):
     """The viewport types of the model ('Title w Line', 'No Title'), as element types.
 
     A viewport type has NO category (so a collector by category finds none, measured in Revit): the way to list
-    them is to ask a viewport which types it accepts. Any viewport will do, and a model with none (no sheet has
-    a view on it) lists none."""
+    them is to ask a viewport which types it accepts. What a viewport accepts can depend on its view (a section
+    offers 'Section 1'), so the answer is the union over the first viewport of each kind of view (plan, elevation,
+    section, 3D, legend ...). A model with no viewport (no sheet has a view on it) lists none."""
     from Autodesk.Revit.DB import FilteredElementCollector, Viewport
 
-    viewport = FilteredElementCollector(doc).OfClass(Viewport).FirstElement()
-    if viewport is None:
-        return []
-    found = [doc.GetElement(type_id) for type_id in viewport.GetValidTypes()]
-    return [t for t in found if t is not None]
+    kinds = set()
+    seen = set()
+    found = []
+    for n, viewport in enumerate(FilteredElementCollector(doc).OfClass(Viewport)):
+        if n >= _VIEWPORTS_LOOKED_AT:
+            break
+        view = doc.GetElement(viewport.ViewId)
+        kind = view.ViewType if view is not None else None
+        if kind in kinds:
+            continue
+        kinds.add(kind)
+        for type_id in viewport.GetValidTypes():
+            key = str(type_id)
+            element = doc.GetElement(type_id)
+            if key not in seen and element is not None:
+                seen.add(key)
+                found.append(element)
+    return found
 
 
 def collect_options(doc):
