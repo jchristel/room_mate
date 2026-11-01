@@ -113,6 +113,11 @@ class Plan(unittest.TestCase):
         self.assertEqual(100, p["elevations"][0]["viewport"]["centre_point"]["x"])
         self.assertEqual(50, p["elevations"][0]["scale"])
 
+    def test_every_viewport_kind_gets_its_detail_numbers_from_the_settings(self):
+        d = verdict()["plan"]["detail_numbers"]
+        self.assertEqual(["1", "2"], d["elevation"])
+        self.assertEqual(["3"], d["plan"], "same style as the elevations: one run")
+
     def test_the_schedule_and_the_plan_tags_come_from_the_template_and_the_server(self):
         p = verdict()["plan"]
         self.assertEqual("01.09 STUDY SCHEDULE", p["schedule_name"])

@@ -39,6 +39,10 @@ def show(forms, model_name, settings, options):
                 combo = getattr(self, name)
                 combo.ItemsSource = labels
                 combo.SelectedIndex = selected
+            for name, key in form.NUMBERINGS:
+                combo = getattr(self, name)
+                combo.ItemsSource = form.NUMBERING_LABELS
+                combo.SelectedIndex = form.numbering_selected(self._existing.get(key))
             for name, key in form.TEXTS:
                 getattr(self, name).Text = self._existing.get(key) or ""
                 token_combo = getattr(self, "tk_" + name[3:])
@@ -90,6 +94,10 @@ def show(forms, model_name, settings, options):
                 self._existing,
                 picked,
                 dict((name, getattr(self, name).Text or "") for name, _key in form.TEXTS),
+                dict(
+                    (name, form.NUMBERING_VALUES[max(getattr(self, name).SelectedIndex, 0)])
+                    for name, _key in form.NUMBERINGS
+                ),
             )
 
         def _status(self):

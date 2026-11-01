@@ -8,6 +8,7 @@ contract, and a key this form does not know rides along untouched, so a setting 
 survives this one saving.
 """
 
+from room_m import detail_numbers
 from room_m.rls_template import TOKEN
 from room_m.textutil import is_text
 
@@ -34,6 +35,21 @@ TEXTS = [
     ("tb_sheet_name", "sheet_name"),
     ("tb_view_name", "view_name"),
 ]
+
+
+# (control name, settings key, label): how the viewports of each kind are numbered on the sheet
+NUMBERINGS = [
+    ("cb_elevation_numbering", detail_numbers.SETTING_OF["elevation"]),
+    ("cb_plan_numbering", detail_numbers.SETTING_OF["plan"]),
+    ("cb_three_d_numbering", detail_numbers.SETTING_OF["three_d"]),
+]
+NUMBERING_LABELS = ["Numeric (1, 2, 3 ...)", "Alphabetic (A, B, C ...)"]
+NUMBERING_VALUES = [detail_numbers.NUMERIC, detail_numbers.ALPHABETIC]
+
+
+def numbering_selected(value):
+    """The entry of the numbering combos for a stored value: numeric when none is stored."""
+    return NUMBERING_VALUES.index(value) if value in NUMBERING_VALUES else 0
 
 
 def get_path(settings, path):
@@ -117,10 +133,10 @@ def problems(settings, parameters):
     return lines
 
 
-def to_settings(existing, combo_values, texts):
+def to_settings(existing, combo_values, texts, numberings=None):
     """The settings object after the form: `existing` with each combo's value and each text set.
-    `combo_values` is `{control name: value}`, `texts` is `{control name: text}`. Keys the form does
-    not know are kept."""
+    `combo_values` is `{control name: value}`, `texts` is `{control name: text}`, `numberings`
+    `{control name: style}`. Keys the form does not know are kept."""
     settings = dict(existing or {})
     settings["sheet_sizes"] = dict(settings.get("sheet_sizes") or {})
     for name, _options, path in COMBOS:
@@ -129,4 +145,7 @@ def to_settings(existing, combo_values, texts):
     for name, key in TEXTS:
         if name in texts:
             settings[key] = texts[name].strip()
+    for name, key in NUMBERINGS:
+        if name in (numberings or {}):
+            settings[key] = numberings[name]
     return settings

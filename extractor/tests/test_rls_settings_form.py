@@ -132,3 +132,14 @@ class Xaml(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Numbering(unittest.TestCase):
+    def test_nothing_stored_is_numeric_and_a_stored_style_is_selected(self):
+        self.assertEqual(0, form.numbering_selected(None))
+        self.assertEqual(1, form.numbering_selected("alphabetic"))
+
+    def test_the_styles_are_saved_under_their_keys_and_others_are_left_alone(self):
+        s = form.to_settings({"plan_detail_numbering": "alphabetic"}, {}, {}, {"cb_elevation_numbering": "alphabetic"})
+        self.assertEqual("alphabetic", s["elevation_detail_numbering"])
+        self.assertEqual("alphabetic", s["plan_detail_numbering"])

@@ -46,6 +46,19 @@
                     <TextBlock Text="Its first filter must be the room number." Opacity="0.6" Margin="170,2,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
+                <!-- detail numbers -->
+                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="0,4,0,4">
+                        <StackPanel>
+                    <TextBlock Text="Detail numbers on the sheet" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Elevations" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_elevation_numbering" SelectionChanged="on_change"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Floor plan" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_plan_numbering" SelectionChanged="on_change"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="3D views" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_three_d_numbering" SelectionChanged="on_change"/></Grid>
+                    <TextBlock Text="Kinds set the same share one run: elevations first, then the plan, then 3D." Opacity="0.6" Margin="170,2,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
                 <!-- tags -->
                 <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="0,4,0,4">
                         <StackPanel>
