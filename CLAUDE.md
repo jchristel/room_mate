@@ -599,7 +599,8 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
 
 ## The RLS creation script: settings, task, duHast
 
-**One Tasks button runs every kind of task** (`tasks_entry`). It claims all kinds in one request (`task_dispatch.claim_kinds`) and hands each
+**One Tasks button runs every kind of task** (`tasks_entry`). A window (`room_m/tasks_window.py`, rules in `tasks_form.py`, `tasks.xaml`) lists the open model's QUEUED tasks (read without claiming,
+`post_tasks.list_queued`) with a check box each, filterable by room or name, kind (create RLS vs other) and level (worked out from the open model's rooms: a task carries none); it works on the open model only, never a link. Only the ticked tasks are claimed (`task_ids` on the claim), in one request (`task_dispatch.claim_kinds`), and handed each
 kind to its handler through `task_dispatch.HANDLER_OF`: populate and update tasks place the items (`_apply_group`, `apply_write`), then
 `create_rls` tasks make the sheets (`_rls_group`, below). **A new kind of task is a line in that table and a function, not another button.**
 A kind nobody handles, a handler that raises and any task never reached are reported failed (`_free_tasks`), so the server never holds a

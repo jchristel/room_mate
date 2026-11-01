@@ -17,9 +17,10 @@ try:
 except ImportError:  # CPython 3
     from urllib.parse import quote
 
-from room_m.post_common import _post_content
+from room_m.post_common import _post_content, fetch_text
 
 BASE_URL = "/projects/{}/roomtasks"
+LIST_URL = "/projects/{}/tasks"
 
 
 def claim_url(project_id):
@@ -38,12 +39,29 @@ def _post_json(url, body):
     return _post_content(url, StringContent(json.dumps(body, ensure_ascii=False), Encoding.UTF8, "application/json"))
 
 
-def claim_tasks(project_id, model_id, kinds=None):
+def list_queued(project_id, model_id):
+    """`(ok, status, text, summaries)`: the model's queued tasks as the server lists them (a summary
+    each, no sheets or items), WITHOUT claiming them: this is what a person chooses from."""
+    ok, status, text = fetch_text("{}?model_id={}&state=queued".format(
+        LIST_URL.format(quote(project_id, safe="")), quote(model_id, safe="")))
+    summaries = []
+    if ok:
+        try:
+            summaries = json.loads(text)
+        except Exception:
+            ok = False
+    return ok, status, text, summaries
+
+
+def claim_tasks(project_id, model_id, kinds=None, task_ids=None):
     """`(ok, status, text, tasks)`: the model's queued tasks, now in progress. `kinds` narrows them
-    (`["create_rls"]` for the RLS script, which must not take a populate task); absent, every kind."""
+    (`["create_rls"]` for the RLS script, which must not take a populate task); absent, every kind.
+    `task_ids` narrows them to the tasks a person ticked; absent, all of them."""
     body = {"model_id": model_id}
     if kinds:
         body["kinds"] = list(kinds)
+    if task_ids:
+        body["task_ids"] = list(task_ids)
     ok, status, text = _post_json(claim_url(project_id), body)
     tasks = []
     if ok:

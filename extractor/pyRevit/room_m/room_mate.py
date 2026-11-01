@@ -34,6 +34,7 @@ from room_m.utils.ui import (
 
 from room_m.utils.generic import (
     document_phases,
+    element_id_str,
     entities_label,
 )
 
@@ -864,11 +865,61 @@ _GROUP_HANDLERS = {
 }
 
 
-def tasks_entry(doc, uiapp, output, forms):
-    """Run the room tasks the server holds for this model: one button for every kind.
+def _room_level_names(doc):
+    """`level_of(room)` for the task chooser: the level name of the open model's room a task names, found by
+    its number (two rooms sharing one are told apart by id), or None when the model has no such room."""
+    from duHast.Revit.Rooms.rooms import get_all_placed_rooms
 
-    1. **Claim.** One request brings every queued task of the model, whatever its kind
-       (`room_m.task_dispatch.claim_kinds`), and marks them in progress.
+    by_number, by_id = {}, {}
+    for room in get_all_placed_rooms(doc):
+        try:
+            level = room.Level.Name
+            by_number.setdefault(str(room.Number), set()).add(level)
+            by_id[element_id_str(room.Id)] = level
+        except Exception:
+            continue
+
+    def level_of(ref):
+        if ref.get("room_id") is not None and str(ref.get("room_id")) in by_id:
+            return by_id[str(ref.get("room_id"))]
+        levels = by_number.get(str(ref.get("number")))
+        return next(iter(levels)) if levels and len(levels) == 1 else None
+
+    return level_of
+
+
+def _choose_tasks(doc, forms):
+    """Show the task chooser for the open model; `{"project", "task_ids"}` or None. The server's projects
+    are read first (nothing to choose from without them), the queued tasks per project as it is chosen."""
+    from room_m import tasks_form, tasks_window
+    from room_m.post_tasks import list_queued
+
+    ok, status, payload = fetch_projects()
+    if not ok:
+        forms.alert("Could not load projects from the server.\n\n{}".format(payload),
+                    title="Roommate - tasks aborted", warn_icon=True)
+        return None
+    if not payload:
+        forms.alert("The server has no registered projects.", title="Roommate - tasks aborted", warn_icon=True)
+        return None
+    level_of = _room_level_names(doc)
+
+    def load(project):
+        ok, status, text, summaries = list_queued(project["id"], doc.Title)
+        if not ok:
+            return False, "Could not list the tasks ({}): {}".format(status if status is not None else "no response", text)
+        return True, tasks_form.rows(summaries, level_of)
+
+    return tasks_window.show(forms, doc.Title, payload, load)
+
+
+def tasks_entry(doc, uiapp, output, forms):
+    """Run the room tasks the server holds for the open model: one button for every kind.
+
+    1. **Choose, then claim.** A window (`room_m.tasks_window`) lists the model's queued tasks, filterable by
+       room, kind and level, and nothing is claimed until a person ticks some and runs. One request then brings
+       exactly those, whatever their kind (`room_m.task_dispatch.claim_kinds`), and marks them in progress.
+       The open model is the only one: tasks are never applied to a link.
     2. **Hand each kind to its code** (`room_m.task_dispatch`): populate and update tasks place the
        items (`room_m.apply_write`), then create_rls tasks make the sheets (`room_m.rls_write`). Each
        group checks its whole list first, asks once about warnings and writes one task per
@@ -892,27 +943,28 @@ def tasks_entry(doc, uiapp, output, forms):
         report_build(return_value, output)
         if log_path:
             return_value.append_message("Log: {}".format(log_path))
-        selected_doc = _single_document(doc, forms, "Select the model the tasks are for")
-        if selected_doc is None:
-            return_value.append_message("No document selected")
+        # Tasks are only ever applied to the open model, never to a link.
+        selected_doc = doc
+        choice = _choose_tasks(selected_doc, forms)
+        if choice is None:
+            return_value.append_message("Tasks cancelled")
             return return_value
-        project = choose_project(forms)
-        if project is None:
-            return_value.update_sep(False, "Tasks aborted: no project selected.")
-            return return_value
-        task_log.info("model '{}', project '{}'".format(selected_doc.Title, project["id"]))
+        project = choice["project"]
+        task_log.info("model '{}', project '{}', {} task(s) chosen".format(
+            selected_doc.Title, project["id"], len(choice["task_ids"])))
 
-        task_log.step("claiming the queued tasks")
-        ok, status, text, claimed = claim_tasks(project["id"], selected_doc.Title, kinds=task_dispatch.claim_kinds())
+        task_log.step("claiming the chosen tasks")
+        ok, status, text, claimed = claim_tasks(
+            project["id"], selected_doc.Title, kinds=task_dispatch.claim_kinds(), task_ids=choice["task_ids"])
         if not ok:
             task_log.error("claim failed: {} {}".format(status, text))
             return_value.update_sep(
                 False, "Could not ask the server for tasks ({}): {}".format(status if status is not None else "no response", text))
             return return_value
         if not claimed:
-            forms.alert("There are no queued tasks for model '{}'.".format(selected_doc.Title),
-                        title="Roommate - nothing to do")
-            return_value.append_message("No queued tasks for '{}'".format(selected_doc.Title))
+            forms.alert("None of the chosen tasks is still queued for model '{}' (another session may have taken them).".format(
+                selected_doc.Title), title="Roommate - nothing to do")
+            return_value.append_message("None of the chosen tasks was still queued for '{}'".format(selected_doc.Title))
             return return_value
         summary = task_dispatch.count_by_kind(claimed)
         task_log.info("claimed {}".format(summary))
