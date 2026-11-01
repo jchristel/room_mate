@@ -154,6 +154,7 @@ class RlsWriter(object):
         self.facts = facts
         self._ports = {}
         self._viewport_type_id = None
+        self._level_z = 0.0
 
     def __call__(self, verdict):
         """Make the sheet of `verdict`; return its notes. Raises, with the model rolled back, when
@@ -179,6 +180,7 @@ class RlsWriter(object):
             task_log.step("find the room, its level and phase")
             room = plan["room"]
             level = room.Level
+            self._level_z = self._level_z_of(room, level)
             # the views belong to the phase the room does, whatever the task says
             phase = get_room_phase(self.doc, room)
             task_log.step("sheet {}".format(plan["number"]))
@@ -202,6 +204,18 @@ class RlsWriter(object):
             task_log.exception("sheet {} failed".format(plan.get("number")))
             result.update_sep(False, str(e))
         return result
+
+    @staticmethod
+    def _level_z_of(room, level):
+        """Where the room's level is in the model's own coordinates, feet. **`Level.Elevation` is not that**: on
+        a model whose project base point is above the internal origin it is the elevation in the project's frame
+        (110250 mm against a floor at 450 mm: measured), while views, crop boxes and geometry are in the internal
+        frame. The room's bounding box is: its bottom is the level plus the room's base offset."""
+        try:
+            base = room.get_Parameter(BuiltInParameter.ROOM_LOWER_OFFSET)
+            return room.get_BoundingBox(None).Min.Z - (base.AsDouble() if base is not None else 0.0)
+        except Exception:
+            return level.Elevation
 
     def _step(self, name, work):
         """Run `work` (returns a duHast Result) in a transaction of its own; a failure raises."""
@@ -240,7 +254,7 @@ class RlsWriter(object):
         room_h = (box.Max.Y - box.Min.Y) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
         vp = plan["plan_viewport"]
         size = (geo.crop_size_mm(vp, room_w, room_h) if vp else None) or (room_w, room_h)
-        centre = XYZ((box.Max.X + box.Min.X) / 2.0, (box.Max.Y + box.Min.Y) / 2.0, level.Elevation)
+        centre = XYZ((box.Max.X + box.Min.X) / 2.0, (box.Max.Y + box.Min.Y) / 2.0, self._level_z)
 
         def crop():
             view.Scale = int(plan["plan_scale"])
@@ -300,7 +314,7 @@ class RlsWriter(object):
         view_type = self.facts._view_type(ViewFamily.Elevation, plan["elevation_view_type"])
         # the bottom of every elevation is the floor of THIS room: its level plus its base offset
         base = room.get_Parameter(BuiltInParameter.ROOM_LOWER_OFFSET)
-        bottom = level.Elevation + (base.AsDouble() if base is not None else 0.0)
+        bottom = self._level_z + (base.AsDouble() if base is not None else 0.0)
         by_marker = {}
         order = []
         for e in plan["elevations"]:
@@ -315,7 +329,7 @@ class RlsWriter(object):
     def _marker(self, elevations, view_type, level, phase, plan_view, plan, sheet, notes, bottom):
         first = elevations[0]
         loc = first["marker_location"]
-        location = XYZ(_ft(loc[0]), _ft(loc[1]), level.Elevation)
+        location = XYZ(_ft(loc[0]), _ft(loc[1]), self._level_z)
         scale = first["scale"] or plan["plan_scale"]
         marker = self._step(
             "RoomMate: elevation marker",
@@ -346,8 +360,8 @@ class RlsWriter(object):
         self._regenerate()
 
         for e, view in made:
-            line_start = XYZ(_ft(e["line_start"][0]), _ft(e["line_start"][1]), level.Elevation)
-            line_end = XYZ(_ft(e["line_end"][0]), _ft(e["line_end"][1]), level.Elevation)
+            line_start = XYZ(_ft(e["line_start"][0]), _ft(e["line_start"][1]), self._level_z)
+            line_end = XYZ(_ft(e["line_end"][0]), _ft(e["line_end"][1]), self._level_z)
             self._step(
                 "RoomMate: extent of {}".format(e["name"]),
                 lambda view=view, e=e, s=line_start, t=line_end: set_elevation_extent_without_transaction_wrapper(
@@ -387,7 +401,7 @@ class RlsWriter(object):
             return
         box = room.get_BoundingBox(None)
         margin = _ft(SECTION_MARGIN_MM)
-        low = XYZ(box.Min.X - margin, box.Min.Y - margin, min(box.Min.Z, level.Elevation) - margin)
+        low = XYZ(box.Min.X - margin, box.Min.Y - margin, min(box.Min.Z, self._level_z) - margin)
         high = XYZ(box.Max.X + margin, box.Max.Y + margin, box.Max.Z + margin)
         for v in plan["three_ds"]:
             view = self._step(
@@ -421,7 +435,7 @@ class RlsWriter(object):
         )
 
     def _tags(self, task, plan, room, plan_view, level, notes):
-        z = level.Elevation
+        z = self._level_z
         independent = self.facts.tag_symbol("independent", plan["independent_tag"]) if plan["independent_tag"] else None
         room_tag = self.facts.tag_symbol("room", plan["room_tag"]) if plan["room_tag"] else None
         made, problems = 0, []
