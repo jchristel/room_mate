@@ -31,6 +31,9 @@ class Missing(unittest.TestCase):
     def test_a_complete_set_needs_no_tags(self):
         self.assertEqual([], rs.missing(COMPLETE))
 
+    def test_the_3d_view_type_is_not_demanded_of_every_project(self):
+        self.assertEqual([], rs.missing(COMPLETE))
+
     def test_a_blank_template_is_missing(self):
         self.assertEqual(["sheet name logic"], rs.missing(dict(COMPLETE, sheet_name="  ")))
 
@@ -67,6 +70,7 @@ class Validate(unittest.TestCase):
         "title_blocks": ["TB : A1"],
         "plan_view_types": ["Plan"],
         "elevation_view_types": ["Elev"],
+        "three_d_view_types": ["3D"],
         "schedules": ["Sched"],
         "room_tags": ["RT"],
         "independent_tags": ["IT"],
@@ -82,6 +86,10 @@ class Validate(unittest.TestCase):
         }
         s.update(over)
         return s
+
+    def test_a_chosen_3d_view_type_the_model_lacks_is_an_error(self):
+        errors, _ = rs.validate(self.settings(three_d_view_type="Old"), self.OPTIONS)
+        self.assertEqual(["3D view type 'Old' is not in this model"], errors)
 
     def test_good_settings_have_nothing_to_report(self):
         self.assertEqual(([], []), rs.validate(self.settings(), self.OPTIONS))

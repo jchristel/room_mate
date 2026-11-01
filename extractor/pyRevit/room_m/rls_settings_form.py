@@ -24,6 +24,7 @@ COMBOS = [
     ("cb_a3", "title_blocks", ("sheet_sizes", "a3")),
     ("cb_plan_view_type", "plan_view_types", ("plan_view_type",)),
     ("cb_elevation_view_type", "elevation_view_types", ("elevation_view_type",)),
+    ("cb_three_d_view_type", "three_d_view_types", ("three_d_view_type",)),
     ("cb_schedule_base", "schedules", ("schedule_base",)),
     ("cb_room_tag", "room_tags", ("room_tag",)),
     ("cb_independent_tag", "independent_tags", ("independent_tag",)),

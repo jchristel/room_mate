@@ -10,7 +10,7 @@ from room_m import rls_task as rt  # noqa: E402
 
 SETTINGS = {
     "sheet_sizes": {"a0": "TB : A0", "a1": "TB : A1", "a2": "TB : A2", "a3": "TB : A3"},
-    "plan_view_type": "RLS Plan", "elevation_view_type": "RLS Elevation", "schedule_base": "Room Base",
+    "plan_view_type": "RLS Plan", "elevation_view_type": "RLS Elevation", "three_d_view_type": "RLS 3D", "schedule_base": "Room Base",
     "room_tag": "Room Tag : Std", "independent_tag": "Multi : Std",
     "sheet_number": "RLS-{Number}", "sheet_name": "{Name} layout", "view_name": "{Number} {Name}",
 }
@@ -233,6 +233,16 @@ class ThreeD(unittest.TestCase):
         v = verdict(with_three_d({"x": 0, "y": 0, "z": 0}, self.U))
         self.assertEqual([], v["plan"]["three_ds"])
         self.assertIn(rt.THREE_D_NO_DIRECTION, codes(v["warnings"]))
+
+    def test_a_3d_view_needs_a_chosen_3d_view_type_and_a_task_without_one_does_not(self):
+        no_type = dict(SETTINGS, three_d_view_type=None)
+        self.assertIn(rt.VIEW_TYPE_MISSING, codes(verdict(with_three_d(self.D, self.U), settings=no_type)["aborts"]))
+        self.assertEqual([], verdict(settings=no_type)["aborts"], "no 3D view on the template: no type asked for")
+
+    def test_a_3d_view_type_the_model_lacks_aborts(self):
+        facts = Facts()
+        facts.view_type_exists = lambda kind, name: kind != "three_d"
+        self.assertIn(rt.VIEW_TYPE_MISSING, codes(verdict(with_three_d(self.D, self.U), facts=facts)["aborts"]))
 
     def test_a_template_with_no_3d_viewport_makes_none(self):
         self.assertEqual([], verdict()["plan"]["three_ds"])

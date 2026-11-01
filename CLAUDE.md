@@ -619,6 +619,7 @@ checked before anything is made, then one transaction group per task (`duHast...
   incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place.
 - **The phase is the room's own, never typed.** A `create_rls` task carries `ROOM_OWN_PHASE` as its phase (a label); the planner aborts if the room has
   none (`PHASE_MISSING`) and `rls_write` makes every view in `get_room_phase(doc, room)`. The request's `phase` is accepted and ignored.
+- **The 3D view type is a setting** (`three_d_view_type`, "3D view type" in the settings window). It is not part of "complete settings" (a project with no 3D views never needs one), but a task whose template has a 3D viewport aborts if none is chosen or the model lacks it.
 - **A template's 3D viewport gives a NEW 3D view** (`rls_task._three_ds`, `rls_write._three_ds`, duHast `view_3d_create`): named `<view name> 3D`, looking
   along the template view's `forward_direction`/`up_direction` at THIS room, cut to the room's bounding box plus `SECTION_MARGIN_MM` (600 mm) on every
   side, in the room's phase, and its viewport goes where the template's was. **The template's eye is not copied** (the export reads zero for a default
