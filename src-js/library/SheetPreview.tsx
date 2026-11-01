@@ -23,6 +23,14 @@ export function SheetPreview({ record }: { record: Pick<SheetRecord, "size_mm" |
             </text>
           </g>
         ))}
+        {preview.lines.map((l, i) => (
+          <g key={`line${i}`} className="elevation-line">
+            <line x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} />
+            <text x={(l.x1 + l.x2) / 2} y={(l.y1 + l.y2) / 2} fontSize={fontSize} textAnchor="middle" dominantBaseline="central">
+              {l.label}
+            </text>
+          </g>
+        ))}
       </svg>
       <figcaption className="hint">
         {preview.measured ? `${Math.round(preview.width)} x ${Math.round(preview.height)} mm` : "Paper size not measured: outline drawn round the viewports"}
