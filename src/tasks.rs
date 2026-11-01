@@ -493,6 +493,19 @@ pub fn create(projects_dir: &Path, project: &str, new: NewTask) -> Result<Task, 
 /// `kinds` narrows what is handed over: the RLS script asks only for `create_rls`, so a populate task
 /// queued for the same model is left for the button that does that. Empty means every kind.
 pub fn claim(projects_dir: &Path, project: &str, model_id: &str, kinds: &[TaskKind]) -> Result<Vec<Task>, TaskError> {
+    claim_chosen(projects_dir, project, model_id, kinds, &[])
+}
+
+/// `claim`, narrowed further to the tasks a person ticked: `ids` empty means all of them, so a session
+/// that does not choose is unchanged. An id that is not queued for this model is simply not handed over
+/// (another session may have taken it, or it was dismissed since the list was read).
+pub fn claim_chosen(
+    projects_dir: &Path,
+    project: &str,
+    model_id: &str,
+    kinds: &[TaskKind],
+    ids: &[String],
+) -> Result<Vec<Task>, TaskError> {
     if model_id.trim().is_empty() {
         return bad("name the model the tasks are for".to_string());
     }
@@ -502,6 +515,7 @@ pub fn claim(projects_dir: &Path, project: &str, model_id: &str, kinds: &[TaskKi
         if task.state != TaskState::Queued
             || task.model_id != model_id
             || !(kinds.is_empty() || kinds.contains(&task.kind))
+            || !(ids.is_empty() || ids.contains(&task.id))
         {
             continue;
         }
@@ -670,6 +684,22 @@ mod tests {
         let rest = claim(&dir, "p", "m1", &[]).unwrap();
         assert_eq!(rest.len(), 1, "the populate task was not handed over to the RLS script");
         assert_eq!(rest[0].kind, TaskKind::PopulateRoom);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn claim_can_be_narrowed_to_the_tasks_a_person_ticked() {
+        let dir = temp_dir("claim-ids");
+        let a = create(&dir, "p", new_task("m1", "r1")).unwrap();
+        let b = create(&dir, "p", new_task("m1", "r2")).unwrap();
+        let got = claim_chosen(&dir, "p", "m1", &[], &[b.id.clone(), "gone".to_string()]).unwrap();
+        assert_eq!(got.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec![b.id.as_str()]);
+        let rest = claim(&dir, "p", "m1", &[]).unwrap();
+        assert_eq!(
+            rest.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec![a.id.as_str()],
+            "the unticked one stays queued"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
