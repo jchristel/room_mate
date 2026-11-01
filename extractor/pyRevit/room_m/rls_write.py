@@ -62,6 +62,7 @@ from duHast.Revit.Views.view_3d_create import create_view_3d_around_box_without_
 from duHast.Revit.Views.views_crop import set_view_crop_around_point_without_transaction_wrapper
 from duHast.Revit.Views.views_names import get_views_in_name_collision
 from duHast.Utilities.Objects.result import Result
+from duHast.Revit.Views.annotation_crop import set_annotation_crop_without_transaction_wrapper
 from duHast.Revit.Views.viewports_create import create_viewport_without_transaction_wrapper
 
 from room_m import apply_geometry as geo
@@ -247,8 +248,20 @@ class RlsWriter(object):
             return set_view_crop_around_point_without_transaction_wrapper(view, centre, _ft(size[0]), _ft(size[1]))
 
         self._step("RoomMate: crop {}".format(plan["plan_name"]), crop)
+        self._annotation_crop(view, vp, plan["plan_name"])
         self._viewport(sheet, view, vp, notes, "plan", "plan")
         return view
+
+    def _annotation_crop(self, view, template_vp, name):
+        """Give the view the annotation crop its template view has (on or off, and where its edges are from the
+        view crop), once its own crop is final. Nothing is done for a template that did not carry it."""
+        wanted = geo.annotation_crop_of(template_vp)
+        if wanted is None:
+            return
+        self._step(
+            "RoomMate: annotation crop of {}".format(name),
+            lambda: set_annotation_crop_without_transaction_wrapper(view, wanted[0], wanted[1]),
+        )
 
     def _viewport(self, sheet, view, template_vp, notes, label, kind):
         at = (geo.viewport_centre_ft(template_vp) if template_vp else None)
@@ -355,6 +368,7 @@ class RlsWriter(object):
                     _ft(e["height_mm"]) if e.get("height_mm") else None, bottom),
             )
             self._check_vertical_extent(view, e, bottom, notes)
+            self._annotation_crop(view, e["viewport"], e["name"])
             d = view.ViewDirection
             looks = e["looks"]
             if (-d.X * looks[0] - d.Y * looks[1]) < FACES_PLAN:

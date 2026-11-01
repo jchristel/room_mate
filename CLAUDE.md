@@ -624,6 +624,11 @@ checked before anything is made, then one transaction group per task (`duHast...
   and `label_line_length` (mm), and a new viewport gets both from its template viewport (`Viewport.LabelOffset`/`LabelLineLength`, after its type). A sheet exported before
   that carries neither and the viewport keeps Revit's default title place. The sheet preview does not draw the title.
   **A viewport is placed by its box centre**: duHast's `create_viewport` calls `SetBoxCenter` after `Viewport.Create`, because Autodesk documents Create's point only as "a location" (a plan view came out left of the original sheet's when it was passed the exported centre alone).
+- **The annotation crop is exported and applied** (plan and elevation views): `annotation_crop_active` and `annotation_crop_offsets` (`left`/`right`/`top`/`bottom` from the
+  view crop, **mm on paper**, because Revit keeps them in view units so they hold at any scale) ride each view of the sheet export (duHast `view_ports_to_data._get_annotation_crop`, via
+  the parameter `VIEWER_ANNOTATION_CROP_ACTIVE` and `ViewCropRegionShapeManager`). A new plan or elevation view gets the same after its own crop is final
+  (`rls_write._annotation_crop`, duHast `annotation_crop.set_annotation_crop_without_transaction_wrapper`). A template exported before carries neither and the view keeps Revit's
+  default. The annotation crop cannot be smaller than the view crop (least offset 1/8 inch on paper). The preview does not draw it. **Not run in Revit.**
 - **The viewport type is a setting** (`viewport_type`, "Viewport type": the model's viewport element types, e.g. "Title w Line"), optional, applied to the plan, elevation and 3D
   viewports (the schedule is a different kind of sheet item); not set means Revit's default type. **A viewport type has no category** (a collector by category finds none, measured in Revit): they are listed by asking existing viewports for their valid types (`rls_settings.viewport_types`: the union over the first viewport of each kind of view, since what is offered can depend on the view), so a model with no viewport at all lists none. A chosen one the model lacks aborts a task and is flagged by `validate`.
 - **An elevation's crop box is bottom-aligned with THIS room's floor** (the room's level elevation plus its Base Offset, `ROOM_LOWER_OFFSET`), and its top is that plus the template

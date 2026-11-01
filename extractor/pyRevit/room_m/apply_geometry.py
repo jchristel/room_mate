@@ -124,6 +124,18 @@ def viewport_centre_ft(viewport):
     return (mm_to_ft(x), mm_to_ft(y))
 
 
+def annotation_crop_of(viewport):
+    """`(active, offsets)` of the template viewport's view annotation crop, `offsets` being `{"left", "right",
+    "top", "bottom"}` in mm on paper (None when it is off); None altogether when the export did not read it (a
+    view that cannot have an annotation crop, or a duHast from before it was exported)."""
+    view = (viewport or {}).get("view") or {}
+    active = view.get("annotation_crop_active")
+    if active is None:
+        return None
+    offsets = view.get("annotation_crop_offsets")
+    return bool(active), (offsets if active and offsets else None)
+
+
 def viewport_label_ft(viewport):
     """`(offset, length)` of the template viewport's title, in feet: `offset` is `(x, y)` from the bottom left
     corner of the viewport box to the left end of the title line, `length` the line's length. Either is None
