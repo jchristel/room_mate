@@ -622,6 +622,10 @@ checked before anything is made, then one transaction group per task (`duHast...
   side, in the room's phase, and its viewport goes where the template's was. **The template's eye is not copied** (the export reads zero for a default
   3D view, and a height measured in another room is wrong in this one): the camera sits back along the direction, so the pitch above the room is the
   template's. A 3D viewport with no usable direction is a warning. **Not run in Revit.**
+- **Detail numbers** (`room_m/detail_numbers.py`, settings `elevation_/plan_/three_d_detail_numbering`, `numeric` or `alphabetic`, default numeric):
+  kinds with the same style share one run, numbered elevations, then the plan, then 3D; a kind with its own style starts again at 1 or A. Revit
+  numbers a new viewport itself and allows each number once per sheet, so after every viewport exists the writer parks them all on
+  `place holder n` and only then sets the real numbers (`rls_write._number_details`). **Not run in Revit.**
 - **View names are the view-name template plus ` PLAN` / ` ELEV m-n` (marker, then view on it, both from 1) / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
   task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.

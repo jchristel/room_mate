@@ -34,6 +34,7 @@ defined, elevations the server could not place.
 import re
 
 from room_m import apply_geometry as geo
+from room_m import detail_numbers
 from room_m import rls_settings
 from room_m.rls_template import TOKEN
 
@@ -253,6 +254,9 @@ def build(task, settings, values):
         "tags": _plan_tags(task),
         "room_tag_head": _room_tag_head(task),
     }
+    # the detail number each viewport gets, in the order the writer makes them (`detail_numbers`)
+    plan["detail_numbers"] = detail_numbers.assign(
+        {"elevation": len(elevations), "plan": 1, "three_d": len(three_ds)}, settings)
     return plan, aborts
 
 

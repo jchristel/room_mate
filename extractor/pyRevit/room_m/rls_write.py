@@ -25,6 +25,7 @@ import math
 
 from Autodesk.Revit.DB import (
     BuiltInCategory,
+    BuiltInParameter,
     Transaction,
     TransactionGroup,
     ViewFamily,
@@ -59,9 +60,11 @@ from duHast.Revit.Views.views import get_view_family_type_by_name, get_view_fami
 from duHast.Revit.Views.view_3d_create import create_view_3d_around_box_without_transaction_wrapper
 from duHast.Revit.Views.views_crop import set_view_crop_around_point_without_transaction_wrapper
 from duHast.Revit.Views.views_names import get_views_in_name_collision
+from duHast.Utilities.Objects.result import Result
 from duHast.Revit.Views.viewports_create import create_viewport_without_transaction_wrapper
 
 from room_m import apply_geometry as geo
+from room_m import detail_numbers
 from room_m import task_log
 from room_m.apply_facts import RevitFacts
 
@@ -128,12 +131,14 @@ class RlsWriter(object):
     def __init__(self, doc, facts):
         self.doc = doc
         self.facts = facts
+        self._ports = {}
 
     def __call__(self, verdict):
         """Make the sheet of `verdict`; return its notes. Raises, with the model rolled back, when
         a step fails."""
         plan = verdict["plan"]
         notes = []
+        self._ports = dict((kind, []) for kind in detail_numbers.KINDS)
         task_log.step("sheet {} {}: transaction group".format(plan["number"], plan["name"]))
         group = TransactionGroup(self.doc, "RoomMate RLS {}".format(plan["number"]))
         outcome = in_transaction_group(group, lambda: self._write(verdict["task"], plan, notes))
@@ -147,8 +152,6 @@ class RlsWriter(object):
     # -- the sequence -----------------------------------------------------------------------
 
     def _write(self, task, plan, notes):
-        from duHast.Utilities.Objects.result import Result
-
         result = Result()
         try:
             task_log.step("find the room, its level and phase")
@@ -166,6 +169,8 @@ class RlsWriter(object):
             self._three_ds(plan, room, level, phase, sheet, notes)
             task_log.step("schedule")
             self._schedule(plan, room, sheet, notes)
+            task_log.step("detail numbers")
+            self._number_details(plan)
             task_log.step("tags")
             self._tags(task, plan, room, plan_view, level, notes)
             notes.append("sheet {} made".format(plan["number"]))
@@ -209,10 +214,10 @@ class RlsWriter(object):
             return set_view_crop_around_point_without_transaction_wrapper(view, centre, _ft(size[0]), _ft(size[1]))
 
         self._step("RoomMate: crop {}".format(plan["plan_name"]), crop)
-        self._viewport(sheet, view, vp, notes, "plan")
+        self._viewport(sheet, view, vp, notes, "plan", "plan")
         return view
 
-    def _viewport(self, sheet, view, template_vp, notes, label):
+    def _viewport(self, sheet, view, template_vp, notes, label, kind):
         at = (geo.viewport_centre_ft(template_vp) if template_vp else None)
         if at is None:
             at = (0.0, 0.0)
@@ -222,7 +227,35 @@ class RlsWriter(object):
             "RoomMate: viewport {}".format(view.Name),
             lambda: create_viewport_without_transaction_wrapper(self.doc, sheet, view, XYZ(at[0], at[1], 0.0)),
         )
-        return outcome.result[0] if outcome.result else None
+        port = outcome.result[0] if outcome.result else None
+        if port is not None:
+            self._ports[kind].append(port)
+        return port
+
+    def _number_details(self, plan):
+        """Give the viewports their detail numbers (`room_m.detail_numbers`). Revit numbers a new viewport
+        itself and a number may be used once per sheet, so each viewport is first parked on a place holder
+        and only then given its real number: an automatic number can never block one of ours."""
+        ports = [(kind, port) for kind in detail_numbers.KINDS for port in self._ports.get(kind, [])]
+        wanted = []
+        for kind in detail_numbers.KINDS:
+            labels = plan["detail_numbers"].get(kind, [])
+            # a viewport that failed to be made leaves its label unused rather than shifting the rest
+            wanted.extend(labels[:len(self._ports.get(kind, []))])
+        if not ports:
+            return
+
+        def put(values):
+            result = Result()
+            try:
+                for (_kind, port), value in zip(ports, values):
+                    port.get_Parameter(BuiltInParameter.VIEWPORT_DETAIL_NUMBER).Set(value)
+            except Exception as e:
+                result.update_sep(False, str(e))
+            return result
+
+        self._step("RoomMate: detail numbers (place holders)", lambda: put(detail_numbers.placeholders(len(ports))))
+        self._step("RoomMate: detail numbers", lambda: put(wanted))
 
     def _elevations(self, plan, room, level, phase, plan_view, sheet, notes):
         if not plan["elevations"]:
@@ -284,7 +317,7 @@ class RlsWriter(object):
             looks = e["looks"]
             if (-d.X * looks[0] - d.Y * looks[1]) < FACES_PLAN:
                 notes.append("{} does not face the way the plan says (the marker's other views are at fixed quarter turns)".format(e["name"]))
-            self._viewport(sheet, view, e["viewport"], notes, e["name"])
+            self._viewport(sheet, view, e["viewport"], notes, e["name"], "elevation")
 
     def _three_ds(self, plan, room, level, phase, sheet, notes):
         """A new 3D view for each 3D viewport of the template: the template's direction, looking at THIS
@@ -305,7 +338,7 @@ class RlsWriter(object):
                 lambda v=v: create_view_3d_around_box_without_transaction_wrapper(
                     self.doc, types[0], v["name"], v["forward"], v["up"], low, high, phase),
             ).result[0]
-            self._viewport(sheet, view, v["viewport"], notes, v["name"])
+            self._viewport(sheet, view, v["viewport"], notes, v["name"], "three_d")
 
     def _schedule(self, plan, room, sheet, notes):
         base = self.facts.schedule(plan["schedule_base"])
