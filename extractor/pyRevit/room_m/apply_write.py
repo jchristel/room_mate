@@ -146,7 +146,7 @@ class TaskWriter(object):
         self._in_transaction("RoomMate: place items", work)
         self._capped(notes, "items not placed", problems)
         notes.append("placed {} of {} item(s)".format(len(placed), len(items)))
-        self.doc.Regenerate()
+        self._in_transaction("RoomMate: regenerate", self.doc.Regenerate)
         # The room's content now includes what was placed; the next read must see it.
         self.facts.refresh()
         return placed
