@@ -52,6 +52,7 @@ from duHast.Revit.Views.schedules_create import (
     place_schedule_on_sheet_without_transaction_wrapper,
     set_first_filter_value_without_transaction_wrapper,
 )
+from duHast.Revit.Views.sheets import get_sheet_num_to_elem_dict
 from duHast.Revit.Views.sheets_create import create_sheet
 from duHast.Revit.Views.schedules import get_schedule_by_name
 from duHast.Revit.Views.views import get_view_family_type_by_name, get_view_family_types
@@ -113,7 +114,7 @@ class RlsFacts(RevitFacts):
         return bool(name) and self.tag_symbol(kind, name) is not None
 
     def sheet_exists(self, number):
-        return self.rls_exists(number)
+        return number in get_sheet_num_to_elem_dict(self.doc)
 
     def views_in_use(self, names):
         return get_views_in_name_collision(self.doc, names)
