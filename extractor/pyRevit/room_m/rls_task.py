@@ -117,15 +117,14 @@ def _first_of_type(sheet, vp_type):
 
 
 def _elevations(task, template, base):
-    """The elevation views to make, in the order they are named: marker by marker, by index."""
+    """The elevation views to make, in the order they are named: marker by marker, by index. A name ends
+    `ELEV <marker>-<view>`, both counted from 1, so two markers in a room never collide."""
     out = []
-    n = 0
-    for marker in (task.get("rls") or {}).get("markers") or []:
-        for view in sorted(marker.get("views") or [], key=lambda v: v.get("marker_index", 0)):
-            n += 1
+    for m, marker in enumerate((task.get("rls") or {}).get("markers") or [], 1):
+        for n, view in enumerate(sorted(marker.get("views") or [], key=lambda v: v.get("marker_index", 0)), 1):
             vp = _template_viewport(template, view.get("view_id"))
             out.append({
-                "name": "{} ELEV {}".format(base, n),
+                "name": "{} ELEV {}-{}".format(base, m, n),
                 "marker_id": marker.get("marker_id"),
                 "marker_location": marker.get("location"),
                 "marker_index": view.get("marker_index", 0),

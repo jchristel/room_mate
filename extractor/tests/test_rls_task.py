@@ -108,7 +108,7 @@ class Plan(unittest.TestCase):
 
     def test_elevations_are_named_marker_by_marker_in_index_order_and_find_their_template_viewport(self):
         p = verdict()["plan"]
-        self.assertEqual(["01.09 STUDY ELEV 1", "01.09 STUDY ELEV 2"], [e["name"] for e in p["elevations"]])
+        self.assertEqual(["01.09 STUDY ELEV 1-1", "01.09 STUDY ELEV 1-2"], [e["name"] for e in p["elevations"]])
         self.assertEqual([1, 2], [e["view_id"] for e in p["elevations"]], "index 0 first")
         self.assertEqual(100, p["elevations"][0]["viewport"]["centre_point"]["x"])
         self.assertEqual(50, p["elevations"][0]["scale"])
