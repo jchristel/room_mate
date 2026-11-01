@@ -64,6 +64,9 @@ class Facts(object):
     def schedule_exists(self, name):
         return self.get("schedule", True)
 
+    def schedule_filters_on_room_number(self, name):
+        return self.get("schedule_room_filter", True)
+
     def tag_type_exists(self, kind, name):
         return self.get("tag_" + kind, True)
 
@@ -123,6 +126,14 @@ class Plan(unittest.TestCase):
         self.assertEqual("01.09 STUDY SCHEDULE", p["schedule_name"])
         self.assertEqual(3, p["schedule_viewport"]["view_id"])
         self.assertEqual(["55"], [t["item_id"] for t in p["tags"]], "only tags with a head are placed")
+
+    def test_a_base_schedule_not_filtered_first_on_the_room_number_aborts(self):
+        v = verdict(facts=Facts(schedule_room_filter=False))
+        self.assertEqual([rt.SCHEDULE_NOT_ROOM_FILTERED], codes(v["aborts"]))
+
+    def test_a_missing_base_schedule_is_only_missing_not_also_unfiltered(self):
+        v = verdict(facts=Facts(schedule=False, schedule_room_filter=False))
+        self.assertEqual([rt.SCHEDULE_MISSING], codes(v["aborts"]))
 
     def test_a_task_with_no_size_falls_back_to_the_templates_and_then_aborts(self):
         t = task()
