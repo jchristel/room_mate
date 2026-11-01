@@ -94,7 +94,7 @@ def main(argv):
                 if DLL_PATTERN.search(open(resolved, encoding="utf-8", errors="replace").read()):
                     dll_loaders.append(name)
 
-    # Reachable duHast files holding non-ASCII bytes with no encoding cookie.
+    # Reachable duHast files holding non-ASCII bytes with no encoding cookie (a UTF-8 BOM counts as one).
     # Reported, never failed: under IronPython 2.7 each is an import-time
     # SyntaxError, but a 2025+ extension may run a python 3 engine where the
     # same file is fine. It is duHast's call to make, and this says which files
@@ -105,6 +105,9 @@ def main(argv):
         if path is None:
             continue
         data = open(path, "rb").read()
+        # a leading UTF-8 BOM is itself an encoding declaration (PEP 263) that python 2.7 and IronPython accept
+        if data.startswith(b"\xef\xbb\xbf"):
+            data = data[3:]
         if not any(byte > 127 for byte in data):
             continue
         head = data[:200].decode("latin-1").splitlines()[:2]
