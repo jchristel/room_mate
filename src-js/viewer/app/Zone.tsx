@@ -425,7 +425,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
       <RoutePanel zone={zone} />
       <ReachPanel zone={zone} />
       <BlueprintPanel zone={zone} />
-      <RlsPanel zone={zone} />
+      <RlsPanel zone={zone} rooms={rooms} />
       <OpenZonePanel zone={zone} />
       <div className="zone-canvas">
         <canvas className="plan-gl" ref={canvasRef} />

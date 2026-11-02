@@ -16,7 +16,7 @@ use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_capture::qualify_room;
 use crate::service::elevation_facing::{self, Elevations};
 use crate::service::room_locator::RoomRef;
-use crate::service::sheet_suggest::{self, Suggestions};
+use crate::service::sheet_suggest::{self, Solved, Suggestions};
 use crate::sheets::{self, DecideRequest, PushOutcome, PushRequest, RoomSummary, SheetRecord, SheetRoom, SheetSummary};
 use crate::state::Shared;
 
@@ -152,6 +152,39 @@ pub async fn http_suggest_sheets(
         Err(crate::service::ServiceError::Invalid(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
         Err(crate::service::ServiceError::Internal(e)) => {
             tracing::error!("suggest error: {e:#}");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SolveBody {
+    /// The rooms to find a sheet for, by the viewer's room id.
+    pub room_ids: Vec<String>,
+}
+
+/// The closest library sheet for each of many rooms at once ("RLS auto"). Offers; applies nothing: the viewer
+/// shows the fit and a person decides, and the tasks go through the same make request as a manual choice.
+pub async fn http_solve_sheets(
+    State(state): State<Shared>,
+    UrlPath(project_id): UrlPath<String>,
+    Json(body): Json<SolveBody>,
+) -> Result<Json<Vec<Solved>>, (StatusCode, String)> {
+    let projects = projects_dir(&state)?;
+    let mut records = sheets::load_all(&projects, &project_id).map_err(to_http)?;
+    let retired: std::collections::HashSet<String> = crate::blueprints::list(&projects, &project_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| !b.in_use)
+        .map(|b| b.id)
+        .collect();
+    records.retain(|r| r.blueprint.as_deref().is_none_or(|b| !retired.contains(b)));
+    match sheet_suggest::context(&state, &project_id) {
+        Ok(Some(ctx)) => Ok(Json(sheet_suggest::solve(&ctx, &body.room_ids, &records))),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "this project has no rooms".to_string())),
+        Err(crate::service::ServiceError::Invalid(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
+        Err(crate::service::ServiceError::Internal(e)) => {
+            tracing::error!("solve error: {e:#}");
             Err((StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()))
         }
     }

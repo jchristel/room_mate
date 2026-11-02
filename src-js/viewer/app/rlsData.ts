@@ -1,7 +1,7 @@
 // What the RLS tool asks of the server: the library's sheets, one sheet in full (for its preview), and the
 // one write it makes (queue a `create_rls` task per room).
 
-import type { Made } from "../rlsTool.js";
+import type { Made, Solved } from "../rlsTool.js";
 import type { SheetRecord, SheetSummary } from "../../library/types.js";
 import { fetchJson } from "./api.js";
 
@@ -37,5 +37,21 @@ export async function makeRlsTasks(
     return res.ok ? ((await res.json()) as Made[]) : (await res.text()).trim() || `HTTP ${res.status}`;
   } catch (err) {
     return `Could not reach the server: ${String(err)}`;
+  }
+}
+
+/** The solver's closest sheets for many rooms at once. Offers only; nothing is queued. */
+export async function solveRooms(project: string, roomIds: readonly string[], signal?: AbortSignal): Promise<Solved[] | string> {
+  try {
+    const res = await fetch(`${base(project)}/sheets/solve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ room_ids: roomIds }),
+      cache: "no-store",
+      signal: signal ?? null,
+    });
+    return res.ok ? ((await res.json()) as Solved[]) : (await res.text()).trim() || `HTTP ${res.status}`;
+  } catch (err) {
+    return signal?.aborted ? "" : `Could not reach the server: ${String(err)}`;
   }
 }

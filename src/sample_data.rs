@@ -130,3 +130,39 @@ fn test_the_authored_data_loads_and_the_assignment_makes_a_task() {
     }
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }
+
+#[test]
+fn test_solve_picks_the_sheet_whose_room_is_the_same_size() {
+    use crate::service::sheet_suggest;
+    use crate::sheets::SheetRecord;
+    let (state, projects) = booted("solve");
+    let ctx = sheet_suggest::context(&state, PROJECT).unwrap().expect("rooms");
+    let rooms = assemble_rooms(&state, &RoomScope { project: Some(PROJECT), ..Default::default() })
+        .unwrap()
+        .unwrap();
+    let first = &rooms.rooms[0];
+    let me = crate::service::room_locator::RoomRef { model_id: first.model_id.clone(), room_id: first.room.id.clone() };
+    let own = sheet_suggest::suggest_in(&ctx, &me, &[])
+        .expect("the first room has an outline")
+        .target
+        .signature;
+    let sheet = |id: &str, scale: f64| -> SheetRecord {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "id": id, "taken_at": "", "revit_sheet_id": id, "document_title": "D",
+            "sheet_number": id, "sheet_name": "", "received_at": "", "sheet": {},
+            "room_summary": {"x_mm": 4000.0, "y_mm": 2000.0 * own.proportion.recip() * 2.0,
+                             "area_m2": own.area_m2 * scale, "items": own.items}
+        }))
+        .expect("a sheet record")
+    };
+    let sheets = vec![sheet("far", 4.0), sheet("twin", 1.0)];
+    let solved = sheet_suggest::solve(&ctx, &[me.room_id.clone(), "no-such-room".into()], &sheets);
+    assert_eq!(solved.len(), 2);
+    assert_eq!(solved[0].choices[0].sheet_id, "twin");
+    assert!(solved[0].choices[0].fit > solved[0].choices[1].fit);
+    assert!(
+        solved[1].reason.is_some() && solved[1].choices.is_empty(),
+        "an unknown room is a verdict, not an error"
+    );
+    std::fs::remove_dir_all(projects.parent().unwrap()).ok();
+}

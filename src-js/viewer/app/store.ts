@@ -25,7 +25,7 @@ import type { TagEntity } from "../../renderer/elementTags.js";
 import { DEFAULT_TAG_SETTINGS, type TagSettings } from "../elementTags.js";
 import type { Scope } from "../scope.js";
 import { newEdit, pickForEdit, type ConnectionsDoc, type PassageReport, type ZoneEdit } from "../connections.js";
-import { newRlsTool, pickRoom as pickRlsRoom, type RlsToolState } from "../rlsTool.js";
+import { doneRoomIds, newRlsTool, pickAuto, pickRoom as pickRlsRoom, type RlsToolState } from "../rlsTool.js";
 import { newBlueprintTool, pickRoom as pickBlueprintRoom, type BlueprintToolState } from "../blueprintTool.js";
 import { newReach, pickSource, type ReachState } from "../reach.js";
 import { newRoute, pickEndpoint, type PlanPoint, type RouteResult, type RouteState } from "../route.js";
@@ -576,7 +576,11 @@ export function select(
       else if (zone.edit) patchZoneEdit(target, pickForEdit(zone.edit, id, at));
       else if (zone.reach) patchZoneReach(target, pickSource(zone.reach, id, at));
       else if (zone.blueprint) patchZoneBlueprint(target, pickBlueprintRoom(zone.blueprint, id));
-      else if (zone.rls) patchZoneRls(target, pickRlsRoom(zone.rls, id));
+      else if (zone.rls)
+        patchZoneRls(
+          target,
+          zone.rls.mode === "auto" ? pickAuto(zone.rls, id, Date.now(), doneRoomIds(state.roomTasks)) : pickRlsRoom(zone.rls, id),
+        );
       return;
     }
   }
