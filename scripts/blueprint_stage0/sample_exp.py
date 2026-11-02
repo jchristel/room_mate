@@ -1,6 +1,6 @@
 import random
-from rhh import *
-rooms, sk = load_rhh()
+from sample import *
+rooms, sk = load_sample()
 random.seed(1)
 GROUPS = ["1 BED B", "1 BED A", "ENS-IN", "ENS-OUT", "WCST", "RESUS", "BMEQ", "CONSULT", "PT-HOLD", "PROP-ST", "WCAC", "MFD", "2BR-IN"]
 NAMES = list(POLS) + ["centroid"]

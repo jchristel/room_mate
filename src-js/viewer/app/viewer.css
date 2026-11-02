@@ -194,7 +194,7 @@
      "Customize" it sits on the first line near the right edge and right-
      anchoring works, and at "Customize: 274 of 313" it wraps to a line of its
      own at the LEFT and the panel hangs 110px outside the inspector, over the
-     plan. Measured on an RHH door. Making `.insp-head` the containing block
+     plan. Measured on a sample project door. Making `.insp-head` the containing block
      pins the panel to the column instead, which no label can move. */
   #inspector .insp-controls .layer-menu { position: static; }
   #inspector .insp-controls .fields-panel { top: 100%; right: 0.7rem; }
@@ -960,7 +960,7 @@
   }
   .fields-panel > div:first-child .menu-group { margin-top: 0; }
   /* The property chooser is taller than the layer menus -- a room offers 45
-     names and RHH's grid offers more -- so it gets the height the panel's own
+     names and the sample project's grid offers more -- so it gets the height the panel's own
      scroll then works within. */
   .layer-menu .fields-panel { max-height: 50vh; }
   /* The services-model picker sits under its own Spaces entry, indented so it

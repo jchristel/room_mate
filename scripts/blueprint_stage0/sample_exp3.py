@@ -1,5 +1,5 @@
 import sys
-exec(open('rhh_exp.py').read().split("g = collections.defaultdict(list)")[0])
+exec(open('sample_exp.py').read().split("g = collections.defaultdict(list)")[0])
 
 def turns(poly):
     E = edges(poly)

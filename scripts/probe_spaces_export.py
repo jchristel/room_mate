@@ -173,15 +173,15 @@ DEFAULT_KEY_PROPERTY = "Number"
 COMPARED_PROPERTIES = ["Name", "Area"]
 
 # Title prefixes narrowing a federated host's links to the models worth
-# reading. Empty takes every loaded link. RHH ran with
-# ["RHH-HDR-AR-MDL", "RHH-JHA-"].
+# reading. Empty takes every loaded link. The sample project ran with
+# ["SAMPLE-AR", "SAMPLE-"].
 DOCUMENT_PREFIXES = []
 
 # Bumped whenever the probe's OUTPUT or its conversion changes. Printed at
 # startup because this script is run by exec'ing its text, so nothing else tells
 # a reader which copy actually ran.
 #
-# v2, after the RHH run: documents are resolved by walking the host's LINKS
+# v2, after the sample project run: documents are resolved by walking the host's LINKS
 # rather than picking from open documents, and the per-element `property_*`
 # reads are gone -- they were display-formatted and rounded, and the export
 # carries the value the server actually stores. A v1 capture still analyses,
@@ -349,7 +349,7 @@ def probe_element(doc, element, key_property, compared_properties):
     """Every Revit fact about one SpatialElement that its export does not carry.
 
     **Compared property values are NOT read here, and v1 was wrong to.** It read
-    them with `LookupParameter(...).AsValueString()`, which on RHH returned
+    them with `LookupParameter(...).AsValueString()`, which on the sample project returned
     `"71 m2"` for a space duHast exports as `71.27892877719862`: display
     formatted, unit suffixed, and rounded to the whole number. The server stores
     the export's value, so calibrating anything on the probe's would set a
@@ -577,7 +577,7 @@ def probe_document(doc, out_dir, key_property, compared_properties):
 def linked_documents(host):
     """The host document plus every loaded link.
 
-    **The RHH run's first correction.** The draft picked from *open* documents,
+    **The the sample project run's first correction.** The draft picked from *open* documents,
     and on a real federated project none of these are open: the architectural
     models and the services models are all links inside one host. A picker over
     open documents finds exactly one document and the cross-document half of the
@@ -602,7 +602,7 @@ def resolve_documents(prefixes=None):
     key match.
 
     `prefixes` is how a federated host with dozens of links is narrowed to the
-    ones worth reading (`["RHH-HDR-AR-MDL", "RHH-JHA-"]` on the RHH run). Empty
+    ones worth reading (`["SAMPLE-AR", "SAMPLE-"]` on the sample project run). Empty
     or None takes every loaded link, which is right for a small project and
     ruinous on a large one -- so it is an argument, not a constant.
     """

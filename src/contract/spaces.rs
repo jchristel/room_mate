@@ -15,7 +15,7 @@
 //! schema version are both baked into bytes on disk.
 //!
 //! **Two things here are NOT the rooms envelope, and both were measured rather
-//! than assumed** (RHH, 2026-09-06; see `docs/Superseded/PLAN-spaces.md`):
+//! than assumed** (the sample project, 2026-09-06; see `docs/Superseded/PLAN-spaces.md`):
 //!
 //! - **`levels` is optional.** A rooms payload requires it. A services model
 //!   pushes spaces and usually nothing else, so its levels arrive here or not at
@@ -62,7 +62,7 @@ pub struct SpacePayload {
     /// close enough to doors to re-earn.
     ///
     /// **A phase name is per document, and on a real project the disciplines do
-    /// not agree on one.** Measured on RHH: the mechanical model keeps 1,532 of
+    /// not agree on one.** Measured on the sample project: the mechanical model keeps 1,532 of
     /// its 1,533 spaces in a phase called `Future`, while every other services
     /// model uses `New Construction` and the architects use `New Construction`
     /// and `Future Expansion`. Since the push phase is one per *run*
@@ -93,7 +93,7 @@ pub struct SpacePayload {
     /// entity exists to report.** An MEP space computed to wall centre and an
     /// architectural room computed to finish face differ by half a wall
     /// thickness, which is not a data error — it is a difference in what was
-    /// measured. On RHH that showed up as a median relative difference falling
+    /// measured. On the sample project that showed up as a median relative difference falling
     /// from 14.0% on rooms under 2 m2 to 0.7% on rooms over 100, because the
     /// delta scales with perimeter while the value scales with area. A reader
     /// tuning a tolerance needs to know which regime each side used.
@@ -247,8 +247,8 @@ mod tests {
     fn test_space_payload_round_trips() {
         let json = serde_json::json!({
             "schema_version": 1,
-            "project":  { "id": "RHH", "name": "RHH" },
-            "model":    { "id": "RHH-JHA-ME-MDL-HOS", "name": "Mechanical", "source": "revit" },
+            "project":  { "id": "SAMPLE", "name": "SAMPLE" },
+            "model":    { "id": "SAMPLE-ME", "name": "Mechanical", "source": "revit" },
             "snapshot": { "taken_at": "2026-09-06T00:00:00Z" },
             "phase": "Future",
             "spaces": [{
@@ -277,8 +277,8 @@ mod tests {
     fn test_an_empty_spaces_push_is_valid() {
         let json = serde_json::json!({
             "schema_version": 1,
-            "project":  { "id": "RHH", "name": "RHH" },
-            "model":    { "id": "RHH-JHA-AV-MDL-HOS", "name": "Audio Visual", "source": "revit" },
+            "project":  { "id": "SAMPLE", "name": "SAMPLE" },
+            "model":    { "id": "SAMPLE-AV", "name": "Audio Visual", "source": "revit" },
             "snapshot": { "taken_at": "2026-09-06T00:00:00Z" },
             "phase": "New Construction",
             "spaces": []
@@ -339,15 +339,15 @@ mod tests {
     fn test_space_stream_envelope_deserializes_without_spaces() {
         let json = serde_json::json!({
             "schema_version": 1,
-            "project":  { "id": "RHH", "name": "RHH" },
+            "project":  { "id": "SAMPLE", "name": "SAMPLE" },
             "snapshot": { "taken_at": "2026-09-06T00:00:00Z" },
             "phase": "New Construction",
-            "models": [{ "id": "RHH-JHA-HY-MDL-HOS", "name": "Hydraulic", "source": "revit" }]
+            "models": [{ "id": "SAMPLE-HY", "name": "Hydraulic", "source": "revit" }]
         });
 
         let envelope: SpaceStreamEnvelope = serde_json::from_value(json).unwrap();
         assert_eq!(envelope.models.len(), 1);
-        assert_eq!(envelope.models[0].model.id, "RHH-JHA-HY-MDL-HOS");
+        assert_eq!(envelope.models[0].model.id, "SAMPLE-HY");
         assert!(envelope.models[0].levels.is_empty());
         assert!(envelope.models[0].room_boundary.is_none());
     }
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_stream_space_carries_its_model_id() {
         let json = serde_json::json!({
-            "model_id": "RHH-JHA-FR-MDL-HOS",
+            "model_id": "SAMPLE-FR",
             "id": "s1",
             "name": "S",
             "level_id": "l1",
@@ -367,7 +367,7 @@ mod tests {
         });
 
         let line: StreamSpace = serde_json::from_value(json).unwrap();
-        assert_eq!(line.model_id, "RHH-JHA-FR-MDL-HOS");
+        assert_eq!(line.model_id, "SAMPLE-FR");
         assert_eq!(line.space.enclosure, Some(Enclosure::Unenclosed));
     }
 

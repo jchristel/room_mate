@@ -3,12 +3,12 @@
 //!
 //! **Why this exists.** Every element carries its properties as a map keyed by
 //! the source's own parameter names, and every door, window, item, ceiling and
-//! floor also carries its family *type's* whole map. On RHH's FF&E that was 61%
+//! floor also carries its family *type's* whole map. On the sample project's FF&E that was 61%
 //! of every snapshot byte for `type_properties` alone -- 16,397 items sharing
 //! 1,005 distinct bags -- and the instance keys repeat on every element too.
 //! Parsing is what a read costs, and the parse was dominated by allocating the
 //! same few thousand strings millions of times, then again when `/ffe` cloned
-//! each item into its response. Measured on the stored RHH FF&E, parse plus
+//! each item into its response. Measured on the stored the sample project FF&E, parse plus
 //! clone: 29 s as maps of owned strings, 4.3 s with the storage shape below and
 //! these types in memory.
 //!

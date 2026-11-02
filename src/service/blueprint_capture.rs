@@ -1,6 +1,6 @@
 //! Capture: a room and the FF&E in it, written as a blueprint revision's recipes.
 //!
-//! The rules are the ones measured on House A and RHH in stage 0
+//! The rules are the ones measured on House A and the sample project in stage 0
 //! (`docs/PLAN-blueprints-stage0.md`), and each is here for a failure that run found:
 //!
 //! - **An item belongs to the edge it lies *beside*,** the nearest edge whose span

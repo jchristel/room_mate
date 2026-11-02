@@ -51,7 +51,7 @@ tolerance_pct?: number | null,
  * **A percentage alone flags the wrong rooms, and this is the measurement
  * that proved it.** The boundary-regime difference between an MEP space and
  * an architectural room scales with perimeter while the value scales with
- * area, so on RHH the median relative difference fell from 14.0% on rooms
+ * area, so on the sample project the median relative difference fell from 14.0% on rooms
  * under 2 m2 to 0.7% on rooms over 100. A flat 30% flagged 416 pairs of
  * 10,066 -- **244 of them (59%) sub-2 m2 rooms**, which is noise that gets
  * the whole report ignored. 30% with a 2 m2 floor flags 127.

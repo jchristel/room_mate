@@ -35,7 +35,7 @@ is a producer fault. A spaces run is asking a different question. "These
 services models were audited and hold no spaces" is the answer requirement 1
 buys, and it is a different fact from "these models were never pushed" -- which
 is a distinction only a push can record. Refusing would delete the finding at
-the moment it was found. RHH has such a model (`RHH-JHA-AV-MDL-HOS`, zero
+the moment it was found. The sample project has such a model (`SAMPLE-AV`, zero
 spaces), so this is measured rather than hypothetical.
 
 Both post functions return `(ok, status, text)`, the same tuple every other
@@ -102,7 +102,7 @@ def translate_space(space, unplaced_ids, zero_area_ids):
 
     - `unenclosed` -- Revit reports no area. A MODEL defect.
     - `unmeasured` -- Revit reports area and duHast produced no polygon anyway.
-      A PIPELINE defect, and the one the RHH probe found exactly once in 10,570
+      A PIPELINE defect, and the one the sample project probe found exactly once in 10,570
       spaces.
     - `enclosed` -- there is a footprint.
 
@@ -197,7 +197,7 @@ def post_payload_stream(run_envelope, entries, url=SERVER_URL_STREAM):
     """Gzip-compressed NDJSON stream (line 1 = envelope, one line per space) to
     the server's streaming ingest -- the path a live run uses.
 
-    RHH's four services models carry 10,570 spaces between them, which is why
+    the sample project's four services models carry 10,570 spaces between them, which is why
     the streaming path is the default here rather than an option.
 
     **Every space line names its own model**, for `post_rooms`' reason: a

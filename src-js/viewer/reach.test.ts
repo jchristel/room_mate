@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { describeReach, describeSaved, draftOf, layerFor, newReach, stateFromSaved, parseMetres, pickSource, problem, reachRequest, type ReachResult } from "./reach.js";
 
-const scope = { projectId: "RHH", building: null, milestone: null } as never;
+const scope = { projectId: "SAMPLE", building: null, milestone: null } as never;
 
 const done = (): ReachResult => ({
   state: "done",
@@ -49,7 +49,7 @@ describe("reachRequest", () => {
   it("carries the sources with their points, the limit and spacing in mm, the method and the cuts", () => {
     const s = { ...pickSource(pickSource(newReach(), "a", { x: 1, y: 2 }), "b"), method: "grid" as const, ignoreCuts: true };
     const req = reachRequest(scope, s)!;
-    expect(req.url).toBe("/projects/RHH/reach");
+    expect(req.url).toBe("/projects/SAMPLE/reach");
     expect(JSON.parse(req.body)).toEqual({
       sources: [{ room_id: "a", x: 1, y: 2 }, { room_id: "b" }],
       limit_mm: 30000,

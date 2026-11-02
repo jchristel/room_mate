@@ -1,10 +1,10 @@
-"""RHH loader for the stage 0 scripts: four interior models, rooms + FF&E by (model, room id)."""
+"""SAMPLE loader for the stage 0 scripts: four interior models, rooms + FF&E by (model, room id)."""
 import json, re, os, glob
 from bp0 import *
 
-BASE = "/Users/janchristel/Documents/repos/RoomMateProd/run/data/snapshots/RHH"
-MODELS = ["RHH-HDR-AR-MDL-HOS-INT_LG-G", "RHH-HDR-AR-MDL-HOS-INT_L1-L2",
-          "RHH-HDR-AR-MDL-HOS-INT_L3-L5", "RHH-HDR-AR-MDL-HOS-INT_L6-RF"]
+BASE = "/Users/janchristel/Documents/repos/RoomMateProd/run/data/snapshots/SAMPLE"
+MODELS = ["SAMPLE-INT_LG-G", "SAMPLE-INT_L1-L2",
+          "SAMPLE-INT_L3-L5", "SAMPLE-INT_L6-RF"]
 CODE = re.compile(r"[-\s]*[A-Z]*\d[\w.\-]*$")
 
 
@@ -15,7 +15,7 @@ def latest(d):
 def base_name(n): return CODE.sub("", n).strip() or n
 
 
-def load_rhh():
+def load_sample():
     rooms = {}; skipped = collections.Counter()
     for m in MODELS:
         R = json.load(open(latest(f"{BASE}/{m}")))

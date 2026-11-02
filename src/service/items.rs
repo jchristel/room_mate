@@ -205,7 +205,7 @@ pub struct FfeResult {
     pub revision: String,
     pub ffe: Vec<ItemResponse>,
     /// Each distinct type-property bag once; every item names its row in
-    /// `type_properties_ref`. On RHH this is what took the body from repeating
+    /// `type_properties_ref`. On the sample project this is what took the body from repeating
     /// 1,005 bags across 38,913 items to sending each once. See
     /// `service::type_table`.
     pub type_property_sets: Vec<Arc<PropertyMap>>,
@@ -214,7 +214,7 @@ pub struct FfeResult {
     /// lineage's current phase.
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
     /// Each contributing model's own levels, so a consumer can put an item on a
-    /// storey by ELEVATION. See `entity_scope::levels_by_model`; RHH's interior
+    /// storey by ELEVATION. See `entity_scope::levels_by_model`; the sample project's interior
     /// models are the case that forced it, where 7031 items sat on a
     /// reference-only level the deduped `/rooms` list has no id for.
     pub levels_by_model: BTreeMap<String, Vec<crate::contract::Level>>,

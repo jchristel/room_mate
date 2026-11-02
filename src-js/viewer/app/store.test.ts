@@ -2,7 +2,7 @@
 //
 // Pinned because getting it wrong costs money in one direction and shows a
 // false state in the other: an overlay polled while nobody asked for it is a
-// 9 MB read on RHH for every viewer, and a layer the room panel lists but
+// 9 MB read on the sample project for every viewer, and a layer the room panel lists but
 // nobody fetches reads "not loaded yet" forever. Two askers, one answer — the
 // rest of the store is plumbing a test would only restate.
 

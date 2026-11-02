@@ -3,7 +3,7 @@
 // **Imperative on purpose, beside a React page.** React owns the controls, the
 // data and the selection (`AdjacencyBand.tsx`); this class owns the pixels. The
 // layout settles over a run of frames, and re-rendering a component tree per
-// frame — or an SVG node per room at depth "All" on an RHH level — is the cost
+// frame — or an SVG node per room at depth "All" on a sample project level — is the cost
 // STRATEGY-BROWSER's "continuous animation" rule sends a view to canvas to
 // avoid. The same rule is why the plan is WebGL and its overlays SVG: three
 // renderers on one page is a deliberate outcome.

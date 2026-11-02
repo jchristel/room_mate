@@ -20,14 +20,14 @@ describe("roomsUrl", () => {
 });
 
 describe("resolveProject", () => {
-  const projects = [{ id: "House A" }, { id: "RHH" }];
+  const projects = [{ id: "House A" }, { id: "SAMPLE" }];
 
   it("keeps a selection the server still lists", () => {
-    expect(resolveProject(projects, "RHH", "House A", true)).toBe("RHH");
+    expect(resolveProject(projects, "SAMPLE", "House A", true)).toBe("SAMPLE");
   });
 
   it("takes the seed on the first resolve", () => {
-    expect(resolveProject(projects, null, "RHH", false)).toBe("RHH");
+    expect(resolveProject(projects, null, "SAMPLE", false)).toBe("SAMPLE");
   });
 
   /** A deep link to a project the server no longer serves must not leave the
@@ -37,7 +37,7 @@ describe("resolveProject", () => {
   });
 
   it("ignores the seed once seeding has happened", () => {
-    expect(resolveProject(projects, null, "RHH", true)).toBe("House A");
+    expect(resolveProject(projects, null, "SAMPLE", true)).toBe("House A");
   });
 
   it("is null when the server lists nothing", () => {

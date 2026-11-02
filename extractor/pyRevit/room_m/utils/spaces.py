@@ -113,7 +113,7 @@ def placement_facts(spaces):
     """Which spaces are unplaced, and which enclose nothing.
 
     **Enclosure is decided from `Area`, never from `GetBoundarySegments`**, and
-    that is a measurement rather than a preference. On RHH, 96.3% of spaces
+    that is a measurement rather than a preference. On the sample project, 96.3% of spaces
     reported *zero* boundary segments while exporting a perfectly good polygon:
     their bounding elements live in the linked architectural model, so Revit
     reports no segments and duHast measures the solid instead. A segment count is

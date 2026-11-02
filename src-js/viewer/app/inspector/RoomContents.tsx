@@ -5,7 +5,7 @@
 // element payloads the poll already holds carry each element's owning room, so
 // this is an inversion of data the page has — the same client-side reshuffle
 // rule that keeps CSV export and area tabulation off the server. It matters
-// more here than tidiness: `/ffe` is 133 MB on RHH, so a panel that fetched on
+// more here than tidiness: `/ffe` is 133 MB on the sample project, so a panel that fetched on
 // the first room click would stall the page on a click that looks free.
 //
 // **The payloads hold only the storeys on screen**, so a room on a storey no
@@ -162,7 +162,7 @@ export function RoomContents({ room, storeyShown }: { room: Room; storeyShown: b
           }
 
           // A read that answered 200 with an empty list means the same to a
-          // reader as one that answered 204 — and RHH proves it matters: it has
+          // reader as one that answered 204 — and the sample project proves it matters: it has
           // no windows snapshot at all, so `/windows` answers 200 with an empty
           // list. Reporting that as "none in this room" would put a fact about
           // the PROJECT into a sentence about the room, on all 3,013 of them.

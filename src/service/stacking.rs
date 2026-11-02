@@ -4,7 +4,7 @@
 //!
 //! ## Why plan overlap, and what was measured
 //!
-//! Measured on RHH (2026-10-10) over its 104 lift and 63 stair rooms: with the next
+//! Measured on the sample project (2026-10-10) over its 104 lift and 63 stair rooms: with the next
 //! storey chosen sensibly, the room whose name shares the source's stem was the top
 //! overlap in 146 of 158 lift hops and 70 of 75 stair hops, and a stem-mate was
 //! never missed when one existed. Lifts overlap almost entirely or not at all, so
@@ -14,7 +14,7 @@
 //!
 //! ## The next storey is the next one with something over the room
 //!
-//! **Not the next level in the project's list.** RHH's car park has half-levels
+//! **Not the next level in the project's list.** The sample project's car park has half-levels
 //! (`C 0.5`, `C 1.5`, ...) stacked between hospital floors, so the level above a
 //! hospital lift room, in elevation order, is a car-park level with nothing over it:
 //! only 51 of 198 lift hops found any overlap that way, against 158 once the
@@ -33,7 +33,7 @@
 //! then by overlap. The stem is a boost and never a requirement, so a stair whose
 //! landing rooms are named differently is still offered. `confidence` says whether
 //! the top candidate stands alone (`clear`) or the reader has to choose
-//! (`ambiguous`): RHH's lift roofs, where several lifts share one plant room, and a
+//! (`ambiguous`): the sample project's lift roofs, where several lifts share one plant room, and a
 //! stair beside a pressurised stairwell, are the cases that measured ambiguous.
 //! Nothing is attributed when no room overlaps: that stair is the manual one.
 

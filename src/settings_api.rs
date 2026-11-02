@@ -264,7 +264,7 @@ fn matching_entry<'a>(
 /// and never sent them, and
 /// all three are `#[serde(default, skip_serializing_if = ...)]` — so an unsent
 /// section did not stay unedited, it was **deleted**, silently, by editing
-/// something unrelated. RHH lost `[doors] room_resolution = "same_model"` that
+/// something unrelated. The sample project lost `[doors] room_resolution = "same_model"` that
 /// way and put 2084 doors back to homeless; nothing anywhere said so.
 ///
 /// The merge is deliberately **top-level only**. A deep merge would resurrect
@@ -1121,7 +1121,7 @@ name_property = "Department"
     /// The regression this whole merge exists for: a body shaped like what the
     /// old `settings.html` sent — no `doors` key anywhere — must not
     /// delete `[doors]`. Before `merge_over_stored`, editing a room label
-    /// silently dropped `room_resolution` and re-homeless'd 2084 RHH doors.
+    /// silently dropped `room_resolution` and re-homeless'd 2084 the sample project doors.
     #[test]
     fn test_update_preserves_sections_the_client_did_not_send() {
         let dir = temp_dir("merge-keep");

@@ -52,7 +52,7 @@ pub mod validation;
 /// **Why this exists.** `/rooms` and `/doors` already return a `revision` the
 /// viewer compares to decide whether to re-render — but it arrives at the bottom
 /// of the body, so a poll that changes nothing still costs a full assemble and a
-/// full download. At RHH scale that is 16 MB and 73 MB every two seconds, per
+/// full download. At the sample project scale that is 16 MB and 73 MB every two seconds, per
 /// open tab: measured, ~4.7 s of work against a 2 s tick, three concurrent
 /// `/doors` reads taking the server from 245 MB to 904 MB resident. This is the
 /// same question answered from the index instead, so the adapters can settle an
@@ -273,7 +273,7 @@ mod tests {
     }
 
     /// Scoping to a project excludes another project's pushes. Without this the
-    /// cursor would be storewide, and RHH — the reason any of this exists —
+    /// cursor would be storewide, and the sample project — the reason any of this exists —
     /// would invalidate House A's poll on every import.
     #[test]
     fn test_cursor_is_scoped_to_its_project() {

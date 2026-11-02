@@ -527,7 +527,7 @@ impl Context<'_> {
             .filter_map(|i| self.bp_frame.get(i.id.as_str()).map(|(c, a)| (i.id.as_str(), corners_of(i, *c, *a))))
             .collect();
         // Only what the room CHANGES: an item already outside its own source room (the model has
-        // some, three of 66 on RHH's `1 BED B`) would otherwise be reported on every resolve.
+        // some, three of 66 on the sample project's `1 BED B`) would otherwise be reported on every resolve.
         for i in &free {
             let (Some(now), Some(was)) = (boxes_in_room.get(i.id.as_str()), boxes_in_blueprint.get(i.id.as_str()))
             else {

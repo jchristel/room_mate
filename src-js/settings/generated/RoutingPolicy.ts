@@ -26,7 +26,7 @@ export type RoutingPolicy = {
 /**
  * The room property holding a room's clear height, in millimetres. Matched
  * ignoring case and runs of spaces, because Revit parameter names are typed by
- * people (RHH's is `Ceiling  Height`, with two). `None` means
+ * people (the sample project's is `Ceiling  Height`, with two). `None` means
  * `RoutingPolicy::DEFAULT_ROOM_HEIGHT_PROPERTY`.
  */
 room_height_property?: string | null, 
@@ -36,7 +36,7 @@ room_height_property?: string | null,
  * ceiling really is (a drop ceiling, a bulkhead) and the property is whatever a
  * template says. The lowest ceiling covering at least a quarter of the room wins, and
  * an offset at or below zero (a roof, a ceiling below its level) is not a ceiling over a
- * room and is ignored. Measured on RHH: ceilings cover 2,291 rooms and the property
+ * room and is ignored. Measured on the sample project: ceilings cover 2,291 rooms and the property
  * 2,538, and using both reaches 2,630.
  */
 room_height_from_ceilings: boolean, 
@@ -44,7 +44,7 @@ room_height_from_ceilings: boolean,
  * Whether a door's height may be read from its type name when none of
  * `door_height_properties` is present: the convention that puts the size in the
  * name ("970 x 2040 TD01", "DWWH-003 820W x 2100H"). On by default, because on
- * RHH 97% of door types follow it and no door has a height property at all. Off
+ * The sample project 97% of door types follow it and no door has a height property at all. Off
  * for a project whose names say something else that happens to look like a size.
  */
 door_height_from_type_name: boolean, 

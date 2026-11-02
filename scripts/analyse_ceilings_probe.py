@@ -372,7 +372,7 @@ def level_rows(documents):
     Both are reported because they answer different questions. duHast's
     `process_ceilings_to_rooms` buckets by NAME, and RoomMate joins storeys by
     name AND elevation (`src-js/renderer/storey.ts`) precisely because a name
-    alone is not enough -- RHH stacks a car park level at the hospital ground's
+    alone is not enough -- the sample project stacks a car park level at the hospital ground's
     elevation. If the two populations disagree on names, the duHast algorithm
     silently matches nothing and this table is the only place that shows it.
     """
@@ -562,7 +562,7 @@ def union_area(polygons):
     The only measurement that separates a duplicated face from two disjoint
     pieces. `A u A = A`, so duplicates union to the area of one face; genuinely
     separate pieces union to more. The sum/largest ratio cannot do this and got
-    RHH wrong by 35 ceilings.
+    the sample project wrong by 35 ceilings.
     """
     if not HAVE_SHAPELY:
         return None
@@ -630,7 +630,7 @@ def shape_rows(documents):
                 continue
             # **Classify on the UNION, never on sum/largest.** That ratio cannot
             # tell a duplicated face from two equal disjoint pieces -- both give
-            # `sum` about twice `largest` -- and on RHH it called 35 genuinely
+            # `sum` about twice `largest` -- and on the sample project it called 35 genuinely
             # disjoint ceilings "duplicate faces", which is how the contract came
             # to take one polygon and lose 44% of ceiling area on average.
             # `union == largest` means the extras add nothing; `union > largest`
@@ -788,7 +788,7 @@ def build_report(index, documents):
     lines.extend(table(["document", "ceilings", "rooms", "holds"], rows))
 
     # **Only `ceilings_only` decides this question, and an earlier version of
-    # this verdict got that wrong on RHH.** It fired on `rooms_only` too and
+    # this verdict got that wrong on the sample project.** It fired on `rooms_only` too and
     # announced "split populations -- the join has to be project-scoped", which
     # would have argued for undoing a correct design decision. A document
     # holding rooms and no ceilings is ordinary: a base-build package, a site
@@ -932,7 +932,7 @@ def build_report(index, documents):
             # opposite.** These pairs are found because `overlap_pairs` is
             # deliberately project-wide -- it measures what geometry does, so
             # the scope question can be decided on numbers rather than assumed.
-            # What it actually finds on RHH is a ceiling in an interiors model
+            # What it actually finds on the sample project is a ceiling in an interiors model
             # lying over the single site-wide or base-build room another
             # document declares at the same storey. Attributing a ceiling to a
             # site boundary is a WRONG answer, and the model-scoped join is what
@@ -999,7 +999,7 @@ def build_report(index, documents):
         "{} ceiling(s) export more than one polygon, and the split below is what "
         "matters. A slab has two horizontal faces, so an extra polygon MAY be the "
         "same face again -- that is all House A had. It may equally be a separate "
-        "piece of the same ceiling, which is what RHH mostly has. The "
+        "piece of the same ceiling, which is what the sample project mostly has. The "
         "classification is on the UNION, never on summed area: `sum` is about "
         "twice `largest` in BOTH cases, which is how the first reading of this "
         "got it wrong.".format(multi_total)
@@ -1048,7 +1048,7 @@ def build_report(index, documents):
             "than any single piece, so the pieces are disjoint parts of one "
             "ceiling. A single outer-ring-plus-holes field cannot carry these, "
             "which is why the contract carries a LIST of polygons and the "
-            "consumer unions them. Taking one piece loses real ceiling: on RHH, "
+            "consumer unions them. Taking one piece loses real ceiling: on the sample project, "
             "44.0% of area on average and 99.2% at worst.".format(len(disjoint))
         )
         lines.extend(

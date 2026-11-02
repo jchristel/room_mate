@@ -1478,7 +1478,7 @@ impl SpaceSink<'_> {
 /// services model usually holds no rooms at all, so "re-phase the model with a
 /// rooms push first" -- the escape hatch the openings message offers -- is not
 /// one it has: its lineage would be fixed on whatever phase reached it first,
-/// permanently. Measured on RHH, where the mechanical model keeps 1,532 of its
+/// permanently. Measured on the sample project, where the mechanical model keeps 1,532 of its
 /// 1,533 spaces in a phase called `Future` while every sibling model uses `New
 /// Construction`, and the push phase is one per run.
 ///
@@ -1649,7 +1649,7 @@ pub async fn ingest_spaces(
 }
 
 /// Streaming NDJSON spaces ingest -- `ingest_spaces` for a push too large to
-/// buffer. RHH's four services models carry 10,570 spaces between them, which is
+/// buffer. The sample project's four services models carry 10,570 spaces between them, which is
 /// what this route is for.
 pub async fn ingest_spaces_stream(
     State(state): State<Shared>,
@@ -3824,8 +3824,8 @@ mod tests {
     /// **An empty spaces push is accepted, where an empty rooms push is a 422.**
     /// The single most entity-specific rule here: "this services model was
     /// audited and holds no spaces" is the finding requirement 1 buys, and a
-    /// different fact from "this model was never pushed". RHH has such a model
-    /// (`RHH-JHA-AV-MDL-HOS`, 0 spaces), so this is the measured case rather
+    /// different fact from "this model was never pushed". The sample project has such a model
+    /// (`SAMPLE-AV`, 0 spaces), so this is the measured case rather
     /// than a hypothetical one.
     #[tokio::test]
     async fn test_an_empty_spaces_push_is_accepted() {
@@ -3868,7 +3868,7 @@ mod tests {
         .expect("the first push phases the lineage");
         assert_eq!(status, StatusCode::OK);
 
-        // The RHH case: the mechanical model's spaces actually live in "Future".
+        // The the sample project case: the mechanical model's spaces actually live in "Future".
         let (status, body) = ingest_spaces(
             State(state.clone()),
             Json(spaces_upload("me", "2026-09-06T01:00:00Z", Some("Future"), vec![make_room("s2", "S")])),

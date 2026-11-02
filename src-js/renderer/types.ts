@@ -118,7 +118,7 @@ export interface Ceiling {
   id: string;
   level_id?: string;
   /** EVERY piece, not one ring. duHast exports a ceiling once per horizontal
-   *  face and RHH's pieces are genuinely disjoint -- drawing only the first
+   *  face and the sample project's pieces are genuinely disjoint -- drawing only the first
    *  would omit 44% of ceiling area on average there, 99.2% at worst. */
   polygons?: CeilingPolygon[];
   /** The model the ceiling came from. Needed by `onStorey`, which joins a

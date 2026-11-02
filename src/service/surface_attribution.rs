@@ -31,7 +31,7 @@
 //! **A WIDTH, because an area cannot catch the second.** A 3 mm strip along a
 //! 3 m wall is 0.009 sqm and along a 30 m corridor 0.09 sqm, so any area line
 //! either lets long walls through or drops real small rooms. The width of that
-//! strip is 3 mm whatever the wall's length. Measured on RHH (2026-09-16) with
+//! strip is 3 mm whatever the wall's length. Measured on the sample project (2026-09-16) with
 //! a 0.001 sqm area tolerance in its place: 243 of the pairs it admitted were
 //! 0.001-0.01 sqm with a median width of 3-4 mm, and 559 more were
 //! 0.01-0.1 sqm with a median of 30-40 mm.
@@ -41,7 +41,7 @@
 //! wall (1.5 ft) unless it was half the room or half the floor, with a 1 sqft
 //! absolute minimum under both. Each drew a line through a population with no
 //! gap in it, and each needed another escape for the case the last one missed:
-//! on RHH the ceiling rule dropped 17 rooms at least half covered by a ceiling
+//! on the sample project the ceiling rule dropped 17 rooms at least half covered by a ceiling
 //! (8 of them wholly) because each was under 0.5% of it, and the floor rule
 //! dropped 43% of a 9 sqft water niche. Deciding which real overlaps
 //! count is a policy about the model, not a property of the arithmetic, so the
@@ -50,10 +50,10 @@
 //! every row. A strip of floor under a wall into a neighbour IS reported, as a
 //! small `fraction_of_room` with a `mean_width` under the wall thickness, and
 //! `rooms` stays ordered largest overlap first, so `rooms[0]` did not change
-//! for any RHH ceiling or floor when the rules went.
+//! for any the sample project ceiling or floor when the rules went.
 //!
 //! What that costs, knowingly: a **degenerate export** -- House A's two ceilings
-//! of 0.33 and 0.18 sqft, RHH's three under 5 sqft -- attributes to the room it
+//! of 0.33 and 0.18 sqft, the sample project's three under 5 sqft -- attributes to the room it
 //! lies in. It is an export fault rather than imprecision, so it is the QA
 //! report's to surface, not this tolerance's to hide.
 
@@ -113,15 +113,15 @@ pub struct SurfaceRoom {
 /// A surface's plan footprint: the UNION of every piece it exports.
 ///
 /// **The union, and not the first piece or the largest one** -- the rule House A
-/// taught wrongly and RHH corrected. duHast exports a slab once per horizontal
+/// taught wrongly and the sample project corrected. duHast exports a slab once per horizontal
 /// face of its solid, so on House A a ceiling arrived as its top face, its
 /// bottom face and some edge slivers, and the largest piece was the whole
-/// ceiling. RHH's pieces are genuinely disjoint instead: against the union,
+/// ceiling. The sample project's pieces are genuinely disjoint instead: against the union,
 /// taking the first loses 44.0% of ceiling area on average (99.2% at worst) and
 /// taking the largest still loses 25.7%, with 31 of 48 losing over 5%.
 ///
 /// The union is the one operation correct on both. It collapses House A's
-/// duplicated faces back to a single face -- `A ∪ A = A` -- and keeps RHH's
+/// duplicated faces back to a single face -- `A ∪ A = A` -- and keeps the sample project's
 /// separate pieces, so neither document needs a special case. It is also what
 /// fills an island back into the hole around it: duHast exports an island as a
 /// piece of its own, never as a ring inside a hole. A SUM would have been wrong
@@ -139,7 +139,7 @@ pub fn surface_shape(surface: &Surface) -> Option<MultiPolygon<f64>> {
         // column or a shaft -- small, and `room_locator::outline_of` drops it so
         // a probe landing on a column still resolves. A surface's hole is a
         // light well, a void over an atrium or a stair opening, and is routinely
-        // large: RHH exports 173 holed ceiling polygons. Keeping them makes both
+        // large: the sample project exports 173 holed ceiling polygons. Keeping them makes both
         // the overlap and the `fraction_of_element` denominator measure the
         // surface that is actually there.
         let holes: Vec<LineString<f64>> =
@@ -174,7 +174,7 @@ fn perimeter(shape: &MultiPolygon<f64>) -> f64 {
 /// rule is that an element joining on a room id is model-scoped everywhere,
 /// and spaces are the single exception because they join on a project-unique
 /// *key*. A surface joins on neither -- it joins on geometry -- so it follows
-/// the conservative rule, which RHH's ceilings confirmed and its fit-out
+/// the conservative rule, which the sample project's ceilings confirmed and its fit-out
 /// floors did too. **Its base-build model has not been exported**, and slabs
 /// there beside fit-out models holding the rooms is exactly the layout that
 /// would break it.
@@ -187,7 +187,7 @@ pub fn attribute(surface: &Surface, elevation: f64, rooms: &[Candidate]) -> Vec<
         return Vec::new();
     }
     // A bounding-box reject before the boolean op. `/ceilings` measured 33 s on
-    // RHH with every ceiling intersected against every room on its storey, and
+    // The sample project with every ceiling intersected against every room on its storey, and
     // a floor plate is the worst case for that: one slab, every room. Nearly
     // every pair on a storey is disjoint, and a rect test settles those for
     // nothing. It cannot change an answer -- boxes that miss cannot hold
@@ -226,7 +226,7 @@ pub fn attribute(surface: &Surface, elevation: f64, rooms: &[Candidate]) -> Vec<
     }
     // Largest first, so the room a surface mostly belongs to reads first and a
     // consumer wanting a single owner can take `rooms[0]` without inventing its
-    // own rule. Then by room id. **The tie-break is not decoration**: RHH has
+    // own rule. Then by room id. **The tie-break is not decoration**: the sample project has
     // ceilings lying over six rooms with byte-identical overlap areas (one
     // covers six at exactly 86.448 sqft), and `partial_cmp` alone leaves their
     // order to whatever the scan produced. `rooms[0]` is documented as a usable
@@ -416,7 +416,7 @@ mod tests {
 
     /// Equal overlaps must order deterministically, or `rooms[0]` -- documented
     /// as a usable single owner -- is a different room between two reads of the
-    /// same data. RHH has a ceiling over six rooms at identical area.
+    /// same data. The sample project has a ceiling over six rooms at identical area.
     #[test]
     fn test_equal_overlaps_break_the_tie_on_room_id() {
         // One 10x10 ceiling split exactly in half by two rooms: 50 sqft each.
@@ -455,9 +455,9 @@ mod tests {
         assert!((out[0].fraction_of_element - 1.0).abs() < 1e-9, "and the surface is 100 sqft, not 200");
     }
 
-    /// **RHH's shape, and the reason the field is a list.** Two disjoint pieces
+    /// **The sample project's shape, and the reason the field is a list.** Two disjoint pieces
     /// are one surface. Taking the first would lose the second entirely -- 44%
-    /// of ceiling area on average across RHH's 48 multi-polygon ceilings, 99.2%
+    /// of ceiling area on average across the sample project's 48 multi-polygon ceilings, 99.2%
     /// at worst -- and taking the largest would still lose the smaller piece.
     #[test]
     fn test_disjoint_pieces_are_one_surface() {
@@ -476,7 +476,7 @@ mod tests {
         assert!((out[0].fraction_of_element - 100.0 / 125.0).abs() < 1e-9);
     }
 
-    /// A hole is a light well, a void over an atrium, a stair opening, and RHH
+    /// A hole is a light well, a void over an atrium, a stair opening, and the sample project
     /// exports 173 holed ceiling polygons. It must come out of the surface's own
     /// area, or a slab with a large void reports covering ground it does not.
     #[test]

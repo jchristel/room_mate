@@ -894,7 +894,7 @@ export class GlPlanRenderer implements PlanRenderer {
     const ceilingLine = overrideOr(app.ceilings?.line, pal[LAYER_THEME_COLOUR.ceilings]);
     for (const ceiling of this.#activeCeilings()) {
       // EVERY piece, and every ring of it. A ceiling is a list of polygons
-      // because RHH's arrive in genuinely disjoint pieces -- drawing only the
+      // because the sample project's arrive in genuinely disjoint pieces -- drawing only the
       // first would under-draw 48 of its ceilings, one of them by 99%. Holes
       // are drawn too: a light well over an atrium is a visible edge, and the
       // server already subtracts it from the ceiling's area.

@@ -22,7 +22,7 @@ const bp: Blueprint = {
 
 describe("export files", () => {
   it("round-trips one revision", () => {
-    const f = toFile(bp, 2, "RHH");
+    const f = toFile(bp, 2, "SAMPLE");
     expect(f?.revision.note).toBe("moved");
     const back = parseFile(JSON.stringify(f));
     expect(back.ok && back.file.name).toBe("1 BED B");
@@ -51,7 +51,7 @@ describe("export files", () => {
   });
 
   it("has nothing to export for a revision the blueprint lacks", () => {
-    expect(toFile(bp, 9, "RHH")).toBeNull();
+    expect(toFile(bp, 9, "SAMPLE")).toBeNull();
   });
 
   it("says why a file is not a blueprint export", () => {

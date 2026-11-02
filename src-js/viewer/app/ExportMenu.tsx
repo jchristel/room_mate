@@ -46,7 +46,7 @@ export function ExportMenu({
 
   const ordered = pickerOrder(levels);
   // A level with no rooms has nothing to frame and can never produce a file, so
-  // it is listed but not offered. RHH declares a second, empty "LEVEL 7" beside
+  // it is listed but not offered. The sample project declares a second, empty "LEVEL 7" beside
   // the real one; ticked, it came back as "LEVEL 7: no rooms, skipped", which
   // reads as the export losing a 185-room floor.
   const offered = payload ? ordered.filter((l) => roomsOnLevel(payload, l.id).length > 0) : [];

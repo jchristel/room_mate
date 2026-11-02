@@ -198,7 +198,7 @@ def translate_item(item, contribution):
         # assigned, and it is only that since duHast 2026-09-07 -- before then
         # `to_data_item` derived it geometrically (nearest level at or below the
         # item's bounding box) and disagreed with the Properties palette on any
-        # model carrying levels its items are not placed on. RHH's interior
+        # model carrying levels its items are not placed on. The sample project's interior
         # models carry exactly that: reference levels mis-elevated onto other
         # storeys' heights, and 9,186 of 15,070 items in one of them exported
         # onto the wrong floor.

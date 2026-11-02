@@ -4,7 +4,7 @@ import { coversStorey, elementUrl, matchSuffix, visibleStoreys } from "./element
 import type { Level } from "../renderer/types.js";
 
 const level = (id: string, name: string, elevation: number): Level => ({ id, name, elevation });
-const scope = { projectId: "RHH", building: null, milestone: null };
+const scope = { projectId: "SAMPLE", building: null, milestone: null };
 
 describe("elementUrl", () => {
   /** The case that stops a load fetching every storey once: until the rooms
@@ -15,23 +15,23 @@ describe("elementUrl", () => {
 
   it("scopes by storey elevation and id", () => {
     const url = elementUrl("doors", scope, [level("7", "LEVEL 1", 12.5)]);
-    expect(url).toBe("/doors?project=RHH&storey_elevations=12.5&storey_level_ids=7");
+    expect(url).toBe("/doors?project=SAMPLE&storey_elevations=12.5&storey_level_ids=7");
   });
 
   /** A payload that declares no levels is the show-everything case, so the
    *  read is unscoped rather than asking for no storeys and getting nothing. */
   it("asks unscoped when the payload declares no levels", () => {
-    expect(elementUrl("ceilings", scope, [])).toBe("/ceilings?project=RHH");
+    expect(elementUrl("ceilings", scope, [])).toBe("/ceilings?project=SAMPLE");
   });
 
   it("carries building and milestone", () => {
-    const url = elementUrl("ffe", { projectId: "RHH", building: "B1", milestone: "Issue 3" }, []);
-    expect(url).toBe("/ffe?project=RHH&building=B1&milestone=Issue+3");
+    const url = elementUrl("ffe", { projectId: "SAMPLE", building: "B1", milestone: "Issue 3" }, []);
+    expect(url).toBe("/ffe?project=SAMPLE&building=B1&milestone=Issue+3");
   });
 
   it("takes a model for spaces only, which is the one entity that serves it", () => {
-    expect(elementUrl("spaces", scope, [], { model: "MECH" })).toBe("/spaces?project=RHH&model=MECH");
-    expect(elementUrl("ceilings", scope, [], { model: "MECH" })).toBe("/ceilings?project=RHH");
+    expect(elementUrl("spaces", scope, [], { model: "MECH" })).toBe("/spaces?project=SAMPLE&model=MECH");
+    expect(elementUrl("ceilings", scope, [], { model: "MECH" })).toBe("/ceilings?project=SAMPLE");
   });
 });
 
@@ -70,7 +70,7 @@ describe("matchSuffix", () => {
 });
 
 describe("coversStorey", () => {
-  const url = (ids: string, extra = "") => `/doors?project=RHH${extra}&storey_elevations=0&storey_level_ids=${ids}`;
+  const url = (ids: string, extra = "") => `/doors?project=SAMPLE${extra}&storey_elevations=0&storey_level_ids=${ids}`;
 
   it("covers a zone whose storey the held read already asked for", () => {
     expect(coversStorey(url("7,9"), url("7,9,11"), "9")).toBe(true);
@@ -91,6 +91,6 @@ describe("coversStorey", () => {
   });
 
   it("treats an unscoped held read as covering every storey", () => {
-    expect(coversStorey("/doors?project=RHH", url("7"), "7")).toBe(true);
+    expect(coversStorey("/doors?project=SAMPLE", url("7"), "7")).toBe(true);
   });
 });

@@ -134,7 +134,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   // MEMOISED, and it is not a micro-optimisation: this array is the paint
   // effect's dependency, so recomputing it on every render would tear down and
   // rebuild the plan whenever any unrelated state moved -- toggling "Link
-  // views" would re-triangulate 3,000 RHH rooms in every zone. With the memo a
+  // views" would re-triangulate 3,000 the sample project rooms in every zone. With the memo a
   // repaint happens when the payload or the level does, which is the old
   // page's rule.
   const rooms = useMemo(() => (payload ? roomsOnLevel(payload, levelId) : []), [payload, levelId]);

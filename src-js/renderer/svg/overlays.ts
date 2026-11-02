@@ -83,7 +83,7 @@ function append(svg: SVGElement, g: SVGElement): void {
 }
 
 /** Every ring of every piece. A ceiling or floor is a LIST of polygons whose
- *  pieces on RHH are genuinely disjoint, and a hole is a visible edge. */
+ *  pieces on the sample project are genuinely disjoint, and a hole is a visible edge. */
 function surface(svg: SVGElement, id: string, cls: string, elements: readonly Ceiling[] | undefined): void {
   const g = group(svg, id);
   for (const element of elements ?? []) {

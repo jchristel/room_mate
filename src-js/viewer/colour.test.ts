@@ -142,7 +142,7 @@ describe("propertycompare", () => {
     expect(colourForRoom(rooms[2]!, plan, ctx, [])).toBe(NO_DATA_COLOUR); // unparseable
   });
 
-  /** The RHH report: a plan over `<source>.<field>` coloured every room "no
+  /** The the sample project report: a plan over `<source>.<field>` coloured every room "no
    *  data" because the viewer never passed the source list, and the lookup binds
    *  a prefix only against that list. Both halves are asserted, so the test
    *  fails if the argument is ignored as well as if it is omitted. */

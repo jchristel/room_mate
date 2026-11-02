@@ -39,7 +39,7 @@ that was the whole story: 7 of 30 ceilings exported more than one polygon, the
 extras were the same face again (IoU above 0.98), and `polygon[0]` happened to
 be the largest. So this module used to take the first and discard the rest.
 
-**RHH proved that general only by accident.** Of its 48 multi-polygon ceilings
+**The sample project proved that general only by accident.** Of its 48 multi-polygon ceilings
 the pieces are genuinely DISJOINT. Measured against the union: taking
 `polygon[0]` loses 44.0% of the ceiling's area on average and 99.2% at worst --
 one 1,457 sqft ceiling whose first piece is 11 sqft -- and taking the LARGEST
@@ -47,7 +47,7 @@ piece still loses 25.7% on average, 31 of the 48 losing over 5%.
 
 So every piece goes on the wire and `service::surface_attribution` unions them,
 which is the one operation correct on both documents: it collapses House A's
-duplicated faces back to one face and keeps RHH's separate pieces. A SUM would
+duplicated faces back to one face and keeps the sample project's separate pieces. A SUM would
 be wrong on House A for exactly the reason the union is not. It is also what
 fills an ISLAND back in: duHast sorts a face's loops by containment, so a loop
 inside a hole arrives as a piece of its own rather than as a second hole.

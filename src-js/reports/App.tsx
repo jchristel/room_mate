@@ -7,7 +7,7 @@
 // rendered by two pieces of code drift the first time either is fixed).
 //
 // Schedules and the by-room reports read `POST /projects/{id}/reports`, which
-// projects to the columns asked for: `/ffe` is 133 MB for one RHH storey and a
+// projects to the columns asked for: `/ffe` is 133 MB for one the sample project storey and a
 // report of it is a few, so this page never fetches an entity payload to
 // project it locally. The filter builder is the next slice; its design, and the
 // mockup it was reviewed against, are in docs/STRATEGY-REPORTS.md. A report

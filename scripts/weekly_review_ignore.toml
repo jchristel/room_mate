@@ -43,7 +43,7 @@
 "Unplaced" = "analyse_spaces_probe state; the extractor drops these, so they never reach a contract"
 
 # --- Data, not identifiers. ---
-"ENG661" = "a room number from the RHH probe, quoted in PLAN-spaces' worst-pairs finding"
+"ENG661" = "a room number from the sample project probe, quoted in PLAN-spaces' worst-pairs finding"
 
 # --- History written on purpose: the doc names an old symbol to explain a
 #     rename or a split. Deleting these names would make the docs worse, not

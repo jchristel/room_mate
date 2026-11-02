@@ -280,7 +280,7 @@ pub struct Item {
     /// The family this instance's type belongs to (`FamilyInstance.Symbol.FamilyName`).
     ///
     /// **Read from Revit by the extractor, not from the export**: `DataItem` has
-    /// no family field, which a probe of 16,161 RHH items confirmed. Two families
+    /// no family field, which a probe of 16,161 the sample project items confirmed. Two families
     /// can share a type name, so this is what a blueprint matches an item on
     /// before it falls back to `type_name`. Absent in a snapshot pushed before the
     /// field existed, and absent when the extractor could not read it -- never
@@ -312,7 +312,7 @@ pub struct Item {
     /// and it is the single largest thing this entity got for free.
     ///
     /// Behind an `Arc` because every instance of a type holds the same bag --
-    /// on RHH, 16,397 items in one model against 1,005 distinct bags.
+    /// on the sample project, 16,397 items in one model against 1,005 distinct bags.
     #[serde(
         default,
         with = "super::property_codec::shared_map",

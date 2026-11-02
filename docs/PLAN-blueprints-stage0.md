@@ -2,7 +2,7 @@
 
 Part of [PLAN-blueprints.md](PLAN-blueprints.md). Measured 2026-10-19 with throwaway scripts in
 `scripts/blueprint_stage0/` (`bp0.py` is the capture and resolve sketch; `survey.py` and `exp.py`
-run House A from the checked-in data; `rhh.py`, `rhh_exp.py`, `rhh_exp3.py` run Sample Project from the
+run House A from the checked-in data; `sample.py`, `sample_exp.py`, `sample_exp3.py` run Sample Project from the
 production snapshot store, with the paths hard-coded). **Nothing here is product
 code.** Only the geometry and grammar questions of stage 0 are answered. The platform
 question is closed by decision (pyRevit), so no spike was run.

@@ -73,13 +73,13 @@ function normaliseName(name: string): string {
  * Comparing the two directly is wrong in two ways that both fail silently:
  *
  *   - a model whose id lost the dedup race has EVERY element dropped, on every
- *     level (RHH: 5 doors on LEVEL 9, 1358 items on GROUND);
+ *     level (the sample project: 5 doors on LEVEL 9, 1358 items on GROUND);
  *   - a model that pushed no rooms contributes no canonical id at all, so none
- *     of its elements can ever match (RHH's facade package: 78 external doors,
+ *     of its elements can ever match (the sample project's facade package: 78 external doors,
  *     invisible everywhere, which is the report this module was written for).
  *
  * **Name AND elevation, because either alone is wrong on real data.** Elevation
- * alone merges storeys that genuinely share one -- RHH's car park stacks "C 00"
+ * alone merges storeys that genuinely share one -- the sample project's car park stacks "C 00"
  * at the hospital's "GROUND" elevation, and matching on the number alone pulls
  * 74 car-park spaces onto hospital floors. Name alone merges a "LEVEL 1" in one
  * building with an unrelated "LEVEL 1" 40 m higher in another. Requiring both is
@@ -115,7 +115,7 @@ export function sameStorey(candidate: Level, target: Level): boolean {
  *      **A property of the whole payload, not of one storey**, which is why
  *      `levels` (the full displayed list) is a parameter. Deciding it per
  *      storey -- "nothing matched here, try elevation" -- duplicates floors on
- *      real data, twice over on RHH: its interior model carries a decoy
+ *      real data, twice over on the sample project: its interior model carries a decoy
  *      "LEVEL 6" mis-elevated onto LEVEL 4's height with no doors on it, and
  *      its car park has level names no FF&E-bearing model uses. Both would
  *      answer with the neighbouring storey's contents. Once the vocabularies
@@ -128,13 +128,13 @@ export function sameStorey(candidate: Level, target: Level): boolean {
  * An element whose own model does not declare its `level_id` is unresolvable and
  * is not kept -- unless nothing else resolved either, which is case 3. FF&E is
  * where this is visible: duHast writes `-1` for an item it found no solid
- * geometry to measure, and RHH has 842 of them. They were already invisible
+ * geometry to measure, and the sample project has 842 of them. They were already invisible
  * before this module (`"-1"` matched no picker id either); what changes is that
  * they no longer count as evidence that the level data is missing.
  *
  * **A model that declares NO levels falls back to comparing ids**, which is
  * what this module replaced and is still the only thing available for such a
- * model. Snapshots predate `levels` on the element envelopes -- RHH's car park
+ * model. Snapshots predate `levels` on the element envelopes -- the sample project's car park
  * pushed its 122 doors in August with none -- and those ids do resolve against
  * the picker whenever that model also pushed rooms, which is how they were
  * drawn before. Dropping them to enforce the better rule would fix the facade
@@ -153,7 +153,7 @@ export function onStorey<T extends Placed>(
   if (!target) return { kept: all, match: "all" };
 
   // model id -> level id -> that model's own Level. Built once per call; the
-  // alternative is a linear scan of one model's levels per element, and RHH's
+  // alternative is a linear scan of one model's levels per element, and the sample project's
   // services models declare ~40 levels each against 38k items.
   const byModel = new Map<string, Map<string, Level>>();
   for (const [modelId, levels] of Object.entries(levelsByModel ?? {})) {

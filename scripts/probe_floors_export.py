@@ -48,7 +48,7 @@ already measured. Two things were NOT, and each is a place the ceilings
 evidence does not transfer:
 
   F2  Are floors and rooms in the SAME document?  The ceilings probe found
-      them co-located in every RHH document. A slab is exactly the element a
+      them co-located in every the sample project document. A slab is exactly the element a
       base-build model holds while fit-out models hold the rooms, and the
       server's join is model-scoped -- so if this answers "no", every slab in
       such a project reports no room, correctly by the rule and uselessly.
@@ -131,7 +131,7 @@ ENTITY_SPECS = {
 }
 
 # Title prefixes narrowing a federated host's links to the models worth
-# reading. Empty takes every loaded link. For F2 on RHH, include the base-build
+# reading. Empty takes every loaded link. For F2 on the sample project, include the base-build
 # model beside the interiors ones -- that pairing is the question.
 DOCUMENT_PREFIXES = []
 

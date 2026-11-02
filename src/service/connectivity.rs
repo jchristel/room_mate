@@ -136,7 +136,7 @@ pub struct ConnectivityScope<'a> {
     /// than this is not passable; absent or 0 checks nothing. See [`Clearance`].
     pub clear_height_mm: Option<f64>,
     /// The room property that holds a room's clear height, matched ignoring case and
-    /// runs of spaces (RHH's is `Ceiling  Height`, with two). Absent means the project's
+    /// runs of spaces (the sample project's is `Ceiling  Height`, with two). Absent means the project's
     /// `[routing] room_height_property`.
     pub height_property: Option<&'a str>,
     /// Treat every open zone's closed walls as open: ignore its `disconnects` and its
@@ -202,7 +202,7 @@ fn height_from_type_name(name: &str) -> Option<f64> {
 
 /// A ceiling covering less than this fraction of a room is not what the room's height is.
 /// The attribution lists every real overlap, including a strip of a neighbour's ceiling
-/// reaching under a shared wall, and measured on RHH the answer hardly moves between 0 and
+/// reaching under a shared wall, and measured on the sample project the answer hardly moves between 0 and
 /// 0.5 (87% agree with the room property throughout), so the middle of the range, stated.
 const MIN_CEILING_COVERAGE_OF_ROOM: f64 = 0.25;
 
@@ -275,11 +275,11 @@ fn door_height_mm(door: &crate::contract::Opening, properties: &[String], from_t
 
 /// What a door's frame and stops take off the width its footprint measures, in mm.
 ///
-/// The footprint is the door's overall width in plan, frame included: on RHH a
+/// The footprint is the door's overall width in plan, frame included: on the sample project a
 /// "970 x 2040" leaf has a 1,055 mm footprint, and its clear opening is nearer 900.
 /// 150 is a rule of thumb for a standard single door, **an estimate and not a
 /// measurement**, which is why a caller can state their own and why every width here
-/// is reported as an estimate. No door on RHH carries a width property to use instead.
+/// is reported as an estimate. No door on the sample project carries a width property to use instead.
 pub const DEFAULT_FRAME_ALLOWANCE_MM: f64 = RoutingPolicy::DEFAULT_DOOR_FRAME_ALLOWANCE_MM;
 
 const MM_PER_FT: f64 = 304.8;
@@ -2972,14 +2972,14 @@ mod tests {
 
         // ---------- heights ----------
 
-        /// A door whose type name states `height_mm` the way RHH's do ("970 x 2040").
+        /// A door whose type name states `height_mm` the way the sample project's do ("970 x 2040").
         fn sized_tall(id: &str, from: &str, to: &str, clear_mm: f64, height_mm: f64) -> Opening {
             let mut o = sized(id, from, to, clear_mm);
             o.type_name = format!("{} x {} TD01", clear_mm as u32, height_mm as u32);
             o
         }
 
-        /// A room with a ceiling height in the property RHH uses, TWO SPACES and all.
+        /// A room with a ceiling height in the property the sample project uses, TWO SPACES and all.
         fn with_height(mut room: Room, mm: &str) -> Room {
             room.properties.insert(
                 "Ceiling  Height".into(),

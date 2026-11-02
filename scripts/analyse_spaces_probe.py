@@ -116,7 +116,7 @@ def load_inputs(directory):
                 continue
             probe = load(probe_path)
             # The export is REDUCED as it is read, never retained. A real run is
-            # hundreds of megabytes -- RHH's four services models alone are
+            # hundreds of megabytes -- the sample project's four services models alone are
             # 141 MB of space polygons. Holding all of them parsed, to answer one
             # integer and a handful of properties per element, is how an analyser
             # that works on a house dies on a hospital.
@@ -145,7 +145,7 @@ def reduce_export(raw, list_key):
 
     **Property values come from the EXPORT, not from the probe's own parameter
     reads, and the difference is not cosmetic.** The probe reads
-    `LookupParameter("Area").AsValueString()`, which on RHH returns `"71 m2"` --
+    `LookupParameter("Area").AsValueString()`, which on the sample project returns `"71 m2"` --
     display-formatted, unit-suffixed and rounded to the whole number. duHast's
     export of the same space carries `71.27892877719862`. The server stores the
     export's value, so an analysis run on the probe's is measuring something no
@@ -307,9 +307,9 @@ def key_index(entries, key_property):
 def match_one_way(space_index, room_index):
     """ONE services model's spaces against the pooled rooms.
 
-    **Scoped to one space document, and that is the correction RHH forced.**
+    **Scoped to one space document, and that is the correction the sample project forced.**
     PLAN-spaces D2 said "project-wide across every model holding rooms", which
-    quietly assumed one space per room. RHH has one services file PER SERVICE,
+    quietly assumed one space per room. The sample project has one services file PER SERVICE,
     each covering the whole building, so a room number legitimately names a
     mechanical space AND a hydraulic one AND an electrical one. Pooling them
     reported 3046 duplicate keys and made the expected shape of the data into
@@ -628,8 +628,8 @@ def build_report(data):
     presence = presence_rows(documents)
 
     # Which documents play which role. A document is a SPACE source if it holds
-    # spaces and a ROOM source if it holds rooms -- and RHH proved those are not
-    # exclusive: `RHH-JHA-EL-MDL-HOS` holds 2945 spaces AND 3418 rooms of its
+    # spaces and a ROOM source if it holds rooms -- and the sample project proved those are not
+    # exclusive: `SAMPLE-EL` holds 2945 spaces AND 3418 rooms of its
     # own, numbered `1`, `2`, `3`... against the architects' `ENG137`. Pooling
     # those into the room side put 3418 rooms that name nothing into the
     # unmatched column. `--room-docs` is how a reader says which documents are
@@ -938,7 +938,7 @@ def main(argv=None):
     parser.add_argument("--dir", default=DEFAULT_DIR, help="directory holding the probe files")
     parser.add_argument("--out", default=None, help="report path (default: <dir>/spaces-probe-report.md)")
     # Role filters, because "holds rooms" does not mean "is the room authority".
-    # RHH's electrical model holds 3418 rooms of its own, numbered on a scheme
+    # The sample project's electrical model holds 3418 rooms of its own, numbered on a scheme
     # nothing else shares; pooled into the room side they are 3418 rooms that
     # name nothing. A substring is enough to say which documents count.
     parser.add_argument("--room-docs", default=None,

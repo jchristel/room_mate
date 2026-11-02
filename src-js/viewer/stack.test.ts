@@ -73,8 +73,8 @@ describe("buildStack", () => {
 
 describe("stackUrl and wording", () => {
   it("names the room and the milestone", () => {
-    expect(stackUrl("RHH", "12", null)).toBe("/projects/RHH/stack?room=12");
-    expect(stackUrl("RHH", "12", "IFC")).toBe("/projects/RHH/stack?room=12&milestone=IFC");
+    expect(stackUrl("SAMPLE", "12", null)).toBe("/projects/SAMPLE/stack?room=12");
+    expect(stackUrl("SAMPLE", "12", "IFC")).toBe("/projects/SAMPLE/stack?room=12&milestone=IFC");
     expect(stackUrl(null, "12", null)).toBeNull();
   });
 

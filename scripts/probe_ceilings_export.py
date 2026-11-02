@@ -173,8 +173,8 @@ ENTITY_SPECS = {
 }
 
 # Title prefixes narrowing a federated host's links to the models worth
-# reading. Empty takes every loaded link. RHH ran the spaces probe with
-# ["RHH-HDR-AR-MDL", "RHH-JHA-"]; ceilings may well need the interiors models
+# reading. Empty takes every loaded link. The sample project ran the spaces probe with
+# ["SAMPLE-AR", "SAMPLE-"]; ceilings may well need the interiors models
 # too, which is Q2 restated as a setting.
 DOCUMENT_PREFIXES = []
 
@@ -631,7 +631,7 @@ def probe_document(doc, out_dir):
 def linked_documents(host):
     """The host document plus every loaded link.
 
-    The correction the RHH spaces run forced: on a real federated project none
+    The correction the sample project spaces run forced: on a real federated project none
     of these documents are OPEN, they are links inside one host, so a picker
     over open documents finds exactly one file and every cross-document
     question answers nothing."""

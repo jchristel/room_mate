@@ -2,7 +2,7 @@
 //
 // A STACK is the rooms joined by vertical links, drawn as a column of levels. It
 // shows **only the levels that hold a room of the stack** (and the one level a
-// suggestion points at), never the project's other levels: RHH has two buildings
+// suggestion points at), never the project's other levels: the sample project has two buildings
 // with distinct levels, and a hospital lift's column must not list the car park's
 // half-levels it passes. That is why the rows are built from the rooms, not from
 // the level list.

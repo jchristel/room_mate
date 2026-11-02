@@ -23,7 +23,7 @@ describe("sameStorey", () => {
   });
 
   it("separates two storeys that share an elevation", () => {
-    // RHH's car park stacks C 00 at the hospital GROUND's elevation. Matching
+    // The sample project's car park stacks C 00 at the hospital GROUND's elevation. Matching
     // on elevation alone pulls car-park elements onto hospital floors.
     expect(sameStorey(lvl("8662438", "C 00", 55500), lvl("7977087", "GROUND", 55500))).toBe(false);
   });
@@ -81,7 +81,7 @@ describe("onStorey", () => {
   });
 
   it("does not fall back once the vocabularies overlap anywhere", () => {
-    // RHH's car park declares "C 00"/"C 05" and no model that pushed FF&E uses
+    // The sample project's car park declares "C 00"/"C 05" and no model that pushed FF&E uses
     // those names -- but both sides agree on GROUND and LEVEL 3, so the names
     // are comparable and "C 05 has no furniture" is the answer. Falling back
     // here painted LEVEL 3's 2382 items onto the car park.
@@ -93,7 +93,7 @@ describe("onStorey", () => {
   });
 
   it("does not fall back to elevation when a model declares the name and is empty", () => {
-    // RHH's interior model carries a decoy "LEVEL 6" mis-elevated to LEVEL 4's
+    // The sample project's interior model carries a decoy "LEVEL 6" mis-elevated to LEVEL 4's
     // height and puts no doors on it. Falling back would answer with LEVEL 4's
     // doors and duplicate a whole storey.
     const decoy = lvl("51029993", "LEVEL 6", 74000);
@@ -119,7 +119,7 @@ describe("onStorey", () => {
   });
 
   it("does not let unresolvable elements trigger the show-everything fallback", () => {
-    // duHast writes level -1 for an item it could not measure; RHH has 842.
+    // duHast writes level -1 for an item it could not measure; the sample project has 842.
     // They are unplaceable, but they are not evidence the levels are missing.
     const levels = { m: [lvl("l3", "LEVEL 3", 69000)] };
     const result = onStorey([el("a", "m", "l3"), el("b", "m", "-1")], levels, target);
@@ -128,7 +128,7 @@ describe("onStorey", () => {
   });
 
   it("falls back to the canonical id for a model that declared no levels", () => {
-    // RHH's car park pushed its doors before `levels` rode the element
+    // The sample project's car park pushed its doors before `levels` rode the element
     // envelopes. Its ids DO resolve against the picker, because it also pushed
     // rooms — dropping them to enforce the better rule would fix the facade by
     // breaking the car park.

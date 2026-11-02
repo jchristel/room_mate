@@ -16,7 +16,7 @@
 > from Revit, pushed, read, reconciled against rooms and drawn on the plan.
 > The decisions below were written from a reading of duHast's source and are
 > left standing rather than edited into agreement with the data;
-> [As measured](#as-measured--rhh-2026-09-06) records what the probe found,
+> [As measured](#as-measured--sample-project-2026-09-06) records what the probe found,
 > including the three predictions it inverted and the one that would have made
 > the first push silently wrong. Read that section before trusting any figure
 > above it. Nothing else is built.
