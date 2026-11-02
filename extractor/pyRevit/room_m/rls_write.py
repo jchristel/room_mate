@@ -26,6 +26,7 @@ rectangle drawn round an item a person chose to tag, and a tag's own text. Sched
 import math
 
 from Autodesk.Revit.DB import (
+    TagOrientation,
     BuiltInCategory,
     BuiltInParameter,
     Element,
@@ -458,16 +459,22 @@ class RlsWriter(object):
             if view is None:
                 continue
             right, up = view.RightDirection, view.UpDirection
+            at = lambda point, offset: XYZ(*geo.elevation_head_ft(  # noqa: E731
+                (point.X, point.Y, point.Z), (right.X, right.Y, right.Z), (up.X, up.Y, up.Z), offset))
             for tag in tags:
                 try:
                     element = self.doc.GetElement(get_element_id_from_int(int(tag["item_id"])))
                     point = element.Location.Point
-                    x, y, z = geo.elevation_head_ft(
-                        (point.X, point.Y, point.Z), (right.X, right.Y, right.Z), (up.X, up.Y, up.Z), tag["view_offset_mm"])
+                    head = at(point, tag["view_offset_mm"])
+                    leader = bool(tag.get("has_leader")) and tag.get("end_offset_mm") is not None
+                    elbow = at(point, tag["elbow_offset_mm"]) if leader and tag.get("elbow_offset_mm") else None
+                    end = at(point, tag["end_offset_mm"]) if leader else None
+                    orientation = TagOrientation.Vertical if str(tag.get("orientation")).lower() == "vertical" else TagOrientation.Horizontal
                     outcome = self._step(
                         "RoomMate: elevation tag",
-                        lambda element=element, head=XYZ(x, y, z), view=view: create_independent_tag_without_transaction_wrapper(
-                            self.doc, view, element, head, independent.Id),
+                        lambda element=element, head=head, view=view, leader=leader, elbow=elbow, end=end, orientation=orientation:
+                        create_independent_tag_without_transaction_wrapper(
+                            self.doc, view, element, head, independent.Id, orientation, leader, elbow, end),
                     )
                     made += 1 if outcome.status else 0
                 except Exception as e:

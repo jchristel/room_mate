@@ -138,6 +138,16 @@ pub struct PlacedTag {
     /// then up. The plug-in adds it to the item's point (it reads the height).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view_offset_mm: Option<[f64; 2]>,
+    /// Elevations, from a rule: `Horizontal` or `Vertical` (an elevation tag's turn is its orientation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<String>,
+    /// Elevations, from a rule that has a leader: where it bends and ends, as `view_offset_mm`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_leader: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elbow_offset_mm: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_offset_mm: Option<[f64; 2]>,
     /// What a tag without a rule says.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -384,6 +394,26 @@ fn untagged(
     items_without_tags
 }
 
+/// An elevation tag from a rule: the rule's offsets (paper mm along the view's right and up) at the view's scale.
+fn elevation_tag(item: &RoomItem, r: &RuleSummary, scale: f64, along: Option<f64>) -> PlacedTag {
+    let out = |o: crate::tag_rules::Offset| [o.x * scale, o.y * scale];
+    PlacedTag {
+        item_id: item.id.clone(),
+        source: Source::Rule,
+        rule_id: Some(r.id.clone()),
+        head: None,
+        rotation: Some(r.placement.rotation),
+        along_line_mm: along,
+        view_offset_mm: Some(out(r.placement.head)),
+        orientation: Some(r.placement.orientation.clone()).filter(|o| !o.trim().is_empty()),
+        has_leader: r.placement.has_leader,
+        elbow_offset_mm: r.placement.elbow.filter(|_| r.placement.has_leader).map(out),
+        end_offset_mm: r.placement.end.filter(|_| r.placement.has_leader).map(out),
+        text: None,
+        outline: None,
+    }
+}
+
 /// Work out the tags of `sheet` for `items`. `rules` are the project's tag rules for the sheet's
 /// viewport types; `markers` are where the elevations went in this room.
 pub fn plan_tags(
@@ -432,20 +462,7 @@ pub fn plan_tags(
                 _ => None,
             };
             match (rule, item.facing) {
-                (Some(r), Some(_)) if kind == "elevation" => {
-                    let scale_out = [r.placement.head.x * scale, r.placement.head.y * scale];
-                    tagged.push(PlacedTag {
-                        item_id: item.id.clone(),
-                        source: Source::Rule,
-                        rule_id: Some(r.id.clone()),
-                        head: None,
-                        rotation: Some(r.placement.rotation),
-                        along_line_mm: along,
-                        view_offset_mm: Some(scale_out),
-                        text: None,
-                        outline: None,
-                    });
-                }
+                (Some(r), Some(_)) if kind == "elevation" => tagged.push(elevation_tag(item, r, scale, along)),
                 (Some(r), Some(f)) => {
                     let (f, l) = (unit(f), (-unit(f).1, unit(f).0));
                     let (x, y) = (r.placement.head.x * scale, r.placement.head.y * scale);
@@ -457,6 +474,10 @@ pub fn plan_tags(
                         rotation: Some(f.1.atan2(f.0) + r.placement.rotation),
                         along_line_mm: None,
                         view_offset_mm: None,
+                        orientation: None,
+                        has_leader: false,
+                        elbow_offset_mm: None,
+                        end_offset_mm: None,
                         text: None,
                         outline: None,
                     });
@@ -477,6 +498,10 @@ pub fn plan_tags(
                         rotation: None,
                         along_line_mm: along,
                         view_offset_mm: None,
+                        orientation: None,
+                        has_leader: false,
+                        elbow_offset_mm: None,
+                        end_offset_mm: None,
                         text: Some(text),
                         outline,
                     });
@@ -608,8 +633,27 @@ mod tests {
         assert_eq!(tag.source, Source::Rule);
         // 4 and 18 mm of paper at the default 1:100 are 400 and 1800 mm in the model
         assert_eq!(tag.view_offset_mm, Some([400.0, 1800.0]));
+        assert_eq!(tag.orientation.as_deref(), Some("Horizontal"));
+        assert!(!tag.has_leader && tag.end_offset_mm.is_none());
         assert!(tag.head.is_none() && tag.along_line_mm.is_some());
         assert!(elevation.candidates.is_empty());
+    }
+
+    #[test]
+    fn a_rule_with_a_leader_sends_its_elbow_and_end_scaled_and_a_vertical_tag_says_so() {
+        let items = vec![item("bed", "Bed", (2000.0, 500.0), Some((0.0, 1.0)))];
+        let mut r = elevation_rule("Bed", "front", 4.0, 18.0);
+        r.placement.has_leader = true;
+        r.placement.orientation = "Vertical".into();
+        r.placement.elbow = Some(Offset { x: 2.0, y: 10.0 });
+        r.placement.end = Some(Offset { x: 0.0, y: 0.0 });
+        let plan = plan_tags(&sheet(), &items, &markers(), &[r], &TagRequest::default());
+        let tag = &plan.views.iter().find(|v| v.view_type == "elevation").unwrap().tagged[0];
+        assert!(tag.has_leader);
+        assert_eq!(
+            (tag.orientation.as_deref(), tag.elbow_offset_mm, tag.end_offset_mm),
+            (Some("Vertical"), Some([200.0, 1000.0]), Some([0.0, 0.0]))
+        );
     }
 
     #[test]

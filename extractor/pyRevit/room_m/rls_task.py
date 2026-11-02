@@ -192,7 +192,8 @@ def _plan_tags(task):
 
 def _elevation_tags(task):
     """The tags the server worked out for the elevations, by the template view's id: `{view_id: [tag]}`, each
-    with an item id and `view_offset_mm` (`[right, up]` from the item's point, model mm)."""
+    with an item id and `view_offset_mm` (`[right, up]` from the item's point, model mm); a rule with a leader
+    also has `has_leader`, `elbow_offset_mm` and `end_offset_mm` the same way, and `orientation` is `Horizontal` or `Vertical`."""
     out = {}
     tags = (task.get("rls") or {}).get("tags") or {}
     for view in tags.get("views") or []:
