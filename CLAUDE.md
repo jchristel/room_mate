@@ -598,8 +598,8 @@ of parallel to the view direction, `FRONT_ON` = 0.9) or from the `side` (anythin
 plan rules keep theirs. The server (`rls_tags`) finds the rule for the way each item is seen in each elevation and sends `view_offset_mm` (model mm, right then up, from the item's point);
 the plug-in adds it to the item's own point along the NEW view's `RightDirection`/`UpDirection` (`apply_geometry.elevation_head_ft`, `rls_write._elevation_tags`), because the item's height is
 Revit's to read. The rule's leader (elbow and end, the same offsets) and its orientation (`Horizontal`/`Vertical`, which is how an elevation tag turns; an arbitrary angle is not settable) are applied too. An item an elevation shows and no rule covers stays a candidate, and `items_without_tags` says which: no elevation tag for the
-type code, or one for an item seen the other way. A chosen tag there is still placed along the line only. **Not run in Revit; it needs the tag export to carry z** (the tag's head point and the item's
-location point). Computing it reads the room's FF&E (seconds on RHH), so a request
+type code, or one for an item seen the other way. A chosen tag there is still placed along the line only. The tag export carries z (read in duHast `to_data_tag`: `TagHeadPosition` and the element's `Location.Point`, both 3D in mm), for **floor plan and elevation views only**
+(`view_ports_to_data` calls `get_tags_in_view` for those two; a section or 3D view's tags are not exported). **Not run in Revit.** Computing it reads the room's FF&E (seconds on RHH), so a request
   without `with_tags` skips it. The tasks page does not show it yet; the plug-in does not read it.
 
 ## The RLS creation script: settings, task, duHast
