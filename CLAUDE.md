@@ -38,7 +38,7 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   serialize a stored snapshot any way but `encode_snapshot`/`StreamingSnapshot`
   — `to_vec_pretty` would write maps with no trailer, which still reads, but
   silently gives up the format. In memory, keys are `Arc<str>` and type bags
-  `Arc<PropertyMap>`; that sharing, not the file, is most of the speed (the sample project
+  `Arc<PropertyMap>`; that sharing, not the file, is most of the speed (a large real project
   FF&E parse + clone: 29 s owned strings, 9 s dictionary expanded back to
   `String`, 4.3 s shared).
 - **Element responses send each type bag once, too** (`service::type_table`,
@@ -140,19 +140,16 @@ was removed: the Export window covers every entity.
 Ceilings ship end to end: contract, ingest, storage, `/ceilings`, MCP,
 exporter, pyRevit button and the plan layer. No QA report yet.
 
-**Probed on the sample project 2026-09-12** (1,833 ceilings across 9 documents, against House
-A's 30). Everything below is measured on both unless it says otherwise. The
-store's sample-project ceilings for the four interior models were re-exported
-2026-09-14 (1,806; 17 fewer, all on one level of one model bar one); the car-park model's
-10 were not, so its latest is still the 2026-09-12 set.
+**Probed on a large real project 2026-09-12** (thousands of ceilings across several documents, against House
+A's 30). Everything below is measured on both unless it says otherwise.
 
 - **A ceiling has no room parameter and a room has no ceiling parameter.** So
   the join is geometric or it does not exist. **Model-scoped is correct, and
-  the sample project confirms it**: every document holding ceilings also holds rooms, so
+  a large real project confirms it**: every document holding ceilings also holds rooms, so
   ceilings are NOT a second exception to the model-scoped rule. A document
   holding rooms and no ceilings (a base-build package, a site model) is ordinary
   and says nothing about scope; what would break it is ceilings with no rooms in
-  their own document, and there are none. The 26 cross-document overlaps the sample project's
+  their own document, and there are none. The cross-document overlaps a large real project's
   geometry shows are what a project-scoped join would wrongly attribute — a
   ceiling over the one enormous site room another model declares. That inverts the precedence rule
   every other entity follows — doors, windows and FF&E each carry an authored
@@ -165,8 +162,8 @@ store's sample-project ceilings for the four interior models were re-exported
   `rooms` on a `/ceilings` row is a list ordered largest-overlap-first, so
   `rooms[0]` is a usable single owner. **Empty means unattributed, which is a
   reported state** — 8 of House A's 30, being external soffits, a level with no
-  rooms, and two degenerate exports; 17 of the sample project's 1,833. **Many-to-many is real,
-  not defensive**: 419 of the sample project's ceilings genuinely cover more than one room at a
+  rooms, and two degenerate exports; a handful on a large real project. **Many-to-many is real,
+  not defensive**: hundreds of a large real project's ceilings genuinely cover more than one room at a
   sliver-filtering threshold, where House A's single apparent case was an
   artefact. Nothing is stored, so changing the rule
   changes every answer and rewrites nothing.
@@ -177,17 +174,17 @@ store's sample-project ceilings for the four interior models were re-exported
   polygons that only touch, and the boolean op returns rounding -- plus a
   finish edge a few mm past a room boundary. **A width, because an area
   cannot**: that strip grows with the wall's length and its width does not.
-  Measured on the sample project with a 0.001 sqm area tolerance instead, 243 admitted pairs
+  Measured on a large real project with a 0.001 sqm area tolerance instead, hundreds of admitted pairs
   were 0.001-0.01 sqm at a median 3-4 mm wide.
 - **The sliver rules are gone, and re-adding one is re-opening a closed
   question.** Ceilings dropped overlaps under 0.5% of the ceiling and floors
   had a 1.5 ft width rule with two escapes, over a 1 sqft minimum. Every one
   drew a line through a population with no gap in it, and each needed another
-  escape for the case the last one missed; on the sample project the ceiling rule dropped 17
+  escape for the case the last one missed; on a large real project the ceiling rule dropped
   rooms at least half covered by a ceiling they were under 0.5% of. Which real
   overlaps matter is the consumer's policy: `fraction_of_element`,
-  `fraction_of_room` and `mean_width` ride every row. Removing them added 222
-  the sample project ceiling pairs and 557 floor pairs, **lost none, and changed `rooms[0]`
+  `fraction_of_room` and `mean_width` ride every row. Removing them added hundreds of
+  ceiling and floor pairs on a large real project, **lost none, and changed `rooms[0]`
   for no element**. Two costs, accepted: a strip under a wall IS listed (behind
   the room it serves), and a degenerate export (House A's 0.33 and 0.18 sqft
   ceilings) attributes -- surfacing that is QA's job. duHast's own test divides
@@ -199,12 +196,12 @@ store's sample-project ceilings for the four interior models were re-exported
   exports one polygon per *horizontal face* and a slab has two, which on House A
   was the whole story: its 7 multi-polygon ceilings were the same face twice
   (IoU above 0.98) and the largest piece — which happened to be `polygon[0]` —
-  was the entire ceiling. **the sample project's 48 multi-polygon ceilings are genuinely
-  DISJOINT.** Measured against the union: taking `polygon[0]` loses **44.0%** of
-  ceiling area on average and **99.2%** at worst (a 1,457 sqft ceiling whose
-  first piece is 11 sqft); taking the LARGEST piece still loses **25.7%**, with
-  31 of the 48 over 5%. The union is the one operation correct on both — it
-  collapses House A's duplicates (`A ∪ A = A`) and keeps the sample project's pieces.
+  was the entire ceiling. **a large real project's multi-polygon ceilings are genuinely
+  DISJOINT.** Measured against the union: taking `polygon[0]` loses over **40%** of
+  ceiling area on average and nearly all of it at worst (a large ceiling whose
+  first piece is a tiny one); taking the LARGEST piece still loses about **a quarter**, with
+  most of them over 5%. The union is the one operation correct on both — it
+  collapses House A's duplicates (`A ∪ A = A`) and keeps a large real project's pieces.
 - **A ratio of summed area to largest area cannot tell a duplicated face from
   two equal disjoint pieces** — both give `sum ≈ 2 × largest`. Only a real
   overlap test separates them. That heuristic is exactly what made the House A
@@ -213,7 +210,7 @@ store's sample-project ceilings for the four interior models were re-exported
 - **Holes are subtracted from a ceiling, unlike a room.** `room_locator::
   outline_of` drops a room's holes so a probe landing on a column still
   resolves; a room's hole is a column or a shaft. A ceiling's hole is a light
-  well or a void over an atrium and is routinely large — the sample project exports 173 holed
+  well or a void over an atrium and is routinely large — a large real project exports hundreds of holed
   polygons — so it comes out of both the overlap and the `fraction_of_element`
   denominator.
 - **Phase is the DOORS range test**, `PHASE_CREATED` / `PHASE_DEMOLISHED`, never
@@ -240,7 +237,7 @@ store's sample-project ceilings for the four interior models were re-exported
   legible where the two coincide. Like spaces it defaults OFF and its poll is
   gated on the toggle, because it overlays the rooms it sits on and polling a
   hidden overlay would cost every viewer a read for a question most are not
-  asking. Unlike spaces it has no model picker -- that exists because the sample project keeps
+  asking. Unlike spaces it has no model picker -- that exists because a large real project keeps
   one services file per service, and `/ceilings` takes no `?model=` at all.
 - **The SVG export draws the zone's layers, and fetches them itself**
   (2026-09-21). The polls hold only the storeys on screen, so `svgExport`
@@ -265,8 +262,8 @@ store's sample-project ceilings for the four interior models were re-exported
 Floors ship end to end on the ceilings stack (2026-09-13): contract, ingest,
 storage, `/floors`, MCP, exporter, pyRevit button and the plan layer. No QA
 report. **Probed on House A** (85 floors, building and site documents) **and
-measured on the sample project's first export** (2026-09-14: 1,749 floors in the four
-interior models, against their 2,858 rooms; the server attributed it under
+measured on a large real project's first export** (2026-09-14: well over a thousand floors in
+several interior models, against thousands of rooms; the server attributed it under
 the sliver rules since removed, and again after).
 
 - **One stack, not two copies.** duHast's `to_data_floor` is `to_data_ceiling`
@@ -283,12 +280,10 @@ the sliver rules since removed, and again after).
   when floors made it a lie; it was never stored, so nothing migrated.
 - **Why floors never had a working threshold of their own** -- the history
   behind the single tolerance above. A slab can be a whole plate, where a
-  fraction of the element drops every small room: the sample project has 25 rooms 80-100%
-  covered by a floor they are 0.08-0.49% of (fire hose reel cupboards, 4-7 sqft
-  bays under corridor finishes). The 1.5 ft width rule that replaced it needed
+  fraction of the element drops every small room: a large real project has rooms 80-100%
+  covered by a floor they are well under 1% of (small cupboards and bays under corridor finishes). The 1.5 ft width rule that replaced it needed
   an escape for a narrow floor wholly in one room (House A's hob, stair
-  surround, step), and still dropped 43% of a 9 sqft water-fountain niche
-  (`FLVY-007.E` into `WATER IMG003`); the sample project's overlaps ran continuously through
+  surround, step), and still dropped much of a small water-fountain niche; a large real project's overlaps ran continuously through
   the line. `analyse_floors_probe.py` still re-runs those retired rules, for the
   comparison it was written to make.
 - **The storey is the host `Level`, never elevation plus offset** (decided
@@ -305,12 +300,12 @@ the sliver rules since removed, and again after).
   roof layers are all floors on House A, and `Structural` does not separate
   them (the rafter zone and `INS-106` are structural). Which one is "the
   floor" is the consumer's question; nothing here answers it.
-- **Model-scoped holds on House A and on the sample project's fit-out models.** House A's
+- **Model-scoped holds on House A and on a large real project's fit-out models.** House A's
   site document holds 16 landscaping floors and no rooms, which report no room
-  correctly. The sample project's export put every floor in a interior model beside its
-  rooms, and 1,744 of 1,749 attribute; the 5 roomless are all `FLGE-004`. None
+  correctly. Its export put every floor in an interior model beside its
+  rooms, and nearly all attribute; the few roomless ones are one floor type. None
   is `Structural` -- these are finishes. **The base-build question is still
-  open**: the export did not include the base-build model, so whether the sample project's slabs live
+  open**: the export did not include the base-build model, so whether its slabs live
   there, beside no rooms, is unmeasured.
 - **The footprint is wrong on some floors, upstream, measured.** Check which
   duHast the extension runs before touching `room_m`:
@@ -325,10 +320,9 @@ the sliver rules since removed, and again after).
     been attributed to POOL EX.03 at 99.8% of the pool; the pool is in its hole.
     Snapshots exported before the fix keep the filled holes until re-exported.
     The same code classifies CEILING loops: no House A ceiling changed, and on
-    the sample project's re-export (2026-09-14) **14 ceilings reclassified an island as a
-    hole**, the rest identical to float noise. Owners barely moved (3 room
-    lists changed), but coverage did: one ceiling's overlap with its only room
-    fell from 554 to 94 sqft, because the old export had filled its void.
+    a large real project's re-export (2026-09-14) **a few ceilings reclassified an island as a
+    hole**, the rest identical to float noise. Owners barely moved, but coverage did:
+    one ceiling's overlap with its only room fell sharply, because the old export had filled its void.
   - **Sloped and shape-edited floors lose area**: 20 floors export under 90% of
     Revit's area, 7 of them nothing -- mostly site lawn, road and driveway.
     `get_unique_horizontal_faces` skips non-planar faces and admits
@@ -357,15 +351,15 @@ get wrong:
   it (`fixed_from_start`, `fixed_from_end`, `percent`). Switching a dimension between fixed
   and percentage is a change of mode, so nothing is recomputed that could drift.
 - **Two outlines, two jobs.** Placements index the **coarse** outline's edges (jogs under
-  350 mm removed), because same-named the sample project patient rooms differ in column nibs and an edge
+  350 mm removed), because same-named patient rooms differ in column nibs and an edge
   count that includes them matched half of them; "is it inside the room" is checked against
   the **fine** one (30 mm), because the items that sit in those nibs are outside the coarse.
   Mixing them up reports findings that are not there. **The coarse outline is the fine one with the jogs taken out of
   it** (`blueprint_geometry::coarse_outline`), never `simplify(raw, 350)`: that removes the first vertex within 350 mm
   of its neighbours' line, so a boundary point 60 mm from a corner cost the room the corner and tilted three edges
-  of House A's `WC 00.03` by 1.2 degrees. Measured on the sample project: it changes 37% of the rooms' coarse outlines, none of the
-  fine, and the share of rooms with an edge off every fine direction falls from 47% to 21%. The price is sibling
-  edge-count agreement: `1 BED B` pairs that differ rise from 16% to 20% (the old result agreed partly by cutting
+  of House A's `WC 00.03` by 1.2 degrees. Measured on a large real project: it changes over a third of the rooms' coarse outlines, none of the
+  fine, and the share of rooms with an edge off every fine direction roughly halves. The price is sibling
+  edge-count agreement: pairs of some room types that differ rise a few points (the old result agreed partly by cutting
   corners). A stored blueprint keeps the outline it was captured with until it is pushed again.
 - **A blueprint's reference outline (the BOX) starts as a rectangle, and a person reshapes it.** Capture from Revit
   (`Reference::Box`) turns the room so its walls run along the axes (`dominant_angle_deg`: the length-weighted mean of
@@ -492,30 +486,29 @@ get wrong:
   `.backups/` is the safety copy made when a file is rewritten, a different thing from review.
   Only `add_revision` (a person's own edit in the editor) can make a revision current directly.
 - **The resolver (`service::blueprint_resolve`) always returns what it could place** and says the
-  rest as findings. Measured on the sample project's real siblings (12 rooms each, every ordered pair): `ENS-IN`
-  and `ENS-OUT` 90% of pairs within 150 mm (median 71 and 58 mm), `1 BED B` 68% (116 mm),
-  `1 BED A` 58% (147 mm). Rules that are easy to break:
+  rest as findings. Measured on a large real project's sibling rooms (every ordered pair): the simplest room types
+  place 90% of pairs within 150 mm, the more irregular ones 58-68%. Rules that are easy to break:
   - **Scaling is the room's.** A fixed distance keeps its mm, a percentage keeps its fraction of
     the edge it is anchored to (or of the room's depth in front of it), items keep their size.
   - **A follower is placed rigidly relative to the item it follows**, in that item's own frame,
     so a run is never squashed and a shelf stays in its wardrobe. A follower of an excluded item,
     or in a loop, is placed by its own recipe and reported (`validate_content` refuses a loop).
   - **A finding is about what the room CHANGES.** `outside` and `overlap` are reported only
-    where the blueprint did not already have them (three of 66 `1 BED B` items are outside their
+    where the blueprint did not already have them (a few items of a typical bedroom are outside their
     own source room, and would otherwise be reported on every resolve). Wall devices are left out.
   - **Mirror image is said only when no rotation fits.** A rectangle's reflection is a rotation,
     so a badly pinned shift on a symmetric room is `no_fit`, not `mirror_image`. The resolver
     never mirrors; the answer is a mirrored copy of the blueprint.
   - **A rectangle fits in two mappings a half turn apart**, and shape cannot choose: pass `shift`
     (the blueprint's doors are what will, in the assign UI).
-  - **A different coarse edge count places nothing** (`edge_count_differs`): 32% of `1 BED B` and
-    62% of `1 BED A` pairs on the sample project. Mapping across differing edge counts is not built.
+  - **A different coarse edge count places nothing** (`edge_count_differs`): a third to well over half of
+    the pairs of irregular room types on a large real project. Mapping across differing edge counts is not built.
   - **Results are in the project's plan frame**, so they draw straight onto the plan.
 - **`family_name` and `host` on an FF&E item are read from Revit by `item_facts`**, not from
-  duHast: the export carries neither (probed on 16,161 the sample project items). Same footing as the
+  duHast: the export carries neither (probed on a large real export). Same footing as the
   category; absent means unread, never guessed. **Not yet run in Revit.**
 - **Capture reads the whole project's FF&E** (`assemble_items`, unscoped by storey) and keeps
-  the room's items, so on the sample project it costs a few seconds. Narrowing it with a storey scope is the
+  the room's items, so on a large real project it costs a few seconds. Narrowing it with a storey scope is the
   obvious fix and has not been needed yet.
 
 ## Room tasks: what a Revit session is told, kept as a record
@@ -599,7 +592,7 @@ plan rules keep theirs. The server (`rls_tags`) finds the rule for the way each 
 the plug-in adds it to the item's own point along the NEW view's `RightDirection`/`UpDirection` (`apply_geometry.elevation_head_ft`, `rls_write._elevation_tags`), because the item's height is
 Revit's to read. The rule's leader (elbow and end, the same offsets) and its orientation (`Horizontal`/`Vertical`, which is how an elevation tag turns; an arbitrary angle is not settable) are applied too. An item an elevation shows and no rule covers stays a candidate, and `items_without_tags` says which: no elevation tag for the
 type code, or one for an item seen the other way. A chosen tag there is still placed along the line only. The tag export carries z (read in duHast `to_data_tag`: `TagHeadPosition` and the element's `Location.Point`, both 3D in mm), for **floor plan and elevation views only**
-(`view_ports_to_data` calls `get_tags_in_view` for those two; a section or 3D view's tags are not exported). **Not run in Revit.** Computing it reads the room's FF&E (seconds on the sample project), so a request
+(`view_ports_to_data` calls `get_tags_in_view` for those two; a section or 3D view's tags are not exported). **Not run in Revit.** Computing it reads the room's FF&E (seconds on a large real project), so a request
   without `with_tags` skips it. The tasks page does not show it yet; the plug-in does not read it.
 
 ## The RLS creation script: settings, task, duHast
@@ -773,8 +766,8 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   person. **A generic sheet carries `room_key`**, an identifier from its room's bounding rectangle and item count (`4000x3000-12`,
   sides to the nearest 10 mm; none for a bound sheet or one without room figures). **A bare re-push (the Sheets button) never unbinds a sheet**; only a push naming a blueprint sets it. A library that cannot take the sheets fails the blueprint push (the blueprint is stored and flagged as having none). The library page shows each sheet's blueprint.
 - **A room outline sent by the extractor has its collinear vertices dropped** (`room_m/ring_tidy.py`, rooms only).
-  Revit puts a vertex wherever the boundary changes wall: 77.5% of the sample project's rooms (2,080 of 2,683) have one and 28% of all
-  boundary vertices (7,659 of 27,558) are one, nearly all within 0.5 mm of the line. Lossless, so the tolerance is
+  Revit puts a vertex wherever the boundary changes wall: most rooms on a large real project have one and over a quarter of all
+  boundary vertices are one, nearly all within 0.5 mm of the line. Lossless, so the tolerance is
   0.5 mm and a real jog is never cut (that question is the server's coarse and fine outlines). A spike that doubles back
   stays. Spaces, ceilings and floors are not tidied. Snapshots already stored keep theirs until re-pushed.
 - **Which wall an elevation looks at is derived at read time, never stored** (`service::elevation_facing`,
@@ -936,14 +929,14 @@ The viewer draws it as a heat map (below).
   beyond the limit or one nothing reaches, else whole mm. "Beyond" is deliberately
   not a number: the search stops at the limit, so a longer distance was never
   measured. A room no door, zone or passage reaches is `reached: false`, a finding
-  about what is connected (the sample project's GROUND has 1,378 rooms in no multi-room component,
+  about what is connected (a large real project's ground floor can have over a thousand rooms in no multi-room component,
   so a source there covers little until zones and passages are authored).
 - **`ignore_cuts` is a scope switch on the graph, not a filter on the answer.** It
   empties each open zone's `disconnects` and `hub` before the zone edges are made
   (`ConnectivityScope::ignore_cuts`). A cut says where a person routes; a coverage question is not
   bound by it. The routes read never sets it.
 - **Two methods, `exact` (default) and `grid`.** `grid` is Dijkstra over each room's
-  cells seeded from the same port distances: the lattice approximation (the sample project GROUND: median +0.2%, worst +14%
+  cells seeded from the same port distances: the lattice approximation (a large real ground floor: median a fraction of a percent, worst +14%
   long; changes with spacing), offered to compare against. Only `exact` agrees with a route.
 - **The heat map is a GL mesh between the element layers and the labels.** One
   translucent quad per COVERED cell (`renderer/reach.ts`; `-1` and `-2` are left
@@ -987,17 +980,17 @@ The viewer draws it as a heat map (below).
 
 ## Linked models: one frame, one storey rule
 
-Both were reported as five separate viewer bugs on the sample project and are one cause each.
+Both were reported as five separate viewer bugs on a large real project and are one cause each.
 
 - **Geometry is placed into a PROJECT-LOCAL frame at read time, never into
   shared space.** `model_to_shared` rode the envelope for a long time with
   nothing applying it, which is invisible while a project's models share an
-  origin (the sample project's four architectural models agree to six decimals) and glaring
-  when they do not (its five services models sit ~250 ft away, so the spaces
+  origin (a real project's architectural models can agree to six decimals) and glaring
+  when they do not (its services models sat hundreds of feet away, so the spaces
   layer drew beside the plan). `service::placement` composes `anchor⁻¹ ∘ model`
   in f64; the survey translations cancel and what is applied is a small local
   delta. **Do not "simplify" this to placing everything into shared space.**
-  Shared space is the survey grid — the sample project's is MGA Sydney, 2.06e7 ft — and the GL
+  Shared space is the survey grid — a real one's is a national grid such as MGA, 2.06e7 ft — and the GL
   renderer uploads world coordinates as `Float32Array`, where that magnitude has
   a ULP of 324 mm. Measured, not feared. The anchor is `[project]
   anchor_model`, else the lexicographically smallest model id per project, and
@@ -1023,10 +1016,10 @@ Both were reported as five separate viewer bugs on the sample project and are on
   already deduped ids across linked models. Comparing the two directly fails
   silently in two directions — a model that lost the dedup race has every
   element dropped, and a model with no rooms (a facade package) contributes no
-  canonical id at all, which is why the sample project's 78 external doors were invisible on
+  canonical id at all, which is why a facade package's external doors were invisible on
   every level. The rule is `src-js/renderer/storey.ts`, shared by all four
   element layers, and it deliberately mirrors `rooms::dedup_levels`. Elevation
-  alone is not enough: the sample project's car park stacks "C 00" at the hospital GROUND's
+  alone is not enough: a car park stacks "C 00" at the hospital GROUND's
   elevation. Every element read carries `levels_by_model` for it.
 - **Element reads fetch only the storeys on screen, and the server's filter
   must stay a SUPERSET of `storey.ts`** (2026-09-17). The viewer sends
@@ -1037,7 +1030,7 @@ Both were reported as five separate viewer bugs on the sample project and are on
   `onStorey`'s name-and-elevation rule, because that rule's fallbacks are
   decided over the whole payload: **change the rule in `storey.ts` and
   re-check the superset**, or a "(by elevation)" layer silently loses
-  elements. The sample project `/ffe`: 133.2 MB for every storey, 23.6 MB for one.
+  elements. On a large real project `/ffe` is over a hundred MB for every storey and a small fraction of that for one.
 - **An `EntityPoll` revision only vouches for the URL that produced it.** A
   storey switch or `?building=` changes the body and not the contributing
   snapshots, so the revision stays equal; the poll treats a changed URL as a
@@ -1050,7 +1043,7 @@ Both were reported as five separate viewer bugs on the sample project and are on
   bounding box: for a T or L the centroid can fall in the notch and the box is far
   wider than the arm the text sits in. Now: the pole of inaccessibility (holes
   excluded), the text centred on the open stretch around it, the font shrunk until
-  the block is inside the outline. On the sample project's busiest level 96 of 478 labels spilled
+  the block is inside the outline. On a large real project's busiest level many labels spilled
   before and none do. Never drops a label (a circle of radius `d` always fits), and
   caches per room so a repaint does not search again. The SVG goldens moved with it;
   change the rule there and nowhere else, or the file and the screen disagree.
@@ -1066,7 +1059,7 @@ Both were reported as five separate viewer bugs on the sample project and are on
   (`viewer/elementTags.ts`: `$id`, `$name`, `$type_name`, else a property, instance then type),
   and placed by `placeLabel` on the footprint: a space's rings, the LARGEST piece of a
   ceiling or floor, an item's footprint or else the marker it is drawn as (so such a tag is
-  tiny, because the object is). GL and SVG share `placeElementTags`. The sample project's ceilings and
+  tiny, because the object is). GL and SVG share `placeElementTags`. A large real project's ceilings and
   floors carry no `type_name`, so the default `$type_name` prints nothing there until a
   property is named.
 - **Settings that name a property are checked against the data** (`settings_check`, logged
@@ -1093,9 +1086,9 @@ Same shape as the door footprint above, same lesson, different field.
 the nearest level at or below its bounding box, and **ignored the level the
 modeller assigned** — which the same export was already sending in
 `instance_properties`. That is right only for a model whose levels are exactly
-its storeys. The sample project's interior models carry reference levels mis-elevated onto
-other storeys' heights ("LEVEL 6" at 74000, where LEVEL 4 sits), and 9,186 of
-15,070 items in one model exported onto a floor they were not on.
+its storeys. A large real project's interior models carry reference levels mis-elevated onto
+other storeys' heights (a spare level at another level's height), and most of the
+items in one model exported onto a floor they were not on.
 
 Fixed upstream 2026-09-07 (`get_item_level_data`: authored first, the walk only
 for an item that states no level — which is what it was written for, a
@@ -1294,36 +1287,35 @@ with one, not here.
 
 ## Open, as of 2026-09-07
 
-- **`/ffe` on the sample project: the read is fixed, the response is not.** Storage and memory
+- **`/ffe` on a large real project: the read is fixed, the response is not.** Storage and memory
   now hold each property key and type bag once (`property_codec`, 2026-09-17):
   release assembly 17.3 s → 3.4 s, `/validation` 14.5 s → 4.5 s, the whole
   local store 1,459 MB → 279 MB. **Only for snapshots written since** — a legacy
   snapshot still reads (9.1 s) but keeps its old layout until re-pushed, and
   nothing rewrites the store for you. The *body* sends each type bag once since
   `service::type_table`: 279.6 MB → 133.2 MB, and only the storeys on screen
-  since `StoreyScope` (one the sample project storey: 23.6 MB). What is left: every snapshot is
+  since `StoreyScope` (one storey: a small fraction). What is left: every snapshot is
   still parsed whole before the storey filter, instance property keys repeat
   per item on the wire, and `assemble_items` still clones each item it serves.
-- **The sample project's windows are pushed (2026-09-07, 2026-09-12) and draw — but "no
+- **A large real project's windows are pushed (2026-09-07, 2026-09-12) and draw — but "no
   external windows" is still what a reader will report.** Checked end to end
-  2026-09-21: 368 windows, 152 of them in the facade model, every one resolving to
-  a picker storey (bar 3 at `level_id` `-1`) and drawn. No facade window names
+  2026-09-21: a hundred-odd facade windows, nearly all resolving to
+  a picker storey (a few at `level_id` `-1`) and drawn. No facade window names
   a room, so they are attributed only by `[windows] room_resolution =
-  "project"` (set in the sample project's local settings the same day): 132 of 152, once a
+  "project"` (set in that project's local settings the same day): most of them, once a
   room-less model's opening stepped a wall thickness rather than the 15 mm
-  centreline floor (`entity_scope::Candidates::cross_model_gap`). The 20 left
-  homeless are LEVEL 8's 14 (no room within 8 ft of that facade), 3
-  ambiguous and the 3 unhosted. Still true: the facade exports only punched
-  windows and louvres (none on LEVEL 2 or 4) — curtain-wall glazing is not
+  centreline floor (`entity_scope::Candidates::cross_model_gap`). The few left
+  homeless have no room within 8 ft of that facade, are ambiguous, or are unhosted. Still true: the facade exports only punched
+  windows and louvres (none on some levels) — curtain-wall glazing is not
   `OST_Windows` and no entry point exports it.
-- **The sample project's FF&E is on the wrong storeys until it is re-exported** — see the FF&E
+- **A large real project's FF&E is on the wrong storeys until it is re-exported** — see the FF&E
   level trap above. The fix is upstream and lands on the next export.
-- **`/ceilings` was 9.25 MB and 33 s on the sample project** (1,833 ceilings against 3,112
+- **`/ceilings` was 9.25 MB and 33 s on a large real project** (thousands of ceilings against thousands of
   rooms). Unlike `/ffe`, the cost is not payload size but the attribution
   itself: every read intersects every ceiling with every room on its storey,
   because nothing is stored. With the bounding-box reject added alongside
-  floors, a DEBUG build answers `/ceilings` in 7.8 s (1,816 ceilings) and
-  `/floors` in 8.5 s (1,749 floors, 10.5 MB), 2026-09-16. The 33 s figure did
+  floors, a DEBUG build answers `/ceilings` in 7.8 s and
+  `/floors` in 8.5 s (about 10 MB), 2026-09-16. The 33 s figure did
   not record its build profile, so the two are not a like-for-like speed-up.
   An index over room bounding boxes per storey is the next shape if it matters.
   Both layers default off so neither is on the first-paint path.
@@ -1405,7 +1397,7 @@ reference is reported by `door_report` as *pending* rather than refused.
 
 ## Spaces: what the fifth entity does differently
 
-Three rules are this entity's alone, and each was measured on the sample project rather than
+Three rules are this entity's alone, and each was measured on a large real project rather than
 reasoned into:
 
 - **An empty spaces push is sent and stored**, where an empty rooms push is a
@@ -1418,15 +1410,15 @@ reasoned into:
   on the first phase that reached it, permanently. `put_pending_raw` is keyed by
   `(model, kind)` for this.
 - **Enclosure is stated by the extractor, from `Area` and the export's polygon —
-  never from `GetBoundarySegments`.** 96.3% of the sample project's spaces report zero boundary
+  never from `GetBoundarySegments`.** nearly all of a large real project's spaces report zero boundary
   segments while exporting a perfectly good polygon, because their bounding
   elements are in the linked architectural model. `Perimeter` is `0.0` for the
   same reason and is no substitute. Unplaced spaces are dropped; unenclosed ones
   are pushed with empty `loops`, which is the difference `translate_room` cannot
   make and `translate_space` does.
 
-**A spaces run is per phase, and the disciplines disagree on the name.** The sample project's
-mechanical model keeps 1,532 of its 1,533 spaces in `Future` while its siblings
+**A spaces run is per phase, and the disciplines disagree on the name.** On a large real project the
+mechanical model keeps nearly all its spaces in `Future` while its siblings
 use `New Construction`, and the push phase is one per *run*. A run under the
 common name pushes three models in full and one space from the fourth, correctly
 and silently — which is why `exporters/spaces.py` reports "N of M spaces are in
