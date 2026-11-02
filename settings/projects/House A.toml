@@ -1,0 +1,128 @@
+project_id = "House A"
+is_default = false
+comparison_properties = []
+builtin_properties = []
+room_label = [
+    "$name",
+    "$id",
+]
+colour_plans = []
+hierarchy_exclusions = []
+
+[sources]
+
+[areas]
+max_wall_thickness = 1.5
+
+# Doors, the project's second primary entity. This project is the doors sample:
+# its rooms and its doors come from the same Revit model, so every door's
+# from_room/to_room resolves against rooms already in the store.
+#
+# `$id` as the comparison key, which is the right answer HERE and worth saying
+# why, because it is the wrong answer for rooms: a door's ElementId is stable
+# across pushes of the same model, so it identifies the same physical leaf. A
+# project that renumbers doors between milestones would want `Mark` instead.
+#
+# Comparing the two room references is the point -- a door that moved between
+# rooms shows up as a `$to_room` difference, and one that lost a reference
+# entirely as a missing property.
+[doors]
+comparison_key = "$id"
+# A door belongs to the room it opens into, else the one it opens from, else it
+# is homeless. The default, stated explicitly here because this is the sample.
+room_attribution = "to_room_then_from_room"
+room_resolution = "off"
+# Reconcile the modeller's authored reference against the attributed room.
+room_reference_property = "Door Room Reference"
+comparison_properties = [
+    "$to_room",
+    "$from_room",
+    "Mark",
+]
+
+[windows]
+room_attribution = "to_room_then_from_room"
+room_resolution = "off"
+comparison_properties = []
+
+[ffe]
+nested_components = "exclude"
+room_resolution = "off"
+comparison_properties = []
+
+[spaces]
+room_models = []
+compared_properties = []
+
+[routing]
+room_height_property = "Ceiling Height"
+room_height_from_ceilings = true
+door_height_from_type_name = true
+door_frame_allowance_mm = 150.0
+door_height_properties = [
+    "Height",
+    "Door Height",
+]
+
+[[hierarchy]]
+name = "Department"
+name_property = "Department"
+
+# Two milestones over the data actually in the store. The first predates the
+# doors push and deliberately pins NO doors: a model a milestone doesn't pin
+# contributes nothing, so comparing the two reports every door as added, which
+# is the honest answer for "doors did not exist at this milestone" and is worth
+# having in the sample rather than hiding.
+#
+# Room and door pins are separate maps because rooms and doors are pushed
+# independently -- their snapshot ids do not correspond, and pinning "the
+# nearest" would pair data that never coexisted.
+[[milestones]]
+name = "Rooms only"
+date = "2026-07-15"
+
+[milestones.reference_snapshots]
+
+[milestones.attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-07-15T11:18:58.186000Z"
+
+[milestones.door_attachments]
+
+[milestones.window_attachments]
+
+[milestones.ffe_attachments]
+
+[milestones.space_attachments]
+
+[milestones.ceiling_attachments]
+
+[milestones.floor_attachments]
+
+[[milestones]]
+name = "Rooms and doors"
+date = "2026-07-29"
+
+[milestones.reference_snapshots]
+
+[milestones.attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-07-24T23:19:10.227000Z"
+
+[milestones.door_attachments]
+"Building_BF_Framing_jan.r.christel" = "2026-07-29T20:03:41Z"
+
+[milestones.window_attachments]
+
+[milestones.ffe_attachments]
+
+[milestones.space_attachments]
+
+[milestones.ceiling_attachments]
+
+[milestones.floor_attachments]
+
+[appearance.rooms]
+line = "#f0c800"
+fill = "#f60404"
+hover = "#3649d3"
+
+[hover]

@@ -1,0 +1,227 @@
+// The SVG painter for the **export**, and nothing else.
+//
+// It used to draw the live plan as well, and its doc comment used to explain
+// that the two shared one body so they "can't drift". That sharing is over: the
+// screen is WebGL (../gl/renderer.ts) and this builds the `.svg` file a user
+// downloads. Saying so plainly matters, because a comment describing a
+// relationship that no longer exists is worse than no comment — it sends the
+// next reader looking for a live path that was deleted.
+//
+// What replaced the sharing is ../appearance.ts. Both painters resolve a room's
+// appearance through `resolveRoomAppearance`, so the DECISION still has exactly
+// one definition even though there are now two emitters. That is the thing that
+// must not drift; the emitting was never the risk.
+//
+// Still reads nothing from a zone or a module global — every input arrives as
+// an argument — which is what lets `buildLevelSvgFile` hand it a detached
+// element and get a self-contained document back.
+
+import { holeClassName, resolveRoomAppearance, roomClassName } from "../appearance.js";
+import { pointsAttr } from "../geometry.js";
+import { placeElementTags, type TagEntity, type TagsRequest } from "../elementTags.js";
+import { placeLabel } from "../labelPlacement.js";
+import { usableColour } from "../style.js";
+import type { AppearanceContext, Rect, Room, RoomAppearance } from "../types.js";
+import { paintGlyphs, paintSurfaces, type OverlayLayers } from "./overlays.js";
+import { paintReach } from "./reach.js";
+import type { ReachLayer } from "../seam.js";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+export interface PaintOptions extends AppearanceContext, OverlayLayers {
+  showLabels?: boolean | undefined;
+  /** Whether to draw the rooms -- polygons, holes and labels. Absent means yes.
+   *  The rooms are still passed when this is false, as they are to the screen:
+   *  they are what `fitted` came from, so an overlay-only file keeps the same
+   *  frame as the full one. */
+  showRooms?: boolean | undefined;
+  /** The reach heat map for this level, painted over the element layers and
+   *  under the labels, as on screen. */
+  reach?: ReachLayer | undefined;
+  /** The text written on FF&E, spaces, ceilings and floors, over the labels as on
+   *  screen. An entity with no list in the layers draws none. */
+  tags?: TagsRequest | undefined;
+}
+
+/** One entity's tags: the room label's stacked text at each element's own placement.
+ *  The colours are classes (`etag-<entity>`, `etag2-<entity>`) the stylesheet resolves
+ *  from the layer's line colour; a project's override rides inline. */
+function addElementTags(
+  svg: SVGElement,
+  entity: TagEntity,
+  placed: ReturnType<typeof placeElementTags>,
+  req: { primary?: string | null | undefined; secondary?: string | null | undefined },
+): void {
+  if (placed.length === 0) return;
+  const doc = svg.ownerDocument;
+  const g = doc.createElementNS(SVG_NS, "g");
+  g.setAttribute("class", `etags ${entity}-tags`);
+  const primary = usableColour(req.primary);
+  const secondary = usableColour(req.secondary) ?? primary;
+  for (const tag of placed) {
+    const text = doc.createElementNS(SVG_NS, "text");
+    text.setAttribute("class", `etag etag-${entity}`);
+    text.setAttribute("x", String(tag.x));
+    text.setAttribute("y", String(tag.y));
+    text.setAttribute("font-size", String(tag.fontSize));
+    if (primary) text.setAttribute("style", `fill: ${primary}`);
+    tag.lines.forEach((line, i) => {
+      const span = doc.createElementNS(SVG_NS, "tspan");
+      span.setAttribute("x", String(tag.x));
+      span.textContent = line;
+      if (i > 0) {
+        span.setAttribute("class", `etag2-${entity}`);
+        span.setAttribute("dy", "1.2em");
+        span.setAttribute("font-size", String(tag.fontSize * 0.7));
+        if (secondary) span.setAttribute("style", `fill: ${secondary}`);
+      }
+      text.appendChild(span);
+    });
+    g.appendChild(text);
+  }
+  svg.appendChild(g);
+}
+
+function line(doc: Document, x1: number, y1: number, x2: number, y2: number): SVGElement {
+  const l = doc.createElementNS(SVG_NS, "line");
+  l.setAttribute("x1", String(x1));
+  l.setAttribute("y1", String(y1));
+  l.setAttribute("x2", String(x2));
+  l.setAttribute("y2", String(y2));
+  return l;
+}
+
+function titleEl(doc: Document, text: string): SVGElement {
+  const t = doc.createElementNS(SVG_NS, "title");
+  t.textContent = text;
+  return t;
+}
+
+/**
+ * A room's label: the primary field, then any further fields stacked smaller in
+ * the accent colour. Returns `null` when there is nothing to draw.
+ *
+ * The three-state `label` rule lives here (see `Room.label`): absent falls back
+ * to name then id; present-but-empty renders nothing at all.
+ *
+ * Position and font size come from `placeLabel`: the room's real outline, not its
+ * bounding box, with `baseFont` as a ceiling -- the same call the GL labels make.
+ */
+export function addLabel(svg: SVGElement, room: Room, baseFont: number): SVGElement | null {
+  const fields =
+    room.label !== undefined ? room.label : [room.name || room.id].filter(Boolean);
+  if (fields.length === 0) return null;
+
+  const outer = room.loops?.[0];
+  if (!outer) return null;
+
+  const longest = fields.reduce((n, f) => Math.max(n, String(f).length), 1);
+  const placed = placeLabel(room, longest, fields.length, baseFont);
+  // `!(x > 0)` rather than `x <= 0` so NaN is rejected too.
+  if (!placed || !(placed.fontSize > 0)) return null;
+  const fontSize = placed.fontSize;
+
+  const doc = svg.ownerDocument;
+  const c = placed;
+  const label = doc.createElementNS(SVG_NS, "text");
+  label.setAttribute("class", "label");
+  label.setAttribute("x", String(c.x));
+  label.setAttribute("y", String(c.y));
+  label.setAttribute("font-size", String(fontSize));
+
+  fields.forEach((text, i) => {
+    const span = doc.createElementNS(SVG_NS, "tspan");
+    span.setAttribute("x", String(c.x));
+    span.textContent = text;
+    if (i > 0) {
+      span.setAttribute("class", "tag");
+      span.setAttribute("dy", "1.2em");
+      span.setAttribute("font-size", String(fontSize * 0.7));
+    }
+    label.appendChild(span);
+  });
+
+  svg.appendChild(label);
+  return label;
+}
+
+export function paintLevel(
+  svg: SVGElement,
+  rooms: readonly Room[],
+  fitted: Rect,
+  opts: PaintOptions = {},
+): void {
+  const { showLabels = true, showRooms = true } = opts;
+  const doc = svg.ownerDocument;
+  const baseFont = Math.max(fitted.w, fitted.h) * 0.02;
+
+  const g = doc.createElementNS(SVG_NS, "g");
+  g.setAttribute("class", "grid");
+  const step = 5;
+  for (let gx = Math.ceil(fitted.x / step) * step; gx < fitted.x + fitted.w; gx += step)
+    g.appendChild(line(doc, gx, fitted.y, gx, fitted.y + fitted.h));
+  for (let gy = Math.ceil(fitted.y / step) * step; gy < fitted.y + fitted.h; gy += step)
+    g.appendChild(line(doc, fitted.x, gy, fitted.x + fitted.w, gy));
+  svg.appendChild(g);
+
+  // Keyed by room across the two passes, so the appearance decision is made
+  // ONCE per room rather than once per pass — `colourFor` is caller-supplied,
+  // and resolving a colour plan twice for every room is real work at plate
+  // scale (an export of `big-plate` covers 5,046 of them).
+  const appearances = new Map<Room, RoomAppearance>();
+
+  // TWO passes, not one: every room's polygons first, then every room's label.
+  // SVG has no reliable z-index — paint order is DOM order — so appending all
+  // polygons before any label is what guarantees labels sit on top.
+  for (const room of showRooms ? rooms : []) {
+    const loops = room.loops;
+    const outerLoop = loops?.[0];
+    if (!loops || !outerLoop) continue;
+
+    const appearance = resolveRoomAppearance(room, opts);
+    appearances.set(room, appearance);
+
+    const outer = doc.createElementNS(SVG_NS, "polygon");
+    outer.setAttribute("points", pointsAttr(outerLoop));
+    outer.setAttribute("class", roomClassName(appearance));
+    // Inline style, not a presentation attribute: an inline fill beats the
+    // `.room` CSS rule, a `fill=` attribute loses to it.
+    if (appearance.fill !== null) outer.style.fill = appearance.fill;
+    outer.appendChild(titleEl(doc, room.name || room.id));
+    svg.appendChild(outer);
+
+    for (let i = 1; i < loops.length; i++) {
+      const hole = doc.createElementNS(SVG_NS, "polygon");
+      hole.setAttribute("points", pointsAttr(loops[i]!));
+      hole.setAttribute("class", holeClassName(appearance));
+      svg.appendChild(hole);
+    }
+  }
+
+  // The element layers, between the rooms and the labels -- the screen's order.
+  // Each emits nothing at all when it has nothing to draw, so a rooms-only
+  // export is byte-identical to what it was before they existed.
+  paintSurfaces(svg, opts);
+  paintGlyphs(svg, opts);
+  paintReach(svg, opts.reach, fitted);
+
+  // Labels off skips the pass entirely. Omitting elements beats styling them
+  // away: an exported file then simply has no `<text>` nodes. Labels follow the
+  // ROOMS too, as on screen: a room's name with the room gone is a caption
+  // floating over whatever the reader turned the rooms off to look at.
+  if (showLabels && showRooms) {
+    for (const room of rooms) {
+      if (!room.loops?.[0]) continue;
+      const label = addLabel(svg, room, baseFont);
+      if (!label) continue;
+      if (appearances.get(room)?.dim) label.classList.add("dim");
+    }
+  }
+
+  // The element tags go over everything, as on screen. Same order as the GL layers.
+  const t = opts.tags;
+  if (t?.ffe && opts.ffe) addElementTags(svg, "ffe", placeElementTags("ffe", opts.ffe, t.ffe, baseFont), t.ffe);
+  if (t?.spaces && opts.spaces) addElementTags(svg, "spaces", placeElementTags("spaces", opts.spaces, t.spaces, baseFont), t.spaces);
+  if (t?.floors && opts.floors) addElementTags(svg, "floors", placeElementTags("floors", opts.floors, t.floors, baseFont), t.floors);
+  if (t?.ceilings && opts.ceilings) addElementTags(svg, "ceilings", placeElementTags("ceilings", opts.ceilings, t.ceilings, baseFont), t.ceilings);
+}

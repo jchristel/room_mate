@@ -1,0 +1,795 @@
+// The page's state, in one place, with subscribers.
+//
+// **Deliberately not a library, and deliberately not React state.** What the
+// old page has is module-scope globals plus explicit listeners
+// (`selectionListeners`), and the port keeps that shape: the poll loop, the
+// renderer host and the pickers all read and write the same values, and most
+// of them are not inside a component. This is that, typed, with one
+// `useSyncExternalStore` at the edge (`useViewer`).
+//
+// One snapshot object, replaced whole on every change, so React's identity
+// check is the change check. The state is small — scope, three server lists,
+// one payload reference and a status string — and the payload is never copied,
+// only pointed at.
+
+import type { BuildingRow, MilestoneRow, ProjectRow, RoomsPayload } from "./api.js";
+import type { ElementEntity } from "../elementUrls.js";
+import type { ColourPlan } from "../colour.js";
+import type { ElementKind } from "../../renderer/seam.js";
+import type { FilterState } from "../properties.js";
+import type { AreasData } from "../areas.js";
+import type { TaskIndex } from "../taskStatus.js";
+import type { ValidationReport } from "../validation.js";
+import type { HoverProperties, ViewerAppearance } from "./appearance.js";
+import type { TagEntity } from "../../renderer/elementTags.js";
+import { DEFAULT_TAG_SETTINGS, type TagSettings } from "../elementTags.js";
+import type { Scope } from "../scope.js";
+import { newEdit, pickForEdit, type ConnectionsDoc, type PassageReport, type ZoneEdit } from "../connections.js";
+import { doneRoomIds, newRlsTool, pickAuto, pickRoom as pickRlsRoom, type RlsToolState } from "../rlsTool.js";
+import { newBlueprintTool, pickRoom as pickBlueprintRoom, type BlueprintToolState } from "../blueprintTool.js";
+import { newReach, pickSource, type ReachState } from "../reach.js";
+import { newRoute, pickEndpoint, type PlanPoint, type RouteResult, type RouteState } from "../route.js";
+
+/** What the page is doing, in the words the old page's zone meta used. Not an
+ *  enum of HTTP states: "waiting for data" (a 204 — the project exists and
+ *  holds no rooms) and "connection lost" are different answers to the reader,
+ *  and both are ordinary rather than errors. */
+export type Status = "starting" | "ready" | "waiting for data" | "connection lost";
+
+/** One zone, as far as RENDERING it goes. The view rect is deliberately not
+ *  here — see `zoneRegistry.ts`: it changes on every pointer move, and holding
+ *  it in the store would re-render the page per frame to update a number only
+ *  the renderer reads. */
+export interface ZoneRow {
+  id: string;
+  /** This zone's route tool, or `null` when it is off. Per zone, like the
+   *  layers: a reader comparing two routes opens two zones, and each plan is
+   *  asked about its own start and end. The endpoints are room ids, so changing
+   *  the zone's level mid-route cannot lose either. */
+  route: RouteState | null;
+  /** This zone's open-zone editor, or `null` when it is off. Exclusive with
+   *  `route`: both claim a room pick. */
+  edit: ZoneEdit | null;
+  /** This zone's reach tool, or `null` when it is off. Exclusive with `route` and
+   *  `edit`: all three claim a room pick. While it is on and has an answer, the
+   *  zone draws the heat map. */
+  reach: ReachState | null;
+  /** This zone's blueprint tool, or `null` when it is off: a blueprint laid into a clicked room as a
+   *  ghost, to choose its rotation and assign it. Exclusive with the other three tools, which all
+   *  claim a room pick. Presentation only; it is not in the SVG export. */
+  blueprint: BlueprintToolState | null;
+  /** This zone's RLS tool, or `null` when it is off: rooms clicked on and a library sheet, to queue
+   *  room layout sheet tasks for Revit. Exclusive with the other tools, which all claim a room pick. */
+  rls: RlsToolState | null;
+  /** This zone's footprint overlay: on/off and which tier. Per zone because
+   *  both are presentation — two zones showing one level at two tiers is a
+   *  comparison the overlay exists to make. */
+  areasMode: boolean;
+  areasTier: number;
+  /** The level this zone shows. `null` until a payload says what there is. */
+  levelId: string | null;
+  /** The colour plan applied to THIS zone, by name, or null for none.
+   *
+   *  Per zone because it is presentation: two zones showing one level under two
+   *  plans is the comparison the picker exists for. The plans themselves are
+   *  page state below — they are a property of the project. */
+  colourPlan: string | null;
+  /** Which element layers THIS zone draws. Per zone since C1, where the page
+   *  had one set for all of them: two zones on one storey, one showing
+   *  ceilings and one not, is the comparison that makes possible. The READS
+   *  stay scope-wide — a layer is fetched while any zone shows it — so this is
+   *  a drawing decision, never a cost control. */
+  layers: Readonly<Record<ElementEntity, boolean>>;
+  /** The rooms themselves, and their labels. Rooms default ON, and that is the
+   *  only toggle that hides the layer every other one is drawn over: the
+   *  overlays are read AGAINST the rooms, and sometimes the rooms are what is
+   *  in the way. */
+  showRooms: boolean;
+  showLabels: boolean;
+  /** The tags written on the routes (each hop's length, then the walk so far in
+   *  brackets) and on the reach heat map (each cell's walk). **Default OFF**: both
+   *  put text over the plan, and a reader who wants the line or the colour alone
+   *  should not have to switch anything off. They are the zone's, and the SVG
+   *  export reads them like every other toggle. */
+  showRouteTags: boolean;
+  showReachTags: boolean;
+  /** The text written on each FF&E item, space, ceiling and floor. **Default OFF**, for
+   *  the reason the other tags are: text over the plan is asked for. What it says and
+   *  its colours are the project's (`tagSettings`). */
+  tags: Readonly<Record<TagEntity, boolean>>;
+  /** What this zone lets a click and a hover reach.
+   *
+   *  **A filter, not an order.** The stack under a pointer is whatever is
+   *  there; this says which kinds of it count, so a reader who wants one-click
+   *  FF&E unticks Rooms, and one comparing a ceiling against its room ticks
+   *  Ceilings. Rooms, doors, windows and items start ticked and the three
+   *  outline layers do not, which is exactly the behaviour before it existed.
+   *
+   *  A kind only reaches the filter if its LAYER is on: something not drawn
+   *  must not be selectable, or a click would pick what nobody can see. */
+  pickable: Readonly<Record<SelectionKind, boolean>>;
+  /** Which services model's spaces this zone draws; `""` is all of them.
+   *
+   *  **Presentation, not a scope.** The read is unscoped and the filtering
+   *  happens at paint, because two zones may choose differently and one
+   *  request cannot serve both. The default was already unscoped, so nothing
+   *  fetches more than it did. */
+  spacesModel: string;
+  /** The models whose FF&E this zone does NOT draw. A set of exclusions, so a model
+   *  pushed later is drawn by default and unticking every box really draws nothing.
+   *  Presentation, like `spacesModel`: the read is unscoped and filtered at paint. */
+  ffeModelsOff: readonly string[];
+}
+
+/**
+ * What is selected, page-wide.
+ *
+ * PAGE state, not zone state, and that is the decision the old page made and
+ * this keeps: one room can legitimately appear in two zones showing the same
+ * level, so the mark is applied in EVERY zone that draws it, while `zoneId`
+ * records where the click came from. That id is a LABEL the panel shows, never
+ * focus machinery — selection is explicit, never inferred from where the reader
+ * last interacted.
+ *
+ * `kind` is what makes this more than an id: ids are unique only within an
+ * entity, so a door and a room may share one.
+ */
+/** What can be selected: every kind the plan can pick, plus `area` — a
+ *  hierarchy FOOTPRINT, which is page geometry drawn over the plan rather than
+ *  an element the renderer knows about. */
+export type SelectionKind = ElementKind | "area";
+
+/** The entities the room panel can list.
+ *
+ *  **Spaces are excluded by the TYPE, not by a runtime check**, because the
+ *  reason is structural: a space carries no room reference at all, so there is
+ *  nothing to join it by. The chooser still names them, as a disabled entry
+ *  saying why — silence would read as an oversight. */
+export type ContentsEntity = Exclude<ElementEntity, "spaces">;
+
+/** What one property chooser governs (G7): one panel KIND, or the grid's
+ *  columns.
+ *
+ *  **Per kind, never per element.** A reader clicking door after door is
+ *  comparing the same six fields, and a choice that reset on every click would
+ *  be a choice they had to make again on every click. A ceiling and a floor
+ *  are kept apart even though one component draws both, because they are
+ *  different records carrying different properties — the panel is shared, the
+ *  question is not. */
+export type PropertyScope = SelectionKind | "grid";
+
+export interface Selection {
+  kind: SelectionKind;
+  id: string;
+  zoneId: string | null;
+}
+
+export interface ViewerState {
+  scope: Scope;
+  selection: Selection | null;
+  /** The inspector's property filters. Page state, and deliberately kept
+   *  ACROSS selection changes: the common use is comparing one field over
+   *  several rooms by clicking each in turn. Not persisted across reloads,
+   *  like every other view preference here. */
+  inspector: FilterState;
+  projects: readonly ProjectRow[];
+  buildings: readonly BuildingRow[];
+  milestones: readonly MilestoneRow[];
+  /** The one `/rooms` payload every zone will render from (B3). */
+  payload: RoomsPayload | null;
+  status: Status;
+  /** When the last changed payload landed, for the meta line. */
+  updatedAt: Date | null;
+  /** The zones on screen, left to right. Never empty: the page always has one,
+   *  which is why `removeZone` stops at one rather than at zero. */
+  zones: readonly ZoneRow[];
+  /** Pan and zoom one zone, move them all. Page state, not per zone: it is a
+   *  property of the strip rather than of any one panel. */
+  linkViews: boolean;
+  /** Every model that has spaces, learned from an unscoped payload. */
+  spacesModels: readonly string[];
+  /** Every model that has FF&E, learned from an unscoped payload. */
+  ffeModels: readonly string[];
+  /** Which related types the room panel's "In this room" section lists.
+   *
+   *  **Page state, not per room** (C4): it is a question about how the panel
+   *  READS, and a reader clicking room after room is comparing the same thing
+   *  — a choice that reset per element would be one they had to make again on
+   *  every click.
+   *
+   *  Ceilings and floors default OFF, so the section reads exactly as it did
+   *  before the chooser existed until it is asked. Ticking one is also what
+   *  FETCHES that layer when no zone draws it — see `layerWanted`. */
+  roomContents: Readonly<Record<ContentsEntity, boolean>>;
+  /** The room search: one query, one field set, one match set for the page.
+   *
+   *  `matches` is `null` for NO QUERY and an empty set for a query that matched
+   *  nothing — opposite states, and only the second dims the plan. `seen`
+   *  records which fields the picker has already offered, so a field arriving
+   *  with a new project can default ON without re-ticking one a reader
+   *  deliberately turned off. */
+  search: {
+    query: string;
+    fields: ReadonlySet<string>;
+    seen: ReadonlySet<string>;
+    matches: ReadonlySet<string> | null;
+    active: boolean;
+  };
+  /** The dissolved footprints for the scope, fetched when some zone first
+   *  switches its overlay on. One dataset serves every zone's overlay AND the
+   *  band's figures: it is scope-derived, so a second copy per zone could only
+   *  disagree with itself. */
+  areas: AreasData | null;
+  /** The project's live room tasks by room, while some zone colours by them (`taskData.ts`). */
+  roomTasks: TaskIndex | null;
+  /** The tier the BAND's figures are at. Separate from a zone's overlay tier
+   *  on purpose: the overlay answers "what does this floor look like by
+   *  department", the figures "what do the departments total across the job". */
+  areasBandTier: number;
+  /** The open pick list, or null.
+   *
+   *  Page state rather than a zone's, because exactly one can be open: it is a
+   *  question about one click, and a second list open behind the first would be
+   *  two answers to it. `at` is in viewport coordinates, which is what the
+   *  click gave and what the panel positions against. */
+  pickList: {
+    zoneId: string;
+    at: { x: number; y: number };
+    /** Where in the plan the click landed, so an entry picked from the list can
+     *  still start or end a route at that spot. */
+    world: PlanPoint | null;
+    entries: readonly { kind: SelectionKind; id: string; label: string }[];
+  } | null;
+  /** The QA report for the scope, or null before one has been read. */
+  validation: ValidationReport | null;
+  /** Whether flagged rooms are marked on the plan. Follows the QA block's
+   *  expansion rather than the report: a reader opens QA to look at the
+   *  flagged rooms, and a plan lighting up on a background refresh would be a
+   *  change nobody asked for. */
+  showErrors: boolean;
+  /** Bumped whenever a layer's payload changes.
+   *
+   *  The element payloads live on their polls, not in this store -- they are
+   *  large and only the paint reads them -- so nothing would tell React that a
+   *  doors push landed. This counter is that signal, and it is what the paint
+   *  effect depends on. Without it the plan drew rooms and no elements until
+   *  something else happened to repaint, which is exactly the bug the old
+   *  page's `redrawAllZones()` on a changed element poll exists to prevent. */
+  layersRevision: number;
+  /** Each element layer with a read in flight for a NEW scope, mapped to the
+   *  URL it is reading. The zones' loading bar is derived from it.
+   *
+   *  **A new scope only, never the 2-second revalidation.** A quiet tick asks
+   *  every layer again and almost always hears 304; recording those would
+   *  flicker every bar every two seconds, and would re-render the page twice
+   *  per layer per tick to say nothing had changed. */
+  loadingLayers: Readonly<Partial<Record<ElementEntity, string>>>;
+  /** Whether a rooms read for a scope other than the one held is in flight --
+   *  the first load, or a project, building or milestone change. */
+  roomsLoading: boolean;
+  /** The project's `[appearance]` block, or `{}` — which is the ordinary state
+   *  and means "every layer follows the theme". */
+  appearance: ViewerAppearance;
+  /** The project's colour plans, fetched with its appearance from the one
+   *  settings read. */
+  colourPlans: readonly ColourPlan[];
+  /**
+   * Which properties each panel and the grid have been told NOT to show (G7).
+   *
+   * **The names turned OFF, not the ones chosen**, and an absent or empty set
+   * means "show everything" — so an untouched panel reads exactly as it did
+   * before the chooser existed, and a property that arrives later (the next
+   * door carries one the last did not) is on rather than silently missing.
+   * The reasoning is written out on `keepChosen`.
+   *
+   * Not persisted across reloads, like every other view preference here. The
+   * durable version of "which properties matter for this project" is project
+   * settings — `room_label` already is one — and a chooser that pretended to
+   * be that would be infuriating when it vanished.
+   */
+  hiddenProperties: Readonly<Partial<Record<PropertyScope, ReadonlySet<string>>>>;
+  /** Which property a hover shows, per entity, from the same settings read as
+   *  `appearance`. Every field absent is the ordinary state and means the
+   *  tooltip keeps naming the element. */
+  hoverProperties: HoverProperties;
+  /** What an element's tag says and its colours, from the same settings read. */
+  tagSettings: TagSettings;
+  /** The zone whose tool most recently took a pick, so a pick that did not
+   *  come from a plan (a grid row, a search chip) knows which tool it is for
+   *  when several zones have one on. */
+  toolFocus: string | null;
+  /** The project's authored connections, as last read, for the open-zone editor
+   *  and for whatever reads that depend on them. `doc` is `null` until read. */
+  connections: {
+    projectId: string | null;
+    doc: ConnectionsDoc | null;
+    error: string | null;
+    /** Room ids no door reaches, read while an editor is open: the worklist for
+     *  new zones. `null` until read. */
+    isolated?: ReadonlySet<string> | null;
+    /** What the server made of each saved passage, read with `isolated`: where it
+     *  crossed the rooms' outlines, or why it did not apply. `null` until read. */
+    passages?: ReadonlyMap<string, PassageReport> | null;
+  };
+  /** Saved routes drawn on every zone at once, and what the server last answered
+   *  for each. Page state and not a zone's, because a route crosses levels and a
+   *  zone shows one: each zone draws the slice on its own level. Which are shown is
+   *  per viewer (a convenience, not the shared record); the routes themselves are
+   *  in `connections.doc`. */
+  savedRoutes: { shown: ReadonlySet<string>; results: Readonly<Record<string, RouteResult>> };
+}
+
+const initial: ViewerState = {
+  scope: { projectId: null, building: null, milestone: null },
+  selection: null,
+  inspector: { filter: "", hideEmpty: true },
+  projects: [],
+  buildings: [],
+  milestones: [],
+  payload: null,
+  status: "starting",
+  updatedAt: null,
+  zones: [newZone("zone-0")],
+  linkViews: false,
+  search: { query: "", fields: new Set(), seen: new Set(), matches: null, active: false },
+  areas: null,
+  roomTasks: null,
+  areasBandTier: 0,
+  pickList: null,
+  validation: null,
+  showErrors: false,
+  spacesModels: [],
+  ffeModels: [],
+  roomContents: { doors: true, windows: true, ffe: true, ceilings: false, floors: false },
+  layersRevision: 0,
+  loadingLayers: {},
+  roomsLoading: false,
+  appearance: {},
+  colourPlans: [],
+  hiddenProperties: {},
+  hoverProperties: {},
+  tagSettings: DEFAULT_TAG_SETTINGS,
+  toolFocus: null,
+  connections: { projectId: null, doc: null, error: null, isolated: null },
+  savedRoutes: { shown: new Set(), results: {} },
+};
+
+let state: ViewerState = initial;
+const listeners = new Set<() => void>();
+
+export function getState(): ViewerState {
+  return state;
+}
+
+/** Merge a patch and notify. A no-op patch still notifies, which is cheap and
+ *  keeps callers from having to prove a change; the snapshot identity is what
+ *  React compares, and a redundant render of a header is not worth a guard. */
+export function setState(patch: Partial<ViewerState>): void {
+  state = { ...state, ...patch };
+  for (const listener of listeners) listener();
+}
+
+export function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** Test seam: the poll loop and the pickers are the only writers, and a test
+ *  that ran either needs the page back as it found it. */
+export function resetState(): void {
+  state = initial;
+  for (const listener of listeners) listener();
+}
+
+// ---- zones ------------------------------------------------------------------
+//
+// A hard ceiling on open zones, and it exists for WebGL specifically: browsers
+// cap live contexts (commonly ~16) and silently kill the OLDEST past the limit,
+// so an unbounded "+ zone" would blank an earlier zone with no error and
+// nothing a reader could act on. 8 leaves headroom for the adjacency canvas and
+// for other tabs on the same GPU.
+export const MAX_ZONES = 8;
+
+let zoneSeq = 1;
+
+/** A zone's starting presentation, or a COPY of another zone's.
+ *
+ *  The three overlay layers start off, for the reason they are not polled while
+ *  off: each covers the rooms it sits on, so a reader switches one on to ask a
+ *  specific question. */
+function newZone(id: string, from?: ZoneRow): ZoneRow {
+  return {
+    id,
+    levelId: from?.levelId ?? null,
+    colourPlan: from?.colourPlan ?? null,
+    areasMode: from?.areasMode ?? false,
+    areasTier: from?.areasTier ?? 0,
+    layers: from
+      ? { ...from.layers }
+      : { doors: true, windows: true, ffe: true, spaces: false, ceilings: false, floors: false },
+    showRooms: from?.showRooms ?? true,
+    showLabels: from?.showLabels ?? true,
+    showRouteTags: from?.showRouteTags ?? false,
+    showReachTags: from?.showReachTags ?? false,
+    tags: from ? { ...from.tags } : { ffe: false, spaces: false, ceilings: false, floors: false },
+    pickable: from
+      ? { ...from.pickable }
+      : { room: true, door: true, window: true, item: true, space: false, ceiling: false, floor: false, area: true },
+    spacesModel: from?.spacesModel ?? "",
+    ffeModelsOff: from ? [...from.ffeModelsOff] : [],
+    // A copy of a zone does not copy an unfinished question.
+    route: null,
+    edit: null,
+    reach: null,
+    blueprint: null,
+    rls: null,
+  };
+}
+
+export function addZone(): void {
+  const { zones } = state;
+  if (zones.length >= MAX_ZONES) return;
+  // The new zone starts on the level the LAST one shows, so "+ zone" opens a
+  // copy of what is on screen and the reader changes one of them -- rather than
+  // jumping to the lowest level and making them find their way back.
+  // A new zone opens as a COPY of the last one -- same level, same layers --
+  // so "+ zone" gives a reader something to change rather than a blank panel
+  // they have to configure back to what they were looking at.
+  setState({ zones: [...zones, newZone(`zone-${zoneSeq++}`, zones[zones.length - 1])] });
+}
+
+export function removeZone(): void {
+  const { zones } = state;
+  if (zones.length <= 1) return;
+  setState({ zones: zones.slice(0, -1) });
+}
+
+export function setZoneLevel(id: string, levelId: string | null): void {
+  setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, levelId } : z)) });
+}
+
+export function setLinkViews(on: boolean): void {
+  setState({ linkViews: on });
+}
+
+// ---- layers, per zone -------------------------------------------------------
+
+/** Change one zone's visibility. `layers` is merged, so a caller names only the
+ *  entity it is toggling. */
+export function setZoneLayer(
+  id: string,
+  patch: {
+    layers?: Partial<Record<ElementEntity, boolean>>;
+    showRooms?: boolean;
+    showLabels?: boolean;
+    showRouteTags?: boolean;
+    showReachTags?: boolean;
+    tags?: Partial<Record<TagEntity, boolean>>;
+  },
+): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id
+        ? {
+            ...z,
+            ...(patch.showRooms === undefined ? {} : { showRooms: patch.showRooms }),
+            ...(patch.showLabels === undefined ? {} : { showLabels: patch.showLabels }),
+            ...(patch.showRouteTags === undefined ? {} : { showRouteTags: patch.showRouteTags }),
+            ...(patch.showReachTags === undefined ? {} : { showReachTags: patch.showReachTags }),
+            ...(patch.tags ? { tags: { ...z.tags, ...patch.tags } } : {}),
+            ...(patch.layers ? { layers: { ...z.layers, ...patch.layers } } : {}),
+          }
+        : z,
+    ),
+  });
+}
+
+/** Change what one zone's clicks and hovers can reach. */
+export function setZonePickable(id: string, kind: SelectionKind, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) => (z.id === id ? { ...z, pickable: { ...z.pickable, [kind]: on } } : z)),
+  });
+}
+
+/** Tick or untick one model's FF&E in a zone. */
+export function setZoneFfeModel(id: string, model: string, shown: boolean): void {
+  setState({
+    zones: state.zones.map((z) => {
+      if (z.id !== id) return z;
+      const rest = z.ffeModelsOff.filter((m) => m !== model);
+      return { ...z, ffeModelsOff: shown ? rest : [...rest, model] };
+    }),
+  });
+}
+
+export function setZoneSpacesModel(id: string, model: string): void {
+  setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, spacesModel: model } : z)) });
+}
+
+/** Change which related types the room panel lists. */
+export function setRoomContents(entity: ContentsEntity, on: boolean): void {
+  setState({ roomContents: { ...state.roomContents, [entity]: on } });
+}
+
+/**
+ * Whether anything on the page needs this layer's data — what decides whether
+ * it is fetched. The read is scope-wide, so it cannot be per zone.
+ *
+ * **Two askers, one answer.** A zone DRAWING the layer is the first, and since
+ * C4 the room panel LISTING it is the second: a reader who ticks Ceilings in
+ * the contents chooser while no zone draws them would otherwise read "not
+ * loaded yet" forever, which is a false state rather than a slow one. Both are
+ * page state, so this stays one question with one place to ask it.
+ */
+export function layerWanted(entity: ElementEntity): boolean {
+  if (state.zones.some((z) => z.layers[entity])) return true;
+  return entity !== "spaces" && state.roomContents[entity];
+}
+
+/** Tell the page a layer's data moved. See `layersRevision`. */
+export function bumpLayers(): void {
+  setState({ layersRevision: state.layersRevision + 1 });
+}
+
+/** Record whether one layer is reading a new scope (`url`) or not (`null`).
+ *  A no-op when nothing moved, so the tick that re-marks every layer costs no
+ *  render. */
+export function markLayerLoading(entity: ElementEntity, url: string | null): void {
+  if ((state.loadingLayers[entity] ?? null) === url) return;
+  const next = { ...state.loadingLayers };
+  if (url === null) delete next[entity];
+  else next[entity] = url;
+  setState({ loadingLayers: next });
+}
+
+export function setRoomsLoading(on: boolean): void {
+  if (state.roomsLoading !== on) setState({ roomsLoading: on });
+}
+
+/** Apply a colour plan to one zone, by name. `null` is no colour. */
+export function setZoneColourPlan(id: string, plan: string | null): void {
+  setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, colourPlan: plan } : z)) });
+}
+
+// ---- selection --------------------------------------------------------------
+
+/** Select one element, or nothing. `zoneId` is where the click came from, and
+ *  is null for a selection made anywhere else (the grid, a search result). */
+export function select(
+  kind: SelectionKind,
+  id: string,
+  zoneId: string | null = null,
+  at: PlanPoint | null = null,
+): void {
+  // While a zone has a room-picking tool on (the route tool, or the open-zone
+  // editor), a ROOM pick belongs to that tool instead of selecting. This one
+  // choke point is what makes every way of reaching a room work with either --
+  // a plan click, an entry in the pick list, a grid row, a search chip --
+  // without any of them knowing the tools exist. Every other kind still
+  // selects, so a door can be inspected mid-route.
+  if (kind === "room") {
+    const target = toolTarget(zoneId);
+    if (target) {
+      const zone = state.zones.find((z) => z.id === target)!;
+      setState({ toolFocus: target });
+      if (zone.route) patchZoneRoute(target, pickEndpoint(zone.route, id, at));
+      else if (zone.edit) patchZoneEdit(target, pickForEdit(zone.edit, id, at));
+      else if (zone.reach) patchZoneReach(target, pickSource(zone.reach, id, at));
+      else if (zone.blueprint) patchZoneBlueprint(target, pickBlueprintRoom(zone.blueprint, id));
+      else if (zone.rls)
+        patchZoneRls(
+          target,
+          zone.rls.mode === "auto" ? pickAuto(zone.rls, id, Date.now(), doneRoomIds(state.roomTasks)) : pickRlsRoom(zone.rls, id),
+        );
+      return;
+    }
+  }
+  setState({ selection: { kind, id, zoneId } });
+}
+
+/** Whether a zone has a room-picking tool on. */
+function hasTool(z: ZoneRow): boolean {
+  return z.route !== null || z.edit !== null || z.reach !== null || z.blueprint !== null || z.rls !== null;
+}
+
+/** Which zone's tool a room pick is for, or `null` for none.
+ *
+ *  A click on a plan is for THAT zone's tool, if it has one -- and if it does
+ *  not, the click is an ordinary selection even while another zone has a tool
+ *  on. A pick from anywhere else (the grid, search) has no zone, so it goes to
+ *  the zone that last took one, else the first with a tool on. */
+function toolTarget(zoneId: string | null): string | null {
+  if (zoneId !== null) {
+    const zone = state.zones.find((z) => z.id === zoneId);
+    return zone && hasTool(zone) ? zoneId : null;
+  }
+  const focused = state.zones.find((z) => z.id === state.toolFocus && hasTool(z));
+  return (focused ?? state.zones.find(hasTool))?.id ?? null;
+}
+
+/** Turn one zone's route tool on (fresh) or off. Turning it on turns that
+ *  zone's open-zone editor off: both claim the same click. */
+export function setZoneRouteMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id ? { ...z, route: on ? (z.route ?? newRoute()) : null, edit: on ? null : z.edit, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint, rls: on ? null : z.rls } : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Turn one zone's open-zone editor on (empty) or off, and the route tool off. */
+export function setZoneEditMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id ? { ...z, edit: on ? (z.edit ?? newEdit()) : null, route: on ? null : z.route, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint, rls: on ? null : z.rls } : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Turn one zone's reach tool on (fresh) or off, and the other two tools off. */
+export function setZoneReachMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id ? { ...z, reach: on ? (z.reach ?? newReach()) : null, route: on ? null : z.route, edit: on ? null : z.edit, blueprint: on ? null : z.blueprint, rls: on ? null : z.rls } : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Turn one zone's blueprint tool on (fresh) or off, and the other tools off. */
+export function setZoneBlueprintMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id
+        ? { ...z, blueprint: on ? (z.blueprint ?? newBlueprintTool()) : null, route: on ? null : z.route, edit: on ? null : z.edit, reach: on ? null : z.reach, rls: on ? null : z.rls }
+        : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Turn one zone's RLS tool on (fresh) or off, and the other tools off. */
+export function setZoneRlsMode(id: string, on: boolean): void {
+  setState({
+    zones: state.zones.map((z) =>
+      z.id === id
+        ? { ...z, rls: on ? (z.rls ?? newRlsTool()) : null, route: on ? null : z.route, edit: on ? null : z.edit, reach: on ? null : z.reach, blueprint: on ? null : z.blueprint }
+        : z,
+    ),
+    toolFocus: on ? id : state.toolFocus,
+  });
+}
+
+/** Replace one zone's RLS tool state; a no-op when the tool is off. */
+export function patchZoneRls(id: string, next: RlsToolState): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.rls ? { ...z, rls: next } : z)) });
+}
+
+/** Replace one zone's blueprint tool state; a no-op when the tool is off. */
+export function patchZoneBlueprint(id: string, next: BlueprintToolState): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.blueprint ? { ...z, blueprint: next } : z)) });
+}
+
+/** Replace one zone's reach state; a no-op when its tool is off. */
+export function patchZoneReach(id: string, next: ReachState): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.reach ? { ...z, reach: next } : z)) });
+}
+
+/** Replace one zone's working open zone; a no-op when its editor is off. */
+export function patchZoneEdit(id: string, next: ZoneEdit): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.edit ? { ...z, edit: next } : z)) });
+}
+
+/** The project's authored connections, as last read. */
+export function setConnections(connections: ViewerState["connections"]): void {
+  // `isolated` is read separately from the document, so a save or a re-read of
+  // the document must not wipe it.
+  setState({
+    connections: {
+      isolated: state.connections.isolated ?? null,
+      passages: state.connections.passages ?? null,
+      ...connections,
+    },
+  });
+}
+
+/** The rooms no door reaches, as last read for an open editor. */
+export function setIsolated(projectId: string | null, isolated: ReadonlySet<string> | null): void {
+  setState({ connections: { ...state.connections, projectId, isolated } });
+}
+
+/** What the server made of each saved passage, as last read for an open editor. */
+export function setPassageReports(projectId: string | null, passages: ReadonlyMap<string, PassageReport> | null): void {
+  setState({ connections: { ...state.connections, projectId, passages } });
+}
+
+/** Show or hide one saved route on the plan. */
+export function setSavedRouteShown(id: string, on: boolean): void {
+  const shown = new Set(state.savedRoutes.shown);
+  if (on) shown.add(id);
+  else shown.delete(id);
+  setState({ savedRoutes: { ...state.savedRoutes, shown } });
+}
+
+/** Record what the server answered for one shown route. */
+export function setSavedRouteResult(id: string, result: RouteResult): void {
+  setState({ savedRoutes: { ...state.savedRoutes, results: { ...state.savedRoutes.results, [id]: result } } });
+}
+
+/** Forget routes that are no longer saved (deleted, or another project). */
+export function pruneSavedRoutes(keep: ReadonlySet<string>): void {
+  const { shown, results } = state.savedRoutes;
+  if ([...shown].every((id) => keep.has(id)) && Object.keys(results).every((id) => keep.has(id))) return;
+  setState({
+    savedRoutes: {
+      shown: new Set([...shown].filter((id) => keep.has(id))),
+      results: Object.fromEntries(Object.entries(results).filter(([id]) => keep.has(id))),
+    },
+  });
+}
+
+/** Patch one zone's route; a no-op when its tool is off. */
+export function patchZoneRoute(id: string, patch: Partial<RouteState>): void {
+  setState({ zones: state.zones.map((z) => (z.id === id && z.route ? { ...z, route: { ...z.route, ...patch } } : z)) });
+}
+
+/** Forget both endpoints, keeping the tool on and what it knows about the scope. */
+export function clearZoneRoute(id: string): void {
+  patchZoneRoute(id, { start: null, end: null, startAt: null, endAt: null, notice: null, result: { state: "idle" } });
+}
+
+export function clearSelection(): void {
+  if (state.selection) setState({ selection: null });
+}
+
+export function setInspectorFilter(patch: Partial<FilterState>): void {
+  setState({ inspector: { ...state.inspector, ...patch } });
+}
+
+/** Replace one scope's hidden set. An empty set is kept rather than deleted:
+ *  "None chosen, then everything turned back on" and "never touched" are the
+ *  same state to every reader, so there is nothing to tell apart. */
+export function setHiddenProperties(scope: PropertyScope, hidden: ReadonlySet<string>): void {
+  setState({ hiddenProperties: { ...state.hiddenProperties, [scope]: hidden } });
+}
+
+/** Update the search, from a function of what it was — the field picker reads
+ *  the previous set to add a newly discovered field without re-ticking one a
+ *  reader turned off. */
+export function setSearch(patch: (prev: ViewerState["search"]) => Partial<ViewerState["search"]>): void {
+  setState({ search: { ...state.search, ...patch(state.search) } });
+}
+
+export function setValidation(report: ValidationReport | null): void {
+  setState({ validation: report });
+}
+
+export function setShowErrors(on: boolean): void {
+  setState({ showErrors: on });
+}
+
+export function setAreas(data: AreasData | null): void {
+  setState({ areas: data });
+}
+
+export function setRoomTasks(index: TaskIndex | null): void {
+  setState({ roomTasks: index });
+}
+
+export function setAreasBandTier(depth: number): void {
+  setState({ areasBandTier: depth });
+}
+
+export function setZoneAreas(id: string, patch: { areasMode?: boolean; areasTier?: number }): void {
+  setState({ zones: state.zones.map((z) => (z.id === id ? { ...z, ...patch } : z)) });
+}
+
+export function openPickList(list: NonNullable<ViewerState["pickList"]>): void {
+  setState({ pickList: list });
+}
+
+export function closePickList(): void {
+  if (state.pickList) setState({ pickList: null });
+}

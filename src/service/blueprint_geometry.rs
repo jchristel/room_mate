@@ -1,0 +1,532 @@
+//! Plan geometry for blueprints: the room outline reduced to the edges a recipe is
+//! written against, and the arithmetic that turns an edge, a distance along it and
+//! a distance into the room back into a point.
+//!
+//! **Everything here is millimetres.** The wire is decimal feet; the one place that
+//! converts is `blueprint_capture`, so a figure in this module is never ambiguous.
+//!
+//! **An outline is held at two tolerances, and which one a caller wants is the
+//! question** (`docs/PLAN-blueprints-stage0.md`). The *coarse* outline drops jogs
+//! under [`COARSE_TOLERANCE_MM`] -- the 0.3 to 0.5 m nibs at columns and risers --
+//! because two rooms of one type differ in exactly those, and an edge count that
+//! includes them matched only half of a real project's same-named rooms. The *fine*
+//! outline keeps them ([`FINE_TOLERANCE_MM`]) because the items that sit in those
+//! nibs are outside the coarse outline and would be reported as findings that are
+//! not. Edges, mapping and recipes use the coarse one; "is it inside" uses the fine.
+//!
+//! **No reflection anywhere.** Every outline is wound counter-clockwise, so an edge's
+//! left-hand normal points into the room, and a blueprint fits a room by a cyclic
+//! shift of edges only. A mirror image is a different blueprint (decision 7).
+
+/// A plan point, millimetres.
+pub type Pt = (f64, f64);
+
+/// Jogs shorter than this are dropped from the coarse outline. Chosen on a real project's same-named rooms, where it
+/// removed most of the edge-count mismatch between siblings.
+pub const COARSE_TOLERANCE_MM: f64 = 350.0;
+
+/// The fine outline's tolerance: a vertex that is not a corner (a collinear point, a
+/// few millimetres of survey noise), and nothing more.
+pub const FINE_TOLERANCE_MM: f64 = 30.0;
+
+pub fn dist(a: Pt, b: Pt) -> f64 {
+    (a.0 - b.0).hypot(a.1 - b.1)
+}
+
+pub fn sub(a: Pt, b: Pt) -> Pt {
+    (a.0 - b.0, a.1 - b.1)
+}
+
+pub fn dot(a: Pt, b: Pt) -> f64 {
+    a.0 * b.0 + a.1 * b.1
+}
+
+pub fn cross(a: Pt, b: Pt) -> f64 {
+    a.0 * b.1 - a.1 * b.0
+}
+
+pub fn unit(a: Pt) -> Pt {
+    let l = a.0.hypot(a.1);
+    if l == 0.0 {
+        (1.0, 0.0)
+    } else {
+        (a.0 / l, a.1 / l)
+    }
+}
+
+/// Positive for a counter-clockwise ring.
+pub fn signed_area(p: &[Pt]) -> f64 {
+    (0..p.len()).map(|i| cross(p[i], p[(i + 1) % p.len()])).sum::<f64>() / 2.0
+}
+
+/// The mean of the vertices. Only a reference origin: nothing is defined against it.
+pub fn centroid(p: &[Pt]) -> Pt {
+    let n = p.len().max(1) as f64;
+    (p.iter().map(|q| q.0).sum::<f64>() / n, p.iter().map(|q| q.1).sum::<f64>() / n)
+}
+
+fn seg_dist(pt: Pt, a: Pt, b: Pt) -> f64 {
+    let ab = sub(b, a);
+    let l2 = dot(ab, ab);
+    let t = if l2 == 0.0 { 0.0 } else { (dot(sub(pt, a), ab) / l2).clamp(0.0, 1.0) };
+    dist(pt, (a.0 + ab.0 * t, a.1 + ab.1 * t))
+}
+
+fn line_dist(pt: Pt, a: Pt, b: Pt) -> f64 {
+    let ab = sub(b, a);
+    let l = ab.0.hypot(ab.1);
+    if l == 0.0 {
+        dist(pt, a)
+    } else {
+        cross(ab, sub(pt, a)).abs() / l
+    }
+}
+
+/// The ring with every vertex that lies within `tol` of the line through its
+/// neighbours removed, counter-clockwise.
+///
+/// Removes one vertex at a time and starts again, because deleting a vertex changes
+/// its neighbours' distances. A ring that would fall below three vertices is left as
+/// it stands rather than collapsed.
+pub fn simplify(ring: &[Pt], tol: f64) -> Vec<Pt> {
+    let mut p: Vec<Pt> = ring.to_vec();
+    loop {
+        let mut deduped: Vec<Pt> = Vec::with_capacity(p.len());
+        for &a in &p {
+            if deduped.last().is_none_or(|&last| dist(a, last) > 1.0) {
+                deduped.push(a);
+            }
+        }
+        if deduped.len() > 1 && dist(deduped[0], deduped[deduped.len() - 1]) <= 1.0 {
+            deduped.pop();
+        }
+        p = deduped;
+        if p.len() <= 3 {
+            break;
+        }
+        let n = p.len();
+        match (0..n).find(|&i| line_dist(p[i], p[(i + n - 1) % n], p[(i + 1) % n]) < tol) {
+            Some(i) => {
+                p.remove(i);
+            }
+            None => break,
+        }
+    }
+    if signed_area(&p) < 0.0 {
+        p.reverse();
+    }
+    p
+}
+
+/// The outline edges are mapped on: the fine outline, then the jogs under
+/// [`COARSE_TOLERANCE_MM`] taken out of THAT.
+///
+/// Never `simplify(ring, COARSE_TOLERANCE_MM)` on the raw ring. `simplify` removes the first
+/// vertex within the tolerance of the line through its neighbours, and a boundary that carries a
+/// point 60 mm from a corner (a door jamb, a room separator) puts that corner 60 mm from the
+/// line between its neighbours, so the CORNER went and a chord took its place: House A's
+/// `WC 00.03`, a 3312 x 2768 mm rectangle, came out with three edges 1.2 degrees off square.
+/// The fine pass first leaves only real corners and real jogs for the coarse one to judge. On
+/// real rooms it moves the coarse outline of many and the fine outline of none.
+pub fn coarse_outline(ring: &[Pt]) -> Vec<Pt> {
+    simplify(&simplify(ring, FINE_TOLERANCE_MM), COARSE_TOLERANCE_MM)
+}
+
+/// The direction the walls mostly run in, in degrees within (-45, 45]: the length-weighted mean of
+/// the edge angles taken modulo a quarter turn (the mean of `4 * angle`, so a wall and the wall
+/// at right angles to it vote together). Turn the ring by the negative of this to square it up.
+/// A ring with no length gives 0.
+pub fn dominant_angle_deg(ring: &[Pt]) -> f64 {
+    let (mut s, mut c) = (0.0, 0.0);
+    for e in edges(ring) {
+        let a = 4.0 * e.t.1.atan2(e.t.0);
+        s += e.len * a.sin();
+        c += e.len * a.cos();
+    }
+    if s.hypot(c) < 1e-9 {
+        return 0.0;
+    }
+    let deg = s.atan2(c).to_degrees() / 4.0;
+    // Float noise on an already square ring is not a turn.
+    if deg.abs() < 0.001 {
+        0.0
+    } else {
+        deg
+    }
+}
+
+/// `p` turned counter-clockwise by `deg` about the origin.
+pub fn rotate(p: Pt, deg: f64) -> Pt {
+    let (s, c) = deg.to_radians().sin_cos();
+    (p.0 * c - p.1 * s, p.0 * s + p.1 * c)
+}
+
+/// The axis-aligned rectangle round the ring, counter-clockwise from its lower left.
+pub fn bounding_rect(ring: &[Pt]) -> Vec<Pt> {
+    let (x0, x1) = ring.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.0), b.max(p.0)));
+    let (y0, y1) = ring.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.1), b.max(p.1)));
+    vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+}
+
+/// Whether no two sides that are not neighbours cross or touch, and no two neighbours fold back
+/// on each other. A box that crosses itself has no inside, so no recipe against it means anything.
+pub fn is_simple(ring: &[Pt]) -> bool {
+    let n = ring.len();
+    if n < 3 {
+        return false;
+    }
+    let side = |p: Pt, q: Pt, r: Pt| cross(sub(q, p), sub(r, p));
+    let crosses = |a: Pt, b: Pt, c: Pt, d: Pt| {
+        let (d1, d2, d3, d4) = (side(a, b, c), side(a, b, d), side(c, d, a), side(c, d, b));
+        d1 * d2 <= 0.0 && d3 * d4 <= 0.0
+    };
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        // Neighbours share a vertex; they must not lie back along each other.
+        let c = ring[(i + 2) % n];
+        if side(a, b, c).abs() < 1e-9 && dot(sub(b, a), sub(c, b)) < 0.0 {
+            return false;
+        }
+        for j in i + 2..n {
+            if i == 0 && j == n - 1 {
+                continue;
+            }
+            if crosses(a, b, ring[j], ring[(j + 1) % n]) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// The smallest rectangle (over the outline's own edge directions) round `ring`, as a counter-
+/// clockwise ring of four corners whose first edge runs along the LONG axis towards +x (or +y when
+/// it is vertical). **The one rectangle algorithm**: the long and short sides that sheet suggestion
+/// ranks on are its first two edges, and the four sides a generic room tag is written against are
+/// its edges in order (`room_tag_place`).
+pub fn oriented_rectangle(ring: &[Pt]) -> Option<Vec<Pt>> {
+    let ring = coarse_outline(ring);
+    if ring.len() < 3 {
+        return None;
+    }
+    // (area, origin, u, w, h): the smallest by area, the first winning a tie.
+    let mut best: Option<(f64, Pt, Pt, f64, f64)> = None;
+    for e in edges(&ring) {
+        let (u, v) = (e.t, (-e.t.1, e.t.0));
+        let (mut lo_u, mut hi_u, mut lo_v, mut hi_v) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for &p in &ring {
+            let (a, b) = (dot(p, u), dot(p, v));
+            lo_u = lo_u.min(a);
+            hi_u = hi_u.max(a);
+            lo_v = lo_v.min(b);
+            hi_v = hi_v.max(b);
+        }
+        let (w, h) = (hi_u - lo_u, hi_v - lo_v);
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        if best.is_none_or(|(a, ..)| w * h < a - 1e-9) {
+            let origin = (u.0 * lo_u + v.0 * lo_v, u.1 * lo_u + v.1 * lo_v);
+            best = Some((w * h, origin, u, w, h));
+        }
+    }
+    let (_, origin, mut u, mut w, mut h) = best?;
+    let v = (-u.1, u.0);
+    let corner = |o: Pt, u: Pt, v: Pt, w: f64, h: f64| -> Vec<Pt> {
+        vec![
+            o,
+            (o.0 + u.0 * w, o.1 + u.1 * w),
+            (o.0 + u.0 * w + v.0 * h, o.1 + u.1 * w + v.1 * h),
+            (o.0 + v.0 * h, o.1 + v.1 * h),
+        ]
+    };
+    let mut ring = corner(origin, u, v, w, h);
+    // The long axis first: turn a quarter so that edge 0 is the long one.
+    if h > w {
+        ring.rotate_left(1);
+        u = v;
+        std::mem::swap(&mut w, &mut h);
+    }
+    // And towards +x (or +y when it is vertical): turn half a turn, which keeps it counter-clockwise.
+    if u.0 < -1e-9 || (u.0.abs() <= 1e-9 && u.1 < 0.0) {
+        ring.rotate_left(2);
+    }
+    Some(ring)
+}
+
+/// One side of an outline, with the frame a recipe is written in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Edge {
+    pub a: Pt,
+    pub b: Pt,
+    /// Unit direction from `a` to `b`.
+    pub t: Pt,
+    /// Unit normal pointing **into** the room (the left of `t`, for a counter-clockwise ring).
+    pub n: Pt,
+    pub len: f64,
+}
+
+pub fn edges(ring: &[Pt]) -> Vec<Edge> {
+    (0..ring.len())
+        .map(|i| {
+            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+            let t = unit(sub(b, a));
+            Edge { a, b, t, n: (-t.1, t.0), len: dist(a, b) }
+        })
+        .collect()
+}
+
+impl Edge {
+    /// The point `along` mm from `a` and `off` mm into the room. `along` may lie outside
+    /// `0..=len`: nothing here clamps, so a placement is never moved by being asked for.
+    pub fn point(&self, along: f64, off: f64) -> Pt {
+        (self.a.0 + self.t.0 * along + self.n.0 * off, self.a.1 + self.t.1 * along + self.n.1 * off)
+    }
+}
+
+/// How far the room extends from edge `i`, at `foot` on it, along its inward normal: the
+/// distance to the next wall in front. The edge's own length when nothing is in front,
+/// which is what a percentage of depth then means.
+pub fn depth_at(ring: &[Pt], i: usize, foot: Pt) -> f64 {
+    let es = edges(ring);
+    let e = es[i];
+    let origin = (foot.0 + e.n.0 * 0.5, foot.1 + e.n.1 * 0.5);
+    let mut best = f64::INFINITY;
+    for (j, f) in es.iter().enumerate() {
+        if j == i {
+            continue;
+        }
+        let d = sub(f.b, f.a);
+        let den = cross(e.n, d);
+        if den.abs() < 1e-9 {
+            continue;
+        }
+        let w = sub(f.a, origin);
+        let s = cross(w, d) / den;
+        let u = cross(w, e.n) / den;
+        if s > 0.0 && (-1e-6..=1.0 + 1e-6).contains(&u) {
+            best = best.min(s);
+        }
+    }
+    if best.is_finite() {
+        best
+    } else {
+        e.len
+    }
+}
+
+/// Whether `pt` is in the ring, or within `tol` of its boundary. A point on a wall is
+/// inside: wall devices are placed on the wall line.
+pub fn inside(pt: Pt, ring: &[Pt], tol: f64) -> bool {
+    let n = ring.len();
+    if (0..n).any(|i| seg_dist(pt, ring[i], ring[(i + 1) % n]) < tol) {
+        return true;
+    }
+    let mut c = false;
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        if (a.1 > pt.1) != (b.1 > pt.1) && pt.0 < (b.0 - a.0) * (pt.1 - a.1) / (b.1 - a.1) + a.0 {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// The four corners of a box centred at `c`, `hu` mm either side along unit `f` and
+/// `hv` mm either side across it.
+pub fn box_corners(c: Pt, f: Pt, hu: f64, hv: f64) -> [Pt; 4] {
+    let v = (-f.1, f.0);
+    [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
+        .map(|(sx, sy)| (c.0 + sx * hu * f.0 + sy * hv * v.0, c.1 + sx * hu * f.1 + sy * hv * v.1))
+}
+
+/// Whether two convex polygons interpenetrate by more than `pen` mm (separating-axis test).
+/// Touching, or sharing an edge, is not an overlap.
+pub fn overlaps(p: &[Pt], q: &[Pt], pen: f64) -> bool {
+    for poly in [p, q] {
+        for i in 0..poly.len() {
+            let e = sub(poly[(i + 1) % poly.len()], poly[i]);
+            let axis = unit((-e.1, e.0));
+            let (pa, qa): (Vec<f64>, Vec<f64>) =
+                (p.iter().map(|&x| dot(x, axis)).collect(), q.iter().map(|&x| dot(x, axis)).collect());
+            let (p_hi, q_hi) =
+                (pa.iter().cloned().fold(f64::MIN, f64::max), qa.iter().cloned().fold(f64::MIN, f64::max));
+            let (p_lo, q_lo) =
+                (pa.iter().cloned().fold(f64::MAX, f64::min), qa.iter().cloned().fold(f64::MAX, f64::min));
+            if p_hi.min(q_hi) - p_lo.max(q_lo) <= pen {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(w: f64, h: f64) -> Vec<Pt> {
+        vec![(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+    }
+
+    /// House A `WC 00.03`: a rectangle whose boundary has points 60 mm from three of its corners.
+    #[test]
+    fn test_the_dominant_angle_squares_a_turned_rectangle_and_ignores_which_wall_it_reads() {
+        let turned: Vec<Pt> = rect(6000.0, 3000.0).into_iter().map(|p| rotate(p, 31.0)).collect();
+        let a = dominant_angle_deg(&turned);
+        assert!((a - 31.0).abs() < 1e-6, "{a}");
+        let square: Vec<Pt> = turned.iter().map(|&p| rotate(p, -a)).collect();
+        let r = bounding_rect(&square);
+        assert!((dist(r[0], r[1]) - 6000.0).abs() < 1e-6 && (dist(r[1], r[2]) - 3000.0).abs() < 1e-6);
+        assert_eq!(dominant_angle_deg(&rect(6000.0, 3000.0)), 0.0);
+        // 100 degrees is 10 past a right angle: 10, not -80.
+        let tilted: Vec<Pt> = rect(6000.0, 3000.0).into_iter().map(|p| rotate(p, 100.0)).collect();
+        assert!((dominant_angle_deg(&tilted) - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_a_bow_tie_is_not_simple_and_a_notched_room_is() {
+        assert!(is_simple(&rect(4000.0, 3000.0)));
+        assert!(!is_simple(&[(0.0, 0.0), (4000.0, 3000.0), (4000.0, 0.0), (0.0, 3000.0)]));
+        let l = [
+            (0.0, 0.0),
+            (4000.0, 0.0),
+            (4000.0, 1500.0),
+            (1500.0, 1500.0),
+            (1500.0, 3000.0),
+            (0.0, 3000.0),
+        ];
+        assert!(is_simple(&l));
+    }
+
+    #[test]
+    fn test_a_point_beside_a_corner_does_not_cost_the_coarse_outline_its_corner() {
+        const FT: f64 = 304.8;
+        let ring: Vec<Pt> = [
+            (60.20442135121404, 29.89337270341045),
+            (60.00889880450828, 29.89337270341045),
+            (49.33827961893068, 29.89337270341048),
+            (49.33827961893068, 29.676524697387137),
+            (49.33827961893066, 22.849722021769843),
+            (49.33827961893066, 22.45867692835832),
+            (49.33827961893067, 20.812007874014142),
+            (49.54036384542645, 20.812007874014142),
+            (60.00889880450826, 20.81200787401411),
+            (60.20442135121402, 20.81200787401411),
+        ]
+        .iter()
+        .map(|&(x, y)| (x * FT, y * FT))
+        .collect();
+        let coarse = coarse_outline(&ring);
+        assert_eq!(coarse.len(), 4);
+        for e in edges(&coarse) {
+            let off_square = (e.t.0.abs().min(e.t.1.abs())).asin().to_degrees();
+            assert!(off_square < 0.01, "an edge is {off_square} degrees off square");
+        }
+        // The first-found removal this replaces: 1.2 degrees.
+        let old = edges(&simplify(&ring, COARSE_TOLERANCE_MM));
+        assert!(old.iter().any(|e| e.t.0.abs().min(e.t.1.abs()).asin().to_degrees() > 1.0));
+    }
+
+    #[test]
+    fn test_a_clockwise_ring_comes_back_counter_clockwise() {
+        let mut cw = rect(4000.0, 3000.0);
+        cw.reverse();
+        assert!(signed_area(&simplify(&cw, FINE_TOLERANCE_MM)) > 0.0);
+    }
+
+    /// House A's BED 01.06 arrives as five points: the fifth is a collinear point on the
+    /// left wall. It must come out as the four-edge rectangle it is.
+    #[test]
+    fn test_a_collinear_vertex_is_dropped() {
+        let mut ring = rect(3900.0, 4000.0);
+        ring.push((0.0, 60.0));
+        assert_eq!(simplify(&ring, FINE_TOLERANCE_MM).len(), 4);
+    }
+
+    /// The jog at a column: a 400 mm nib on the long wall. The fine outline keeps it, the
+    /// coarse one does not, which is the whole reason there are two.
+    #[test]
+    fn test_a_jog_survives_the_fine_outline_and_not_the_coarse() {
+        let ring = vec![
+            (0.0, 0.0),
+            (2000.0, 0.0),
+            (2000.0, 300.0),
+            (2400.0, 300.0),
+            (2400.0, 0.0),
+            (5000.0, 0.0),
+            (5000.0, 4000.0),
+            (0.0, 4000.0),
+        ];
+        assert_eq!(simplify(&ring, FINE_TOLERANCE_MM).len(), 8);
+        assert_eq!(simplify(&ring, COARSE_TOLERANCE_MM).len(), 4);
+    }
+
+    #[test]
+    fn test_the_normal_points_into_the_room() {
+        let es = edges(&simplify(&rect(4000.0, 3000.0), FINE_TOLERANCE_MM));
+        for e in es {
+            let mid = e.point(e.len / 2.0, 100.0);
+            assert!(inside(mid, &rect(4000.0, 3000.0), 0.0), "edge from {:?}", e.a);
+        }
+    }
+
+    #[test]
+    fn test_depth_is_the_distance_to_the_wall_in_front() {
+        let ring = simplify(&rect(4000.0, 3000.0), FINE_TOLERANCE_MM);
+        let es = edges(&ring);
+        // Edge 0 runs along the bottom, so its depth is the room's height.
+        assert!((depth_at(&ring, 0, es[0].point(1000.0, 0.0)) - 3000.0).abs() < 1.0);
+        // Edge 1 runs up the right wall, so its depth is the room's width.
+        assert!((depth_at(&ring, 1, es[1].point(1000.0, 0.0)) - 4000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_boxes_overlap_only_when_they_interpenetrate() {
+        let a = box_corners((0.0, 0.0), (1.0, 0.0), 300.0, 300.0);
+        let touching = box_corners((600.0, 0.0), (1.0, 0.0), 300.0, 300.0);
+        let over = box_corners((500.0, 0.0), (1.0, 0.0), 300.0, 300.0);
+        let apart = box_corners((900.0, 0.0), (1.0, 0.0), 300.0, 300.0);
+        assert!(!overlaps(&a, &touching, 5.0), "a shared edge is not an overlap");
+        assert!(overlaps(&a, &over, 5.0));
+        assert!(!overlaps(&a, &apart, 5.0));
+    }
+
+    #[test]
+    fn test_a_point_on_the_wall_is_inside_and_one_beyond_it_is_not() {
+        let ring = rect(4000.0, 3000.0);
+        assert!(inside((0.0, 1000.0), &ring, 20.0));
+        assert!(!inside((-200.0, 1000.0), &ring, 20.0));
+        assert!(inside((2000.0, 1500.0), &ring, 20.0));
+    }
+
+    fn close(a: Pt, b: Pt) -> bool {
+        dist(a, b) < 1e-6
+    }
+
+    fn rect_at(x0: f64, y0: f64, w: f64, h: f64) -> Vec<Pt> {
+        vec![(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)]
+    }
+
+    #[test]
+    fn test_the_rectangle_starts_on_the_long_axis_towards_plus_x_whatever_the_ring_started_with() {
+        // 4 x 3 starting at the other corner, going the same way round, and the same room turned a quarter.
+        let a = oriented_rectangle(&rect_at(0.0, 0.0, 4000.0, 3000.0)).unwrap();
+        assert!(close(a[0], (0.0, 0.0)) && close(a[1], (4000.0, 0.0)), "{a:?}");
+        let tall = oriented_rectangle(&rect_at(0.0, 0.0, 3000.0, 4000.0)).unwrap();
+        assert!(
+            dist(tall[0], tall[1]) > dist(tall[1], tall[2]),
+            "the first edge is the long one: {tall:?}"
+        );
+        assert!(
+            tall[1].0 > tall[0].0 || (tall[1].0 - tall[0].0).abs() < 1e-9,
+            "it runs towards +x: {tall:?}"
+        );
+        let mut shifted = rect_at(0.0, 0.0, 4000.0, 3000.0);
+        shifted.rotate_left(2);
+        let b = oriented_rectangle(&shifted).unwrap();
+        for (p, q) in a.iter().zip(&b) {
+            assert!(close(*p, *q), "the starting corner of the ring does not matter: {a:?} {b:?}");
+        }
+    }
+}

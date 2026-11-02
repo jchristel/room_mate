@@ -1,0 +1,88 @@
+# Builds the Mac and Linux package (server + both MCP servers + viewer, no pyRevit) and attaches it
+# to the release for a tag, beside the Windows installer from release.yml.
+#
+# Its own workflow, not a leg of release.yml: that one is Windows-only by construction (Inno Setup,
+# PowerShell, the pyRevit extension) and a matrix over it would make every step conditional. The
+# two meet only at the release they both upload into.
+#
+# It also runs on a pull request that touches the package, which is the point of the smoke test:
+# an install script nobody runs until a tag is how a release ships a package that does not start.
+#
+# What it does NOT do: rebuild the committed frontend and fail if it is stale. release.yml makes
+# that check on the same tag, and `static/` is committed precisely so a build needs no node. A tag
+# whose frontend is stale therefore fails there, not here.
+name: Release (Mac and Linux)
+
+on:
+  push:
+    # The existing tag scheme (0.0.1-beta.3), no `v` prefix, anchored on a digit.
+    tags: [ "[0-9]*" ]
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "installer/unix/**"
+      - ".github/workflows/release-unix.yml"
+  # Builds and uploads the package as a run artifact, publishes nothing.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp (defaults to the crate version)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    # Apple silicon and x64 Linux. An Intel Mac is not built: nobody has asked, and a runner image
+    # for it is on its way out.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v7
+
+    # Values arrive through env, not interpolated into the script body: a tag name is attacker-
+    # controlled text in the general case.
+    - name: Build the package
+      id: build
+      env:
+        REF_TYPE: ${{ github.ref_type }}
+        REF_NAME: ${{ github.ref_name }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        VERSION=""
+        if [ "$REF_TYPE" = "tag" ]; then VERSION="$REF_NAME"; else VERSION="$INPUT_VERSION"; fi
+        installer/unix/build.sh "$VERSION"
+        PKG=$(ls target/unix-package/*.tar.gz | head -1)
+        echo "package=$PKG" >> "$GITHUB_OUTPUT"
+        echo "name=$(basename "$PKG")" >> "$GITHUB_OUTPUT"
+
+    # Unpacks what was just built, installs it into a throwaway home, starts the server and asks it
+    # for the viewer. This is the test that the package works, not that the code compiles.
+    - name: Smoke test the package
+      run: installer/unix/smoke.sh "${{ steps.build.outputs.package }}"
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.build.outputs.name }}
+        path: |
+          ${{ steps.build.outputs.package }}
+          ${{ steps.build.outputs.package }}.sha256
+        if-no-files-found: error
+
+    # Same tolerance as release.yml: create the release if the tag was pushed from a terminal, and
+    # carry on if the web UI created it in the meantime. The upload is the step that must succeed.
+    - name: Attach the package to the release
+      if: github.ref_type == 'tag'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+        PKG: ${{ steps.build.outputs.package }}
+      run: |
+        gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes || true
+        gh release upload "$TAG" "$PKG" "$PKG.sha256" --clobber

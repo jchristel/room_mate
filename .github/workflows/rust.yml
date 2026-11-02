@@ -1,0 +1,113 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  # For the `audit` job below: a new advisory can land against a dependency
+  # with no commit here to trigger on, so it is also checked weekly.
+  schedule:
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    # Both platforms, because this crate's storage layer is path code and the
+    # two disagree about paths. `FsStore` builds directories from user-supplied
+    # project/model ids, `is_path_safe_component` enforces Windows-specific
+    # rules (DOS device names, trailing dot/space) that are perfectly ordinary
+    # names on Linux, and `write_atomic` relies on rename-over-existing, which
+    # Windows only permits once the source handle is closed. Every one of those
+    # passes on ubuntu whether or not it is right.
+    #
+    # Windows is also the primary development machine here, so an ubuntu-only
+    # gate tested the platform nobody runs and skipped the one everybody does.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel the other leg on first failure — when a change breaks one
+      # platform, whether it broke both is the first thing worth knowing.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
+    # crates/drofus-mcp must stay copy-out-able (no path dependency, no workspace inheritance, no import of a
+    # roommate crate): see its CLAUDE.md.
+    - name: drofus-mcp is still standalone
+      run: python scripts/check_drofus_standalone.py
+
+    # The settings page reads TypeScript types GENERATED from the Rust ones
+    # (ts-rs, in roommate-shared), committed under src-js/settings/generated/
+    # so `npm run build` needs no Rust toolchain. `cargo test` above
+    # is what writes them, so by this point the tree already holds a fresh copy
+    # — any difference means the committed one is stale.
+    #
+    # ubuntu only, like clippy and fmt: the generator's output is
+    # platform-independent, and the Windows leg is here for behaviour.
+    - name: Committed TypeScript types are current
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        changes="$(git status --porcelain -- src-js/settings/generated/)"
+        if [ -n "$changes" ]; then
+          echo "$changes"
+          echo "::error::src-js/settings/generated/ is stale. Run 'cargo test' and commit the result."
+          exit 1
+        fi
+    # Lints, gated. `--all-targets` so test code is covered too (most of this
+    # crate's lines are inline `#[cfg(test)] mod tests`, and they drifted just
+    # as far as the lib did before this ran).
+    #
+    # `-D warnings` deliberately, and it does NOT contradict Cargo.toml's
+    # "`too_many_lines` is warn, never deny". The escape hatch that comment
+    # describes is `#[allow(clippy::too_many_lines)]` **with a reason**, and an
+    # explicit allow still compiles cleanly under `-D warnings` -- so a
+    # long-but-cohesive function is still permitted, it just has to say so out
+    # loud instead of adding one more line to a warning count nobody reads.
+    # That was the actual failure mode: the lint was configured, ran locally,
+    # and had accumulated 35 unread warnings.
+    #
+    # Only on ubuntu: clippy findings are platform-independent for this crate,
+    # so running it twice would double the gate's cost to re-report the same
+    # diagnostics. The Windows leg is here for *behaviour*, not lints.
+    - name: Clippy
+      if: matrix.os == 'ubuntu-latest'
+      run: cargo clippy --all-targets -- -D warnings
+    # Formatting, gated against the repo's own `rustfmt.toml` rather than
+    # rustfmt's defaults. That distinction is the whole reason this is
+    # tolerable: the defaults disagree with this codebase in ~670 places, and
+    # adopting them would have meant a reformat that rewrites every file and
+    # loses `git blame` on all of it. The committed config encodes the width
+    # and inline-literal thresholds the code was already written to, which cut
+    # the one-time diff to something reviewable. See rustfmt.toml.
+    #
+    # ubuntu only, same reasoning as clippy: formatting is platform-independent.
+    - name: Format
+      if: matrix.os == 'ubuntu-latest'
+      run: cargo fmt --check
+
+  # Known-vulnerability check over the dependency tree, as its own job so a
+  # RUSTSEC advisory published against a crate we never changed still turns the
+  # build red. That is the point: this is the one check whose result can change
+  # without anyone touching the repo, so it also runs on a schedule rather than
+  # only on push.
+  #
+  # Separate from `build` deliberately — an advisory is not a reason to hide
+  # whether the code compiles and passes its tests, so the two report
+  # independently.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Install cargo-audit
+      run: cargo install cargo-audit --locked
+    - name: Audit dependencies
+      run: cargo audit

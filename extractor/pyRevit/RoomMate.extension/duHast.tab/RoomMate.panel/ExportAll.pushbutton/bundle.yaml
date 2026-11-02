@@ -1,0 +1,9 @@
+title: "Export"
+
+tooltip: |
+  Push Revit data to the RoomMate server from one window: tick what to
+  export (rooms, doors, windows, FF&E, spaces, ceilings, floors), choose the
+  project and phase, and push the whole model or only chosen levels.
+
+author:
+  - Jan Christel

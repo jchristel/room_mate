@@ -1,0 +1,10 @@
+title: "Tasks"
+
+tooltip: |
+  Runs the room tasks the RoomMate server holds for this model:
+  places the items, then makes the room layout sheets.
+  Checks every task first, asks once about warnings, and
+  writes each step to RoomMate.log (application data, RoomMate folder).
+
+author:
+  - Jan Christel

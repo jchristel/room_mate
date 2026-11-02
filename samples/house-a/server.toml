@@ -1,0 +1,7 @@
+# The sample server settings: snapshots under ./data/snapshots, projects under ./projects.
+# Relative paths resolve against THIS file's directory, so it runs from anywhere:
+#   cargo run --bin roommate -- --server-settings samples/house-a/server.toml --project-settings samples/house-a/projects
+# Regenerate everything here with scripts/make_sample.py.
+
+[storage]
+root = "./data/snapshots"

@@ -1,0 +1,319 @@
+// The shapes the renderer reads off the wire, and the shapes it hands back.
+//
+// Deliberately a SUBSET of what `/rooms` returns. Typing the whole contract here
+// would create a second, drifting copy of a carefully versioned server-side
+// definition, which STRATEGY-BROWSER.md's framework discussion already names as
+// a recurring cost. What is written down is exactly what the renderer touches.
+
+/** A point in the payload's coordinate space: **Y-up**, as the model authored
+ *  it. Everything downstream of `flip()` is Y-down instead; the two are not
+ *  interchangeable and mixing them is the bug this comment exists to prevent. */
+export interface Point2D {
+  x: number;
+  y: number;
+}
+
+export interface Loop {
+  points: Point2D[];
+}
+
+export interface PropertyValue {
+  value: string;
+  storage_type: string | null;
+}
+
+/** One storey, as a model declares it.
+ *
+ *  `id` is a Revit `ElementId` and is unique only within the document that
+ *  wrote it -- which is why `storey.ts` matches on `name` + `elevation` and
+ *  never on this field. `elevation` is millimetres. */
+export interface Level {
+  id: string;
+  name: string;
+  elevation: number;
+}
+
+export interface ClassificationTier {
+  tier: string;
+  name: string;
+  /** The tier's code, when the classification declares one. Absent from this
+   *  subset until the colour plans needed it: a hierarchy plan groups by CODE
+   *  first and falls back to the name, because two departments may share a
+   *  name and never a code. */
+  code?: string | null;
+  undefined: boolean;
+}
+
+export interface Room {
+  id: string;
+  name?: string;
+  level_id?: string;
+  /** `loops[0]` is the outer ring; `loops[1..]` are voids. May be empty or
+   *  absent — a door family with no 3D geometry arrives this way (see CLAUDE.md
+   *  on `±1e30`), and such a room is skipped rather than treated as an error. */
+  loops?: Loop[];
+  /**
+   * The server-resolved, ordered field list from `room_label`. Three states,
+   * and they are NOT interchangeable:
+   *   - absent      -> an older payload; fall back to name, then id.
+   *   - `[]`        -> the configured properties did not resolve. Render NOTHING.
+   *                    Falling back here would invent data the server withheld.
+   *   - `[a, b, …]` -> `a` is the primary line, the rest stack smaller in accent.
+   */
+  label?: string[];
+  properties?: Record<string, PropertyValue>;
+  classification?: ClassificationTier[];
+}
+
+/**
+ * One MEP space, as `/spaces` returns it -- a SUBSET, on the same terms as
+ * `Room`.
+ *
+ * **Drawn as an outline over the rooms, never as a fill**, and that is the whole
+ * design of this layer. A space and the room it serves occupy the same ground,
+ * so a second filled polygon would either hide the room or be hidden by it. An
+ * outline lets a reader watch the two boundaries diverge, which is the question
+ * this layer exists to answer and the one the QA report answers numerically.
+ *
+ * `loops` is EMPTY for an unenclosed or unmeasured space, so those draw nothing
+ * -- a real limitation rather than an oversight, and one worth stating: the two
+ * states most worth seeing are exactly the ones with no geometry to see. The QA
+ * report is where they are counted.
+ */
+export interface Space {
+  id: string;
+  name?: string;
+  level_id?: string;
+  loops?: Loop[];
+  /** `"enclosed"` | `"unenclosed"` | `"unmeasured"`, or absent on a snapshot
+   *  written before the field existed. */
+  enclosure?: string;
+  /** The services model this space came from. Load-bearing here: one file per
+   *  service means several spaces legitimately share a number. */
+  model_id?: string;
+}
+
+/**
+ * One ceiling, as `/ceilings` returns it -- a SUBSET, on the same terms as
+ * `Room`.
+ *
+ * **Drawn as a dashed outline over the rooms**, for the reason `Space` is drawn
+ * as a ring: a ceiling covers the same ground as the room under it, so a second
+ * filled polygon would either hide the room or be hidden by it. It differs from
+ * the spaces layer in hue and in dash on purpose -- a space is a SERVICES
+ * boundary being compared against the architecture, while a ceiling is part of
+ * the architecture, so it reads in the room ink rather than the accent.
+ *
+ * `polygons` is EMPTY for a ceiling duHast could not measure, so those draw
+ * nothing. That is the same stated limitation the spaces layer has, and it is
+ * why such a ceiling is exported at all rather than dropped: the server counts
+ * it and attributes it to no room, which is where it is visible.
+ */
+/** One piece of a ceiling's footprint: `[0]` outer, `[1..]` holes. */
+export interface CeilingPolygon {
+  loops?: Loop[];
+}
+
+export interface Ceiling {
+  id: string;
+  level_id?: string;
+  /** EVERY piece, not one ring. duHast exports a ceiling once per horizontal
+   *  face and real pieces are genuinely disjoint -- drawing only the first
+   *  would omit much of the ceiling area. */
+  polygons?: CeilingPolygon[];
+  /** The model the ceiling came from. Needed by `onStorey`, which joins a
+   *  storey by name + elevation against this model's own level list. */
+  model_id?: string;
+  /** Height above `level_id`, in decimal feet. Not drawn -- a plan has no axis
+   *  for it -- but carried so a reader inspecting a ceiling can tell a bulkhead
+   *  from the soffit nested inside it. */
+  height_offset?: number | null;
+  type_name?: string | null;
+}
+
+/**
+ * One floor, as `/floors` returns it. The SAME record as `Ceiling` -- the
+ * server serves both from one `Surface` type -- so this is an alias rather
+ * than a copy that could drift from it.
+ *
+ * **Drawn as a DOTTED ring**, under the ceilings. A floor, a ceiling and the
+ * room outline can all sit on one line of the plan, and the three are told
+ * apart by stroke pattern -- solid, long dash, dot -- rather than by colour,
+ * which a project may override. `height_offset` is to the floor's TOP.
+ */
+export type Floor = Ceiling;
+
+/**
+ * One door, as `/doors` returns it — a SUBSET, on the same terms as `Room`.
+ *
+ * A door is not a room with different fields. The two that matter here:
+ * `loops` may be legitimately EMPTY (a door family with no 3D geometry — 2 of
+ * the 26 House A doors), and a door carries its own placement so it is still
+ * drawable when that happens.
+ */
+export interface Door {
+  id: string;
+  level_id?: string;
+  /** `loops[0]` is the footprint rectangle; the room convention verbatim.
+   *  **Empty is a real state**, not an error — see `buildDoorGlyph`. */
+  loops?: Loop[];
+  /** The room the door opens from, or absent for an external door. */
+  from_room?: string | null;
+  to_room?: string | null;
+  /** Where the door sits. Present even when `loops` is empty, which is the
+   *  whole reason a geometry-less door can still be drawn. */
+  insertion_point?: Point2D | null;
+  /**
+   * A unit vector along the direction the door **faces**, Y-up like every
+   * other point here.
+   *
+   * **Not "toward `to_room`".** They usually coincide, but a door is
+   * attributed to the room it *serves* and the modeller decides that — a
+   * cupboard off a corridor swings into the corridor and belongs to the
+   * cupboard. So an arrow drawn from this can legitimately point away from
+   * `owner_rooms`, and that is correct data rather than something to
+   * reconcile.
+   */
+  through_wall_normal?: Point2D | null;
+  type_name?: string;
+  /** Rooms this door is attributed to under the project's policy. **Empty
+   *  means homeless** — a reported state, not a missing value. */
+  owner_rooms?: string[];
+  properties?: Record<string, PropertyValue>;
+  /** This element's row in the response's `type_property_sets`, which sends each
+   *  distinct family-type bag once. Indexes THAT payload only; absent when the
+   *  element has no type properties. */
+  type_properties_ref?: number;
+}
+
+/**
+ * One window, as `/windows` returns it.
+ *
+ * **The same record as `Door`, and an alias rather than a copy**, because that
+ * is what the measurement found: a full-depth key-path diff of real exports from
+ * two documents showed zero structural differences between a window record and a
+ * door record. The server shares one `Opening` type for exactly this reason, and
+ * a second interface here would only be somewhere for the two to drift apart.
+ *
+ * **Named `WindowOpening`, not `Window`**, which is not a stylistic choice:
+ * `Window` is the DOM global, and shadowing it in a file that also touches the
+ * canvas is a class of bug nobody enjoys finding.
+ *
+ * What differs is the DATA, not the shape, and the glyph is where that shows up
+ * — see `buildWindowGlyph`.
+ */
+export type WindowOpening = Door;
+
+/**
+ * One FF&E instance, as `/ffe` returns it — a SUBSET, on the same terms as
+ * `Room` and `Door`.
+ *
+ * **Its own interface, NOT an alias of `Door`**, which is the opposite call to
+ * `WindowOpening` above and made on the same evidence. A window record was
+ * measured to be a door record, so an alias was the honest description. An item
+ * is measurably not: it names ONE room rather than two sides, carries a Revit
+ * `category` no opening has, and has `facing` where an opening has
+ * `through_wall_normal` — a different claim, not a different spelling.
+ *
+ * `loops` is **empty on every item today**, because the upstream exporter
+ * carries no footprint for FF&E yet. That is the normal state here rather than
+ * the exception it is for an opening, and `buildItemGlyph` is built around it.
+ */
+export interface Item {
+  id: string;
+  /** The model this item came from; what a zone's FF&E model checkboxes filter on. */
+  model_id?: string;
+  level_id?: string;
+  /** The Revit category, e.g. `"Furniture"`. The one field no opening has, and
+   *  the first thing a reader filters on. */
+  category?: string;
+  /** `loops[0]` is the footprint rectangle when there is one. **Empty is the
+   *  ordinary state**, not an error — see `buildItemGlyph`. */
+  loops?: Loop[];
+  /** The room this item is in, or absent. Not a pair: an item sits IN a room. */
+  room?: string | null;
+  /** Where the item sits. The only placement most items have. */
+  insertion_point?: Point2D | null;
+  /**
+   * A unit vector along the item's own X axis, Y-up like every other point
+   * here — which way it faces.
+   *
+   * **Not an opening's `through_wall_normal`.** That vector passes through a
+   * wall and has a meaning on each side; this is an orientation and nothing
+   * more. Absent for 44 of 644 measured items, whose local X points along Z.
+   */
+  facing?: Point2D | null;
+  /** The instance this one is a component of, when it is one. Present means the
+   *  project's `nested_components` policy chose to include it. */
+  super_component_id?: string | null;
+  /** Whether the server classed this as a component — the resolved answer, so
+   *  a reader need not re-derive it from `super_component_id`. */
+  is_component?: boolean;
+  type_name?: string;
+  /** The room this item is attributed to, as a list of at most one. **Empty
+   *  means homeless** — a reported state, not a missing value. */
+  owner_rooms?: string[];
+  properties?: Record<string, PropertyValue>;
+  /** This element's row in the response's `type_property_sets`, which sends each
+   *  distinct family-type bag once. Indexes THAT payload only; absent when the
+   *  element has no type properties. */
+  type_properties_ref?: number;
+}
+
+/** A rectangle in the **flipped** (Y-down) space — the same space as
+ *  `zone.view` and the SVG viewBox. */
+export interface Extent {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** A viewport/frame in the flipped space, in `viewBox` order. */
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface Size {
+  w: number;
+  h: number;
+}
+
+/**
+ * One room's resolved appearance — the whole output of the appearance decision,
+ * and the thing that must not drift between the SVG export and the GL renderer.
+ *
+ * Note what is NOT here: selection. `paintLevel` is shared with the SVG export
+ * and an exported file must never carry a selection stroke, so selection is
+ * re-applied after painting rather than resolved with everything else.
+ */
+export interface RoomAppearance {
+  /** A literal colour from the active colour plan, or `null` to mean "leave the
+   *  CSS `--fill` alone". `null` is not `""`: an empty string would emit an
+   *  inline `fill:` that overrides the stylesheet with nothing. */
+  fill: string | null;
+  error: boolean;
+  match: boolean;
+  dim: boolean;
+}
+
+/** Everything the appearance decision needs that is not the room itself. */
+export interface AppearanceContext {
+  /**
+   * Resolves the active colour plan to a literal colour, or `null` when no plan
+   * is active. INJECTED rather than implemented here: colour plans and their
+   * palette are the viewer's (`src-js/viewer/colour.ts`, `palette.ts`), and
+   * this bundle is built and committed separately, so importing them would
+   * put a second copy of the palette in a second artifact. The precedence
+   * *rule* is what matters and it lives in `resolveRoomAppearance`; which hex a
+   * value maps to is a separate concern.
+   */
+  colourFor?: ((room: Room) => string | null) | undefined;
+  errorRoomIds?: ReadonlySet<string> | null | undefined;
+  showErrors?: boolean | undefined;
+  matchRoomIds?: ReadonlySet<string> | null | undefined;
+  searchActive?: boolean | undefined;
+}

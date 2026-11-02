@@ -1,0 +1,549 @@
+#!/usr/bin/env python3
+"""Mechanical drift checks for the weekly review — docs versus code.
+
+**Why this exists.** This repo's documentation is its main asset: dense,
+specific, and full of falsifiable claims about symbols, routes and file sizes.
+That is a strength with a maintenance cost nobody can pay by re-reading. A
+2026-08-07 review found ~20 drift findings, and all but a handful were
+mechanically detectable — a doc naming `ServiceError::NotFound` eighteen months
+after the variant was renamed is invisible to a careful reader and obvious to
+`grep`. This script is that `grep`, with the false positives tuned out.
+
+**This is advisory, never a gate, and that is a design decision rather than
+timidity.** Live docs legitimately name symbols that do not exist, in at least
+three shapes this script cannot distinguish from rot:
+
+  - explaining a rename ("`ReferenceRecord`, renamed from `DrofusRecord`"),
+  - recording a design that was considered and rejected,
+  - describing a design settled but deliberately not built (STRATEGY-AUTHORED).
+
+Each of those is *good writing*. A gate would punish it, and the pressure would
+be to delete the history rather than fix the rot. So: this reports, a human
+judges, and anything judged fine goes in `weekly_review_ignore.toml` **with a
+reason** so next week is quieter than this week. The ignore file converging on
+zero unexplained hits is the point.
+
+No third-party dependencies: stdlib only, so it runs anywhere the repo does.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+IGNORE_FILE = Path(__file__).resolve().parent / "weekly_review_ignore.toml"
+
+# Where a symbol may live. Docs cite Rust types, TypeScript renderer internals,
+# viewer globals and extractor functions interchangeably, so a check that read
+# only `src/` would report every frontend and pyRevit symbol as dead. `crates`
+# holds `roommate-shared` — the settings types and `RoomBoundary` among them —
+# which the docs still cite as freely as anything in `src/`.
+SOURCE_TREES = ("src", "crates", "src-js", "static", "extractor", "scripts")
+SOURCE_SUFFIXES = {".rs", ".ts", ".js", ".py", ".html"}
+
+# Generated, and megabytes of minified vendor code: it would match almost any
+# identifier by chance and silence real findings.
+EXCLUDED_FILES = {"static/vendor/renderer.bundle.js"}
+
+
+class Findings:
+    """Collects results so every check can run before anything is printed."""
+
+    def __init__(self) -> None:
+        self.sections: list[tuple[str, list[str], str]] = []
+        self.total = 0
+
+    def add(self, title: str, hits: list[str], clean_note: str = "") -> None:
+        self.sections.append((title, hits, clean_note))
+        self.total += len(hits)
+
+    def report(self) -> int:
+        for title, hits, clean_note in self.sections:
+            print(f"\n## {title}")
+            if not hits:
+                print(f"  OK{(' -- ' + clean_note) if clean_note else ''}")
+                continue
+            for h in hits:
+                print(f"  {h}")
+        print(f"\n{'=' * 68}")
+        print(f"{self.total} item(s) to judge. None of this is automatically a defect --")
+        print("see the header of scripts/weekly_review.py. Anything fine goes in")
+        print("scripts/weekly_review_ignore.toml with a reason.")
+        return 0
+
+
+def load_ignores() -> dict:
+    if not IGNORE_FILE.exists():
+        return {}
+    with IGNORE_FILE.open("rb") as fh:
+        return tomllib.load(fh)
+
+
+def live_docs() -> list[Path]:
+    """Live strategy docs only — never a review write-up.
+
+    A review document deliberately quotes dead symbols as its subject matter, so
+    checking one would report every finding it makes as a finding of its own.
+    """
+    return sorted(
+        p
+        for p in (ROOT / "docs").glob("*.md")
+        if not p.name.startswith("CODE-REVIEW")
+    )
+
+
+def source_text() -> tuple[set[str], set[str]]:
+    """Every identifier and every source path across all source trees."""
+    words: set[str] = set()
+    files: set[str] = set()
+    for tree in SOURCE_TREES:
+        for path in (ROOT / tree).rglob("*"):
+            if path.suffix not in SOURCE_SUFFIXES or not path.is_file():
+                continue
+            rel = path.relative_to(ROOT).as_posix()
+            files.add(rel)
+            if rel in EXCLUDED_FILES:
+                continue
+            try:
+                words.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", path.read_text(encoding="utf-8")))
+            except UnicodeDecodeError:
+                continue
+    return words, files
+
+
+# --------------------------------------------------------------------------
+# Check 1 — symbol liveness
+# --------------------------------------------------------------------------
+
+RUST_PATH = re.compile(r"[a-z_]+(?:::[a-zA-Z_][a-zA-Z0-9_]*)+")
+TYPE_NAME = re.compile(r"[A-Z][A-Za-z0-9]+")
+FN_CALL = re.compile(r"[a-z_][a-z0-9_]*\(\)")
+SRC_FILE = re.compile(r"(?:[a-z_][a-z0-9_]*/)*[a-z_][a-z0-9_]*\.(?:rs|ts|py)")
+RUST_ITEM = re.compile(r"\b(?:fn|mod|macro_rules!)\s+([a-z_][a-z0-9_]*)")
+
+# First segments that make a path OURS. Anything else (`std::`, `geo::`) is an
+# external crate this check cannot see into, so it keeps the leaf-only test.
+LOCAL_ROOTS = {"crate", "super", "self", "roommate", "roommate_shared"}
+
+
+def rust_names() -> dict[str, set[str]]:
+    """Module name -> every lowercase name reachable directly under it.
+
+    What is under `foo` is its child modules (`foo/bar.rs`, `foo/bar/`) and every
+    `fn`, inline `mod` or `macro_rules!` in `foo.rs` or anywhere below `foo/` --
+    below rather than directly in, because a `mod.rs` re-exports its children's
+    items and a doc cites them by the re-exported path. Keyed by NAME, not by
+    location, so the two `settings` modules (the server's re-export and
+    `roommate-shared`'s types) pool: the docs cite them as one. The `""` key
+    holds everything, for a parent this cannot place (`crate::`, `super::`).
+    """
+    under: dict[str, set[str]] = {"": set()}
+    for tree in ("src", "crates"):
+        for path in (ROOT / tree).rglob("*.rs"):
+            names = set(RUST_ITEM.findall(path.read_text(encoding="utf-8")))
+            parts = path.relative_to(ROOT / tree).with_suffix("").parts
+            under[""].update(names | set(parts))
+            for i, directory in enumerate(parts[:-1]):
+                below = under.setdefault(directory, set())
+                below.update(names)
+                if parts[i + 1] != "mod":
+                    below.add(parts[i + 1])
+            # `foo.rs` holds foo's own items, same as `foo/mod.rs`.
+            own = parts[-2] if parts[-1] == "mod" and len(parts) > 1 else parts[-1]
+            under.setdefault(own, set()).update(names)
+            # An inline `mod tests { .. }` is a parent too, and a doc cites a test
+            # through it. Its items are pooled with the file's, which is loose but
+            # only ever errs towards passing.
+            for inline in re.findall(r"\bmod\s+([a-z_][a-z0-9_]*)\s*\{", path.read_text(encoding="utf-8")):
+                under.setdefault(inline, set()).update(names)
+    return under
+
+
+def check_symbols(findings: Findings, words: set[str], files: set[str], ignores: dict) -> None:
+    """Docs name a symbol or source file that exists nowhere in the tree.
+
+    An ignore key is either a bare symbol (benign wherever it appears -- an
+    external API, a prose word) or `SYMBOL@DOC.md`, meaning benign *in that
+    document only*. The scoped form matters: a doc explaining a rename
+    ("the former `contract.rs`") is benign there, while the same name in a doc
+    that means it as a live reference is still rot. A bare key would silence
+    both, and the second is exactly what this check exists to find.
+    """
+    skip = set(ignores.get("symbols", {}).keys())
+    hits: dict[str, list[str]] = {}
+    under = rust_names()
+
+    def ignored(span: str, doc_name: str) -> bool:
+        return span in skip or f"{span}@{doc_name}" in skip
+
+    def path_is_dead(span: str) -> bool:
+        """A `module::lowercase` path whose leaf is neither a module nor a fn.
+
+        **The leaf-only word test was a checker bug for exactly this shape.** It
+        asked whether the last segment appeared anywhere in the tree, and a
+        module name almost always does: `service::ceilings` passed for three
+        days after floors renamed the module to `service::surfaces`, because
+        "ceilings" is in hundreds of lines -- and even "is there a module named
+        ceilings" says yes, because `contract::ceilings` exists. A lowercase
+        leaf under a lowercase parent can only be a module or an item OF THAT
+        PARENT, so that is what it must be. A leaf under a TYPE
+        (`ProjectSettings::comparison_key`) may be a field, which this cannot
+        resolve, so it keeps the word test.
+        """
+        segs = span.split("::")
+        local = segs[0] in under or segs[0] in LOCAL_ROOTS
+        if len(segs) < 2 or not local or not segs[-2][0].islower() or not segs[-1][0].islower():
+            return segs[-1] not in words
+        parent = "" if segs[-2] in LOCAL_ROOTS else segs[-2]
+        return segs[-1] not in under.get(parent, set())
+
+    for doc in live_docs():
+        for lineno, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+            for span in re.findall(r"`([^`\n]{2,60})`", line):
+                if ignored(span, doc.name):
+                    continue
+                if SRC_FILE.fullmatch(span):
+                    if not any(f == span or f.endswith("/" + span) for f in files):
+                        hits.setdefault(span, []).append(f"{doc.name}:{lineno}")
+                elif RUST_PATH.fullmatch(span):
+                    if path_is_dead(span):
+                        hits.setdefault(span, []).append(f"{doc.name}:{lineno}")
+                elif TYPE_NAME.fullmatch(span) or FN_CALL.fullmatch(span):
+                    if span.replace("()", "") not in words:
+                        hits.setdefault(span, []).append(f"{doc.name}:{lineno}")
+
+    # Every site, never a truncated list: capping the locations at four silently
+    # hid a real `contract.rs` reference in STRATEGY.md behind three benign ones,
+    # which is the one failure mode a drift checker must not have.
+    findings.add(
+        "Symbols named in live docs that exist nowhere in the tree",
+        [f"{sym:<38} {', '.join(locs)}" for sym, locs in sorted(hits.items())],
+        f"{len(skip)} known-benign entr(y/ies) ignored",
+    )
+
+
+# --------------------------------------------------------------------------
+# Check 2 — path liveness
+# --------------------------------------------------------------------------
+
+# A markdown link, or a bare citation that contains a directory separator.
+#
+# **Bare names are deliberately not checked**, and this is the single most
+# important tuning decision in this file. Both the docs and the code cite
+# documents by name constantly in prose -- "see PLAN-phasing.md D6",
+# "(HANDOVER-gzip.md)" -- and those are navigational hints, not links. Checking
+# them reported 60+ hits, nearly all of them prose that reads perfectly well and
+# that no reader has ever been misled by.
+#
+# A citation that spells out a *path*, on the other hand, makes a checkable
+# promise: it says "the file is here". Those are the ones that mislead, because
+# they look authoritative and resolve to nothing. Every real finding the
+# 2026-08-07 review made in this category (`docs/PLAN-webgl-renderer.md` cited
+# from six build files after the doc moved) is of that shape.
+MD_LINK = re.compile(r"\]\(\s*(?!https?:)([^)\s#]+\.md)(?:#[^)\s]*)?\s*\)")
+MD_PATH = re.compile(r"(?<![\w/.])((?:\.\./|\./)*(?:[A-Za-z0-9_\-]+/)+[A-Za-z0-9_\-]+\.md)")
+
+
+def check_paths(findings: Findings) -> None:
+    """A `.md` *path* cited from code or live docs that no longer resolves.
+
+    Catches the commonest rot in this repo by count: a document moves or is
+    deleted and the places spelling out its old path keep pointing at
+    nothing. Nothing breaks -- a reader just lands nowhere, which is why it
+    survives so long.
+    """
+    all_md = {p.relative_to(ROOT).as_posix() for p in ROOT.rglob("*.md") if "node_modules" not in p.parts}
+    hits: list[str] = []
+
+    scan: list[Path] = [ROOT / "package.json", ROOT / "tsconfig.json", ROOT / "vite.config.ts",
+                        ROOT / ".gitignore", ROOT / "Cargo.toml", ROOT / "CLAUDE.md", ROOT / "README.md"]
+    for base in [ROOT / t for t in SOURCE_TREES] + [ROOT / "docs", ROOT / "settings"]:
+        if base.exists():
+            scan.extend(p for p in base.rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES | {".md", ".toml"})
+
+    seen: set[tuple[str, str]] = set()
+    for path in scan:
+        rel = path.relative_to(ROOT).as_posix()
+        if not path.exists() or rel in EXCLUDED_FILES:
+            continue
+        # Archives cite their own era's paths correctly; this script's own files
+        # and any review write-up quote broken paths as their subject matter.
+        if path.name.startswith("CODE-REVIEW") or "weekly_review" in path.name:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for ref in set(MD_LINK.findall(text)) | set(MD_PATH.findall(text)):
+            if (path.parent / ref).exists() or (ROOT / ref).exists():
+                continue
+            name = Path(ref).name
+            actual = sorted(p for p in all_md if Path(p).name == name)
+            if not actual:
+                continue  # names a document that does not exist under any path
+            key = (rel, ref)
+            if key in seen:
+                continue
+            seen.add(key)
+            hits.append(f"{rel:<38} cites {ref:<38} -> {actual[0]}")
+
+    findings.add("Stale `.md` paths cited from code or live docs", sorted(hits))
+
+
+# --------------------------------------------------------------------------
+# Check 3 — HTTP route / MCP tool parity
+# --------------------------------------------------------------------------
+
+def check_mcp_parity(findings: Findings) -> None:
+    """Every HTTP *read* route should have an MCP tool, per `bin/mcp.rs`'s claim.
+
+    Mutating routes are deliberately absent from MCP (ingest, activate, settings
+    writes) and are filtered out here rather than reported every week.
+    """
+    main = (ROOT / "src/main.rs").read_text(encoding="utf-8")
+    mcp = (ROOT / "src/bin/mcp.rs").read_text(encoding="utf-8")
+
+    routes: list[str] = []
+    for m in re.finditer(r'\.route\(\s*"([^"]+)"\s*,\s*(.+?)\)\s*(?:\.layer|\n)', main, re.S):
+        path, handlers = m.group(1), m.group(2)
+        if "get(" in handlers:  # a read route; `post`-only routes are mutations
+            routes.append(path)
+    # `/comparison` is a POST that reads (it carries a list body), so it is a
+    # read route despite the verb -- see handlers::compare_project_milestones.
+    if "/projects/{id}/comparison" in main:
+        routes.append("/projects/{id}/comparison")
+
+    tool_count = len(re.findall(r"#\[tool\(", mcp))
+    # `[\w-]`, and a line break allowed inside the phrase: the header wraps "in
+    # total" across a `//!` line and past twenty the count is hyphenated, so the
+    # plain `(\w+) in total` matched nothing and this check was silently off.
+    claimed = re.search(r"([\w-]+) in(?:\s|//!)+total", mcp)
+
+    hits: list[str] = []
+    # Route -> tool is judged by hand once, then encoded here: the mapping is
+    # not derivable from names (`/areas` -> `get_hierarchy_areas`).
+    mapping = {
+        "/rooms": "get_rooms", "/doors": "get_doors", "/windows": "get_windows", "/ffe": "get_ffe",
+        "/spaces": "get_spaces", "/ceilings": "get_ceilings", "/floors": "get_floors",
+        "/projects": "list_projects",
+        "/projects/{id}/buildings": "list_buildings", "/projects/{id}/validation": "get_validation",
+        "/projects/{id}/snapshots": "list_snapshots", "/projects/{id}/milestones": "list_milestones",
+        "/projects/{id}/areas": "get_hierarchy_areas", "/projects/{id}/adjacency": "get_adjacency",
+        "/projects/{id}/connectivity": "get_connectivity",
+        "/projects/{id}/reach": "get_reach",
+        "/projects/{id}/stack": "get_stack_candidates",
+        "/projects/{id}/connections": "list_connections",
+        "/projects/{id}/comparison": "compare_milestones",
+        "/projects/{project_id}/models/{model_id}/snapshots/latest": "get_latest_snapshot",
+        "/projects/{project_id}/models/{model_id}/snapshots/pending": "get_pending_snapshot",
+        "/projects/{id}/reference/{source}/snapshots": "list_reference_snapshots",
+        "/projects/{id}/reference/{source}/latest": "get_reference_snapshot",
+        "/api/settings/projects": "list_project_settings",
+        "/api/settings/projects/{id}": "get_project_settings",
+        "/api/settings/resolve/{id}": "resolve_project_settings",
+    }
+    for route in routes:
+        tool = mapping.get(route, "?")
+        if tool == "?":
+            hits.append(f"{route:<58} NEW read route -- no tool mapping recorded")
+        elif tool is None:
+            hits.append(f"{route:<58} no MCP tool (known gap -- is it still intended?)")
+        elif f"fn {tool}(" not in mcp:
+            hits.append(f"{route:<58} maps to `{tool}`, which is gone from bin/mcp.rs")
+
+    numbers = {
+        "Fourteen": 14, "Fifteen": 15, "Sixteen": 16, "Seventeen": 17, "Eighteen": 18,
+        "Nineteen": 19, "Twenty": 20, "Twenty-one": 21, "Twenty-two": 22, "Twenty-three": 23,
+    }
+    if claimed:
+        said = numbers.get(claimed.group(1).capitalize())
+        if said and said != tool_count:
+            hits.append(f"bin/mcp.rs header says {claimed.group(1)} tools; {tool_count} `#[tool(` found")
+
+    findings.add(
+        "HTTP read routes without an MCP tool",
+        hits,
+        f"{len(routes)} read routes, {tool_count} tools",
+    )
+
+
+# --------------------------------------------------------------------------
+# Check 4 — modules past the split trigger
+# --------------------------------------------------------------------------
+
+def real_lines(path: Path) -> int:
+    """Non-test lines: everything before the first `#[cfg(test)]`.
+
+    The convention judges module size by non-test lines but does not state how
+    it counted. This proxy is stated here so the number is honest about being
+    approximate — it is a "worth a second look" threshold, not a limit, so being
+    a few lines out either way changes nothing.
+    """
+    text = path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(text):
+        if "#[cfg(test)]" in line:
+            return i
+    return len(text)
+
+
+SPLIT_TRIGGER = 500
+
+
+def check_long_modules(findings: Findings, ignores: dict) -> None:
+    """Modules past CODING-CONVENTIONS' ~500 real-line split trigger.
+
+    **This measures the code, not a sentence about the code.** It used to do the
+    latter: the doc carried a hand-copied census of twelve modules and their
+    sizes, and this check re-verified the numbers. That was backwards twice over
+    — the doc held a data table whose only purpose was to be checked, and the
+    check could only ever confirm a transcription. It also degraded silently:
+    delete the table and the check reports OK having examined nothing.
+
+    So the question asked here is the one the *rule* cares about — which modules
+    are over the trigger and have not been judged — and the answer comes from
+    `src/` and `crates/`. Being over it is **not a defect**; the trigger is
+    "worth a second look", not a limit. A module judged and kept whole goes in
+    `weekly_review_ignore.toml` under `[modules]` with the reason, exactly as a
+    benign symbol does, and the rule asks that the same reason live in the
+    module header where the next reader of that file will find it.
+
+    `crates/` is measured too, because a module that moves there has not stopped
+    being a module: the settings types left `src/` whole, 1,700 lines of them,
+    and reading `src/` alone would have quietly dropped them from this list the
+    day they moved. An ignore key is relative to its tree, so `src/` keys
+    (`contract/mod.rs`) read exactly as they always have.
+    """
+    skip = ignores.get("modules", {})
+    hits: list[str] = []
+
+    for tree in ("src", "crates"):
+        for path in sorted((ROOT / tree).rglob("*.rs")):
+            rel = path.relative_to(ROOT / tree).as_posix()
+            if rel in skip:
+                continue
+            count = real_lines(path)
+            if count > SPLIT_TRIGGER:
+                hits.append(f"{tree}/{rel:<28} ~{count} real lines -- split candidate, or record why not")
+
+    findings.add(
+        "Modules past the ~500-line split trigger, unjudged",
+        hits,
+        f"{len(skip)} judged and recorded in the ignore file",
+    )
+
+
+# --------------------------------------------------------------------------
+# Check 5 — section references that no longer resolve
+# --------------------------------------------------------------------------
+
+# `Decision 4`, `§6`, `R4` — the three shapes this repo uses to name a section
+# of a document. Deliberately not "any heading text": prose quotes headings
+# loosely ("the storage section"), and matching that would report paraphrase as
+# rot.
+SECTION_TOKEN = re.compile(r"Decision\s+\d+|§\s?\d+|\bR\d\b")
+DOC_NAME = re.compile(r"\b([A-Z][A-Za-z0-9_-]*\.md)\b")
+
+# Comment leaders, so a citation wrapped across two `///` lines reads as one
+# span. Without this the check sees "STRATEGY-ENTITIES.md)" and "Decision 4" as
+# unrelated, which is exactly how the real ones were written.
+COMMENT_LEADER = re.compile(r"^\s*(?://!|///|//|#|\*)?\s?")
+
+
+def flattened(path: Path) -> str:
+    lines = [COMMENT_LEADER.sub("", ln) for ln in path.read_text(encoding="utf-8").splitlines()]
+    return " ".join(lines)
+
+
+def check_section_refs(findings: Findings, ignores: dict) -> None:
+    """A live doc is cited by name plus a section it no longer contains.
+
+    **This is the gap that let the strategy-doc cleanup break ~20 citations
+    silently.** Check 2 verifies that a cited `.md` path resolves; nothing
+    verified that `STRATEGY-ENTITIES.md Decision 4` named a section that still
+    existed. Deleting the section left the path valid and the sentence wrong,
+    which is the worst combination — it reads as a working reference.
+
+    Only a **qualified** reference is reported: one naming a live doc and a
+    section token that document does not contain. An *unqualified* token ("the
+    thing Decision 4 says") was tried and dropped — this repo's prose reasonably
+    names the document once and then uses the bare token for a paragraph, so the
+    check reported 25 hits of which nearly all read fine in context. Permanent
+    noise is the fastest way to get a tool like this ignored (see the header).
+
+    Check 2 already owns whether the path resolves at all.
+    """
+    skip = set(ignores.get("sections", {}).keys())
+    live = {p.name: p.read_text(encoding="utf-8") for p in live_docs()}
+    hits: list[str] = []
+
+    scan: list[Path] = [ROOT / "CLAUDE.md"]
+    for tree in SOURCE_TREES:
+        scan.extend(
+            p for p in (ROOT / tree).rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES
+        )
+    scan.extend(live_docs())
+
+    for path in scan:
+        rel = path.relative_to(ROOT).as_posix()
+        # The checker names these tokens as its own examples, so scanning it
+        # reports the description of the check as an instance of the fault.
+        if rel in EXCLUDED_FILES or path == Path(__file__).resolve():
+            continue
+        try:
+            text = flattened(path)
+        except UnicodeDecodeError:
+            continue
+
+        for m in SECTION_TOKEN.finditer(text):
+            token = " ".join(m.group(0).split())
+            # The nearest document named before this token, within a window wide
+            # enough to span a wrapped sentence but not a whole paragraph.
+            before = text[max(0, m.start() - 220) : m.start()]
+            docs = DOC_NAME.findall(before)
+            if not docs:
+                continue
+            target = docs[-1]
+            if target not in live or f"{token}@{rel}" in skip:
+                continue
+            if token not in live[target]:
+                hits.append(f"{rel:<30} cites {target} `{token}` -- no such section")
+
+    findings.add(
+        "Section references that no longer resolve",
+        sorted(set(hits)),
+        f"{len(skip)} known-benign entr(y/ies) ignored",
+    )
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--only", choices=["symbols", "paths", "mcp", "modules", "sections"], help="run one check")
+    args = ap.parse_args()
+
+    ignores = load_ignores()
+    words, files = source_text()
+    findings = Findings()
+
+    print("RoomMate weekly review -- mechanical checks")
+    print("=" * 68)
+
+    if args.only in (None, "symbols"):
+        check_symbols(findings, words, files, ignores)
+    if args.only in (None, "paths"):
+        check_paths(findings)
+    if args.only in (None, "mcp"):
+        check_mcp_parity(findings)
+    if args.only in (None, "modules"):
+        check_long_modules(findings, ignores)
+    if args.only in (None, "sections"):
+        check_section_refs(findings, ignores)
+
+    return findings.report()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

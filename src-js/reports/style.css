@@ -1,0 +1,173 @@
+/* The reports page's own CSS. The palette comes from static/tokens.css, which
+   every page links, so "change the accent" stays a one-file edit. The shapes
+   below deliberately match the settings page's — same header, same uppercase
+   section labels, same monospace — because the two are siblings a reader moves
+   between, not two products. */
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+button, select, input { font-family: var(--mono); font-size: 0.78rem; color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--ink);
+}
+header h1 {
+  font-size: 0.95rem; font-weight: 600; letter-spacing: 0.18em;
+  text-transform: uppercase; margin: 0;
+}
+header select { background: var(--paper); border: 1px solid var(--rule); padding: 0.2rem 0.4rem; }
+header .links { margin-left: auto; display: flex; gap: 1rem; }
+header .links a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+header .links a:hover { text-decoration: underline; }
+
+main { min-height: 0; overflow-y: auto; }
+.content { padding: 1.25rem 1.5rem 3rem; display: grid; gap: 1.5rem; align-content: start; min-width: 0; }
+
+h2 {
+  font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--ink); opacity: 0.6; font-weight: 600; margin: 0;
+}
+h3 { font-size: 0.82rem; margin: 0 0 0.5rem; }
+h3 .base { opacity: 0.55; font-weight: 400; }
+h4 {
+  font-size: 0.64rem; letter-spacing: 0.12em; text-transform: uppercase;
+  opacity: 0.6; margin: 0 0 0.3rem;
+}
+.group { display: grid; gap: 0.5rem; align-content: start; }
+.foot { font-size: 0.7rem; color: var(--ink); opacity: 0.65; margin: 0; max-width: 78ch; }
+
+select.kind {
+  font-size: 0.9rem; font-weight: 600; background: var(--paper);
+  border: 1px solid var(--ink); padding: 0.4rem 0.6rem; min-width: 30ch; width: fit-content;
+}
+.kind-desc { font-size: 0.74rem; opacity: 0.7; margin: 0; max-width: 70ch; }
+
+button.action {
+  background: var(--paper); border: 1px solid var(--ink); padding: 0.3rem 0.7rem; cursor: pointer;
+}
+button.action:hover { background: var(--fill); }
+button.action.primary { background: var(--ink); color: var(--paper); }
+button.action.primary:hover { background: var(--accent); border-color: var(--accent); }
+button.action:disabled { opacity: 0.4; cursor: default; }
+button.action:disabled:hover { background: var(--paper); }
+
+.field input[type="text"] {
+  background: var(--paper); border: 1px solid var(--rule); padding: 0.28rem 0.4rem; width: min(100%, 40ch);
+}
+.check { display: flex; gap: 0.5rem; align-items: baseline; cursor: pointer; font-size: 0.78rem; }
+.check input { accent-color: var(--accent); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; min-height: 1.7rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  border: 1px solid var(--rule); background: var(--paper);
+  padding: 0.12rem 0.2rem 0.12rem 0.45rem; font-size: 0.74rem;
+}
+.chip button { background: none; border: none; cursor: pointer; padding: 0 0.25rem; color: var(--ink); opacity: 0.6; font-size: 0.8rem; line-height: 1; }
+.chip button:hover { color: var(--accent); opacity: 1; }
+.add-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.add-row input[type="text"] { background: var(--paper); border: 1px solid var(--rule); padding: 0.26rem 0.4rem; }
+
+.milestones { display: grid; grid-template-columns: auto auto 1fr; gap: 0.25rem 0.9rem; align-items: baseline; width: fit-content; }
+.milestones .hd { font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.6; }
+.milestones .date { opacity: 0.55; font-variant-numeric: tabular-nums; }
+.milestones input { accent-color: var(--accent); }
+
+.msg { font-size: 0.72rem; }
+.msg.ok { color: var(--ok); }
+.msg.err { color: var(--accent); }
+
+.preview-head { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.preview-head .count { font-size: 0.72rem; opacity: 0.65; font-variant-numeric: tabular-nums; margin-right: auto; }
+
+.note {
+  font-size: 0.74rem; border-left: 3px solid var(--accent); background: var(--fill);
+  padding: 0.4rem 0.7rem; max-width: 78ch;
+}
+
+/* Wide content scrolls in its own container so the page never scrolls sideways. */
+.table-wrap { overflow-x: auto; border: 1px solid var(--ink); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 0.32rem 0.6rem; text-align: left; border-bottom: 1px solid var(--rule); vertical-align: top; }
+thead th {
+  font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;
+  background: var(--fill); border-bottom: 1px solid var(--ink); white-space: nowrap;
+}
+tbody tr:hover td { background: var(--fill); }
+tbody tr.quiet td { opacity: 0.7; }
+
+/* Severity is a shape as well as a word, so what needs attention reads at a
+   glance in a long sheet. */
+.pill { font-size: 0.66rem; padding: 0 0.35rem; border: 1px solid currentColor; white-space: nowrap; }
+.pill.finding { color: var(--accent); }
+.pill.warning { color: var(--ink); }
+.pill.expected { color: var(--ink); opacity: 0.6; }
+
+.cmp { border-top: 1px solid var(--rule); padding-top: 0.9rem; margin-top: 0.4rem; }
+.cmp:first-of-type { border-top: none; margin-top: 0; }
+.grp { margin: 0.5rem 0; }
+.grp ul { margin: 0; padding-left: 1.1rem; font-size: 0.74rem; }
+.grp li { margin-bottom: 0.2rem; }
+.val { color: var(--accent); }
+.arrow { opacity: 0.5; padding: 0 0.25rem; }
+.miss { color: var(--accent); }
+
+/* ---------- the filter builder ----------
+   Nesting is shown by an accent rail rather than by indentation alone: the
+   tree is at most three deep, and a reader has to see which group a condition
+   belongs to at a glance to trust the sentence under it. */
+.fgroup { border: 1px solid var(--ink); background: var(--paper); padding: 0.6rem 0.7rem; display: grid; gap: 0.45rem; }
+.fgroup .fgroup { border: 1px solid var(--rule); border-left: 3px solid var(--accent); background: var(--fill); }
+.fgroup-head { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; font-size: 0.76rem; }
+.fgroup-head select { background: var(--paper); border: 1px solid var(--ink); padding: 0.15rem 0.3rem; font-weight: 600; }
+.fgroup-head .spacer { flex: 1; }
+.cond, .nest { display: grid; grid-template-columns: 3.4rem minmax(0, 1fr); gap: 0.45rem; align-items: start; }
+.cond-body { display: grid; grid-template-columns: minmax(12rem, 1.3fr) minmax(9rem, 0.8fr) minmax(10rem, 1fr) auto; gap: 0.4rem; align-items: center; }
+.conn { font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.6; text-align: right; padding-top: 0.35rem; }
+.conn.op { color: var(--accent); opacity: 1; font-weight: 600; }
+.cond select, .cond input { background: var(--paper); border: 1px solid var(--rule); padding: 0.26rem 0.35rem; width: 100%; min-width: 0; }
+.fieldcell { display: flex; gap: 0.3rem; align-items: center; min-width: 0; }
+.ftype { font-size: 0.58rem; border: 1px solid var(--rule); padding: 0 0.25rem; opacity: 0.6; white-space: nowrap; }
+.valcell { display: flex; gap: 0.3rem; align-items: center; min-width: 0; }
+.valcell .and { font-size: 0.66rem; opacity: 0.6; }
+.valcell .na { font-size: 0.68rem; opacity: 0.6; }
+.icon { background: none; border: 1px solid transparent; cursor: pointer; opacity: 0.6; padding: 0.1rem 0.4rem; font-size: 0.85rem; }
+.icon:hover { color: var(--accent); border-color: var(--rule); opacity: 1; }
+.icon.case { font-size: 0.66rem; border-color: var(--rule); line-height: 1.4; }
+.icon.case.on { background: var(--accent); color: var(--paper); border-color: var(--accent); opacity: 1; }
+.cond .warn { grid-column: 1 / -1; font-size: 0.66rem; opacity: 0.75; }
+.cond .warn button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 0.66rem; text-decoration: underline; }
+.cond.incomplete .conn { opacity: 0.35; }
+.fadd { display: flex; gap: 0.4rem; padding-left: 3.85rem; margin: 0; }
+.fadd button { background: none; border: 1px dashed var(--rule); padding: 0.2rem 0.55rem; cursor: pointer; font-size: 0.72rem; }
+.fadd button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* The sentence the tree reads as — how a reader checks their own logic. */
+.fsummary { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem; font-size: 0.74rem; align-items: baseline; }
+.fsummary .k { font-size: 0.6rem; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.6; }
+.fsummary code { font-family: var(--mono); overflow-wrap: anywhere; }
+
+@media (max-width: 900px) { .cond-body { grid-template-columns: 1fr; } .fadd { padding-left: 0; } }
+
+/* A saved report is a chip you press, so it says so rather than looking like
+   the value chips beside it. */
+.chip.saved { cursor: pointer; gap: 0.45rem; padding: 0.15rem 0.5rem; font-family: var(--mono); }
+.chip.saved:hover { border-color: var(--accent); color: var(--accent); }
+.chip.saved.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.chip .src { font-size: 0.62rem; opacity: 0.6; }
+.chip.saved.on .src { opacity: 0.75; }

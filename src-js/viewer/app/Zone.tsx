@@ -1,0 +1,517 @@
+// One zone: a toolbar, a plan, and the states a plan can be in instead.
+//
+// **The hybrid, in one component.** A `<canvas>` under an `<svg>`: the canvas
+// is the WebGL plan, the svg is the overlay that carries pointer handling, the
+// selection and hover marks and (later) the areas footprints. The renderer is
+// handed the svg as its overlay and keeps its viewBox in step with the
+// projection — without that the overlay is in pixel space and every mark lands
+// in the top-left corner.
+//
+// The renderer is created ONCE per zone and released on unmount. Both calls
+// matter and they are not the same: `dispose()` clears the level, `destroy()`
+// releases the WebGL context, and only the second is what the browser's cap
+// counts. A zone closed without it eventually blanks a different zone.
+
+import { useEffect, useMemo, useRef } from "react";
+
+import { levelLabel, levelsForPayload, pickerOrder, resolveLevel, roomsOnLevel } from "../levels.js";
+import { detectReferenceSources } from "../properties.js";
+import { buildColourContext, colourForRoom } from "../colour.js";
+import { errorRoomIds } from "../validation.js";
+import { AreasOverlay } from "./AreasOverlay.js";
+import { RouteOverlay } from "./RouteOverlay.js";
+import { OpenZoneOverlay } from "./OpenZoneOverlay.js";
+import { SavedRoutesOverlay } from "./SavedRoutesOverlay.js";
+import { OpenZonePanel } from "./OpenZonePanel.js";
+import { RoutePanel } from "./RoutePanel.js";
+import { BlueprintOverlay } from "./BlueprintOverlay.js";
+import { BlueprintPanel } from "./BlueprintPanel.js";
+import { RlsOverlay } from "./RlsOverlay.js";
+import { RlsPanel } from "./RlsPanel.js";
+import { ReachPanel } from "./ReachPanel.js";
+import { layerFor } from "../reach.js";
+import { LayerMenu } from "./LayerMenu.js";
+import { SelectionFilter } from "./SelectionFilter.js";
+import { ExportMenu } from "./ExportMenu.js";
+import { loadAreas } from "./areasData.js";
+import { watchRoomTasks } from "./taskData.js";
+import { TASKS_PLAN, TASK_STATE_COLOUR, TASK_STATE_LABEL, taskColourForRoom } from "../taskStatus.js";
+import { tierNames } from "../areas.js";
+import { elementsOnStorey, layerPayload, typePropertiesOf, zoneAwaitsLayers, type ElementOf } from "./layers.js";
+import { tagsRequest } from "../elementTags.js";
+import { onStoreysChanged } from "./poll.js";
+import { fittedBounds, GlPlanRenderer, type PlanRendererInstance } from "./planRenderer.js";
+import { closePickList, setZoneAreas, setZoneBlueprintMode, setZoneColourPlan, setZoneEditMode, setZoneLevel, setZoneReachMode, setZoneRlsMode, setZoneRouteMode, type ZoneRow } from "./store.js";
+import { useViewer } from "./useViewer.js";
+import { wirePlanGestures } from "./gestures.js";
+import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
+import type { Room } from "../../renderer/types.js";
+
+/** Above this many rooms, show a busy panel while the plan is built.
+ *
+ *  A ROOM COUNT, not a duration, and that is forced rather than chosen: the
+ *  build is synchronous, so a "show it if this takes 150 ms" timer can never
+ *  fire — nothing runs during the block, including timers. Measured: House A
+ *  (12) and the showcase levels (~50) are imperceptible, the 299-room synthetic
+ *  is under ~100 ms, and `big-plate` at 5,046 takes ~1.3 s. Nothing real sits
+ *  near the line. */
+const BUSY_ROOM_THRESHOLD = 1000;
+
+export function Zone({ zone }: { zone: ZoneRow }) {
+  const {
+    payload,
+    status,
+    appearance,
+    layersRevision,
+    colourPlans,
+    selection,
+    search,
+    validation,
+    showErrors,
+    areas,
+    scope,
+    roomsLoading,
+    tagSettings,
+    roomTasks,
+  } = useViewer();
+  // This zone's own visibility, since C1 — see `ZoneRow.layers`.
+  const { layers, showRooms, showLabels, spacesModel, ffeModelsOff } = zone;
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const handleRef = useRef<ZoneHandle | null>(null);
+  const busyRef = useRef<HTMLDivElement | null>(null);
+  const tipRef = useRef<HTMLDivElement | null>(null);
+  /** The level this zone last PAINTED, so a repaint can tell a level switch
+   *  (which refits) from a new payload on the same level (which must keep the
+   *  reader's pan and zoom). */
+  const paintedLevel = useRef<string | null>(null);
+
+  // Create the renderer once. StrictMode runs this twice in development, so the
+  // cleanup has to be complete — a leaked context is invisible until the
+  // browser starts killing them.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const svg = svgRef.current;
+    if (!canvas || !svg) return;
+    const renderer: PlanRendererInstance = new GlPlanRenderer(canvas, { overlay: svg });
+    const handle: ZoneHandle = {
+      id: zone.id,
+      renderer,
+      view: { x: 0, y: 0, w: 100, h: 100 },
+      fitted: { x: 0, y: 0, w: 100, h: 100 },
+    };
+    handleRef.current = handle;
+    register(handle);
+    const unwire = wirePlanGestures(svg, zone.id, tipRef);
+    return () => {
+      unwire();
+      unregister(zone.id);
+      handleRef.current = null;
+      paintedLevel.current = null;
+      renderer.dispose();
+      renderer.destroy();
+    };
+  }, [zone.id]);
+
+  const levels = payload ? levelsForPayload(payload) : [];
+  // The zone's level, resolved against what the payload actually has. Written
+  // back to the store when it moves, so the picker and (later) the storey scope
+  // of every element read agree with what was drawn.
+  const levelId = resolveLevel(levels, zone.levelId);
+  // The heat map of THIS zone's storey, only while the tool is on. Memoised so a
+  // quiet page does not repaint: its identity changes with the answer, the
+  // storey and the opacity slider, and with nothing else.
+  const reachResult = zone.reach?.result;
+  const reachOpacity = zone.reach?.opacity ?? 55;
+  const reachLayer = useMemo(
+    () => (reachResult ? layerFor(reachResult, levelId, reachOpacity, zone.showReachTags) : null),
+    [reachResult, levelId, reachOpacity, zone.showReachTags],
+  );
+  useEffect(() => {
+    if (levelId !== zone.levelId) setZoneLevel(zone.id, levelId);
+  }, [levelId, zone.id, zone.levelId]);
+
+  // MEMOISED, and it is not a micro-optimisation: this array is the paint
+  // effect's dependency, so recomputing it on every render would tear down and
+  // rebuild the plan whenever any unrelated state moved -- toggling "Link
+  // views" would re-triangulate thousands of rooms in every zone. With the memo a
+  // repaint happens when the payload or the level does, which is the old
+  // page's rule.
+  const rooms = useMemo(() => (payload ? roomsOnLevel(payload, levelId) : []), [payload, levelId]);
+  const levelName = levels.find((l) => l.id === levelId)?.name ?? levelId ?? "";
+  const byTasks = zone.colourPlan === TASKS_PLAN;
+  const plan = byTasks ? null : (colourPlans.find((p) => p.name === zone.colourPlan) ?? null);
+  // Read the tasks only while this zone colours by them.
+  useEffect(() => (byTasks ? watchRoomTasks() : undefined), [byTasks]);
+  // Which joined sources this payload carries. A plan names a field as
+  // `<source>.<field>` and the lookup binds the prefix only against this list, so
+  // leaving it out colours every room "no data" without an error.
+  const sources = useMemo(() => detectReferenceSources(payload), [payload]);
+  // The union across sources: a room is flagged on the plan if ANY source has
+  // something to say about it. Which source said it belongs in the band.
+  const errorRooms = useMemo(() => errorRoomIds(validation), [validation]);
+  // Rooms first: until they land, no zone knows its storey and nothing else
+  // has been asked for.
+  const roomsPending = status === "starting" || roomsLoading;
+  const loading = roomsPending || zoneAwaitsLayers(zone, levelId);
+
+  // Paint. The dependency list is what decides a repaint, and `payload` changes
+  // identity only when the poll saw a new revision — so a quiet system never
+  // repaints, exactly as the old page's revision check achieves.
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    const renderer = handle.renderer;
+
+    const draw = () => {
+      // Clearing the drawing and clearing the pick index behind it are ONE
+      // operation. Every early return below used to skip the reset in the old
+      // page: switching to a level with no rooms left the previous level's
+      // units live against nothing drawn, so a click resolved to a room that
+      // was not on screen.
+      renderer.dispose();
+      if (!rooms.length) return;
+
+      const refit = paintedLevel.current !== levelId;
+      if (refit) {
+        const fitted = fittedBounds(rooms);
+        if (!fitted) return;
+        handle.fitted = fitted;
+        handle.view = { ...fitted };
+        renderer.setView(handle.view);
+      }
+      paintedLevel.current = levelId;
+      // Every layer is resolved against THIS zone's storey, by name and
+      // elevation -- `elementsOnStorey`. A layer switched off contributes an
+      // empty list rather than being left out, so the renderer clears what it
+      // drew last time.
+      const on = <E extends keyof ElementOf>(entity: E): readonly ElementOf[E][] =>
+        layers[entity] ? elementsOnStorey(entity, levelId).kept : [];
+      // The services-model filter is applied HERE, not in the request: the read
+      // is unscoped since C1, because two zones may choose different models and
+      // one request cannot serve both. `""` is every model.
+      const spaces = spacesModel
+        ? on("spaces").filter((s) => s.model_id === spacesModel)
+        : on("spaces");
+      // The FF&E model checkboxes work the same way, as a set of models left out.
+      const ffe = ffeModelsOff.length
+        ? on("ffe").filter((i) => !ffeModelsOff.includes(i.model_id ?? ""))
+        : on("ffe");
+      // The plan resolves to a `colourFor` callback here rather than being
+      // handed to the renderer: the palette lives in `common.js`, which the
+      // renderer bundle cannot import, so the precedence rule stays in the
+      // typed module and the hex lookup stays with the palette. The context is
+      // built ONCE per paint -- two of the three modes need a property of the
+      // whole level before any room can be coloured.
+      const ctx = plan ? buildColourContext(rooms, plan, sources) : null;
+      const build = () =>
+        renderer.paint(rooms, handle.fitted, {
+          showLabels,
+          showRooms,
+          appearance,
+          errorRoomIds: errorRooms,
+          showErrors,
+          ...(plan && ctx ? { colourFor: (room: Room) => colourForRoom(room, plan, ctx, sources) } : {}),
+          ...(byTasks && roomTasks ? { colourFor: (room: Room) => taskColourForRoom(room, roomTasks) } : {}),
+          doors: on("doors"),
+          showDoors: layers.doors,
+          windows: on("windows"),
+          showWindows: layers.windows,
+          ffe,
+          showFfe: layers.ffe,
+          spaces,
+          showSpaces: layers.spaces,
+          ceilings: on("ceilings"),
+          showCeilings: layers.ceilings,
+          floors: on("floors"),
+          showFloors: layers.floors,
+          reach: reachLayer ?? undefined,
+          tags: tagsRequest(tagSettings, zone.tags, (entity, el) =>
+            typePropertiesOf(layerPayload(entity) as Parameters<typeof typePropertiesOf>[0], el as { type_properties_ref?: number | null }),
+          ),
+        });
+      // Below the threshold the build runs INLINE: deferring every level by a
+      // frame would make the common case worse to save a flash nobody sees.
+      if (rooms.length < BUSY_ROOM_THRESHOLD || !busyRef.current) {
+        build();
+        return;
+      }
+      // Showing the panel only changes the DOM, and the browser will not PAINT
+      // that until the task yields — so the panel goes up, the frame is handed
+      // back, and the build runs on the next one.
+      const busy = busyRef.current;
+      busy.classList.remove("hidden");
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          try {
+            build();
+          } finally {
+            busy.classList.add("hidden");
+          }
+        }),
+      );
+    };
+
+    // The GL context is created asynchronously; painting before it exists draws
+    // nothing and looks exactly like a broken payload.
+    void renderer.ready.then(draw);
+  }, [payload, levelId, rooms, layers, reachLayer, showRooms, showLabels, appearance, spacesModel, ffeModelsOff, layersRevision, plan, byTasks, roomTasks, sources, errorRooms, showErrors, zone.tags, tagSettings]);
+
+  // Search is applied to what is ALREADY drawn -- never by re-rendering. A
+  // search can match thousands of rooms, and a keystroke must not re-upload a
+  // level; the renderer writes a vertex attribute instead.
+  useEffect(() => {
+    handleRef.current?.renderer.applyHighlight({
+      searchActive: search.active,
+      matchRoomIds: search.matches as ReadonlySet<string> | null,
+    });
+  }, [search.active, search.matches, payload, levelId]);
+
+  // The mark follows the PAGE selection, in every zone that draws the element:
+  // one room can appear in two zones showing the same level, and a selection
+  // visible in only one of them reads as a broken click in the other. Its own
+  // effect, not part of the paint: a selection change must not rebuild a level.
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    // `area` is page geometry in the SVG overlay, not something the renderer
+    // can mark — it draws its own selected class. Everything else is the
+    // plan's.
+    const ref = selection && selection.kind !== "area" ? { kind: selection.kind, id: selection.id } : null;
+    handle.renderer.setSelection(ref);
+  }, [selection, payload, levelId, layersRevision]);
+
+  // Fetched on the trigger that needs it -- a zone switching its overlay on --
+  // rather than with the rooms: the dissolve is server work nobody asked for
+  // until someone looks at footprints.
+  useEffect(() => {
+    if (zone.areasMode) void loadAreas();
+  }, [zone.areasMode, payload]);
+
+  // A storey switch invalidates an open list for the same reason a pan does:
+  // its entries name elements that are no longer drawn.
+  useEffect(() => {
+    closePickList();
+  }, [levelId]);
+
+  // The element reads only hold the storeys that WERE on screen, so a level
+  // switch (or this zone appearing at all) has to ask again. A no-op when the
+  // storeys did not actually move -- see `onStoreysChanged`.
+  useEffect(() => {
+    void onStoreysChanged();
+  }, [payload, levelId]);
+
+  return (
+    <div className="zone">
+      <div className="zone-toolbar">
+        {/* On the toolbar's bottom rule, not a row of its own: a row that came
+            and went would resize the canvas under it, and the plan would jump
+            on every level switch. Indeterminate on purpose -- the server's
+            time before the first byte has no size to measure against. */}
+        {loading ? <div className="zone-loading" role="progressbar" aria-label="Loading data" /> : null}
+        <LayerMenu zone={zone} />
+        <SelectionFilter zone={zone} />
+        {/* Per zone, because it is presentation: two zones on one level under
+            two plans is the comparison this picker exists for. Hidden when the
+            project declares none, which is the ordinary case. */}
+        <select
+          className="picker colourSelect"
+          value={zone.colourPlan ?? ""}
+          onChange={(e) => setZoneColourPlan(zone.id, e.target.value || null)}
+        >
+          <option value="">No colour</option>
+          <option value={TASKS_PLAN}>{TASKS_PLAN}</option>
+          {colourPlans.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        {byTasks ? (
+          <span className="taskKey" aria-label="Room task colours">
+            {(Object.keys(TASK_STATE_COLOUR) as (keyof typeof TASK_STATE_COLOUR)[]).map((k) => (
+              <span key={k} className="taskKeyItem">
+                <i style={{ background: TASK_STATE_COLOUR[k] }} />
+                {TASK_STATE_LABEL[k]}
+              </span>
+            ))}
+          </span>
+        ) : null}
+        <select
+          className={`picker levelSelect${levels.length > 1 ? "" : " hidden"}`}
+          value={levelId ?? ""}
+          onChange={(e) => setZoneLevel(zone.id, e.target.value)}
+        >
+          {payload
+            ? pickerOrder(levels).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {levelLabel(payload, l)}
+                </option>
+              ))
+            : null}
+        </select>
+        {/* The zone's own layers decide what each file draws; the menu only
+            asks which levels. */}
+        <ExportMenu zone={zone} levels={levels} plan={plan} errorRooms={errorRooms} />
+        <button
+          className={`areas-toggle${zone.areasMode ? " on" : ""}`}
+          title="Show hierarchy footprints on this zone's plan"
+          onClick={() => setZoneAreas(zone.id, { areasMode: !zone.areasMode })}
+        >
+          Areas
+        </button>
+        <button
+          className={`route-toggle${zone.route ? " on" : ""}`}
+          title="Pick a start room and an end room on this zone, and show the shortest route through doors"
+          onClick={() => setZoneRouteMode(zone.id, zone.route === null)}
+        >
+          Route
+        </button>
+        <button
+          className={`route-toggle${zone.reach ? " on" : ""}`}
+          title="Colour the plan by how far a walk reaches from chosen rooms (a hose reel, an exit)"
+          onClick={() => setZoneReachMode(zone.id, zone.reach === null)}
+        >
+          Reach
+        </button>
+        <button
+          className={`route-toggle${zone.blueprint ? " on" : ""}`}
+          title="Lay a blueprint into a room as a ghost, choose which rotation fits, and assign it"
+          onClick={() => setZoneBlueprintMode(zone.id, zone.blueprint === null)}
+        >
+          Blueprint
+        </button>
+        <button
+          className={`route-toggle${zone.rls ? " on" : ""}`}
+          title="Make room layout sheets: choose a library sheet, click the rooms to make it for, and queue the tasks for Revit"
+          onClick={() => setZoneRlsMode(zone.id, zone.rls === null)}
+        >
+          RLS
+        </button>
+        <button
+          className={`route-toggle${zone.edit ? " on" : ""}`}
+          title="Define open zones (rooms the model does not join with doors) and vertical links (floor-to-floor hops for lifts and stairs)"
+          onClick={() => setZoneEditMode(zone.id, zone.edit === null)}
+        >
+          Connections
+        </button>
+        {zone.areasMode && areas ? (
+          <select
+            className="picker areasTier"
+            title="Footprint tier (this zone's overlay)"
+            value={zone.areasTier}
+            onChange={(e) => setZoneAreas(zone.id, { areasTier: Number(e.target.value) })}
+          >
+            {tierNames(areas).map((name, depth) => (
+              <option key={name} value={depth}>
+                {name}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <span className="meta">
+          {payload
+            ? `${levelName || "—"} · ${rooms.length} room${rooms.length === 1 ? "" : "s"} · v${payload.schema_version}${
+                // The match count spans the whole payload, not this level: the
+                // highlight is visible only here, but "how many matched" is a
+                // question about the search, not about the storey.
+                search.active && search.matches
+                  ? ` · ${search.matches.size} match${search.matches.size === 1 ? "" : "es"}`
+                  : ""
+              }`
+            : status}
+        </span>
+      </div>
+      <RoutePanel zone={zone} />
+      <ReachPanel zone={zone} />
+      <BlueprintPanel zone={zone} />
+      <RlsPanel zone={zone} rooms={rooms} />
+      <OpenZonePanel zone={zone} />
+      <div className="zone-canvas">
+        <canvas className="plan-gl" ref={canvasRef} />
+        <svg className={`plan${zone.areasMode ? " areas-active" : ""}`} ref={svgRef} xmlns="http://www.w3.org/2000/svg">
+          {/* The footprints are SVG and stay OUTSIDE the renderer seam: there
+              are dozens of them against thousands of rooms, which is the split
+              the hybrid was designed around. */}
+          <AreasOverlay
+            zoneId={zone.id}
+            data={areas}
+            levelId={levelId}
+            depth={zone.areasTier}
+            active={zone.areasMode}
+            selectedKey={selection?.kind === "area" ? selection.id : null}
+          />
+          <OpenZoneOverlay levelId={levelId} edit={zone.edit} />
+          <SavedRoutesOverlay zoneId={zone.id} levelId={levelId} />
+          {/* Above the footprints: a route is the thing being asked about. */}
+          <RouteOverlay zoneId={zone.id} levelId={levelId} route={zone.route} />
+          <BlueprintOverlay zoneId={zone.id} levelId={levelId} tool={zone.blueprint} />
+          <RlsOverlay levelId={levelId} tool={zone.rls} />
+        </svg>
+        {/* The per-room tooltip the browser used to draw for free from an SVG
+            `<title>`. WebGL has no elements, so it is a DOM node the hover
+            code positions. */}
+        <div className="plan-tip hidden" ref={tipRef} />
+        <ZoneEmpty payload={!!payload} loading={roomsPending} rooms={rooms.length} levels={levels.length} levelName={levelName} />
+        <div className="plan-busy hidden" ref={busyRef}>
+          <span>Drawing plan…</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The three states a zone shows instead of a plan, in the old page's words.
+ *
+ *  They are different answers and a reader acts on each differently: nothing
+ *  has ever been pushed, the pickers exclude everything, or this one level is
+ *  empty. The level is NAMED — with three zones open, which one is empty is the
+ *  question, and this panel is the only place that answers it. */
+function ZoneEmpty({
+  payload,
+  loading,
+  rooms,
+  levels,
+  levelName,
+}: {
+  payload: boolean;
+  loading: boolean;
+  rooms: number;
+  levels: number;
+  levelName: string;
+}) {
+  if (rooms > 0) return null;
+  // Not "No rooms received yet": telling a reader to POST data that is on
+  // its way is advice for a problem they do not have.
+  if (!payload && loading) {
+    return (
+      <div className="empty">
+        <strong>Loading rooms…</strong>
+      </div>
+    );
+  }
+  if (!payload) {
+    return (
+      <div className="empty">
+        <strong>No rooms received yet</strong>
+        <span>
+          POST room JSON to <code>/rooms</code>, then this updates.
+        </span>
+      </div>
+    );
+  }
+  if (!levels) {
+    return (
+      <div className="empty">
+        <strong>No rooms in this scope</strong>
+        <span>The data has no levels to draw — check the project, building and milestone pickers.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="empty">
+      <strong>{levelName || "This level"} has no rooms</strong>
+      <span>The model arrived; this level is empty. Pick another level above.</span>
+    </div>
+  );
+}

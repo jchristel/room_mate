@@ -1,0 +1,77 @@
+# Known-benign hits for `scripts/weekly_review.py`, each with the reason it is
+# benign. The reason is the point of the file: an ignore list with no reasons
+# becomes a place to hide findings, and nobody can later tell an entry that is
+# still true from one that stopped being true.
+#
+# The check asks "does this identifier exist anywhere in the tree?", so anything
+# naming an *external* API, a *past* design, or an *unbuilt* one answers no
+# while being perfectly correct prose. Those are the three shapes below.
+#
+# Adding an entry is the normal outcome of a review, not an admission of
+# defeat — the goal is that next week's run is quieter than this week's, so a
+# genuine finding is visible instead of buried.
+
+[symbols]
+
+# --- External APIs the docs cite by name. Not ours, never will be. ---
+"Int64" = "Revit API type, in STRATEGY.md's parameter-storage discussion"
+"IntegerValue" = "Revit API ElementId member"
+"ActiveProjectLocation" = "Revit API, in the georeferencing discussion"
+"IfcRelSpaceBoundary" = "IFC schema entity, cited in the area-standards comparison"
+"BitmapText" = "PixiJS class, cited in the renderer strategy"
+"FormData" = "browser DOM API"
+"HttpClient" = "IronPython/.NET, used by the extractor's transport discussion"
+"StringContent" = ".NET, same discussion"
+
+# --- Prose that happens to match an identifier shape. ---
+"Comments" = "prose — the English word, in STRATEGY-ENTITIES' authored-data list"
+"DELETE" = "prose — the HTTP verb, in STRATEGY-SECURITY's method table"
+
+# --- Deliberately illustrative placeholders. ---
+"foo.rs" = "CODING-CONVENTIONS' worked example of a module split; not a real file"
+"crate::foo::Bar" = "same worked example"
+"foo.ts" = "CODING-CONVENTIONS:128's 'foo.ts beside foo.test.ts' co-location example"
+
+# --- Designs recorded but not built. Absence is the documented state. ---
+"DocumentIndex" = "STRATEGY-AUTHORED is flagged 'design settled, not built'"
+"service::reports@STRATEGY-REPORTS.md" = "the module the unbuilt /reports/ page proposes; the doc is flagged 'Nothing here is built'"
+
+# --- Analyser vocabulary, not server vocabulary. `scripts/analyse_spaces_probe.py`
+#     classifies five enclosure states where the contract carries three, because
+#     the extra two are distinctions a modeller acts on and the server cannot.
+"Redundant" = "analyse_spaces_probe state; folds into Enclosure::Unenclosed on the wire"
+"Unplaced" = "analyse_spaces_probe state; the extractor drops these, so they never reach a contract"
+
+# --- Data, not identifiers. ---
+"ENG661" = "a room number from the sample project probe, quoted in PLAN-spaces' worst-pairs finding"
+
+# --- History written on purpose: the doc names an old symbol to explain a
+#     rename or a split. Deleting these names would make the docs worse, not
+#     better.
+#
+#     These are SCOPED (`symbol@doc`) rather than global, so the same name used
+#     as a live reference in some other document is still reported. A bare
+#     `contract.rs` key would have silenced the genuine STRATEGY.md:206 hit that
+#     the 2026-08-08 review found. ---
+"DrofusRecord" = "STRATEGY-SOURCES:65 explains 'ReferenceRecord, renamed from DrofusData/DrofusRecord'"
+"BuiltinProperties" = "STRATEGY-SOURCES:236 describes a v3 design that was reconsidered"
+"contract.rs@STRATEGY-ENTITIES.md" = "Decision 4 says 'the former contract.rs' to name the split doors triggered"
+
+# Modules past CODING-CONVENTIONS' ~500 real-line split trigger that have been
+# judged and kept whole. Being over the trigger is not a defect — it is "worth a
+# second look" — so this section records the second look, and an entry here is a
+# claim that the same reason is (or should be) in the module's own header, where
+# the next reader of that file will find it.
+#
+# An entry is NOT a permanent exemption. Delete it if the module's shape changes
+# and the argument stops holding.
+
+[modules]
+
+"handlers.rs" = "ingest is the one part with no service/ counterpart (MCP exposes none), so it accretes here by design; the seam if it ever splits is ingest versus the read adapters"
+"storage/fs.rs" = "one impl of one trait — splitting the impl from its trait contract would separate the rules from the code that keeps them"
+"contract/mod.rs" = "already split once, when doors triggered it; rooms deliberately did not move out alongside them, and its header says why"
+"service/openings.rs" = "split once already, when FFE arrived: 435 lines of scoping, pinning, revision, phase report and candidate build moved to service/entity_scope. What is left is ~553 lines of the two things that could NOT move -- how many room references an opening has and how geometry resolves them -- plus the wire types and one pinned wire-shape fixture. The previous entry claimed the size WAS the saving; that argument was retired rather than reworded, because it was true of a second opening and false of a fourth entity"
+"service/spaces.rs" = "the read and the space-to-room report are the entity's only two answers and they share one vocabulary -- the tiered property lookup that resolves a key or a compared property is the same call in both, and splitting them would put a shared private helper across a module boundary. Judged 2026-09-06 at ~747 lines; if the viewer layer adds a third concern, the seam is read versus report"
+"service/validation.rs" = "one report over one project, and the parts are only correct together -- the phase check, the reference reconciliation and the opening reports all read the same scoped rooms, and splitting them would mean three passes that could disagree about which rooms they were describing"
+"service/adjacency.rs" = "one algorithm -- tolerances, the two boundary regimes and the spatial index -- whose excess over the trigger is written-down rationale rather than code; its header records this, and names SpatialGrid as the seam if it grows"

@@ -1,0 +1,2890 @@
+[
+ {
+  "id": "2626831",
+  "name": "RAMPUS 00.01",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 44.85009064255297,
+      "y": 41.42716535432917
+     },
+     {
+      "x": 44.82876518323539,
+      "y": 41.59612860892234
+     },
+     {
+      "x": 44.82876518323541,
+      "y": 50.6840551181087
+     },
+     {
+      "x": 44.758195629429494,
+      "y": 50.6840551181087
+     },
+     {
+      "x": 44.74513526197545,
+      "y": 50.6840551181087
+     },
+     {
+      "x": 27.999696941765347,
+      "y": 50.68405511810875
+     },
+     {
+      "x": 27.99969694176535,
+      "y": 29.872047244092965
+     },
+     {
+      "x": 28.07846859530862,
+      "y": 29.872047244092965
+     },
+     {
+      "x": 40.32253158743459,
+      "y": 29.87204724409293
+     },
+     {
+      "x": 44.85009064255295,
+      "y": 29.87204724409291
+     },
+     {
+      "x": 44.85009064255297,
+      "y": 41.42193152153417
+     }
+    ]
+   }
+  ],
+  "label": [
+   "RAMPUS 00.01",
+   "2626831"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "31.4754524480",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "1",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Living",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "POLISHED CONCRETE",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "TRM-101",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "3kPNO6UOr6GeAbjiJ16hm8",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "RAMPUS",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "00.01",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "22566.0000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "RUMPUS",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "00.01",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "PAINT",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "CONCRETE",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Living",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2626834",
+  "name": "OFFICE 00.02",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 60.18309589189645,
+      "y": 29.89337270341045
+     },
+     {
+      "x": 60.18309589189647,
+      "y": 41.596128608922285
+     },
+     {
+      "x": 44.85009064255297,
+      "y": 41.59612860892234
+     },
+     {
+      "x": 44.85009064255295,
+      "y": 29.872047244092908
+     },
+     {
+      "x": 49.14931875201494,
+      "y": 29.872047244092897
+     },
+     {
+      "x": 49.15455258480994,
+      "y": 29.872047244092897
+     },
+     {
+      "x": 49.33827961893067,
+      "y": 29.89337270341048
+     }
+    ]
+   }
+  ],
+  "label": [
+   "OFFICE 00.02",
+   "2626834"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "15.8096891930",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "1",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Bed",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "POLISHED CONCRETE",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "TRM-101",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "3kPNO6UOr6GeAbjiJ16hmL",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "OFFICE",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "00.02",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "16056.0000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "OFFICE",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "00.02",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "PAINT",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Bed",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2626836",
+  "name": "WC 00.03",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 60.20442135121404,
+      "y": 29.89337270341045
+     },
+     {
+      "x": 60.00889880450828,
+      "y": 29.89337270341045
+     },
+     {
+      "x": 49.33827961893068,
+      "y": 29.89337270341048
+     },
+     {
+      "x": 49.33827961893068,
+      "y": 29.676524697387137
+     },
+     {
+      "x": 49.33827961893066,
+      "y": 22.849722021769843
+     },
+     {
+      "x": 49.33827961893066,
+      "y": 22.45867692835832
+     },
+     {
+      "x": 49.33827961893067,
+      "y": 20.812007874014142
+     },
+     {
+      "x": 49.54036384542645,
+      "y": 20.812007874014142
+     },
+     {
+      "x": 60.00889880450826,
+      "y": 20.81200787401411
+     },
+     {
+      "x": 60.20442135121402,
+      "y": 20.81200787401411
+     }
+    ]
+   }
+  ],
+  "label": [
+   "WC 00.03",
+   "2626836"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "8.55731131559",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "1",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Utility",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "3kPNO6UOr6GeAbjiJ16hmJ",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "WC",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "00.03",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "11752.0000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "WC",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "00.03",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Utility",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2626838",
+  "name": "HALL 00.07",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 40.322531587434575,
+      "y": 22.65419947506411
+     },
+     {
+      "x": 49.33827961893066,
+      "y": 22.65419947506408
+     },
+     {
+      "x": 49.33827961893068,
+      "y": 29.872047244092897
+     },
+     {
+      "x": 45.04561318925872,
+      "y": 29.872047244092908
+     },
+     {
+      "x": 44.65456809584719,
+      "y": 29.87204724409291
+     },
+     {
+      "x": 40.32253158743459,
+      "y": 29.87204724409293
+     },
+     {
+      "x": 40.32253158743458,
+      "y": 23.144997612321056
+     }
+    ]
+   }
+  ],
+  "label": [
+   "HALL 00.07",
+   "2626838"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "5.48925363657",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "1",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Circulation",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "POLISHED CONCRETE",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "TRM-101",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "3kPNO6UOr6GeAbjiJ16hmH",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "HALL",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "00.07",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "9436.00000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "HALL",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "00.07",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "PAINT",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Circulation",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2626840",
+  "name": "STORAGE 00.08",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 27.576468595308626,
+      "y": 29.872047244092965
+     },
+     {
+      "x": 27.576468595308615,
+      "y": 22.97080052493297
+     },
+     {
+      "x": 40.32253158743458,
+      "y": 22.970800524932883
+     },
+     {
+      "x": 40.32253158743459,
+      "y": 29.87204724409293
+     }
+    ]
+   }
+  ],
+  "label": [
+   "STORAGE 00.08",
+   "2626840"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "7.43163480026",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "1",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Utility",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "POLISHED CONCRETE",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "TRM-101",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "3kPNO6UOr6GeAbjiJ16hmV",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "STORAGE",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "00.08",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "11442.0000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "STORAGE",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "00.08",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "PAINT",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "CONCRETE",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Utility",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2626842",
+  "name": "STAIR 00.06",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 27.57646859530861,
+      "y": 22.63287401574657
+     },
+     {
+      "x": 27.576468595308608,
+      "y": 18.225065616796467
+     },
+     {
+      "x": 40.12700904072882,
+      "y": 18.225065616796428
+     },
+     {
+      "x": 40.518054134140336,
+      "y": 18.225065616796424
+     },
+     {
+      "x": 49.34484129872068,
+      "y": 18.2250656167964
+     },
+     {
+      "x": 49.34484129872069,
+      "y": 20.637810786625977
+     },
+     {
+      "x": 49.34484129872069,
+      "y": 20.643044619420976
+     },
+     {
+      "x": 49.33827961893066,
+      "y": 20.812007874014142
+     },
+     {
+      "x": 49.33827961893066,
+      "y": 22.65419947506408
+     },
+     {
+      "x": 40.322531587434575,
+      "y": 22.65419947506411
+     },
+     {
+      "x": 40.132242873520674,
+      "y": 22.632874015746527
+     }
+    ]
+   }
+  ],
+  "label": [
+   "STAIR 00.06",
+   "2626842"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "7.99261455873",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "1",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Circulation",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "POLISHED CONCRETE",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "TRM-101",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "3kPNO6UOr6GeAbjiJ16hmT",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "STAIR",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "00.06",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "15422.0000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "STAIR",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "00.06",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "PAINT",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Circulation",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2626844",
+  "name": "GARAGE 00.04",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 49.34484129872068,
+      "y": 18.225065616796396
+     },
+     {
+      "x": 40.322531587434575,
+      "y": 18.225065616796424
+     },
+     {
+      "x": 40.322531587434554,
+      "y": 0.8579396325444566
+     },
+     {
+      "x": 60.18309589189641,
+      "y": 0.8579396325443938
+     },
+     {
+      "x": 60.18309589189643,
+      "y": 20.81200787401411
+     },
+     {
+      "x": 49.34484129872069,
+      "y": 20.812007874014142
+     }
+    ]
+   }
+  ],
+  "label": [
+   "GARAGE 00.04",
+   "2626844"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "33.3529116397",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "-",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Utility",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "FL-003",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "FL-003",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "TRM-101",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "3kPNO6UOr6GeAbjiJ16hmR",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "GARAGE",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "00.04",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "23846.0000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "GARAGE",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "00.04",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "PAINT",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Utility",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2628259",
+  "name": "STORAGE 00.05",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 27.576468595308604,
+      "y": 18.225065616796467
+     },
+     {
+      "x": 27.57646859530858,
+      "y": 1.0269028871376582
+     },
+     {
+      "x": 40.322531587434554,
+      "y": 1.0269028871375951
+     },
+     {
+      "x": 40.322531587434554,
+      "y": 1.0321367199326303
+     },
+     {
+      "x": 40.322531587434575,
+      "y": 18.225065616796428
+     }
+    ]
+   }
+  ],
+  "label": [
+   "STORAGE 00.05",
+   "2628259"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "19.3207596813",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Utility",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "FL-003",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "FL-003",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "TRM-101",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "1IVVrRUzX4i9hLOhrlkpm6",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "STORAGE",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "00.05",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "17822.0000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "STORAGE",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "00.05",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "PAINT",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "CONCRETE",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Utility",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2855029",
+  "name": "POOL PUMP 01.21",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 30.178858951555323,
+      "y": 86.33268083133775
+     },
+     {
+      "x": 37.98338590246856,
+      "y": 81.6128117296604
+     },
+     {
+      "x": 39.82388416853575,
+      "y": 84.65616272334054
+     },
+     {
+      "x": 39.57748121577638,
+      "y": 84.80517747985374
+     },
+     {
+      "x": 32.01935721762257,
+      "y": 89.376031825018
+     }
+    ]
+   }
+  ],
+  "label": [
+   "POOL PUMP 01.21",
+   "2855029"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "2.50325921356",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "-217.228088336",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Utility",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "19Ad0gZG92NQRLN0mgaden",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "1470.74760650",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "POOL PUMP",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "01.21",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "7228.10469504",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "POOL PUMP",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "EX.02",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "1687.97569484",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Utility",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "2920181",
+  "name": "UNDERCROFT 01.22",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 27.149959408956953,
+      "y": 51.01706036745262
+     },
+     {
+      "x": 24.88617988139791,
+      "y": 51.01706036745263
+     },
+     {
+      "x": 24.88617988139791,
+      "y": 50.688976377951306
+     },
+     {
+      "x": 8.514788805282429,
+      "y": 50.68897637795136
+     },
+     {
+      "x": 8.514788805282397,
+      "y": 31.26640419947367
+     },
+     {
+      "x": 11.467544710794176,
+      "y": 31.26640419947366
+     },
+     {
+      "x": 11.467544710794147,
+      "y": 14.763779527557649
+     },
+     {
+      "x": 8.514788805282368,
+      "y": 14.763779527557652
+     },
+     {
+      "x": 8.514788805282341,
+      "y": -2.2637795275604646
+     },
+     {
+      "x": 27.34680980265765,
+      "y": -2.2637795275605246
+     },
+     {
+      "x": 27.34680980265765,
+      "y": -0.1364674285970112
+     },
+     {
+      "x": 27.34680980265765,
+      "y": -0.1312335958020121
+     },
+     {
+      "x": 27.149959408956867,
+      "y": -0.13123359580201055
+     }
+    ]
+   }
+  ],
+  "label": [
+   "UNDERCROFT 01.22",
+   "2920181"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "86.2894628475",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Outdoor",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "28QUOBfqD8k8x4kbThlL82",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "UNDERCROFT",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "01.22",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "45760.0000000",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "UNDERCROFT",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "EX.03",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2438.4",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Outdoor",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "3060738",
+  "name": "POOL EX.01",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 33.01218869558643,
+      "y": 74.34369235441008
+     },
+     {
+      "x": 7.74573453795372,
+      "y": 89.62384412243028
+     },
+     {
+      "x": 12.126044711452863,
+      "y": 96.86689431428502
+     },
+     {
+      "x": 29.8642317562774,
+      "y": 86.13954062850597
+     },
+     {
+      "x": 30.15392721865503,
+      "y": 85.96434427511106
+     },
+     {
+      "x": 37.39249886908557,
+      "y": 81.58674254626483
+     }
+    ]
+   }
+  ],
+  "label": [
+   "POOL EX.01",
+   "3060738"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "1mcXHpt8jEOBZug28xoQ6m",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "POOL",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "EX.01",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "POOL",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "EX.01",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1256",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "None",
+    "undefined": false
+   }
+  ]
+ },
+ {
+  "id": "5256781",
+  "name": "BACKYARD AND SIDE SOUTH EX.04",
+  "level_id": "1483",
+  "loops": [
+   {
+    "points": [
+     {
+      "x": 60.61452633809063,
+      "y": 42.02755905511647
+     },
+     {
+      "x": 60.61452633809069,
+      "y": -0.26246719160258153
+     },
+     {
+      "x": 68.75100927948625,
+      "y": -0.2624671916026078
+     },
+     {
+      "x": 68.75100927948637,
+      "y": 71.18803196201938
+     },
+     {
+      "x": 41.74693773123616,
+      "y": 87.5190259763534
+     },
+     {
+      "x": 40.224032237185206,
+      "y": 85.00082966286021
+     },
+     {
+      "x": 38.63309348450053,
+      "y": 82.37013713620367
+     },
+     {
+      "x": 38.96997953993563,
+      "y": 82.16640177929673
+     },
+     {
+      "x": 38.63042061175739,
+      "y": 81.60492502023821
+     },
+     {
+      "x": 38.460641147668255,
+      "y": 81.32418664070893
+     },
+     {
+      "x": 33.01072035040771,
+      "y": 72.31248465782
+     },
+     {
+      "x": 30.877108665985396,
+      "y": 73.60280858489726
+     },
+     {
+      "x": 28.94162277536949,
+      "y": 70.40239105826379
+     },
+     {
+      "x": 24.886179881397947,
+      "y": 72.85496246063862
+     },
+     {
+      "x": 24.886179881397947,
+      "y": 72.63032387581951
+     },
+     {
+      "x": 24.88617988139792,
+      "y": 54.13385826771478
+     },
+     {
+      "x": 24.88617988139791,
+      "y": 51.01706036745263
+     },
+     {
+      "x": 27.149959408956953,
+      "y": 51.01706036745262
+     },
+     {
+      "x": 27.248384605807463,
+      "y": 51.11548556430301
+     },
+     {
+      "x": 44.243135261975446,
+      "y": 51.11548556430292
+     },
+     {
+      "x": 44.243135261975446,
+      "y": 51.186055118108705
+     },
+     {
+      "x": 44.2431352619757,
+      "y": 52.48314604661948
+     },
+     {
+      "x": 45.2601956294295,
+      "y": 53.50020641407326
+     },
+     {
+      "x": 45.26019562942949,
+      "y": 51.186055118108705
+     },
+     {
+      "x": 45.260195629429475,
+      "y": 42.02755905511654
+     }
+    ]
+   }
+  ],
+  "label": [
+   "BACKYARD AND SIDE SOUTH EX.04",
+   "5256781"
+  ],
+  "properties": {
+   "Apartment No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Area": {
+    "value": "158.731278042",
+    "storage_type": "Double"
+   },
+   "BASIX_ROOM_CONDITIONED": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "Base Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Base Offset": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Ceiling Cornice": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Ceiling Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Comments": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Computation Height": {
+    "value": "0.0",
+    "storage_type": "Double"
+   },
+   "Department": {
+    "value": "Outdoor",
+    "storage_type": "String"
+   },
+   "Design Option": {
+    "value": "Main Model",
+    "storage_type": "String"
+   },
+   "Edited by": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Export to IFC": {
+    "value": "0",
+    "storage_type": "Integer"
+   },
+   "Export to IFC As": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Floor Skirting": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IFC Predefined Type": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "IfcGUID": {
+    "value": "2Ot6iBiYn8yv6khIgxhObs",
+    "storage_type": "String"
+   },
+   "Image": {
+    "value": "-1",
+    "storage_type": "ElementId"
+   },
+   "Level": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Limit Offset": {
+    "value": "2700.0",
+    "storage_type": "Double"
+   },
+   "Name": {
+    "value": "BACKYARD AND SIDE SOUTH",
+    "storage_type": "String"
+   },
+   "Number": {
+    "value": "EX.04",
+    "storage_type": "String"
+   },
+   "Occupancy": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Perimeter": {
+    "value": "77183.2227343",
+    "storage_type": "Double"
+   },
+   "Phase": {
+    "value": "3",
+    "storage_type": "ElementId"
+   },
+   "Room Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SEPP65_Cross Ventilation": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_Solar Access": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SEPP65_South Facing": {
+    "value": "",
+    "storage_type": "Integer"
+   },
+   "SP_Room_Label": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Name": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "SP_Room_Number": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Unbounded Height": {
+    "value": "2700.0",
+    "storage_type": "Double"
+   },
+   "Unit No.": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Upper Limit": {
+    "value": "1483",
+    "storage_type": "ElementId"
+   },
+   "Volume": {
+    "value": "",
+    "storage_type": "Double"
+   },
+   "Wall Finish": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Primary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Wall Finish Secondary": {
+    "value": "None",
+    "storage_type": "String"
+   },
+   "Workset": {
+    "value": "1268",
+    "storage_type": "Integer"
+   }
+  },
+  "classification": [
+   {
+    "tier": "Department",
+    "name": "Outdoor",
+    "undefined": false
+   }
+  ]
+ }
+]

@@ -1,0 +1,183 @@
+/* The settings page's own stylesheet. It began as the subset of the hand-written
+   static/settings.html's inline <style> that the first React slice used; that
+   page is deleted, so this is now the only copy and there is nothing to keep in
+   step. The palette tokens are shared with the other pages through tokens.css. */
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--ink);
+}
+header h1 {
+  font-size: 0.95rem; font-weight: 600; letter-spacing: 0.18em;
+  text-transform: uppercase; margin: 0;
+}
+header .preview { font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+header a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+header a:first-of-type { margin-left: auto; }
+header a:hover { text-decoration: underline; }
+
+main {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 0;
+}
+
+nav {
+  border-right: 1px solid var(--ink);
+  padding: 1rem;
+  overflow-y: auto;
+}
+nav h2 {
+  font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase;
+  opacity: 0.6; margin: 0 0 0.75rem;
+}
+nav ul { list-style: none; margin: 0 0 1rem; padding: 0; }
+nav li button {
+  display: block; width: 100%; text-align: left;
+  font-family: var(--mono); font-size: 0.78rem;
+  background: none; border: none; color: var(--ink);
+  padding: 0.35rem 0.4rem; cursor: pointer;
+}
+nav li button:hover { background: var(--fill); }
+nav li button.active { background: var(--fill-hover); }
+nav li button .default-mark { color: var(--accent); }
+nav li .file-error { font-size: 0.62rem; color: var(--accent); padding: 0 0.4rem 0.3rem; }
+
+button.action {
+  font-family: var(--mono); font-size: 0.72rem;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--ink); padding: 0.3rem 0.6rem; cursor: pointer;
+}
+button.action:hover { background: var(--fill); }
+button.action.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+button.action:disabled { opacity: 0.4; cursor: default; }
+
+.editor { padding: 1.25rem 1.5rem 3rem; overflow-y: auto; }
+.placeholder { padding: 2rem; opacity: 0.6; font-size: 0.8rem; }
+.not-ported { font-size: 0.7rem; opacity: 0.7; max-width: 760px; margin: 0 0 1.4rem; }
+
+/* THE BASE SIZE FOR A BLOCK'S OWN TEXT, and it has to be stated here because
+   nothing else states it.
+
+   `.row-head` carried no rule at all, and the milestone and hierarchy rows
+   label their fields with bare <span>s -- so all of it inherited the document's
+   16px while every control beside it was 0.72rem (11.5px). That put a 16px
+   "name" and "date" next to an 11.5px field, which is what made the milestone
+   rows look like a different page. 25 elements across 9 sections were affected;
+   the milestone rows hold 10 of them, and they sit directly against their
+   inputs, which is why it showed up there first.
+
+   Set on the block rather than on `.row-head`, so the bare spans are covered
+   too and a future section cannot reintroduce this by forgetting a class.
+   0.72rem matches `label.field`, so a row's heading and its fields are one
+   size. Anything with its own rule -- h2, .hint, the appearance grid's column
+   headers -- still wins. */
+details.block { margin-bottom: 0.4rem; max-width: 760px; font-size: 0.72rem; }
+details.block > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 0.5rem;
+  border-bottom: 1px solid var(--rule); padding: 0.35rem 0;
+}
+details.block > summary::-webkit-details-marker { display: none; }
+details.block > summary::before { content: "▸"; font-size: 0.7rem; width: 0.8rem; }
+details.block[open] > summary::before { content: "▾"; }
+details.block > summary:hover { background: var(--fill); }
+details.block[open] { margin-bottom: 1.2rem; }
+.expand-bar { display: flex; gap: 0.5rem; max-width: 760px; margin-bottom: 0.6rem; }
+
+/* A ROW IS A FLEX ROW, which `.row` never actually said -- it carried no rule
+   at all, so `<Row>` was a plain block div whose children were separated by
+   nothing but the whitespace JSX strips. What made rows look like rows was the
+   16px text above overflowing 760px and wrapping; correcting the size took that
+   away and left "...christel)rooms" running together.
+
+   `gap` rather than margins on the children, so a row with one control and a
+   row with six space identically, and `wrap` so a long one breaks between
+   controls instead of overflowing the block. 0.4rem matches the gap inside
+   `label.field`, so the space between two fields reads the same as the space
+   between a field's label and its input. */
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.4rem; margin: 0.3rem 0; }
+/* `label.field` already spaces itself; inside a flex row that margin doubles
+   up with the gap and pulls the row apart. */
+.row > label.field { margin-right: 0; }
+details.block > summary > h2 {
+  font-size: 0.68rem; letter-spacing: 0.15em; text-transform: uppercase; margin: 0;
+}
+details.block > .hint { font-size: 0.65rem; opacity: 0.6; margin: 0.15rem 0 0.6rem; }
+
+label.field { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; margin-right: 1rem; }
+input[type="text"] {
+  font-family: var(--mono); font-size: 0.75rem;
+  background: #fff8; border: 1px solid var(--ink); color: var(--ink);
+  padding: 0.25rem 0.4rem;
+}
+input[type="text"]:read-only { background: var(--fill); opacity: 0.8; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin: 0.4rem 0 0.5rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  background: var(--fill); border: 1px solid var(--ink);
+  font-size: 0.72rem; padding: 0.15rem 0.2rem 0.15rem 0.5rem;
+}
+.chip button { border: none; background: none; cursor: pointer; font-family: var(--mono); font-size: 0.72rem; padding: 0 0.2rem; }
+.chip button:hover { color: var(--accent); }
+
+.save-bar { display: flex; align-items: center; gap: 1rem; max-width: 760px; margin-top: 1rem; }
+.save-message { font-size: 0.72rem; white-space: pre-wrap; }
+.save-message.ok { color: var(--ok); }
+.save-message.bad { color: var(--accent); }
+
+/* --- the appearance grid ---
+   A table rather than a stack of rows, because the question it answers is
+   comparative: two colours a few inches apart on the plan have to be
+   comparable a few inches apart here. The dash cells are load-bearing -- they
+   say a layer has nothing to apply that colour to, which is why they are
+   rendered rather than left blank. */
+.appearance-grid { border-collapse: collapse; font-size: 0.72rem; }
+.appearance-grid th, .appearance-grid td { padding: 0.2rem 0.7rem 0.2rem 0; text-align: left; }
+.appearance-grid thead th {
+  font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase;
+  opacity: 0.6; font-weight: normal; border-bottom: 1px solid var(--rule);
+}
+.appearance-grid tbody th { font-weight: normal; padding-right: 1.2rem; }
+.appearance-grid .cell-absent { opacity: 0.35; cursor: help; }
+
+/* The hover properties: seven entity/property pairs, read down rather than
+   across. A grid with the labels in their own column so the inputs line up --
+   "FF&E" and "Ceilings" are different widths, and inline fields would stagger
+   every box, which is what makes seven rows hard to scan as one decision. */
+.hover-grid { display: grid; grid-template-columns: max-content max-content; gap: 0.25rem 0.8rem; }
+.hover-grid label.field { display: contents; margin-right: 0; }
+
+.colour-field { display: inline-flex; align-items: center; gap: 0.3rem; }
+/* Unset swatches are muted so "following the theme" is visible down a column
+   at a glance, rather than needing the button beside each one read. */
+.colour-swatch {
+  width: 2rem; height: 1.1rem; padding: 0; cursor: pointer;
+  border: 1px solid var(--rule); background: none; opacity: 0.45;
+}
+.colour-swatch.set { border-color: var(--ink); opacity: 1; }
+.colour-reset {
+  font-family: var(--mono); font-size: 0.6rem; cursor: pointer;
+  background: none; border: 1px solid var(--rule); color: var(--ink);
+  padding: 0.05rem 0.25rem;
+}
+.colour-reset:disabled { cursor: default; opacity: 0.4; border-style: dashed; }
+.colour-reset:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+
+.tag-colours { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
+
+/* A property a setting names that the project's data does not carry. */
+.warn { color: #c8102e; margin-left: 0.4rem; font-size: 0.8em; cursor: help; }

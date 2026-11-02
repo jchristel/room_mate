@@ -1,0 +1,11 @@
+{
+  "name": "RoomMate",
+  "version": "0.0.0",
+  "description": "Pushes Revit room, door, window, FF&E, space, ceiling and floor data to a local RoomMate server",
+  "author": "Jan Christel",
+  "min_revit_ver": 2025,
+  "engines": {
+    "2025": { "clean": true },
+    "2026": { "clean": true }
+  }
+}

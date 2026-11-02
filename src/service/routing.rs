@@ -1,0 +1,708 @@
+//! How a route is computed once the graph of connections is known: the choice of
+//! METHOD.
+//!
+//! The graph (which rooms connect, through what) is `service::connectivity`'s and
+//! does not depend on the method. What does is where a person walks *inside* a
+//! room, and so how long a route is and where it is drawn. There is more than one
+//! published way to do that, so the method is a parameter, listed in `CATALOG` so a
+//! caller (the viewer's picker, an MCP client) can discover them, with what each is
+//! and where it comes from.
+//!
+//! **Adding a method is a variant of `Method`, an entry in `CATALOG`, and a
+//! function here**; nothing in the graph, the HTTP route or the tool changes shape.
+//!
+//! ## The methods
+//!
+//! - **`centroid`**: the original. A room is a node at its centre; a route walks
+//!   from one centre to a door to the next centre. The dual-graph / cell-centre
+//!   family (Lee 2001; Lorenz, Ohlbach and Stoffel 2006). Cheap and always
+//!   available, but it bends at every centre, and Liu and Zlatanova (2011) name
+//!   exactly that as its fault: it walks to the middle of rooms nobody needs to
+//!   enter and takes "unnecessary tortuous paths".
+//! - **`door_to_door`**: the recommended one. Liu and Zlatanova (2011), "A
+//!   'door-to-door' path-finding approach for indoor navigation" (ISPRS Gi4DM),
+//!   invert the graph: the doors are the nodes and a room is the set of edges
+//!   between its doors, so a route runs from one door to the next visible door, or
+//!   by the shortest way round for two doors that cannot see each other. Inside a
+//!   room that shortest way is computed exactly on the room's polygon, columns
+//!   included, by a visibility graph over its reflex corners (`service::geodesic`;
+//!   de Berg et al., *Computational Geometry*, ch. 15; the building block Xu, Wei
+//!   and Zlatanova 2016 compare their subdivision against and find theirs
+//!   compatible with). Two-level, as they describe it: the graph says which rooms,
+//!   the room polygons say where.
+//!
+//! ## What the geometry covers, and does not
+//!
+//! The walk is the geometric shortest path inside the room's outline. It is not
+//! where a person walks (people keep off walls), furniture is not modelled, and a
+//! room whose outline is missing or too irregular falls back to the straight line
+//! between its two points, counted in the result's `note` so it is never silent.
+//! A route's distance is a walking estimate, not a measurement.
+
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
+
+use serde::Serialize;
+
+use crate::contract::{Point2D, Room};
+
+use super::connectivity::{route as centroid_route, Edge, EdgeKind, Metric, Node, PathResult, Segment, Step};
+use super::geodesic::RoomShape;
+use super::ServiceError;
+
+/// One way of computing where a route runs inside rooms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Method {
+    /// Room centre to door to room centre.
+    Centroid,
+    /// Door to door, by the shortest walk inside each room. The default.
+    #[default]
+    DoorToDoor,
+}
+
+/// What a method is, for a picker or an agent choosing one.
+#[derive(Debug, Serialize)]
+pub struct MethodInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub summary: &'static str,
+    /// The published source, or what the method is when it is the baseline.
+    pub reference: &'static str,
+}
+
+pub const CATALOG: &[MethodInfo] = &[
+    MethodInfo {
+        id: "door_to_door",
+        name: "Door to door (shortest in each room)",
+        summary: "Routes from door to door, taking the exact shortest walk inside each room around its corners and columns. \
+                  The shortest of the methods; the default.",
+        reference: "Liu and Zlatanova 2011, 'A \"door-to-door\" path-finding approach for indoor navigation', ISPRS Gi4DM; \
+                    visibility graph after Lozano-Perez and Wesley 1979 and de Berg et al., Computational Geometry, ch. 15",
+    },
+    MethodInfo {
+        id: "centroid",
+        name: "Room centres",
+        summary: "Routes from the centre of each room to its door and on to the next centre. Fast and simple, but it bends \
+                  at every room centre, so it overstates distances and draws detours.",
+        reference: "Dual-graph / cell-centre networks (Lee 2001; Lorenz, Ohlbach and Stoffel 2006), the baseline Liu and \
+                    Zlatanova 2011 improve on",
+    },
+];
+
+impl Method {
+    pub fn id(self) -> &'static str {
+        match self {
+            Method::Centroid => "centroid",
+            Method::DoorToDoor => "door_to_door",
+        }
+    }
+
+    pub fn parse(raw: Option<&str>) -> Result<Self, ServiceError> {
+        match raw.map(str::trim) {
+            None | Some("") => Ok(Method::default()),
+            Some("door_to_door") => Ok(Method::DoorToDoor),
+            Some("centroid") => Ok(Method::Centroid),
+            Some(other) => Err(ServiceError::Invalid(format!(
+                "method {other:?} is not one of: {}",
+                CATALOG.iter().map(|m| m.id).collect::<Vec<_>>().join(", ")
+            ))),
+        }
+    }
+}
+
+/// What is being asked: the two rooms (as node indices) and, optionally, where in
+/// each the route starts and ends. A missing point is the room's centre.
+pub(super) struct Ask {
+    pub from: usize,
+    pub to: usize,
+    pub from_at: Option<Point2D>,
+    pub to_at: Option<Point2D>,
+}
+
+/// Compute the route with the chosen method.
+///
+/// `rooms[i]` is node `i`'s room outline, when it has one. The hops metric has no
+/// geometry to improve (it counts doors), so it always takes the graph's own
+/// search, and says so.
+pub(super) fn route(
+    method: Method,
+    nodes: &[Node],
+    edges: &[Edge],
+    rooms: &[Option<&Room>],
+    ask: &Ask,
+    metric: Metric,
+) -> PathResult {
+    match (method, metric) {
+        (Method::DoorToDoor, Metric::Distance) => door_to_door(nodes, edges, rooms, ask),
+        (Method::DoorToDoor, Metric::Hops) => {
+            let mut result = centroid_at(nodes, edges, ask, metric);
+            result.note = Some(
+                "the hops metric counts doors and has no geometry, so the room-centre drawing was used".to_string(),
+            );
+            result
+        }
+        (Method::Centroid, _) => centroid_at(nodes, edges, ask, metric),
+    }
+}
+
+/// The room-centre route, from and to the given points when there are any.
+///
+/// A point replaces the room's centre as the place the route starts or ends, so
+/// the legs that touch it are re-measured and the search sees them. Both rooms
+/// being the same room has no door to cross, so the route is the straight line.
+fn centroid_at(nodes: &[Node], edges: &[Edge], ask: &Ask, metric: Metric) -> PathResult {
+    if ask.from_at.is_none() && ask.to_at.is_none() {
+        return centroid_route(nodes, edges, ask.from, ask.to, metric);
+    }
+    let mut ns = nodes.to_vec();
+    if let Some(p) = ask.from_at {
+        ns[ask.from].centroid = p;
+    }
+    if let Some(p) = ask.to_at {
+        ns[ask.to].centroid = p;
+    }
+    if ask.from == ask.to {
+        // Both points are in one room, so they are read from the request: `ns` holds
+        // one centre per room and the second would have overwritten the first.
+        let (a, b) = (
+            ask.from_at.unwrap_or(nodes[ask.from].centroid),
+            ask.to_at.unwrap_or(nodes[ask.to].centroid),
+        );
+        let mut result = centroid_route(&ns, edges, ask.from, ask.to, metric);
+        result.distance_ft = dist(a, b);
+        result.cost = if metric == Metric::Distance { dist(a, b) } else { 0.0 };
+        result.segments = vec![Segment { level_id: ns[ask.from].level_id.clone(), points: vec![a, b] }];
+        return result;
+    }
+    let mut es = edges.to_vec();
+    for e in es.iter_mut() {
+        let touches = [ask.from, ask.to].contains(&e.ia) || [ask.from, ask.to].contains(&e.ib);
+        if touches && e.kind != EdgeKind::Vertical {
+            e.length = e.length_between(ns[e.ia].centroid, ns[e.ib].centroid);
+        }
+    }
+    centroid_route(&ns, &es, ask.from, ask.to, metric)
+}
+
+// =============================== door to door ===============================
+
+/// A point where a route crosses between rooms or starts or ends, as seen from
+/// ONE room. A door is two ports (one on each side), joined by the crossing.
+struct Port {
+    room: usize,
+    at: Point2D,
+    /// The port on the other side, what crossing costs, and which edge it is.
+    twin: Option<(usize, f64, usize)>,
+}
+
+#[derive(Clone, Copy)]
+enum Hop {
+    Walk(usize),
+    Cross(usize),
+}
+
+fn dist(a: Point2D, b: Point2D) -> f64 {
+    (a.x - b.x).hypot(a.y - b.y)
+}
+
+/// Lazily built room shapes, one per room a search touches.
+pub(super) struct Shapes<'a> {
+    rooms: &'a [Option<&'a Room>],
+    cache: HashMap<usize, Option<RoomShape>>,
+}
+
+impl<'a> Shapes<'a> {
+    fn new(rooms: &'a [Option<&'a Room>]) -> Self {
+        Self { rooms, cache: HashMap::new() }
+    }
+
+    fn get(&mut self, node: usize) -> Option<&RoomShape> {
+        let rooms = self.rooms;
+        self.cache.entry(node).or_insert_with(|| rooms[node].and_then(RoomShape::new)).as_ref()
+    }
+
+    /// Where a route starts, ends or changes level in a room: its centre when the
+    /// centre is in the room (so both methods start from the same place and a
+    /// comparison between them is about the walk and nothing else), else a point
+    /// surely inside it, as for an L or a C whose centre is out in the cold. The
+    /// given centre again for a room with no outline.
+    fn inside(&mut self, node: usize, centre: Point2D) -> Point2D {
+        match self.get(node) {
+            Some(shape) if shape.contains(centre) => centre,
+            Some(shape) => shape.inside_point().unwrap_or(centre),
+            None => centre,
+        }
+    }
+
+    fn snap(&mut self, node: usize, p: Point2D) -> Point2D {
+        self.get(node).map_or(p, |s| s.snap(p))
+    }
+
+    /// The walk between two points of one room: exact where the room has an
+    /// outline, the straight line where it does not, and `false` in that case so
+    /// the caller can count the fallback.
+    fn walk(&mut self, node: usize, a: Point2D, b: Point2D) -> RoomWalk {
+        match self.get(node).and_then(|s| s.walk(a, b)) {
+            Some(w) => (w.length, w.points, true),
+            None => (dist(a, b), vec![a, b], false),
+        }
+    }
+}
+
+#[derive(PartialEq)]
+struct Frontier {
+    /// Cost so far plus the heuristic: what the queue is ordered by.
+    estimate: f64,
+    /// Cost so far.
+    cost: f64,
+    port: usize,
+}
+impl Eq for Frontier {}
+impl Ord for Frontier {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.estimate.total_cmp(&self.estimate).then(other.port.cmp(&self.port))
+    }
+}
+impl PartialOrd for Frontier {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// A walk between two ports of one room: its length, its points, and whether it is
+/// exact (false when the room had no usable outline and the line is straight).
+type RoomWalk = (f64, Vec<Point2D>, bool);
+
+/// Every port, and which ports each room holds.
+struct Network {
+    ports: Vec<Port>,
+    by_room: Vec<Vec<usize>>,
+}
+
+/// What the search found: the cheapest cost to each port, how it was reached, and
+/// every in-room walk it computed (so the path can be drawn without redoing them).
+struct Solved {
+    best: Vec<f64>,
+    prev: Vec<Option<Hop>>,
+    walks: HashMap<(usize, usize), RoomWalk>,
+}
+
+/// The route from the start room's inside point to the end room's, door to door.
+///
+/// **Ports are the nodes.** Every edge of the graph becomes two ports, one in each
+/// of its rooms; a door's ports sit where the door's point meets each room's
+/// outline, and are joined by the short crossing through the wall. Within a room
+/// every pair of its ports is joined by the exact walk between them, found only
+/// when the search reaches the room (rooms with many doors are not paid for unless
+/// the route goes through them). A level change has no plan position, so its two
+/// ports sit at each room's inside point and are joined at the link's stated cost.
+fn door_to_door(nodes: &[Node], edges: &[Edge], rooms: &[Option<&Room>], ask: &Ask) -> PathResult {
+    let (from, to) = (ask.from, ask.to);
+    let mut shapes = Shapes::new(rooms);
+    let net = build_network(nodes, edges, &mut shapes, ask);
+    let solved = solve(&net, edges, &mut shapes);
+    if !solved.best[1].is_finite() {
+        return PathResult {
+            found: false,
+            reason: Some(format!(
+                "no route through the connections: the first room is in component {} and the second in component {}. \
+                 This is a limit of what is connected, not necessarily of the building",
+                nodes[from].component, nodes[to].component
+            )),
+            from: nodes[from].room.clone(),
+            to: nodes[to].room.clone(),
+            cost: 0.0,
+            distance_ft: 0.0,
+            arrival_ft: 0.0,
+            start: net.ports[0].at,
+            end: net.ports[1].at,
+            method: Method::DoorToDoor.id(),
+            note: None,
+            rooms: vec![],
+            steps: vec![],
+            segments: vec![],
+        };
+    }
+    let mut notes = Vec::new();
+    for (given, port, which) in [(ask.from_at, 0, "start"), (ask.to_at, 1, "end")] {
+        if given.is_some_and(|p| dist(p, net.ports[port].at) > 1e-6) {
+            notes.push(format!("the {which} point was outside its room and was moved onto the room's outline"));
+        }
+    }
+    assemble(nodes, edges, &net, &solved, ask, notes)
+}
+
+/// Turn the graph's edges into ports. Port 0 is the start and port 1 the end.
+fn build_network(nodes: &[Node], edges: &[Edge], shapes: &mut Shapes<'_>, ask: &Ask) -> Network {
+    let (from, to) = (ask.from, ask.to);
+    // A given point is brought into its room (a click lands inside it, but rounding
+    // and a door's wall are real); no point is the room's centre, or a point surely
+    // inside it where the centre is not.
+    let start = match ask.from_at {
+        Some(p) => shapes.snap(from, p),
+        None => shapes.inside(from, nodes[from].centroid),
+    };
+    let end = match ask.to_at {
+        Some(p) => shapes.snap(to, p),
+        None => shapes.inside(to, nodes[to].centroid),
+    };
+    let mut ports: Vec<Port> = Vec::new();
+    ports.push(Port { room: from, at: start, twin: None });
+    ports.push(Port { room: to, at: end, twin: None });
+    for (k, e) in edges.iter().enumerate() {
+        let (at_a, at_b, crossing) = crossing_ports(nodes, shapes, e);
+        let first = ports.len();
+        ports.push(Port { room: e.ia, at: at_a, twin: Some((first + 1, crossing, k)) });
+        ports.push(Port { room: e.ib, at: at_b, twin: Some((first, crossing, k)) });
+    }
+    let mut by_room: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    for (i, p) in ports.iter().enumerate() {
+        by_room[p.room].push(i);
+    }
+    Network { ports, by_room }
+}
+
+/// Where an edge's two ports sit (one in each room) and what crossing between them costs.
+fn crossing_ports(nodes: &[Node], shapes: &mut Shapes<'_>, e: &Edge) -> (Point2D, Point2D, f64) {
+    match e.kind {
+        EdgeKind::Door | EdgeKind::Zone => {
+            let (a, b) = (shapes.snap(e.ia, e.point), shapes.snap(e.ib, e.point));
+            (a, b, dist(a, e.point) + dist(e.point, b))
+        }
+        // A passage is crossed between its own two points, each moved onto the outline
+        // of the room it belongs to; `point` is on `a`'s, `far_point` on `b`'s.
+        EdgeKind::Passage => {
+            let (a, b) = (shapes.snap(e.ia, e.point), shapes.snap(e.ib, e.far_point.unwrap_or(e.point)));
+            (a, b, dist(a, b))
+        }
+        EdgeKind::Vertical => (
+            shapes.inside(e.ia, nodes[e.ia].centroid),
+            shapes.inside(e.ib, nodes[e.ib].centroid),
+            e.length,
+        ),
+    }
+}
+
+/// A* over ports, with the straight-line distance to the end as the estimate.
+///
+/// That is safe (never over-estimates) as long as no edge is cheaper than the plan
+/// distance it spans: true of every walk and crossing, and checked for level
+/// changes, whose two ends need not be stacked. When it is not, the estimate is
+/// zero and this is plain Dijkstra. A walk between two ports of a room is computed
+/// once.
+fn solve(net: &Network, edges: &[Edge], shapes: &mut Shapes<'_>) -> Solved {
+    let ports = &net.ports;
+    let goal = ports[1].at;
+    let safe = edges.iter().enumerate().all(|(k, e)| {
+        e.kind != EdgeKind::Vertical
+            || ports
+                .iter()
+                .any(|p| matches!(p.twin, Some((t, c, kk)) if kk == k && dist(p.at, ports[t].at) <= c + 1e-9))
+    });
+    let estimate = |port: usize| if safe { dist(ports[port].at, goal) } else { 0.0 };
+
+    let mut walks: HashMap<(usize, usize), RoomWalk> = HashMap::new();
+    let mut best = vec![f64::INFINITY; ports.len()];
+    let mut prev: Vec<Option<Hop>> = vec![None; ports.len()];
+    let mut heap = BinaryHeap::new();
+    best[0] = 0.0;
+    heap.push(Frontier { estimate: estimate(0), cost: 0.0, port: 0 });
+    while let Some(Frontier { cost, port: x, .. }) = heap.pop() {
+        if x == 1 {
+            break;
+        }
+        if cost > best[x] {
+            continue;
+        }
+        let room = ports[x].room;
+        for &y in &net.by_room[room] {
+            if y == x {
+                continue;
+            }
+            let key = (x.min(y), x.max(y));
+            let len = walks.entry(key).or_insert_with(|| shapes.walk(room, ports[key.0].at, ports[key.1].at)).0;
+            if cost + len < best[y] {
+                best[y] = cost + len;
+                prev[y] = Some(Hop::Walk(x));
+                heap.push(Frontier { estimate: cost + len + estimate(y), cost: cost + len, port: y });
+            }
+        }
+        if let Some((twin, crossing, _)) = ports[x].twin
+            && cost + crossing < best[twin]
+        {
+            best[twin] = cost + crossing;
+            prev[twin] = Some(Hop::Cross(x));
+            heap.push(Frontier { estimate: cost + crossing + estimate(twin), cost: cost + crossing, port: twin });
+        }
+    }
+    Solved { best, prev, walks }
+}
+
+/// Read the chain of hops back from the end port and build the route: the rooms
+/// passed, a step for each crossing (carrying the walk before it), and the drawn
+/// polyline grouped by level.
+fn assemble(
+    nodes: &[Node],
+    edges: &[Edge],
+    net: &Network,
+    solved: &Solved,
+    ask: &Ask,
+    mut notes: Vec<String>,
+) -> PathResult {
+    let (from, to) = (ask.from, ask.to);
+    let ports = &net.ports;
+    let mut chain: Vec<(usize, Hop)> = Vec::new();
+    let mut at = 1;
+    while at != 0 {
+        let hop = solved.prev[at].expect("a reached port has a predecessor");
+        chain.push((at, hop));
+        at = match hop {
+            Hop::Walk(x) | Hop::Cross(x) => x,
+        };
+    }
+    chain.reverse();
+
+    let (from_ref, to_ref) = (nodes[from].room.clone(), nodes[to].room.clone());
+    let mut room_path = vec![from_ref.clone()];
+    let mut steps: Vec<Step> = Vec::new();
+    let mut drawn: Vec<(String, Point2D)> = vec![(nodes[from].level_id.clone(), ports[0].at)];
+    let mut pending = 0.0;
+    let mut fallbacks = 0usize;
+    for (arrived, hop) in chain {
+        match hop {
+            Hop::Walk(x) => {
+                let key = (x.min(arrived), x.max(arrived));
+                let (len, pts, exact) = &solved.walks[&key];
+                if !exact {
+                    fallbacks += 1;
+                }
+                let ordered: Vec<Point2D> = if key.0 == x { pts.clone() } else { pts.iter().rev().copied().collect() };
+                for p in ordered.into_iter().skip(1) {
+                    drawn.push((nodes[ports[x].room].level_id.clone(), p));
+                }
+                pending += len;
+            }
+            Hop::Cross(x) => {
+                let (twin, crossing, k) = ports[x].twin.expect("a crossing has a twin");
+                let e = &edges[k];
+                let (here, there) = (ports[x].room, ports[twin].room);
+                if e.kind == EdgeKind::Passage {
+                    // The point the walker leaves from is the port itself, which depends
+                    // on which room it is in; `e.point` is always `a`'s.
+                    drawn.push((nodes[here].level_id.clone(), ports[x].at));
+                } else if e.kind != EdgeKind::Vertical {
+                    drawn.push((nodes[here].level_id.clone(), e.point));
+                }
+                drawn.push((nodes[there].level_id.clone(), ports[twin].at));
+                steps.push(Step {
+                    from: nodes[here].room.clone(),
+                    to: nodes[there].room.clone(),
+                    kind: e.kind,
+                    door_id: e.door_id.clone(),
+                    door_model_id: e.door_model_id.clone(),
+                    zone_id: e.zone_id.clone(),
+                    link_id: e.link_id.clone(),
+                    passage_id: e.passage_id.clone(),
+                    point: e.point,
+                    length: pending + crossing,
+                });
+                pending = 0.0;
+                room_path.push(nodes[there].room.clone());
+            }
+        }
+    }
+
+    let mut segments: Vec<Segment> = Vec::new();
+    for (level, p) in drawn {
+        match segments.last_mut() {
+            Some(seg) if seg.level_id == level => seg.points.push(p),
+            _ => segments.push(Segment { level_id: level, points: vec![p] }),
+        }
+    }
+    let total = solved.best[1];
+    PathResult {
+        found: true,
+        reason: None,
+        from: from_ref,
+        to: to_ref,
+        cost: total,
+        distance_ft: total,
+        arrival_ft: pending,
+        start: ports[0].at,
+        end: ports[1].at,
+        method: Method::DoorToDoor.id(),
+        note: {
+            if fallbacks > 0 {
+                notes.push(format!(
+                    "{fallbacks} walk{} inside rooms used a straight line because the room has no usable outline, \
+                     so those stretches are not shortest-path",
+                    if fallbacks == 1 { "" } else { "s" }
+                ));
+            }
+            (!notes.is_empty()).then(|| notes.join("; "))
+        },
+        rooms: room_path,
+        steps,
+        segments,
+    }
+}
+
+// ================================ reach ================================
+
+/// Where a distance field starts: a room, and a point in it (the room's inside
+/// point when absent).
+pub(super) struct Source {
+    pub node: usize,
+    pub at: Option<Point2D>,
+}
+
+/// The cheapest walk, in feet, from the nearest source to every port within a limit.
+///
+/// **The same network a route is searched over, from several starts at once.** Every
+/// edge becomes two ports joined by its crossing and every pair of a room's ports by
+/// the exact walk inside it (`crossing_ports`, `Shapes::walk`), so a distance here and
+/// a route's length agree. The search is plain Dijkstra, not A*: there is no single goal
+/// to aim at. It stops expanding at `limit_ft`, so a room the limit cannot reach costs
+/// nothing but its ports.
+///
+/// **Level changes are not crossed.** A walk measured on one plate does not continue by lift, and a field is about
+/// one floor plate; a vertical link is skipped, which is a statement about the question
+/// and not a limit of the data.
+pub(super) struct Field<'a> {
+    shapes: Shapes<'a>,
+    /// Per node: where its reached ports are and the cheapest walk to each, nearest
+    /// first. A source's own port is among them at 0.
+    pub ports: Vec<Vec<(Point2D, f64)>>,
+    /// Where each source really starts: its point moved into the room.
+    pub starts: Vec<Point2D>,
+    /// Walks between two ports that fell back to a straight line (a room with no
+    /// usable outline), so the answer can say its distances are not all exact.
+    pub fallbacks: usize,
+}
+
+impl Field<'_> {
+    /// The walk, in feet, between two points of one room.
+    pub fn walk_length(&mut self, node: usize, a: Point2D, b: Point2D) -> f64 {
+        let (len, _, exact) = self.shapes.walk(node, a, b);
+        if !exact {
+            self.fallbacks += 1;
+        }
+        len
+    }
+
+    /// Whether a point is in the room, outline included.
+    pub fn contains(&mut self, node: usize, p: Point2D) -> bool {
+        self.shapes.get(node).is_some_and(|s| s.contains(p))
+    }
+
+    /// A point surely inside the room, for a room too small to hold a grid point.
+    pub fn inside_point(&mut self, node: usize) -> Option<Point2D> {
+        self.shapes.get(node).and_then(|s| s.inside_point())
+    }
+}
+
+/// Run the search. `rooms[i]` is node `i`'s outline, as for `route`.
+pub(super) fn field<'a>(
+    nodes: &[Node],
+    edges: &[Edge],
+    rooms: &'a [Option<&'a Room>],
+    sources: &[Source],
+    limit_ft: f64,
+) -> Field<'a> {
+    let mut shapes = Shapes::new(rooms);
+    let mut ports: Vec<Port> = Vec::new();
+    let mut starts = Vec::new();
+    for s in sources {
+        let at = match s.at {
+            Some(p) => shapes.snap(s.node, p),
+            None => shapes.inside(s.node, nodes[s.node].centroid),
+        };
+        starts.push(at);
+        ports.push(Port { room: s.node, at, twin: None });
+    }
+    let source_ports = ports.len();
+    for (k, e) in edges.iter().enumerate() {
+        if e.kind == EdgeKind::Vertical {
+            continue;
+        }
+        let (at_a, at_b, crossing) = crossing_ports(nodes, &mut shapes, e);
+        let first = ports.len();
+        ports.push(Port { room: e.ia, at: at_a, twin: Some((first + 1, crossing, k)) });
+        ports.push(Port { room: e.ib, at: at_b, twin: Some((first, crossing, k)) });
+    }
+    let mut by_room: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    for (i, p) in ports.iter().enumerate() {
+        by_room[p.room].push(i);
+    }
+
+    let mut walks: HashMap<(usize, usize), f64> = HashMap::new();
+    let mut fallbacks = 0usize;
+    let mut best = vec![f64::INFINITY; ports.len()];
+    let mut heap = BinaryHeap::new();
+    for (i, b) in best.iter_mut().enumerate().take(source_ports) {
+        *b = 0.0;
+        heap.push(Frontier { estimate: 0.0, cost: 0.0, port: i });
+    }
+    while let Some(Frontier { cost, port: x, .. }) = heap.pop() {
+        if cost > best[x] {
+            continue;
+        }
+        let room = ports[x].room;
+        for &y in &by_room[room] {
+            if y == x {
+                continue;
+            }
+            let key = (x.min(y), x.max(y));
+            let len = *walks.entry(key).or_insert_with(|| {
+                let (len, _, exact) = shapes.walk(room, ports[key.0].at, ports[key.1].at);
+                if !exact {
+                    fallbacks += 1;
+                }
+                len
+            });
+            let c = cost + len;
+            if c <= limit_ft && c < best[y] {
+                best[y] = c;
+                heap.push(Frontier { estimate: c, cost: c, port: y });
+            }
+        }
+        if let Some((twin, crossing, _)) = ports[x].twin {
+            let c = cost + crossing;
+            if c <= limit_ft && c < best[twin] {
+                best[twin] = c;
+                heap.push(Frontier { estimate: c, cost: c, port: twin });
+            }
+        }
+    }
+
+    let mut reached: Vec<Vec<(Point2D, f64)>> = vec![Vec::new(); nodes.len()];
+    for (i, p) in ports.iter().enumerate() {
+        if best[i].is_finite() {
+            reached[p.room].push((p.at, best[i]));
+        }
+    }
+    for r in &mut reached {
+        r.sort_by(|a, b| a.1.total_cmp(&b.1));
+    }
+    Field { shapes, ports: reached, starts, fallbacks }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_the_catalog_names_every_method_once_and_parse_agrees_with_it() {
+        let ids: Vec<_> = CATALOG.iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec!["door_to_door", "centroid"]);
+        for m in CATALOG {
+            assert_eq!(Method::parse(Some(m.id)).unwrap().id(), m.id);
+            assert!(!m.reference.is_empty() && !m.summary.is_empty());
+        }
+        assert_eq!(Method::parse(None).unwrap(), Method::DoorToDoor, "the recommended method is the default");
+        assert_eq!(Method::parse(Some(" ")).unwrap(), Method::DoorToDoor);
+        let err = Method::parse(Some("teleport")).unwrap_err();
+        assert!(matches!(err, ServiceError::Invalid(m) if m.contains("door_to_door") && m.contains("centroid")));
+    }
+}

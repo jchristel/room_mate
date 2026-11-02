@@ -1,0 +1,2089 @@
+//! roommate's MCP server: exposes the read side as MCP tools over stdio, one
+//! per existing HTTP read route -- `list_projects`, `list_buildings`,
+//! `get_rooms`, `get_validation`, `get_hierarchy_areas`, `get_adjacency`,
+//! `get_connectivity`, `get_reach`, `list_connections`, `get_stack_candidates`,
+//! `list_snapshots`, `get_latest_snapshot`, `get_pending_snapshot`,
+//! `list_milestones`, `compare_milestones`, `list_reference_snapshots`,
+//! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
+//! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
+//! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
+//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `get_sheet_elevations`, `suggest_sheets`, `list_assignments`, `list_tasks`, `get_task`, `list_tag_rules`, `get_tag_rule` --
+//! plus three settings *reads* off `settings_api`'s transport-agnostic core
+//! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
+//! and the one forwarded mutation (`upload_reference`, below). Forty-two in
+//! total, and "one per existing HTTP read route" is now literally true -- it was
+//! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
+//! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
+//! and STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
+//! `roommate::service` -- parse params, call one service function, serialize
+//! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
+//! second transport over the same domain layer.
+//!
+//! Ingest (`POST /rooms`) has no MCP equivalent here: an MCP client asking an
+//! LLM to push a full room snapshot isn't a realistic flow, and the HTTP
+//! server remains the ingest path.
+//!
+//! The one mutating tool, `upload_reference`, doesn't break that rule: it never
+//! writes this process's state or the store — it reads a CSV file and
+//! *forwards it over HTTP* to the running server (`--server-url`, default the
+//! shared default address), which stays the single writer and hot-swaps
+//! its own registry. The `reqwest` dependency this adds is an HTTP *client*;
+//! the "no transport crate leaks into the other binary" rule is about server
+//! frameworks (`mcp.rs` still never imports `axum`), and `main.rs` still
+//! never imports `rmcp` or `reqwest`.
+//!
+//! `--http <port>` serves the same tools at `/mcp` for several people on a closed network, instead of
+//! one client-spawned process each; the framework side is `roommate::mcp_http`. One long-lived process,
+//! so settings are read once at start (restart it after a settings save); `upload_reference` is off
+//! there unless `--allow-upload`.
+//!
+//! Run as a client-spawned subprocess (e.g. from an MCP host's config) --
+//! stdout is reserved for the JSON-RPC stream, so all logging goes to
+//! stderr. This is a distinct OS process from any running HTTP server: it
+//! only sees the same room data if pointed at the same `[storage]` root via
+//! `--server-settings`, since `MemStore` state isn't shared across processes.
+
+use std::path::PathBuf;
+
+use clap::Parser;
+use rmcp::{
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo},
+    schemars, tool, tool_handler, tool_router,
+    transport::stdio,
+    ErrorData as McpError, ServerHandler, ServiceExt,
+};
+
+use roommate::bootstrap::build_state;
+use roommate::contract::{CeilingPayload, FloorPayload};
+use roommate::default_http_addr;
+use roommate::reports_api;
+use roommate::service::{
+    adjacency, areas, comparison, connectivity, items, milestones, openings, projects, reach, reference, reports,
+    rooms, snapshots, spaces, surfaces, validation, ServiceError,
+};
+use roommate::settings_api::{self, SettingsError};
+use roommate::state::Shared;
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ProjectIdParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct BlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The blueprint id, as returned by `list_blueprints`.
+    blueprint_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CaptureBlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The room's model. Omit it and the room id is looked up among the project's rooms (refused, naming the models, if more than one has it): a room id is unique only within its model.
+    model_id: Option<String>,
+    /// The room's id.
+    room_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ResolveBlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The blueprint id, as returned by `list_blueprints`.
+    blueprint_id: String,
+    /// The target room's model. Omit it and the room id is looked up among the project's rooms.
+    model_id: Option<String>,
+    /// The target room.
+    room_id: String,
+    /// The revision to place; the blueprint's current one when omitted.
+    revision: Option<u32>,
+    /// Pin the edge mapping: blueprint edge i goes to room edge (i + shift) % edges. Omit to use the best fit by shape.
+    shift: Option<usize>,
+    /// Map the edges by hand: the room edge for each blueprint edge, in blueprint edge order. Wins over `shift`, and is how a room with a DIFFERENT number of edges is placed.
+    edge_map: Option<Vec<usize>>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ListTasksParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Only the tasks for this model (the Revit document's title).
+    #[serde(default)]
+    model_id: Option<String>,
+    /// Only tasks in this state: queued, in_progress, completed, completed_with_warnings, failed, aborted or dismissed.
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct TaskParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The task id, as returned by `list_tasks`.
+    task_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct TagRuleParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The rule id, as returned by `list_tag_rules`.
+    rule_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SheetParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The sheet record id, as returned by `list_sheets`.
+    sheet_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SuggestSheetsParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The room's model. Omit it and the room id is looked up among the project's rooms (refused, naming the models, if more than one has it): a room id is unique only within its model.
+    model_id: Option<String>,
+    /// The room to find a sheet for.
+    room_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ModelIdParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The model id, as returned by `list_snapshots`.
+    model_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetRoomsParams {
+    /// Scope the merge to one project id. Omit to merge every stored model.
+    #[serde(default)]
+    project: Option<String>,
+    /// Opaque building key from `list_buildings`. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`: serve the snapshots that
+    /// milestone pins instead of each model's latest. Omit for latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Property predicates, ALL of which must hold (AND), one per element:
+    /// ["Department=Cardiology", "Area>=20", "drofus.NetArea>20"]. Operators:
+    /// = != > >= < <= and ~ (case-insensitive contains). An unqualified name
+    /// is a canonical room property (as listed by get_project_settings'
+    /// builtin_properties), plus $name / $id for the room's own fields; a
+    /// source-prefixed name (e.g. "drofus.") reads that joined record's field label
+    /// (as listed by get_reference_snapshot). A room missing the property -- or
+    /// with no joined record for that source at all -- never matches, negative
+    /// operators included. Quote a value containing spaces if in doubt.
+    /// Omit for no filter.
+    #[serde(default)]
+    filter: Vec<String>,
+}
+
+/// `get_ceilings` and `get_floors` parameters. Its own type rather than
+/// `GetSpacesParams`: there is no `filter` (no reference source declares either
+/// entity, so the grammar would advertise an empty vocabulary) and no `model` --
+/// a surface is asked about per project, not per model, because the question
+/// these entities exist for is "which ceilings / floors are in this room".
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetSurfacesParams {
+    /// Scope the merge to one project id. Omit to merge every stored model.
+    #[serde(default)]
+    project: Option<String>,
+    /// Milestone name from `list_milestones`: serve the snapshots that
+    /// milestone pins instead of each model's latest. Omit for latest. Note the
+    /// ROOMS it attributes against are pinned by the same milestone, so a
+    /// milestone read answers one consistent question.
+    #[serde(default)]
+    milestone: Option<String>,
+}
+
+/// `list_saved_reports` parameters.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SavedReportsParams {
+    /// Project id whose saved reports to list.
+    project: String,
+}
+
+/// `get_saved_report` parameters.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SavedReportParams {
+    project: String,
+    /// Report id, from `list_saved_reports`.
+    report: String,
+}
+
+/// `list_report_columns` parameters.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ReportColumnsParams {
+    /// Project id to ask about.
+    project: String,
+    /// Which entity: rooms, doors, windows, ceilings, floors, spaces or ffe.
+    entity: String,
+}
+
+/// `build_report` parameters -- the report definition, in the shape
+/// `service::reports::ReportDefinition` takes. One tool rather than one per
+/// report type: the type IS the parameters, and a tool per type would be
+/// fourteen tools that differ by two fields.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct BuildReportParams {
+    /// Project id to report on.
+    project: String,
+    /// Which entity: rooms, doors, windows, ceilings, floors, spaces or ffe.
+    entity: String,
+    /// Report the entity BY ROOM rather than as a flat schedule. Not available
+    /// for rooms (they are the other side of the join) or spaces (their match
+    /// is a key match that lives in the QA report, not on the rows).
+    #[serde(default)]
+    by_room: bool,
+    /// Columns over the entity, in the same vocabulary `filter` parses: a
+    /// property name, a `$intrinsic`, or `source.label` for a joined field.
+    #[serde(default)]
+    columns: Vec<String>,
+    /// Columns over the room, for a by-room report.
+    #[serde(default)]
+    room_columns: Vec<String>,
+    /// What the join measured. Ceilings and floors carry `overlap_area`,
+    /// `fraction_of_element`, `fraction_of_room` and `mean_width`; FF&E carries
+    /// `room_origin`.
+    #[serde(default)]
+    measures: Vec<String>,
+    /// `per_match` (default) or `per_room`, which groups and aggregates.
+    #[serde(default)]
+    shape: Option<String>,
+    /// List rooms nothing matched. Off by default.
+    #[serde(default)]
+    include_rooms_without: bool,
+    /// List elements no room matched. ON by default -- an unattributed element
+    /// is part of the answer, and dropping it silently makes the totals lie.
+    #[serde(default = "mcp_default_true")]
+    include_unattributed: bool,
+    /// Scope to one building, through the room each element is attributed to.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`; omit for each model's latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Cap the rows returned. `total_rows` still counts them all.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// The filter tree, as JSON: a group is `{"mode": "all"|"any", "items":
+    /// [...]}` and a condition is `{"side": "room"|"element"|"join", "field",
+    /// "op", "value"}`. Operators: eq, ne, gt, ge, lt, le, contains,
+    /// not_contains, starts_with, ends_with, between (with `value2`), blank,
+    /// has_value. Text folds case unless `case_sensitive` is set. ON THE
+    /// ASSOCIATED SIDE A CONDITION ASKS ABOUT THE ROOM'S WHOLE SET: `ne` and
+    /// `not_contains` mean the room has NONE that match, so a room with no
+    /// elements at all satisfies them and fails every positive condition.
+    /// Untyped here because the shape is a tree; the server names anything it
+    /// cannot read.
+    #[serde(default)]
+    #[schemars(with = "Option<serde_json::Value>")]
+    filter: Option<reports::FilterWire>,
+}
+
+fn mcp_default_true() -> bool {
+    true
+}
+
+/// `get_spaces` parameters. Its own type rather than `GetDoorsParams`: there is
+/// no `building` -- a space cannot be scoped by one -- and there is a `model`,
+/// because this entity's first question is asked per services model.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetSpacesParams {
+    /// Scope the merge to one project id. Omit to merge every stored model.
+    #[serde(default)]
+    project: Option<String>,
+    /// Scope to ONE model id -- the services model whose spaces you want. This
+    /// entity's first question ("does this model have spaces at all") is asked
+    /// per model, which is why this exists here and not on get_rooms.
+    #[serde(default)]
+    model: Option<String>,
+    /// Milestone name from `list_milestones`: serve the spaces snapshots that
+    /// milestone pins instead of each model's latest. Omit for latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Property predicates, ALL of which must hold (AND), one per element:
+    /// ["$enclosure!=enclosed"]. Same operators as get_rooms' filter. An
+    /// unqualified name reads the space's own properties; the intrinsics are
+    /// $id, $name, $level_id, $model_id and $enclosure. Omit for no filter.
+    #[serde(default)]
+    filter: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+/// Parameters for both  and .
+///
+/// One struct, because the two reads take identical arguments -- the entity is
+/// the tool you call, not a field you pass. A second identical type would only
+/// give the two descriptions somewhere to drift apart.
+struct GetDoorsParams {
+    /// Scope the merge to one project id. Omit to merge every stored model.
+    #[serde(default)]
+    project: Option<String>,
+    /// Opaque building key from `list_buildings`. A door's building is the
+    /// building of the room it is attributed to, so a door attributed to no
+    /// room ("homeless") matches no building. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`: serve the doors snapshots that
+    /// milestone pins instead of each model's latest. Omit for latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Property predicates, ALL of which must hold (AND), one per element:
+    /// ["$to_room=2621156", "Mark=29"]. Same operators as get_rooms' filter.
+    /// An unqualified name reads the door's own properties, instance tier then
+    /// family type tier; the intrinsics are $id, $type_id, $type_name,
+    /// $level_id, $from_room and $to_room. A door missing the property never
+    /// matches, negative operators included -- so an external door (null on one
+    /// side) does not match "$to_room!=x" either. Omit for no filter.
+    #[serde(default)]
+    filter: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct AdjacencyParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Opaque building key from `list_buildings`. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`: build the graph from the
+    /// snapshots that milestone pins instead of each model's latest. Omit for
+    /// latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Largest gap between two room boundaries, in decimal feet, still counted
+    /// as a shared wall. **Omit it unless you have a reason not to:** the
+    /// server then derives the tolerance from the project's declared
+    /// `[areas] max_wall_thickness` and the boundary regime the models
+    /// declared — zero when every level in scope is drawn to wall centrelines
+    /// (neighbours touch exactly), the declared thickness otherwise. The
+    /// response echoes the value actually applied. Pass one only to probe a
+    /// different tolerance than the project declares; must be between 0 and 5.
+    #[serde(default)]
+    wall_max: Option<f64>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct StackParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The room to find a stack for.
+    room: String,
+    /// The room's model, only needed when its id exists in several models.
+    #[serde(default)]
+    room_model: Option<String>,
+    /// Milestone name from `list_milestones`. Omit for the latest snapshots.
+    #[serde(default)]
+    milestone: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ReachSourceParams {
+    /// The room the start point is in. A room id is unique only within its model: if two models
+    /// hold it the call is refused and names them, and `model_id` resolves it.
+    room_id: String,
+    /// The model of the room, only needed when `room_id` exists in several.
+    #[serde(default)]
+    model_id: Option<String>,
+    /// Where in the room the start point is, in the plan's coordinates (feet, y up, the frame
+    /// `get_connectivity`'s route points are in): both `x` and `y`, or neither for a point
+    /// inside the room. A point outside the room is moved onto it.
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ReachParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The start points: every cell takes the walk to its NEAREST source.
+    sources: Vec<ReachSourceParams>,
+    /// The length of walk to measure, in mm (30 m is 30000). Required.
+    limit_mm: f64,
+    /// Grid spacing in mm; 1000 when omitted. Finer is slower and larger: a request that
+    /// would hold more than 600000 cells is refused with the count.
+    #[serde(default)]
+    spacing_mm: Option<f64>,
+    /// Treat every open zone's closed walls (its `disconnects` and its `hub`) as open. A
+    /// cut says where a person routes; a coverage question is not bound by it.
+    #[serde(default)]
+    ignore_cuts: bool,
+    /// `exact` (default): the exact walk to each cell. `grid`: Dijkstra over the cells of each
+    /// room, the lattice approximation, a little longer between cells (median 0.2%, worst seen 14%) and
+    /// dependent on `spacing_mm`.
+    #[serde(default)]
+    method: Option<String>,
+    /// Opaque building key from `list_buildings`. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`. Omit for the latest snapshots.
+    #[serde(default)]
+    milestone: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ConnectivityParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Opaque building key from `list_buildings`. Scopes the ROOMS; a door is in
+    /// the graph when its rooms are. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`: build the graph from the rooms and
+    /// doors that milestone pins instead of each model's latest. Omit for latest.
+    #[serde(default)]
+    milestone: Option<String>,
+    /// Property predicates over DOORS, ALL of which must hold (AND). A door that
+    /// fails one is not in the graph, so a route that needed it stops existing:
+    /// ["Fire Rating!=FRL120"] asks for a route that avoids those doors. Same
+    /// grammar as get_doors' filter. Omit for every door.
+    #[serde(default)]
+    door_filter: Vec<String>,
+    /// Start room id. Give BOTH `from` and `to` to get a route, or neither for
+    /// the graph alone. A room id is unique only within its model: if two models
+    /// hold it the call is refused and names them, and `from_model` resolves it.
+    #[serde(default)]
+    from: Option<String>,
+    /// The model of the start room, only needed when `from` exists in several.
+    #[serde(default)]
+    from_model: Option<String>,
+    /// End room id. See `from`.
+    #[serde(default)]
+    to: Option<String>,
+    /// The model of the end room, only needed when `to` exists in several.
+    #[serde(default)]
+    to_model: Option<String>,
+    /// Where in the start room the route begins, in the plan's coordinates (a
+    /// route's `start` and `end` are in the same frame). Both `from_x` and `from_y`,
+    /// or neither for the room's centre. A point outside the room is moved onto
+    /// its outline and `path.note` says so.
+    #[serde(default)]
+    from_x: Option<f64>,
+    #[serde(default)]
+    from_y: Option<f64>,
+    /// Where in the end room the route finishes; same rules as `from_x` and `from_y`.
+    #[serde(default)]
+    to_x: Option<f64>,
+    #[serde(default)]
+    to_y: Option<f64>,
+    /// The width, in mm, of an object that has to make the trip (a bed, a trolley, a
+    /// piece of plant). A door or open wall narrower than this is not passable, so the
+    /// route is the shortest among those it fits through. 0 or omitted checks nothing.
+    #[serde(default)]
+    width_mm: Option<f64>,
+    /// What a door's frame takes off its footprint width to give its clear opening, in
+    /// mm. Omit for the project's setting: a door's width here is an ESTIMATE.
+    #[serde(default)]
+    frame_mm: Option<f64>,
+    /// The height, in mm, of an object that has to make the trip. A door or a ROOM lower
+    /// than this is not passable, so the route is the shortest among those it fits.
+    /// 0 or omitted checks nothing.
+    #[serde(default)]
+    height_mm: Option<f64>,
+    /// The room property holding a room's clear height. Omit for the project's setting.
+    #[serde(default)]
+    height_property: Option<String>,
+    /// `distance` (default, approximate walking distance in feet) or `hops`
+    /// (fewest doors).
+    #[serde(default)]
+    metric: Option<String>,
+    /// How a route runs inside rooms. `door_to_door` (default) takes the exact
+    /// shortest walk inside each room, from door to door (Liu and Zlatanova 2011);
+    /// `centroid` walks from each room's centre to its door to the next centre, the
+    /// original and longer-looking baseline. The answer lists both under `methods`.
+    #[serde(default)]
+    method: Option<String>,
+    /// `summary` (default) returns components, isolated rooms, counts and the
+    /// route. `full` adds every node and edge, which on a large project is over
+    /// a megabyte: ask for it only when you need the graph itself.
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct AreasParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Opaque building key from `list_buildings`. Omit for no building filter.
+    #[serde(default)]
+    building: Option<String>,
+    /// Milestone name from `list_milestones`: measure the snapshots that
+    /// milestone pins instead of each model's latest. Omit for latest.
+    #[serde(default)]
+    milestone: Option<String>,
+}
+
+/// Serialize any service response into a single text content block -- the
+/// same `Serialize` types the HTTP handlers already return as JSON, just
+/// wrapped for MCP instead of `axum::Json`.
+/// `ReportsError` -> `McpError`, the same split `settings_to_mcp_error` makes:
+/// a caller fault carries its message, an internal one is logged and not
+/// echoed.
+fn reports_to_mcp_error(err: roommate::reports_api::ReportsError) -> McpError {
+    use roommate::reports_api::ReportsError;
+    match err {
+        ReportsError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no saved reports to read".to_string(),
+            None,
+        ),
+        ReportsError::NotFound(msg) | ReportsError::Invalid(msg) => McpError::invalid_params(msg, None),
+        ReportsError::Internal(e) => {
+            tracing::error!("saved reports error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn connections_to_mcp_error(err: roommate::connections::ConnectionsError) -> McpError {
+    use roommate::connections::ConnectionsError;
+    match err {
+        ConnectionsError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no connections to read".to_string(),
+            None,
+        ),
+        ConnectionsError::Invalid(msg) | ConnectionsError::Conflict(msg) => McpError::invalid_params(msg, None),
+        ConnectionsError::Internal(e) => {
+            tracing::error!("connections error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn blueprints_to_mcp_error(err: roommate::blueprints::BlueprintError) -> McpError {
+    use roommate::blueprints::BlueprintError;
+    match err {
+        BlueprintError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no blueprints to read".to_string(),
+            None,
+        ),
+        BlueprintError::Invalid(msg) | BlueprintError::Conflict(msg) | BlueprintError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        BlueprintError::Internal(e) => {
+            tracing::error!("blueprints error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn tasks_to_mcp_error(err: roommate::tasks::TaskError) -> McpError {
+    use roommate::tasks::TaskError;
+    match err {
+        TaskError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no tasks to read".to_string(),
+            None,
+        ),
+        TaskError::Invalid(msg) | TaskError::Conflict(msg) | TaskError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        TaskError::Internal(e) => {
+            tracing::error!("tasks error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn tag_rules_to_mcp_error(err: roommate::tag_rules::TagRuleError) -> McpError {
+    use roommate::tag_rules::TagRuleError;
+    match err {
+        TagRuleError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no tag rules to read".to_string(),
+            None,
+        ),
+        TagRuleError::Invalid(msg) | TagRuleError::NotFound(msg) => McpError::invalid_params(msg, None),
+        TagRuleError::Internal(e) => {
+            tracing::error!("tag rules error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn sheets_to_mcp_error(err: roommate::sheets::SheetError) -> McpError {
+    use roommate::sheets::SheetError;
+    match err {
+        SheetError::NotFileBacked => McpError::internal_error(
+            "this MCP server was not started with --project-settings, so it has no sheets to read".to_string(),
+            None,
+        ),
+        SheetError::Invalid(msg) | SheetError::Conflict(msg) | SheetError::NotFound(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        SheetError::Internal(e) => {
+            tracing::error!("sheets error: {e:#}");
+            McpError::internal_error("internal error".to_string(), None)
+        }
+    }
+}
+
+fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string(value)
+        .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
+    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+}
+
+/// Minimal percent-encoding for URL path/query components. The values that
+/// pass through here are constrained by construction — project ids are
+/// path-safe (`is_path_safe_component`) and `taken_at` is RFC3339, whose only
+/// URL-reserved character is the `+` of a numeric offset — so a tiny
+/// encode-everything-non-unreserved loop beats a dependency.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Which reference source a reference tool call means.
+///
+/// The tools used to hardcode `"drofus"`, which quietly made every other
+/// configured source unreachable over MCP. Making `source` *required* instead
+/// would have been the honest fix and a bad trade: the overwhelmingly common
+/// project configures exactly one source, and an agent should not have to make
+/// a `get_project_settings` round trip to learn a name the server can infer.
+///
+/// So: an explicit `source` always wins. Omitted, it resolves to the project's
+/// sole configured source. Ambiguity is refused rather than guessed — picking
+/// "the first one" would silently answer about the wrong dataset, and the
+/// error names the actual choices so the retry is obvious.
+fn resolve_source(state: &Shared, project_id: &str, requested: Option<&str>) -> Result<String, McpError> {
+    if let Some(name) = requested {
+        return Ok(name.to_string());
+    }
+    let registry = state.settings();
+    let names: Vec<&String> = registry
+        .settings_for(project_id)
+        .map(|bundle| bundle.reference.keys().collect())
+        .unwrap_or_default();
+    match names.as_slice() {
+        [only] => Ok((*only).clone()),
+        [] => Err(McpError::invalid_params(
+            format!("project '{project_id}' configures no reference source"),
+            None,
+        )),
+        many => Err(McpError::invalid_params(
+            format!(
+                "project '{project_id}' configures {} reference sources ({}); pass `source` to say which",
+                many.len(),
+                many.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+            None,
+        )),
+    }
+}
+
+/// `ServiceError` -> `McpError`: an internal failure becomes `internal_error`,
+/// a malformed request `invalid_params` -- the MCP counterpart of the HTTP
+/// adapter's 500/400 split, mapped here in the adapter rather than in the
+/// domain layer.
+fn to_mcp_error(err: ServiceError) -> McpError {
+    match err {
+        ServiceError::Internal(e) => {
+            tracing::error!("internal service error: {e:#}");
+            McpError::internal_error(e.to_string(), None)
+        }
+        // Caller-addressable, and worth passing verbatim: the message names
+        // the offending predicate, which is what lets the client fix it
+        // instead of guessing why a result was empty.
+        ServiceError::Invalid(msg) => McpError::invalid_params(msg, None),
+    }
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CompareMilestonesParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The baseline milestone name (from `list_milestones`) every other is
+    /// compared against.
+    baseline: String,
+    /// The milestone names to compare against the baseline. Any equal to the
+    /// baseline is skipped.
+    #[serde(default)]
+    others: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ReferenceSourceParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Which reference source, e.g. "drofus". Omit when the project
+    /// configures exactly one — see `resolve_source`.
+    #[serde(default)]
+    source: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetReferenceSnapshotParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Which reference source, e.g. "drofus". Omit when the project
+    /// configures exactly one — see `resolve_source`.
+    #[serde(default)]
+    source: Option<String>,
+    /// A snapshot id from `list_reference_snapshots`. Omit for the latest.
+    #[serde(default)]
+    taken_at: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct UploadReferenceParams {
+    /// The project id, as returned by `list_projects`. Its settings must
+    /// declare `[sources.reference.<source>] type = "upload"`.
+    project_id: String,
+    /// Which reference source to upload for, e.g. "drofus". Omit when the
+    /// project configures exactly one — see `resolve_source`.
+    #[serde(default)]
+    source: Option<String>,
+    /// Absolute path to the CSV export to upload.
+    path: String,
+    /// Snapshot id (RFC3339 UTC date-time) to store the upload under. Omit
+    /// to let the server mint one; the result reports the resolved id.
+    #[serde(default)]
+    taken_at: Option<String>,
+}
+
+// `tool_router` is read by the `#[tool_handler]`-generated dispatch code,
+// but rustc's dead-code analysis doesn't see through that -- same false
+// positive the rmcp SDK's own examples suppress this way.
+#[allow(dead_code)]
+#[derive(Clone)]
+struct RoommateMcp {
+    state: Shared,
+    server_url: String,
+    /// Whether `upload_reference` may run. On for a client-spawned process (it is the
+    /// user's own), off by default over HTTP, where any caller could use it.
+    allow_upload: bool,
+    tool_router: ToolRouter<RoommateMcp>,
+}
+
+#[tool_router]
+impl RoommateMcp {
+    fn new(state: Shared, server_url: String) -> Self {
+        Self { state, server_url, allow_upload: true, tool_router: Self::tool_router() }
+    }
+
+    fn with_upload(mut self, allow: bool) -> Self {
+        self.allow_upload = allow;
+        self
+    }
+
+    /// Lists every project with at least one stored model -- see
+    /// `service::projects::list_projects`.
+    #[tool(description = "List every project with at least one stored model")]
+    fn list_projects(&self) -> Result<CallToolResult, McpError> {
+        let result = projects::list_projects(&self.state).map_err(to_mcp_error)?;
+        json_result(&result)
+    }
+
+    /// Lists the distinct "Building" classification values for one project
+    /// -- see `service::projects::list_buildings`.
+    #[tool(description = "List the distinct Building classification values found in one project's rooms")]
+    fn list_buildings(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let result = projects::list_buildings(&self.state, &p.project_id).map_err(to_mcp_error)?;
+        json_result(&result)
+    }
+
+    /// Merges every stored model's levels and rooms, optionally scoped by
+    /// project and building -- see `service::rooms::assemble_rooms`. The
+    /// service's `None` ("nothing has ever been pushed" -- the HTTP 204 case)
+    /// has no MCP status-code equivalent, so it becomes a short plain-text
+    /// answer instead of a JSON body; an LLM client reads either just fine.
+    #[tool(
+        description = "Fetch merged rooms and levels across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
+                          A project whose hierarchy has no 'Building' tier matches nothing under a building filter (check list_buildings' tier_configured before filtering); \
+                          under a milestone filter, models are served from the snapshots that milestone pins instead of their latest. \
+                          Prefer the 'filter' parameter over fetching every room and matching client-side -- it answers property questions ('which rooms are Department = Cardiology?') \
+                          server-side, against the same canonical property names the rest of the settings use. Note that a room missing the filtered property never matches, \
+                          negative operators included, so an empty result can mean 'no room has that property' rather than 'no room has that value'. \
+                          IMPORTANT -- results are scoped to ONE Revit phase per model, not the whole model: each model's rooms were filtered at export to the phase named in \
+                          'phase_by_model' (project id -> model id -> phase). This is a partial view of the building by design, so do not read it as a complete model. \
+                          Different models of one project CAN be on different phases, in which case the merged result spans two phases -- compare the values in 'phase_by_model' \
+                          before aggregating across models, and see get_validation's 'phases.disagree' for that as a reported finding. A null phase means a model pushed before \
+                          phasing existed, whose rooms were never filtered to any phase at all."
+    )]
+    fn get_rooms(&self, Parameters(p): Parameters<GetRoomsParams>) -> Result<CallToolResult, McpError> {
+        // Parsed here, in the adapter holding the raw strings, then passed
+        // down as a domain type -- `service` never sees the filter syntax.
+        // The known-source vocabulary comes from the live registry, not a
+        // fixed list -- see `handlers::get_rooms`'s matching call.
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = rooms::RoomScope {
+            project: p.project.as_deref(),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+        };
+        let result = rooms::assemble_rooms(&self.state, &scope).map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Merges every stored model's doors, optionally scoped -- see
+    /// `service::openings::assemble_openings`. Same `None` -> plain-text handling as
+    /// `get_rooms`, for the same reason.
+    #[tool(
+        description = "Fetch merged doors across stored models, optionally scoped by project id, milestone name, and property filter. Each door carries its own instance \
+                          properties AND its family type's properties, its footprint, its level, and BOTH room references: 'from_room' and 'to_room'. \
+                          The family-type properties are sent ONCE per distinct bag, in the top-level 'type_property_sets' array: each door names its row in \
+                          'type_properties_ref', an index into THIS response only. \
+                          A null on one side is an EXTERNAL door -- a normal state, not missing data. Use '$from_room=<room id>' or '$to_room=<room id>' in the filter to ask \
+                          which doors touch a given room; the other intrinsics are $id, $type_id, $type_name and $level_id, and any other unqualified name reads the door's \
+                          properties, INSTANCE tier first then the family TYPE tier (a blank instance value does not hide the type's). \
+                          Room references are model-scoped: a room id is unique only within one model, so resolve 'from_room'/'to_room' against rooms of the SAME 'model_id' \
+                          this door carries. get_validation's 'doors' section reports the ones that resolve to nothing. \
+                          Doors carry no joined reference sources yet, so a source-prefixed filter (e.g. 'drofus.') matches no door rather than erroring. \
+                          Each door also carries 'owner_rooms': the room(s) it is attributed to under the project's [doors] room_attribution policy, whose default is 'the room it opens                           into, else the room it opens from'. An EMPTY owner_rooms means the door is homeless -- a reported state, not missing data -- and a homeless door matches                           no 'building' filter. It is a list because the 'both' policy attributes a door between two rooms twice. \
+                          IMPORTANT -- like get_rooms, results are scoped to ONE Revit phase per model, named in 'phase_by_model'. Do not read them as a complete door schedule."
+    )]
+    fn get_doors(&self, Parameters(p): Parameters<GetDoorsParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = openings::OpeningScope {
+            project: p.project.as_deref(),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+            // Every storey: a storey scope is how the viewer narrows its polls to
+            // what it is drawing, and a tool caller is drawing nothing.
+            storeys: None,
+        };
+        let result = openings::assemble_openings::<roommate::contract::DoorPayload>(
+            &self.state,
+            openings::OpeningKind::Doors,
+            &scope,
+        )
+        .map_err(to_mcp_error)?
+        .map(openings::DoorsResult::from_assembled);
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no doors have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    #[tool(
+        description = "Fetch merged windows across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
+                          The SAME record shape as get_doors -- instance and family-type properties, footprint, level, both room references, owner_rooms -- because a window \
+                          and a door are the same record in this contract. Every filter intrinsic get_doors accepts works here unchanged. \
+                          WHAT DIFFERS IS THE DATA, and reading it like a door schedule will mislead you. A null on one side is an EXTERNAL window, which for doors is the \
+                          exception and for windows is most of a facade. A window with null on BOTH sides is normal in a facade or envelope model: such a file links its \
+                          interiors rather than containing them, and Revit cannot resolve a room across a link -- measured on a real facade file, 0 of 158 windows carried a \
+                          reference on either side, and so did 0 of its 191 doors. Do NOT report that as missing data. \
+                          Consequently owner_rooms is empty far more often than for doors, and an empty owner_rooms means homeless -- a reported state, and a homeless window \
+                          matches no 'building' filter. If a project cares about window-to-room attribution in such a model it must set [windows] room_resolution, which \
+                          derives the rooms geometrically; get_validation's openings.windows.room_resolution echoes whether it ran, and 'off' is NOT the same as clean. \
+                          Room references are model-scoped: a room id is unique only within one model, so resolve them against rooms of the SAME 'model_id'. \
+                          The windows contract is schema_version 1 and moves independently of doors' 2; the payload's element list is keyed 'windows'. \
+                          IMPORTANT -- like get_rooms and get_doors, results are scoped to ONE Revit phase per model, named in 'phase_by_model'. Not a complete window schedule."
+    )]
+    fn get_windows(&self, Parameters(p): Parameters<GetDoorsParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = openings::OpeningScope {
+            project: p.project.as_deref(),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+            // Every storey: a storey scope is how the viewer narrows its polls to
+            // what it is drawing, and a tool caller is drawing nothing.
+            storeys: None,
+        };
+        let result = openings::assemble_openings::<roommate::contract::WindowPayload>(
+            &self.state,
+            openings::OpeningKind::Windows,
+            &scope,
+        )
+        .map_err(to_mcp_error)?
+        .map(openings::WindowsResult::from_assembled);
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no windows have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    #[tool(
+        description = "Fetch merged FF&E (furniture, fixtures and equipment) across stored models, optionally scoped by project id, building key, milestone name, \
+                          and property filter. A DIFFERENT record from get_doors/get_windows, and reading it as one will mislead you. \
+                          Its family-type properties are sent as get_doors sends them: ONCE per distinct bag in the top-level 'type_property_sets' array, each item \
+                          naming its row in 'type_properties_ref'. \
+                          An item sits IN one room, so it carries a single 'room' and 'owner_rooms' is a list of AT MOST ONE -- there is no from_room/to_room, no swing, \
+                          no through-wall direction, and no attribution policy, because there are no sides to choose between. Empty owner_rooms means homeless: an item in \
+                          a corridor void, a shaft or outside the envelope, which is an ordinary reported state, and a homeless item matches no 'building' filter. \
+                          'owner_spaces' is a SEPARATE, extractor-authored list, populated only when the push that sent this item identified it against Revit Spaces \
+                          rather than Rooms -- the entry a services model with no Room elements uses. It is unrelated to 'owner_rooms'/'building': nothing server-side \
+                          joins it to anything, there is no geometric fallback, and a 'building' filter cannot see it. In practice a given item carries one or the other, \
+                          never both. \
+                          Each item carries 'category' (the Revit category it was collected under, e.g. OST_Furniture) -- filter on it with $category, which is usually the \
+                          first question worth asking. There is no equivalent on any other entity. \
+                          'loops' is EMPTY on every item today: the upstream exporter carries no footprint for FF&E yet, so an item is placed by 'insertion_point' and \
+                          oriented by 'facing'. Absent geometry is expected and is NOT missing data. \
+                          COMPONENTS: a family instance nested inside another (a joinery handle inside a casework run) carries 'super_component_id'. By default these are \
+                          EXCLUDED from this response and counted in 'excluded_components' -- on one real model 179 of 647 instances were components, nearly all hardware. \
+                          If excluded_components is large that is normal, not a fault. A project may set [ffe] nested_components = \"include\", and then they are returned \
+                          with is_component true. Do NOT infer that a component is not a real item from its room or its Mark: components DO name rooms (97.8% of them on \
+                          the measured model), and only the absence of a Mark weakly distinguishes them. \
+                          Room references are model-scoped: a room id is unique only within one model, so resolve them against rooms of the SAME 'model_id'. \
+                          The FF&E contract is schema_version 1 and moves independently of rooms', doors' and windows'; the payload's element list is keyed 'ffe'. \
+                          IMPORTANT -- like get_rooms, get_doors and get_windows, results are scoped to ONE Revit phase per model, named in 'phase_by_model'. \
+                          Not a complete FF&E schedule."
+    )]
+    fn get_ffe(&self, Parameters(p): Parameters<GetDoorsParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = items::ItemScope {
+            project: p.project.as_deref(),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+            // Every storey: a storey scope is how the viewer narrows its polls to
+            // what it is drawing, and a tool caller is drawing nothing.
+            storeys: None,
+        };
+        match items::assemble_items(&self.state, &scope).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no FF&E has been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    #[tool(
+        description = "Fetch merged SPACES across stored models, optionally scoped by project id, model id, milestone name, and property filter. \
+                          A Revit SPACE is an MEP concept and is NOT a room: spaces live in the services models (mechanical, hydraulic, electrical, fire) while rooms live in \
+                          the architectural ones, and one services file per service means the SAME room number legitimately names a space in each of them. Two spaces sharing \
+                          a number are therefore two disciplines, NOT a duplicate -- always read 'model_id' before concluding anything about duplication. \
+                          A space carries NO room reference of any kind: it is matched to a room by a user-chosen property value, across models, and that match is not \
+                          performed by this tool. There is no from_room/to_room, no owner_rooms and no room id to resolve. \
+                          Every space carries 'enclosure', one of enclosed / unenclosed / unmeasured, and it is the most useful thing here. 'unenclosed' means the model says \
+                          the space bounds nothing -- a MODEL defect somebody wants to know about. 'unmeasured' means Revit reported an area and the pipeline produced no \
+                          polygon anyway -- a PIPELINE defect. Both carry empty 'loops', which is why they are distinguished on the wire rather than inferred from geometry. \
+                          Filter with $enclosure, e.g. $enclosure!=enclosed to list every defective space; also $id, $name, $level_id and $model_id. \
+                          An EMPTY result for a model is meaningful and is not an error: it means that services model was audited and holds no spaces. That is a different \
+                          fact from the model never having been pushed, which returns no data at all. \
+                          The spaces contract is schema_version 1 and moves independently of every other entity's; the payload's element list is keyed 'spaces'. \
+                          IMPORTANT -- results are scoped to ONE Revit phase per model, named in 'phase_by_model', and on a real project the disciplines DO NOT agree on the \
+                          phase name. A model reporting a different phase from its siblings is ordinary; check phase_by_model before reading a low count as missing data."
+    )]
+    fn get_spaces(&self, Parameters(p): Parameters<GetSpacesParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let scope = spaces::SpaceScope {
+            project: p.project.as_deref(),
+            model: p.model.as_deref(),
+            milestone: p.milestone.as_deref(),
+            filter: Some(&filter).filter(|f| !f.is_empty()),
+            // Every storey: a storey scope is how the viewer narrows its polls to
+            // what it is drawing, and a tool caller is drawing nothing.
+            storeys: None,
+        };
+        match spaces::assemble_spaces(&self.state, &scope).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no spaces have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Builds one tabular report -- see `service::reports::build_report`.
+    #[tool(
+        description = "Build a tabular report over one entity: a flat schedule, or that entity BY ROOM. Returns `columns` (each with the side it came from -- room, element or join) and `rows` of flat string cells, plus `total_rows` before any `limit` so 'first N of M' is honest. ONLY THE COLUMNS ASKED FOR ARE READ, which is the point of this tool over the entity endpoints: /ffe can be over a hundred MB per storey on a large project and a report of it is a few. A BY-ROOM REPORT NEVER RECOMPUTES THE ATTRIBUTION -- which room a ceiling lies over, which room owns a door, which room an item sits in are read off the entity's own answer, where the policy, the tolerance and the model scope already applied. An element attributed to several rooms appears once per room (a ceiling over three rooms is three rows), so element columns must not be summed across rows; only the join's own numeric measures add up, and `overlap_area` is the one that means anything added up. AN UNMATCHED ROW IS A REPORTED STATE: `include_unattributed` (on by default) lists elements no room matched -- every external door, every facade-package window -- with the room columns empty, and `include_rooms_without` lists rooms nothing matched. A 204 means nothing of that entity has ever been pushed, which is a different answer from a report with no rows."
+    )]
+    fn build_report(&self, Parameters(p): Parameters<BuildReportParams>) -> Result<CallToolResult, McpError> {
+        let Some(entity) = reports::Entity::parse(&p.entity) else {
+            return Err(McpError::invalid_params(format!("unknown entity {:?} for a report", p.entity), None));
+        };
+        let shape = match p.shape.as_deref() {
+            None | Some("per_match") => reports::Shape::PerMatch,
+            Some("per_room") => reports::Shape::PerRoom,
+            Some(other) => {
+                return Err(McpError::invalid_params(
+                    format!("unknown shape {other:?} -- expected per_match or per_room"),
+                    None,
+                ))
+            }
+        };
+        let filter = match &p.filter {
+            None => None,
+            Some(wire) => {
+                let known = self.state.settings().known_reference_sources();
+                Some(wire.parse(&known).map_err(|msg| McpError::invalid_params(msg, None))?)
+            }
+        };
+        let definition = reports::ReportDefinition {
+            entity,
+            by_room: p.by_room,
+            columns: p.columns,
+            room_columns: p.room_columns,
+            measures: p.measures,
+            shape,
+            include_rooms_without: p.include_rooms_without,
+            include_unattributed: p.include_unattributed,
+            limit: p.limit,
+            filter,
+        };
+        let scope = reports::ReportScope {
+            project: Some(&p.project),
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+        };
+        match reports::build_report(&self.state, &scope, &definition).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "no {} have been pushed to this server yet",
+                p.entity
+            ))])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// One project's saved reports -- see `reports_api::list_reports`.
+    #[tool(
+        description = "List the reports somebody saved for one project: id, name, entity, and whether it is a by-room report. A saved report is a request kept rather than a setting -- deleting one changes no other answer in this system -- so these live as JSON documents beside the project settings. Pair with get_saved_report and build_report to run one."
+    )]
+    fn list_saved_reports(&self, Parameters(p): Parameters<SavedReportsParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let listed = reports_api::list_reports(&dir, &p.project).map_err(reports_to_mcp_error)?;
+        json_result(&listed)
+    }
+
+    /// One saved report, whole -- see `reports_api::get_report`.
+    #[tool(
+        description = "Read one saved report by id: the whole definition, which is exactly the request build_report takes (entity, by_room, columns, room_columns, measures, shape, the unmatched switches, the filter). Running a saved report is reading it here and passing its fields to build_report; there is no second shape in between."
+    )]
+    fn get_saved_report(&self, Parameters(p): Parameters<SavedReportParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let report = reports_api::get_report(&dir, &p.project, &p.report).map_err(reports_to_mcp_error)?;
+        json_result(&report)
+    }
+
+    /// What a report over one entity may name -- see
+    /// `service::reports::column_catalog`.
+    #[tool(
+        description = "List what a report over one entity can put in a column or a filter, for one project: the entity's own property names with the value type Revit stated for each, its `$intrinsics`, any joined reference labels as `source.label`, the room side for a by-room report, and the measures the join produces. READ FROM EACH SNAPSHOT'S PROPERTY DICTIONARY, not by assembling the entity, so it costs a tail read rather than a parse. A name it offers is one SOME element carries -- it does not promise every element has it, which is why a cell can still come back empty. A snapshot stored before the property codec has no dictionary and contributes no names; its properties are still filterable by name."
+    )]
+    fn list_report_columns(&self, Parameters(p): Parameters<ReportColumnsParams>) -> Result<CallToolResult, McpError> {
+        let Some(entity) = reports::Entity::parse(&p.entity) else {
+            return Err(McpError::invalid_params(format!("unknown entity {:?} for a report", p.entity), None));
+        };
+        json_result(&reports::column_catalog(&self.state, Some(&p.project), entity))
+    }
+
+    /// Serves one project's ceilings with the rooms each lies over -- see
+    /// `service::surfaces::assemble_surfaces`.
+    #[tool(
+        description = "List one project's ceilings, each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit ceiling has no room parameter and a room has no ceiling parameter, so every entry in a ceiling's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet plus `mean_width` and two fractions that answer different questions — `fraction_of_element` (how much of this ceiling is in that room) and `fraction_of_room` (how much of that room this ceiling covers, which is the coverage question a finishes take-off asks). `rooms` is a LIST because a ceiling can lie over several, ordered largest overlap first, so `rooms[0]` is a usable single owner. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR: a ceiling over a stairwell, an external soffit, or one on a level carrying no rooms legitimately belongs to nothing — 8 of House A's 30 do. A ceiling with empty `loops` is one duHast could not measure; it is exported rather than dropped so that 'no such ceiling' and 'a ceiling nobody could measure' stay distinguishable, and it attributes to nothing. Attribution ignores only overlaps narrower than 10 mm mean width, which is imprecision (edges that merely touch, a finish a few mm past a wall line), not a judgement about size: EVERY real overlap is listed, including a sliver where a large ceiling grazes a neighbouring room and a degenerate exported footprint. To ignore slivers, filter on `fraction_of_element`, `fraction_of_room` or `mean_width` -- the read deliberately does not. Type properties are sent ONCE per distinct bag in the top-level `type_property_sets` array; each ceiling names its row in `type_properties_ref`."
+    )]
+    fn get_ceilings(&self, Parameters(p): Parameters<GetSurfacesParams>) -> Result<CallToolResult, McpError> {
+        let scope =
+            surfaces::SurfaceScope { project: p.project.as_deref(), milestone: p.milestone.as_deref(), storeys: None };
+        match surfaces::assemble_surfaces::<CeilingPayload>(&self.state, &scope).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no ceilings have been pushed to this server yet",
+            )])),
+            Some(assembled) => json_result(&surfaces::CeilingsResult::from(assembled)),
+        }
+    }
+
+    /// Serves one project's floors with the rooms each lies over -- the
+    /// ceilings read under its own key.
+    #[tool(
+        description = "List one project's floors (Revit category Floors), each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit floor has no room parameter, so every entry in a floor's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet, `fraction_of_element` (how much of this floor is in that room), `fraction_of_room` (how much of that room this floor covers -- the finishes take-off question) and `mean_width` (2 x overlap area / overlap perimeter, in feet). `rooms` is a LIST ordered largest overlap first, so `rooms[0]` is a usable single owner. The category holds structural slabs AND finish floors AND balconies; the `Structural` instance property tells them apart, and a room can legitimately lie on both a slab and a finish floor -- `height_offset` (feet above the level, to the TOP of the floor) separates them. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR. A floor with empty `polygons` is one duHast could not measure and attributes to nothing. Attribution is the ceilings rule exactly: only overlaps narrower than 10 mm mean width are ignored, as imprecision. EVERY real overlap is listed, so a strip of floor reaching under a wall into a neighbour appears behind the room the floor serves, with a small `fraction_of_room` and a `mean_width` under a wall's thickness -- filter on those to ignore it. The room association is model-scoped: floors in one Revit document are never attributed to rooms in another. Type properties are sent ONCE per distinct bag in the top-level `type_property_sets` array; each floor names its row in `type_properties_ref`."
+    )]
+    fn get_floors(&self, Parameters(p): Parameters<GetSurfacesParams>) -> Result<CallToolResult, McpError> {
+        let scope =
+            surfaces::SurfaceScope { project: p.project.as_deref(), milestone: p.milestone.as_deref(), storeys: None };
+        match surfaces::assemble_surfaces::<FloorPayload>(&self.state, &scope).map_err(to_mcp_error)? {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no floors have been pushed to this server yet",
+            )])),
+            Some(assembled) => json_result(&surfaces::FloorsResult::from(assembled)),
+        }
+    }
+
+    /// Lists one project's milestones (named dated snapshot pins) -- see
+    /// `service::milestones::list_milestones`.
+    #[tool(
+        description = "List one project's milestones: named dates with data snapshots pinned to them, newest first — each carries its model-pin count and `reference_snapshots`, a map of reference source name to the snapshot id that milestone pins for it (absent sources are joined at their current data). Pass a milestone's name to get_rooms to view the project as captured at that milestone, rooms AND every reference source."
+    )]
+    fn list_milestones(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let result = milestones::list_milestones(&self.state, &p.project_id).map_err(to_mcp_error)?;
+        json_result(&result)
+    }
+
+    /// Compares N milestones against a baseline for one project -- see
+    /// `service::comparison::compare_milestones`. A project with no
+    /// `comparison_key` configured returns `comparison_key_configured: false`.
+    #[tool(
+        description = "Compare milestones for one project: one baseline milestone versus each of the others (a star diff, not all-pairs). \
+                          Reports rooms added and removed relative to the baseline, and per-property differences on rooms present in both, \
+                          over the project's configured comparison property set. Rooms are matched by the project's user-defined comparison_key \
+                          property (its own setting, NOT any reference source's link property); if none is configured the result is comparison_key_configured: false. \
+                          A separate 'doors' section reports the same diff over the project's DOORS -- doors_added, doors_removed and changed_doors, each changed door carrying \
+                          its model_id because a door id is unique only within one model. Doors are configured independently, by [doors] comparison_key and [doors] \
+                          comparison_properties, so a project can compare rooms and not doors or the reverse: check 'doors.comparison_key_configured' separately from the \
+                          top-level one. Comparing '$to_room'/'$from_room' is how a door that MOVED between rooms shows up; losing a room reference entirely is reported as a \
+                          missing property rather than a difference against an empty value. Doors come from the snapshots a milestone pins in door_attachments, which are \
+                          separate pins from the rooms ones."
+    )]
+    fn compare_milestones(
+        &self,
+        Parameters(p): Parameters<CompareMilestonesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result =
+            comparison::compare_milestones(&self.state, &p.project_id, &p.baseline, &p.others).map_err(to_mcp_error)?;
+        json_result(&result)
+    }
+
+    /// Lists every stored snapshot id for one project, grouped per model --
+    /// see `service::snapshots::list_project_snapshots`.
+    #[tool(
+        description = "List every stored snapshot id (RFC3339 UTC taken_at) for one project, grouped per model, each group carrying its latest"
+    )]
+    fn list_snapshots(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let result = snapshots::list_project_snapshots(&self.state, &p.project_id).map_err(to_mcp_error)?;
+        json_result(&result)
+    }
+
+    /// The latest snapshot id for one model -- see
+    /// `service::snapshots::latest_snapshot`. The service's `None` (the HTTP
+    /// 404 case) becomes a short plain-text answer, same convention as
+    /// `get_rooms`' empty-store case.
+    #[tool(description = "Get the latest snapshot id (taken_at) for one model of one project")]
+    fn get_latest_snapshot(&self, Parameters(p): Parameters<ModelIdParams>) -> Result<CallToolResult, McpError> {
+        let result = snapshots::latest_snapshot(&self.state, &p.project_id, &p.model_id).map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots stored for that project/model",
+            )])),
+            Some(latest) => json_result(&latest),
+        }
+    }
+
+    /// The quarantined push waiting on one model -- see
+    /// `service::snapshots::pending_snapshot`. Read-only: activating one is a
+    /// mutation and stays HTTP-only, same line ingest draws.
+    #[tool(
+        description = "Get the push waiting to be activated for one model, if any. A model's Revit phase is fixed by its first phased push, so a push declaring a different phase is stored but NOT made live -- nothing reads it until someone activates it over HTTP. Returns its snapshot id, the phase it would move the model to ('phase'), the phase the model is on now ('current_phase'), and its room count."
+    )]
+    fn get_pending_snapshot(&self, Parameters(p): Parameters<ModelIdParams>) -> Result<CallToolResult, McpError> {
+        let result = snapshots::pending_snapshot(&self.state, &p.project_id, &p.model_id).map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no pending push for that project/model",
+            )])),
+            Some(pending) => json_result(&pending),
+        }
+    }
+
+    /// Runs the reference reconciliation QA report for one project -- see
+    /// `service::validation::compute_project_validation`.
+    #[tool(
+        description = "Run the reference reconciliation validation report for one project. Returns one report per configured reference source under 'sources' (keyed by source name, each with its own link_property, discrepancy lists, field coverage and 'error_rooms' room_id -> number/name/link value for the flagged rooms), plus a cross-source 'discrepancies' summary for a one-shot count. \
+                       Unmatched is reported in BOTH directions and they mean different things: 'rooms_unmatched' lists room ids whose link value finds no record, while 'reference_unmatched' lists the source's own link values that no room resolves to (bare values, not room ids -- there is no room, which is the finding). A value shared by several rooms counts as matched and is reported once under 'duplicate_link_values' instead. \
+                       Check 'link_property_absent_everywhere' BEFORE reading either list: when true, the source's link property names no property on any room in the project, so the join never ran -- every room appears under 'rooms_missing_link_value' and every row under 'reference_unmatched' for that one reason, and neither list says anything about the data. It is a settings fault (a mistyped link property, or one needing a [[builtin_properties]] alias to the Revit property that holds it), not a data-quality finding, and reporting the lists as findings would be wrong. False when the property exists but is blank everywhere -- that is an ordinary data gap. \
+                       An empty 'sources' map means the project reconciles against nothing -- normal, not an error. \
+                       Separately from any reference source, 'phases' reports which Revit phase each of the project's models was filtered to ('by_model') and whether they \
+                       disagree ('disagree'). A true 'disagree' means /rooms is merging rooms from two different phases into one plan that will nonetheless look complete; \
+                       an unphased model (null) counts as a distinct value there, since its rooms were never filtered at all. This is reported, never rejected. \
+                       Also separate from any reference source, 'openings' reports whether the project's openings link to rooms that exist. It is a MAP KEYED BY ENTITY -- 'doors' and 'windows' -- and every report in it has the identical shape, so read one and you can read them all. An entity with nothing pushed still appears, reporting zero: absent would be ambiguous with 'not supported'. \n                       Per report: 'without_room_reference' lists openings naming no room on either side, and 'unresolved_room' lists room references naming a room the opening's own model does not have (one entry per dangling side, each carrying model_id, opening_id, side and room_id). References resolve WITHIN one model, because room ids are unique only within a model. \n                       An opening with a room on exactly one side is EXTERNAL -- normal, counted under 'external', and deliberately not a discrepancy. For doors that is the exception; for windows in a facade model it is the rule, and a facade file that links its interiors reports EVERY opening under 'without_room_reference' because Revit cannot see a room across a link. Read 'room_resolution' before treating that as a data fault: 'off' means the geometric fallback never ran, which is not the same as clean. \n                       Each report has its own 'discrepancies', NOT included in the top-level 'discrepancies', which counts reference sources only. \n                       'room_attribution' echoes the policy deciding which room owns an opening (default: the room it opens into, else the one it opens from, else homeless); \n                       'unattributed' lists openings that name a room the policy declines to use, which is a policy consequence rather than a data gap and is empty under the default. \n                       'room_reference_mismatches' lists openings whose AUTHORED room reference disagrees with the attributed room -- reported, never corrected, since the geometry and \n                       the modeller are making different claims. It is empty when that entity's room_reference_property is unset, which means the check is OFF, not clean. \n\
+                       Beside 'openings' is 'items', keyed 'ffe', which reports the same question for FF&E and is a DIFFERENT SHAPE because an item is a different record. \
+                       There is no 'external' and no 'unattributed': an item sits in ONE room, so there are no sides to be external on and no attribution policy to decline anything. \
+                       'without_room' lists items naming no room, and unlike the doors report it is deliberately NOT counted in 'discrepancies' -- an item outside every room is very \
+                       often correct (a bollard, external furniture, plant on a roof), and on a measured model it was 75 of 647. Treat a large 'without_room' as information, not a fault. \
+                       'excluded_components' counts items this project's [ffe] nested_components policy removed from BOTH this report and /ffe, and 'nested_components' echoes that \
+                       policy. A large value is normal: 179 of 647 on the measured model, nearly all hardware nested inside other families. \
+                       Its 'discrepancies' counts only unresolved_room, room_reference_mismatches, phase_drift and room_geometry_mismatches, and like the openings reports it is NOT \
+                       included in the top-level 'discrepancies'. \
+                       Finally 'spaces' reconciles the project's SPACES against its ROOMS, and it is a third shape again -- not a map, because there is one such report per project. \
+                       Read it in two halves. The PRESENCE half needs no configuration and is always populated: 'models_not_audited' names models the project knows that have no \
+                       spaces snapshot at all, 'models_without_spaces' names models that pushed one holding ZERO spaces. Those two are NOT the same finding -- the second means \
+                       the model was checked and genuinely has none, which is usually what somebody wants to know. A model that has never pushed anything appears in NEITHER, \
+                       which is a stated limitation rather than an oversight. 'enclosure' counts enclosed / unenclosed / unmeasured across the project; unenclosed is a model \
+                       defect and unmeasured a pipeline one. \
+                       The MATCH half is empty unless [spaces] comparison_key is set -- check 'comparison_key' before reading any empty list as clean, because empty means \
+                       nothing was attempted. 'by_model' has one row per SERVICES model, each with matched / unmatched / without_key / ambiguous_keys. Ambiguity is counted \
+                       WITHIN one model only: one services file per service means the same room number legitimately names a space in each of them, so the same key in four \
+                       models is four disciplines and NOT a duplicate. 'rooms_without_space' is the other direction in full, and 'room_models' says which models supplied the \
+                       rooms -- read it before concluding a room set is small. \
+                       'property_mismatches' carries 'delta_pct' where a numeric tolerance is configured; a large one on a very small room is usually the boundary-regime \
+                       difference between an MEP space and an architectural room rather than a data fault, which is what [spaces] tolerance_min exists to filter. \
+                       'incomparable' is a pair whose ROOM value is zero: neither a pass nor a mismatch, since a relative difference against zero is undefined."
+    )]
+    fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;
+        json_result(&result)
+    }
+
+    /// Hierarchy gross-area footprints for one project -- see
+    /// `service::areas::assemble_areas`. Shares the exact read logic the HTTP
+    /// `GET /projects/{id}/areas` uses; `None` (nothing pushed) mirrors
+    /// `get_rooms`' empty-store message.
+    #[tool(
+        description = "Compute per-level, per-tier dissolved area footprints for one project, optionally scoped by building key and milestone name. Each group carries its resolved classification path, its measured footprint area (an aggregated ROOM FOOTPRINT — room area PLUS the enclosed wall bands between rooms, MINUS any genuine void like a courtyard or atrium; NOT net area and NOT a standards gross), whether it counts toward tiers above it (a settings exclusion can withhold a group), and its footprint polygons (each an exterior ring plus any interior rings for open voids). How much wall a footprint contains follows the boundary regime each model declared: a finish-face level fills the gaps between its rooms up to the project's declared max_wall_thickness, while a centreline level already has its walls inside the room polygons and is dissolved with no fill at all. The response echoes the gap applied per level (wall_gap_by_level) and the project's declared measurement_standard, which may be null — the figure is a house convention, not a standards gross, so read measurement_standard before quoting it. A void wider than a wall stays open and is excluded from the area."
+    )]
+    fn get_hierarchy_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<CallToolResult, McpError> {
+        let result = areas::assemble_areas(&self.state, &p.project_id, p.building.as_deref(), p.milestone.as_deref())
+            .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Room-to-room adjacency graph for one project -- see
+    /// `service::adjacency::assemble_adjacency`. Shares the exact read logic
+    /// the HTTP `GET /projects/{id}/adjacency` uses, including the tolerance
+    /// validation, so the two front doors cannot disagree on what a valid
+    /// `wall_max` is.
+    #[tool(
+        description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and any joined reference records, each flattened under its source name) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, NOT door connectivity: two rooms can share a wall with no door in it, and a door can connect two rooms sharing almost no wall. Doors ARE collected — use get_doors, where every door names its from_room and to_room — but they are a separate edge set over the same rooms, not a refinement of this graph. The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor."
+    )]
+    fn get_adjacency(&self, Parameters(p): Parameters<AdjacencyParams>) -> Result<CallToolResult, McpError> {
+        let result = adjacency::assemble_adjacency(
+            &self.state,
+            &p.project_id,
+            p.building.as_deref(),
+            p.milestone.as_deref(),
+            p.wall_max,
+        )
+        .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// How far a walk reaches from some start points -- see `service::reach`. The same
+    /// read as `POST /projects/{id}/reach`.
+    #[tool(
+        description = "How far a walk of a given length reaches from one or more start points, laid out as a grid over the floor plan: a heat map of walking distance, for questions such as whether everything on a floor plate lies within 30 m of these points (a hose reel, an exit, an extinguisher). \
+                       The distance is the door-to-door walk `get_connectivity` computes -- around walls and columns inside rooms, through doors, open-zone walls and passages -- measured from the NEAREST source. One storey at a time: vertical links are not crossed. \
+                       Pass `sources` (a room, and optionally the point in it) and `limit_mm` (30 m is 30000); `spacing_mm` sets the grid (default 1000), and `ignore_cuts` treats the closed walls inside open zones as open; `method` is `exact` (default) or `grid`, the lattice approximation that can run longer between cells (median 0.2%, worst seen 14%). \
+                       THE ANSWER: `levels` holds one grid per storey reached, row by row from the lowest y; cell (col, row) has its centre at origin + ((col+0.5), (row+0.5)) * spacing_ft (feet, y up) and its value at distance_mm[row * cols + col]: -1 means no room there, -2 means a room but beyond the limit (the search stops at the limit, so a distance past it is not measured), otherwise the walk in whole mm. `rooms` gives each room's coverage -- `cells`, `covered`, `fraction`, `reached` (false means no door, zone or passage lets the walk in at all, a finding about what is connected and not an error), `nearest_mm` and `farthest_mm` -- and a room too small to hold a cell is judged on one point so a cupboard is not left out. `summary` counts rooms fully, partly and not covered, with area in square metres. \
+                       LIMITS: a walk is the geometric shortest path, which hugs corners, so it is the least walk that reaches a cell; furniture is not modelled; any allowance beyond the walk is yours to add to `limit_mm`. A grid over 600000 cells is refused."
+    )]
+    fn get_reach(&self, Parameters(p): Parameters<ReachParams>) -> Result<CallToolResult, McpError> {
+        let sources = p
+            .sources
+            .iter()
+            .map(|s| reach::source(&s.room_id, s.model_id.as_deref(), s.x, s.y))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_mcp_error)?;
+        let (limit_mm, spacing_mm) = reach::params(Some(p.limit_mm), p.spacing_mm).map_err(to_mcp_error)?;
+        let method = reach::Method::parse(p.method.as_deref()).map_err(to_mcp_error)?;
+        let scope = reach::ReachScope {
+            method,
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            ignore_cuts: p.ignore_cuts,
+        };
+        let result = reach::assemble_reach(&self.state, &p.project_id, &scope, &sources, limit_mm, spacing_mm)
+            .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Door connectivity and the shortest route between two rooms -- see
+    /// `service::connectivity::assemble_connectivity`. The same read the HTTP
+    /// `GET /projects/{id}/connectivity` uses, including the refusal to guess
+    /// between models.
+    #[tool(
+        description = "Build the connectivity graph for one project -- which rooms are joined by a DOOR, or by an OPEN ZONE a user authored (see list_connections) -- and, when `from` and `to` are given, the shortest route between two rooms. Optionally scoped by building key and milestone name, and by `door_filter` predicates over doors (a door that fails one is not in the graph, so \"Fire Rating!=FRL120\" asks for a route avoiding those doors). \
+                       THE GRAPH IS DOORS PLUS WHATEVER OPEN ZONES SOMEBODY HAS AUTHORED, and that is a limit of the method, not a fact about the building: a bay, an open-plan area, an archway modelled as a wall opening, or a shaft has no door, so unless a zone covers it it appears under `isolated` and no route reaches it. An isolated room is NOT a model fault and `isolated` is not a list of bays -- it is the list of rooms this method cannot reach, and some of them are simply rooms whose doors name no room. Each edge and each route step says `kind`: `door` (from the model) or `zone` (user-stated: a hop across a wall two members of one zone share). Read the `connections` block before trusting a route that uses a zone: it lists each zone's stale members, members sharing no wall with another member after any disconnects (`unlinked`), `closed` (walls left closed by a disconnect or the hub), `hub`, `hub_stale` (the hub left the model, so the rule was NOT applied), `stale_disconnects` and `reaches_doors`, and `pinned` is false because a milestone view applies TODAY'S connections. A route crosses a LEVEL only through a VERTICAL LINK somebody drew by hand: one link joins exactly two rooms on different storeys (a lift or stair is a run of floor-to-floor links, never a jump from level 1 to 8). Its step has `kind: vertical` and a `link_id`, its `length` is the link's stated cost (default 40 ft, an assumption and not a measurement), and `path.segments` breaks there into one polyline per level. The `connections.links` block reports every link: whether it was `applied`, why not (a room no longer in scope, both rooms on one storey, or a pair already joined), and `levels_between`, which is above 0 when a link skips storeys. A third user-stated kind, `passage` (a `passage_id`), is a straight line drawn between two rooms on one storey: its step lists the first crossing in `point`, and `connections.passages` reports each one with whether it was `applied`, why not (a room gone, rooms on different storeys, an end outside its room, a line that never leaves or enters), where it crossed and its `span_mm`; its width and height are the author's stated ones and are checked like a door's. A route between storeys with no link is reported as not found, which is a finding about what has been authored, not about the building. WIDTH: pass `width_mm` to ask whether an object of that width can make the trip; the route is then the shortest among doors and open-area walls it fits through. A door's width is an ESTIMATE (its footprint less `frame_mm`, default 150: the footprint includes the frame), an open area's is the length of the wall two of its rooms share, and a level change or a door with no footprint is NOT checked (counted in `clearance.unchecked_hops`). HEIGHT: pass `height_mm` to also require the object to fit under every door AND in every room it passes through: a door lower than that, or a ROOM whose clear height is lower, is not passable (rooms count even at the start and end). A door's height is an ESTIMATE read from the project's `[routing]` sources (its height properties, else the size in its type name such as '970 x 2040'), a room's comes from its height property (default `Ceiling Height`, overridable with `height_property`), and a door or room with no readable height is let through and counted in `clearance.unchecked_height`. `clearance.lowest` is the lowest checked door or room on the route found and `clearance.tallest_possible` the tallest object that fits by ANY route and what limits it. The width of a corridor inside a room is NOT checked, so a route reported clear has cleared its doors and openings only. `clearance` says `narrowest` (the tightest checked hop on the route found) and `widest_possible` (the widest object that could make the trip by ANY route, and the hop that limits it), so you do not have to guess a width; when a width blocks every route, `path.reason` names that limit. \
+                       A route that does not exist is a FINDING, not an error: `path.found` is false and `path.reason` names the component each room is in. Do not report it as 'these rooms are not connected'; report it as 'no door route', and read `isolated` and `components` before concluding anything. An error means the request was wrong -- a room that is not in scope, or a bare room id that exists in several models (the message lists them; pass `from_model`/`to_model`). \
+                       Other reported states: `exits` on a node counts doors with that room on one side and nothing on the other (the way outside, or into a model that holds no rooms) -- they are not edges; `counts` tallies doors that name no room (`unattached`), the same room twice (`same_room`) or a room outside the scope (`out_of_scope`); `doors_pushed` false means NO doors snapshot exists for the project, so every room is isolated for that reason alone. \
+                       `path.distance_ft` is an ESTIMATED walking distance, not a measurement, and what it estimates depends on `method` (the answer lists every method under `methods`, each with its source). `door_to_door` (the default) walks from door to door by the exact shortest path inside each room's outline, around its corners and columns (Liu and Zlatanova 2011); it is the shortest the geometry allows but not where people walk (they keep off walls), and furniture is not modelled. `centroid` walks from each room's centre to its door to the next room's centre, which bends at every centre and can be longer, or shorter where its straight lines cut through walls. `path.start` and `path.end` say where the route began and ended (a room's centre unless from_x/from_y or to_x/to_y gave a point inside it), `path.method` says which ran and `path.note` says if a point had to be moved onto its room's outline or if any room's outline was too irregular to walk exactly (that stretch is a straight line). A route's `steps[].length` under door_to_door is the walk inside the room it leaves plus the crossing, and `path.arrival_ft` is the walk inside the last room. Each edge's `point_source` says whether its door point was the door's own insertion point, its footprint, or a midpoint between the rooms because the door had neither. Rooms are always named by `model_id` plus `room_id`. `path.segments` is the route as polylines, one per run on one level, in the project's local frame. THE DEFAULT RESPONSE OMITS `nodes` AND `edges` (a large project's graph is over a megabyte); it still carries components, isolated rooms, counts and the route. Pass detail=full only when you need the graph itself."
+    )]
+    fn get_connectivity(&self, Parameters(p): Parameters<ConnectivityParams>) -> Result<CallToolResult, McpError> {
+        let known = self.state.settings().known_reference_sources();
+        let filter =
+            rooms::RoomFilter::parse(&p.door_filter, &known).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+        let metric = connectivity::Metric::parse(p.metric.as_deref()).map_err(to_mcp_error)?;
+        let detail = connectivity::Detail::parse(p.detail.as_deref()).map_err(to_mcp_error)?;
+        let method = roommate::service::routing::Method::parse(p.method.as_deref()).map_err(to_mcp_error)?;
+        let from_at = connectivity::point(p.from_x, p.from_y, "start").map_err(to_mcp_error)?;
+        let to_at = connectivity::point(p.to_x, p.to_y, "end").map_err(to_mcp_error)?;
+        let route = connectivity::endpoints_at(
+            p.from.as_deref(),
+            p.from_model.as_deref(),
+            from_at,
+            p.to.as_deref(),
+            p.to_model.as_deref(),
+            to_at,
+        )
+        .map_err(to_mcp_error)?;
+        let (clear_width_mm, frame_allowance_mm) =
+            connectivity::width_params(p.width_mm, p.frame_mm).map_err(to_mcp_error)?;
+        let scope = connectivity::ConnectivityScope {
+            building: p.building.as_deref(),
+            milestone: p.milestone.as_deref(),
+            door_filter: Some(&filter).filter(|f| !f.is_empty()),
+            clear_width_mm,
+            frame_allowance_mm,
+            clear_height_mm: connectivity::height_param(p.height_mm).map_err(to_mcp_error)?,
+            height_property: p.height_property.as_deref().filter(|n| !n.trim().is_empty()),
+            ignore_cuts: false,
+        };
+        let result = connectivity::assemble_connectivity(
+            &self.state,
+            &p.project_id,
+            &scope,
+            route.as_ref().map(|(a, b)| (a, b)),
+            metric,
+            method,
+            detail,
+        )
+        .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// The rooms over and under one room, as candidates for a vertical link -- see
+    /// `service::stacking`. The same read as `GET /projects/{id}/stack`.
+    #[tool(
+        description = "Suggest vertical links for one room: the rooms on the storey above and the storey below that sit over or under it, ranked, for a person to confirm. A SUGGESTION and never a write -- nothing is stored, and a link is made by hand (PUT /projects/{id}/connections). `up` and `down` each name the NEAREST storey that has a room overlapping this one (not simply the next level in the project's list: a car park's half-levels stacked between hospital floors have nothing over a hospital lift, so they are passed, and `levels_passed` counts them), or are null when nothing overlaps (the top of a shaft, or a stair that moves between floors, which stays manual). Each candidate carries `overlap` (area as a fraction of the SMALLER of the two rooms, so a stair whose landings differ still scores), `fraction_of_room` and `same_stem` (the name shares the source's name without its last word: LIFT 3 TRA003 and LIFT 3 TRA032 share LIFT 3). Candidates start at 0.3 overlap and are ordered stem-mates first, then by overlap. `confidence` is `clear` when one candidate stands alone (the only overlap of 0.7 or more, or the only such stem-mate) and `ambiguous` when the reader must choose (several lifts sharing one plant room, a stair beside a pressurised stairwell). Measured on one large project the stem-mate was the top overlap in about 92% of lift and stair hops, and a stem-mate was never missed when one existed; the name is a boost and not a rule. A room id is unique only within its model: an id two models share is refused and the models are named, and `room_model` resolves it."
+    )]
+    fn get_stack_candidates(&self, Parameters(p): Parameters<StackParams>) -> Result<CallToolResult, McpError> {
+        let result = roommate::service::stacking::stack_candidates(
+            &self.state,
+            &p.project_id,
+            &p.room,
+            p.room_model.as_deref(),
+            p.milestone.as_deref(),
+        )
+        .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(
+                "no snapshots have been pushed to this server yet",
+            )])),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// The authored connections for one project -- see `connections::load`.
+    #[tool(
+        description = "List what somebody authored for one project, in five lists (`routes`, `passages` and `reaches` are described last). `zones` are OPEN ZONES: each is a named set of rooms (model_id plus room_id) declared to be one open space, so every wall two of its members share is treated as open and the rooms connect as a door would connect them. A zone may also carry `disconnects` (pairs of its members whose shared wall stays CLOSED, for members that touch but do not connect, such as bays along a corridor) and a `hub` (one member the others connect ONLY through). `links` are VERTICAL LINKS: each joins exactly two rooms on different storeys, drawn by hand, one floor-to-floor hop per link (`cost_ft` is the walking-equivalent of that hop, default 40 ft when absent). Both are USER-STATED, not read from the model, and are applied by get_connectivity (its `connections` block reports what each did: for zones, edges added, pairs a door already joined, stale members, members sharing no wall with another member, and whether the zone reaches a door at all; for links, whether it was applied, why not, and how many storeys it skips). `taken_at` is the version of the document; an empty list with an empty taken_at means nobody has authored anything, which is not the same as a model with no open spaces. A member naming a room that no longer exists is reported as stale by get_connectivity, never an error. `routes` are SAVED ROUTES: each is a request (a name, a start and end room with an optional point in each, a routing method and a `#rrggbb` colour) and never a path, so pass its rooms, points and method to get_connectivity to get the route as it is today. `passages` are PASSAGES: each is a straight line a person drew between two rooms on ONE storey (`a`, `b`, and the line's two ends `from` and `to`, each inside its room), for a way through that no door and no shared wall shows. The points where the line leaves one room and enters the other are derived by get_connectivity and not stored; `width_mm` and `height_mm` are STATED by the author (absent means unknown, so the size checks let it through and count it as unchecked). `reaches` are SAVED REACHES: each is the request a person made to get_reach (start rooms with an optional clicked point, `limit_mm`, `spacing_mm`, `method`, `ignore_cuts`) and never a grid, so pass it to get_reach to see the coverage as the building stands today. Writing is HTTP-only (PUT /projects/{id}/connections), and a save that leaves out `passages`, `routes` or `reaches` keeps what is saved."
+    )]
+    fn list_connections(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let document = roommate::connections::load(&dir, &p.project_id).map_err(connections_to_mcp_error)?;
+        json_result(&document)
+    }
+
+    /// The project's authored blueprints -- see `blueprints::list`.
+    #[tool(
+        description = "List the blueprints authored for one project, by name. A BLUEPRINT is a room and the FF&E in it written as RECIPES against the room's edges (which edge, how far along it, how far into the room, which way it faces), so the same layout can be placed in another room; it is authored data, not read from the model. Each row has `id`, `name`, `taken_at` (the blueprint's version), `source` (the room it was captured from: a record, not a reference that must still resolve), `current_revision` (the revision new assignments use), `in_use` (a blueprint is never deleted, only marked not in use: it then takes no new assignment and its sheets are not suggested), `revisions` (how many), `pending` (revisions pushed from elsewhere and waiting for a person to accept or reject them) and `items` (in the current revision, excluded ones not counted) and `sheets` (how many library sheets are bound to it: a blueprint holds no sheets itself, list_sheets shows them with their `blueprint`). Revisions are append-only: an edit is a new revision. Read one with get_blueprint; to see what a room would capture as, use capture_blueprint. A blueprint is made only by the Revit push, which sends its room layout sheets to the library bound to it; writing is HTTP-only (POST /projects/{id}/blueprints/from-revit)."
+    )]
+    fn list_blueprints(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows =
+            roommate::blueprints_api::list_with_sheet_counts(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One blueprint with all its revisions -- see `blueprints::load`.
+    #[tool(
+        description = "Read one blueprint with every revision. A revision holds an `outline` (`coarse`: jogs under about 350 mm removed, and the one every placement's `edge` index refers to, counter-clockwise with edge i running from vertex i to i+1; `fine`: corners only, for checking whether something is inside the room; both in millimetres with the room's centroid as the origin) and `items`. An item is the FF&E record as exported (`family_name` when the extractor carried it, `type_name`, `category`, `properties` and `type_properties` verbatim) with a `placement`: `edge`, `along_mm` (the item's centre from the edge's start, as captured) and `along_mode` (`fixed_from_start`, `fixed_from_end` or `percent`: how that distance is read in a room of another size), `off_mm` and `off_mode` (`fixed` or `percent` of the room's `depth_mm` in front of the edge), `edge_len_mm`, `facing_deg` (from the edge's inward normal) and `size_mm` (along the facing, then across). `class` is `wall_device` for something under 100 mm thick (a switch or socket: located by wall and height, no footprint check) and `free` otherwise; `excluded` marks an item removed from the blueprint but kept; `follows` says the item abuts the previous one in a run, or sits `inside` another, and so keeps its gap to it instead of getting its own percentage. `corner_anchored` is true for an item with no edge beside it. `pending` lists revisions that ARRIVED (an import, later a Revit push) and have not been reviewed: they are NOT part of the history, are not current, and no assignment can pin one, until a person accepts it (it becomes the next revision and the current one) or rejects it (it moves to `rejected`, kept). Do not describe a pending revision as the blueprint's layout. Nothing here is derived from today's model."
+    )]
+    fn get_blueprint(&self, Parameters(p): Parameters<BlueprintParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let blueprint =
+            roommate::blueprints::load(&dir, &p.project_id, &p.blueprint_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&blueprint)
+    }
+
+    /// What capturing a room would produce -- see `service::blueprint_capture`.
+    #[tool(
+        description = "Work out the blueprint revision that capturing one room would produce, WITHOUT storing anything. Reads the room's outline and the FF&E attributed to it (under the project's own attribution policy) and returns the same `outline` and `items` get_blueprint shows, plus `room_name` and `skipped`: how many items capture left out because they are components of another instance (`nested`; they move with their parent) or have no footprint to write a recipe against (`no_footprint`). A silence would read as 'nothing was there', which is why they are counted. To keep one, POST the result to /projects/{id}/blueprints with a name."
+    )]
+    fn capture_blueprint(&self, Parameters(p): Parameters<CaptureBlueprintParams>) -> Result<CallToolResult, McpError> {
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
+        match roommate::service::blueprint_capture::capture_room(&self.state, &p.project_id, &room)
+            .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some((captured, room_name)) => json_result(&serde_json::json!({
+                "room_name": room_name,
+                "model_id": room.model_id,
+                "outline": captured.content.outline,
+                "items": captured.content.items,
+                "skipped": captured.skipped,
+            })),
+        }
+    }
+
+    /// Where a blueprint's items go in one room -- see `service::blueprint_resolve`.
+    #[tool(
+        description = "Work out where a blueprint revision's items go in ONE target room, without storing or applying anything. Each entry of `placements` has the item's `centre` and unit `facing` in the PROJECT's plan frame in millimetres (so it draws straight onto the plan), its `size_mm` (along the facing, then across), the target `edge` it sits against and `rule`, the rule that put it there in words. Scaling is the ROOM's and never the item's: a fixed distance keeps its millimetres, a percentage keeps its fraction of the edge or of the room's depth, measured on the edge it is anchored to. An item that follows another (a run of casework, a shelf in a wardrobe) moves rigidly with it. `fit` says how the blueprint's outline matched the room's: `kind` is `plain` (the same shape up to rotation), `mirror_image` (the room is the blueprint REFLECTED: the blueprint never mirrors, so the answer is a blueprint authored for the other hand; it, and placements are still returned for reference), `no_fit` or `edge_count_differs` (nothing is placed). `shift` is the edge mapping used and `cost` its shape cost (about 1.0 or under is a fit). A rectangle fits in two mappings a half turn apart, so pass `shift` to choose. A lot of resolving is manual: pass `edge_map` (the room edge for each blueprint edge) to place a blueprint in a room with a DIFFERENT number of edges, or to override the shape fit; the fit `kind` is then `manual` and nothing is judged about the mapping. `findings` lists what to look at, never an error: `outside` (a corner is outside the room's true outline), `overlap` (two items that did not overlap in the blueprint now do), `follow_broken`, `corner_anchored`, `mirror_image`, `shape_mismatch`. Wall devices are left out of outside and overlap findings. `excluded` counts items the blueprint holds but excludes."
+    )]
+    fn resolve_blueprint(&self, Parameters(p): Parameters<ResolveBlueprintParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let blueprint =
+            roommate::blueprints::load(&dir, &p.project_id, &p.blueprint_id).map_err(blueprints_to_mcp_error)?;
+        let number = p.revision.unwrap_or(blueprint.current_revision);
+        let revision = blueprint
+            .revision(number)
+            .ok_or_else(|| McpError::invalid_params(format!("the blueprint has no revision {number}"), None))?;
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
+        use roommate::service::blueprint_resolve::EdgeMap;
+        match roommate::service::blueprint_resolve::resolve_in_room(
+            &self.state,
+            &p.project_id,
+            &revision.content,
+            &room,
+            &p.edge_map
+                .map_or_else(|| p.shift.map_or(EdgeMap::Auto, EdgeMap::Shift), EdgeMap::Explicit),
+        )
+        .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some((room_name, resolution)) => json_result(&serde_json::json!({
+                "blueprint_id": blueprint.id,
+                "revision": number,
+                "room_name": room_name,
+                "fit": resolution.fit,
+                "outline": resolution.outline,
+                "placements": resolution.placements,
+                "findings": resolution.findings,
+                "excluded": resolution.excluded,
+                "candidates": resolution.candidates,
+                "doors": resolution.doors,
+                "mapped_doors": resolution.mapped_doors,
+            })),
+        }
+    }
+
+    /// Which blueprint is placed in which room -- see `assignments::list`.
+    #[tool(
+        description = "List the project's blueprint ASSIGNMENTS: which blueprint a person placed in which room. Authored data, one per room. Each row has `id`, `blueprint_id` and `blueprint_name`, the pinned `revision` (an edit to the blueprint later changes nothing here until a person re-assigns), `current_revision`, `newer_revision` (the blueprint has moved on since), `blueprint_missing` (it was deleted: a reported state), `room` ({model_id, room_id}), `room_name` as it was when assigned, `mapping` (a `shift`, or an `edge_map` the person chose by hand, or neither for the best fit) and an optional `note`. Placements are NOT stored: to see where the items land, call resolve_blueprint with the row's blueprint, revision, room and mapping. Writing is HTTP-only (POST /projects/{id}/assignments)."
+    )]
+    fn list_assignments(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::assignments::list(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// Room tasks, as a Revit session sees them -- see `tasks::list`.
+    #[tool(
+        description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets`, `tag_rules` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."
+    )]
+    fn list_tasks(&self, Parameters(p): Parameters<ListTasksParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let state = match p.state.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            None => None,
+            Some(s) => Some(
+                serde_json::from_value::<roommate::tasks::TaskState>(serde_json::Value::String(s.to_string()))
+                    .map_err(|_| McpError::invalid_params(format!("{s:?} is not a task state"), None))?,
+            ),
+        };
+        let rows =
+            roommate::tasks::list(&dir, &p.project_id, p.model_id.as_deref(), state).map_err(tasks_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One task in full -- see `tasks::load`.
+    #[tool(
+        description = "Read one room task in full. `items` are the family instances to place, in the target MODEL's own frame, millimetres: `x_mm`, `y_mm` (centre), `facing_x`/`facing_y` (unit vector), `size_mm` (along the facing, then across), `family_name`, `type_name`, `category`, `placement_type` (`free` or `wall_device`), `host` and the instance and type `properties` as exported. `sheets` are the room layout sheet layouts to make (as exported by duHast: viewports with sheet positions and types; no tags: the tag rules for them are in `tag_rules`), with the number, name and id of the SOURCE sheet, which are not for the new sheets. `findings` is what the resolver said the room changes about the layout and any warning from making the task. `attempts` lists each go by a Revit session with its status and messages."
+    )]
+    fn get_task(&self, Parameters(p): Parameters<TaskParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let task = roommate::tasks::load(&dir, &p.project_id, &p.task_id).map_err(tasks_to_mcp_error)?;
+        json_result(&task)
+    }
+
+    /// The project's room layout sheet library -- see `sheets::list`.
+    #[tool(
+        description = "List the room layout sheets in one project's sheet LIBRARY: sheets a person chose to export from Revit and keep as exported, so the closest one can be offered for a room. It is authored data, kept apart from blueprints, not read from the model. Each row has `id`, `taken_at` (the record's version), `revit_sheet_id` and `document_title` (together a sheet's identity: a sheet id is unique only within its document), `sheet_number`, `sheet_name`, `blueprint` (the room blueprint the sheet is bound to, absent for a GENERIC sheet), `room_key` (a generic sheet's identifier: its room's bounding rectangle in mm and its item count, like `4000x3000-12`), `size_mm` (the paper size measured from the title block), `rooms` (labels of the rooms it covers), `room_summary` (their combined figures), `room` (the room it was made for, set by a blueprint push: a reference that may no longer resolve), `viewports` (how many) and `pending` (pushes held back for a person to confirm, because the sheet number changed). Read one with get_sheet; to find the sheets closest to a room use suggest_sheets. Writing is HTTP-only (POST /projects/{id}/sheets)."
+    )]
+    fn list_sheets(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::sheets::list(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// Tag rules -- see `tag_rules::list`.
+    #[tool(
+        description = "List the project's TAG RULES: where a tag goes relative to the element it tags, learned from tags in Revit views and kept as ONE rule per key. The key is the tagged item's TYPE CODE (`type_code`: the value of the type parameter the project names in `tag_type_code`, read under `code_parameter`; never Revit ids or family and type names, because a blueprint places new elements with new ids), the tag's category, family and type (`tag_*`) and the `viewport_type` it was read in. A rule is generic (`blueprint` empty) or bound to a room blueprint (`blueprint`, and for an item's tag the blueprint item it is for in `instance`); a room tag's `placement.boundary` is its place against the room's boundary. `placement` is the answer: `head`, `elbow` and `end` are offsets in PAPER millimetres in the element's own frame (x along its facing, y to its left), `rotation` is radians relative to the facing, plus `orientation`, `has_leader` and `leader_end_condition`; `sample_count` is how many tags it was made from (the median of them). `tag_kind` is `independent`, `room`, `space` or `area`. Read one, with its samples, with get_tag_rule. Writing is HTTP-only (POST /projects/{id}/tagrules/observations)."
+    )]
+    fn list_tag_rules(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rows = roommate::tag_rules::list(&dir, &p.project_id).map_err(tag_rules_to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// One tag rule with its samples -- see `tag_rules::load`.
+    #[tool(
+        description = "Read one tag rule with the `samples` it is the median of. Each sample says where it was read (`source`: the sheet, the tag's id and the tagged element's id in the source model, which are provenance and never how a rule is found) and the placement it measured, so a rule that looks wrong can be traced to the tag that made it."
+    )]
+    fn get_tag_rule(&self, Parameters(p): Parameters<TagRuleParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let rule = roommate::tag_rules::load(&dir, &p.project_id, &p.rule_id).map_err(tag_rules_to_mcp_error)?;
+        json_result(&rule)
+    }
+
+    /// One library sheet -- see `sheets::load`.
+    #[tool(
+        description = "Read one room layout sheet from the library, as exported. `sheet` is duHast's export of the Revit sheet unchanged: its instance and type properties, its `view_ports` (each with a type of floor plan, elevation, 3D or schedule, a `bounding_box` and `centre_point` giving its position on the sheet, and per view the crop box, plus the marker index and view direction for an elevation, the eye, forward and up for a 3D view, or the row count and segment heights for a schedule) and its sheet size. NOT in the export: view template and view names. Tags are taken out before a sheet is stored (see list_tag_rules). The record also carries `blueprint`, `size_mm`, `rooms`, `room_summary` and `room_key` as list_sheets describes them. `pending` lists pushes of this sheet that arrived with a CHANGED sheet number and are being held for a person to accept or reject: they are not the sheet, so do not describe one as the sheet's current number or layout. `rejected` keeps the ones that were declined."
+    )]
+    fn get_sheet(&self, Parameters(p): Parameters<SheetParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let record = roommate::sheets::load(&dir, &p.project_id, &p.sheet_id).map_err(sheets_to_mcp_error)?;
+        json_result(&record)
+    }
+
+    /// Which wall each elevation on a library sheet looks at -- see `service::elevation_facing`.
+    #[tool(
+        description = "For one library sheet, which elevation viewport is which index of which elevation marker, and which wall(s) of the sheet's room each looks at. `markers` lists each marker (`marker_id`, `location`, and its `views` as [index, view_id] in index order). `elevations` has one row per elevation viewport: `view_id`, `marker_id`, `marker_index`, the elevation line (`line_start`, `line_end`, model mm), `looks` (the plan direction it looks along), `depth_mm` (how far, absent when not depth limited) and `faces`: the room edges it covers, largest first, each with `edge` (index in the room's 30 mm counter-clockwise outline), its end points `a`/`b`, `edge_mm`, `visible_mm` (the part inside the view), `square_on` (cosine of the angle between the wall and the view: 1 straight on) and `nearest_mm`. Worked out when asked from the room as it is now; occlusion by other walls is not judged. A sheet exported before markers were read, or with no room, says so in `findings` instead of failing."
+    )]
+    fn get_sheet_elevations(&self, Parameters(p): Parameters<SheetParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let record = roommate::sheets::load(&dir, &p.project_id, &p.sheet_id).map_err(sheets_to_mcp_error)?;
+        let out = roommate::service::elevation_facing::for_sheet(&self.state, &p.project_id, &record)
+            .map_err(to_mcp_error)?;
+        json_result(&out)
+    }
+
+    /// The library sheets closest to one room -- see `service::sheet_suggest`.
+    #[tool(
+        description = "Rank the project's library sheets by how close the room(s) each covers are to ONE target room, closest first, on the figures stored with the sheet. Closeness weighs three figures EQUALLY: the room's area, its proportions (the long side over the short side of the smallest rectangle enclosing the outline) and the number of FF&E items in it, each compared as a ratio, so twice the area is as far as half the area. `distance` is the mean of `parts`, and `signature` is each room's own three figures, so the reason a sheet was offered is in the answer. Worked out from the rooms and FF&E as they are today, and never stored. This OFFERS and never applies: it is for sheet creation mode, a person chooses, and a low distance is a similarity of room size and contents and says nothing about whether the sheet's layout suits the room. `unassigned` counts sheets with no room figures, which cannot be ranked; sheets bound to a blueprint that is not in use are left out. `unresolved` lists sheets whose room is not in the model today, with the reason."
+    )]
+    fn suggest_sheets(&self, Parameters(p): Parameters<SuggestSheetsParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let records = roommate::sheets::load_all(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        let room = roommate::service::blueprint_capture::qualify_room(
+            &self.state,
+            &p.project_id,
+            &p.room_id,
+            p.model_id.as_deref(),
+        )
+        .map_err(to_mcp_error)?
+        .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
+        match roommate::service::sheet_suggest::suggest(&self.state, &p.project_id, &room, &records)
+            .map_err(to_mcp_error)?
+        {
+            None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
+            Some(result) => json_result(&result),
+        }
+    }
+
+    /// Lists every uploaded snapshot id for one project's reference source --
+    /// see `service::reference::list_reference_snapshots`.
+    #[tool(
+        description = "List every uploaded CSV snapshot id (RFC3339 UTC taken_at) for one project's reference source, ascending, with the latest. \
+                          `source` names the reference source (e.g. \"drofus\") and may be omitted when the project configures exactly one; \
+                          when it configures several, the error names them. \
+                          Reads the shared store fresh, so an upload forwarded moments ago shows here immediately."
+    )]
+    fn list_reference_snapshots(
+        &self,
+        Parameters(p): Parameters<ReferenceSourceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
+        let result = reference::list_reference_snapshots(&self.state, &p.project_id, &source).map_err(to_mcp_error)?;
+        json_result(&result)
+    }
+
+    /// A parsed summary of one uploaded reference CSV -- see
+    /// `service::reference::get_reference_snapshot`. The service's `None` (the
+    /// HTTP 404 case) becomes a short plain-text answer, same convention as
+    /// `get_latest_snapshot`.
+    #[tool(
+        description = "Get a parsed summary (record count, link property, field labels) of one uploaded reference CSV -- the given taken_at, or the latest when omitted. \
+                          `source` names the reference source (e.g. \"drofus\") and may be omitted when the project configures exactly one. \
+                          Reads the shared store fresh."
+    )]
+    fn get_reference_snapshot(
+        &self,
+        Parameters(p): Parameters<GetReferenceSnapshotParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
+        let result = reference::get_reference_snapshot(&self.state, &p.project_id, &source, p.taken_at.as_deref())
+            .map_err(to_mcp_error)?;
+        match result {
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "no such '{source}' upload stored for that project"
+            ))])),
+            Some(info) => json_result(&info),
+        }
+    }
+
+    /// Uploads a reference CSV by FORWARDING it to the running HTTP server --
+    /// this process never writes the store itself (see the module doc): the
+    /// server validates, stores, and hot-swaps its own registry, staying the
+    /// single writer.
+    #[tool(description = "Upload a reference-source CSV export (given as an absolute file path) for one project. \
+                          `source` names the reference source (e.g. \"drofus\") and may be omitted when the project configures exactly one. \
+                          Forwards the file over HTTP to the running roommate server, which validates it against that source's \
+                          declared fields before storing it as a dated snapshot and applying it live -- so the HTTP server must be running. \
+                          The project's settings must declare [sources.reference.<source>] type = \"upload\". \
+                          Note the staleness asymmetry: after an upload, this process's own get_rooms/get_validation still join the \
+                          data loaded at ITS startup; list_reference_snapshots/get_reference_snapshot read the store fresh and see the new upload immediately.")]
+    async fn upload_reference(
+        &self,
+        Parameters(p): Parameters<UploadReferenceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if !self.allow_upload {
+            return Err(McpError::invalid_params(
+                "upload_reference is turned off on this server (start it with --allow-upload to enable it)",
+                None,
+            ));
+        }
+        let source = resolve_source(&self.state, &p.project_id, p.source.as_deref())?;
+        let bytes = std::fs::read(&p.path)
+            .map_err(|e| McpError::invalid_params(format!("could not read CSV file {:?}: {e}", p.path), None))?;
+
+        let mut url = format!(
+            "{}/projects/{}/reference/{}",
+            self.server_url.trim_end_matches('/'),
+            urlencode(&p.project_id),
+            urlencode(&source)
+        );
+        if let Some(taken_at) = &p.taken_at {
+            url.push_str(&format!("?taken_at={}", urlencode(taken_at)));
+        }
+
+        let response = reqwest::Client::new()
+            .post(&url)
+            .header("Content-Type", "text/csv")
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|e| {
+                McpError::internal_error(
+                    format!(
+                        "the roommate HTTP server is not reachable at {} ({e}) -- \
+                         start it (it is the single writer for uploads) and retry",
+                        self.server_url
+                    ),
+                    None,
+                )
+            })?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status.is_success() {
+            Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        } else {
+            // The server's rejection text is the real validator -- pass it on
+            // verbatim, marked caller-addressable.
+            Err(McpError::invalid_params(format!("server answered {status}: {body}"), None))
+        }
+    }
+
+    // Settings tools are READ-ONLY by design: this is a separate process from
+    // the HTTP server, so a write from here could not hot-swap that server's
+    // in-memory registry -- the file and the serving process would silently
+    // disagree until a restart. Mutation stays behind the HTTP settings UI
+    // (see `settings_api`'s module doc), matching the "Read-only access
+    // against local state" contract `get_info` declares. `upload_reference`
+    // above is not an exception: it forwards to that HTTP server rather than
+    // writing anything from this process.
+
+    /// Lists every project settings file with its headline facts -- see
+    /// `settings_api::list_project_files`.
+    #[tool(
+        description = "List every project settings file (project id, is_default, and reference_sources -- the names of the reference sources it declares). \
+                          Reads the files fresh, so a settings change saved through the HTTP UI shows here immediately; \
+                          this process's own get_rooms/get_validation behavior still reflects the settings loaded at its startup."
+    )]
+    fn list_project_settings(&self) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let result = settings_api::list_project_files(&dir).map_err(settings_to_mcp_error)?;
+        json_result(&result)
+    }
+
+    /// One project's parsed settings as JSON -- see
+    /// `settings_api::get_project_file`.
+    #[tool(
+        description = "Get one project's settings (hierarchy, reference sources, builtin properties, room label, QA fields) as JSON. \
+                          Reads the file fresh, so a settings change saved through the HTTP UI shows here immediately; \
+                          this process's own get_rooms/get_validation behavior still reflects the settings loaded at its startup."
+    )]
+    fn get_project_settings(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let (file, settings) = settings_api::get_project_file(&dir, &p.project_id).map_err(settings_to_mcp_error)?;
+        json_result(&serde_json::json!({ "file": file, "settings": settings }))
+    }
+
+    /// One project's settings resolved the way the *viewer* resolves them:
+    /// exact `project_id` match, else the file marked `is_default` -- see
+    /// `settings_api::resolve_project_file`.
+    ///
+    /// A separate tool rather than a flag on `get_project_settings`, mirroring
+    /// the two separate HTTP routes and for the same reason: the fallback must
+    /// not be reachable from the path an editor reads before it writes, where
+    /// loading the default and saving it back would overwrite the wrong file.
+    /// An agent has no such write path here -- both are reads -- but collapsing
+    /// them would make the MCP surface disagree with the HTTP one about what
+    /// "get this project's settings" means, and the two front doors answering
+    /// the same question differently is the thing the service seam exists to
+    /// prevent.
+    #[tool(
+        description = "Get the settings that APPLY to one project id, falling back to the default settings file when no file declares that id. \
+                          Use this when the id came from room or door DATA -- a payload project id, as returned by list_projects -- rather than from a settings file: \
+                          the two id spaces differ, so get_project_settings can legitimately report 'not found' for a project that is nonetheless being served settings. \
+                          Prefer get_project_settings when you mean 'the settings file whose project_id is X': it answers about a FILE and never falls back. \
+                          The response names the file the settings actually came from, so a fallback is visible rather than silent -- a 'file' unrelated to the id you \
+                          passed means the default answered, and the values you are reading are not authored for that project."
+    )]
+    fn resolve_project_settings(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let (file, settings) =
+            settings_api::resolve_project_file(&dir, &p.project_id).map_err(settings_to_mcp_error)?;
+        json_result(&serde_json::json!({ "file": file, "settings": settings }))
+    }
+
+    /// The `--project-settings` directory this process was started with --
+    /// always present for this binary (the arg is required), so the error arm
+    /// is defensive only.
+    fn projects_dir(&self) -> Result<std::path::PathBuf, McpError> {
+        self.state
+            .projects_dir()
+            .cloned()
+            .ok_or_else(|| McpError::internal_error("no project settings directory configured", None))
+    }
+}
+
+/// `SettingsError` -> `McpError`: caller-addressable problems (unknown id,
+/// invalid input) become `invalid_params`; the rest `internal_error`.
+fn settings_to_mcp_error(err: SettingsError) -> McpError {
+    match err {
+        SettingsError::NotFound(msg) | SettingsError::Invalid(msg) | SettingsError::Conflict(msg) => {
+            McpError::invalid_params(msg, None)
+        }
+        SettingsError::NotFileBacked => McpError::internal_error("no project settings directory configured", None),
+        SettingsError::Internal(e) => {
+            tracing::error!("settings read error: {e:#}");
+            McpError::internal_error(e.to_string(), None)
+        }
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for RoommateMcp {
+    fn get_info(&self) -> ServerInfo {
+        // Not `Implementation::from_build_env()` -- it's a plain fn whose body
+        // bakes in `env!()` at *rmcp's own* compile time, so it always reports
+        // "rmcp"/rmcp's version rather than ours (confirmed via a stdio smoke
+        // test). Name and version explicitly instead.
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("roommate-mcp", env!("CARGO_PKG_VERSION")))
+            .with_instructions(
+                "Read-only access to roommate's stored room and reference data -- this process never \
+                 writes its own state or the store. The one mutating tool, upload_reference, forwards \
+                 the CSV over HTTP to the running roommate server, which stays the single writer \
+                 and hot-swaps its own registry. Requires the same [storage] root as the HTTP \
+                 server (via --server-settings) to see real data -- this process does not share \
+                 memory with it."
+                    .to_string(),
+            )
+    }
+}
+
+#[derive(Parser)]
+struct Args {
+    /// Path to the server-wide TOML settings file (same file the HTTP server
+    /// uses via `--server-settings`).
+    #[arg(long)]
+    server_settings: PathBuf,
+
+    /// Path to the directory of per-project TOML settings files (same
+    /// directory the HTTP server uses via `--project-settings`).
+    #[arg(long)]
+    project_settings: PathBuf,
+
+    /// Base URL of the running roommate HTTP server, used only by the
+    /// `upload_reference` tool (which forwards uploads to it). Defaults to the
+    /// address the server binary binds by default.
+    ///
+    /// It tracks the server's *default* port, not its actual one: the server
+    /// takes `--port` (and `$PORT`), and nothing here can observe that choice.
+    /// Move the server and this flag has to move with it — deliberately loud
+    /// rather than a second env lookup that would silently disagree with
+    /// whatever the server actually did.
+    #[arg(long, default_value_t = format!("http://{}", default_http_addr()))]
+    server_url: String,
+
+    /// Serve MCP over HTTP at `/mcp` on this port instead of over stdio, so several people on a
+    /// closed network can use one server (they add it to their client by URL). One long-lived
+    /// process: it reads settings once at start, so restart it after saving settings in the UI.
+    /// `--bind` decides who can reach it; read the warning there.
+    #[arg(long)]
+    http: Option<u16>,
+
+    /// The interface to listen on with `--http`. Loopback by default; `0.0.0.0` is every
+    /// interface. Also read from `ROOMMATE_BIND`, like the HTTP server's.
+    #[arg(long, env = "ROOMMATE_BIND", default_value = roommate::DEFAULT_HTTP_HOST)]
+    bind: std::net::IpAddr,
+
+    /// An extra `Host` name to answer to with `--http` on a network (repeat or comma-separate;
+    /// also `ROOMMATE_ALLOW_HOSTS`), as for the HTTP server.
+    #[arg(long = "allow-host", env = "ROOMMATE_ALLOW_HOSTS", value_delimiter = ',')]
+    allow_host: Vec<String>,
+
+    /// A shared secret clients must send as `Authorization: Bearer <token>` with `--http`. Read
+    /// it from `ROOMMATE_MCP_TOKEN` rather than the command line, which other users of the
+    /// machine can see. Without one, anyone who can reach the port can read every project.
+    #[arg(long, env = "ROOMMATE_MCP_TOKEN", hide_env_values = true)]
+    token: Option<String>,
+
+    /// Let `upload_reference` run. Always on over stdio (the process is the user's own); over
+    /// `--http` it is off unless this is given, because any caller could use it to replace a
+    /// project's reference data.
+    #[arg(long)]
+    allow_upload: bool,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // stderr, never stdout -- stdout is the JSON-RPC transport. Filter on the
+    // *current* crate name (this said "revit_viewer", the crate's old name,
+    // which silently dropped every log event). RUST_LOG still wins when set.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("roommate=info,mcp=info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    let args = Args::parse();
+    let state = build_state(&args.server_settings, &args.project_settings)?;
+
+    if let Some(port) = args.http {
+        return serve_http(state, &args, port).await;
+    }
+
+    let service = RoommateMcp::new(state, args.server_url).serve(stdio()).await.inspect_err(|e| {
+        tracing::error!("serving error: {e:?}");
+    })?;
+    service.waiting().await?;
+
+    Ok(())
+}
+
+/// `--http`: the same tools behind `/mcp`. See `roommate::mcp_http` for what stands in front.
+async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()> {
+    use roommate::network::{self, HostPolicy};
+
+    let hostname = network::machine_hostname();
+    let hosts = HostPolicy::for_bind(args.bind, hostname.as_deref(), &args.allow_host);
+    let (url, allow_upload) = (args.server_url.clone(), args.allow_upload);
+    let app = roommate::mcp_http::router(
+        move || Ok(RoommateMcp::new(state.clone(), url.clone()).with_upload(allow_upload)),
+        hosts,
+        args.token.clone().filter(|t| !t.is_empty()),
+    );
+    let addr = std::net::SocketAddr::new(args.bind, port);
+    for base in network::reachable_urls(addr, hostname.as_deref()) {
+        tracing::info!("MCP endpoint: {base}{}", roommate::mcp_http::MCP_PATH);
+    }
+    if network::serves_network(args.bind) && args.token.as_deref().is_none_or(str::is_empty) {
+        tracing::warn!(
+            "serving a network with no token: anyone who can reach this port can read every project. Set ROOMMATE_MCP_TOKEN."
+        );
+    }
+    if !allow_upload {
+        tracing::info!("upload_reference is off over HTTP (--allow-upload turns it on)");
+    }
+    roommate::mcp_http::serve(addr, app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use roommate::state::{AppState, ProjectSettings};
+    use roommate::storage::MemStore;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// A registered project configuring `sources` reference sources by name.
+    fn state_with(sources: &[&str]) -> Shared {
+        let bundle = ProjectSettings {
+            spaces: Default::default(),
+            reference: sources
+                .iter()
+                .map(|name| {
+                    (
+                        name.to_string(),
+                        roommate::state::ProjectReferenceSource {
+                            entity: roommate::settings::ReferenceEntity::Rooms,
+                            data: None,
+                            fields: vec![],
+                        },
+                    )
+                })
+                .collect(),
+            hierarchy: vec![],
+            builtin_properties: vec![],
+            room_label: vec![],
+            milestones: vec![],
+            anchor_model: None,
+            tag_type_code: None,
+            comparison_key: None,
+            comparison_properties: vec![],
+            areas: Default::default(),
+            doors: Default::default(),
+            windows: Default::default(),
+            ffe: Default::default(),
+            hierarchy_exclusions: vec![],
+            routing: Default::default(),
+        };
+        Arc::new(AppState::new(
+            Box::new(MemStore::new()),
+            HashMap::from([("p1".to_string(), bundle)]),
+            None,
+        ))
+    }
+
+    /// The common case: one configured source, so a caller that names none
+    /// still gets the right one. This is what keeps `source` optional instead
+    /// of forcing a `get_project_settings` round trip before every call.
+    #[test]
+    fn test_sole_source_resolves_without_being_named() {
+        assert_eq!(resolve_source(&state_with(&["drofus"]), "p1", None).unwrap(), "drofus");
+    }
+
+    /// An explicit source always wins — including one the project does not
+    /// configure. Whether that source has data is the service's answer to
+    /// give (a soft-empty listing), not this resolver's to pre-empt.
+    #[test]
+    fn test_explicit_source_wins() {
+        let state = state_with(&["drofus", "ffe"]);
+        assert_eq!(resolve_source(&state, "p1", Some("ffe")).unwrap(), "ffe");
+        assert_eq!(resolve_source(&state, "p1", Some("nope")).unwrap(), "nope");
+    }
+
+    /// **Ambiguity is refused, not guessed.** Silently taking the first source
+    /// would answer confidently about the wrong dataset, which is worse than
+    /// an error. The message names the real choices so the retry is obvious.
+    #[test]
+    fn test_ambiguous_source_is_refused_and_names_the_choices() {
+        let err = resolve_source(&state_with(&["drofus", "ffe"]), "p1", None).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("drofus") && msg.contains("ffe"), "must name the choices: {msg}");
+    }
+
+    /// A project with no reference source, and an unregistered project, both
+    /// fail with a caller-addressable message rather than defaulting to a
+    /// name that would then 404 deeper in.
+    #[test]
+    fn test_no_configured_source_is_an_error() {
+        assert!(resolve_source(&state_with(&[]), "p1", None).is_err());
+        assert!(resolve_source(&state_with(&["drofus"]), "ghost", None).is_err());
+    }
+
+    fn http_app(allow_upload: bool, token: Option<&str>) -> roommate::mcp_http::Router {
+        let state = state_with(&["drofus"]);
+        roommate::mcp_http::router(
+            move || Ok(RoommateMcp::new(state.clone(), "http://127.0.0.1:1".into()).with_upload(allow_upload)),
+            roommate::network::HostPolicy::loopback_only(),
+            token.map(String::from),
+        )
+    }
+
+    async fn rpc(app: roommate::mcp_http::Router, token: Option<&str>, body: serde_json::Value) -> (u16, String) {
+        roommate::mcp_http::call(app, token, &body.to_string()).await
+    }
+
+    fn init() -> serde_json::Value {
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}})
+    }
+
+    /// The tools answer over HTTP as they do over stdio: the handshake works and a call returns
+    /// what the service returns. One POST per message, so nothing depends on a session surviving.
+    #[tokio::test]
+    async fn test_http_answers_initialize_and_a_tool_call() {
+        let (status, body) = rpc(http_app(false, None), None, init()).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("roommate-mcp"), "{body}");
+
+        let call = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"list_projects","arguments":{}}});
+        let (status, body) = rpc(http_app(false, None), None, call).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("\"result\""), "{body}");
+    }
+
+    /// With a token set, a call without it never reaches a tool.
+    #[tokio::test]
+    async fn test_http_refuses_a_call_without_the_token() {
+        assert_eq!(rpc(http_app(false, Some("s3cret")), None, init()).await.0, 401);
+        assert_eq!(rpc(http_app(false, Some("s3cret")), Some("s3cret"), init()).await.0, 200);
+    }
+
+    /// Over HTTP the one mutating tool is off unless asked for, and says so rather than failing
+    /// on the network call it would otherwise make.
+    #[tokio::test]
+    async fn test_upload_is_off_over_http_by_default() {
+        let call = serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name":"upload_reference","arguments":{"project_id":"p1","path":"/nope.csv"}}});
+        let (status, body) = rpc(http_app(false, None), None, call).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("turned off"), "{body}");
+    }
+
+    /// Path and query components are percent-encoded before they reach the
+    /// forwarded upload URL — a source or project name with a space or slash
+    /// must not split the path.
+    #[test]
+    fn test_urlencode_escapes_path_hostile_characters() {
+        assert_eq!(urlencode("drofus"), "drofus");
+        assert_eq!(urlencode("a b/c"), "a%20b%2Fc");
+        assert_eq!(urlencode("2026-01-01T10:00:00+10:00"), "2026-01-01T10%3A00%3A00%2B10%3A00");
+    }
+}

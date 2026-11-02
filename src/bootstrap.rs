@@ -1,0 +1,744 @@
+//! Settings file paths -> a running `Shared` state. The one place that knows
+//! how to turn a server-settings file plus a directory of per-project
+//! settings files into a live `AppState`: load each project's settings, load
+//! each of its configured reference sources' data, validate their declared
+//! fields against it, register it under its project id, pick the storage
+//! backend, and seed dev/test data.
+//! Shared verbatim by both binaries (`main.rs`'s HTTP server and
+//! `bin/mcp.rs`'s MCP server) so they can't drift on this wiring -- a change
+//! to how the store backend is chosen, for instance, only has one call site
+//! to update.
+//!
+//! Settings are one-per-project rather than one-per-process, while
+//! `[storage]`/`[test_data]` (server-wide, not tied to any one project) stay
+//! behind in their own `ServerConfig` file.
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use anyhow::Context;
+
+use crate::reference::load_reference_from_bytes;
+use crate::service::rooms::{validate_namespaced_field, validate_room_only_field};
+use crate::settings::{
+    load_server_config, load_settings, validate_reference_field_shapes, validate_reference_fields, ColourMode,
+    ColourPlan, ReferenceOrigin, ServerConfig,
+};
+use crate::state::{seed_if_test, AppState, ProjectReferenceSource, ProjectSettings, SettingsRegistry, Shared};
+use crate::storage::{FsStore, MemStore, SnapshotStore};
+
+/// Refuse a reference source whose name would shadow a room's own wire field.
+///
+/// `RoomResponse.reference` is `#[serde(flatten)]`ed onto the response so that
+/// today's sources cost no wire change -- which means a source literally named
+/// `id` or `properties` would REPLACE the room's real field on every response
+/// rather than adding one. Silent, and visible only as rooms that lost a field.
+///
+/// Here rather than in `load_settings` because the reserved vocabulary is
+/// `service::rooms`'s to define, and settings must not depend on service.
+///
+/// Extracted from `load_project_bundle` when adding the windows policy took
+/// that function one line past the `too_many_lines` gate. It is the most
+/// self-contained block in it -- it reads one field and touches nothing else --
+/// so it is the seam that costs the least to cut.
+fn reject_reserved_reference_names(settings: &crate::settings::Settings, path: &Path) -> anyhow::Result<()> {
+    // A source name that collides with a room's own wire field would
+    // silently overwrite it: `RoomResponse.reference` (service::rooms) is
+    // `#[serde(flatten)]`ed onto the response precisely so today's one
+    // source ("drofus") costs no wire change, but that means a source
+    // literally named "id" or "properties" would shadow the room's real
+    // field on every response instead of adding one. Checked here, not in
+    // `load_settings`, because the reserved vocabulary is `service::rooms`'s
+    // to define and settings must not depend on service.
+    const RESERVED_REFERENCE_NAMES: &[&str] = &[
+        "id",
+        "name",
+        "level_id",
+        "loops",
+        "properties",
+        "classification",
+        "label",
+    ];
+    for name in settings.sources.reference.keys() {
+        if RESERVED_REFERENCE_NAMES.contains(&name.as_str()) {
+            anyhow::bail!(
+                "{}: [sources.reference.{name}] uses a reserved name — it would shadow the room's own '{name}' field on every /rooms response",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Load and fully validate ONE project settings file into its runtime
+/// bundle: parse TOML, hydrate each configured reference source from its
+/// latest stored upload (which is why the store is a parameter), validate
+/// each source's declared fields against it. This is
+/// the single validation pipeline for a project file — startup
+/// (`load_project_settings_dir`) and the settings API's save both run
+/// exactly this, so a file the UI accepts can never fail the next boot.
+pub fn load_project_bundle(path: &Path, store: &dyn SnapshotStore) -> anyhow::Result<(String, bool, ProjectSettings)> {
+    let settings = load_settings(path).with_context(|| format!("bad settings file: {}", path.display()))?;
+
+    // Every setting that may name a joined source: the namespace half is
+    // checkable right here, and left unchecked each one fails differently but
+    // always silently — an empty milestone diff indistinguishable from "no
+    // changes", a room-tag chip that never appears, a colour plan that greys
+    // every room. Lives here rather than in `load_settings` because the
+    // vocabulary belongs to `service::rooms` (settings must not depend on
+    // service); running inside this function is also what gives the
+    // settings-save path the same rejection for free. Unqualified names stay
+    // unvalidated — free-text room properties may legitimately match nothing
+    // yet, and only the source half is a closed set this file can check.
+    //
+    // Validated against THIS project's own configured source names, not a
+    // global cross-project union: every one of these settings is scoped to one
+    // project (a comparison runs as `compare_milestones(state, project, ..)`; a
+    // label and a colour plan belong to the project that authored them), so a
+    // name pointing at a source only some OTHER project configures could never
+    // resolve here anyway — the tighter, project-local check is both simpler
+    // (no chicken-and-egg with the rest of the directory still loading) and the
+    // semantically correct one. Contrast the live `/rooms` filter
+    // (`handlers::get_rooms`), which spans projects unscoped and so must use the
+    // registry-wide union instead (see
+    // `SettingsRegistry::known_reference_sources`).
+    let known_here: std::collections::BTreeSet<String> = settings.sources.reference.keys().cloned().collect();
+    for (which, field) in settings
+        .comparison_key
+        .iter()
+        .map(|f| ("comparison_key".to_string(), f))
+        .chain(settings.comparison_properties.iter().map(|f| ("comparison_properties".to_string(), f)))
+        .chain(settings.room_label.iter().map(|f| ("room_label".to_string(), f)))
+        .chain(settings.colour_plans.iter().flat_map(colour_plan_fields))
+    {
+        validate_namespaced_field(field, &known_here)
+            .map_err(|msg| anyhow::anyhow!("bad {which} entry {field:?} in {}: {msg}", path.display()))?;
+    }
+
+    // Hierarchy tiers are the one surface that reads room properties ONLY, so
+    // they get the inverse check — see `validate_room_only_field`.
+    for tier in &settings.hierarchy {
+        for (which, field) in [
+            ("code_property", &tier.code_property),
+            ("name_property", &tier.name_property),
+        ] {
+            let Some(field) = field else { continue };
+            validate_room_only_field(field, &known_here).map_err(|msg| {
+                anyhow::anyhow!("hierarchy tier {:?} {which} {field:?} in {}: {msg}", tier.name, path.display())
+            })?;
+        }
+    }
+
+    reject_reserved_reference_names(&settings, path)?;
+
+    // Every configured reference source hydrates the latest stored CSV for
+    // that (project, source) pair from the snapshot store (which is why the
+    // store is a parameter) — absent upload data is a legitimate "not
+    // configured yet" state, not a startup error. Each source's `fields` list
+    // lives on its own settings entry (`[sources.reference.<name>].fields`),
+    // so there is no way to declare fields with no source to attach them to.
+    let mut reference = std::collections::BTreeMap::new();
+    for (name, source_cfg) in &settings.sources.reference {
+        let data = match &source_cfg.origin {
+            // `type = "file"` is gone. Rejected by name with the migration
+            // command rather than left to serde's "unknown variant `file`",
+            // because a settings file written before this change is a
+            // situation the operator has to be *told how to fix*, not merely
+            // told about — the "loud startup over silent no-op" rule, applied
+            // to a removal instead of a typo.
+            ReferenceOrigin::File { path: csv_path } => {
+                anyhow::bail!(
+                    "settings file {} declares `[sources.reference.{name}] type = \"file\"`, \
+                     which is no longer supported — reference data is uploaded and stored as \
+                     dated snapshots now.\n\
+                     \n\
+                     To migrate, replace that source's `type`/`path` lines with:\n\
+                     \n    [sources.reference.{name}]\n    type = \"upload\"\n\n\
+                     then upload the CSV once, with the server running:\n\
+                     \n    curl --data-binary @{} -H 'Content-Type: text/csv' \\\n         \
+                     http://127.0.0.1:5151/projects/{}/reference/{name}\n\n\
+                     (or drag it onto that source's card in the settings page).",
+                    path.display(),
+                    csv_path.display(),
+                    settings.project_id,
+                );
+            }
+            ReferenceOrigin::Upload => match store.get_latest_reference(&settings.project_id, name)? {
+                Some((taken_at, bytes)) => {
+                    // A stored CSV that fails to parse fails the boot loudly —
+                    // same discipline as a rotted `file` CSV. The upload endpoint
+                    // validates before storing, so this is only reachable by
+                    // hand-editing the store.
+                    let data = load_reference_from_bytes(&bytes).with_context(|| {
+                        format!(
+                            "bad stored '{name}' upload {} for project '{}' (referenced by {})",
+                            taken_at,
+                            settings.project_id,
+                            path.display()
+                        )
+                    })?;
+                    validate_reference_fields(&source_cfg.fields, &data.all_labels)
+                        .with_context(|| format!("bad '{name}' fields in {}", path.display()))?;
+                    Some(data)
+                }
+                // No upload yet: a legitimate "not configured yet" state, not an
+                // error. The label set is unknowable, so only the label-free half
+                // of the field validation can run.
+                None => {
+                    validate_reference_field_shapes(&source_cfg.fields)
+                        .with_context(|| format!("bad '{name}' fields in {}", path.display()))?;
+                    None
+                }
+            },
+        };
+        reference.insert(
+            name.clone(),
+            ProjectReferenceSource { entity: source_cfg.entity, data, fields: source_cfg.fields.clone() },
+        );
+    }
+
+    let bundle = ProjectSettings {
+        reference,
+        hierarchy: settings.hierarchy,
+        builtin_properties: settings.builtin_properties,
+        room_label: settings.room_label,
+        milestones: settings.milestones,
+        anchor_model: settings.anchor_model,
+        tag_type_code: settings.tag_type_code,
+        comparison_key: settings.comparison_key,
+        comparison_properties: settings.comparison_properties,
+        areas: settings.areas,
+        doors: settings.doors,
+        windows: settings.windows,
+        ffe: settings.ffe,
+        spaces: settings.spaces,
+        hierarchy_exclusions: settings.hierarchy_exclusions,
+        routing: settings.routing,
+    };
+    Ok((settings.project_id, settings.is_default, bundle))
+}
+
+/// The property names one colour plan authors, each paired with the label a
+/// load error should name it by — the plan's own name included, since a project
+/// may hold several and "bad colour plan property_a" would not say which one.
+///
+/// `Hierarchy` contributes nothing: its `tiers` names hierarchy tiers, not room
+/// properties, so there is no namespace to split.
+fn colour_plan_fields(plan: &ColourPlan) -> Vec<(String, &String)> {
+    let label = |which: &str| format!("colour plan {:?} {which}", plan.name);
+    match &plan.mode {
+        ColourMode::PropertyCompare { property_a, property_b, .. } => {
+            vec![(label("property_a"), property_a), (label("property_b"), property_b)]
+        }
+        ColourMode::DateRange { property, .. } => vec![(label("property"), property)],
+        ColourMode::Hierarchy { .. } => Vec::new(),
+    }
+}
+
+/// Load and validate every `*.toml` file directly inside `projects_dir` (not
+/// recursive) into a project-id-keyed registry, plus the explicit default
+/// bundle if exactly one file sets `is_default = true`. Fails the whole
+/// startup on: a malformed file, a duplicate `project_id` across files, or
+/// more than one file claiming `is_default` -- same "loud startup error over
+/// a silent no-op" discipline `load_settings` already uses for hierarchy
+/// tiers and builtin properties. Also re-run by the settings API after a
+/// save, to build the registry it hot-swaps in.
+/// The third return value is a digest of every settings file's **bytes**, for
+/// `SettingsRegistry::new` to hash into the revision every read's ETag carries.
+/// Taken from the bytes rather than from the parsed bundles on purpose: a field
+/// added to `Settings` is covered without anyone remembering to list it, which
+/// is the failure mode a hand-written digest has and cannot detect.
+pub fn load_project_settings_dir(
+    projects_dir: &Path,
+    store: &dyn SnapshotStore,
+) -> anyhow::Result<(HashMap<String, ProjectSettings>, Option<ProjectSettings>, u64)> {
+    use std::hash::{Hash, Hasher};
+
+    let mut registry = HashMap::new();
+    let mut default_bundle: Option<(String, ProjectSettings)> = None;
+    // (file name, bytes) per settings file, sorted before hashing: a directory
+    // walk's order is an artefact, and a revision that moved with it would
+    // invalidate every cached read for nothing.
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+
+    let entries = std::fs::read_dir(projects_dir)
+        .with_context(|| format!("could not read project settings directory: {}", projects_dir.display()))?;
+
+    for entry in entries {
+        let entry = entry.with_context(|| format!("could not read entry in {}", projects_dir.display()))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue; // not a settings file (e.g. a stray drofus.csv sitting alongside)
+        }
+
+        let (project_id, is_default, bundle) = load_project_bundle(&path, store)?;
+        tracing::info!("project settings loaded from {} (project_id = {})", path.display(), project_id);
+
+        // Read a second time, for the digest only. Cheap where it happens —
+        // startup and a settings save, never a request — and it keeps
+        // `load_project_bundle` a parser rather than a parser that also
+        // fingerprints.
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("could not re-read settings file for its digest: {}", path.display()))?;
+        files.push((path.file_name().unwrap_or_default().to_string_lossy().into_owned(), bytes));
+
+        if is_default {
+            if let Some((other_id, _)) = &default_bundle {
+                anyhow::bail!(
+                    "more than one project settings file sets is_default = true: '{}' and '{}'",
+                    other_id,
+                    project_id
+                );
+            }
+            default_bundle = Some((project_id.clone(), bundle.clone()));
+        }
+
+        if registry.insert(project_id.clone(), bundle).is_some() {
+            anyhow::bail!("duplicate project_id across settings files: '{}'", project_id);
+        }
+    }
+
+    files.sort_unstable();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    files.hash(&mut hasher);
+
+    Ok((registry, default_bundle.map(|(_, b)| b), hasher.finish()))
+}
+
+pub fn build_state(server_settings: &Path, projects_dir: &Path) -> anyhow::Result<Shared> {
+    let ServerConfig { storage, test_data } = load_server_config(server_settings)
+        .with_context(|| format!("bad server settings file: {}", server_settings.display()))?;
+    tracing::info!("server settings loaded from {}", server_settings.display());
+
+    // Pick the backend from config: a `[storage]` root → persistent FsStore,
+    // otherwise the volatile MemStore (dev/test). Both satisfy SnapshotStore, so
+    // this is the only line that knows which one is running. Constructed BEFORE
+    // the project bundles load, because an `upload`-sourced project hydrates
+    // its dRofus data from this store.
+    let store: Box<dyn SnapshotStore> = match storage {
+        Some(cfg) => {
+            tracing::info!("persistent storage at {}", cfg.root.display());
+            Box::new(FsStore::new(cfg.root)?)
+        }
+        None => {
+            tracing::info!("no [storage] configured — using in-memory store");
+            Box::new(MemStore::new())
+        }
+    };
+
+    let (project_settings, default_settings, files_digest) = load_project_settings_dir(projects_dir, store.as_ref())
+        .with_context(|| format!("bad project settings directory: {}", projects_dir.display()))?;
+
+    if project_settings.is_empty() && default_settings.is_none() {
+        tracing::warn!(
+            "no project settings files found in {} -- every read/ingest will be rejected/skipped until one is added",
+            projects_dir.display()
+        );
+    }
+
+    let state: Shared = Arc::new(
+        AppState::with_registry(store, SettingsRegistry::new(project_settings, default_settings, files_digest))
+            .with_projects_dir(projects_dir.to_path_buf()),
+    );
+
+    seed_if_test(&state, test_data.as_ref())?;
+
+    // AFTER seeding, so a seeded snapshot is indexed like a pushed one.
+    backfill_placements(&state)?;
+
+    Ok(state)
+}
+
+/// Fill in `ModelEntry::placement` for models stored before the manifest
+/// carried it.
+///
+/// **A one-shot migration that costs nothing once it has run.** A model whose
+/// index already names a placement is skipped without opening anything, so the
+/// pass is a manifest read per project on every start after the first. Only
+/// models with a gap pay for a snapshot parse.
+///
+/// **Why it has to exist at all.** The placement is what
+/// `service::placement::from_index` needs to put a project's linked models in
+/// one frame, and it is normally recorded at push time. Every snapshot already
+/// on disk predates that, so without this the alignment would only reach data
+/// pushed after the upgrade — which on a store someone has just copied in from
+/// another machine is every model that matters.
+///
+/// **Failures are warnings, never fatal.** A snapshot that cannot be parsed
+/// leaves its model unplaced, which is exactly the state it was already in; a
+/// server that refused to start over it would trade a cosmetic misalignment for
+/// an outage.
+fn backfill_placements(state: &AppState) -> anyhow::Result<()> {
+    /// Only the envelope field wanted, so the parse ignores the element array
+    /// rather than building it. Every entity's payload carries the key at the
+    /// top level, so one shape reads all five.
+    #[derive(serde::Deserialize)]
+    struct JustPlacement {
+        model_to_shared: Option<crate::contract::ModelToShared>,
+    }
+
+    let index = state.model_index()?;
+    let mut filled = 0usize;
+    for row in index.iter().filter(|row| row.placement.is_none()) {
+        // Any kind will do — `model_to_shared` is a model fact, identical on
+        // every entity's envelope. Smallest snapshot first, because an FF&E
+        // push is two orders of magnitude larger than a spaces one and this
+        // parse is pure overhead.
+        let mut found = None;
+        let mut kinds: Vec<_> = row.latest.keys().copied().collect();
+        kinds.sort_by_key(|kind| state.store().get_latest_raw(*kind, &row.key).map(|b| b.map_or(0, |b| b.len())).ok());
+        for kind in kinds {
+            let Ok(Some(bytes)) = state.store().get_latest_raw(kind, &row.key) else {
+                continue;
+            };
+            match serde_json::from_slice::<JustPlacement>(&bytes) {
+                Ok(JustPlacement { model_to_shared: Some(placement) }) => {
+                    found = Some(placement);
+                    break;
+                }
+                Ok(_) => continue, // parsed fine and declares none: nothing to backfill
+                Err(err) => {
+                    tracing::warn!(
+                        "could not read placement from {}/{} {} snapshot: {err}",
+                        row.key.project_id,
+                        row.key.model_id,
+                        kind.label()
+                    );
+                }
+            }
+        }
+        if let Some(placement) = found {
+            state.store().set_placement(&row.key, placement)?;
+            filled += 1;
+        }
+    }
+    if filled > 0 {
+        tracing::info!("backfilled the placement index for {filled} model(s)");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_projects_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("roommate-bootstrap-{}-{}", tag, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// **The migration tripwire.** A settings file still declaring the removed
+    /// `type = "file"` fails the boot with a message that names the source and
+    /// spells out the migration, rather than leaving serde to answer "unknown
+    /// variant". The whole reason the variant is still deserializable.
+    #[test]
+    fn test_file_origin_fails_with_migration_instructions() {
+        let dir = temp_projects_dir("file-origin");
+        let path = dir.join("p1.toml");
+        std::fs::write(
+            &path,
+            "project_id = \"p1\"
+
+[sources.reference.drofus]
+type = \"file\"
+path = \"../drofus.csv\"
+",
+        )
+        .unwrap();
+
+        let msg = match load_project_bundle(&path, &MemStore::new()) {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("a `file` source must not load"),
+        };
+
+        assert!(msg.contains("no longer supported"), "says it is gone: {msg}");
+        assert!(msg.contains("drofus"), "names the source: {msg}");
+        assert!(msg.contains("type = \"upload\""), "shows the replacement: {msg}");
+        assert!(msg.contains("/projects/p1/reference/drofus"), "gives the upload URL: {msg}");
+        assert!(msg.contains("../drofus.csv"), "names the CSV to upload: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The digest is over content, so an unchanged directory reloads to the
+    /// same value. A restart, or a save that rewrote a file identically, must
+    /// not throw away every client cached read -- which is the whole reason
+    /// this is a hash rather than a counter (see `SettingsRegistry::revision`).
+    #[test]
+    fn test_settings_digest_is_stable_for_unchanged_files() {
+        let dir = temp_projects_dir("digest-stable");
+        std::fs::write(dir.join("p1.toml"), "project_id = \"p1\"\nroom_label = [\"Number\"]\n").unwrap();
+
+        let (_registry, _default, first) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        let (_registry, _default, second) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+
+        assert_eq!(first, second, "same bytes, same digest");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// And it moves for any edit, including one no code here reads by name.
+    /// That is the argument for hashing bytes rather than listing the policy
+    /// fields that matter: the list is what stops being complete.
+    #[test]
+    fn test_settings_digest_moves_when_a_file_changes() {
+        let dir = temp_projects_dir("digest-moves");
+        let file = dir.join("p1.toml");
+        std::fs::write(&file, "project_id = \"p1\"\nroom_label = [\"Number\"]\n").unwrap();
+        let (_registry, _default, before) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+
+        std::fs::write(&file, "project_id = \"p1\"\nroom_label = [\"Number\", \"Name\"]\n").unwrap();
+        let (_registry, _default, after) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+
+        assert_ne!(before, after, "a changed settings file must change the digest");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A re-uploaded CSV changes what every joined column answers while no
+    /// settings file and no snapshot moves, so the registry hashes the
+    /// resolved reference data as well as the files. Same row count, one
+    /// changed value -- the case a cheaper digest (row counts, timestamps)
+    /// would miss, and the reason this one walks the records.
+    #[test]
+    fn test_registry_revision_moves_when_a_reference_upload_changes() {
+        let dir = temp_projects_dir("digest-upload");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n",
+        )
+        .unwrap();
+
+        let revision_for = |csv: &[u8]| {
+            let store = MemStore::new();
+            store.put_reference("p1", "drofus", "2026-01-01T10:00:00Z", csv).unwrap();
+            let (by_project, default, digest) = load_project_settings_dir(&dir, &store).unwrap();
+            SettingsRegistry::new(by_project, default, digest).revision
+        };
+
+        let before = revision_for(b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n");
+        let same = revision_for(b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n");
+        let after = revision_for(b"DrofusRoomId,NetArea\nNumber,Area\n1,31.0\n");
+
+        assert_eq!(before, same, "identical data must hash identically");
+        assert_ne!(before, after, "a changed reference value must move the revision");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A project with no `[sources]` at all registers with an empty
+    /// `reference` map — the "nothing to reconcile" state
+    /// `compute_project_validation` reports as an empty `sources` map.
+    #[test]
+    fn test_project_without_sources_registers_with_no_drofus() {
+        let dir = temp_projects_dir("no-sources");
+        std::fs::write(dir.join("p1.toml"), "project_id = \"p1\"\n").unwrap();
+
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        assert!(registry.get("p1").unwrap().reference.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // A `drofus_fields`-without-a-source config mistake (the old
+    // `test_drofus_fields_without_source_fails_startup`) is now structurally
+    // unrepresentable: a source's fields live under its own
+    // `[sources.reference.<name>]` entry, so there is no longer a way to
+    // declare fields with no source to attach them to.
+
+    /// An `upload`-sourced project with no upload yet registers with
+    /// `drofus: None` — a legitimate not-configured-yet state — and its
+    /// fields are accepted on their label-free shape checks alone.
+    #[test]
+    fn test_upload_source_with_empty_store_registers_without_drofus() {
+        let dir = temp_projects_dir("upload-empty");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
+        )
+        .unwrap();
+
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        let bundle = registry.get("p1").unwrap();
+        let drofus_source = &bundle.reference["drofus"];
+        assert!(drofus_source.data.is_none());
+        assert_eq!(drofus_source.fields.len(), 1, "field declarations carried along for later");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An `upload`-sourced project's shape checks still run with no data: a
+    /// `date` field without a `format` is rejectable without knowing labels.
+    #[test]
+    fn test_upload_source_shape_validation_runs_without_data() {
+        let dir = temp_projects_dir("upload-shape");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"Updated\"\ntype = \"date\"\n",
+        )
+        .unwrap();
+
+        let msg = match load_project_settings_dir(&dir, &MemStore::new()) {
+            Err(err) => format!("{err:#}"),
+            Ok(_) => panic!("expected failure: date field with no format"),
+        };
+        assert!(msg.contains("format"), "message names the problem: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An `upload`-sourced project with a stored CSV hydrates it as its
+    /// dRofus data, and its fields' labels are validated against it.
+    #[test]
+    fn test_upload_source_hydrates_latest_stored_csv() {
+        let dir = temp_projects_dir("upload-hydrate");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NetArea\"\nqa = \"exact\"\n",
+        )
+        .unwrap();
+
+        let store = MemStore::new();
+        store
+            .put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
+            .unwrap();
+
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &store).unwrap();
+        let drofus = registry.get("p1").unwrap().reference["drofus"].data.as_ref().expect("hydrated");
+        assert_eq!(drofus.link_property, "Number");
+        assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A bad namespace in a comparison field fails the boot with a message
+    /// naming the file, the field, and the known sources — replacing the
+    /// silent empty-diff no-op it used to become at read time. The unqualified
+    /// entry alongside it proves free-text names stay unvalidated.
+    #[test]
+    fn test_bad_comparison_namespace_fails_startup() {
+        let dir = temp_projects_dir("cmp-ns");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\ncomparison_key = \"Number\"\ncomparison_properties = [\"Area\", \"drofuss.NetArea\"]\n",
+        )
+        .unwrap();
+
+        let msg = match load_project_settings_dir(&dir, &MemStore::new()) {
+            Err(err) => format!("{err:#}"),
+            Ok(_) => panic!("expected startup failure for an unknown comparison namespace"),
+        };
+        assert!(msg.contains("unknown data source"), "names the problem: {msg}");
+        assert!(msg.contains("drofus"), "names the known sources: {msg}");
+        assert!(msg.contains("comparison_properties"), "names the setting: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The valid comparison shapes all boot: a known namespace, unqualified
+    /// free-text (which may match nothing yet), and no key at all.
+    #[test]
+    fn test_valid_comparison_fields_boot() {
+        let dir = temp_projects_dir("cmp-ok");
+        std::fs::write(
+            dir.join("p1.toml"),
+            // `drofus.`-qualified fields validate only against sources THIS
+            // project actually configures (see the comment on the
+            // `known_here` computation in `load_project_bundle`), so the
+            // fixture must declare the source, not just reference it.
+            "project_id = \"p1\"\ncomparison_key = \"drofus.RoomId\"\ncomparison_properties = [\"Area\", \"drofus.NetArea\", \"No Such Property\"]\n\n[sources.reference.drofus]\ntype = \"upload\"\n",
+        )
+        .unwrap();
+
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &MemStore::new()).unwrap();
+        assert_eq!(registry.get("p1").unwrap().comparison_key.as_deref(), Some("drofus.RoomId"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A stored CSV whose labels don't cover the declared fields fails the
+    /// load loudly — same discipline as a `file` source.
+    #[test]
+    fn test_upload_source_label_mismatch_fails_loudly() {
+        let dir = temp_projects_dir("upload-mismatch");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n[sources.reference.drofus]\ntype = \"upload\"\n\n[[sources.reference.drofus.fields]]\nlabel = \"NoSuchColumn\"\nqa = \"exact\"\n",
+        )
+        .unwrap();
+
+        let store = MemStore::new();
+        store
+            .put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
+            .unwrap();
+
+        let msg = match load_project_settings_dir(&dir, &store) {
+            Err(err) => format!("{err:#}"),
+            Ok(_) => panic!("expected failure: field label not in stored CSV"),
+        };
+        assert!(msg.contains("NoSuchColumn"), "message names the label: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A reference source named after one of `RoomResponse`'s own wire fields
+    /// fails the boot loudly rather than silently shadowing that field once
+    /// `#[serde(flatten)]` spreads it onto every `/rooms` response.
+    #[test]
+    fn test_reserved_reference_source_name_fails_startup() {
+        let dir = temp_projects_dir("reserved-name");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n[sources.reference.properties]\ntype = \"upload\"\n",
+        )
+        .unwrap();
+
+        let msg = match load_project_settings_dir(&dir, &MemStore::new()) {
+            Err(err) => format!("{err:#}"),
+            Ok(_) => panic!("expected startup failure for a reserved source name"),
+        };
+        assert!(msg.contains("reserved") && msg.contains("properties"), "names the problem: {msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two configured reference sources on one project both load into
+    /// `ProjectSettings.reference`, independently of each other — the
+    /// end-to-end proof that `load_project_bundle` no longer special-cases
+    /// "drofus" as the only loadable source name.
+    #[test]
+    fn test_two_reference_sources_both_load_independently() {
+        let dir = temp_projects_dir("two-sources");
+        std::fs::write(
+            dir.join("p1.toml"),
+            "project_id = \"p1\"\n\n\
+             [sources.reference.drofus]\ntype = \"upload\"\n\n\
+             [[sources.reference.drofus.fields]]\nlabel = \"NetArea\"\ntype = \"numeric\"\n\n\
+             [sources.reference.doors]\ntype = \"upload\"\n\n\
+             [[sources.reference.doors.fields]]\nlabel = \"Mark\"\n",
+        )
+        .unwrap();
+
+        let store = MemStore::new();
+        store
+            .put_reference("p1", "drofus", "2026-01-01T10:00:00Z", b"DrofusRoomId,NetArea\nNumber,Area\n1,25.5\n")
+            .unwrap();
+        store
+            .put_reference("p1", "doors", "2026-01-01T10:00:00Z", b"DoorId,Mark\nMark,Mark\nD1,101A\n")
+            .unwrap();
+
+        let (registry, _default, _digest) = load_project_settings_dir(&dir, &store).unwrap();
+        let bundle = registry.get("p1").unwrap();
+
+        assert_eq!(bundle.reference.len(), 2, "both sources registered, not just \"drofus\"");
+        let drofus = bundle.reference["drofus"].data.as_ref().expect("drofus hydrated");
+        assert_eq!(drofus.by_id["1"].fields.get("NetArea"), Some(&"25.5".to_string()));
+        let doors = bundle.reference["doors"].data.as_ref().expect("doors hydrated");
+        assert_eq!(doors.by_id["D1"].fields.get("Mark"), Some(&"101A".to_string()));
+        assert_eq!(bundle.reference["doors"].fields[0].label, "Mark");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

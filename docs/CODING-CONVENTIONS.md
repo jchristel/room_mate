@@ -1,0 +1,224 @@
+# RoomMate — Coding Conventions
+
+The engineering rules this codebase already follows, in one place so future
+work (and future handovers) can point at them instead of re-deriving them.
+These are *conventions*, not architecture — the "why it's shaped this way" of
+the pipeline lives in the [STRATEGY docs](STRATEGY.md); this is the "how we
+write it" that sits underneath.
+
+## Module structure & length
+- Judge a module's size by its **non-test** lines (tests live inline — see
+  below — and legitimately dominate a small module).
+- A module past **~500 real lines**, or one mixing distinct concerns (types +
+  logic + IO), is a split candidate. Split a `foo.rs` into a `foo/` directory
+  with `mod.rs` plus per-concern files.
+- **Re-export public items from `mod.rs`** (`pub use fs::FsStore;`) so the
+  public path (`crate::foo::Bar`) never moves — a split then touches zero call
+  sites outside the module. `storage/` and `settings/` are the worked examples.
+- A type's inherent `impl { fn validate() }` stays *with the type*; only
+  standalone free functions move to a sibling file (see `settings/`).
+
+**Being over the trigger is not a defect — but it has to be *judged*, and the
+judgement has to be written down.** `scripts/weekly_review.py` measures `src/`
+and reports every module past the trigger that has not been. A module judged and
+kept whole goes in `weekly_review_ignore.toml` under `[modules]` with its reason,
+and that same reason belongs in the module header, where the next reader of the
+file will find it.
+
+This used to be a hand-copied census of twelve modules and their sizes, with the
+script re-verifying the numbers. It drifted to +47% and named a deleted file
+before anyone noticed — the exact failure this section warns about, committed by
+the section itself. Measure the code, never a sentence about the code.
+
+The recorded judgements are the ignore file's `[modules]` section; the rest of
+the backlog is whatever the check reports; two of them are worth naming because the answer is
+known and only the writing-down is missing:
+
+- **`roommate-shared`'s `settings/mod.rs` reads as unfinished.** The server's
+  `src/settings/mod.rs` is now the thin re-export the pattern describes, but
+  only because the types moved out *whole* into `crates/roommate-shared` — the
+  bulk moved with them rather than being split.
+  The types are already grouped by concern in the file (area policy, reference
+  field config, hierarchy, milestones, colour plans), so the seams exist.
+- **`areas.rs` and `rooms.rs` are cohesive by argument, not by accident** — one
+  geometry pipeline and one assembly pipeline, each with an invariant only
+  checkable by reading the parts together. That argument has never been written
+  into either header, so the next reader cannot tell it was decided rather than
+  deferred. Writing it is the whole task.
+
+## Tests
+- Unit tests live **inline** as `#[cfg(test)] mod tests` at the bottom of the
+  file they exercise — not in a separate `tests/` tree. They move with their
+  code when a module is split (a small shared helper like `payload(...)` is
+  duplicated into each sub-module rather than hoisted).
+- Test-drive behaviour end-to-end where it's cheap: `FsStore`-backed tests when
+  history matters, `MemStore` when it doesn't.
+
+## Long functions
+- A long function is a bigger smell than a long module. The `too_many_lines`
+  clippy lint (in `Cargo.toml`, `warn` — fires >100 lines) surfaces them.
+- **Clippy is a CI gate**: `.github/workflows/rust.yml` runs
+  `cargo clippy --all-targets -- -D warnings` alongside build and test, so the
+  tree is warning-free and stays that way. `--all-targets` because most of this
+  crate's lines are inline test modules, and they drifted just as far as the lib
+  did while nothing was watching.
+- **`-D warnings` does not make `too_many_lines` a hard limit.** The escape
+  hatch stays exactly what it always was — `#[allow(clippy::too_many_lines)]`
+  **with a reason** — and an explicit allow compiles clean under `-D warnings`.
+  A long-but-cohesive function is still permitted; it just has to say so out
+  loud. `settings_api::tests::test_settings_toml_round_trip` (118 lines) is the
+  worked example: it asserts that the *whole* `Settings` shape round-trips
+  through TOML at once, so splitting it per section would test each against a
+  separately built document and lose the value-before-table ordering property
+  (see the TOML footgun below) that only bites when sections are interleaved.
+- Extract helpers only at **seams that improve clarity** — a natural phase
+  boundary with a nameable input/output — never mechanically to hit the line
+  count. `assemble_rooms` (scope → dedup levels → assemble) and
+  `compute_validation` (resolve link values → compare fields → coverage) are
+  the worked examples. A helper called once that just relocates a block without
+  clarifying it is not worth it; a cohesive function that trips the lint carries
+  `#[allow(clippy::too_many_lines)]` with a reason instead.
+- Factor a repeated or gnarly type into a `type` alias with a doc comment
+  (`ScopedPayload`, `LinkValueIndex`) — it reads better *and* silences clippy's
+  `type_complexity`.
+
+## `static/` — the frontend toolchain and its migration direction
+**Extract when two consumers must agree, or when the boundary is a genuinely
+different concern — not to hit a line count.** The two extractions that happened
+before any rule prompted them were each pulled by a specific argument, and they
+are the two shapes: `common.js` (the palette and the classification-path
+vocabulary, because two views disagreeing about a colour or a group's identity
+is worse than either being arbitrary — both have since moved into
+`src-js/viewer/`, `palette.ts` and `areas.ts`, once every reader was
+TypeScript) and `graph.js`, now `src-js/viewer/adjacency/` (because
+the concern boundary is a different renderer). The first shape has a sequel
+worth knowing: when the viewer moved to TypeScript it grew its own copy of the
+vocabulary, and the copies drifted — "/" against ">" — so every area below tier
+0 focused an empty graph. Extraction only prevents drift while there is ONE
+copy; a port that re-declares a shared helper instead of importing it undoes
+the extraction silently.
+
+Page size is deliberately **not** the trigger, and reading it as one inverts the
+answer: `index.html` grew while the code it owns shrank, because the renderer
+work moved out into `src-js/`. That is the migration rule working.
+
+The zero-build vanilla rule was a proof-of-concept-stage decision and is
+**retired**. The frontend now has:
+
+- **`src-js/` — TypeScript, built by Vite, `npm run build`.** Where new frontend
+  code lands. `strict`, plus `noUncheckedIndexedAccess` and
+  `exactOptionalPropertyTypes`, because the viewer's behaviour already turns on
+  distinctions those flags enforce — `room.label` absent (fall back to name/id)
+  versus present-but-empty (properties didn't resolve, stay blank) is the one
+  that bites.
+- **`static/vendor/renderer.bundle.js` is generated and committed.** So a fresh
+  clone plus `cargo run` serves a working viewer with no node installed. Edit
+  the source, run `npm run build`, commit the result; `.github/workflows/frontend.yml`
+  rebuilds and fails on any diff. A committed artifact with no gate drifts, and
+  the failure is silent — a stale renderer with no error anyone can act on.
+- **Tests are co-located**: `foo.ts` beside `foo.test.ts`. The Rust rule below
+  says "never a `tests/` tree", and its *spirit* is tests beside what they
+  exercise; co-location honours it rather than contradicting it.
+- **The migration is incremental, by design.** `common.js` stays JavaScript. The standing rule is that **each
+  frontend change moves the module it touches** into `src-js/` — not a big-bang
+  conversion, which on code with no test coverage is a refactor of shared
+  mutable globals wearing a translation's clothes.
+
+## Dependency direction is the seam
+- `service/` is transport-agnostic: it never imports `axum`, `rmcp`, or
+  `reqwest`. `handlers` (HTTP) and `bin/mcp.rs` (MCP) are thin adapters — each
+  extracts its own input form, calls exactly one `service` function, and
+  translates the result to its wire format.
+- Neither binary's transport crate leaks into the other: `main.rs` never
+  imports `rmcp`/`reqwest`, `mcp.rs` never imports `axum`. (An HTTP *client* in
+  `mcp.rs` is fine — the rule is about server frameworks.)
+- `bootstrap` (settings files → a running `AppState`) is shared verbatim by
+  both binaries so they can't drift on how the store is picked or data is seeded.
+
+## "Signal, not error"
+A reference that *should* resolve but doesn't is usually a represented state to
+surface, not a hard failure — pick the shape that fits:
+- **soft-empty** (unknown/unregistered project → `[]`/`204`, not `404`);
+- **skip + warn** (a milestone pin to a since-deleted snapshot → drop that
+  model, log it);
+- **fall back + warn** (a milestone's reference pin that is missing or
+  unparseable → join that source's current data instead).
+An unmatched reference key, a room↔level mismatch, and a partially-classified
+room are all diagnostic signals, not errors.
+
+## Loud startup over silent no-op
+- Config mistakes fail the boot with a **specific** message (an unkeyable
+  hierarchy tier, a reference `fields` label the CSV never declared, a malformed
+  strftime pattern) rather than silently misbehaving on the first request.
+- The settings-save path re-runs the **exact** startup validation
+  (`bootstrap::load_project_bundle`) before installing a file, so a file the API
+  accepts can never fail the next boot; a rejected save leaves the old file
+  untouched.
+
+## Identity & the upload envelope
+- Ids are immutable keys; names are display-only. Tie storage to the id (the
+  Revit model GUID, the project id), never the name, so a rename doesn't fork
+  the record.
+- Every snapshot id resolves **only** through `contract::ensure_taken_at` /
+  `validate_snapshot_id` (RFC3339 UTC, omittable → server-minted, echoed back),
+  never a reimplementation. Any new upload type rides the same envelope.
+- **Validate uploaded data before storing it** — a stored artifact is hydrated
+  at every boot, so accepting a bad one turns a bad upload into a failed
+  startup. (See the reference-source upload path.)
+
+## Line endings
+- `*.rs`, `*.py`, and config files are **LF** in the working tree, enforced by
+  the repo-root `.gitattributes` (`* text=auto` plus per-extension `eol=lf`).
+  Windows-only scripts (`*.bat`/`*.cmd`/`*.ps1`) stay CRLF. A file that drifted
+  to CRLF is renormalized with `git add --renormalize`.
+
+## Annotate the "why"
+- Module headers and non-obvious code carry the **rationale**, not a restatement
+  of the what. The house style is a doc comment that explains the decision (why
+  this seam, why this fallback, what would break otherwise) — the thing a future
+  reader can't recover from the code alone.
+
+## Code documents what is built; a strategy doc documents what is not
+The other half of "Annotate the why", and the rule that decides *which file* a
+piece of prose belongs in. Read the two together: the first says the code
+carries the rationale, this one says that is therefore the only place it goes.
+
+- **A strategy doc holds only what is *not* built** — deferred work, designs
+  settled but unimplemented, and the rules that constrain what gets built next.
+  Anything else in one is a second copy of the module header, free to drift from
+  it, and it does: the docs went on naming a `drofus` module for weeks after the
+  rename, and described the plan renderer as "SVG today" a fortnight after it
+  moved to WebGL.
+- **So when a feature ships, deleting its description from the strategy doc is
+  part of that change**, not tidy-up for later. What survives the deletion is
+  whatever the code cannot state — an open question, a rejected alternative, a
+  constraint on the next change, a definition contested outside this repo (the
+  measurement standards are the type specimen).
+- **This is not a licence to grow the doc comments.** They are already thorough;
+  the point is that the prose beside them is redundant, not that more prose is
+  needed. Before deleting a section, *check* the relevant header carries the
+  rationale — usually it already does. If it genuinely doesn't, add the one
+  sentence it lacks and delete the section regardless. Never mirror a doc
+  section into a header wholesale to make the deletion feel safe: that recreates
+  the duplication one file to the left.
+- **A retired brief is deleted, not archived** (git history keeps it). Its surviving
+  open items move into the strategy doc that owns them first, so a live item is
+  never left in a document nobody reads.
+
+## TOML footgun (serialize side)
+- **Declare scalar and inline-array fields before any map/`Vec<Struct>` field**
+  (e.g. `Milestone.name`/`date` before `reference_snapshots` and `attachments`).
+  Free to follow, and it is the shape the structs already have.
+- **The hazard is silent when it bites**: a value emitted *after* a `[table]`
+  header parses back as a key inside that table. The value survives, it just
+  moves — which is why a round-trip test comparing values cannot see it.
+- **Keep the rule even though the current `toml` cannot break it.** The
+  serializer hoists all value-typed fields above every table regardless of
+  declaration order, so the hazard is presently unreachable — but a version
+  bump, a move to `toml_edit`, or a hand-rolled writer restores it. Two guards
+  (`test_toml_serializer_hoists_values_above_tables`,
+  `test_project_manifest_scalars_stay_top_level`) fail the day that happens,
+  which is *before* settings files start being written wrong.
+- The general form, and the reason both the rule and the guards stay: a
+  discipline nothing measures is one nobody can tell has stopped being
+  necessary — and, worse, one nobody notices has started being necessary again.

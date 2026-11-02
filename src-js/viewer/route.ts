@@ -1,0 +1,513 @@
+// The route tool's rules, with no store and no DOM.
+//
+// A route is two rooms the reader clicked and the shortest door route between
+// them, computed by the server (`/projects/{id}/connectivity`). What lives here
+// is the part that is a RULE rather than plumbing: which rooms may be an
+// endpoint, what a click does to the two slots, and how the server's polylines
+// become a zone's slice. Pure and out of the components for the reason
+// `panTo.ts` is: each is small, several zones apply it to themselves, and each
+// is only wrong in ways that are hard to see on screen.
+
+import type { Room } from "../renderer/types.js";
+import type { Scope } from "./scope.js";
+
+/** Where a route stands. `null` in the store is the tool being OFF. */
+/** A position in the plan, in the same coordinates the server answers in. */
+export interface PlanPoint {
+  x: number;
+  y: number;
+}
+
+export interface RouteState {
+  start: string | null;
+  end: string | null;
+  /** Where in the start and end rooms the route begins and ends, when a plan
+   *  click set it; `null` is the room's centre, which is what a grid row or a
+   *  search chip (no position) gives. */
+  startAt: PlanPoint | null;
+  endAt: PlanPoint | null;
+  /** The routing method asked for, or `null` for the server's default. */
+  method: string | null;
+  /** The width in mm of the object that has to make the trip, as typed, so a
+   *  half-typed number is not lost. Blank or 0 checks nothing. */
+  width: string;
+  /** Its height in mm, as typed. Blank or 0 checks nothing. */
+  height: string;
+  /** Every method the server offers, learned from its first answer, so the picker
+   *  is whatever the server supports and never a list kept here. */
+  methods: readonly RouteMethod[];
+  /** Room ids no door reaches, from the server's `isolated` list; `null` until
+   *  the first read for this scope lands.
+   *
+   *  **A room in here cannot be an endpoint**, which is the rule this tool was
+   *  asked to have: a route from a room nothing connects to can only ever answer
+   *  "no route", so the pick is refused instead of producing that answer. When
+   *  authored connections exist the server stops listing a connected room here
+   *  and the rule follows without a change on this side. */
+  unreachable: ReadonlySet<string> | null;
+  /** What the last refused or ignored click was, for the panel to say. */
+  notice: RouteNotice | null;
+  result: RouteResult;
+}
+
+export type RouteNotice =
+  | { kind: "no-door"; roomId: string }
+  | { kind: "loading" };
+
+export type RouteResult =
+  | { state: "idle" }
+  | { state: "loading" }
+  | { state: "error"; message: string }
+  | { state: "done"; path: RoutePath; clearance?: Clearance };
+
+/** One hop's width, as the server reports it. */
+export interface WidthLimit {
+  width_mm: number;
+  kind: "door" | "zone" | "vertical" | "passage";
+  door_id?: string;
+  zone_id?: string;
+  passage_id?: string;
+}
+
+/** What the route's widths say. A door's width is an ESTIMATE (footprint less a frame
+ *  allowance); a level change and a door with no footprint are not checked; the width
+ *  of a corridor inside a room is not checked at all. */
+export interface Clearance {
+  asked_mm?: number;
+  frame_allowance_mm: number;
+  narrowest?: WidthLimit;
+  unchecked_hops: number;
+  widest_possible?: WidthLimit;
+  asked_height_mm?: number;
+  /** The lowest checked door or room on the route found. */
+  lowest?: HeightLimit;
+  /** The tallest object that fits by ANY route, and what limits it. */
+  tallest_possible?: HeightLimit;
+  /** Doors and rooms of the route whose height is unknown, so were not checked. */
+  unchecked_height: number;
+}
+
+/** One door's or room's height, as the server reports it. */
+export interface HeightLimit {
+  height_mm: number;
+  kind: "door" | "room" | "passage";
+  door_id?: string;
+  passage_id?: string;
+  /** The room, or the two rooms a door joins. */
+  rooms: { model_id: string; room_id: string }[];
+  /** For a room: the height is a ceiling's and not the room's own property. */
+  from_ceiling?: boolean;
+}
+
+/** One routing method, as the server lists it. */
+export interface RouteMethod {
+  id: string;
+  name: string;
+  summary: string;
+  reference: string;
+}
+
+/** The part of the server's `path` the page reads. */
+export interface RoutePath {
+  found: boolean;
+  reason: string | null;
+  /** The method that produced it, and anything about how it was computed. */
+  method?: string;
+  note?: string | null;
+  /** Where the route actually began and ended (a point moved onto its room when it
+   *  lay outside it). */
+  start?: PlanPoint;
+  end?: PlanPoint;
+  distance_ft: number;
+  rooms: { model_id: string; room_id: string }[];
+  steps: RouteStep[];
+  segments: { level_id: string; points: { x: number; y: number }[] }[];
+}
+
+/** One hop of a route, as the server answers it. */
+export interface RouteStep {
+  kind: "door" | "zone" | "vertical" | "passage";
+  from?: { model_id: string; room_id: string };
+  to?: { model_id: string; room_id: string };
+  door_id?: string;
+  zone_id?: string;
+  link_id?: string;
+  passage_id?: string;
+  point: { x: number; y: number };
+  /** Feet walked for this hop (the walk inside the room it leaves plus the crossing). */
+  length?: number;
+}
+
+export function newRoute(): RouteState {
+  return { start: null, end: null, startAt: null, endAt: null, method: null, width: "", height: "", methods: [], unreachable: null, notice: null, result: { state: "idle" } };
+}
+
+/**
+ * What a click on a room does to the route.
+ *
+ * - A room with no door route is refused with a notice and nothing changes.
+ * - Before the first read has landed nothing can be judged, so the click is
+ *   ignored with a notice rather than accepted and possibly wrong.
+ * - Otherwise: the first free slot is filled, start before end. Clicking an
+ *   endpoint that is already placed clears it, which is how one is undone
+ *   without a control. With both placed, a click on another room replaces the
+ *   END: the start is the one a reader fixed first and the end is the one they
+ *   are still choosing.
+ */
+export function pickEndpoint(route: RouteState, roomId: string, at: PlanPoint | null = null): RouteState {
+  if (route.unreachable === null) return { ...route, notice: { kind: "loading" } };
+  if (route.unreachable.has(roomId)) return { ...route, notice: { kind: "no-door", roomId } };
+  const next = { ...route, notice: null };
+  if (roomId === route.start) return { ...next, start: null, startAt: null, result: { state: "idle" } };
+  if (roomId === route.end) return { ...next, end: null, endAt: null, result: { state: "idle" } };
+  if (route.start === null) return { ...next, start: roomId, startAt: at };
+  return { ...next, end: roomId, endAt: at };
+}
+
+/** The connectivity URL for a scope: the summary, and a route when both ends
+ *  are placed. Rooms go by bare id, because the plan does not know a room's
+ *  model; the server refuses an id two models share and says which. */
+export function connectivityUrl(
+  scope: Scope,
+  from: string | null,
+  to: string | null,
+  method: string | null = null,
+  at: { from?: PlanPoint | null; to?: PlanPoint | null } = {},
+  /** A saved route knows its rooms' models; a plan pick does not. */
+  models: { from?: string | null; to?: string | null } = {},
+  /** The width of the object that has to make the trip, in mm; 0 or null checks nothing. */
+  widthMm: number | null = null,
+  /** Its height, in mm; 0 or null checks nothing. */
+  heightMm: number | null = null,
+): string | null {
+  if (!scope.projectId) return null;
+  const q = new URLSearchParams();
+  if (scope.building) q.set("building", scope.building);
+  if (scope.milestone) q.set("milestone", scope.milestone);
+  if (from && to) {
+    q.set("from", from);
+    q.set("to", to);
+    if (method) q.set("method", method);
+    if (widthMm !== null && widthMm > 0) q.set("width_mm", String(widthMm));
+    if (heightMm !== null && heightMm > 0) q.set("height_mm", String(heightMm));
+    if (models.from) q.set("from_model", models.from);
+    if (models.to) q.set("to_model", models.to);
+    // A position only means something with the room it is in, so it rides with the
+    // route and never alone.
+    if (at.from) {
+      q.set("from_x", String(at.from.x));
+      q.set("from_y", String(at.from.y));
+    }
+    if (at.to) {
+      q.set("to_x", String(at.to.x));
+      q.set("to_y", String(at.to.y));
+    }
+  }
+  const tail = q.toString();
+  return `/projects/${encodeURIComponent(scope.projectId)}/connectivity${tail ? `?${tail}` : ""}`;
+}
+
+/** The slice of a route one zone draws: the polylines on its level. A route
+ *  across levels draws its first run in one zone and its last in another, which
+ *  is exactly why the server groups points by level. */
+export function segmentsOnLevel(path: RoutePath | null, levelId: string | null): RoutePath["segments"] {
+  if (!path?.found || levelId === null) return [];
+  return path.segments.filter((s) => s.level_id === levelId);
+}
+
+/** Millimetres to the plan's unit: coordinates on the wire are decimal feet. */
+export const MM_PER_FT = 304.8;
+
+/** A saved route as the painters need it: who it is, its colour and its path. */
+export interface DrawableRoute {
+  id: string;
+  name: string;
+  colour: string;
+  path: RoutePath | null;
+  /** The width in mm the route was found for; absent or 0 draws the plain line. */
+  widthMm?: number | null | undefined;
+}
+
+/** What one route draws on one level. */
+export interface RouteDrawing {
+  id: string;
+  name: string;
+  colour: string;
+  /** The polylines on this level, two points or more. */
+  lines: PlanPoint[][];
+  /** The width of the object, in the plan's own unit (feet) so a band of it is drawn at
+   *  true size; `null` for no width, which draws the plain line as it always was. */
+  bandFt: number | null;
+  /** Where the route begins and ends, only when that is ON this level. */
+  start: PlanPoint | null;
+  end: PlanPoint | null;
+}
+
+/**
+ * What each route draws on `levelId`: its polylines, and its two ends when they are
+ * there. **One rule for the plan and for the SVG export**, so a file shows the routes
+ * the screen shows and not a second reading of them. A route with nothing on the level
+ * is left out, and so is one whose path was not found.
+ *
+ * The ends are the first point of the first segment and the last point of the last,
+ * drawn only on the level they are on: a route that climbs three storeys has its start
+ * on the bottom one and its end on the top one, and the storeys between have neither.
+ */
+export function routeDrawingsOnLevel(routes: readonly DrawableRoute[], levelId: string | null): RouteDrawing[] {
+  if (levelId === null) return [];
+  const out: RouteDrawing[] = [];
+  for (const route of routes) {
+    const path = route.path;
+    const here = segmentsOnLevel(path, levelId);
+    if (!path || here.length === 0) continue;
+    const first = path.segments[0];
+    const last = path.segments[path.segments.length - 1];
+    out.push({
+      id: route.id,
+      name: route.name,
+      colour: route.colour,
+      lines: here.filter((s) => s.points.length >= 2).map((s) => s.points),
+      bandFt: route.widthMm && route.widthMm > 0 ? route.widthMm / MM_PER_FT : null,
+      start: first && first.level_id === levelId ? (first.points[0] ?? null) : null,
+      end: last && last.level_id === levelId ? (last.points[last.points.length - 1] ?? null) : null,
+    });
+  }
+  return out;
+}
+
+/** One route tag: where it sits and what it says. */
+export interface RouteTag {
+  routeId: string;
+  colour: string;
+  at: PlanPoint;
+  /** "7.1 m (19.0 m)": this hop, then the whole walk so far from the start. */
+  text: string;
+}
+
+/** The font size of a route tag in the plan's own unit, from the level's fitted frame:
+ *  the screen overlay and the SVG export both use it, so a file's tags are as large
+ *  against the drawing as the screen's. */
+export const routeTagFont = (fitted: { w: number; h: number }): number => Math.max(fitted.w, fitted.h) * 0.005;
+
+const M_PER_FT = 0.3048;
+const metresText = (ft: number) => `${(ft * M_PER_FT).toFixed(1)} m`;
+
+/** Two plan points that are one point to within a tenth of a millimetre. A route's
+ *  polyline repeats a door's point (in, through, out), exactly. */
+const samePoint = (a: PlanPoint, b: PlanPoint) => Math.abs(a.x - b.x) < 3e-4 && Math.abs(a.y - b.y) < 3e-4;
+
+/** The point half way along a polyline, by length. */
+function midpoint(points: readonly PlanPoint[]): PlanPoint {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) total += Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y);
+  let left = total / 2;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (left <= len && len > 0) return { x: a.x + ((b.x - a.x) * left) / len, y: a.y + ((b.y - a.y) * left) / len };
+    left -= len;
+  }
+  return points[points.length - 1] ?? { x: 0, y: 0 };
+}
+
+/**
+ * The tags of one route path: for each hop (start to the first crossing, crossing to
+ * crossing, last crossing to the end) the length of the hop and, in brackets, the
+ * length from the start to the END of that hop. One rule for the plan and the SVG
+ * export, like `routeDrawingsOnLevel`; the level of a tag is the level its hop starts
+ * on, and the last bracket is the route's own `distance_ft`.
+ *
+ * Lengths are the server's (`step.length`, and what is left of `distance_ft` for the
+ * final leg), never re-measured from the polyline, so a tag says what the route
+ * answer says. The polyline is used only to find where on the plan a hop lies.
+ */
+export function routeHops(path: RoutePath | null): { levelId: string; at: PlanPoint; segmentFt: number; totalFt: number }[] {
+  if (!path?.found) return [];
+  const flat = path.segments.flatMap((s) => s.points.map((p) => ({ levelId: s.level_id, p })));
+  if (flat.length === 0) return [];
+  const out: { levelId: string; at: PlanPoint; segmentFt: number; totalFt: number }[] = [];
+  let cursor = 0;
+  let total = 0;
+  const place = (from: number, to: number) => {
+    const first = flat[from]!;
+    const run: PlanPoint[] = [];
+    for (let i = from; i <= to && flat[i]!.levelId === first.levelId; i++) run.push(flat[i]!.p);
+    return { levelId: first.levelId, at: midpoint(run) };
+  };
+  for (const step of path.steps) {
+    const len = step.length ?? 0;
+    let idx = -1;
+    for (let i = cursor; i < flat.length; i++) {
+      if (samePoint(flat[i]!.p, step.point)) {
+        idx = i;
+        // The door's point is repeated; the hop ends at the last of the run.
+        while (idx + 1 < flat.length && samePoint(flat[idx + 1]!.p, step.point)) idx++;
+        break;
+      }
+    }
+    total += len;
+    // A crossing the polyline does not pass through still gets its tag, at the point.
+    const where = idx >= 0 ? place(cursor, idx) : { levelId: flat[cursor]!.levelId, at: step.point };
+    out.push({ ...where, segmentFt: len, totalFt: total });
+    if (idx >= 0) cursor = idx;
+  }
+  const rest = path.distance_ft - total;
+  if (rest > 0.05 && cursor < flat.length - 1) out.push({ ...place(cursor, flat.length - 1), segmentFt: rest, totalFt: path.distance_ft });
+  return out;
+}
+
+/** What each route's hops say on `levelId`: the tags of every route on the level. */
+export function routeTagsOnLevel(routes: readonly DrawableRoute[], levelId: string | null): RouteTag[] {
+  if (levelId === null) return [];
+  const out: RouteTag[] = [];
+  for (const route of routes) {
+    for (const hop of routeHops(route.path)) {
+      if (hop.levelId !== levelId) continue;
+      out.push({ routeId: route.id, colour: route.colour, at: hop.at, text: `${metresText(hop.segmentFt)} (${metresText(hop.totalFt)})` });
+    }
+  }
+  return out;
+}
+
+/** A point the renderer answers with, as the plan's own coordinates. The renderer's
+ *  world has Y down; the data, and the server, have it up. `null` for no answer (the
+ *  pointer is off the plan). The one place that flip is written for a position taken
+ *  from the screen, so a click and a drag cannot disagree about it. */
+export function planPointOf(world: { x: number; y: number } | null | undefined): PlanPoint | null {
+  return world ? { x: world.x, y: -world.y } : null;
+}
+
+/** An SVG `points` string in the overlay's frame (world Y is flipped, like
+ *  every drawn shape). */
+export function polylinePoints(points: readonly { x: number; y: number }[]): string {
+  return points.map((p) => `${p.x},${-p.y}`).join(" ");
+}
+
+/** A room's marker position: the mean of its outer ring. Only a mark, so a
+ *  centroid outside an L-shaped room is acceptable here, unlike for geometry. */
+export function markerPoint(room: Pick<Room, "loops">): { x: number; y: number } | null {
+  const ring = room.loops?.[0]?.points;
+  if (!ring?.length) return null;
+  const n = ring.length;
+  return { x: ring.reduce((s, p) => s + p.x, 0) / n, y: ring.reduce((s, p) => s + p.y, 0) / n };
+}
+
+/** One line of the route panel: a room the route passes through, and how it got
+ *  there. */
+export interface RouteRow {
+  roomId: string;
+  /** `start` for the first room, else what the hop into it was. */
+  how: "start" | RouteStep["kind"];
+  /** Feet walked for the hop into this room; 0 for the start. */
+  lengthFt: number;
+  /** The room's level changes here, which is where a reader loses their place on a
+   *  plan that shows one level. */
+  levelChanged: boolean;
+  doorId?: string;
+  passageId?: string;
+}
+
+/** The rooms of a route in order, with the hop into each. Built from `steps` and
+ *  not from `rooms`, because a step names both its ends and so carries the kind and
+ *  length; `rooms` alone would lose what joined them. */
+export function routeRows(path: RoutePath | null, levelOf: (roomId: string) => string | null | undefined): RouteRow[] {
+  if (!path?.found || path.rooms.length === 0) return [];
+  const rows: RouteRow[] = [{ roomId: path.rooms[0]!.room_id, how: "start", lengthFt: 0, levelChanged: false }];
+  let level = levelOf(path.rooms[0]!.room_id);
+  for (const [i, step] of path.steps.entries()) {
+    const roomId = (step.to ?? path.rooms[i + 1])?.room_id;
+    if (!roomId) continue;
+    const here = levelOf(roomId);
+    const row: RouteRow = { roomId, how: step.kind, lengthFt: step.length ?? 0, levelChanged: here !== level };
+    if (step.door_id) row.doorId = step.door_id;
+    if (step.passage_id) row.passageId = step.passage_id;
+    rows.push(row);
+    level = here;
+  }
+  return rows;
+}
+
+/** The width typed, in mm: `null` for blank or 0 (no check), the number when it is one
+ *  above zero, and `"bad"` for anything else, so the bar can say so instead of asking
+ *  the server a question it will refuse. */
+export function parseWidth(typed: string): number | null | "bad" {
+  if (typed.trim() === "") return null;
+  const n = Number(typed);
+  if (!Number.isFinite(n) || n < 0 || n > 100_000) return "bad";
+  return n === 0 ? null : n;
+}
+
+/** A height typed, by the same rule as a width (blank or 0 checks nothing). */
+export const parseHeight = parseWidth;
+
+const heightOf = (l: HeightLimit) => `${Math.round(l.height_mm)} mm`;
+
+const widthOf = (l: WidthLimit) => `${Math.round(l.width_mm)} mm`;
+
+function heightLimitName(l: HeightLimit, nameOf: (roomId: string) => string): string {
+  if (l.kind === "door") return `door ${l.door_id ?? "?"}`;
+  if (l.kind === "passage") return `passage ${l.passage_id ?? "?"}`;
+  return `room ${nameOf(l.rooms[0]?.room_id ?? "?")}${l.from_ceiling ? " (from its ceiling)" : ""}`;
+}
+
+function limitName(l: WidthLimit): string {
+  if (l.kind === "door") return `door ${l.door_id ?? "?"}`;
+  if (l.kind === "zone") return "an open area's wall";
+  if (l.kind === "passage") return `passage ${l.passage_id ?? "?"}`;
+  return "a level change";
+}
+
+/** What a reader should know about the widths of a route: the tightest hop, how many
+ *  hops could not be checked, and whether a wider route exists. Empty when there is
+ *  nothing to say. Said in estimates, because a door's width is one. */
+export function describeClearance(c: Clearance | undefined, nameOf: (roomId: string) => string = (id) => id): string {
+  if (!c) return "";
+  const parts: string[] = [];
+  if (c.narrowest) parts.push(`narrowest ${limitName(c.narrowest)}, about ${widthOf(c.narrowest)}`);
+  // Only against a route that WAS found: when none was, the reason already says what
+  // fits, and "another route" would be a route that does not exist.
+  if (c.narrowest && c.widest_possible && c.widest_possible.width_mm > c.narrowest.width_mm + 1) {
+    parts.push(`up to about ${widthOf(c.widest_possible)} fits by another route`);
+  }
+  if (c.unchecked_hops > 0) {
+    parts.push(`${c.unchecked_hops} hop${c.unchecked_hops === 1 ? "" : "s"} not checked`);
+  }
+  // The same for height: the lowest point, a taller alternative if there is one, and
+  // how many doors and rooms had no height to check.
+  if (c.lowest) parts.push(`lowest ${heightLimitName(c.lowest, nameOf)}, about ${heightOf(c.lowest)}`);
+  if (c.lowest && c.tallest_possible && c.tallest_possible.height_mm > c.lowest.height_mm + 1) {
+    parts.push(`up to about ${heightOf(c.tallest_possible)} tall fits by another route`);
+  }
+  if (c.unchecked_height > 0) {
+    parts.push(`${c.unchecked_height} door${c.unchecked_height === 1 ? "" : "s"} or room${c.unchecked_height === 1 ? "" : "s"} not checked for height`);
+  }
+  return parts.join(" · ");
+}
+
+/** The panel's one-line reading of a result. */
+export function describeResult(result: RouteResult): string {
+  switch (result.state) {
+    case "idle":
+      return "";
+    case "loading":
+      return "Finding route…";
+    case "error":
+      return result.message;
+    case "done": {
+      if (!result.path.found) return result.path.reason ?? "No route through doors.";
+      const count = (kind: string) => result.path.steps.filter((s) => s.kind === kind).length;
+      const doors = count("door");
+      const zones = count("zone");
+      const levels = count("vertical");
+      const passages = count("passage");
+      // Said apart, because a door is the model's word and an open-zone hop is a
+      // person's, and a reader weighing a route should be able to tell which.
+      const parts = [`${doors} door${doors === 1 ? "" : "s"}`];
+      if (zones > 0) parts.push(`${zones} open-zone hop${zones === 1 ? "" : "s"}`);
+      if (passages > 0) parts.push(`${passages} passage${passages === 1 ? "" : "s"}`);
+      if (levels > 0) parts.push(`${levels} level change${levels === 1 ? "" : "s"}`);
+      return `${parts.join(", ")}, about ${Math.round(result.path.distance_ft)} ft`;
+    }
+  }
+}

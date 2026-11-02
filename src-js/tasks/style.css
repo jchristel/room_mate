@@ -1,0 +1,66 @@
+/* The tasks page's own CSS. The palette comes from static/tokens.css; the shapes match the
+   blueprints page (same header, labels and monospace) because they are siblings a reader moves between. */
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--paper); color: var(--ink); font-family: var(--mono); font-size: 13px; line-height: 1.5; overflow: hidden; }
+#root { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+button, select, input { font-family: var(--mono); font-size: 0.78rem; color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--ink); }
+header h1 { font-size: 0.95rem; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; margin: 0; }
+header select { background: var(--paper); border: 1px solid var(--rule); padding: 0.2rem 0.4rem; }
+header .links { margin-left: auto; display: flex; gap: 1rem; }
+header .links a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+header .links a:hover { text-decoration: underline; }
+
+.page { display: grid; grid-template-columns: 22rem minmax(0, 1fr); min-height: 0; overflow: hidden; }
+.left { overflow-y: auto; padding: 0.75rem; border-right: 1px solid var(--rule); }
+main { min-width: 0; min-height: 0; overflow-y: auto; padding: 0.75rem 1.25rem; }
+
+button { background: var(--fill); border: 1px solid var(--rule); padding: 0.25rem 0.6rem; cursor: pointer; }
+button:hover:not(:disabled) { background: var(--fill-hover); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.on { background: var(--fill); border-color: var(--ink); }
+button.danger { color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
+.stack { display: grid; gap: 0.15rem; font-size: 0.7rem; margin: 0.4rem 0; }
+.stack select, .stack input, input[type="search"] { width: 100%; background: var(--paper); border: 1px solid var(--rule); padding: 0.25rem 0.4rem; }
+.hint { opacity: 0.65; font-size: 0.74rem; }
+.hint.empty { margin-top: 2rem; }
+.sub { opacity: 0.65; font-size: 0.74rem; }
+.spacer { flex: 1; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0; }
+.chip { font-size: 0.66rem; padding: 0.1rem 0.45rem; }
+.left ul { list-style: none; margin: 0.5rem 0; padding: 0; display: grid; gap: 0.25rem; }
+.left li button { width: 100%; text-align: left; display: grid; gap: 0.1rem; background: transparent; border: 1px solid transparent; padding: 0.3rem 0.5rem; }
+.left li button span { opacity: 0.7; font-size: 0.7rem; }
+.left li button.on { background: var(--fill); border-color: var(--ink); }
+
+.badge { font-style: normal; font-size: 0.66rem; border: 1px solid var(--rule); padding: 0 0.35rem; }
+.badge.attention { color: var(--accent); border-color: var(--accent); }
+.badge.dismissed { opacity: 0.5; }
+.badge.in_progress { border-color: var(--ink); }
+
+.toolbar { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.banner { margin: 0.4rem 0; padding: 0.3rem 0.6rem; border: 1px solid var(--rule); }
+.banner.error { border-color: var(--accent); color: var(--accent); }
+h3 { font-size: 0.82rem; margin: 1rem 0 0.3rem; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.15rem 1rem; margin: 0.5rem 0; }
+.facts dt { opacity: 0.65; font-size: 0.72rem; }
+.facts dd { margin: 0; }
+.findings { list-style: none; margin: 0.3rem 0; padding: 0; display: grid; gap: 0.2rem; font-size: 0.74rem; }
+.findings li.room_size_differs, .findings li.doors_disagree, .findings li.shape_mismatch, .findings li.refused, .findings li.frame_unknown { color: var(--accent); }
+.attempts { margin: 0.3rem 0; padding-left: 1.2rem; font-size: 0.74rem; }
+.attempts ul { margin: 0.1rem 0 0.4rem; padding-left: 1rem; opacity: 0.85; }
+table { border-collapse: collapse; font-size: 0.72rem; margin: 0.3rem 0; }
+th, td { text-align: left; border-bottom: 1px solid var(--rule); padding: 0.15rem 0.7rem 0.15rem 0; }
+th { opacity: 0.65; font-weight: 400; }
+
+.make label { display: block; font-size: 0.74rem; margin: 0.3rem 0; }
+.make .stack { display: grid; }
+.picks { list-style: none; margin: 0.4rem 0; padding: 0; max-height: 18rem; overflow-y: auto; border: 1px solid var(--rule); }
+.picks li { padding: 0.1rem 0.5rem; }
+.picks li span { opacity: 0.6; font-size: 0.7rem; margin-left: 0.4rem; }
