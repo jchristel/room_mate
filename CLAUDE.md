@@ -629,6 +629,11 @@ checked before anything is made, then one transaction group per task (`duHast...
   room the sheet was made for (`section_z_above_floor_mm`, on the 3D view: the first ticked room on the Sheets button, the blueprint's room on the Blueprint button), the level's z being
   the room's own (`utils.rooms.level_z_ft`), never `Level.Elevation`. A new 3D view's box then runs those heights above THIS room's level; its x and y stay the room's bounding box plus
   `SECTION_MARGIN_MM`. A sheet with no room, or exported before, gets the room's box plus the margin all round, as before. **Not run in Revit.**
+- **A new 3D view hides the room's own walls that stand between its camera and the middle of the room** (`room_m/view_walls.py`, `rls_write._hide_walls_in_the_way`).
+  The camera is where duHast's `view_3d_create` puts it (back along the view direction from the section box's centre); a wall is in the way when the line from it to the
+  room's bounding-box centre, **in plan**, crosses one of the room's boundary pieces whose element is a wall (`Room.GetBoundarySegments`). Heights are ignored on purpose (a wall the
+  line of sight passes over goes too), a view looking straight down hides nothing, and a failure is a note: the view is made either way. The walls are hidden with
+  `View.HideElements`, in that view only. **Not run in Revit.**
 - **The annotation crop is exported and applied** (plan and elevation views): `annotation_crop_active` and `annotation_crop_offsets` (`left`/`right`/`top`/`bottom` from the
   view crop, **mm on paper**, because Revit keeps them in view units so they hold at any scale) ride each view of the sheet export (duHast `view_ports_to_data._get_annotation_crop`, via
   the parameter `VIEWER_ANNOTATION_CROP_ACTIVE` and `ViewCropRegionShapeManager`). A new plan or elevation view gets the same after its own crop is final

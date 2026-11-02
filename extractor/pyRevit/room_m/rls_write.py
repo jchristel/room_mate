@@ -27,6 +27,7 @@ from Autodesk.Revit.DB import (
     BuiltInCategory,
     BuiltInParameter,
     Element,
+    SpatialElementBoundaryOptions,
     Transaction,
     TransactionGroup,
     ViewFamily,
@@ -34,7 +35,7 @@ from Autodesk.Revit.DB import (
 )
 
 from duHast.Revit.Annotation.independent_tags_create import create_independent_tag_without_transaction_wrapper
-from duHast.Revit.Common.element_id import get_element_id_from_int
+from duHast.Revit.Common.element_id import get_el_id_int, get_element_id_from_int
 from duHast.Revit.Common.transaction import in_transaction, in_transaction_group
 from duHast.Revit.Family.family_symbol_lookup import (
     get_family_symbol_by_full_name,
@@ -67,6 +68,7 @@ from duHast.Revit.Views.viewports_create import create_viewport_without_transact
 
 from room_m import apply_geometry as geo
 from room_m import section_box
+from room_m import view_walls
 from room_m.utils.rooms import level_z_ft
 from room_m import detail_numbers
 from room_m import rls_settings
@@ -418,7 +420,51 @@ class RlsWriter(object):
                 lambda v=v: create_view_3d_around_box_without_transaction_wrapper(
                     self.doc, view_type, v["name"], v["forward"], v["up"], low, high, phase),
             ).result[0]
+            self._hide_walls_in_the_way(view, room, low, high, v["forward"], v["name"], notes)
             self._viewport(sheet, view, v["viewport"], notes, v["name"], "three_d")
+
+    def _hide_walls_in_the_way(self, view, room, low, high, forward, name, notes):
+        """Hide, in the new 3D view, the room's walls that stand between its camera and the middle of the room
+        (seen in plan: `room_m.view_walls`). The camera is where `create_view_3d_around_box` puts it. A failure
+        here is a note: the view is made and placed either way."""
+        try:
+            centre = ((low.X + high.X) / 2.0, (low.Y + high.Y) / 2.0)
+            eye = view_walls.eye_xy(centre, forward, low.DistanceTo(high) * 2.0)
+            if eye is None:
+                return
+            boundary = []
+            for loop in room.GetBoundarySegments(SpatialElementBoundaryOptions()) or []:
+                for segment in loop:
+                    wall = self.doc.GetElement(segment.ElementId)
+                    if wall is None or wall.Category is None or get_el_id_int(wall.Category.Id) != int(BuiltInCategory.OST_Walls):
+                        continue
+                    curve = segment.GetCurve()
+                    a, b = curve.GetEndPoint(0), curve.GetEndPoint(1)
+                    boundary.append((segment.ElementId, (a.X, a.Y), (b.X, b.Y)))
+            # the room's own centre in plan is what the camera looks at
+            box = room.get_BoundingBox(None)
+            looked_at = ((box.Min.X + box.Max.X) / 2.0, (box.Min.Y + box.Max.Y) / 2.0)
+            ids = view_walls.blocking(eye, looked_at, [(get_el_id_int(i), p, q) for i, p, q in boundary])
+            if not ids:
+                return
+            by_value = dict((get_el_id_int(i), i) for i, _, _ in boundary)
+            from System.Collections.Generic import List
+            from Autodesk.Revit.DB import ElementId
+
+            hide = List[ElementId]()
+            for value in ids:
+                hide.Add(by_value[value])
+
+            def work():
+                result = Result()
+                view.HideElements(hide)
+                return result
+
+            self._step("RoomMate: hide walls in {}".format(name), work)
+            notes.append("{}: {} wall(s) between the camera and the room hidden".format(name, len(ids)))
+        except Exception as e:
+            task_log.exception("hiding walls in {}".format(name))
+            notes.append("{}: walls in the way were not hidden ({})".format(name, e))
 
     def _schedule(self, plan, room, sheet, notes):
         base = self.facts.schedule(plan["schedule_base"])
