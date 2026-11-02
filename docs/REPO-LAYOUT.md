@@ -15,5 +15,5 @@ it belongs to:
 | [`samples/house-a/`](../samples/house-a) | **A sample project to run the server against**: a small house as Revit pushed it, with a blueprint and its assignment. Built by `scripts/make_sample.py` and read by a test, so it stays in the current format. |
 | [`settings/`](../settings) | Server config, and one TOML per project (classification tiers, sources, area policy). Every available setting, with a sample of each, is in the [settings reference](SETTINGS.md). |
 | [`scripts/`](../scripts) | Dev tooling run *against* this repo: fixture generators, `fixtures/` (sample data to push or upload), `check_areas.py` (the areas diagnostic), `weekly_review.py` (the docs-vs-code drift check), `module_stats.py` (measures the module plan's cells; `--check` reports drift), and the `probe_*`/`analyse_*` pairs that settle an entity's open questions before it is built. Not shipped. |
-| [`docs/`](docs) | Strategy docs, coding conventions, and handovers (landed ones in `docs/Superseded/`). |
+| [`docs/`](docs) | Strategy docs, coding conventions and plans. |
 | [`installer/`](../installer) | The **Windows package** — an Inno Setup script and the launcher the Start Menu shortcut runs, producing one `RoomMate-Setup.exe` with no prerequisites. See [installer/README.md](../installer/README.md). |

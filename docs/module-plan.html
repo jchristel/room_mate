@@ -1209,7 +1209,7 @@
     // ---- browser: pages
     {
       id: "p_index", name: "viewer/ (React)", path: "src-js/viewer/", zone: "pages", lang: "TypeScript + React",
-      blurb: "The viewer, served at /: zones, levels, layers, colour plans, selection and its seven inspectors, search, the grid, the QA/areas/adjacency bands, the routes and reach tools (heat map, saved reaches, tags) and the SVG export. React since 2026-09-20, ported slice by slice against the hand-written page it replaced (docs/Superseded/PLAN-viewer-react.md). Its rules — scope, levels, element URLs, colour, properties, grid, search, validation, areas, pan-to-room — are tested modules beside the components; the state is one store, with a zone's view rect deliberately outside it because it changes per pointer move. Selection grew to the whole plan on 2026-09-20 (docs/Superseded/PLAN-viewer-selection.md): a left click lists what is stacked under it, filtered per zone; visibility, pickability and the room panel's contents are menus over one DropMenu; every panel and the grid choose which properties they show; a grid row selects its room and pans to it; and the outline layers' selection colour and every entity's hover property come from project settings.",
+      blurb: "The viewer, served at /: zones, levels, layers, colour plans, selection and its seven inspectors, search, the grid, the QA/areas/adjacency bands, the routes and reach tools (heat map, saved reaches, tags) and the SVG export. React since 2026-09-20, ported slice by slice against the hand-written page it replaced. Its rules — scope, levels, element URLs, colour, properties, grid, search, validation, areas, pan-to-room — are tested modules beside the components; the state is one store, with a zone's view rect deliberately outside it because it changes per pointer move. Selection grew to the whole plan on 2026-09-20: a left click lists what is stacked under it, filtered per zone; visibility, pickability and the room panel's contents are menus over one DropMenu; every panel and the grid choose which properties they show; a grid row selects its room and pans to it; and the outline layers' selection colour and every entity's hover property come from project settings.",
       deps: ["p_common", "p_tokens", "p_bundle", "p_graph", "p_library"]
     },
     {
@@ -1271,7 +1271,7 @@
     },
     {
       id: "docsdir", name: "docs/", path: "docs/STRATEGY-*.md · CODING-CONVENTIONS.md", zone: "bench", lang: "Markdown",
-      blurb: "<strong>The strategy docs hold only what is not built; the code documents what is.</strong> Shipping a feature includes deleting its description from the strategy doc. <code>docs/Superseded/</code> is an archive — nothing there is live.",
+      blurb: "<strong>The strategy docs hold only what is not built; the code documents what is.</strong> Shipping a feature includes deleting its description from the strategy doc. A landed brief is deleted, not archived.",
       deps: []
     },
 

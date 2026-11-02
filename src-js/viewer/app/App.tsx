@@ -1,7 +1,7 @@
 // The React viewer, served at /viewer/ while it is being ported.
 //
-// Ported slice by slice from the hand-written page it replaced
-// (docs/Superseded/PLAN-viewer-react.md), each slice checked against that page
+// Ported slice by slice from the hand-written page it replaced,
+// each slice checked against that page
 // running beside it until the cutover deleted it.
 //
 // The elements keep the OLD PAGE'S IDS (`mainRow`, `zones`, `inspector`,

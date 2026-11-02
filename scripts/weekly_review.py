@@ -23,11 +23,6 @@ judges, and anything judged fine goes in `weekly_review_ignore.toml` **with a
 reason** so next week is quieter than this week. The ignore file converging on
 zero unexplained hits is the point.
 
-`docs/Superseded/` is not checked at all. An archived handover naming a
-since-renamed symbol is *correct history* — it records what was true when the
-work landed. Checking it would generate permanent noise that no fix could
-silence, which is the fastest way to get a tool like this ignored.
-
 No third-party dependencies: stdlib only, so it runs anywhere the repo does.
 """
 
@@ -89,7 +84,7 @@ def load_ignores() -> dict:
 
 
 def live_docs() -> list[Path]:
-    """Live strategy docs only — never `Superseded/`, never a review write-up.
+    """Live strategy docs only — never a review write-up.
 
     A review document deliberately quotes dead symbols as its subject matter, so
     checking one would report every finding it makes as a finding of its own.
@@ -248,7 +243,7 @@ def check_symbols(findings: Findings, words: set[str], files: set[str], ignores:
 # promise: it says "the file is here". Those are the ones that mislead, because
 # they look authoritative and resolve to nothing. Every real finding the
 # 2026-08-07 review made in this category (`docs/PLAN-webgl-renderer.md` cited
-# from six build files after the doc moved to `Superseded/`) is of that shape.
+# from six build files after the doc moved) is of that shape.
 MD_LINK = re.compile(r"\]\(\s*(?!https?:)([^)\s#]+\.md)(?:#[^)\s]*)?\s*\)")
 MD_PATH = re.compile(r"(?<![\w/.])((?:\.\./|\./)*(?:[A-Za-z0-9_\-]+/)+[A-Za-z0-9_\-]+\.md)")
 
@@ -256,8 +251,8 @@ MD_PATH = re.compile(r"(?<![\w/.])((?:\.\./|\./)*(?:[A-Za-z0-9_\-]+/)+[A-Za-z0-9
 def check_paths(findings: Findings) -> None:
     """A `.md` *path* cited from code or live docs that no longer resolves.
 
-    Catches the commonest rot in this repo by count: a document moves into
-    `Superseded/` and the places spelling out its old path keep pointing at
+    Catches the commonest rot in this repo by count: a document moves or is
+    deleted and the places spelling out its old path keep pointing at
     nothing. Nothing breaks -- a reader just lands nowhere, which is why it
     survives so long.
     """
@@ -277,7 +272,7 @@ def check_paths(findings: Findings) -> None:
             continue
         # Archives cite their own era's paths correctly; this script's own files
         # and any review write-up quote broken paths as their subject matter.
-        if "Superseded" in path.parts or path.name.startswith("CODE-REVIEW") or "weekly_review" in path.name:
+        if path.name.startswith("CODE-REVIEW") or "weekly_review" in path.name:
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -479,8 +474,7 @@ def check_section_refs(findings: Findings, ignores: dict) -> None:
     check reported 25 hits of which nearly all read fine in context. Permanent
     noise is the fastest way to get a tool like this ignored (see the header).
 
-    `Superseded/` is never the target: an archived brief keeps its own section
-    numbering, and check 2 already owns whether the path resolves at all.
+    Check 2 already owns whether the path resolves at all.
     """
     skip = set(ignores.get("sections", {}).keys())
     live = {p.name: p.read_text(encoding="utf-8") for p in live_docs()}

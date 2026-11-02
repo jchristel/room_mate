@@ -1119,9 +1119,8 @@ growing the doc comment to compensate. The rule and its failure modes are in
 [`CODING-CONVENTIONS.md`](docs/CODING-CONVENTIONS.md) under "Code documents what
 is built"; read it before adding prose to a `STRATEGY-*.md`.
 
-`docs/Superseded/` is an archive — nothing there is live, live docs do not link
-into it, and it pins `file.rs:NNN` line numbers that have drifted. Trust the
-*symbol* name, search for it, never jump to the line.
+Docs that cite code name the *symbol*, never a `file.rs:NNN` line, because lines drift.
+Search for the symbol.
 
 ## Verify before claiming done
 

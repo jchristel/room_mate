@@ -264,11 +264,10 @@ The goal is a richer browser tool run locally, not a desktop app.
   polls) and was answered by extracting a typed module, not a framework. What
   moved the page was a feature request the hand-written page could only take
   twice: a pick menu, three more inspectors and a grid-to-plan link, all page
-  code, with settings and reports already React. The port is
-  `docs/Superseded/PLAN-viewer-react.md`; it was a PARITY port in ten slices,
+  code, with settings and reports already React. The port was
+  a PARITY port in ten slices,
   each checked against the old page running beside it at `/viewer/`, and the
-  cutover deleted that page. **That request then landed in full** — eight steps,
-  `docs/Superseded/PLAN-viewer-selection.md` — and grew on the way to seven
+  cutover deleted that page. **That request then landed in full** — eight steps — and grew on the way to seven
   inspectors, three kinds of menu, a property chooser over every panel and the
   grid, and two more settings blocks. It is the best evidence the decision has:
   the slice that was "only twice more" in the old page was eight PRs in this

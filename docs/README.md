@@ -29,7 +29,7 @@ strategy doc documents what is not".
 | Document | Description |
 |---|---|
 | [Coding Conventions](CODING-CONVENTIONS.md) | The engineering rules this codebase follows (module structure, testing, dependency direction, error stance) |
-| [Plan: shortest path between rooms](PLAN-connectivity.md) | **Start here for a new session on routing.** Everything planned there is built (doors, open areas with cuts and a hub, vertical links and the stack view, routing methods, saved routes, the width check, the SVG export); it records where things stand, the open decisions (storage type, wall clearance and corridor width inside rooms), the measurements, the routing-method research and its sources, and practical notes. Moves to Superseded when the storage type is decided |
+| [Plan: shortest path between rooms](PLAN-connectivity.md) | **Start here for a new session on routing.** Everything planned there is built (doors, open areas with cuts and a hub, vertical links and the stack view, routing methods, saved routes, the width check, the SVG export); it records where things stand, the open decisions (storage type, wall clearance and corridor width inside rooms), the measurements, the routing-method research and its sources, and practical notes. Retired when the storage type is decided |
 | [Plan: blueprints](PLAN-blueprints.md) | Room layouts stored as recipes against the room boundary and applied to other rooms (rotate, room-size adaptation), written into Revit by tasks. **Largely built** (stages 0 to 6, the server half of 7 and 8, the sheet library, tag rules, and the 2026-10-31 rework: a blueprint holds only its room, its sheets and tags are bound to it), the Revit side: room layout sheet creation has run in Revit end to end (2026-11-01), placing items has not; the plan keeps the decisions, the critique and what is not built. Room layout sheets are a separate track inside it |
 | [Repository layout](REPO-LAYOUT.md) | What each top-level folder is, mapped to the pipeline stage it belongs to |
 | [The extractor](EXTRACTOR.md) | Why extractor and server change together, and the Revit-side status: what has and has not been run in Revit |
@@ -39,22 +39,6 @@ strategy doc documents what is not".
 | [MCP host setup](mcp-host-setup.md) | Client configs for Claude Code and Claude Desktop, plus build and verify steps |
 | [Module plan](module-plan.html) | Interactive map of every module across the extractor, server and browser — sized by lines of code, with its import edges. Open the file in a browser. **Half generated, half written**: the measured `STATS` come from `scripts/module_stats.py` (`--check` reports drift, and catches a module added or renamed on one side only), while the blurbs and import edges are hand-written from the module headers — so treat a header as the source and this as the view |
 
-## Archive
-
-[Superseded/](Superseded/) holds the handover briefs and plans whose work has
-fully landed — kept as the record of how each was sequenced and what was
-deliberately *not* built. **Nothing there is live**, and the strategy docs
-deliberately no longer link into it: a live item buried in an archive is a live
-item nobody finds.
-
-Two things follow from that:
-
-- **When a brief is superseded, its surviving open items move out of it** into
-  the strategy doc that owns them. The adjacency handover is the worked example:
-  its two remaining false-positive checks now sit in
-  [Area calculation](STRATEGY-AREA-CALCULATION.md)'s "Open" section, beside the
-  `max_wall_thickness` value whose choice is what creates the risk they test.
-- **Do not trust the archive's `file.rs:NNN` deep links.** They pin line numbers
-  and the files have moved underneath them — most now land on unrelated code. The
-  *file* and the *symbol name* in the surrounding prose are still right; search
-  for the symbol. New cross-references should name the symbol, not the line.
+A brief whose work has fully landed is deleted (git history keeps it), after its surviving
+open items move into the strategy doc that owns them. Cross-references name the symbol, never a
+`file.rs:NNN` line: the files move and the line numbers drift.

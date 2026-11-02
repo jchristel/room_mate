@@ -201,10 +201,9 @@ carries the rationale, this one says that is therefore the only place it goes.
   sentence it lacks and delete the section regardless. Never mirror a doc
   section into a header wholesale to make the deletion feel safe: that recreates
   the duplication one file to the left.
-- **`docs/Superseded/` is an archive, and live docs do not link into it.** A
-  live item cited from a superseded brief is a live item nobody finds. When a
-  brief is retired, its surviving open items move into the strategy doc that
-  owns them first.
+- **A retired brief is deleted, not archived** (git history keeps it). Its surviving
+  open items move into the strategy doc that owns them first, so a live item is
+  never left in a document nobody reads.
 
 ## TOML footgun (serialize side)
 - **Declare scalar and inline-array fields before any map/`Vec<Struct>` field**

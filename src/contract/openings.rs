@@ -133,7 +133,7 @@ pub struct Opening {
     ///
     /// **One room, not a list.** The raw export carries an array only because it
     /// holds one entry per phase. RoomMate pushes exactly one phase
-    /// ([Phasing](../../docs/Superseded/PLAN-phasing.md)), so the array collapses to at most
+    /// (a run pushes one phase), so the array collapses to at most
     /// one entry and the producer resolves which — from the Revit API's
     /// `FamilyInstance.FromRoom[phase]`, which takes the phase and answers
     /// exactly one room, rather than from the export's `phase_id`, which is not

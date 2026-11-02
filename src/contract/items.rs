@@ -25,8 +25,7 @@
 //! [Entities](../../docs/STRATEGY-ENTITIES.md) makes and this is the second test
 //! of it.
 //!
-//! Figures throughout cite the House A probe (`docs/Superseded/PLAN-ffe.md`,
-//! "As measured"): 647 instances collected across nine categories, 644 exported.
+//! Figures throughout cite the House A probe: 647 instances collected across nine categories, 644 exported.
 
 use std::sync::Arc;
 

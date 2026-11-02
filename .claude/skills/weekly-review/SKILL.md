@@ -131,9 +131,7 @@ compensate.
 Two related shapes worth the same pass:
 
 - an in-flight scaffolding block ("What survived contact", "As built") that has
-  outlived the build it was written for;
-- a brief in `Superseded/` still holding a live open item — it should have moved
-  into the strategy doc that owns it when the brief was retired.
+  outlived the build it was written for.
 
 ---
 

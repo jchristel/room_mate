@@ -596,8 +596,8 @@ pub struct ItemDiscrepancyCounts {
 
 /// Whether this project's FF&E links to rooms that actually exist.
 ///
-/// **A sibling of `OpeningReport`, not a reuse of it, and the plan expected
-/// otherwise.** `docs/Superseded/PLAN-ffe.md` D5 said this would reuse five finding types
+/// **A sibling of `OpeningReport`, not a reuse of it, and the original plan
+/// expected otherwise.** It said this would reuse five finding types
 /// verbatim. Reading them, one does: `RoomResolutionCounts`, which counts what
 /// the geometry answered and has nothing entity-shaped in it. Two carry a
 /// `side` an item has no equivalent for, and three name their element

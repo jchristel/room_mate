@@ -192,7 +192,7 @@ def add_room_boundary(selected_doc, block, return_value):
     own declaration."""
 
     # Which boundary regime this model was drawn to
-    # (docs/Superseded/HANDOVER-areas-boundary-location.md Decision 1). Read
+    # (the area-calculation boundary regime). Read
     # ONCE per document from Area and Volume Computations, and stamped on the
     # envelope alongside the transform above -- a document setting, so each
     # linked model reports its own, which is why the field is per model and a

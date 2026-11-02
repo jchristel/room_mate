@@ -1,8 +1,7 @@
 # Plan — shortest path between rooms, in three steps
 
 **Status: all three steps are built; one decision is left open: the storage type
-of the authored connections** (see "Storage inputs"). This moves to
-`Superseded/` when that is decided, and what survives goes into [Entities](STRATEGY-ENTITIES.md) (the door
+of the authored connections** (see "Storage inputs"). This plan is retired when that is decided, and what survives goes into [Entities](STRATEGY-ENTITIES.md) (the door
 connectivity graph is already listed there as deferred) and
 [Authored](STRATEGY-AUTHORED.md) (connections are its first kind).
 

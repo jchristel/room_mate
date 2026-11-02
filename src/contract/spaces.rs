@@ -15,7 +15,7 @@
 //! schema version are both baked into bytes on disk.
 //!
 //! **Two things here are NOT the rooms envelope, and both were measured rather
-//! than assumed** (on a real federated project, 2026-09-06; see `docs/Superseded/PLAN-spaces.md`):
+//! than assumed** (on a real federated project, 2026-09-06):
 //!
 //! - **`levels` is optional.** A rooms payload requires it. A services model
 //!   pushes spaces and usually nothing else, so its levels arrive here or not at

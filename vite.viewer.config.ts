@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
-// The React viewer — an APP build. See docs/Superseded/PLAN-viewer-react.md.
+// The React viewer — an APP build.
 //
 // **It IS the viewer**: this build writes `static/index.html`, which axum
 // serves at "/". It spent the port at /viewer/, beside the hand-written page it
