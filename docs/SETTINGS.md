@@ -353,7 +353,7 @@ never guessed. Unknown keys are rejected.
 | Key | Meaning | Default |
 |---|---|---|
 | `room_height_from_ceilings` | read a room's height from the **ceilings** over it first (the lowest ceiling covering at least a quarter of the room; an offset at or below zero is ignored), falling back on the property for a room none covers | `true` |
-| `room_height_property` | room property holding the clear height, in **millimetres**, used when no ceiling covers the room; matched ignoring case and runs of spaces (RHH's `Ceiling  Height` has two) | `Ceiling Height` |
+| `room_height_property` | room property holding the clear height, in **millimetres**, used when no ceiling covers the room; matched ignoring case and runs of spaces (Sample Project's `Ceiling  Height` has two) | `Ceiling Height` |
 | `door_height_properties` | door properties tried in order, instance before type, for a door's height in mm | `["Height", "Door Height"]` |
 | `door_height_from_type_name` | when none of those is present, read the size in the type name: "970 x 2040 TD01", "DWWH-003 820W x 2100H" (the first `A x B` wins) | `true` |
 | `door_frame_allowance_mm` | taken off a door's footprint width to give the clear opening; the footprint is overall width, frame included (a 970 mm leaf measures about 1,055 mm) | `150` (0 to 2000) |

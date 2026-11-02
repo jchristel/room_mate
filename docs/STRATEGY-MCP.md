@@ -71,7 +71,7 @@ about the data are:
 - **The same room number legitimately names a space in every services model.**
   One file per service means four spaces numbered `ENG137` is four disciplines,
   not a duplicate — and an agent that reports it as one is reporting the
-  project's structure as a defect. Measured on RHH: pooled across models, 3,046
+  project's structure as a defect. Measured on Sample Project: pooled across models, 3,046
   keys looked duplicated; per model, 31 actually were. So `get_spaces`' text has
   to say *read `model_id` before concluding anything about duplication*, in as
   many words.

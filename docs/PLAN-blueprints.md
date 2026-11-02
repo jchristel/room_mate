@@ -9,7 +9,7 @@ design and of how sheets are stored; first written 2026-10-19 from the stage 0 r
 Built so far (PR #215): FF&E carries `family_name` and `host` (stage 1, read from Revit by the
 extractor, **not yet run in Revit**); the blueprint store with append-only revisions, pending pushed
 revisions, import and export between projects, and its HTTP and MCP surface (stage 2); capture from a
-room (stage 3, a service for the Revit push); the resolver (stage 4), which on RHH's real sibling rooms lands the items within
+room (stage 3, a service for the Revit push); the resolver (stage 4), which on Sample Project's real sibling rooms lands the items within
 150 mm of the real ones for 90% of ensuite pairs, 68% of `1 BED B` and 58% of `1 BED A`; the blueprint
 viewer at `/blueprints/` (stage 5: list, Import and Export, revision timeline with
 pending revisions, the room's outline, doors and FF&E, an inspector for dimension constraints, and a
@@ -51,7 +51,7 @@ Grounded in the code as of 2026-10-18; rows marked *now* were true then and have
 |---|---|
 | Room outline, level, properties | Have. |
 | FF&E: type, category, `insertion_point` (plan, mm), `facing`, owner room | Have. |
-| FF&E footprint (`loops`, the instance's oriented box in plan) | Have: 15,826 of 16,161 items (98%) in RHH `HOS-INT_L1-L2` (probed 2026-10-18). The "empty on every item" comments in `renderer/types.ts` predate it and are stale. |
+| FF&E footprint (`loops`, the instance's oriented box in plan) | Have: 15,826 of 16,161 items (98%) in Sample Project `HOS-INT_L1-L2` (probed 2026-10-18). The "empty on every item" comments in `renderer/types.ts` predate it and are stale. |
 | FF&E instance and type **properties** (every parameter, as exported) | Have. The probe found `Elevation from Level` on 100% of items, `Host` on 99.9%, `Offset from Host` on 99.4%, `Mounting Height` on 59%. |
 | FF&E **vertical extent and sizes** | **Not needed as separate fields** (decided): they are part of the type and instance properties, which a blueprint item carries as exported. |
 | FF&E **hosting kind** | Weak: `Host` is a display string (`Level : LEVEL 1`); which wall, and where on it, is not stated. *Now:* `host` is read from Revit by the extractor (built, not yet run in Revit). |
@@ -98,7 +98,7 @@ write path into Revit. They have very different risk, which drives the staging.
 7. **No mirroring, at assignment or by copy** (decided 2026-10-19, confirmed 2026-10-20).
    Handed items are most likely a different family, and a reflection would place the wrong
    one in a way that looks right. Rotation is supported; mirror is not offered. Stage 0
-   shows handedness is common (37% and 43% of ensuite pairs on RHH are mirror images), so the
+   shows handedness is common (37% and 43% of ensuite pairs on Sample Project are mirror images), so the
    resolver reports "this room is the mirror image of the blueprint" instead of resolving
    badly, and the other hand is **authored by a person as its own blueprint**. No mirrored
    copy is generated. A link between the two ("handed pair", so the finding can offer the
@@ -126,7 +126,7 @@ write path into Revit. They have very different risk, which drives the staging.
     diff by default" is kept for the update task type; the populate task's safety is its
     validation, since the room must be empty in the phase (or overwrite is chosen).
 14. **The reference outline is a general polygon, held at two tolerances** (stage 0).
-    The standardised repeated rooms on RHH (patient rooms, ensuites) are 5 to 9-edge angled
+    The standardised repeated rooms on Sample Project (patient rooms, ensuites) are 5 to 9-edge angled
     polygons, so rectangles are a case, not the scope. A blueprint stores a **coarse outline**
     (jogs under about 350 mm removed) for matching and edge mapping, and the **true outline**
     (about 30 mm) for checking findings: on the coarse outline items near column jogs fall
@@ -298,8 +298,8 @@ moves ahead of the Revit write path from the earlier draft: it is where constrai
 authored and checked, and the author has now specified it concretely.
 
 **Stage 0 — Prove the model on real data (no product code). Done 2026-10-19** on House A and
-RHH: [PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md). Capture and resolve with throwaway
-scripts reproduce a captured layout exactly on its own room and, on RHH patient rooms and
+Sample Project: [PLAN-blueprints-stage0.md](PLAN-blueprints-stage0.md). Capture and resolve with throwaway
+scripts reproduce a captured layout exactly on its own room and, on Sample Project patient rooms and
 ensuites, land the median item within 27 to 97 mm of the real item in a sibling room (74 to
 96% of shape-compatible pairs within 150 mm). Findings folded into decisions 4, 7 and 14 to
 16. The platform question is decided (pyRevit), so there is no spike.
@@ -554,7 +554,7 @@ blueprint.
 1. ~~**"Scaling" in the assign UI.**~~ **Closed 2026-10-19:** room size and proportions
    only; items keep their size (decision 6).
 2. ~~**Rooms in scope for v1.**~~ **Closed 2026-10-19 by stage 0:** general polygons. The
-   rooms that repeat on RHH are angled 5 to 9-edge rooms, not rectangles (decision 14).
+   rooms that repeat on Sample Project are angled 5 to 9-edge rooms, not rectangles (decision 14).
 3. **Scope of a blueprint**: same-server import/export is planned. Reusable across
    projects as a shared library, or only copied between them?
 4. ~~**Revit platform.**~~ **Closed 2026-10-19:** pyRevit (decision 17).

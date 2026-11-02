@@ -319,7 +319,7 @@ user-chosen key, project-wide, across models (D2) — so re-phasing a spaces
 lineage strands nothing. Reusing the openings check would emit a true-sounding
 error whose stated cause is false.
 
-Worse, it would trap this exact project. RHH's mechanical model keeps its spaces
+Worse, it would trap this exact project. Sample Project's mechanical model keeps its spaces
 in `Future`; if it were ever pushed once under `New Construction` — which the
 one-phase-per-run rule makes easy, and which yields precisely one space — the
 lineage would be phased and **no correct push could ever replace it**, because
@@ -401,7 +401,7 @@ small rooms", until `tolerance_min` is set from this measurement.
 | **U1** | duHast: `get_all_spaces` stops swallowing exceptions | before C |
 | **B1** | `contract::spaces`, `SnapshotKind::Spaces` and its manifest index, `Enclosure`, `ReferenceEntity::Spaces` | `cargo test`, fmt, clippy |
 | **B2** | `/spaces` and `/spaces/stream` ingest, the per-kind pending slot, and D11's quarantine | as above |
-| **C** | extractor: `utils/spaces.py`, `exporters/spaces.py`, `post_spaces.py`, `spaces_export_entry`, one `ENTITY_EXPORTERS` row | the shipping translation over the captured RHH export |
+| **C** | extractor: `utils/spaces.py`, `exporters/spaces.py`, `post_spaces.py`, `spaces_export_entry`, one `ENTITY_EXPORTERS` row | the shipping translation over the captured Sample Project export |
 | **D** | read: `GET /spaces`, the `$enclosure` intrinsic, MCP `get_spaces` (tool count 20 to 21) | `cargo test`, fmt, clippy |
 | **E** | QA: `SpaceReport`, `[spaces]` settings, the match and the property diff | `cargo test`, fmt, clippy |
 | **F** | viewer: a spaces outline layer and its toggle | driven in the browser, which is what caught the bug below |
@@ -410,7 +410,7 @@ F is last for the reason the FF&E viewer PR proved: a fifth draw layer is where
 two bugs appeared that the tests did not catch, and they were separable only
 because nothing else landed with them.
 
-## As measured — RHH, 2026-09-06
+## As measured — Sample Project, 2026-09-06
 
 14 documents, walked as **links from a federated host** rather than as open
 documents — the first correction, and it changed the probe: `pick_document` over
@@ -452,7 +452,7 @@ catch is not present on this project.
   model, the real number is **31** keys duplicated inside a single model — small,
   actionable, and exactly the invariant check D2 wanted.
 
-- **"Every model holding rooms" is not the room authority.** `RHH-JHA-EL-MDL-HOS`
+- **"Every model holding rooms" is not the room authority.** `SAMPLE-JHA-EL-MDL-HOS`
   holds 2,945 spaces **and 3,418 rooms of its own**, numbered `1`, `2`, `3`
   against the architects' `ENG137`. Pooled into the room side they are 3,418
   rooms that name nothing, and they buried the 44 architectural rooms that
@@ -463,7 +463,7 @@ catch is not present on this project.
 
 ### The finding that would have made the first push silently wrong
 
-**`RHH-JHA-ME-MDL-HOS` has 1,532 of its 1,533 spaces in a phase called
+**`SAMPLE-JHA-ME-MDL-HOS` has 1,532 of its 1,533 spaces in a phase called
 `Future`.** Every other services model is `New Construction`; the architectural
 models use `New Construction` and `Future Expansion`. No two disciplines spell
 the phase the same way.
@@ -478,7 +478,7 @@ empty pushes again, silent and partial rather than loud and empty.
 Two consequences, and neither is a contract change — the one-phase-per-run rule
 is load-bearing and correctly argued where it lives:
 
-- **A spaces run is per phase, so RHH needs two.** Recorded here so the first
+- **A spaces run is per phase, so Sample Project needs two.** Recorded here so the first
   push does not discover it.
 - **The push summary must report a per-model element count**, so a model
   contributing 1 of its 1,533 spaces is visible at the moment it happens. Cheap,
@@ -568,10 +568,10 @@ Two consequences worth stating rather than discovering:
 
 **A model picker, because "all" is only legible on a toy project.** The layer
 first shipped drawing every services model at once, which is right on House A
-(one model, five spaces) and unusable on RHH: one file per service means four
+(one model, five spaces) and unusable on Sample Project: one file per service means four
 near-identical outlines stacked on every room, in one colour, with no way to tell
 which discipline is which. The picker scopes **server-side** through the `?model=`
-the read already offered -- on RHH that is the difference between shipping 10,570
+the read already offered -- on Sample Project that is the difference between shipping 10,570
 spaces to draw one model's and shipping that model's -- and keeps `all` as an
 explicit option rather than the silent default it was. It hides itself below two
 models, since a control that cannot change the answer is noise.

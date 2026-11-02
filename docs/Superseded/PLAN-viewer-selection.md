@@ -22,7 +22,7 @@ are both done.** What is left is phase C, below.
 ## Goals
 
 Each goal is done when every one of its criteria holds, verified by driving
-the page (House A and RHH), not by reading the diff.
+the page (House A and Sample Project), not by reading the diff.
 
 ### G1 — Ceilings, floors and spaces are selectable and inspected
 
@@ -272,7 +272,7 @@ inspectors are what the filter makes reachable.
 
 Every PR: `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D
 warnings`, `npm run typecheck && npm test && npm run build`, with the rebuilt
-bundle committed — and driven in the browser on House A and RHH.
+bundle committed — and driven in the browser on House A and Sample Project.
 
 ## Critique
 

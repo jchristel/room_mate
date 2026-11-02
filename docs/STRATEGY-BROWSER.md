@@ -27,7 +27,7 @@ rediscover are below rather than in the code, because they are properties of the
   one side of this join that could be resolved today.
 
   **Not yet worth the wire change**, and the measurement is why: no room id on
-  RHH is claimed by more than one model, across 3,013 rooms, 1,857 doors and
+  Sample Project is claimed by more than one model, across 3,013 rooms, 1,857 doors and
   38,913 items in five models. The signal to serve the field is a project where
   that stops being true — the note is the instrument that would say so — not a
   preference for stronger keys. Note that a selection is `{kind, id}` and the
@@ -278,7 +278,7 @@ The goal is a richer browser tool run locally, not a desktop app.
   diff would have shown, each found by driving the two pages side by side: a
   picker reverted by an in-flight poll, a plan drawn many times its panel's
   height because the page grid no longer applied under React's root, a grid that
-  put all 3,013 RHH rows in the DOM because its scroller was measured before
+  put all 3,013 Sample Project rows in the DOM because its scroller was measured before
   layout, and element layers that never repainted because their payloads live
   outside React. The last two are one lesson — **measure after layout, then keep
   measuring** — and it bit a third time on the adjacency canvas.

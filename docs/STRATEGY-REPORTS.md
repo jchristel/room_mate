@@ -35,7 +35,7 @@ Comparison and the checks each read one already-computed endpoint
 client-side and nothing waits on `service::reports`. The schedules and the
 by-room reports are different: those read whole entity payloads, which is where
 the server-side section below stops being optional — `/ffe` is 133 MB for every
-storey on RHH. **Take that as the trigger, not the date**: the first report type
+storey on Sample Project. **Take that as the trigger, not the date**: the first report type
 that needs an entity payload is the one that needs the endpoint.
 
 **What is still owed to the checks**: the ceilings check (no server-side report
@@ -190,7 +190,7 @@ Left open:
 Each association has a different cardinality, and a report that ignores it
 produces a total that is wrong without looking wrong.
 
-- **Ceilings are many-to-many.** 419 of RHH's 1,833 ceilings cover more than
+- **Ceilings are many-to-many.** 419 of Sample Project's 1,833 ceilings cover more than
   one room at a sliver threshold the read has since dropped (2026-09-16), so it
   now lists slivers too and a report that means "the rooms this ceiling is
   in" states its own line over `fraction_of_element` or `fraction_of_room`.
@@ -220,18 +220,18 @@ produces a total that is wrong without looking wrong.
   moves, with nothing pushed and nothing stored; the join rule line has to
   state the live policy, and the `to`/`from` side belongs on the row as a
   measure. **An external door or a facade-package window is homeless**, which
-  is the ordinary case rather than an edge one: RHH's facade model holds no
+  is the ordinary case rather than an edge one: Sample Project's facade model holds no
   rooms at all, so every window in it reports no room and matches no
   `?building=`. That is what "include openings with no room" is for, and why a
   doors report defaults it on where a ceilings report does not.
-- **"Never pushed" is not "no rows".** `/windows?project=RHH` answers 200 with
+- **"Never pushed" is not "no rows".** `/windows?project=Sample Project` answers 200 with
   an empty list because `windows_export_entry` has never run there, and a
   report that renders that as an empty table tells the reader their filter is
   wrong. The entity reads already distinguish the two — nothing ever pushed is
   the service's `None`, a 204 — so the report says "no windows have been pushed
   for this project" and never dresses it as a result.
 - **Unmatched rows are reported states, never gaps** — "signal, not error".
-  Unattributed ceilings (17 on RHH), homeless items, unmatched spaces, rooms
+  Unattributed ceilings (17 on Sample Project), homeless items, unmatched spaces, rooms
   with none. Two explicit switches, in plain words rather than join vocabulary:
   **"include rooms with no ⟨ceilings⟩"** and **"include ⟨ceilings⟩ with no
   room"**, the second rendering as a `(no room)` group. Without them totals do
@@ -303,7 +303,7 @@ Not built, and each is a deliberate stop rather than an oversight:
 ## Open questions
 
 - **Row volume: the preview is capped, the CSV is not** (decided 2026-09-19).
-  One row per match over RHH FF&E is ~39,000 rows. The page asks for the first
+  One row per match over Sample Project FF&E is ~39,000 rows. The page asks for the first
   N and says what it is showing -- "first 500 of 39,412" -- and anyone who
   wants all of it takes the streamed CSV. Honest about what the cap buys:
   payload and browser memory, not server work, since the join still runs to

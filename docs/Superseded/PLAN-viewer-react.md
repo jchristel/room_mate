@@ -121,7 +121,7 @@ the same PR.
    frontend CI gate rebuilds and compares, so a forgotten `npm run build` is a
    red PR rather than a stale page — but the renderer bundle and the viewer
    bundle are now two committed artifacts that must both be rebuilt.
-6. **RHH is the only honest test subject for B3 and B6** (3,013 rooms, 10
+6. **Sample Project is the only honest test subject for B3 and B6** (3,013 rooms, 10
    models, storey-scoped reads) and it is slow on a debug build. Slices that
    touch paint or the grid are checked there as well as on House A, which is
    the cost of not shipping a viewer that is fine on 18 rooms.

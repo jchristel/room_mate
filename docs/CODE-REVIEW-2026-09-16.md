@@ -117,7 +117,7 @@ does not add an eighth copy.
 ### 4. Live docs disagreeing with each other
 
 - **`STRATEGY-ENTITIES.md`'s opening said floors were "probed on House A only"**,
-  while its own floors entry (in-progress edit), and `CLAUDE.md`, record RHH
+  while its own floors entry (in-progress edit), and `CLAUDE.md`, record Sample Project
   measurements. *Fixed.* Same paragraph: "six entities" → seven. *Fixed.*
 - **`docs/README.md` said Entities records what "five" entities proved**, and its
   open list lacked the ceilings/floors QA reports. *Fixed.*
@@ -146,7 +146,7 @@ does not add an eighth copy.
   QA report; the paragraph should go. *Left open — deletion in a section with
   in-progress edits.*
 - **The floors entry is titled "what House A settled, and what it could not"**
-  and opens with what was settled (sliver escape, host Level). RHH has since
+  and opens with what was settled (sliver escape, host Level). Sample Project has since
   answered part of it, and "settled" is scaffolding. Retitle to what is left and
   drop the settled sentence. *Left open, same reason.*
 
@@ -158,7 +158,7 @@ does not add an eighth copy.
 | `scripts/weekly_review_ignore.toml` | `service/adjacency.rs` judged; `service::reports@STRATEGY-REPORTS.md` benign |
 | `docs/STRATEGY-REPORTS.md` | `service::ceilings` → `service::surface_attribution` / `service::surfaces`; `fraction_of_ceiling` → `fraction_of_element` |
 | `docs/STRATEGY-BROWSER.md`, `vite.settings.config.ts`, `src-js/settings/{main.tsx,App.tsx,style.css}`, `static/common.js` | Settings page no longer called a preview |
-| `docs/STRATEGY-ENTITIES.md` | "House A only" → "and measured on RHH"; six → seven entities |
+| `docs/STRATEGY-ENTITIES.md` | "House A only" → "and measured on Sample Project"; six → seven entities |
 | `docs/README.md` | five → seven; ceilings/floors QA added to Entities' open list |
 | `docs/CODING-CONVENTIONS.md` | Hand-kept module-judgement count replaced with a pointer |
 

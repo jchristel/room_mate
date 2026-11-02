@@ -1,8 +1,8 @@
-# Blueprints, stage 0 findings: House A and RHH
+# Blueprints, stage 0 findings: House A and Sample Project
 
 Part of [PLAN-blueprints.md](PLAN-blueprints.md). Measured 2026-10-19 with throwaway scripts in
 `scripts/blueprint_stage0/` (`bp0.py` is the capture and resolve sketch; `survey.py` and `exp.py`
-run House A from the checked-in data; `rhh.py`, `rhh_exp.py`, `rhh_exp3.py` run RHH from the
+run House A from the checked-in data; `rhh.py`, `rhh_exp.py`, `rhh_exp3.py` run Sample Project from the
 production snapshot store, with the paths hard-coded). **Nothing here is product
 code.** Only the geometry and grammar questions of stage 0 are answered. The platform
 question is closed by decision (pyRevit), so no spike was run.
@@ -17,7 +17,7 @@ real items of the same type are, which is no better than the no-recipe baseline 
 the two bedrooms are laid out differently, not badly mapped. Pooled over all 94 room pairs with
 two shared types, every recipe policy lands 1.86 to 2.06 m from the real item (baseline 2.00 m);
 most pairs are unrelated rooms, so this number measures nothing about the model.
-**The repeated-layout question needs RHH** (patient rooms), which is the next section.
+**The repeated-layout question needs Sample Project** (patient rooms), which is the next section.
 
 ## What was proven
 
@@ -72,7 +72,7 @@ Scaling a room in its own axes and resolving the 313 items of the 21 rooms with 
   nested). An independent percentage for each cabinet in a run compresses the run, which
   cannot be what anyone wants.
 
-## RHH: the repeated-layout test
+## Sample Project: the repeated-layout test
 
 Four interior models (`INT_LG-G`, `L1-L2`, `L3-L5`, `L6-RF`), latest snapshots: 2,683 rooms (204
 dropped for no usable outline) and 37,520 FF&E items kept, after excluding 14,131 nested

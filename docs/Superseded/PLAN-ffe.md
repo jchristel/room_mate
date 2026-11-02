@@ -219,7 +219,7 @@ items this work did not close moved into
 - duHast's U1 (the instance footprint, without which every item draws as a
   marker) and U2 (merging sub-component solids);
 - the FF&E level heuristic, and whether the instance's own `Level` should win;
-- FF&E at scale — everything known comes from one house, and RHH is the model
+- FF&E at scale — everything known comes from one house, and Sample Project is the model
   the probe is waiting for;
 - the pyRevit buttons for `ffe_export_entry` and `windows_export_entry`, both
   owed outside this repository;

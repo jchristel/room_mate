@@ -53,14 +53,14 @@ on-screen colour legend. Route tags say metres while the route bar says feet.
 **The stack view (built 2026-10-10).** "Stack view" in the Connections editor: pick a
 room and see the rooms joined to it by vertical links as a column of levels, with the
 next hop above and below offered. **Only levels that hold a room of the stack are
-listed** (plus the one a suggestion points at), never the project's other levels: RHH has
+listed** (plus the one a suggestion points at), never the project's other levels: Sample Project has
 two buildings with distinct levels and a hospital lift must not list the car park's
 half-levels. A suggestion is never a write; **Link** saves one hop at a time and the
 column grows and asks again. The read is `GET /projects/{id}/stack` and the MCP tool
 `get_stack_candidates` (`service::stacking`). **A room may be in an open zone and in a
 vertical link at once**: the records are independent and a test pins it.
 
-**Measured on RHH 2026-10-10** (104 lift rooms, 63 stair rooms; latest rooms of the six
+**Measured on Sample Project 2026-10-10** (104 lift rooms, 63 stair rooms; latest rooms of the six
 architectural models, a copy of the store):
 
 - The next storey is **the nearest one with something over the room**, not the next level in
@@ -73,10 +73,10 @@ architectural models, a copy of the store):
   stair needs the score relative to the SMALLER room, and 0.9 loses real stairs where 0.7 does not.
 - 11 hops were ambiguous: several lifts under one plant room, a stair beside a pressurised
   stairwell (`STAIR PRES`), a stair over a riser. Those are shown as a choice, never preselected.
-- Limits: no hand-drawn links exist on RHH to compare against, so the stem is a proxy; the probe
+- Limits: no hand-drawn links exist on Sample Project to compare against, so the stem is a proxy; the probe
   used each room's outer outline and the deduplicated `/rooms` read (3,043 of 3,112 rooms).
 
-**A route across levels was driven in the browser on RHH** (a copy, with two hand-made links
+**A route across levels was driven in the browser on Sample Project** (a copy, with two hand-made links
 between the clinical lift lobbies on LEVEL 1 to 3): the route found 2 level changes at 80 ft, the
 steps list marks both, a step switches the zone's level, and a saved route draws in every zone.
 A hop between rooms stacked at one position has no length on the plan and draws as a dot; the
@@ -90,7 +90,7 @@ members whose wall stays closed) and an optional `hub` (members connect only thr
 editor: **Cut** (click a room, then the room next to it; the same pair again reopens it) and
 **Only through…** (click the corridor). Cuts are drawn as a red cross on the plan and listed as
 chips. The hub is stored as a room, not as the pairs it implies, so a member added later is held to
-it. Measured on RHH's `t2` (two corridors, three treatment bays): the route between the end bays
+it. Measured on Sample Project's `t2` (two corridors, three treatment bays): the route between the end bays
 went through the middle bay, and with the hub on `CORRIDOR REN060` it goes along the corridor.
 Rules worth knowing: a cut or hub must name a member (the editor drops them when the member
 leaves, the server refuses them otherwise); a hub that has left the model is reported
@@ -110,9 +110,9 @@ route `path.reason` names that limit.
 What is and is not checked, because a route that reads "clear" must not be read as more than it is:
 
 - **A door's width is an ESTIMATE**: its footprint's longer side less a frame allowance
-  (`frame_mm`, default 150). The footprint is overall width, frame included: on RHH a "970 x 2040"
-  leaf measures 1,055 mm and its clear opening is nearer 900. No RHH door carries a width property
-  to use instead. Across RHH's 1,627 doors with a footprint the estimate has min 555, median 910,
+  (`frame_mm`, default 150). The footprint is overall width, frame included: on Sample Project a "970 x 2040"
+  leaf measures 1,055 mm and its clear opening is nearer 900. No Sample Project door carries a width property
+  to use instead. Across Sample Project's 1,627 doors with a footprint the estimate has min 555, median 910,
   max 6,070 mm.
 - **An open area's opening is the length of the wall two of its rooms share.**
 - **Not checked, and counted in `unchecked_hops`:** a level change (a lift or stair has no width
@@ -147,14 +147,14 @@ reason names the limit, or says "each size fits some route, but no single route 
 - **Room heights come from the ceilings first** (`room_height_from_ceilings`, on by default), the property
   as the fallback. A ceiling's `height_offset` (decimal feet, to its underside) is where the ceiling really
   is; the lowest one covering at least a quarter of the room is its height, and an offset at or below zero (a
-  roof) is not a ceiling over a room. Measured on RHH: ceilings cover 2,291 rooms and the property 2,538, and
+  roof) is not a ceiling over a room. Measured on Sample Project: ceilings cover 2,291 rooms and the property 2,538, and
   using both reaches 2,630. Where both exist they agree within 50 mm on 87% of rooms; the ceiling is lower in
   about 30 (median 300 mm: drop ceilings, bulkheads) and higher in about 250, which is the case where the
   ceiling-first choice is the LESS cautious one, so a project that prefers the property turns it off. The
   coverage threshold barely moves this (0 to 0.5 all give 87%). Ceilings are read only when a height is
   asked, and the height facts in the answer (`lowest`, `tallest_possible`, `unchecked_height`) are only
   worked out then too. A room's height reads "(from its ceiling)" when it came from one.
-- **Measured on RHH:** 1,610 of 1,627 doors get a height (97% of door types carry "970 x 2040"; no door has a
+- **Measured on Sample Project:** 1,610 of 1,627 doors get a height (97% of door types carry "970 x 2040"; no door has a
   height property) and 2,538 of 3,043 rooms have a numeric `Ceiling  Height` (min 2,400, median 2,700,
   max 7,800 mm). A door's height from its type name is the NOMINAL size, an estimate.
 - **Not checked:** level changes (no height for a lift or stair), a door or room with no readable height

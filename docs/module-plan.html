@@ -1013,7 +1013,7 @@
 
     {
       id: "svc_reports", name: "service/reports.rs", path: "src/service/reports.rs", zone: "service", lang: "Rust",
-      blurb: "Tabular reports: a schedule of one entity, or one entity BY ROOM. Projects to the columns asked for, which is why it exists at all -- /ffe is 133 MB for one RHH storey and a report of it is a few. It never recomputes an attribution: which room a ceiling lies over or a door belongs to is read off that entity's own answer. Renders CSV too, so a download and an MCP host cannot differ.",
+      blurb: "Tabular reports: a schedule of one entity, or one entity BY ROOM. Projects to the columns asked for, which is why it exists at all -- /ffe is 133 MB for one Sample Project storey and a report of it is a few. It never recomputes an attribution: which room a ceiling lies over or a door belongs to is read off that entity's own answer. Renders CSV too, so a download and an MCP host cannot differ.",
       deps: ["svc_rooms", "svc_openings", "svc_items", "svc_spaces", "svc_surfaces", "svc_mod", "state"]
     },
 
@@ -1328,7 +1328,7 @@
     },
     {
       id: "u_tidy", name: "ring_tidy.py", path: "extractor/pyRevit/room_m/ring_tidy.py", zone: "readers", lang: "IronPython",
-      blurb: "Small pure helpers. ring_tidy drops the collinear vertices Revit puts wherever a boundary changes wall (77.5% of RHH's rooms have one); losslessly, at 0.5 mm. Rooms only.",
+      blurb: "Small pure helpers. ring_tidy drops the collinear vertices Revit puts wherever a boundary changes wall (77.5% of Sample Project's rooms have one); losslessly, at 0.5 mm. Rooms only.",
       deps: []
     },
     {
@@ -1423,7 +1423,7 @@
     },
     {
       id: "bp_capture", name: "service/blueprint_capture.rs", path: "src/service/blueprint_capture.rs", zone: "service", lang: "Rust",
-      blurb: "Capture: a room and the FF&E in it written as recipes, with the rules measured on House A and RHH (an item belongs to the edge it lies beside; nested components are left out).",
+      blurb: "Capture: a room and the FF&E in it written as recipes, with the rules measured on House A and Sample Project (an item belongs to the edge it lies beside; nested components are left out).",
       deps: ["bp_geom", "bp_model", "shared", "state", "svc_items", "svc_locator", "svc_openings", "svc_rooms"]
     },
     {
@@ -1508,7 +1508,7 @@
     },
     {
       id: "svc_type_table", name: "service/type_table.rs", path: "src/service/type_table.rs", zone: "service", lang: "Rust",
-      blurb: "Each distinct type-property bag sent once per read, every element pointing at its row: 279.6 MB to 133.2 MB for RHH's FF&E.",
+      blurb: "Each distinct type-property bag sent once per read, every element pointing at its row: 279.6 MB to 133.2 MB for Sample Project's FF&E.",
       deps: ["shared"]
     },
     {

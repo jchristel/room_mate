@@ -9,7 +9,7 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 **Open work only.** Rooms, doors, windows, FF&E and spaces all ship — contract,
 ingest, storage, read, QA, MCP, the plan and the pyRevit exporter — and phasing
 ships under them. **Ceilings ship everywhere except QA**, and **floors ship on
-the ceilings stack everywhere except QA, probed on House A and measured on RHH** — their entries below are about what is left. What each of those does, and the invariants that
+the ceilings stack everywhere except QA, probed on House A and measured on Sample Project** — their entries below are about what is left. What each of those does, and the invariants that
 are expensive to rediscover (tier precedence, opening ownership, item
 attribution, the model-scoped element→room join, the phase rules, the three
 rules that are spaces' alone, and the geometry-only attribution that is
@@ -210,7 +210,7 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   should be when the parent is in a *different* category (87 of 179 on House A
   were furniture inside casework), and whether the payload wants the
   type-property deduplication this document defers below. `scripts/probe_ffe_export.py`
-  is the instrument and RHH is the model; the analyser refuses to interpret a run
+  is the instrument and Sample Project is the model; the analyser refuses to interpret a run
   whose category list has drifted from duHast's, so the two must move together.
 
 - **Windows in milestone comparison.** `Milestone::window_attachments` landed
@@ -247,7 +247,7 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
 - **Ceilings: the QA report.** The entity ships otherwise -- contract, ingest,
   storage, `/ceilings`, MCP tool, exporter, pyRevit button and the plan layer --
   and what it proved is in `CLAUDE.md` and in `service::surfaces`. Probed on
-  House A (30 ceilings) and RHH (1,833 across 9 documents, 2026-09-12), so the
+  House A (30 ceilings) and Sample Project (1,833 across 9 documents, 2026-09-12), so the
   design now rests on two documents rather than one.
 
   What is left is the report, and **the probe already calibrated what it must
@@ -259,14 +259,14 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   `CLFS-550`, 4 of them on a level with no rooms. A report listing every
   unattributed ceiling individually would bury the signal in the expected.
 
-  Three RHH findings the report should be built to surface: **3 ceilings
+  Three Sample Project findings the report should be built to surface: **3 ceilings
   exported a footprint under 5 sqft** (2.09-4.47), which the read now
   attributes like any other since it stopped dropping slivers; **17 of 1,833 attribute to no room at all**; and the storey join
   leans on name *plus* elevation, because CPB-MAIN's "C 00" sits at 182.087 ft,
   the same elevation as the hospital's GROUND.
 
 - **Floors: what is left.** Probed on House A (85 floors, 2026-09-13) and
-  measured on RHH's four `HOS-INT_*` models (1,749 floors, 2026-09-14); what both
+  measured on Sample Project's four `HOS-INT_*` models (1,749 floors, 2026-09-14); what both
   proved is in `CLAUDE.md`. Left open:
 
   **Scope (F2).** Every exported floor sat beside its rooms, but `HOS-BASE`
@@ -279,7 +279,7 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   **duHast, where the footprint is wrong and the fix is upstream.** The
   `adjust_delta` +2 case is fixed (2026-09-13) and confirmed by a House A
   re-probe in Revit: both affected floors now export an outer loop with holes
-  at Revit's area, and no other floor or ceiling changed. RHH's ceilings
+  at Revit's area, and no other floor or ceiling changed. Sample Project's ceilings
   re-export shows the same fix on 14 of 1,806. What is left is re-exporting
   `CPB-MAIN`'s ceilings and House A's floors and ceilings. The lost
   faces on sloped and shape-edited floors (20 of 85 under 90% of Revit's area)
