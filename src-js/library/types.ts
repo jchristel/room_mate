@@ -144,6 +144,8 @@ export interface RuleKey {
   blueprint: string;
   /** The blueprint item a bound item rule is for; empty otherwise. */
   instance: string;
+  /** Elevation rules only: the item was seen `front` on or from the `side`. Absent or empty for a plan. */
+  view_side?: string;
 }
 
 /** A room tag's place against the room's boundary: a fraction along an edge, paper mm into the room. */

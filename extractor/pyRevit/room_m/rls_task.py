@@ -190,6 +190,21 @@ def _plan_tags(task):
     return []
 
 
+def _elevation_tags(task):
+    """The tags the server worked out for the elevations, by the template view's id: `{view_id: [tag]}`, each
+    with an item id and `view_offset_mm` (`[right, up]` from the item's point, model mm); a rule with a leader
+    also has `has_leader`, `elbow_offset_mm` and `end_offset_mm` the same way, and `orientation` is `Horizontal` or `Vertical`."""
+    out = {}
+    tags = (task.get("rls") or {}).get("tags") or {}
+    for view in tags.get("views") or []:
+        if view.get("view_type") != "elevation":
+            continue
+        placed = [t for t in view.get("tagged") or [] if t.get("view_offset_mm")]
+        if placed:
+            out[view.get("view_id")] = placed
+    return out
+
+
 def _room_tag_head(task):
     """Where the server put the room tag in this room, `[x, y]` in the model's frame (mm), when its
     rule was written against a room boundary; None when the plug-in is to apply the rule's offset in
@@ -257,6 +272,7 @@ def build(task, settings, values):
         "room_tag": settings.get("room_tag") or None,
         "independent_tag": settings.get("independent_tag") or None,
         "tags": _plan_tags(task),
+        "elevation_tags": _elevation_tags(task),
         "room_tag_head": _room_tag_head(task),
     }
     # the detail number each viewport gets, in the order the writer makes them (`detail_numbers`)

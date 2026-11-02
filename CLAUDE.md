@@ -592,10 +592,14 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
   offset (paper mm x the view scale, turned with the item). What no rule tags is **offered, per view** (`candidates`) and overall
   (`items_without_tags`, with the views that show it and why no rule did); a person answers per item in `tags.choices`: `tag` it in a
   named view (a default head beside it, a rectangle round its footprint, the text of `tags.tag_property`: `$id`, `$type_name`,
-  `$family_name` or a property name, a setting of its own and not the viewer's FF&E tag) or `dismiss` it. **Elevations tag nothing by
-  rule, on purpose**: a rule's offset is measured in plan (`tag_rules::to_offset` drops z), which says nothing about where a tag sits
-  in an elevation, so an elevation needs offsets along the view's right and up and whether the item faces the viewer or is seen from
-  the side. A chosen elevation tag is placed along the line only. Computing it reads the room's FF&E (seconds on RHH), so a request
+  `$family_name` or a property name, a setting of its own and not the viewer's FF&E tag) or `dismiss` it. **Elevations have rules of their own** (2026-11-02): a tag read in an elevation is measured along the view's right and up (paper mm, `tag_rules::to_view_offset`; the observation
+carries the view's `view_direction`, and an elevation without it gives no sample) and the rule is keyed by `view_side`, the item seen `front` on (its plan facing within about 25 degrees
+of parallel to the view direction, `FRONT_ON` = 0.9) or from the `side` (anything else), besides the viewport type `elevation`. `view_side` is left out of a rule's id while empty, so
+plan rules keep theirs. The server (`rls_tags`) finds the rule for the way each item is seen in each elevation and sends `view_offset_mm` (model mm, right then up, from the item's point);
+the plug-in adds it to the item's own point along the NEW view's `RightDirection`/`UpDirection` (`apply_geometry.elevation_head_ft`, `rls_write._elevation_tags`), because the item's height is
+Revit's to read. The rule's leader (elbow and end, the same offsets) and its orientation (`Horizontal`/`Vertical`, which is how an elevation tag turns; an arbitrary angle is not settable) are applied too. An item an elevation shows and no rule covers stays a candidate, and `items_without_tags` says which: no elevation tag for the
+type code, or one for an item seen the other way. A chosen tag there is still placed along the line only. The tag export carries z (read in duHast `to_data_tag`: `TagHeadPosition` and the element's `Location.Point`, both 3D in mm), for **floor plan and elevation views only**
+(`view_ports_to_data` calls `get_tags_in_view` for those two; a section or 3D view's tags are not exported). **Not run in Revit.** Computing it reads the room's FF&E (seconds on RHH), so a request
   without `with_tags` skips it. The tasks page does not show it yet; the plug-in does not read it.
 
 ## The RLS creation script: settings, task, duHast

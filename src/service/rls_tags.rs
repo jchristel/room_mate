@@ -16,11 +16,14 @@
 //! beside the item and a **rectangle** round it (the item's footprint in its own frame), with the
 //! text of `tag_property` -- a setting of its own, not the plan viewer's FF&E tag.
 //!
-//! **Elevations have no rules yet, on purpose.** A rule's offset is measured in plan, in the item's
-//! frame (`tag_rules::to_offset` takes x and y and drops z), which says nothing about where a tag
-//! sits in an ELEVATION: that needs the offset along the view's right and up, and whether the item
-//! faces the viewer or is seen from the side. So an elevation tags nothing by rule; every item it
-//! shows is a candidate, and a chosen tag there is placed along the elevation line only.
+//! **Elevations have rules of their own.** A plan rule's offset is in the item's frame and drops z, which
+//! says nothing about where a tag sits in an ELEVATION. An elevation rule (`RuleKey::viewport_type` =
+//! `elevation`) is measured along the view's right and up, in paper mm, and keyed by how the item is seen:
+//! **front on** (its facing parallel to the direction the view looks, `tag_rules::view_side`) or from the
+//! **side**. The server turns it into `view_offset_mm` (model mm, right and up from the item's point); the
+//! plug-in adds that to the item's own point along the new view's right and up, because the item's height
+//! is Revit's to read. An item with no elevation rule for the way it is seen stays a candidate, and a chosen
+//! tag there is placed along the elevation line only.
 //!
 //! **What an elevation shows** is what lies between the ends of its line and no further than it
 //! looks (`rls_plan::ViewPlan`); occlusion is not judged.
@@ -33,7 +36,7 @@ use serde_json::Value;
 use super::blueprint_geometry::{centroid, dist, dot, sub, unit, Pt};
 use super::blueprint_model::Property;
 use super::rls_plan::{MarkerPlan, ViewPlan};
-use crate::tag_rules::{is_spatial, RuleSummary};
+use crate::tag_rules::{is_spatial, plan_direction, view_side, RuleSummary};
 
 /// The paper scale assumed when a viewport does not say.
 const DEFAULT_SCALE: f64 = 100.0;
@@ -131,6 +134,20 @@ pub struct PlacedTag {
     /// Elevations: the distance along the elevation line, from its start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub along_line_mm: Option<f64>,
+    /// Elevations, from a rule: where the head goes from the item's point, model mm, along the view's right
+    /// then up. The plug-in adds it to the item's point (it reads the height).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_offset_mm: Option<[f64; 2]>,
+    /// Elevations, from a rule: `Horizontal` or `Vertical` (an elevation tag's turn is its orientation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<String>,
+    /// Elevations, from a rule that has a leader: where it bends and ends, as `view_offset_mm`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_leader: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elbow_offset_mm: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_offset_mm: Option<[f64; 2]>,
     /// What a tag without a rule says.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -197,8 +214,13 @@ fn has_code(rule: &RuleSummary, item: &RoomItem) -> bool {
 /// The rule that tags `item` in a viewport of type `kind` (plan decision 27): the one bound to the
 /// blueprint item it stands for, else the generic one for its type code. A rule bound to some other
 /// item of the blueprint is not this item's, even when the code is the same.
-fn rule_for<'a>(rules: &'a [RuleSummary], kind: &str, item: &RoomItem) -> Option<&'a RuleSummary> {
-    let of_kind = |r: &&RuleSummary| !is_spatial(&r.tag_kind) && same(&r.key.viewport_type, kind) && has_code(r, item);
+fn rule_for<'a>(rules: &'a [RuleSummary], kind: &str, side: &str, item: &RoomItem) -> Option<&'a RuleSummary> {
+    let of_kind = |r: &&RuleSummary| {
+        !is_spatial(&r.tag_kind)
+            && same(&r.key.viewport_type, kind)
+            && same(&r.key.view_side, side)
+            && has_code(r, item)
+    };
     let bound = item
         .instance
         .as_deref()
@@ -305,8 +327,16 @@ fn shown_in(view: &ViewPlan, c: Pt) -> Option<f64> {
     ((0.0..=width).contains(&u) && (0.0..=limit).contains(&t)).then_some(u)
 }
 
-/// The items no view tags, with where they could be and why no rule did.
-fn untagged(items: &[RoomItem], views: &[ViewTags], rules: &[RuleSummary], dismissed_ids: &[&str]) -> Vec<Untagged> {
+/// The items no view tags, with where they could be and why no rule did. `views` carries each view's
+/// kind (`ViewTags::view_type`) and `elevations` the elevations' directions, so an item seen only in
+/// elevations is told which way it was seen and which tag the library lacks.
+fn untagged(
+    items: &[RoomItem],
+    views: &[ViewTags],
+    elevations: &[&ViewPlan],
+    rules: &[RuleSummary],
+    dismissed_ids: &[&str],
+) -> Vec<Untagged> {
     let mut items_without_tags = Vec::new();
     for item in items.iter().filter(|i| !dismissed_ids.contains(&i.id.as_str())) {
         let tagged_somewhere = views.iter().any(|v| v.tagged.iter().any(|t| t.item_id == item.id));
@@ -318,6 +348,12 @@ fn untagged(items: &[RoomItem], views: &[ViewTags], rules: &[RuleSummary], dismi
             .filter(|v| v.candidates.iter().any(|c| c.item_id == item.id))
             .map(|v| v.view_id)
             .collect();
+        let kinds: Vec<&str> = views
+            .iter()
+            .filter(|v| in_views.contains(&v.view_id))
+            .map(|v| v.view_type.as_str())
+            .collect();
+        let coded: Vec<&RuleSummary> = rules.iter().filter(|r| !is_spatial(&r.tag_kind) && has_code(r, item)).collect();
         let reason = if item.centre().is_none() {
             Some("it has no footprint".to_string())
         } else if in_views.is_empty() {
@@ -326,14 +362,56 @@ fn untagged(items: &[RoomItem], views: &[ViewTags], rules: &[RuleSummary], dismi
             Some("it has no facing, so a rule cannot place its tag".to_string())
         } else if item.type_code.is_none() {
             Some("its type has no value for the type-code parameter, so no rule can find it".to_string())
-        } else if !rules.iter().any(|r| !is_spatial(&r.tag_kind) && has_code(r, item)) {
+        } else if coded.is_empty() {
             Some("the library has no tag for this type code".to_string())
         } else {
-            None
+            // One reason per kind of view that shows it and has no rule for it.
+            let mut why = Vec::new();
+            if kinds.contains(&"floor plan") && !coded.iter().any(|r| same(&r.key.viewport_type, "floor plan")) {
+                why.push("the library has no plan tag for this type code".to_string());
+            }
+            if kinds.contains(&"elevation") {
+                let elevation_rules: Vec<&&RuleSummary> =
+                    coded.iter().filter(|r| same(&r.key.viewport_type, "elevation")).collect();
+                let side = item
+                    .facing
+                    .zip(elevations.iter().find(|v| in_views.contains(&v.view_id)))
+                    .and_then(|(f, v)| plan_direction(v.looks[0], v.looks[1]).map(|l| view_side(unit(f), l)));
+                match side {
+                    _ if elevation_rules.is_empty() => why.push("the library has no elevation tag for this type code".to_string()),
+                    Some(side) if !elevation_rules.iter().any(|r| same(&r.key.view_side, side)) => why.push(format!(
+                        "the library's elevation tag for this type code is for an item seen {}, and this one is seen {}",
+                        if side == "front" { "from the side" } else { "front on" },
+                        if side == "front" { "front on" } else { "from the side" },
+                    )),
+                    _ => {}
+                }
+            }
+            (!why.is_empty()).then(|| why.join("; "))
         };
         items_without_tags.push(Untagged { item: item_ref(item), in_views, reason });
     }
     items_without_tags
+}
+
+/// An elevation tag from a rule: the rule's offsets (paper mm along the view's right and up) at the view's scale.
+fn elevation_tag(item: &RoomItem, r: &RuleSummary, scale: f64, along: Option<f64>) -> PlacedTag {
+    let out = |o: crate::tag_rules::Offset| [o.x * scale, o.y * scale];
+    PlacedTag {
+        item_id: item.id.clone(),
+        source: Source::Rule,
+        rule_id: Some(r.id.clone()),
+        head: None,
+        rotation: Some(r.placement.rotation),
+        along_line_mm: along,
+        view_offset_mm: Some(out(r.placement.head)),
+        orientation: Some(r.placement.orientation.clone()).filter(|o| !o.trim().is_empty()),
+        has_leader: r.placement.has_leader,
+        elbow_offset_mm: r.placement.elbow.filter(|_| r.placement.has_leader).map(out),
+        end_offset_mm: r.placement.end.filter(|_| r.placement.has_leader).map(out),
+        text: None,
+        outline: None,
+    }
 }
 
 /// Work out the tags of `sheet` for `items`. `rules` are the project's tag rules for the sheet's
@@ -376,8 +454,15 @@ pub fn plan_tags(
             if !shown {
                 continue;
             }
-            let rule = (kind == "floor plan").then(|| rule_for(rules, &kind, item)).flatten();
+            let view = elevations.iter().find(|v| v.view_id == view_id);
+            let looks = view.and_then(|v| plan_direction(v.looks[0], v.looks[1]));
+            let rule = match (kind.as_str(), looks, item.facing) {
+                ("floor plan", _, _) => rule_for(rules, &kind, "", item),
+                ("elevation", Some(l), Some(f)) => rule_for(rules, &kind, view_side(unit(f), l), item),
+                _ => None,
+            };
             match (rule, item.facing) {
+                (Some(r), Some(_)) if kind == "elevation" => tagged.push(elevation_tag(item, r, scale, along)),
                 (Some(r), Some(f)) => {
                     let (f, l) = (unit(f), (-unit(f).1, unit(f).0));
                     let (x, y) = (r.placement.head.x * scale, r.placement.head.y * scale);
@@ -388,6 +473,11 @@ pub fn plan_tags(
                         head: Some([c.0 + f.0 * x + l.0 * y, c.1 + f.1 * x + l.1 * y]),
                         rotation: Some(f.1.atan2(f.0) + r.placement.rotation),
                         along_line_mm: None,
+                        view_offset_mm: None,
+                        orientation: None,
+                        has_leader: false,
+                        elbow_offset_mm: None,
+                        end_offset_mm: None,
                         text: None,
                         outline: None,
                     });
@@ -407,6 +497,11 @@ pub fn plan_tags(
                         head,
                         rotation: None,
                         along_line_mm: along,
+                        view_offset_mm: None,
+                        orientation: None,
+                        has_leader: false,
+                        elbow_offset_mm: None,
+                        end_offset_mm: None,
                         text: Some(text),
                         outline,
                     });
@@ -417,7 +512,7 @@ pub fn plan_tags(
         views.push(ViewTags { view_id, view_type: kind, tagged, candidates });
     }
 
-    let items_without_tags = untagged(items, &views, rules, &dismissed_ids);
+    let items_without_tags = untagged(items, &views, &elevations, rules, &dismissed_ids);
     let dismissed = items.iter().filter(|i| dismissed_ids.contains(&i.id.as_str())).map(item_ref).collect();
     TagPlan { views, items_without_tags, dismissed }
 }
@@ -461,6 +556,7 @@ mod tests {
                 viewport_type: "floor plan".into(),
                 blueprint: String::new(),
                 instance: String::new(),
+                view_side: String::new(),
             },
             tag_kind: "independent".into(),
             placement: Placement {
@@ -514,6 +610,89 @@ mod tests {
         let head = tag.head.unwrap();
         assert!((head[0] - 2000.0).abs() < 1e-6 && (head[1] - 1000.0).abs() < 1e-6, "{head:?}");
         assert!(plan.items_without_tags.is_empty() || plan.items_without_tags[0].in_views == vec![2]);
+    }
+
+    fn elevation_rule(family: &str, side: &str, right: f64, up: f64) -> RuleSummary {
+        let mut r = rule(family, right, up);
+        r.key.viewport_type = "elevation".into();
+        r.key.view_side = side.into();
+        r
+    }
+
+    #[test]
+    fn an_item_seen_front_on_in_an_elevation_is_tagged_by_the_front_rule_along_the_views_right_and_up() {
+        // the elevation looks towards -y, so its right is -x; the bed faces the viewer (+y), seen front on
+        let items = vec![item("bed", "Bed", (2000.0, 500.0), Some((0.0, 1.0)))];
+        let rules = [
+            elevation_rule("Bed", "front", 4.0, 18.0),
+            elevation_rule("Bed", "side", 99.0, 99.0),
+        ];
+        let plan = plan_tags(&sheet(), &items, &markers(), &rules, &TagRequest::default());
+        let elevation = plan.views.iter().find(|v| v.view_type == "elevation").unwrap();
+        let tag = &elevation.tagged[0];
+        assert_eq!(tag.source, Source::Rule);
+        // 4 and 18 mm of paper at the default 1:100 are 400 and 1800 mm in the model
+        assert_eq!(tag.view_offset_mm, Some([400.0, 1800.0]));
+        assert_eq!(tag.orientation.as_deref(), Some("Horizontal"));
+        assert!(!tag.has_leader && tag.end_offset_mm.is_none());
+        assert!(tag.head.is_none() && tag.along_line_mm.is_some());
+        assert!(elevation.candidates.is_empty());
+    }
+
+    #[test]
+    fn a_rule_with_a_leader_sends_its_elbow_and_end_scaled_and_a_vertical_tag_says_so() {
+        let items = vec![item("bed", "Bed", (2000.0, 500.0), Some((0.0, 1.0)))];
+        let mut r = elevation_rule("Bed", "front", 4.0, 18.0);
+        r.placement.has_leader = true;
+        r.placement.orientation = "Vertical".into();
+        r.placement.elbow = Some(Offset { x: 2.0, y: 10.0 });
+        r.placement.end = Some(Offset { x: 0.0, y: 0.0 });
+        let plan = plan_tags(&sheet(), &items, &markers(), &[r], &TagRequest::default());
+        let tag = &plan.views.iter().find(|v| v.view_type == "elevation").unwrap().tagged[0];
+        assert!(tag.has_leader);
+        assert_eq!(
+            (tag.orientation.as_deref(), tag.elbow_offset_mm, tag.end_offset_mm),
+            (Some("Vertical"), Some([200.0, 1000.0]), Some([0.0, 0.0]))
+        );
+    }
+
+    #[test]
+    fn an_item_seen_from_the_side_takes_the_side_rule_and_without_one_says_which_is_missing() {
+        let items = vec![item("bed", "Bed", (2000.0, 500.0), Some((1.0, 0.0)))];
+        let side = plan_tags(
+            &sheet(),
+            &items,
+            &markers(),
+            &[elevation_rule("Bed", "side", 1.0, 2.0)],
+            &TagRequest::default(),
+        );
+        assert_eq!(side.views.iter().find(|v| v.view_type == "elevation").unwrap().tagged.len(), 1);
+
+        let wrong = plan_tags(
+            &sheet(),
+            &items,
+            &markers(),
+            &[elevation_rule("Bed", "front", 1.0, 2.0)],
+            &TagRequest::default(),
+        );
+        let why = wrong.items_without_tags[0].reason.clone().unwrap_or_default();
+        assert!(why.contains("seen front on") && why.contains("this one is seen from the side"), "{why}");
+
+        let plan_only = plan_tags(&sheet(), &items, &markers(), &[rule("Bed", 1.0, 0.0)], &TagRequest::default());
+        // the plan rule tags it in the plan, so it is not "without tags" at all
+        assert!(plan_only.items_without_tags.is_empty());
+    }
+
+    #[test]
+    fn an_item_seen_only_in_elevations_with_just_a_plan_rule_is_told_so() {
+        // a sheet with an elevation only
+        let sheet = json!({ "view_ports": [ { "vp_type": "elevation", "view_id": 2, "view": {} } ]});
+        let items = vec![item("bed", "Bed", (2000.0, 500.0), Some((0.0, 1.0)))];
+        let plan = plan_tags(&sheet, &items, &markers(), &[rule("Bed", 1.0, 0.0)], &TagRequest::default());
+        assert_eq!(
+            plan.items_without_tags[0].reason.as_deref(),
+            Some("the library has no elevation tag for this type code")
+        );
     }
 
     #[test]
@@ -636,7 +815,7 @@ mod tests {
             bound_rule("Bed", "b1", 30.0),
             bound_rule("Bed", "b2", 50.0),
         ];
-        let pick = |item: &RoomItem| rule_for(&rules, "floor plan", item).map(|r| r.placement.head.x);
+        let pick = |item: &RoomItem| rule_for(&rules, "floor plan", "", item).map(|r| r.placement.head.x);
         assert_eq!(pick(&bed), Some(10.0), "no blueprint item: the generic rule");
         bed.instance = Some("b2".into());
         assert_eq!(pick(&bed), Some(50.0), "the rule of its own blueprint item");
@@ -644,7 +823,7 @@ mod tests {
         assert_eq!(pick(&bed), Some(10.0), "a blueprint item with no rule falls back to the generic one");
         let only_bound = [bound_rule("Bed", "b1", 30.0)];
         assert!(
-            rule_for(&only_bound, "floor plan", &bed).is_none(),
+            rule_for(&only_bound, "floor plan", "", &bed).is_none(),
             "another item's rule is never this item's"
         );
     }

@@ -154,6 +154,10 @@ pub struct Observation {
     pub view_id: Option<i64>,
     #[serde(default)]
     pub view_scale: Option<f64>,
+    /// The direction an ELEVATION looks along (model frame, a unit vector or any length), which is what its
+    /// sample is measured against. Absent for a plan; an elevation without it gives no sample.
+    #[serde(default)]
+    pub view_direction: Option<P3>,
     #[serde(default)]
     pub sheet: SourceSheet,
     pub tag: ObservedTag,
@@ -200,6 +204,11 @@ pub struct RuleKey {
     /// from), so a rule holds one sample; empty for a generic rule and for a room tag.
     #[serde(default)]
     pub instance: String,
+    /// Elevations only: whether the item was seen `front` on (its facing parallel to the view direction) or from the
+    /// `side`. A plan has none (empty). It keys the rule because the tag sits somewhere else on an item seen front
+    /// on than on one seen edge on, and it is kept out of the id while empty so older rules keep theirs.
+    #[serde(default)]
+    pub view_side: String,
 }
 
 impl RuleKey {
@@ -219,6 +228,11 @@ impl RuleKey {
         .map(|s| s.trim().to_lowercase())
         .collect::<Vec<_>>()
         .join("\u{1f}")
+            + &if self.view_side.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\u{1f}{}", self.view_side.trim().to_lowercase())
+            }
     }
 
     /// A file name for the key: stable (FNV-1a, never the std hasher, which may change between
@@ -513,6 +527,44 @@ fn to_offset(p: P3, from: P3, facing: (f64, f64), scale: f64) -> Offset {
     }
 }
 
+/// How square-on an item's facing must be to the direction a view looks for the item to count as seen front on:
+/// the cosine of about 25 degrees. Anything less is `side`, so an item at 45 degrees is read as seen from the side.
+pub const FRONT_ON: f64 = 0.9;
+
+/// Whether a viewport type is an elevation (an elevation's offsets are along the view, not the plan).
+pub fn is_elevation(viewport_type: &str) -> bool {
+    viewport_type.trim().eq_ignore_ascii_case("elevation")
+}
+
+/// A unit horizontal direction, or `None` for a vector with no plan part (a view looking straight down).
+pub fn plan_direction(x: f64, y: f64) -> Option<(f64, f64)> {
+    let len = x.hypot(y);
+    (len > 1e-6).then(|| (x / len, y / len))
+}
+
+/// `front` when the item's plan facing is parallel (or opposite) to the direction the view looks, else `side`.
+pub fn view_side(facing: (f64, f64), looks: (f64, f64)) -> &'static str {
+    if (facing.0 * looks.0 + facing.1 * looks.1).abs() >= FRONT_ON {
+        "front"
+    } else {
+        "side"
+    }
+}
+
+/// The viewer's right in plan for a view looking along `looks` (an elevation is vertical, so up is +z).
+pub fn view_right(looks: (f64, f64)) -> (f64, f64) {
+    (looks.1, -looks.0)
+}
+
+/// A model-space point as an offset from the element in an ELEVATION: x along the viewer's right, y up, paper mm.
+fn to_view_offset(p: P3, from: P3, looks: (f64, f64), scale: f64) -> Offset {
+    let right = view_right(looks);
+    Offset {
+        x: ((p.x - from.x) * right.0 + (p.y - from.y) * right.1) / scale,
+        y: (p.z - from.z) / scale,
+    }
+}
+
 fn wrap(angle: f64) -> f64 {
     let two_pi = std::f64::consts::TAU;
     let mut a = angle % two_pi;
@@ -600,6 +652,16 @@ fn samples_of(
                 .location_point
                 .as_ref()
                 .ok_or_else(|| format!("tagged element {}: it has no point location", el.host_element_id))?;
+            // An item in an elevation is measured along the view (right, up) and keyed by how it is seen.
+            let elevation = !spatial && is_elevation(&viewport_type);
+            let looks = if elevation {
+                let d = obs.view_direction.unwrap_or_default();
+                Some(plan_direction(d.x, d.y).ok_or_else(|| {
+                    format!("tagged element {}: the elevation's view direction was not read", el.host_element_id)
+                })?)
+            } else {
+                None
+            };
             // A room has no orientation of its own: its tag is placed in the plan's axes.
             let facing = if spatial {
                 (1.0, 0.0)
@@ -625,6 +687,11 @@ fn samples_of(
                 viewport_type: viewport_type.clone(),
                 blueprint: blueprint.clone(),
                 instance,
+                view_side: looks.map(|l| view_side(facing, l).to_string()).unwrap_or_default(),
+            };
+            let offset = |p: P3| match looks {
+                Some(l) => to_view_offset(p, from, l, scale),
+                None => to_offset(p, from, facing, scale),
             };
             let boundary = if spatial {
                 ctx.boundary.and_then(|f| f(&obs.sheet.document_title, element_id, tag.point, !blueprint.is_empty(), scale))
@@ -634,13 +701,14 @@ fn samples_of(
             let sample = Sample {
                 source: SampleSource { sheet: obs.sheet.clone(), tag_id: tag.id, element_id },
                 view_scale: scale,
-                head: to_offset(tag.point, from, facing, scale),
-                rotation: wrap(tag.rotation - facing.1.atan2(facing.0)),
+                head: offset(tag.point),
+                // in an elevation the tag's turn is about the view's normal, which the item's facing says nothing of
+                rotation: if elevation { wrap(tag.rotation) } else { wrap(tag.rotation - facing.1.atan2(facing.0)) },
                 orientation: clean(&tag.orientation),
                 has_leader: tag.has_leader,
                 leader_end_condition: clean(&tag.leader_end_condition),
-                elbow: el.elbow_location.filter(|_| tag.has_leader).map(|p| to_offset(p, from, facing, scale)),
-                end: el.leader_end.filter(|_| tag.has_leader).map(|p| to_offset(p, from, facing, scale)),
+                elbow: el.elbow_location.filter(|_| tag.has_leader).map(offset),
+                end: el.leader_end.filter(|_| tag.has_leader).map(offset),
                 boundary,
             };
             let kind = if tag.tag_kind.trim().is_empty() {
@@ -887,6 +955,7 @@ mod tests {
             viewport_type: Some("floor plan".to_string()),
             view_id: Some(7),
             view_scale: Some(50.0),
+            view_direction: None,
             sheet: SourceSheet {
                 document_title: "M".into(),
                 revit_sheet_id: "1".into(),
@@ -945,6 +1014,62 @@ mod tests {
             blueprint: Some(("bp".to_string(), items.iter().map(|s| s.to_string()).collect())),
             ..Default::default()
         }
+    }
+
+    /// `obs` seen in an elevation looking along +y (so the viewer's right is +x and up is +z), the tag 200 mm
+    /// to the right of the bed and 900 mm above its point; the bed faces `facing`.
+    fn elevation_obs(tag_id: i64, facing: (f64, f64)) -> Observation {
+        let mut o = obs(tag_id, 0.0, facing, (200.0, 0.0));
+        o.viewport_type = Some("elevation".into());
+        o.view_direction = Some(P3 { x: 0.0, y: 1.0, z: 0.0 });
+        o.tag.point = P3 { x: 200.0, y: 0.0, z: 900.0 };
+        o
+    }
+
+    #[test]
+    fn test_an_elevation_tag_is_measured_along_the_views_right_and_up_and_keyed_by_how_the_item_is_seen() {
+        let d = dir();
+        // a bed facing the viewer (facing parallel to the view direction) and one seen from the side
+        let out = push(d.path(), vec![elevation_obs(1, (0.0, -1.0)), elevation_obs(2, (1.0, 0.0))]);
+        assert_eq!(out.samples, 2, "{:?}", out.skipped);
+        let rules = load_all(d.path(), "p").unwrap();
+        let mut sides: Vec<&str> = rules.iter().map(|r| r.key.view_side.as_str()).collect();
+        sides.sort();
+        assert_eq!(sides, ["front", "side"]);
+        for r in &rules {
+            // 200 mm right and 900 mm up at 1:50 is 4 and 18 mm on paper, whichever way the bed faces
+            assert!(
+                (r.placement.head.x - 4.0).abs() < 1e-9 && (r.placement.head.y - 18.0).abs() < 1e-9,
+                "{:?}",
+                r.placement.head
+            );
+        }
+    }
+
+    #[test]
+    fn test_an_elevation_with_no_view_direction_gives_no_sample_and_a_plan_rule_keeps_its_id() {
+        let d = dir();
+        let mut o = elevation_obs(1, (0.0, 1.0));
+        o.view_direction = None;
+        let out = push(d.path(), vec![o]);
+        assert_eq!(out.samples, 0);
+        assert!(out.skipped[0].reason.contains("view direction"), "{:?}", out.skipped);
+        // an empty side is left out of the id, so a rule written before the field existed is still found
+        let mut key = RuleKey {
+            tagged_category: "A".into(),
+            code_parameter: "B".into(),
+            type_code: "C".into(),
+            tag_category: "D".into(),
+            tag_family: "E".into(),
+            tag_type: "F".into(),
+            viewport_type: "floor plan".into(),
+            blueprint: String::new(),
+            instance: String::new(),
+            view_side: String::new(),
+        };
+        let plain = key.id();
+        key.view_side = "front".into();
+        assert_ne!(plain, key.id());
     }
 
     #[test]

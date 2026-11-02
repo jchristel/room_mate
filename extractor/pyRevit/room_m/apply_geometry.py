@@ -71,6 +71,15 @@ def tag_placement(item, rule, scale):
     }
 
 
+def elevation_head_ft(point_ft, right, up, offset_mm):
+    """Where an elevation tag's head goes, `(x, y, z)` in feet: the item's own point moved `offset_mm` (`[right, up]`,
+    model mm, as the server worked it out from the rule) along the new view's right and up directions (unit
+    vectors, `(x, y, z)`). The item's height is Revit's to read, which is why the server sends an offset and
+    not a point."""
+    dx, dy = mm_to_ft(offset_mm[0]), mm_to_ft(offset_mm[1])
+    return tuple(point_ft[i] + right[i] * dx + up[i] * dy for i in range(3))
+
+
 def _norm(s):
     return (s or "").strip().lower()
 
