@@ -786,6 +786,13 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   short sides, area, item count), sent by the extractor (the server reads one itself only for a sheet that names a linked room and
   sent none). Suggest ranks on it, so a sheet still ranks when its room has
   been redrawn or is not on the server; a sheet without one is read from its room as before.
+- **RLS auto matches many rooms to library sheets** (`POST /projects/{id}/sheets/solve` with `room_ids`; `sheet_suggest::solve`, which reads the rooms
+  and FF&E once and ranks each room as `suggest` does). The answer per room is its three closest sheets with a **fit**, `100 * exp(-distance)`
+  (a scale to read, not a probability; the ranking is the distance), or a `reason` (no such room, the id is in several models, no sheet can be ranked):
+  a verdict, never an error. The viewer's RLS tool has a mode: manual (the old flow) and auto, which solves this storey's rooms **that have no task**
+  (queued, in progress, completed or with warnings; those are faded, a double click on one or "Include all" puts it back), draws them green (80+), yellow
+  (60-80) or red, lets a person override the sheet per room (an override, or "no sheet", is its own category) and queues, per sheet, the rooms of the
+  ticked categories through the ordinary make request. The bands are constants in `rlsTool.ts`. **Not driven in a browser against Revit data.**
 - **Neither sheet entry point is in `ENTITY_EXPORTERS`.** They are selection-driven, and the
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
   side was checked for syntax, ASCII and duHast-import closure only.

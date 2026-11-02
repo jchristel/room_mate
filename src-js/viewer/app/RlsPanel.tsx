@@ -8,13 +8,33 @@
 import { useEffect, useState } from "react";
 
 import { SheetPreview } from "../../library/SheetPreview.js";
-import { chooseSheet, madeText, roomsText, whyNot } from "../rlsTool.js";
-import { getLibrarySheet, listLibrarySheets, makeRlsTasks, type LibrarySheet, type LibrarySheetRecord } from "./rlsData.js";
-import { patchZoneRls, setZoneRlsMode, type ZoneRow } from "./store.js";
+import type { Room } from "../../renderer/types.js";
+import {
+  autoBatches,
+  categoryOf,
+  chooseSheet,
+  doneRoomIds,
+  includeAll,
+  madeText,
+  NO_SHEET,
+  roomsText,
+  setOverride,
+  solverSet,
+  tally,
+  whyNot,
+  type Category,
+  type Made,
+  type RlsMode,
+} from "../rlsTool.js";
+import { getLibrarySheet, listLibrarySheets, makeRlsTasks, solveRooms, type LibrarySheet, type LibrarySheetRecord } from "./rlsData.js";
+import { getState, patchZoneRls, setZoneRlsMode, type ZoneRow } from "./store.js";
+import { watchRoomTasks } from "./taskData.js";
 import { useViewer } from "./useViewer.js";
 
-export function RlsPanel({ zone }: { zone: ZoneRow }) {
-  const { scope, payload, toolFocus } = useViewer();
+const CATEGORY_LABEL: Record<Category, string> = { green: "green (80+)", yellow: "yellow (60-80)", red: "red (below 60)", override: "overrides" };
+
+export function RlsPanel({ zone, rooms }: { zone: ZoneRow; rooms: readonly Room[] }) {
+  const { scope, payload, toolFocus, roomTasks } = useViewer();
   const tool = zone.rls;
   const zoneId = zone.id;
   const active = tool !== null;
@@ -43,6 +63,28 @@ export function RlsPanel({ zone }: { zone: ZoneRow }) {
     return () => ac.abort();
   }, [active, project, sheetId]);
 
+  // Auto mode reads the room tasks (the rooms with one leave the solver set) while it is on.
+  const auto = tool?.mode === "auto";
+  useEffect(() => (auto ? watchRoomTasks() : undefined), [auto]);
+
+  // The solver set: this storey's rooms without a task, plus the ones put back.
+  const done = doneRoomIds(roomTasks);
+  const set = tool && auto ? solverSet(rooms.map((r) => r.id), done, tool) : [];
+  const setKey = set.join("\u0000");
+  useEffect(() => {
+    if (!auto || !project || set.length === 0) return;
+    const ac = new AbortController();
+    void solveRooms(project, set, ac.signal).then((answer) => {
+      if (ac.signal.aborted) return;
+      if (typeof answer === "string") return answer ? setNotice(answer) : undefined;
+      const solved = Object.fromEntries(answer.map((a) => [a.room_id, a]));
+      const now = getZoneTool(zoneId);
+      if (now) patchZoneRls(zoneId, { ...now, solved });
+    });
+    return () => ac.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto, project, setKey]);
+
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
@@ -53,6 +95,7 @@ export function RlsPanel({ zone }: { zone: ZoneRow }) {
   }, [active, toolFocus, zoneId]);
 
   if (!tool) return null;
+  const mode = (m: RlsMode) => patchZoneRls(zoneId, { ...tool, mode: m });
   const blocked = whyNot(tool);
   const name = (id: string) => payload?.rooms?.find((r) => r.id === id)?.name ?? id;
 
@@ -74,10 +117,96 @@ export function RlsPanel({ zone }: { zone: ZoneRow }) {
     patchZoneRls(zoneId, { ...tool, roomIds: answer.filter((m) => m.refused).map((m) => m.subject) });
   };
 
+  const batches = autoBatches(tool, set);
+  const queued = [...batches.values()].reduce((n, r) => n + r.length, 0);
+  const counts = tally(tool, set);
+  const focus = tool.focus;
+  const makeAuto = async () => {
+    if (!project) return;
+    setBusy(true);
+    setNotice(null);
+    const made: Made[] = [];
+    for (const [sheet, ids] of batches) {
+      const answer = await makeRlsTasks(project, sheet, ids, tool.overwrite, Boolean(sheets?.find((x) => x.id === sheet)?.blueprint));
+      if (typeof answer === "string") {
+        setBusy(false);
+        return setNotice(answer);
+      }
+      made.push(...answer);
+    }
+    setBusy(false);
+    setNotice(madeText(made));
+  };
+
+  if (auto) {
+    const nameOf = (id: string) => rooms.find((r) => r.id === id)?.name ?? id;
+    const best = focus ? tool.solved[focus]?.choices[0] : undefined;
+    return (
+      <div className="routeBar rlsBar">
+        <strong>RLS</strong>
+        <select className="picker" value={tool.mode} onChange={(e) => mode(e.target.value as RlsMode)} aria-label="RLS mode">
+          <option value="manual">RLS manual</option>
+          <option value="auto">RLS auto</option>
+        </select>
+        <span className="routeResult" title="Rooms of this level without a task are matched to the closest library sheet by area, proportions and item count">
+          {set.length} rooms matched: {counts.green} green, {counts.yellow} yellow, {counts.red} red, {counts.override} overridden
+          {done.size > 0 ? `; ${rooms.filter((r) => done.has(r.id) && !tool.included.includes(r.id)).length} faded (have a task)` : ""}
+        </span>
+        <button className="chip" title="Put every faded room (one that has a task) back in the solver set. Double click one room to put back just that one." onClick={() => patchZoneRls(zoneId, includeAll(tool, new Set(rooms.filter((r) => done.has(r.id)).map((r) => r.id))))}>
+          Include all
+        </button>
+        {(["green", "yellow", "red", "override"] as const).map((c) => (
+          <label key={c} title={`Queue the ${CATEGORY_LABEL[c]} rooms`}>
+            <input type="checkbox" checked={tool.bands[c]} onChange={(e) => patchZoneRls(zoneId, { ...tool, bands: { ...tool.bands, [c]: e.target.checked } })} /> {CATEGORY_LABEL[c]}
+          </label>
+        ))}
+        <label title="Replace a sheet that already exists (off, it is skipped with a warning)">
+          <input type="checkbox" checked={tool.overwrite} onChange={(e) => patchZoneRls(zoneId, { ...tool, overwrite: e.target.checked })} /> overwrite
+        </label>
+        {focus ? (
+          <span className="rlsRooms">
+            <strong>{nameOf(focus)}</strong>
+            {best ? ` ${Math.round(best.fit)}% ${best.sheet_number}` : ` ${tool.solved[focus]?.reason ?? ""}`}
+            <select
+              className="picker"
+              value={tool.overrides[focus] ?? ""}
+              onChange={(e) => patchZoneRls(zoneId, setOverride(tool, focus, e.target.value || null))}
+              aria-label="Sheet for this room"
+            >
+              <option value="">{categoryOf(tool, focus) === "override" ? "Back to the solver's choice" : "Solver's choice"}</option>
+              <option value={NO_SHEET}>No sheet (leave this room out)</option>
+              {sheets?.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.sheet_number} {s.sheet_name}
+                </option>
+              ))}
+            </select>
+          </span>
+        ) : (
+          <span className="meta">click a room to override its sheet</span>
+        )}
+        <button className="chip on" disabled={busy || queued === 0} title={queued === 0 ? "No room in the ticked categories has a sheet" : "Queue a room layout sheet task per room, for the Revit session to make (the Tasks button)"} onClick={() => void makeAuto()}>
+          {busy ? "Working…" : `Make ${queued} task${queued === 1 ? "" : "s"}`}
+        </button>
+        {notice ? <span className="meta">{notice}</span> : null}
+        <a className="chip" href={`/tasks/?project=${encodeURIComponent(project ?? "")}`}>
+          Tasks page
+        </a>
+        <button className="chip" title="Leave the RLS tool (Esc)" onClick={() => setZoneRlsMode(zoneId, false)}>
+          Close
+        </button>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="routeBar rlsBar">
         <strong>RLS</strong>
+        <select className="picker" value={tool.mode} onChange={(e) => mode(e.target.value as RlsMode)} aria-label="RLS mode">
+          <option value="manual">RLS manual</option>
+          <option value="auto">RLS auto</option>
+        </select>
         <select
           className="picker"
           value={tool.sheetId ?? ""}
@@ -120,4 +249,9 @@ export function RlsPanel({ zone }: { zone: ZoneRow }) {
       ) : null}
     </>
   );
+}
+
+/** The zone's tool as it is now, for an async answer that arrives after the render that asked. */
+function getZoneTool(zoneId: string) {
+  return getState().zones.find((z) => z.id === zoneId)?.rls ?? null;
 }

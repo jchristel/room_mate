@@ -193,14 +193,15 @@ pub fn rank(
     out
 }
 
-/// Rank the project's library sheets against one room. `Ok(None)` when the project has no
-/// rooms, or the room is not among them.
-pub fn suggest(
-    state: &AppState,
-    project: &str,
-    target: &RoomRef,
-    sheets: &[SheetRecord],
-) -> Result<Option<Suggestions>, ServiceError> {
+/// What every ranking in a project needs and nothing in it depends on the target: the rooms and the
+/// number of FF&E items attributed to each. Read once, so asking for a whole level costs one read.
+pub struct Context {
+    rooms: super::rooms::RoomsResult,
+    item_counts: std::collections::BTreeMap<RoomRef, usize>,
+}
+
+/// `None` when the project has no rooms.
+pub fn context(state: &AppState, project: &str) -> Result<Option<Context>, ServiceError> {
     let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
         return Ok(None);
     };
@@ -212,8 +213,16 @@ pub fn suggest(
             }
         }
     }
-    let signature_of = |room: &RoomRef| -> Option<(String, Signature)> {
-        let found = rooms.rooms.iter().find(|r| r.model_id == room.model_id && r.room.id == room.room_id)?;
+    Ok(Some(Context { rooms, item_counts }))
+}
+
+impl Context {
+    fn signature_of(&self, room: &RoomRef) -> Option<(String, Signature)> {
+        let found = self
+            .rooms
+            .rooms
+            .iter()
+            .find(|r| r.model_id == room.model_id && r.room.id == room.room_id)?;
         let outer = found.room.loops.first()?;
         let ring: Vec<Pt> = loop_mm(outer);
         if ring.len() < 3 {
@@ -224,13 +233,40 @@ pub fn suggest(
             Signature {
                 area_m2: signed_area(&ring).abs() * M2_PER_MM2,
                 proportion: proportion_of(&ring),
-                items: item_counts.get(room).copied().unwrap_or(0),
+                items: self.item_counts.get(room).copied().unwrap_or(0),
             },
         ))
-    };
-    let Some((room_name, signature)) = signature_of(target) else {
+    }
+
+    /// Every room with this id, one per model that has it.
+    pub fn rooms_with_id(&self, room_id: &str) -> Vec<RoomRef> {
+        self.rooms
+            .rooms
+            .iter()
+            .filter(|r| r.room.id == room_id)
+            .map(|r| RoomRef { model_id: r.model_id.clone(), room_id: r.room.id.clone() })
+            .collect()
+    }
+}
+
+/// Rank the project's library sheets against one room. `Ok(None)` when the project has no
+/// rooms, or the room is not among them.
+pub fn suggest(
+    state: &AppState,
+    project: &str,
+    target: &RoomRef,
+    sheets: &[SheetRecord],
+) -> Result<Option<Suggestions>, ServiceError> {
+    let Some(ctx) = context(state, project)? else {
         return Ok(None);
     };
+    Ok(suggest_in(&ctx, target, sheets))
+}
+
+/// `suggest` against rooms already read.
+pub fn suggest_in(ctx: &Context, target: &RoomRef, sheets: &[SheetRecord]) -> Option<Suggestions> {
+    let signature_of = |room: &RoomRef| ctx.signature_of(room);
+    let (room_name, signature) = signature_of(target)?;
 
     let (mut candidates, mut unresolved, mut unassigned) = (Vec::new(), Vec::new(), 0);
     for sheet in sheets {
@@ -267,7 +303,7 @@ pub fn suggest(
             }),
         }
     }
-    Ok(Some(Suggestions {
+    Some(Suggestions {
         target: Target {
             model_id: target.model_id.clone(),
             room_id: target.room_id.clone(),
@@ -277,7 +313,90 @@ pub fn suggest(
         suggestions: rank(&signature, candidates),
         unassigned,
         unresolved,
-    }))
+    })
+}
+
+/// How well a sheet suits a room, 0 to 100: `100 * exp(-distance)`. The distance is the mean log-ratio of
+/// area, proportions and item count, so 0 is a twin (100) and a room about 1.6 times the size in every
+/// figure (distance 0.5) reads 61. A scale for a person to read; the ranking uses the distance itself.
+pub fn fit_percent(distance: f64) -> f64 {
+    100.0 * (-distance).exp()
+}
+
+/// One room's answer to "which sheet": the closest sheet and the next two, or why there is none.
+#[derive(Debug, Clone, Serialize)]
+pub struct Solved {
+    pub room_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub room_name: String,
+    /// Closest first, at most `ALTERNATIVES + 1`; empty when `reason` is set.
+    pub choices: Vec<Choice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Choice {
+    pub sheet_id: String,
+    pub sheet_number: String,
+    pub sheet_name: String,
+    pub room_name: String,
+    /// `fit_percent` of the distance.
+    pub fit: f64,
+}
+
+const ALTERNATIVES: usize = 2;
+
+/// Solve each of `room_ids` against `sheets`. A room is a verdict, never an error: not on the server, in
+/// two models at once (a viewer room names no model, so the id must be unambiguous), or no sheet to rank.
+pub fn solve(ctx: &Context, room_ids: &[String], sheets: &[SheetRecord]) -> Vec<Solved> {
+    room_ids
+        .iter()
+        .map(|id| {
+            let none = |reason: String| Solved {
+                room_id: id.clone(),
+                model_id: String::new(),
+                room_name: String::new(),
+                choices: Vec::new(),
+                reason: Some(reason),
+            };
+            let found = ctx.rooms_with_id(id);
+            let target = match found.as_slice() {
+                [one] => one,
+                [] => return none("no such room in this project".to_string()),
+                many => {
+                    let models: Vec<&str> = many.iter().map(|r| r.model_id.as_str()).collect();
+                    return none(format!("the room id is in several models: {}", models.join(", ")));
+                }
+            };
+            let Some(s) = suggest_in(ctx, target, sheets) else {
+                return none("the room has no outline to measure".to_string());
+            };
+            if s.suggestions.is_empty() {
+                return none("no sheet in the library can be ranked".to_string());
+            }
+            Solved {
+                room_id: id.clone(),
+                model_id: s.target.model_id,
+                room_name: s.target.room_name,
+                choices: s
+                    .suggestions
+                    .iter()
+                    .take(ALTERNATIVES + 1)
+                    .map(|x| Choice {
+                        sheet_id: x.sheet_id.clone(),
+                        sheet_number: x.sheet_number.clone(),
+                        sheet_name: x.sheet_name.clone(),
+                        room_name: x.room_name.clone(),
+                        fit: fit_percent(x.distance),
+                    })
+                    .collect(),
+                reason: None,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -392,5 +511,12 @@ mod tests {
         assert_eq!(order, ["RLS-01", "RLS-02", "RLS-04", "RLS-03"]);
         assert_eq!(ranked[0].distance, 0.0);
         assert!(ranked[3].parts.area > ranked[2].parts.area, "the figures ride the answer");
+    }
+
+    #[test]
+    fn test_fit_is_100_for_a_twin_and_falls_with_distance() {
+        assert_eq!(fit_percent(0.0), 100.0);
+        assert!((fit_percent(0.5) - 60.65).abs() < 0.01);
+        assert!(fit_percent(2.0) < fit_percent(1.0));
     }
 }
