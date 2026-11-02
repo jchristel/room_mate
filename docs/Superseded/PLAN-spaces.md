@@ -452,7 +452,7 @@ catch is not present on this project.
   model, the real number is **31** keys duplicated inside a single model — small,
   actionable, and exactly the invariant check D2 wanted.
 
-- **"Every model holding rooms" is not the room authority.** `SAMPLE-JHA-EL-MDL-HOS`
+- **"Every model holding rooms" is not the room authority.** The sample project's electrical services model
   holds 2,945 spaces **and 3,418 rooms of its own**, numbered `1`, `2`, `3`
   against the architects' `ENG137`. Pooled into the room side they are 3,418
   rooms that name nothing, and they buried the 44 architectural rooms that
@@ -463,7 +463,7 @@ catch is not present on this project.
 
 ### The finding that would have made the first push silently wrong
 
-**`SAMPLE-JHA-ME-MDL-HOS` has 1,532 of its 1,533 spaces in a phase called
+**The sample project's mechanical services model has 1,532 of its 1,533 spaces in a phase called
 `Future`.** Every other services model is `New Construction`; the architectural
 models use `New Construction` and `Future Expansion`. No two disciplines spell
 the phase the same way.

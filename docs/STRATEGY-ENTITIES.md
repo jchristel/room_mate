@@ -262,14 +262,14 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   Three Sample Project findings the report should be built to surface: **3 ceilings
   exported a footprint under 5 sqft** (2.09-4.47), which the read now
   attributes like any other since it stopped dropping slivers; **17 of 1,833 attribute to no room at all**; and the storey join
-  leans on name *plus* elevation, because CPB-MAIN's "C 00" sits at 182.087 ft,
+  leans on name *plus* elevation, because a car-park model's "C 00" sits at 182.087 ft,
   the same elevation as the hospital's GROUND.
 
 - **Floors: what is left.** Probed on House A (85 floors, 2026-09-13) and
-  measured on Sample Project's four `HOS-INT_*` models (1,749 floors, 2026-09-14); what both
+  measured on the sample project's four interior models (1,749 floors, 2026-09-14); what both
   proved is in `CLAUDE.md`. Left open:
 
-  **Scope (F2).** Every exported floor sat beside its rooms, but `HOS-BASE`
+  **Scope (F2).** Every exported floor sat beside its rooms, but the base-build model
   was not in the run, so whether its slabs exist and would be roomless is
   unmeasured. If they do, the answer is not to widen the join by default --
   a floor joins on geometry, not a key, so there is no uniqueness guarantee
@@ -281,7 +281,7 @@ have. **Do not re-add an ingest-time gate for the next dependent entity.**
   re-probe in Revit: both affected floors now export an outer loop with holes
   at Revit's area, and no other floor or ceiling changed. Sample Project's ceilings
   re-export shows the same fix on 14 of 1,806. What is left is re-exporting
-  `CPB-MAIN`'s ceilings and House A's floors and ceilings. The lost
+  the car-park model's ceilings and House A's floors and ceilings. The lost
   faces on sloped and shape-edited floors (20 of 85 under 90% of Revit's area)
   are diagnosed only as far as their shape -- non-planar faces skipped,
   near-vertical ones admitted as slivers, faces paired by equal area wherever

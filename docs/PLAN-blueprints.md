@@ -51,7 +51,7 @@ Grounded in the code as of 2026-10-18; rows marked *now* were true then and have
 |---|---|
 | Room outline, level, properties | Have. |
 | FF&E: type, category, `insertion_point` (plan, mm), `facing`, owner room | Have. |
-| FF&E footprint (`loops`, the instance's oriented box in plan) | Have: 15,826 of 16,161 items (98%) in Sample Project `HOS-INT_L1-L2` (probed 2026-10-18). The "empty on every item" comments in `renderer/types.ts` predate it and are stale. |
+| FF&E footprint (`loops`, the instance's oriented box in plan) | Have: 15,826 of 16,161 items (98%) in one interior model of the sample project (probed 2026-10-18). The "empty on every item" comments in `renderer/types.ts` predate it and are stale. |
 | FF&E instance and type **properties** (every parameter, as exported) | Have. The probe found `Elevation from Level` on 100% of items, `Host` on 99.9%, `Offset from Host` on 99.4%, `Mounting Height` on 59%. |
 | FF&E **vertical extent and sizes** | **Not needed as separate fields** (decided): they are part of the type and instance properties, which a blueprint item carries as exported. |
 | FF&E **hosting kind** | Weak: `Host` is a display string (`Level : LEVEL 1`); which wall, and where on it, is not stated. *Now:* `host` is read from Revit by the extractor (built, not yet run in Revit). |
