@@ -3,14 +3,14 @@
 //!
 //! **Why this exists.** Every element carries its properties as a map keyed by
 //! the source's own parameter names, and every door, window, item, ceiling and
-//! floor also carries its family *type's* whole map. On the sample project's FF&E that was 61%
-//! of every snapshot byte for `type_properties` alone -- 16,397 items sharing
-//! 1,005 distinct bags -- and the instance keys repeat on every element too.
+//! floor also carries its family *type's* whole map. On a large FF&E export that was most
+//! of every snapshot byte for `type_properties` alone -- thousands of items sharing
+//! a thousand-odd distinct bags -- and the instance keys repeat on every element too.
 //! Parsing is what a read costs, and the parse was dominated by allocating the
 //! same few thousand strings millions of times, then again when `/ffe` cloned
-//! each item into its response. Measured on the stored the sample project FF&E, parse plus
-//! clone: 29 s as maps of owned strings, 4.3 s with the storage shape below and
-//! these types in memory.
+//! each item into its response. Measured on a large stored FF&E snapshot, parse plus
+//! clone took several times longer as maps of owned strings than with the storage
+//! shape below and these types in memory.
 //!
 //! **The in-memory half** is `PropertyKey = Arc<str>` and a type bag behind
 //! `Arc<PropertyMap>`. A key or bag is allocated once per snapshot and every

@@ -114,7 +114,7 @@ pub struct SurfaceResponse {
     /// **Empty means unattributed, and that is a reported state.** A ceiling
     /// over a stairwell, an external soffit, a slab on a level that carries no
     /// rooms at all legitimately belongs to nothing — 8 of House A's 30
-    /// ceilings, 17 of the sample project's 1,833. Never an error, and not on its own a
+    /// ceilings. Never an error, and not on its own a
     /// finding.
     pub rooms: Vec<SurfaceRoom>,
 }

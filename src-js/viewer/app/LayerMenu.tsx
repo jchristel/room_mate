@@ -73,7 +73,7 @@ export function LayerMenu({ zone }: { zone: ZoneRow }) {
             </label>
           ) : null}
           {/* The services-model picker belongs to the Spaces entry, and only
-              appears when there is a choice: it exists because the sample project keeps one
+              appears when there is a choice: it exists because a real project keeps one
               services file per service, so "all models" stacks four
               near-identical outlines on every room in one colour. */}
           {layer.entity === "spaces" && zone.layers.spaces && spacesModels.length > 1 ? (

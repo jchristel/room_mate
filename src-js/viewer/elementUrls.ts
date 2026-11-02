@@ -2,8 +2,8 @@
 //
 // **Storey-scoped, and that is a size decision with a measurement behind it.**
 // These reads used to ship every storey and let the browser discard most of it:
-// on the sample project, 38,913 FF&E items to draw the few hundred on the floor being looked
-// at — 133 MB against 23.6 MB for one storey. The server keeps a SUPERSET of
+// on a large project, tens of thousands of FF&E items to draw the few hundred on the floor being looked
+// at — over a hundred MB against a fraction of that for one storey. The server keeps a SUPERSET of
 // what the viewer's own storey rule can keep (`service::entity_scope::
 // StoreyScope`), so every storey decision and every "(by elevation)" label
 // comes out as it did.

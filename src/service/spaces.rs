@@ -68,8 +68,7 @@ pub struct SpaceResponse {
     /// is not for a room.** One services file per service means the same room
     /// number legitimately names a space in each of them, so a consumer holding
     /// two spaces with one key is looking at two disciplines rather than a
-    /// duplicate. Measured on the sample project, where pooling them made 3,046 keys look
-    /// duplicated.
+    /// duplicate. Pooling them once made thousands of keys look duplicated.
     pub model_id: String,
 
     #[serde(skip)]
@@ -165,8 +164,8 @@ pub struct SpacesResult {
     /// lineage's current phase.
     ///
     /// **Worth reading on this entity above all others.** The push phase is one
-    /// per run and the disciplines do not agree on the name: on the sample project the
-    /// mechanical model's spaces are in `Future` while its siblings are in `New
+    /// per run and the disciplines do not agree on the name: on a real project one
+    /// model's spaces are in `Future` while its siblings are in `New
     /// Construction`. Two models reporting different phases here is ordinary and
     /// correct; it is also the only place a consumer can see it.
     pub phase_by_model: BTreeMap<String, BTreeMap<String, Option<String>>>,
@@ -205,7 +204,7 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
     let registry = state.settings();
 
     // The model filter narrows the PLAN, not the parsed payloads. Applied after
-    // the read, as it used to be, a picker set to one of the sample project's services models
+    // the read, as it used to be, a picker set to one services model
     // parsed all of them to serve one.
     let index = state.model_index().map_err(ServiceError::Internal)?;
     let mut plan = entity_scope::plan_reads(&index, &registry, SnapshotKind::Spaces, scope.project, scope.milestone);
@@ -221,8 +220,7 @@ pub fn assemble_spaces(state: &AppState, scope: &SpaceScope<'_>) -> Result<Optio
     // Resolved once per read, asked once per space below.
     let storeys = scope.storeys.map(|s| s.admitter(&levels_by_model));
     // From the manifest index, so the frame matches `/rooms` -- see
-    // `service::placement::from_index`. THE entity this exists for: the sample project's five
-    // services models are exported from an origin ~250 ft from the
+    // `service::placement::from_index`. THE entity this exists for: services models are often exported from an origin far from the
     // architectural one, so their spaces drew beside the plan instead of over
     // it.
     let placement = super::placement::from_index(state)?;
@@ -351,8 +349,8 @@ pub struct SpaceModelMatch {
     ///
     /// Only within, never across. One services file per service means the same
     /// room number legitimately names a space in each of them, so cross-model
-    /// duplication is the design rather than a finding -- pooled, the sample project reported
-    /// 3,046 duplicate keys where the real number was 31.
+    /// duplication is the design rather than a finding -- pooled, thousands of duplicate keys
+    /// were reported where the real number was a few dozen.
     pub ambiguous_keys: Vec<AmbiguousKey>,
 }
 
@@ -1116,8 +1114,8 @@ mod tests {
 
     /// **Duplication ACROSS services models is the design, not a finding.** One
     /// file per service means the same room number legitimately names a space in
-    /// each. Pooled, the sample project reported 3,046 duplicate keys where the real number was
-    /// 31 -- this is that mistake, pinned.
+    /// each. Pooled, thousands of duplicate keys were reported where the real number was
+    /// a few dozen -- this is that mistake, pinned.
     #[test]
     fn test_the_same_key_in_two_services_models_is_not_ambiguous() {
         let rooms = vec![rooms_of("arch", vec![keyed("r1", "101", &[])])];
@@ -1150,8 +1148,8 @@ mod tests {
     }
 
     /// **`room_models` scopes the room side, and without it the report drowns.**
-    /// The sample project's electrical model holds 3,418 rooms of its own on a numbering
-    /// nothing else shares; pooled in, they are 3,418 rooms that name nothing
+    /// A services model may hold thousands of rooms of its own on a numbering
+    /// nothing else shares; pooled in, they are rooms that name nothing
     /// and they bury the handful that genuinely have no space.
     #[test]
     fn test_room_models_scopes_the_room_side() {

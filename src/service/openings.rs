@@ -1066,8 +1066,8 @@ mod tests {
     /// **A facade opening reaches centreline rooms a wall thickness away.** The
     /// interior rooms here are drawn to centrelines, which would size the step
     /// at the 15 mm floor -- and the door sits 0.25 ft from each, in a wall
-    /// neither room shares because it belongs to the facade document. The sample project's
-    /// facade resolved 3 windows of 149 that way; the room-less model steps by
+    /// neither room shares because it belongs to the facade document. A real facade
+    /// model resolved almost none that way; the room-less model steps by
     /// `max_wall_thickness` instead.
     #[test]
     fn test_a_room_less_models_opening_steps_a_wall_thickness_into_centreline_rooms() {

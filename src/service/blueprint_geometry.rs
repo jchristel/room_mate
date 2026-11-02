@@ -9,7 +9,7 @@
 //! question** (`docs/PLAN-blueprints-stage0.md`). The *coarse* outline drops jogs
 //! under [`COARSE_TOLERANCE_MM`] -- the 0.3 to 0.5 m nibs at columns and risers --
 //! because two rooms of one type differ in exactly those, and an edge count that
-//! includes them matched only half of the sample project's same-named patient rooms. The *fine*
+//! includes them matched only half of a real project's same-named rooms. The *fine*
 //! outline keeps them ([`FINE_TOLERANCE_MM`]) because the items that sit in those
 //! nibs are outside the coarse outline and would be reported as findings that are
 //! not. Edges, mapping and recipes use the coarse one; "is it inside" uses the fine.
@@ -21,8 +21,8 @@
 /// A plan point, millimetres.
 pub type Pt = (f64, f64);
 
-/// Jogs shorter than this are dropped from the coarse outline. Chosen on the sample project, where it
-/// took `1 BED B`'s edge-count mismatch between siblings from 54% to 16%.
+/// Jogs shorter than this are dropped from the coarse outline. Chosen on a real project's same-named rooms, where it
+/// removed most of the edge-count mismatch between siblings.
 pub const COARSE_TOLERANCE_MM: f64 = 350.0;
 
 /// The fine outline's tolerance: a vertex that is not a corner (a collinear point, a
@@ -127,7 +127,7 @@ pub fn simplify(ring: &[Pt], tol: f64) -> Vec<Pt> {
 /// line between its neighbours, so the CORNER went and a chord took its place: House A's
 /// `WC 00.03`, a 3312 x 2768 mm rectangle, came out with three edges 1.2 degrees off square.
 /// The fine pass first leaves only real corners and real jogs for the coarse one to judge. On
-/// The sample project it moves the coarse outline of 37% of the rooms and the fine outline of none.
+/// real rooms it moves the coarse outline of many and the fine outline of none.
 pub fn coarse_outline(ring: &[Pt]) -> Vec<Pt> {
     simplify(&simplify(ring, FINE_TOLERANCE_MM), COARSE_TOLERANCE_MM)
 }

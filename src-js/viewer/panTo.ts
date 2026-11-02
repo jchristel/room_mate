@@ -49,5 +49,5 @@ export function viewCentredOn(view: Rect, target: Rect): Rect | null {
 
 /** How much of the view's own size counts as "did not move". Relative rather
  *  than absolute because the units are project feet and the view spans four
- *  orders of magnitude between a cupboard and the sample project's site. */
+ *  orders of magnitude between a cupboard and a large site. */
 const EPS = 1e-6;

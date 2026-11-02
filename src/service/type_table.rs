@@ -4,8 +4,8 @@
 //! **Why the wire needed its own.** Storage and memory already hold one bag per
 //! distinct type (`contract::property_codec`), but a response that serialised
 //! each element whole wrote that shared bag out again for every instance. On
-//! The sample project that made `/ffe` a 280 MB body for 38,913 items, most of it the same
-//! 1,005 bags repeated -- and the viewer polls that body before it can draw.
+//! a large project that made `/ffe` a body of hundreds of MB, most of it the same
+//! bags repeated -- and the viewer polls that body before it can draw.
 //!
 //! **Moved, not copied, and only at the wire.** `Assembled` and the service
 //! results keep every bag on its element, because the property filter and the

@@ -15,7 +15,7 @@
 //! schema version are both baked into bytes on disk.
 //!
 //! **Two things here are NOT the rooms envelope, and both were measured rather
-//! than assumed** (the sample project, 2026-09-06; see `docs/Superseded/PLAN-spaces.md`):
+//! than assumed** (on a real federated project, 2026-09-06; see `docs/Superseded/PLAN-spaces.md`):
 //!
 //! - **`levels` is optional.** A rooms payload requires it. A services model
 //!   pushes spaces and usually nothing else, so its levels arrive here or not at
@@ -62,9 +62,9 @@ pub struct SpacePayload {
     /// close enough to doors to re-earn.
     ///
     /// **A phase name is per document, and on a real project the disciplines do
-    /// not agree on one.** Measured on the sample project: the mechanical model keeps 1,532 of
-    /// its 1,533 spaces in a phase called `Future`, while every other services
-    /// model uses `New Construction` and the architects use `New Construction`
+    /// not agree on one.** Measured on a real project: the mechanical model kept nearly all
+    /// its spaces in a phase called `Future`, while every other services
+    /// model used `New Construction` and the architects used `New Construction`
     /// and `Future Expansion`. Since the push phase is one per *run*
     /// (`choose_phase` offers only names common to every selected document), a
     /// run over all four services models under `New Construction` pushes three
@@ -93,8 +93,8 @@ pub struct SpacePayload {
     /// entity exists to report.** An MEP space computed to wall centre and an
     /// architectural room computed to finish face differ by half a wall
     /// thickness, which is not a data error — it is a difference in what was
-    /// measured. On the sample project that showed up as a median relative difference falling
-    /// from 14.0% on rooms under 2 m2 to 0.7% on rooms over 100, because the
+    /// measured. On a real project that showed up as a relative difference that fell
+    /// steeply as rooms grew, because the
     /// delta scales with perimeter while the value scales with area. A reader
     /// tuning a tolerance needs to know which regime each side used.
     #[serde(default)]

@@ -107,7 +107,7 @@ def item_facts(doc, phase_name, categories, identify_by="room"):
 
     The category is `instance.Category.Name` ("Furniture", not "OST_Furniture"): what a
     `?category=` filter is written against. Family name and host are read from Revit because
-    the export carries neither (probed on 16,161 the sample project items); absent means unread."""
+    the export carries neither (probed on a large real export); absent means unread."""
     if identify_by not in ("room", "space"):
         raise ValueError("identify_by must be 'room' or 'space', got {!r}".format(identify_by))
     phase = phase_by_name(doc, phase_name)

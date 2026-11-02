@@ -14,7 +14,7 @@
 // Each poll holds only the storeys some zone is SHOWING (`StoreyScope`), so an
 // export of any other level would come out with no doors and no way to tell.
 // Levels go one at a time so a large project holds one storey's worth at once --
-// The sample project's `/ffe` is 23.6 MB for one storey and 133 MB for all of them -- and the
+// A large project's `/ffe` is a fraction of its size for one storey -- and the
 // same `storeyElements` join the screen uses decides what each level keeps.
 //
 // The file is framed to the LEVEL's own fitted bounds, never the zone's current

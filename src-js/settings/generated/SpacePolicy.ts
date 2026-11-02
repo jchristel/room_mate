@@ -33,9 +33,9 @@ room_key?: string | null,
  *
  * **This exists because "holds rooms" is not the same as "is the room
  * authority", and the difference was measured rather than imagined.** On
- * The sample project the electrical services model holds 2,945 spaces *and 3,418 rooms of
+ * a real project the electrical services model holds thousands of spaces *and as many rooms of
  * its own*, numbered `1`, `2`, `3` against the architects' `ENG137`. Pooled
- * into the room side they are 3,418 rooms that name nothing, and they bury
+ * into the room side they are rooms that name nothing, and they bury
  * the 44 architectural rooms that genuinely have no space -- which is the
  * finding the report exists to surface.
  *

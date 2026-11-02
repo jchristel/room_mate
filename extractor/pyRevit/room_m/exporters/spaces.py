@@ -26,7 +26,7 @@ bucket.
 The fifth entity, and the one that cost the least to extract: duHast already
 ships a space export that mirrors the room one, so this module is close to
 `exporters.rooms` with a different getter. What it adds is two guards that only
-this entity needs, both earned from the sample project run.
+this entity needs, both earned from a real project run.
 """
 
 from duHast.Revit.Spaces.Export.to_data_space import get_all_space_data
@@ -78,7 +78,7 @@ def export_model(selected_doc, phase_name, return_value, level_ids=None):
     turns that silence into a failed model.
 
     The second is the per-model phase report. The push phase is one per RUN, and
-    on the sample project the mechanical model keeps 1,532 of its 1,533 spaces in a phase called
+    on a real project the mechanical model keeps nearly all its spaces in a phase called
     `Future` while every sibling uses `New Construction`. A run under the common
     name pushes three full models and one space from the fourth -- a correctly
     filtered push that is almost entirely empty, and nothing about it is an

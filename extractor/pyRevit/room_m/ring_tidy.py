@@ -1,8 +1,8 @@
 """Dropping the vertices of a room outline that add no corner.
 
 Revit puts a vertex wherever the boundary changes wall, so a wall run made of two walls is two
-segments on ONE line. Measured on the sample project (2,683 rooms): 77.5% of rooms have such a vertex, and 28%
-of all boundary vertices (7,659 of 27,558) are one -- all but a handful within 0.5 mm of the line
+segments on ONE line. Measured on a real project (thousands of rooms): most rooms have such a vertex, and over a quarter
+of all boundary vertices are one -- all but a handful within 0.5 mm of the line
 through their neighbours. Dropping them is LOSSLESS (the outline and its area are the same), which
 is why the tolerance is a rounding allowance and not a design choice: a larger one would start
 cutting real jogs, and the server's coarse and fine outlines (blueprint_geometry) already own that

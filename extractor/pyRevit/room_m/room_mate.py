@@ -323,7 +323,7 @@ def spaces_export_entry(doc, uiapp, output, forms):
     are worth knowing before pressing the button.**
 
     A run pushes ONE phase, and the disciplines do not agree on what to call it.
-    Measured on the sample project: the mechanical model keeps 1,532 of its 1,533 spaces in a
+    Measured on a real project: the mechanical model keeps nearly all its spaces in a
     phase called `Future` while the hydraulic, fire and electrical models use
     `New Construction`. `choose_phase` offers only names common to every selected
     document, so a run over all four under the common name pushes three models in

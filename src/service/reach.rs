@@ -41,8 +41,8 @@
 //! because it is the method a reader may know and compare against. It is
 //! never shorter than `exact` inside a room (a lattice path cannot beat the straight
 //! line) and runs longer between cells (the lattice's own error is up to about 8%, and
-//! a port seeds its nearest cell, not its exact point; on the sample project's GROUND the median was
-//! 0.2% and the worst 14%), so it can leave a cell at the
+//! a port seeds its nearest cell, not its exact point; on a real ground floor the median was
+//! a fraction of a percent and the worst about 14%), so it can leave a cell at the
 //! limit's edge uncovered that `exact` covers, and its values change with the spacing.
 //! Only `exact` is a distance a route would also measure.
 //!

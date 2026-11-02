@@ -3,7 +3,7 @@
 //
 // **The rows come from the server** (`POST /projects/{id}/reports`), projected
 // to the columns asked for. That is not an optimisation detail a reader can
-// ignore: `/ffe` is 133 MB for one the sample project storey, and a report of it is a few, so
+// ignore: `/ffe` is over a hundred MB for one storey of a large project, and a report of it is a few, so
 // a page that fetched the entity and projected locally would be unusable on
 // the project this was built for.
 //

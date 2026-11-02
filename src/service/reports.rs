@@ -6,7 +6,7 @@
 //! **Why this exists at all, rather than the page joining payloads itself.**
 //! The checks and the milestone comparison each read one endpoint that had
 //! already done the work, so they needed nothing here. A schedule does not: it
-//! reads a whole entity payload, and `/ffe` is 133 MB for one the sample project storey with
+//! reads a whole entity payload, and `/ffe` is over a hundred MB for one storey of a large project with
 //! every instance's property map on the wire. A report wants six columns of it.
 //! So the projection happens here and the rows go out as flat strings — the
 //! payload saving *is* the feature, not a side effect of it.

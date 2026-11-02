@@ -573,7 +573,7 @@ impl SnapshotStore for FsStore {
         let len = file.metadata()?.len();
         // A dictionary is one line and a snapshot can be hundreds of megabytes,
         // so read a window from the end rather than the file. The window is
-        // generous: the sample project's widest vocabulary is a few thousand keys, and a
+        // generous: the widest vocabulary seen is a few thousand keys, and a
         // dictionary too long for it simply reads as no trailer rather than as
         // half of one.
         const WINDOW: u64 = 4 * 1024 * 1024;

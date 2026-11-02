@@ -833,7 +833,7 @@ impl RoomAttribution {
 pub struct RoutingPolicy {
     /// The room property holding a room's clear height, in millimetres. Matched
     /// ignoring case and runs of spaces, because Revit parameter names are typed by
-    /// people (the sample project's is `Ceiling  Height`, with two). `None` means
+    /// people (one real project's is `Ceiling  Height`, with two). `None` means
     /// `RoutingPolicy::DEFAULT_ROOM_HEIGHT_PROPERTY`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_height_property: Option<String>,
@@ -843,15 +843,15 @@ pub struct RoutingPolicy {
     /// ceiling really is (a drop ceiling, a bulkhead) and the property is whatever a
     /// template says. The lowest ceiling covering at least a quarter of the room wins, and
     /// an offset at or below zero (a roof, a ceiling below its level) is not a ceiling over a
-    /// room and is ignored. Measured on the sample project: ceilings cover 2,291 rooms and the property
-    /// 2,538, and using both reaches 2,630.
+    /// room and is ignored. Measured on a real project: ceilings and the property each cover most rooms,
+    /// and using both reaches more than either.
     #[serde(default = "RoutingPolicy::yes")]
     pub room_height_from_ceilings: bool,
 
     /// Whether a door's height may be read from its type name when none of
     /// `door_height_properties` is present: the convention that puts the size in the
     /// name ("970 x 2040 TD01", "DWWH-003 820W x 2100H"). On by default, because on
-    /// The sample project 97% of door types follow it and no door has a height property at all. Off
+    /// a real project nearly all door types follow it and no door has a height property at all. Off
     /// for a project whose names say something else that happens to look like a size.
     #[serde(default = "RoutingPolicy::yes")]
     pub door_height_from_type_name: bool,
@@ -905,8 +905,8 @@ impl Default for RoutingPolicy {
 impl RoutingPolicy {
     pub const DEFAULT_ROOM_HEIGHT_PROPERTY: &'static str = "Ceiling Height";
     pub const DEFAULT_DOOR_HEIGHT_PROPERTIES: &'static [&'static str] = &["Height", "Door Height"];
-    /// The footprint is overall width, frame included: on the sample project a "970 x 2040" leaf
-    /// measures 1,055 mm and its clear opening is nearer 900. 150 is a rule of thumb
+    /// The footprint is overall width, frame included: on a real project a "970 x 2040" leaf
+    /// measures about 1,055 mm and its clear opening is nearer 900. 150 is a rule of thumb
     /// for a standard single door, an estimate and not a measurement.
     pub const DEFAULT_DOOR_FRAME_ALLOWANCE_MM: f64 = 150.0;
     /// The most a frame allowance may be: beyond it no door has a clear opening.
@@ -1613,9 +1613,9 @@ pub struct SpacePolicy {
     ///
     /// **This exists because "holds rooms" is not the same as "is the room
     /// authority", and the difference was measured rather than imagined.** On
-    /// The sample project the electrical services model holds 2,945 spaces *and 3,418 rooms of
+    /// a real project the electrical services model holds thousands of spaces *and as many rooms of
     /// its own*, numbered `1`, `2`, `3` against the architects' `ENG137`. Pooled
-    /// into the room side they are 3,418 rooms that name nothing, and they bury
+    /// into the room side they are rooms that name nothing, and they bury
     /// the 44 architectural rooms that genuinely have no space -- which is the
     /// finding the report exists to surface.
     ///
@@ -1693,9 +1693,9 @@ pub struct SpaceFieldConfig {
     /// **A percentage alone flags the wrong rooms, and this is the measurement
     /// that proved it.** The boundary-regime difference between an MEP space and
     /// an architectural room scales with perimeter while the value scales with
-    /// area, so on the sample project the median relative difference fell from 14.0% on rooms
-    /// under 2 m2 to 0.7% on rooms over 100. A flat 30% flagged 416 pairs of
-    /// 10,066 -- **244 of them (59%) sub-2 m2 rooms**, which is noise that gets
+    /// area, so on a real project the median relative difference fell steeply
+    /// from rooms under 2 m2 to rooms over 100. A flat 30% flagged hundreds of pairs, **most of them
+    /// sub-2 m2 rooms**, which is noise that gets
     /// the whole report ignored. 30% with a 2 m2 floor flags 127.
     ///
     /// Defaults to absent, which is a pure percentage: the simple case stays
@@ -2329,7 +2329,7 @@ entity = \"spaces\"
         assert_eq!(policy.frame_allowance_mm(), 150.0);
         assert!(
             policy.door_height_from_type_name,
-            "on by default: 97% of the sample project's door types follow the convention"
+            "on by default: nearly all real door types follow the convention"
         );
         assert!(
             policy.room_height_from_ceilings,

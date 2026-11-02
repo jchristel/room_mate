@@ -100,7 +100,7 @@ async function refreshScope(projects: readonly ProjectRow[]): Promise<void> {
   // **Read the scope again, AFTER the awaits.** A picker change lands while a
   // tick is in flight — `setScope` writes the new scope and the tick is already
   // past its own read — so a scope captured at the top and written back here
-  // silently reverts the user's pick. Measured on the sample project: selecting a building put
+  // silently reverts the user's pick. Seen on a real project: selecting a building put
   // it in the URL and then the next tick dropped it, so the select snapped back
   // to "All buildings" and the rooms never re-scoped.
   const live = getState().scope;

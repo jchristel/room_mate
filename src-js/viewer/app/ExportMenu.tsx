@@ -46,9 +46,9 @@ export function ExportMenu({
 
   const ordered = pickerOrder(levels);
   // A level with no rooms has nothing to frame and can never produce a file, so
-  // it is listed but not offered. The sample project declares a second, empty "LEVEL 7" beside
-  // the real one; ticked, it came back as "LEVEL 7: no rooms, skipped", which
-  // reads as the export losing a 185-room floor.
+  // it is listed but not offered. A real project can declare a second, empty level beside
+  // the real one; ticked, it came back as "no rooms, skipped", which
+  // reads as the export losing a whole floor.
   const offered = payload ? ordered.filter((l) => roomsOnLevel(payload, l.id).length > 0) : [];
   const chosen = offered.filter((l) => !excluded.has(l.id));
   const busy = progress !== null;

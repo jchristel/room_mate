@@ -2,7 +2,7 @@
 // the next hop up and down offered for a person to confirm.
 //
 // **Only the levels that hold a room of the stack are listed**, plus the one level a
-// suggestion points at. The sample project has two buildings with distinct levels, and a hospital
+// suggestion points at. A real project can have two buildings with distinct levels, and a hospital
 // lift's column must not list the car park's half-levels in between. The column is
 // built from the rooms (`stack.ts`), never from the level list.
 //

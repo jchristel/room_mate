@@ -69,12 +69,12 @@ pub struct Surface {
     /// Plan footprint: **every** piece duHast measured, each an outer ring plus
     /// its holes, in decimal feet, model space, Y up.
     ///
-    /// **A list of pieces rather than one ring, and the sample project's ceilings are what
+    /// **A list of pieces rather than one ring, and a real project's ceilings are what
     /// forced that.** House A's 30 ceilings made a single `loops` look
     /// sufficient: 7 exported more than one polygon and every extra was the same
     /// horizontal face again (IoU above 0.98), so the largest piece *was* the
-    /// whole ceiling and `polygon[0]` happened to be it. The sample project is not like that.
-    /// Of its 48 multi-polygon ceilings the pieces are genuinely DISJOINT, and
+    /// whole ceiling and `polygon[0]` happened to be it. A real project is not like that:
+    /// its multi-polygon ceilings are genuinely DISJOINT, and
     /// the two shortcuts cost real area — measured against the union, taking
     /// `polygon[0]` loses 44.0% on average and 99.2% at worst (a 1,457 sqft
     /// ceiling whose first piece is 11 sqft), and even taking the LARGEST piece

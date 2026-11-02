@@ -150,7 +150,7 @@ pub struct CustomValue {
 ///
 /// **Stated by the extractor, never inferred from `loops.is_empty()`**, and the
 /// distinction between the last two variants is the whole reason this type
-/// exists rather than a `bool`. Measured on the sample project (2026-09-06): **96.3% of spaces
+/// exists rather than a `bool`. Measured on a real project (2026-09-06): **nearly all spaces
 /// report zero boundary segments while exporting a perfectly good polygon**,
 /// because their bounding elements live in the linked architectural model and
 /// duHast falls back to measuring the solid. So "no geometry" has two causes
@@ -173,8 +173,8 @@ pub enum Enclosure {
     /// nothing. A **model** defect, and an expected finding.
     Unenclosed,
     /// Revit reports area, and the pipeline produced no polygon anyway. A
-    /// **pipeline** defect — the one the sample project probe's kill condition counted, and
-    /// found exactly once in 10,570 spaces.
+    /// **pipeline** defect — the one the probe's kill condition counted, and
+    /// found only once across thousands of spaces.
     Unmeasured,
 }
 

@@ -215,8 +215,8 @@ describe("RoomIndex", () => {
     const surface = (id: string, ...pieces: Loop[][]) => ({ element: { id }, pieces });
 
     /**
-     * The sample project's multi-polygon ceilings are genuinely DISJOINT pieces, and taking
-     * the first one loses up to 99% of a ceiling. Both pieces must answer.
+     * Real multi-polygon ceilings are genuinely DISJOINT pieces, and taking
+     * the first one loses most of a ceiling. Both pieces must answer.
      */
     it("hits every piece of a multi-piece surface, and not the gap between", () => {
       const i = new SurfaceIndex([surface("c", [ring(0, 0, 10, 10)], [ring(20, 0, 30, 10)])]);

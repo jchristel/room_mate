@@ -242,8 +242,8 @@ export interface PickableSurface<T> {
  * The pick index for the three outline layers -- spaces, ceilings, floors.
  *
  * A third tree, not the room one reused, because these are not rooms: a
- * ceiling is a LIST of disjoint pieces (the sample project's multi-polygon ceilings lose up to
- * 99% of their area if only one is kept), so one element has one box around all
+ * ceiling is a LIST of disjoint pieces (real multi-polygon ceilings lose most of their
+ * area if only one is kept), so one element has one box around all
  * of them and a hit is "inside any piece's outer ring and none of that piece's
  * holes". A hole is a light well or a void over an atrium, drawn as its own
  * ring, and a click in it is a click on whatever is below -- the rule a room's

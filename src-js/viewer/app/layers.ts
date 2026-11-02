@@ -12,7 +12,7 @@
 // own sake: spaces, ceilings and floors each overlay the rooms they sit on, so
 // each starts off and a reader switches it on to answer a specific question.
 // Polling a hidden overlay would cost every viewer of every project a read —
-// `/ceilings` is 9 MB on the sample project — for a question most of them are not asking.
+// `/ceilings` is several MB on a large project — for a question most of them are not asking.
 
 import { EntityPoll, onStorey } from "./planRenderer.js";
 import { coversStorey, elementUrl, matchSuffix, visibleStoreys, type ElementEntity } from "../elementUrls.js";
@@ -95,7 +95,7 @@ for (const layer of LAYERS) {
 
 /** Every model that has spaces, learned from the payload's `phase_by_model` —
  *  which lists exactly the models that contributed. The picker exists because
- *  the sample project keeps one services file per service, so "all" stacks four
+ *  a real project keeps one services file per service, so "all" stacks four
  *  near-identical outlines on every room in one colour.
  *
  *  Unconditional since C1: the read is always unscoped now, so the list can
@@ -138,8 +138,8 @@ export function abortStaleLayers(): void {
  *
  * The join is `onStorey`'s — NAME plus ELEVATION, never a raw level id. A
  * `Level.id` is per document, so comparing ids directly drops every element in
- * a model that pushes no rooms: the sample project's facade package has 78 external doors, and
- * they were invisible on every level. */
+ * a model that pushes no rooms: a facade package's external doors were
+ * invisible on every level. */
 export function elementsOnStorey<E extends ElementEntity>(
   entity: E,
   levelId: string | null,
@@ -205,8 +205,8 @@ export function findElement<E extends ElementEntity>(
  *
  * An element read sends each distinct bag ONCE, in `type_property_sets`, and
  * each element names its row in `type_properties_ref` — the same bag on 1,000
- * chairs used to arrive 1,000 times, which on the sample project was most of a 293 MB `/ffe`
- * body. The row indexes THIS payload only, so it is always resolved against the
+ * chairs used to arrive 1,000 times, which on a large project was most of a `/ffe`
+ * body of hundreds of MB. The row indexes THIS payload only, so it is always resolved against the
  * payload the element came from; an element with no type properties names no
  * row.
  */

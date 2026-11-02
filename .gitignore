@@ -59,7 +59,8 @@ __pycache__/
 # machine-specific path: it invokes `cargo run -q --bin mcp` with settings paths
 # relative to the crate root. Keep it that way; an absolute path belongs in the
 # host's own config (that doc's Claude Desktop section), never in this file.
-settings/projects/RHH.toml
+# A real client project's settings stay local: name the file <anything>.local.toml.
+settings/projects/*.local.toml
 
 # Scratch space for probe runs and one-off exports (the windows facade probe,
 # raw duHast dumps, control files kept to diff a fixed extractor against a

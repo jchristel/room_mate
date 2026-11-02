@@ -132,7 +132,7 @@ describe("paintLevel element layers", () => {
   });
 
   it("draws every piece of a ceiling, not just the first", () => {
-    // The sample project's multi-piece ceilings are genuinely disjoint; one piece loses 44%.
+    // Real multi-piece ceilings are genuinely disjoint; one piece loses much of the area.
     expect(paintLayers().querySelectorAll("#ceilings polygon.ceiling")).toHaveLength(2);
   });
 

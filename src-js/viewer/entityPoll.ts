@@ -218,7 +218,7 @@ export class EntityPoll<P> {
       // fix for a stall. Stored first — as the page did — a body that failed
       // mid-transfer left us holding the tag for data we never received, so
       // every later poll got a 304 and the layer never loaded until the next
-      // push. `/ffe` is 273 MB over ~94 s on the sample project; a dropped body is not
+      // push. `/ffe` can be hundreds of MB over a minute or more on a large project; a dropped body is not
       // hypothetical at that size.
       this.etag = res.headers.get("ETag");
       this.fetchState = "loaded";
@@ -249,7 +249,7 @@ export class EntityPoll<P> {
    * Cancel the read in flight if the page no longer wants its answer.
    *
    * `poll` already drops such an answer unread; this stops the transfer and
-   * the parse as well, which on the sample project is up to 24 MB of FF&E for a storey the
+   * the parse as well, which on a large project is tens of MB of FF&E for a storey the
    * reader has just left. The server may still finish building the body it
    * had started -- cancelling cannot reach into that -- but it is not sent,
    * and the next read in the lane starts at once instead of waiting for it.

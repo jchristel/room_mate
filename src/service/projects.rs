@@ -61,9 +61,9 @@ pub struct BuildingsResponse {
 /// **Answered from the index, never by opening a snapshot**, and that is the
 /// whole point of the route being this shape. It used to derive both strings
 /// from `all_snapshots()` on the reasoning that a project's identity already
-/// rides on every payload it stores — true, and it made a 213-byte response
-/// cost a full parse of every model's newest snapshot: 0.36 s of CPU at the sample project
-/// scale, on the route the viewer polls every two seconds. The names live in
+/// rides on every payload it stores — true, and it made a tiny response
+/// cost a full parse of every model's newest snapshot: a third of a second of CPU at a large
+/// project's scale, on the route the viewer polls every two seconds. The names live in
 /// the manifest too; only the missing accessor forced the parse. See
 /// `SnapshotStore::model_index`.
 pub fn list_projects(state: &AppState) -> Result<Vec<ProjectSummary>, ServiceError> {

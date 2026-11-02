@@ -3,15 +3,15 @@
 //!
 //! **The bug this exists for.** `model_to_shared` has always ridden the
 //! envelope, and nothing applied it to the geometry a consumer draws. That is
-//! invisible while a project's models are exported from one origin — the sample project's four
-//! architectural models agree to six decimal places, so they line up by luck —
-//! and it is glaring the moment they are not: the sample project's five services models sit
-//! ~250 ft east of the architectural ones, and up to 16 ft from each other, so
+//! invisible while a project's models are exported from one origin — a real project's
+//! architectural models can agree to six decimal places, so they line up by luck —
+//! and it is glaring the moment they are not: its services models sat
+//! hundreds of feet from the architectural ones, and some feet from each other, so
 //! the spaces layer drew a whole hospital's worth of outlines beside the plan
 //! instead of over it.
 //!
 //! **Why not simply place everything into shared space.** Because shared space
-//! IS the survey grid, and the sample project's is MGA Sydney: `(1_008_718, 20_572_195)` in
+//! IS the survey grid, and a real one's is a national grid such as MGA: `(1_008_718, 20_572_195)` in
 //! feet. The renderer uploads world coordinates as `Float32Array` vertex
 //! attributes (`gl/lines.ts`, `gl/fills.ts`), and f32 near 2.06e7 has a ULP of
 //! **1.06 ft — 324 mm**. Every wall in the building would snap to a foot-scale
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_inverse_round_trips_a_survey_scale_placement() {
-        // The sample project's actual matrix. The translation is MGA Sydney in feet, which is
+        // A real project's matrix. The translation is a national grid in feet, which is
         // the whole reason the frame has to be project-local.
         let m = ModelToShared {
             matrix: [
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_models_sharing_an_origin_need_no_transform() {
-        // The sample project's four architectural models. Placing them would be a no-op walk
+        // Architectural models sharing an origin. Placing them would be a no-op walk
         // over every point of every polygon on the largest payloads served.
         let a = placement(36.8, 1_008_718.03, 20_572_194.94);
         let b = placement(36.8, 1_008_718.03, 20_572_194.94);

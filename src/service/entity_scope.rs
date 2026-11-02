@@ -117,9 +117,9 @@ pub struct Candidates {
     /// the facade's wall is not one of them: it lives in another document, so
     /// the interior rooms stop at their own lining or at a link-bounded line
     /// short of it, never at the facade window's insertion point. Measured on
-    /// The sample project 2026-09-21: the median facade window sat 0.64 ft from the nearest
-    /// room edge, so the 15 mm centreline step resolved 3 of 149 and a wall
-    /// thickness reaches about 135. Only the room-less model gets it, because an
+    /// a real project 2026-09-21: the median facade window sat well over half a foot from the nearest
+    /// room edge, so the 15 mm centreline step resolved almost none and a wall
+    /// thickness reaches most. Only the room-less model gets it, because an
     /// opening in a model that has rooms IS on a shared line, and a 1.5 ft step
     /// there would jump a cupboard into the room beyond it.
     cross_model_gap: f64,
@@ -622,8 +622,8 @@ pub fn phase_by_model<P: SnapshotEnvelope>(
 /// matching an element to the displayed storey by id is wrong twice over -- a
 /// model that lost the dedup race has every element silently dropped, and a
 /// model with no rooms at all (a facade package) contributes no canonical id
-/// for its elements to match in the first place. The sample project's facade model is exactly
-/// that case: 78 external doors, invisible on every level.
+/// for its elements to match in the first place. A facade model is exactly
+/// that case: its external doors were invisible on every level.
 ///
 /// **Elevation is what crosses documents**, so the consumer resolves
 /// `(model_id, level_id) -> elevation` through this map and matches on the
@@ -644,7 +644,7 @@ pub fn levels_by_model<P: SnapshotEnvelope>(scoped: &[(ModelKey, P)]) -> BTreeMa
 /// showing, which may be several (one per zone).
 ///
 /// **Why the server narrows at all.** An element read used to ship every storey
-/// and let the viewer throw most of it away: the sample project's `/ffe` is 38,913 items across
+/// and let the viewer throw most of it away: a large project's `/ffe` is tens of thousands of items across
 /// dozens of storeys to draw the one or two a reader is looking at. Parsing what
 /// is stored still reads the whole snapshot, but skipping an element here spares
 /// its clone, its reference joins, its geometric probe, its serialisation, the

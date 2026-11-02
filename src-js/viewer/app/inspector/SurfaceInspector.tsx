@@ -102,7 +102,7 @@ export function SurfaceInspector({ selection }: { selection: Selection }) {
       />
       {/* EMPTY IS A REPORTED STATE, not a gap: a ceiling over a stairwell, an
           external soffit, or a slab on a level carrying no rooms legitimately
-          belongs to nothing — 8 of House A's 30 ceilings, 17 of the sample project's 1,833. */}
+          belongs to nothing — 8 of House A's 30 ceilings. */}
       {covered.length ? (
         <Section
           title={`Rooms covered (${covered.length})`}
@@ -126,7 +126,7 @@ export function SurfaceInspector({ selection }: { selection: Selection }) {
       <Section
         title="Geometry"
         rows={[
-          // A LIST of pieces, unioned — never one piece. The sample project's multi-piece
+          // A LIST of pieces, unioned — never one piece. Real multi-piece
           // ceilings are genuinely disjoint, so the count is worth seeing.
           ["Pieces", pieces ? String(pieces) : "none — the exporter measured no polygon"],
           ["Holes", String(holes)],

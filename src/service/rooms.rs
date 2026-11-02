@@ -1723,7 +1723,7 @@ mod tests {
     /// Two models exported from DIFFERENT origins must draw on top of each
     /// other, not beside each other.
     ///
-    /// The the sample project bug, in miniature: the services models sit ~250 ft from the
+    /// The real-project bug, in miniature: the services models sit hundreds of feet from the
     /// architectural ones in shared space, and nothing used to apply
     /// `model_to_shared` to the geometry a consumer draws, so their spaces
     /// landed off the side of the plan. The frame is project-LOCAL -- see

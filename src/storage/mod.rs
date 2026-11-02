@@ -503,7 +503,7 @@ pub trait SnapshotStore: Send + Sync {
     /// ends on its property dictionary (`contract::property_codec`), so the
     /// vocabulary of an entity — every property name any element carries, with
     /// its Revit storage type — is one short read rather than a parse of the
-    /// whole file. On the sample project's FF&E that is the difference between a few hundred
+    /// whole file. On a large FF&E snapshot that is the difference between a few hundred
     /// bytes and tens of megabytes, per model, to answer "what can I put in a
     /// column".
     ///
@@ -543,8 +543,8 @@ pub trait SnapshotStore: Send + Sync {
     /// **It exists so `/projects` can stop parsing the store.** A project's id
     /// and name ride on every payload it stores, so listing projects used to be
     /// derived from `all_latest_raw` — which parses every model's newest
-    /// snapshot to read two strings. That is fine at sample-project scale and
-    /// absurd at the sample project's: measured, a 213-byte `/projects` response cost 0.36 s of
+    /// snapshot to read two strings. That is fine for a small project and
+    /// absurd for a large one: measured, a tiny `/projects` response cost a third of a second of
     /// CPU, on a route the viewer polls every two seconds. The names were in the
     /// manifest the whole time; nothing but the missing accessor forced the
     /// parse.
@@ -568,7 +568,7 @@ pub trait SnapshotStore: Send + Sync {
     /// rather than a caller-side filter** because filtering afterwards is what
     /// made every read cost the whole store. Each caller here is answering a
     /// question about one project and then discarding the rest — measured, a
-    /// 257 KB `/doors?project=House A` response spent 1.3 s of CPU parsing the sample project
+    /// small `/doors?project=House A` response spent over a second of CPU parsing a large project
     /// first. `None` still reads everything, for the genuinely unscoped
     /// `/rooms`.
     ///
@@ -637,7 +637,7 @@ pub trait SnapshotStore: Send + Sync {
     /// push strands nothing. And a services model typically holds no rooms at
     /// all, so "re-phase the model with a rooms push first" is not an escape
     /// hatch it has: refusing would fix such a lineage on its first phase
-    /// permanently. Measured on the sample project, where the mechanical model keeps its spaces
+    /// permanently. Measured on a real project, where one model keeps its spaces
     /// in a phase called `Future` while every sibling uses `New Construction`.
     ///
     /// Keying by kind rather than adding a second slot keeps this one method
