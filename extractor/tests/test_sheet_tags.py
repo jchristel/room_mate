@@ -35,6 +35,12 @@ class TakeTags(unittest.TestCase):
         self.assertEqual(("floor plan", 7, 50, "RLS-1"),
                          (found[0]["viewport_type"], found[0]["view_id"], found[0]["view_scale"], found[0]["sheet"]["sheet_number"]))
 
+    def test_an_observation_carries_the_direction_its_view_looks_along(self):
+        sheet = {"view_ports": [{"vp_type": "elevation", "view": {
+            "id": 8, "view_scale": 20, "view_direction": {"x": 0, "y": 1, "z": 0}, "tags": [{"id": 1}]}}]}
+        self.assertEqual({"x": 0, "y": 1, "z": 0}, st.take_tags(sheet)[0]["view_direction"])
+        self.assertIsNone(st.take_tags(a_sheet())[0]["view_direction"], "a plan has none")
+
     def test_a_sheet_with_no_tags_or_no_views_is_fine(self):
         self.assertEqual([], st.take_tags({"view_ports": [{"view": {}}]}))
         self.assertEqual([], st.take_tags({}))

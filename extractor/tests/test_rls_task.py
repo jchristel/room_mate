@@ -32,7 +32,10 @@ def task(**changes):
             {"view_id": 2, "marker_index": 1, "line_start": [0, 0], "line_end": [2000, 0], "looks": [1, 0], "depth_mm": 2500.0},
             {"view_id": 1, "marker_index": 0, "line_start": [0, 0], "line_end": [2000, 0], "looks": [0, -1], "depth_mm": 2000.0}]}],
             "tags": {"views": [{"view_id": 10, "view_type": "floor plan", "tagged": [
-                {"item_id": "55", "source": "rule", "head": [100.0, 200.0]}, {"item_id": "56", "source": "choice"}]}]}},
+                {"item_id": "55", "source": "rule", "head": [100.0, 200.0]}, {"item_id": "56", "source": "choice"}]},
+                {"view_id": 1, "view_type": "elevation", "tagged": [
+                    {"item_id": "57", "source": "rule", "view_offset_mm": [400.0, 1800.0], "along_line_mm": 500.0},
+                    {"item_id": "58", "source": "choice", "along_line_mm": 900.0}]}]}},
         "findings": [],
     }
     t.update(changes)
@@ -127,6 +130,11 @@ class Plan(unittest.TestCase):
         self.assertEqual("01.09 STUDY SCHEDULE", p["schedule_name"])
         self.assertEqual(3, p["schedule_viewport"]["view_id"])
         self.assertEqual(["55"], [t["item_id"] for t in p["tags"]], "only tags with a head are placed")
+
+    def test_elevation_tags_come_by_template_view_and_only_those_with_an_offset(self):
+        p = verdict()["plan"]
+        self.assertEqual({1: ["57"]}, dict((k, [t["item_id"] for t in v]) for k, v in p["elevation_tags"].items()))
+        self.assertEqual(["55"], [t["item_id"] for t in p["tags"]], "the plan's tags are not the elevations'")
 
     def test_a_base_schedule_not_filtered_first_on_the_room_number_aborts(self):
         v = verdict(facts=Facts(schedule_room_filter=False))

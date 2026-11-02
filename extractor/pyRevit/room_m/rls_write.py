@@ -15,7 +15,9 @@ its point turns the views on it; a view's `ViewDirection` points at the viewer; 
 elevation has its far extent at negative z. A view that does not face the way the plan says is
 reported as a note, not hidden.
 
-**Not placed yet**: tags in elevation views (the plan has only an offset along the line), the
+Item tags in the elevations come from the server's elevation rules (`_elevation_tags`).
+
+**Not placed yet**: the
 rectangle drawn round an item a person chose to tag, and a tag's own text. Schedule size is Revit's.
 
 **Not yet run in Revit.**
@@ -158,6 +160,7 @@ class RlsWriter(object):
         self._ports = {}
         self._viewport_type_id = None
         self._level_z = 0.0
+        self._elevation_views = {}
 
     def __call__(self, verdict):
         """Make the sheet of `verdict`; return its notes. Raises, with the model rolled back, when
@@ -165,6 +168,7 @@ class RlsWriter(object):
         plan = verdict["plan"]
         notes = []
         self._ports = dict((kind, []) for kind in detail_numbers.KINDS)
+        self._elevation_views = {}
         task_log.step("sheet {} {}: transaction group".format(plan["number"], plan["name"]))
         group = TransactionGroup(self.doc, "RoomMate RLS {}".format(plan["number"]))
         outcome = in_transaction_group(group, lambda: self._write(verdict["task"], plan, notes))
@@ -347,6 +351,8 @@ class RlsWriter(object):
                     self.doc, marker, plan_view, e["marker_index"], e["name"], phase.Id),
             )
             made.append((e, outcome.result[0]))
+            # the template's view id says which server tags belong to this new view
+            self._elevation_views[e["view_id"]] = outcome.result[0]
 
         # Which way index 0 of a new marker looks is Revit's to say: turn the marker by how far the
         # first view is from where the plan wants it, then check every view.
@@ -443,6 +449,31 @@ class RlsWriter(object):
             lambda: place_schedule_on_sheet_without_transaction_wrapper(self.doc, sheet, copy, XYZ(at[0], at[1], 0.0)),
         )
 
+    def _elevation_tags(self, plan, independent, problems):
+        """Tag items in the new elevations where the server's rules put them: the item's own point moved along
+        the view's right and up (`geo.elevation_head_ft`). Returns how many were placed."""
+        made = 0
+        for view_id, tags in (plan.get("elevation_tags") or {}).items():
+            view = self._elevation_views.get(view_id)
+            if view is None:
+                continue
+            right, up = view.RightDirection, view.UpDirection
+            for tag in tags:
+                try:
+                    element = self.doc.GetElement(get_element_id_from_int(int(tag["item_id"])))
+                    point = element.Location.Point
+                    x, y, z = geo.elevation_head_ft(
+                        (point.X, point.Y, point.Z), (right.X, right.Y, right.Z), (up.X, up.Y, up.Z), tag["view_offset_mm"])
+                    outcome = self._step(
+                        "RoomMate: elevation tag",
+                        lambda element=element, head=XYZ(x, y, z), view=view: create_independent_tag_without_transaction_wrapper(
+                            self.doc, view, element, head, independent.Id),
+                    )
+                    made += 1 if outcome.status else 0
+                except Exception as e:
+                    problems.append("elevation tag on item {} not placed: {}".format(tag.get("item_id"), e))
+        return made
+
     def _tags(self, task, plan, room, plan_view, level, notes):
         z = self._level_z
         independent = self.facts.tag_symbol("independent", plan["independent_tag"]) if plan["independent_tag"] else None
@@ -461,6 +492,8 @@ class RlsWriter(object):
                     made += 1 if outcome.status else 0
                 except Exception as e:
                     problems.append("tag on item {} not placed: {}".format(tag.get("item_id"), e))
+        if independent is not None:
+            made += self._elevation_tags(plan, independent, problems)
         if room_tag is not None:
             head = None
             if plan.get("room_tag_head"):

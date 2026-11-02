@@ -118,5 +118,15 @@ class ViewportLabel(unittest.TestCase):
         self.assertEqual((None, None), g.viewport_label_ft(None))
 
 
+class ElevationHead(unittest.TestCase):
+    def test_the_head_is_the_items_point_moved_along_the_views_right_and_up(self):
+        # an elevation looking along +y: right is +x, up is +z; 304.8 mm is a foot
+        head = g.elevation_head_ft((10.0, 20.0, 1.0), (1, 0, 0), (0, 0, 1), [304.8, 609.6])
+        self.assertEqual((11.0, 20.0, 3.0), tuple(round(v, 9) for v in head))
+        # looking along -y the viewer's right is -x
+        head = g.elevation_head_ft((10.0, 20.0, 0.0), (-1, 0, 0), (0, 0, 1), [304.8, 0.0])
+        self.assertEqual((9.0, 20.0, 0.0), tuple(round(v, 9) for v in head))
+
+
 if __name__ == "__main__":
     unittest.main()

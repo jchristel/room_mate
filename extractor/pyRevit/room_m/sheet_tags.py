@@ -29,7 +29,7 @@ def take_tags(sheet, identity=None):
 
     `identity` is where they were read (`document_title`, `revit_sheet_id`, `sheet_number`),
     kept as provenance. Each observation is
-    `{"viewport_type", "view_id", "view_scale", "sheet", "tag"}`; `tag` is the duHast tag as it
+    `{"viewport_type", "view_id", "view_scale", "view_direction", "sheet", "tag"}`; `tag` is the duHast tag as it
     was exported. A sheet-level or viewport-level `tags` key, from an older export, is dropped."""
     observations = []
     if not isinstance(sheet, dict):
@@ -43,6 +43,8 @@ def take_tags(sheet, identity=None):
                     "viewport_type": port.get("vp_type"),
                     "view_id": view.get("id"),
                     "view_scale": view.get("view_scale"),
+                    # an elevation's rule is measured along the view, so the direction it looks along rides with the tag
+                    "view_direction": view.get("view_direction"),
                     "sheet": dict(identity or {}),
                     "tag": tag,
                 }
