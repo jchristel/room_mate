@@ -219,6 +219,16 @@ struct GetSurfacesParams {
     /// milestone read answers one consistent question.
     #[serde(default)]
     milestone: Option<String>,
+    /// `summary` (the default) returns each element's identity and room references only; `full` returns the
+    /// whole record: footprint, every property, type properties.
+    #[serde(default)]
+    detail: Option<String>,
+    /// Elements per page. Defaults to 500 for a summary and 50 for `full`; lowered to 2000 and 200.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Elements to skip, for the next page: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 /// `list_saved_reports` parameters.
@@ -333,6 +343,16 @@ struct GetSpacesParams {
     /// $id, $name, $level_id, $model_id and $enclosure. Omit for no filter.
     #[serde(default)]
     filter: Vec<String>,
+    /// `summary` (the default) returns each element's identity and room references only; `full` returns the
+    /// whole record: footprint, every property, type properties.
+    #[serde(default)]
+    detail: Option<String>,
+    /// Elements per page. Defaults to 500 for a summary and 50 for `full`; lowered to 2000 and 200.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Elements to skip, for the next page: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -363,6 +383,16 @@ struct GetDoorsParams {
     /// side) does not match "$to_room!=x" either. Omit for no filter.
     #[serde(default)]
     filter: Vec<String>,
+    /// `summary` (the default) returns each element's identity and room references only; `full` returns the
+    /// whole record: footprint, every property, type properties.
+    #[serde(default)]
+    detail: Option<String>,
+    /// Elements per page. Defaults to 500 for a summary and 50 for `full`; lowered to 2000 and 200.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Elements to skip, for the next page: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -647,6 +677,183 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpErro
     let json = serde_json::to_string(value)
         .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
     Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+}
+
+/// An entity read whose answer is one list of elements, so one function can page and summarise it.
+trait Listing: serde::Serialize {
+    type Element: serde::Serialize;
+    /// The answer's list key, and what a summary row keeps of an element.
+    const KEY: &'static str;
+    const SUMMARY: &'static [&'static str];
+    fn elements(&mut self) -> &mut Vec<Self::Element>;
+    /// The shared type-property table and each element's row in it, for the entities that have one.
+    fn table(&mut self) -> Option<&mut Vec<std::sync::Arc<roommate::contract::PropertyMap>>> {
+        None
+    }
+    fn row(_: &mut Self::Element) -> Option<&mut Option<u32>> {
+        None
+    }
+}
+
+macro_rules! listing {
+    ($result:ty, $element:ty, $key:literal, $summary:expr, $list:ident, tabled) => {
+        impl Listing for $result {
+            type Element = $element;
+            const KEY: &'static str = $key;
+            const SUMMARY: &'static [&'static str] = $summary;
+            fn elements(&mut self) -> &mut Vec<$element> {
+                &mut self.$list
+            }
+            fn table(&mut self) -> Option<&mut Vec<std::sync::Arc<roommate::contract::PropertyMap>>> {
+                Some(&mut self.type_property_sets)
+            }
+            fn row(e: &mut $element) -> Option<&mut Option<u32>> {
+                Some(&mut e.type_properties_ref)
+            }
+        }
+    };
+    ($result:ty, $element:ty, $key:literal, $summary:expr, $list:ident) => {
+        impl Listing for $result {
+            type Element = $element;
+            const KEY: &'static str = $key;
+            const SUMMARY: &'static [&'static str] = $summary;
+            fn elements(&mut self) -> &mut Vec<$element> {
+                &mut self.$list
+            }
+        }
+    };
+}
+
+const OPENING_SUMMARY: &[&str] = &[
+    "id",
+    "type_name",
+    "level_id",
+    "model_id",
+    "from_room",
+    "to_room",
+    "owner_rooms",
+];
+const SURFACE_SUMMARY: &[&str] = &["id", "type_name", "level_id", "model_id", "height_offset", "rooms"];
+
+listing!(openings::DoorsResult, openings::OpeningResponse, "doors", OPENING_SUMMARY, doors, tabled);
+listing!(
+    openings::WindowsResult,
+    openings::OpeningResponse,
+    "windows",
+    OPENING_SUMMARY,
+    windows,
+    tabled
+);
+listing!(
+    items::FfeResult,
+    items::ItemResponse,
+    "ffe",
+    &[
+        "id",
+        "category",
+        "type_name",
+        "family_name",
+        "level_id",
+        "model_id",
+        "room",
+        "owner_rooms"
+    ],
+    ffe,
+    tabled
+);
+listing!(
+    spaces::SpacesResult,
+    spaces::SpaceResponse,
+    "spaces",
+    &["id", "name", "level_id", "model_id"],
+    spaces
+);
+listing!(
+    surfaces::CeilingsResult,
+    surfaces::SurfaceResponse,
+    "ceilings",
+    SURFACE_SUMMARY,
+    ceilings,
+    tabled
+);
+listing!(
+    surfaces::FloorsResult,
+    surfaces::SurfaceResponse,
+    "floors",
+    SURFACE_SUMMARY,
+    floors,
+    tabled
+);
+
+/// What to try when an element answer is too big to give.
+const LISTING_ADVICE: &str = "Ask for less: `filter`, `building`, a smaller `limit` with `offset` to page, or \
+    `detail=summary`. To list or count elements with chosen columns use build_report. For bulk geometry use the \
+    HTTP API or the SVG export, which are not bounded.";
+
+/// One page of an element read, as a summary row each or the whole record, in the shared envelope.
+fn listing_result<R: Listing>(
+    mut result: R,
+    detail: Option<&str>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<CallToolResult, McpError> {
+    let detail = Detail::parse(detail).map_err(|m| McpError::invalid_params(m, None))?;
+    let (default, ceiling) = match detail {
+        Detail::Summary => (500, 2000),
+        Detail::Full => (50, 200),
+    };
+    let (mut kept, info) =
+        mcp_bounds::paginate(std::mem::take(result.elements()), Page::new(limit, offset, default, ceiling));
+    let internal = |e: serde_json::Error| McpError::internal_error(format!("failed to serialize response: {e}"), None);
+    let mut answer = match detail {
+        Detail::Full => {
+            if let Some(table) = result.table() {
+                let all = std::mem::take(table);
+                *table = roommate::service::type_table::restrict(&mut kept, &all, |e| {
+                    R::row(e).expect("an entity with a table has a row")
+                });
+            }
+            *result.elements() = kept;
+            serde_json::to_value(&result).map_err(internal)?
+        }
+        Detail::Summary => {
+            result.table().map(std::mem::take);
+            let mut answer = serde_json::to_value(&result).map_err(internal)?;
+            let rows = kept
+                .iter()
+                .map(|e| {
+                    let full = serde_json::to_value(e).map_err(internal)?;
+                    let row: serde_json::Map<String, serde_json::Value> = R::SUMMARY
+                        .iter()
+                        .filter_map(|k| full.get(*k).map(|v| ((*k).to_string(), v.clone())))
+                        .collect();
+                    Ok(serde_json::Value::Object(row))
+                })
+                .collect::<Result<Vec<_>, McpError>>()?;
+            if let serde_json::Value::Object(map) = &mut answer {
+                map.remove("type_property_sets");
+                map.insert(R::KEY.to_string(), serde_json::Value::Array(rows));
+            }
+            answer
+        }
+    };
+    if let serde_json::Value::Object(map) = &mut answer {
+        mcp_bounds::describe(
+            map,
+            detail,
+            &info,
+            &[
+                "footprint (loops/polygons)",
+                "properties",
+                "type properties",
+                "everything not listed in a row",
+            ],
+            "pass detail=full for footprints and properties (combine with filter, building and limit/offset), or \
+             use build_report for chosen columns",
+        );
+    }
+    let text = mcp_bounds::bounded(&answer, R::KEY, LISTING_ADVICE).map_err(|m| McpError::invalid_params(m, None))?;
+    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
 /// What to try when a rooms answer is too big to give.
@@ -951,7 +1158,7 @@ impl RoommateMcp {
     /// `service::openings::assemble_openings`. Same `None` -> plain-text handling as
     /// `get_rooms`, for the same reason.
     #[tool(
-        description = "Fetch merged doors across stored models, optionally scoped by project id, milestone name, and property filter. Each door carries its own instance \
+        description = "THE DEFAULT ANSWER IS A SUMMARY (`detail`: identity, level, room references; one page of up to 500) that says what it leaves out; `detail=full` returns whole records with footprints and properties, 50 a page, paged with `limit`/`offset` (see `next_offset`); an answer over 1 MB is refused. To LIST or COUNT with chosen columns prefer build_report. Fetch merged doors across stored models, optionally scoped by project id, milestone name, and property filter. Each door carries its own instance \
                           properties AND its family type's properties, its footprint, its level, and BOTH room references: 'from_room' and 'to_room'. \
                           The family-type properties are sent ONCE per distinct bag, in the top-level 'type_property_sets' array: each door names its row in \
                           'type_properties_ref', an index into THIS response only. \
@@ -988,12 +1195,12 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no doors have been pushed to this server yet",
             )])),
-            Some(result) => json_result(&result),
+            Some(result) => listing_result(result, p.detail.as_deref(), p.limit, p.offset),
         }
     }
 
     #[tool(
-        description = "Fetch merged windows across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
+        description = "THE DEFAULT ANSWER IS A SUMMARY (`detail`: identity, level, room references; one page of up to 500) that says what it leaves out; `detail=full` returns whole records with footprints and properties, 50 a page, paged with `limit`/`offset` (see `next_offset`); an answer over 1 MB is refused. To LIST or COUNT with chosen columns prefer build_report. Fetch merged windows across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
                           The SAME record shape as get_doors -- instance and family-type properties, footprint, level, both room references, owner_rooms -- because a window \
                           and a door are the same record in this contract. Every filter intrinsic get_doors accepts works here unchanged. \
                           WHAT DIFFERS IS THE DATA, and reading it like a door schedule will mislead you. A null on one side is an EXTERNAL window, which for doors is the \
@@ -1031,12 +1238,12 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no windows have been pushed to this server yet",
             )])),
-            Some(result) => json_result(&result),
+            Some(result) => listing_result(result, p.detail.as_deref(), p.limit, p.offset),
         }
     }
 
     #[tool(
-        description = "Fetch merged FF&E (furniture, fixtures and equipment) across stored models, optionally scoped by project id, building key, milestone name, \
+        description = "THE DEFAULT ANSWER IS A SUMMARY (`detail`: identity, level, room references; one page of up to 500) that says what it leaves out; `detail=full` returns whole records with footprints and properties, 50 a page, paged with `limit`/`offset` (see `next_offset`); an answer over 1 MB is refused. To LIST or COUNT with chosen columns prefer build_report. Fetch merged FF&E (furniture, fixtures and equipment) across stored models, optionally scoped by project id, building key, milestone name, \
                           and property filter. A DIFFERENT record from get_doors/get_windows, and reading it as one will mislead you. \
                           Its family-type properties are sent as get_doors sends them: ONCE per distinct bag in the top-level 'type_property_sets' array, each item \
                           naming its row in 'type_properties_ref'. \
@@ -1078,12 +1285,12 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no FF&E has been pushed to this server yet",
             )])),
-            Some(result) => json_result(&result),
+            Some(result) => listing_result(result, p.detail.as_deref(), p.limit, p.offset),
         }
     }
 
     #[tool(
-        description = "Fetch merged SPACES across stored models, optionally scoped by project id, model id, milestone name, and property filter. \
+        description = "THE DEFAULT ANSWER IS A SUMMARY (`detail`: identity, level, room references; one page of up to 500) that says what it leaves out; `detail=full` returns whole records with footprints and properties, 50 a page, paged with `limit`/`offset` (see `next_offset`); an answer over 1 MB is refused. To LIST or COUNT with chosen columns prefer build_report. Fetch merged SPACES across stored models, optionally scoped by project id, model id, milestone name, and property filter. \
                           A Revit SPACE is an MEP concept and is NOT a room: spaces live in the services models (mechanical, hydraulic, electrical, fire) while rooms live in \
                           the architectural ones, and one services file per service means the SAME room number legitimately names a space in each of them. Two spaces sharing \
                           a number are therefore two disciplines, NOT a duplicate -- always read 'model_id' before concluding anything about duplication. \
@@ -1116,7 +1323,7 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no spaces have been pushed to this server yet",
             )])),
-            Some(result) => json_result(&result),
+            Some(result) => listing_result(result, p.detail.as_deref(), p.limit, p.offset),
         }
     }
 
@@ -1206,7 +1413,7 @@ impl RoommateMcp {
     /// Serves one project's ceilings with the rooms each lies over -- see
     /// `service::surfaces::assemble_surfaces`.
     #[tool(
-        description = "List one project's ceilings, each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit ceiling has no room parameter and a room has no ceiling parameter, so every entry in a ceiling's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet plus `mean_width` and two fractions that answer different questions — `fraction_of_element` (how much of this ceiling is in that room) and `fraction_of_room` (how much of that room this ceiling covers, which is the coverage question a finishes take-off asks). `rooms` is a LIST because a ceiling can lie over several, ordered largest overlap first, so `rooms[0]` is a usable single owner. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR: a ceiling over a stairwell, an external soffit, or one on a level carrying no rooms legitimately belongs to nothing — 8 of House A's 30 do. A ceiling with empty `loops` is one duHast could not measure; it is exported rather than dropped so that 'no such ceiling' and 'a ceiling nobody could measure' stay distinguishable, and it attributes to nothing. Attribution ignores only overlaps narrower than 10 mm mean width, which is imprecision (edges that merely touch, a finish a few mm past a wall line), not a judgement about size: EVERY real overlap is listed, including a sliver where a large ceiling grazes a neighbouring room and a degenerate exported footprint. To ignore slivers, filter on `fraction_of_element`, `fraction_of_room` or `mean_width` -- the read deliberately does not. Type properties are sent ONCE per distinct bag in the top-level `type_property_sets` array; each ceiling names its row in `type_properties_ref`."
+        description = "THE DEFAULT ANSWER IS A SUMMARY (`detail`: identity, level, room references; one page of up to 500) that says what it leaves out; `detail=full` returns whole records with footprints and properties, 50 a page, paged with `limit`/`offset` (see `next_offset`); an answer over 1 MB is refused. To LIST or COUNT with chosen columns prefer build_report. List one project's ceilings, each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit ceiling has no room parameter and a room has no ceiling parameter, so every entry in a ceiling's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet plus `mean_width` and two fractions that answer different questions — `fraction_of_element` (how much of this ceiling is in that room) and `fraction_of_room` (how much of that room this ceiling covers, which is the coverage question a finishes take-off asks). `rooms` is a LIST because a ceiling can lie over several, ordered largest overlap first, so `rooms[0]` is a usable single owner. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR: a ceiling over a stairwell, an external soffit, or one on a level carrying no rooms legitimately belongs to nothing — 8 of House A's 30 do. A ceiling with empty `loops` is one duHast could not measure; it is exported rather than dropped so that 'no such ceiling' and 'a ceiling nobody could measure' stay distinguishable, and it attributes to nothing. Attribution ignores only overlaps narrower than 10 mm mean width, which is imprecision (edges that merely touch, a finish a few mm past a wall line), not a judgement about size: EVERY real overlap is listed, including a sliver where a large ceiling grazes a neighbouring room and a degenerate exported footprint. To ignore slivers, filter on `fraction_of_element`, `fraction_of_room` or `mean_width` -- the read deliberately does not. Type properties are sent ONCE per distinct bag in the top-level `type_property_sets` array; each ceiling names its row in `type_properties_ref`."
     )]
     fn get_ceilings(&self, Parameters(p): Parameters<GetSurfacesParams>) -> Result<CallToolResult, McpError> {
         let scope =
@@ -1215,14 +1422,16 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no ceilings have been pushed to this server yet",
             )])),
-            Some(assembled) => json_result(&surfaces::CeilingsResult::from(assembled)),
+            Some(assembled) => {
+                listing_result(surfaces::CeilingsResult::from(assembled), p.detail.as_deref(), p.limit, p.offset)
+            }
         }
     }
 
     /// Serves one project's floors with the rooms each lies over -- the
     /// ceilings read under its own key.
     #[tool(
-        description = "List one project's floors (Revit category Floors), each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit floor has no room parameter, so every entry in a floor's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet, `fraction_of_element` (how much of this floor is in that room), `fraction_of_room` (how much of that room this floor covers -- the finishes take-off question) and `mean_width` (2 x overlap area / overlap perimeter, in feet). `rooms` is a LIST ordered largest overlap first, so `rooms[0]` is a usable single owner. The category holds structural slabs AND finish floors AND balconies; the `Structural` instance property tells them apart, and a room can legitimately lie on both a slab and a finish floor -- `height_offset` (feet above the level, to the TOP of the floor) separates them. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR. A floor with empty `polygons` is one duHast could not measure and attributes to nothing. Attribution is the ceilings rule exactly: only overlaps narrower than 10 mm mean width are ignored, as imprecision. EVERY real overlap is listed, so a strip of floor reaching under a wall into a neighbour appears behind the room the floor serves, with a small `fraction_of_room` and a `mean_width` under a wall's thickness -- filter on those to ignore it. The room association is model-scoped: floors in one Revit document are never attributed to rooms in another. Type properties are sent ONCE per distinct bag in the top-level `type_property_sets` array; each floor names its row in `type_properties_ref`."
+        description = "THE DEFAULT ANSWER IS A SUMMARY (`detail`: identity, level, room references; one page of up to 500) that says what it leaves out; `detail=full` returns whole records with footprints and properties, 50 a page, paged with `limit`/`offset` (see `next_offset`); an answer over 1 MB is refused. To LIST or COUNT with chosen columns prefer build_report. List one project's floors (Revit category Floors), each with the rooms it lies over. Optionally scoped by milestone name. THE ROOM ASSOCIATION IS GEOMETRIC, not authored: a Revit floor has no room parameter, so every entry in a floor's `rooms` list was derived from polygon overlap on this read and is stored nowhere. Each entry carries `overlap_area` in square feet, `fraction_of_element` (how much of this floor is in that room), `fraction_of_room` (how much of that room this floor covers -- the finishes take-off question) and `mean_width` (2 x overlap area / overlap perimeter, in feet). `rooms` is a LIST ordered largest overlap first, so `rooms[0]` is a usable single owner. The category holds structural slabs AND finish floors AND balconies; the `Structural` instance property tells them apart, and a room can legitimately lie on both a slab and a finish floor -- `height_offset` (feet above the level, to the TOP of the floor) separates them. AN EMPTY `rooms` IS A REPORTED STATE, NOT AN ERROR. A floor with empty `polygons` is one duHast could not measure and attributes to nothing. Attribution is the ceilings rule exactly: only overlaps narrower than 10 mm mean width are ignored, as imprecision. EVERY real overlap is listed, so a strip of floor reaching under a wall into a neighbour appears behind the room the floor serves, with a small `fraction_of_room` and a `mean_width` under a wall's thickness -- filter on those to ignore it. The room association is model-scoped: floors in one Revit document are never attributed to rooms in another. Type properties are sent ONCE per distinct bag in the top-level `type_property_sets` array; each floor names its row in `type_properties_ref`."
     )]
     fn get_floors(&self, Parameters(p): Parameters<GetSurfacesParams>) -> Result<CallToolResult, McpError> {
         let scope =
@@ -1231,7 +1440,9 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no floors have been pushed to this server yet",
             )])),
-            Some(assembled) => json_result(&surfaces::FloorsResult::from(assembled)),
+            Some(assembled) => {
+                listing_result(surfaces::FloorsResult::from(assembled), p.detail.as_deref(), p.limit, p.offset)
+            }
         }
     }
 
@@ -2055,6 +2266,59 @@ async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
+    #[derive(serde::Serialize)]
+    struct FakeList {
+        revision: String,
+        things: Vec<serde_json::Value>,
+    }
+
+    impl Listing for FakeList {
+        type Element = serde_json::Value;
+        const KEY: &'static str = "things";
+        const SUMMARY: &'static [&'static str] = &["id", "name"];
+        fn elements(&mut self) -> &mut Vec<serde_json::Value> {
+            &mut self.things
+        }
+    }
+
+    fn fake(n: usize) -> FakeList {
+        let things = (0..n)
+            .map(|i| serde_json::json!({"id": i, "name": format!("n{i}"), "loops": [[1, 2, 3]]}))
+            .collect();
+        FakeList { revision: "r".into(), things }
+    }
+
+    fn text_of(r: Result<CallToolResult, McpError>) -> serde_json::Value {
+        let r = r.unwrap();
+        serde_json::from_str(r.content[0].as_text().unwrap().text.as_str()).unwrap()
+    }
+
+    #[test]
+    fn test_a_listing_summary_keeps_the_summary_keys_and_says_what_it_omitted() {
+        let a = text_of(listing_result(fake(5), None, Some(2), None));
+        assert_eq!(a["detail"], "summary");
+        assert_eq!(
+            (a["total"].as_u64(), a["returned"].as_u64(), a["next_offset"].as_u64()),
+            (Some(5), Some(2), Some(2))
+        );
+        assert_eq!(a["things"][0], serde_json::json!({"id": 0, "name": "n0"}));
+        assert!(a["omitted"].is_array() && a["more"].is_string());
+    }
+
+    #[test]
+    fn test_a_listing_full_page_keeps_whole_records_and_pages_on() {
+        let a = text_of(listing_result(fake(5), Some("full"), Some(2), Some(2)));
+        assert_eq!(a["detail"], "full");
+        assert_eq!(a["things"].as_array().unwrap().len(), 2);
+        assert_eq!(a["things"][0]["id"], 2);
+        assert!(a["things"][0].get("loops").is_some() && a.get("omitted").is_none());
+        assert_eq!(a["next_offset"], 4);
+    }
+
+    #[test]
+    fn test_a_listing_refuses_a_bad_detail() {
+        assert!(listing_result(fake(1), Some("everything"), None, None).is_err());
+    }
 
     use super::*;
     use roommate::state::{AppState, ProjectSettings};
