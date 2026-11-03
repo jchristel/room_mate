@@ -35,6 +35,124 @@ impl Page {
     }
 }
 
+/// Page sizes for one kind of record, per form: `(default, ceiling)`.
+///
+/// **Named once** so a size is a decision made in one place: a summary row is a line and a full
+/// record carries geometry, so the same entity has two sizes, and two tools reading the same
+/// records must not drift apart.
+#[derive(Debug, Clone, Copy)]
+pub struct Sizes {
+    pub summary: (usize, usize),
+    pub full: (usize, usize),
+}
+
+impl Sizes {
+    pub fn page(self, detail: Detail, limit: Option<usize>, offset: Option<usize>) -> Page {
+        let (default, ceiling) = match detail {
+            Detail::Summary => self.summary,
+            Detail::Full => self.full,
+        };
+        Page::new(limit, offset, default, ceiling)
+    }
+}
+
+/// Rooms, and the rooms of the adjacency graph: a full room is outline, properties and joins.
+pub const ROOM_SIZES: Sizes = Sizes { summary: (1000, 5000), full: (100, 500) };
+/// Doors, windows, FF&E, spaces, ceilings, floors.
+pub const ELEMENT_SIZES: Sizes = Sizes { summary: (500, 2000), full: (50, 200) };
+/// A list of authored records or project facts: no summary form, so both forms are one size.
+pub const LIST_SIZES: Sizes = Sizes { summary: (200, 1000), full: (200, 1000) };
+/// Report rows and the shared walls of the adjacency graph: a row is a few cells.
+pub const ROW_SIZES: Sizes = Sizes { summary: (500, 5000), full: (500, 5000) };
+pub const WALL_SIZES: Sizes = Sizes { summary: (2000, 10_000), full: (2000, 10_000) };
+
+/// How a tool bounds its answer. **Every tool declares one**, and a test holds the declaration to the
+/// tool list, so a new tool cannot be added without choosing how it behaves when its data grows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A list of heavy records: `detail` summary or full, paged.
+    PagedDetail,
+    /// A list with no summary form: paged.
+    Paged,
+    /// A report built mostly of counts: its long lists are cut, and the cut is reported.
+    Cut,
+    /// One document or one computed result: refused above the limit, never paged.
+    Document,
+}
+
+/// How each tool bounds its answer. Held to the registered tool list by a test in `bin/mcp.rs`.
+pub const TOOL_KINDS: &[(&str, Kind)] = &[
+    ("get_rooms", Kind::PagedDetail),
+    ("get_doors", Kind::PagedDetail),
+    ("get_windows", Kind::PagedDetail),
+    ("get_ffe", Kind::PagedDetail),
+    ("get_spaces", Kind::PagedDetail),
+    ("get_ceilings", Kind::PagedDetail),
+    ("get_floors", Kind::PagedDetail),
+    ("get_adjacency", Kind::PagedDetail),
+    ("build_report", Kind::Paged),
+    ("list_projects", Kind::Paged),
+    ("list_buildings", Kind::Paged),
+    ("list_milestones", Kind::Paged),
+    ("list_snapshots", Kind::Paged),
+    ("list_blueprints", Kind::Paged),
+    ("list_assignments", Kind::Paged),
+    ("list_tasks", Kind::Paged),
+    ("list_sheets", Kind::Paged),
+    ("list_tag_rules", Kind::Paged),
+    ("list_saved_reports", Kind::Paged),
+    ("get_validation", Kind::Cut),
+    ("capture_blueprint", Kind::Document),
+    ("compare_milestones", Kind::Document),
+    ("get_blueprint", Kind::Document),
+    ("get_connectivity", Kind::Document),
+    ("get_hierarchy_areas", Kind::Document),
+    ("get_latest_snapshot", Kind::Document),
+    ("get_pending_snapshot", Kind::Document),
+    ("get_project_settings", Kind::Document),
+    ("get_reach", Kind::Document),
+    ("get_reference_snapshot", Kind::Document),
+    ("get_saved_report", Kind::Document),
+    ("get_sheet", Kind::Document),
+    ("get_sheet_elevations", Kind::Document),
+    ("get_stack_candidates", Kind::Document),
+    ("get_tag_rule", Kind::Document),
+    ("get_task", Kind::Document),
+    ("list_connections", Kind::Document),
+    ("list_project_settings", Kind::Document),
+    ("list_reference_snapshots", Kind::Document),
+    ("list_report_columns", Kind::Document),
+    ("resolve_blueprint", Kind::Document),
+    ("resolve_project_settings", Kind::Document),
+    ("suggest_sheets", Kind::Document),
+    ("upload_reference", Kind::Document),
+];
+
+fn names_of(kind: Kind) -> String {
+    TOOL_KINDS
+        .iter()
+        .filter(|(_, k)| *k == kind)
+        .map(|(n, _)| *n)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The part of the server instructions that tells a client how answers are bounded, generated from
+/// [`TOOL_KINDS`] so it cannot drift from what the tools do.
+pub fn bounding_note() -> String {
+    format!(
+        "Answers are bounded (1 MB at most). To LIST or COUNT things use build_report. \
+         Paged with `limit`/`offset`, each answer stating `total`, `returned`, `truncated` and `next_offset`: \
+         {detail}, {lists}. Of those, {detail} take `detail`: `summary` (the default) is identity, level and room \
+         references and says what it `omitted`; `detail=full` is the whole record. {cut} cuts its long lists \
+         to `list_limit` and names each cut in `cut_lists`. Every other tool returns one document and refuses \
+         an answer over the limit, saying how to ask for less.",
+        detail = names_of(Kind::PagedDetail),
+        lists = names_of(Kind::Paged),
+        cut = names_of(Kind::Cut),
+    )
+}
+
 /// What a list answer says about itself, flattened into the top level of the answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PageInfo {
@@ -47,6 +165,22 @@ pub struct PageInfo {
     /// Pass this as `offset` for the next page; absent on the last.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<usize>,
+}
+
+impl PageInfo {
+    /// For a list that was paged elsewhere (a report cuts its rows inside the service): `total` matched,
+    /// `returned` of them came back starting at `offset`.
+    pub fn of(total: usize, offset: usize, returned: usize) -> Self {
+        let start = offset.min(total);
+        let end = start + returned;
+        Self {
+            total,
+            returned,
+            offset: start,
+            truncated: end < total,
+            next_offset: (end < total).then_some(end),
+        }
+    }
 }
 
 /// Cut `items` to the page and describe what was cut.
@@ -298,5 +432,19 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn test_page_info_of_matches_what_paginate_says() {
+        let (_, via_paginate) = paginate((0..10).collect::<Vec<_>>(), Page { limit: 3, offset: 4 });
+        assert_eq!(PageInfo::of(10, 4, 3), via_paginate);
+        assert_eq!(PageInfo::of(10, 99, 0).offset, 10, "an offset past the end is clamped");
+    }
+
+    #[test]
+    fn test_sizes_pick_the_form_and_lower_to_the_ceiling() {
+        assert_eq!(ELEMENT_SIZES.page(Detail::Summary, None, None).limit, 500);
+        assert_eq!(ELEMENT_SIZES.page(Detail::Full, None, None).limit, 50);
+        assert_eq!(ELEMENT_SIZES.page(Detail::Full, Some(10_000), Some(3)), Page { limit: 200, offset: 3 });
     }
 }
