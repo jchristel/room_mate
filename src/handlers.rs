@@ -3322,6 +3322,7 @@ pub async fn build_project_report(
         include_rooms_without: req.include_rooms_without,
         include_unattributed: req.include_unattributed,
         limit: req.limit,
+        offset: None,
         filter,
     };
     let scope = reports::ReportScope {

@@ -312,6 +312,9 @@ struct BuildReportParams {
     /// Cap the rows returned. `total_rows` still counts them all.
     #[serde(default)]
     limit: Option<usize>,
+    /// Rows to skip before `limit`, to read a long report in pages: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
     /// The filter tree, as JSON: a group is `{"mode": "all"|"any", "items":
     /// [...]}` and a condition is `{"side": "room"|"element"|"join", "field",
     /// "op", "value"}`. Operators: eq, ne, gt, ge, lt, le, contains,
@@ -931,6 +934,9 @@ fn adjacency_result(mut result: adjacency::AdjacencyResult, p: &AdjacencyParams)
     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
+/// What to try when a report is too big to give.
+const REPORT_ADVICE: &str = "Ask for fewer columns, a smaller `limit`, or a `filter`; page with `offset`.";
+
 /// What to try when a rooms answer is too big to give.
 const ROOMS_ADVICE: &str = "Ask for less: `level` (one storey), `building`, `filter`, a smaller `limit` with `offset` \
     to page, or `detail=summary`. To list or count rooms use build_report. For bulk geometry use the HTTP API or \
@@ -1404,7 +1410,7 @@ impl RoommateMcp {
 
     /// Builds one tabular report -- see `service::reports::build_report`.
     #[tool(
-        description = "Build a tabular report over one entity: a flat schedule, or that entity BY ROOM. Returns `columns` (each with the side it came from -- room, element or join) and `rows` of flat string cells, plus `total_rows` before any `limit` so 'first N of M' is honest. ONLY THE COLUMNS ASKED FOR ARE READ, which is the point of this tool over the entity endpoints: /ffe can be over a hundred MB per storey on a large project and a report of it is a few. A BY-ROOM REPORT NEVER RECOMPUTES THE ATTRIBUTION -- which room a ceiling lies over, which room owns a door, which room an item sits in are read off the entity's own answer, where the policy, the tolerance and the model scope already applied. An element attributed to several rooms appears once per room (a ceiling over three rooms is three rows), so element columns must not be summed across rows; only the join's own numeric measures add up, and `overlap_area` is the one that means anything added up. AN UNMATCHED ROW IS A REPORTED STATE: `include_unattributed` (on by default) lists elements no room matched -- every external door, every facade-package window -- with the room columns empty, and `include_rooms_without` lists rooms nothing matched. A 204 means nothing of that entity has ever been pushed, which is a different answer from a report with no rows."
+        description = "THE CHEAP WAY TO LIST OR COUNT: use this, not the entity reads, for \"list the rooms on level 2\", \"how many doors\", \"names and numbers\". 500 rows a page by default (ceiling 5000), `total_rows` before paging, `next_offset` for the next page. `$level` is the LEVEL NAME as the element's own model declares it (filter on it: `$level` = \"LEVEL 2\"); `$level_id` is that model's own id. An unknown `$` name is refused with the valid ones. Build a tabular report over one entity: a flat schedule, or that entity BY ROOM. Returns `columns` (each with the side it came from -- room, element or join) and `rows` of flat string cells, plus `total_rows` before any `limit` so 'first N of M' is honest. ONLY THE COLUMNS ASKED FOR ARE READ, which is the point of this tool over the entity endpoints: /ffe can be over a hundred MB per storey on a large project and a report of it is a few. A BY-ROOM REPORT NEVER RECOMPUTES THE ATTRIBUTION -- which room a ceiling lies over, which room owns a door, which room an item sits in are read off the entity's own answer, where the policy, the tolerance and the model scope already applied. An element attributed to several rooms appears once per room (a ceiling over three rooms is three rows), so element columns must not be summed across rows; only the join's own numeric measures add up, and `overlap_area` is the one that means anything added up. AN UNMATCHED ROW IS A REPORTED STATE: `include_unattributed` (on by default) lists elements no room matched -- every external door, every facade-package window -- with the room columns empty, and `include_rooms_without` lists rooms nothing matched. A 204 means nothing of that entity has ever been pushed, which is a different answer from a report with no rows."
     )]
     fn build_report(&self, Parameters(p): Parameters<BuildReportParams>) -> Result<CallToolResult, McpError> {
         let Some(entity) = reports::Entity::parse(&p.entity) else {
@@ -1436,7 +1442,8 @@ impl RoommateMcp {
             shape,
             include_rooms_without: p.include_rooms_without,
             include_unattributed: p.include_unattributed,
-            limit: p.limit,
+            limit: Some(Page::new(p.limit, None, 500, 5000).limit),
+            offset: p.offset,
             filter,
         };
         let scope = reports::ReportScope {
@@ -1449,7 +1456,24 @@ impl RoommateMcp {
                 "no {} have been pushed to this server yet",
                 p.entity
             ))])),
-            Some(result) => json_result(&result),
+            Some(result) => {
+                let offset = p.offset.unwrap_or(0).min(result.total_rows);
+                let returned = result.rows.len();
+                let mut answer = serde_json::to_value(&result)
+                    .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
+                if let serde_json::Value::Object(map) = &mut answer {
+                    let end = offset + returned;
+                    map.insert("offset".into(), serde_json::json!(offset));
+                    map.insert("returned".into(), serde_json::json!(returned));
+                    map.insert("truncated".into(), serde_json::json!(end < result.total_rows));
+                    if end < result.total_rows {
+                        map.insert("next_offset".into(), serde_json::json!(end));
+                    }
+                }
+                let text = mcp_bounds::bounded(&answer, "build_report", REPORT_ADVICE)
+                    .map_err(|m| McpError::invalid_params(m, None))?;
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+            }
         }
     }
 
