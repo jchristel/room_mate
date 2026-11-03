@@ -30,6 +30,7 @@
 //!   caller's two switches, and the row count says what it counted.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -379,6 +380,8 @@ pub struct ReportDefinition {
     /// Cap the rows returned; `total_rows` still counts them all, so a caller
     /// can say "first 500 of 39,412" honestly.
     pub limit: Option<usize>,
+    /// Rows to skip before `limit`, to read a long report in pages. `total_rows` still counts them all.
+    pub offset: Option<usize>,
     /// The filter, or `None` for every row.
     pub filter: Option<ReportFilter>,
 }
@@ -464,12 +467,13 @@ fn intrinsics(entity: Entity) -> Vec<ColumnInfo> {
     let text = |name: &str| ColumnInfo { name: name.to_string(), kind: "intrinsic", value_type: "text" };
     let number = |name: &str| ColumnInfo { name: name.to_string(), kind: "intrinsic", value_type: "number" };
     match entity {
-        Entity::Rooms | Entity::Spaces => vec![text("$id"), text("$name"), text("$level_id")],
+        Entity::Rooms | Entity::Spaces => vec![text("$id"), text("$name"), text("$level_id"), text("$level")],
         Entity::Doors | Entity::Windows => vec![
             text("$id"),
             text("$type_name"),
             text("$type_id"),
             text("$level_id"),
+            text("$level"),
             text("$from_room"),
             text("$to_room"),
         ],
@@ -478,6 +482,7 @@ fn intrinsics(entity: Entity) -> Vec<ColumnInfo> {
             text("$type_name"),
             text("$type_id"),
             text("$level_id"),
+            text("$level"),
             number("$height_offset"),
         ],
         Entity::Ffe => vec![
@@ -486,6 +491,7 @@ fn intrinsics(entity: Entity) -> Vec<ColumnInfo> {
             text("$type_name"),
             text("$type_id"),
             text("$level_id"),
+            text("$level"),
             text("$room"),
         ],
     }
@@ -641,6 +647,8 @@ pub fn build_report(
         )));
     }
 
+    check_intrinsics(def)?;
+
     let registry = state.settings();
     let builtin: Vec<BuiltinPropertyDef> = scope
         .project
@@ -664,10 +672,53 @@ pub fn build_report(
     }
 
     result.total_rows = result.rows.len();
+    if let Some(offset) = def.offset {
+        result.rows.drain(..offset.min(result.rows.len()));
+    }
     if let Some(limit) = def.limit {
         result.rows.truncate(limit);
     }
     Ok(Some(result))
+}
+
+/// Refuse a `$` name nothing answers.
+///
+/// **An unknown intrinsic used to read as an empty cell**, which looks exactly like a field the data
+/// leaves blank: `$level` once returned a column of nothing and no error. A `$` name is never a
+/// property of the model (those are named plainly), so a stranger is a typo and is said so, with
+/// the names that exist. The room side of a by-room report has fewer than the entity side: a room
+/// is read as a stored room there, which has no level NAME, only `$level_id`.
+fn check_intrinsics(def: &ReportDefinition) -> Result<(), ServiceError> {
+    let entity: Vec<String> = intrinsics(def.entity).into_iter().map(|c| c.name).collect();
+    let room: Vec<String> = ["$id", "$name", "$level_id"].iter().map(|s| (*s).to_string()).collect();
+    let mut asked: Vec<(&str, &[String], &'static str)> = Vec::new();
+    asked.extend(def.columns.iter().map(|c| (c.as_str(), entity.as_slice(), def.entity.one())));
+    asked.extend(def.room_columns.iter().map(|c| (c.as_str(), room.as_slice(), "room")));
+    if let Some(filter) = &def.filter {
+        filter_fields(filter, &mut |side, field| {
+            match side {
+                Side::Element => asked.push((field, entity.as_slice(), def.entity.one())),
+                Side::Room => asked.push((field, room.as_slice(), "room")),
+                Side::Join => {}
+            };
+        });
+    }
+    for (name, valid, what) in asked {
+        if name.starts_with('$') && !valid.iter().any(|v| v == name) {
+            return Err(ServiceError::Invalid(format!(
+                "unknown {what} column \"{name}\"; the $ names for {what} are: {}",
+                valid.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn filter_fields<'a>(filter: &'a ReportFilter, visit: &mut impl FnMut(Side, &'a str)) {
+    match filter {
+        ReportFilter::Group { items, .. } => items.iter().for_each(|i| filter_fields(i, visit)),
+        ReportFilter::Condition(c) => visit(c.side, c.predicate.property.as_str()),
+    }
 }
 
 /// One element, reduced to what a report needs: a way to read its fields, its
@@ -695,6 +746,44 @@ struct Attribution {
     model_id: String,
     room_id: String,
     measures: BTreeMap<&'static str, String>,
+}
+
+/// One model's level names by id, shared by every element of that model.
+type LevelNames = Arc<BTreeMap<String, String>>;
+
+/// Each model's level names, so an element reads the name of the level ITS document declares.
+///
+/// **The model's own name for a level, not a canonical storey.** A `level_id` is per document, so the
+/// id alone names nothing across models; the name the element's own model gives it is a fact that
+/// needs no judgement ("LEVEL 2" in every fit-out model). Grouping differently-named levels into one
+/// storey is the viewer's name-plus-elevation rule (`renderer/storey.ts`) and is not repeated here.
+fn level_names_by_model(levels: &BTreeMap<String, Vec<crate::contract::Level>>) -> BTreeMap<String, LevelNames> {
+    levels
+        .iter()
+        .map(|(model, levels)| {
+            (model.clone(), Arc::new(levels.iter().map(|l| (l.id.clone(), l.name.clone())).collect()))
+        })
+        .collect()
+}
+
+fn names_of(by_model: &BTreeMap<String, LevelNames>, model: &str) -> LevelNames {
+    by_model.get(model).cloned().unwrap_or_default()
+}
+
+/// Add the `$level` intrinsic to a reader: the name of the level `$level_id` points at. An id the model
+/// does not declare reads as absent, not as the id, so a cell never passes an id off as a name.
+fn with_level_name(read: FieldReader, names: LevelNames) -> FieldReader {
+    Box::new(move |source, property, defs| {
+        if source.is_none() && property == "$level" {
+            return match read(None, "$level_id", defs) {
+                PropertyPresence::Present(id) => {
+                    names.get(&id).map_or(PropertyPresence::Absent, |n| PropertyPresence::Present(n.clone()))
+                }
+                other => other,
+            };
+        }
+        read(source, property, defs)
+    })
 }
 
 fn presence_reader<T>(element: T) -> FieldReader
@@ -737,6 +826,7 @@ fn read_rooms(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<El
         filter: None,
     };
     Ok(rooms::assemble_rooms(state, &room_scope)?.map(|result| {
+        let names: LevelNames = Arc::new(result.levels.iter().map(|l| (l.id.clone(), l.name.clone())).collect());
         result
             .rooms
             .into_iter()
@@ -744,7 +834,7 @@ fn read_rooms(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<El
                 let model_id = room.model_id.clone();
                 let room_id = room.room.id.clone();
                 Element {
-                    read: presence_reader(room),
+                    read: with_level_name(presence_reader(room), names.clone()),
                     // A room is its own attribution, so a room schedule can
                     // carry room columns without a special case.
                     rooms: vec![Attribution { model_id, room_id, measures: BTreeMap::new() }],
@@ -770,6 +860,7 @@ fn read_openings<P: crate::contract::OpeningEnvelope + serde::de::DeserializeOwn
         storeys: None,
     };
     Ok(openings::assemble_openings::<P>(state, kind, &opening_scope)?.map(|assembled| {
+        let names = level_names_by_model(&assembled.levels_by_model);
         assembled
             .openings
             .into_iter()
@@ -783,7 +874,8 @@ fn read_openings<P: crate::contract::OpeningEnvelope + serde::de::DeserializeOwn
                         measures: BTreeMap::new(),
                     })
                     .collect();
-                Element { read: presence_reader(opening), rooms }
+                let level = names_of(&names, &opening.model_id);
+                Element { read: with_level_name(presence_reader(opening), level), rooms }
             })
             .collect()
     }))
@@ -798,6 +890,7 @@ fn read_surfaces<P: surfaces::SurfacePayloadKind>(
 ) -> Result<Option<Vec<Element>>, ServiceError> {
     let surface_scope = SurfaceScope { project: scope.project, milestone: scope.milestone, storeys: None };
     Ok(surfaces::assemble_surfaces::<P>(state, &surface_scope)?.map(|assembled| {
+        let names = level_names_by_model(&assembled.levels_by_model);
         assembled
             .surfaces
             .into_iter()
@@ -816,7 +909,8 @@ fn read_surfaces<P: surfaces::SurfacePayloadKind>(
                         ]),
                     })
                     .collect();
-                Element { read: presence_reader(surface), rooms }
+                let level = names_of(&names, &surface.model_id);
+                Element { read: with_level_name(presence_reader(surface), level), rooms }
             })
             .collect()
     }))
@@ -831,6 +925,7 @@ fn read_items(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<El
         storeys: None,
     };
     Ok(items::assemble_items(state, &item_scope)?.map(|result| {
+        let names = level_names_by_model(&result.levels_by_model);
         result
             .ffe
             .into_iter()
@@ -847,7 +942,8 @@ fn read_items(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<El
                         measures: BTreeMap::from([("room_origin", origin.clone())]),
                     })
                     .collect();
-                Element { read: presence_reader(item), rooms }
+                let level = names_of(&names, &item.model_id);
+                Element { read: with_level_name(presence_reader(item), level), rooms }
             })
             .collect()
     }))
@@ -880,6 +976,7 @@ fn read_spaces(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<E
     };
 
     let matches = space_matches(state, scope)?;
+    let names = level_names_by_model(&result.levels_by_model);
     Ok(Some(
         result
             .spaces
@@ -906,7 +1003,8 @@ fn read_spaces(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<E
                     // reported states, and `spaces_note` says which.
                     _ => Vec::new(),
                 };
-                Element { read: presence_reader(space), rooms }
+                let level = names_of(&names, &space.model_id);
+                Element { read: with_level_name(presence_reader(space), level), rooms }
             })
             .collect(),
     ))
@@ -1614,6 +1712,7 @@ mod tests {
             include_rooms_without: false,
             include_unattributed: true,
             limit: None,
+            offset: None,
             filter: None,
         }
     }
@@ -1795,6 +1894,67 @@ mod tests {
 
         assert_eq!(result.rows.len(), 2);
         assert_eq!(result.total_rows, 3);
+    }
+
+    /// The catalog lists a name, an arm answers it. A listed name no arm answers is a column of
+    /// blanks that reads as missing data (`$level_id` on rooms was exactly that).
+    #[test]
+    fn test_every_listed_room_intrinsic_answers_for_a_room() {
+        let state = state_with(vec![room("r1", "ENTRY", &[])], vec![]);
+        let mut def = definition(Entity::Rooms, false);
+        def.columns = vec!["$id".into(), "$name".into(), "$level_id".into()];
+        let result = run(&state, &def);
+        assert!(result.rows[0].iter().all(|cell| !cell.is_empty()), "{:?}", result.rows[0]);
+    }
+
+    #[test]
+    fn test_offset_skips_rows_and_the_total_still_counts_them() {
+        let state = state_with(
+            vec![room("r1", "ENTRY", &[("Number", "G01")])],
+            vec![
+                door("d1", Some("r1"), &[]),
+                door("d2", Some("r1"), &[]),
+                door("d3", Some("r1"), &[]),
+            ],
+        );
+        let mut def = definition(Entity::Doors, false);
+        def.offset = Some(1);
+        def.limit = Some(1);
+        let result = run(&state, &def);
+        assert_eq!((result.rows.len(), result.total_rows), (1, 3));
+        def.offset = Some(99);
+        assert!(run(&state, &def).rows.is_empty(), "an offset past the end is an empty page");
+    }
+
+    #[test]
+    fn test_an_unknown_dollar_name_is_refused_with_the_valid_ones() {
+        let state = state_with(vec![room("r1", "ENTRY", &[])], vec![door("d1", Some("r1"), &[])]);
+        let mut def = definition(Entity::Doors, false);
+        def.columns = vec!["$levle".to_string()];
+        let err = format!("{:?}", build_report(&state, &scope(), &def).expect_err("a typo is refused"));
+        assert!(err.contains("$levle") && err.contains("$level_id") && err.contains("$level,"), "{err}");
+        def.columns = vec!["$level".to_string(), "Mark".to_string()];
+        assert!(build_report(&state, &scope(), &def).is_ok(), "$level and a plain property are fine");
+    }
+
+    #[test]
+    fn test_level_reads_as_the_name_the_models_level_declares() {
+        let names: LevelNames = Arc::new(BTreeMap::from([("10".to_string(), "LEVEL 2".to_string())]));
+        let read = |id: &'static str| -> FieldReader {
+            Box::new(move |_, property, _| match property {
+                "$level_id" => PropertyPresence::Present(id.to_string()),
+                _ => PropertyPresence::Absent,
+            })
+        };
+        let named = with_level_name(read("10"), names.clone());
+        assert_eq!(named(None, "$level", &[]), PropertyPresence::Present("LEVEL 2".to_string()));
+        let unknown = with_level_name(read("99"), names);
+        assert_eq!(
+            unknown(None, "$level", &[]),
+            PropertyPresence::Absent,
+            "an id is never passed off as a name"
+        );
+        assert_eq!(unknown(None, "$level_id", &[]), PropertyPresence::Present("99".to_string()));
     }
 
     /// Nothing pushed is `None` -- the 204 -- and a different answer from a
@@ -2025,6 +2185,7 @@ mod tests {
             include_rooms_without: def.include_rooms_without,
             include_unattributed: def.include_unattributed,
             limit: def.limit,
+            offset: def.offset,
             filter: None,
         }
     }

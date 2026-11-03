@@ -533,6 +533,7 @@ fn presence_of(
         None => match property {
             "$name" => intrinsic(&room.room.name),
             "$id" => intrinsic(&room.room.id),
+            "$level_id" => intrinsic(&room.room.level_id),
             canonical => property_presence(&room.room, canonical, &room.source, builtin_defs),
         },
         // The joined record's own field labels, verbatim as the source

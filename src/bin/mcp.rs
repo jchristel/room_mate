@@ -110,6 +110,17 @@ struct ResolveBlueprintParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ValidationParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The most entries any list in the report keeps (default 200, ceiling 5000). The report is mostly counts,
+    /// but carries lists of offenders, which can run to tens of thousands; the answer's `cut_lists` names
+    /// each list that was cut and how many it held.
+    #[serde(default)]
+    list_limit: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct ListTasksParams {
     /// The project id, as returned by `list_projects`.
     project_id: String,
@@ -301,6 +312,9 @@ struct BuildReportParams {
     /// Cap the rows returned. `total_rows` still counts them all.
     #[serde(default)]
     limit: Option<usize>,
+    /// Rows to skip before `limit`, to read a long report in pages: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
     /// The filter tree, as JSON: a group is `{"mode": "all"|"any", "items":
     /// [...]}` and a condition is `{"side": "room"|"element"|"join", "field",
     /// "op", "value"}`. Operators: eq, ne, gt, ge, lt, le, contains,
@@ -417,6 +431,21 @@ struct AdjacencyParams {
     /// different tolerance than the project declares; must be between 0 and 5.
     #[serde(default)]
     wall_max: Option<f64>,
+    /// `summary` (the default) returns each room as id, name, level and centroid; `full` adds its classification
+    /// and every joined reference record (about 750 bytes a room).
+    #[serde(default)]
+    detail: Option<String>,
+    /// Rooms per page. Defaults to 1000 for a summary and 100 for `full`; lowered to 5000 and 500.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Rooms to skip, for the next page: pass `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Shared walls per page (default 2000, ceiling 10000), skipped by `edge_offset`.
+    #[serde(default)]
+    edge_limit: Option<usize>,
+    #[serde(default)]
+    edge_offset: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -674,10 +703,13 @@ fn sheets_to_mcp_error(err: roommate::sheets::SheetError) -> McpError {
 }
 
 fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
-    let json = serde_json::to_string(value)
-        .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
-    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    let text = mcp_bounds::bounded(value, "", GENERIC_ADVICE).map_err(|m| McpError::invalid_params(m, None))?;
+    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
+
+/// Advice for a tool with no paging of its own: scope the request.
+const GENERIC_ADVICE: &str = "Narrow the request (a project, a milestone, a single id, a smaller area) or use \
+    build_report for chosen columns. For bulk data use the HTTP API, which is not bounded.";
 
 /// An entity read whose answer is one list of elements, so one function can page and summarise it.
 trait Listing: serde::Serialize {
@@ -855,6 +887,55 @@ fn listing_result<R: Listing>(
     let text = mcp_bounds::bounded(&answer, R::KEY, LISTING_ADVICE).map_err(|m| McpError::invalid_params(m, None))?;
     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
+
+/// A project's adjacency graph, paged: rooms as summary or full, shared walls as their own page.
+fn adjacency_result(mut result: adjacency::AdjacencyResult, p: &AdjacencyParams) -> Result<CallToolResult, McpError> {
+    let detail = Detail::parse(p.detail.as_deref()).map_err(|m| McpError::invalid_params(m, None))?;
+    let (default, ceiling) = match detail {
+        Detail::Summary => (1000, 5000),
+        Detail::Full => (100, 500),
+    };
+    let (nodes, node_page) =
+        mcp_bounds::paginate(std::mem::take(&mut result.nodes), Page::new(p.limit, p.offset, default, ceiling));
+    let (edges, edge_page) =
+        mcp_bounds::paginate(std::mem::take(&mut result.edges), Page::new(p.edge_limit, p.edge_offset, 2000, 10_000));
+    result.edges = edges;
+    let internal = |e: serde_json::Error| McpError::internal_error(format!("failed to serialize response: {e}"), None);
+    let mut answer = serde_json::to_value(&result).map_err(internal)?;
+    let rows = match detail {
+        Detail::Full => serde_json::to_value(&nodes).map_err(internal)?,
+        Detail::Summary => serde_json::Value::Array(
+            nodes
+                .iter()
+                .map(|n| {
+                    serde_json::json!({
+                        "room_id": n.room_id,
+                        "name": n.name,
+                        "level_id": n.level_id,
+                        "centroid": n.centroid,
+                    })
+                })
+                .collect(),
+        ),
+    };
+    if let serde_json::Value::Object(map) = &mut answer {
+        map.insert("nodes".into(), rows);
+        mcp_bounds::describe(
+            map,
+            detail,
+            &node_page,
+            &["classification", "joined reference records"],
+            "pass detail=full for each room's classification and reference records, or use get_rooms",
+        );
+        map.insert("edges_page".into(), serde_json::json!(edge_page));
+    }
+    let text =
+        mcp_bounds::bounded(&answer, "get_adjacency", GENERIC_ADVICE).map_err(|m| McpError::invalid_params(m, None))?;
+    Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+}
+
+/// What to try when a report is too big to give.
+const REPORT_ADVICE: &str = "Ask for fewer columns, a smaller `limit`, or a `filter`; page with `offset`.";
 
 /// What to try when a rooms answer is too big to give.
 const ROOMS_ADVICE: &str = "Ask for less: `level` (one storey), `building`, `filter`, a smaller `limit` with `offset` \
@@ -1329,7 +1410,7 @@ impl RoommateMcp {
 
     /// Builds one tabular report -- see `service::reports::build_report`.
     #[tool(
-        description = "Build a tabular report over one entity: a flat schedule, or that entity BY ROOM. Returns `columns` (each with the side it came from -- room, element or join) and `rows` of flat string cells, plus `total_rows` before any `limit` so 'first N of M' is honest. ONLY THE COLUMNS ASKED FOR ARE READ, which is the point of this tool over the entity endpoints: /ffe can be over a hundred MB per storey on a large project and a report of it is a few. A BY-ROOM REPORT NEVER RECOMPUTES THE ATTRIBUTION -- which room a ceiling lies over, which room owns a door, which room an item sits in are read off the entity's own answer, where the policy, the tolerance and the model scope already applied. An element attributed to several rooms appears once per room (a ceiling over three rooms is three rows), so element columns must not be summed across rows; only the join's own numeric measures add up, and `overlap_area` is the one that means anything added up. AN UNMATCHED ROW IS A REPORTED STATE: `include_unattributed` (on by default) lists elements no room matched -- every external door, every facade-package window -- with the room columns empty, and `include_rooms_without` lists rooms nothing matched. A 204 means nothing of that entity has ever been pushed, which is a different answer from a report with no rows."
+        description = "THE CHEAP WAY TO LIST OR COUNT: use this, not the entity reads, for \"list the rooms on level 2\", \"how many doors\", \"names and numbers\". 500 rows a page by default (ceiling 5000), `total_rows` before paging, `next_offset` for the next page. `$level` is the LEVEL NAME as the element's own model declares it (filter on it: `$level` = \"LEVEL 2\"); `$level_id` is that model's own id. An unknown `$` name is refused with the valid ones. Build a tabular report over one entity: a flat schedule, or that entity BY ROOM. Returns `columns` (each with the side it came from -- room, element or join) and `rows` of flat string cells, plus `total_rows` before any `limit` so 'first N of M' is honest. ONLY THE COLUMNS ASKED FOR ARE READ, which is the point of this tool over the entity endpoints: /ffe can be over a hundred MB per storey on a large project and a report of it is a few. A BY-ROOM REPORT NEVER RECOMPUTES THE ATTRIBUTION -- which room a ceiling lies over, which room owns a door, which room an item sits in are read off the entity's own answer, where the policy, the tolerance and the model scope already applied. An element attributed to several rooms appears once per room (a ceiling over three rooms is three rows), so element columns must not be summed across rows; only the join's own numeric measures add up, and `overlap_area` is the one that means anything added up. AN UNMATCHED ROW IS A REPORTED STATE: `include_unattributed` (on by default) lists elements no room matched -- every external door, every facade-package window -- with the room columns empty, and `include_rooms_without` lists rooms nothing matched. A 204 means nothing of that entity has ever been pushed, which is a different answer from a report with no rows."
     )]
     fn build_report(&self, Parameters(p): Parameters<BuildReportParams>) -> Result<CallToolResult, McpError> {
         let Some(entity) = reports::Entity::parse(&p.entity) else {
@@ -1361,7 +1442,8 @@ impl RoommateMcp {
             shape,
             include_rooms_without: p.include_rooms_without,
             include_unattributed: p.include_unattributed,
-            limit: p.limit,
+            limit: Some(Page::new(p.limit, None, 500, 5000).limit),
+            offset: p.offset,
             filter,
         };
         let scope = reports::ReportScope {
@@ -1374,7 +1456,24 @@ impl RoommateMcp {
                 "no {} have been pushed to this server yet",
                 p.entity
             ))])),
-            Some(result) => json_result(&result),
+            Some(result) => {
+                let offset = p.offset.unwrap_or(0).min(result.total_rows);
+                let returned = result.rows.len();
+                let mut answer = serde_json::to_value(&result)
+                    .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
+                if let serde_json::Value::Object(map) = &mut answer {
+                    let end = offset + returned;
+                    map.insert("offset".into(), serde_json::json!(offset));
+                    map.insert("returned".into(), serde_json::json!(returned));
+                    map.insert("truncated".into(), serde_json::json!(end < result.total_rows));
+                    if end < result.total_rows {
+                        map.insert("next_offset".into(), serde_json::json!(end));
+                    }
+                }
+                let text = mcp_bounds::bounded(&answer, "build_report", REPORT_ADVICE)
+                    .map_err(|m| McpError::invalid_params(m, None))?;
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+            }
         }
     }
 
@@ -1524,7 +1623,7 @@ impl RoommateMcp {
     /// Runs the reference reconciliation QA report for one project -- see
     /// `service::validation::compute_project_validation`.
     #[tool(
-        description = "Run the reference reconciliation validation report for one project. Returns one report per configured reference source under 'sources' (keyed by source name, each with its own link_property, discrepancy lists, field coverage and 'error_rooms' room_id -> number/name/link value for the flagged rooms), plus a cross-source 'discrepancies' summary for a one-shot count. \
+        description = "LISTS IN THE REPORT ARE CUT to `list_limit` entries (default 200); `cut_lists` names each list cut and its true total, so counts stay exact. Run the reference reconciliation validation report for one project. Returns one report per configured reference source under 'sources' (keyed by source name, each with its own link_property, discrepancy lists, field coverage and 'error_rooms' room_id -> number/name/link value for the flagged rooms), plus a cross-source 'discrepancies' summary for a one-shot count. \
                        Unmatched is reported in BOTH directions and they mean different things: 'rooms_unmatched' lists room ids whose link value finds no record, while 'reference_unmatched' lists the source's own link values that no room resolves to (bare values, not room ids -- there is no room, which is the finding). A value shared by several rooms counts as matched and is reported once under 'duplicate_link_values' instead. \
                        Check 'link_property_absent_everywhere' BEFORE reading either list: when true, the source's link property names no property on any room in the project, so the join never ran -- every room appears under 'rooms_missing_link_value' and every row under 'reference_unmatched' for that one reason, and neither list says anything about the data. It is a settings fault (a mistyped link property, or one needing a [[builtin_properties]] alias to the Revit property that holds it), not a data-quality finding, and reporting the lists as findings would be wrong. False when the property exists but is blank everywhere -- that is an ordinary data gap. \
                        An empty 'sources' map means the project reconciles against nothing -- normal, not an error. \
@@ -1555,9 +1654,23 @@ impl RoommateMcp {
                        difference between an MEP space and an architectural room rather than a data fault, which is what [spaces] tolerance_min exists to filter. \
                        'incomparable' is a pair whose ROOM value is zero: neither a pass nor a mismatch, since a relative difference against zero is undefined."
     )]
-    fn get_validation(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+    fn get_validation(&self, Parameters(p): Parameters<ValidationParams>) -> Result<CallToolResult, McpError> {
         let result = validation::compute_project_validation(&self.state, &p.project_id).map_err(to_mcp_error)?;
-        json_result(&result)
+        let mut answer = serde_json::to_value(&result)
+            .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
+        let cap = Page::new(p.list_limit, None, 200, 5000).limit;
+        let cut = mcp_bounds::cap_lists(&mut answer, cap);
+        if let (false, serde_json::Value::Object(map)) = (cut.is_empty(), &mut answer) {
+            map.insert("cut_lists".into(), serde_json::json!(cut));
+            map.insert(
+                "cut_note".into(),
+                serde_json::json!(
+                    "lists above list_limit were cut to their first entries (see cut_lists for each total); raise \
+                     list_limit, or list the offenders with build_report or the element read"
+                ),
+            );
+        }
+        json_result(&answer)
     }
 
     /// Hierarchy gross-area footprints for one project -- see
@@ -1584,7 +1697,7 @@ impl RoommateMcp {
     /// validation, so the two front doors cannot disagree on what a valid
     /// `wall_max` is.
     #[tool(
-        description = "Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and any joined reference records, each flattened under its source name) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, NOT door connectivity: two rooms can share a wall with no door in it, and a door can connect two rooms sharing almost no wall. Doors ARE collected — use get_doors, where every door names its from_room and to_room — but they are a separate edge set over the same rooms, not a refinement of this graph. The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor."
+        description = "THE DEFAULT ANSWER IS A SUMMARY (`detail`: each room as id, name, level, centroid; 1000 rooms and 2000 shared walls a page, paged with `limit`/`offset` and `edge_limit`/`edge_offset`); `detail=full` adds classification and reference records. An answer over 1 MB is refused. Compute the room-to-room adjacency graph for one project: which rooms share a wall, and how much wall they share. Optionally scoped by building key and milestone name. Returns nodes (one per room, with its level, centroid, classification path and any joined reference records, each flattened under its source name) and undirected edges (a room pair, their level, and the accumulated shared wall length in feet). Same level only — no cross-floor adjacency. Adjacency here means SHARED WALL geometry, NOT door connectivity: two rooms can share a wall with no door in it, and a door can connect two rooms sharing almost no wall. Doors ARE collected — use get_doors, where every door names its from_room and to_room — but they are a separate edge set over the same rooms, not a refinement of this graph. The `wall_max` parameter is the gap tolerance and matters: a Revit model whose room boundaries sit on wall centrelines has neighbours touching exactly (use 0), while one using finish faces separates them by the wall thickness (use roughly that). Too large a value bridges rooms that merely face each other across a corridor."
     )]
     fn get_adjacency(&self, Parameters(p): Parameters<AdjacencyParams>) -> Result<CallToolResult, McpError> {
         let result = adjacency::assemble_adjacency(
@@ -1599,7 +1712,7 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no snapshots have been pushed to this server yet",
             )])),
-            Some(result) => json_result(&result),
+            Some(result) => adjacency_result(result, &p),
         }
     }
 
