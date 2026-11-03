@@ -185,6 +185,10 @@ struct GetRoomsParams {
     /// Omit for no filter.
     #[serde(default)]
     filter: Vec<String>,
+    /// Keep only the rooms on one level, named as `levels` names it ("LEVEL 02") or by its id;
+    /// case-insensitive. Omit for every level. Unknown names are refused with the names there are.
+    #[serde(default)]
+    level: Option<String>,
 }
 
 /// `get_ceilings` and `get_floors` parameters. Its own type rather than
@@ -633,6 +637,49 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpErro
     Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
 }
 
+/// The most a room read puts in one answer. A large project's rooms run to tens of megabytes
+/// (roughly 3 KB a room), far past what a model can read, and a client that is handed that
+/// either drops the connection or fills its context with it. Refusing with advice is cheaper
+/// than either.
+const ROOMS_ANSWER_MAX_BYTES: usize = 1024 * 1024;
+
+/// `json_result`, refusing above `max` bytes with a message that says how to ask for less.
+fn bounded_json_result<T: serde::Serialize>(value: &T, max: usize, tool: &str) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string(value)
+        .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
+    if json.len() > max {
+        return Err(McpError::invalid_params(
+            format!(
+                "{tool}: the answer is {} MB, over the {} MB limit. Ask for less: pass `level` (one storey), \
+                 `building` or `filter`; or use build_report for a table of chosen columns.",
+                json.len() / (1024 * 1024),
+                max / (1024 * 1024)
+            ),
+            None,
+        ));
+    }
+    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+}
+
+/// Narrow a rooms answer to one level, by name or id. Refuses an unknown one and lists what exists.
+fn keep_level(result: &mut rooms::RoomsResult, wanted: &str) -> Result<(), String> {
+    let wanted = wanted.trim();
+    let ids: Vec<String> = result
+        .levels
+        .iter()
+        .filter(|l| l.id == wanted || l.name.eq_ignore_ascii_case(wanted))
+        .map(|l| l.id.clone())
+        .collect();
+    if ids.is_empty() {
+        let names: Vec<&str> = result.levels.iter().map(|l| l.name.as_str()).collect();
+        return Err(format!("no level \"{wanted}\"; the levels are: {}", names.join(", ")));
+    }
+    result.levels.retain(|l| ids.contains(&l.id));
+    result.rooms.retain(|r| ids.contains(&r.room.level_id));
+    result.boundary_by_level.retain(|k, _| ids.contains(k));
+    Ok(())
+}
+
 /// Minimal percent-encoding for URL path/query components. The values that
 /// pass through here are constrained by construction — project ids are
 /// path-safe (`is_path_safe_component`) and `taken_at` is RFC3339, whose only
@@ -835,7 +882,12 @@ impl RoommateMcp {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(
                 "no snapshots have been pushed to this server yet",
             )])),
-            Some(result) => json_result(&result),
+            Some(mut result) => {
+                if let Some(level) = p.level.as_deref() {
+                    keep_level(&mut result, level).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
+                }
+                bounded_json_result(&result, ROOMS_ANSWER_MAX_BYTES, "get_rooms")
+            }
         }
     }
 
@@ -1944,6 +1996,14 @@ async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_an_oversized_answer_is_refused_with_advice() {
+        let big = vec!["x".repeat(1000); 10];
+        let err = bounded_json_result(&big, 100, "get_rooms").unwrap_err();
+        assert!(err.message.contains("level") && err.message.contains("get_rooms"), "{}", err.message);
+        assert!(bounded_json_result(&big, 1_000_000, "get_rooms").is_ok());
+    }
+
     use super::*;
     use roommate::state::{AppState, ProjectSettings};
     use roommate::storage::MemStore;
