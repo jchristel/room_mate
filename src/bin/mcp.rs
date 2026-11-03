@@ -866,12 +866,8 @@ fn listing_result<R: Listing>(
     offset: Option<usize>,
 ) -> Result<CallToolResult, McpError> {
     let detail = Detail::parse(detail).map_err(|m| McpError::invalid_params(m, None))?;
-    let (default, ceiling) = match detail {
-        Detail::Summary => (500, 2000),
-        Detail::Full => (50, 200),
-    };
     let (mut kept, info) =
-        mcp_bounds::paginate(std::mem::take(result.elements()), Page::new(limit, offset, default, ceiling));
+        mcp_bounds::paginate(std::mem::take(result.elements()), mcp_bounds::ELEMENT_SIZES.page(detail, limit, offset));
     let internal = |e: serde_json::Error| McpError::internal_error(format!("failed to serialize response: {e}"), None);
     let mut answer = match detail {
         Detail::Full => {
@@ -927,14 +923,12 @@ fn listing_result<R: Listing>(
 /// A project's adjacency graph, paged: rooms as summary or full, shared walls as their own page.
 fn adjacency_result(mut result: adjacency::AdjacencyResult, p: &AdjacencyParams) -> Result<CallToolResult, McpError> {
     let detail = Detail::parse(p.detail.as_deref()).map_err(|m| McpError::invalid_params(m, None))?;
-    let (default, ceiling) = match detail {
-        Detail::Summary => (1000, 5000),
-        Detail::Full => (100, 500),
-    };
     let (nodes, node_page) =
-        mcp_bounds::paginate(std::mem::take(&mut result.nodes), Page::new(p.limit, p.offset, default, ceiling));
-    let (edges, edge_page) =
-        mcp_bounds::paginate(std::mem::take(&mut result.edges), Page::new(p.edge_limit, p.edge_offset, 2000, 10_000));
+        mcp_bounds::paginate(std::mem::take(&mut result.nodes), mcp_bounds::ROOM_SIZES.page(detail, p.limit, p.offset));
+    let (edges, edge_page) = mcp_bounds::paginate(
+        std::mem::take(&mut result.edges),
+        mcp_bounds::WALL_SIZES.page(Detail::Summary, p.edge_limit, p.edge_offset),
+    );
     result.edges = edges;
     let internal = |e: serde_json::Error| McpError::internal_error(format!("failed to serialize response: {e}"), None);
     let mut answer = serde_json::to_value(&result).map_err(internal)?;
@@ -979,7 +973,11 @@ fn list_result<T: serde::Serialize>(
 ) -> Result<CallToolResult, McpError> {
     let value = serde_json::to_value(value)
         .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
-    json_result(&mcp_bounds::page_list(value, key, Page::new(limit, offset, 200, 1000)))
+    json_result(&mcp_bounds::page_list(
+        value,
+        key,
+        mcp_bounds::LIST_SIZES.page(Detail::Summary, limit, offset),
+    ))
 }
 
 /// What to try when a report is too big to give.
@@ -1270,11 +1268,7 @@ impl RoommateMcp {
                     keep_level(&mut result, level).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
                 }
                 let detail = Detail::parse(p.detail.as_deref()).map_err(|m| to_mcp_error(ServiceError::Invalid(m)))?;
-                let (default, ceiling) = match detail {
-                    Detail::Summary => (1000, 5000),
-                    Detail::Full => (100, 500),
-                };
-                let rooms_text = rooms_answer(result, detail, Page::new(p.limit, p.offset, default, ceiling))
+                let rooms_text = rooms_answer(result, detail, mcp_bounds::ROOM_SIZES.page(detail, p.limit, p.offset))
                     .map_err(|m| McpError::internal_error(m, None))?;
                 let text = mcp_bounds::bounded(&rooms_text, "get_rooms", ROOMS_ADVICE)
                     .map_err(|m| McpError::invalid_params(m, None))?;
@@ -1490,7 +1484,7 @@ impl RoommateMcp {
             shape,
             include_rooms_without: p.include_rooms_without,
             include_unattributed: p.include_unattributed,
-            limit: Some(Page::new(p.limit, None, 500, 5000).limit),
+            limit: Some(mcp_bounds::ROW_SIZES.page(Detail::Summary, p.limit, None).limit),
             offset: p.offset,
             filter,
         };
@@ -1505,18 +1499,12 @@ impl RoommateMcp {
                 p.entity
             ))])),
             Some(result) => {
-                let offset = p.offset.unwrap_or(0).min(result.total_rows);
-                let returned = result.rows.len();
+                let info = mcp_bounds::PageInfo::of(result.total_rows, p.offset.unwrap_or(0), result.rows.len());
                 let mut answer = serde_json::to_value(&result)
                     .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
                 if let serde_json::Value::Object(map) = &mut answer {
-                    let end = offset + returned;
-                    map.insert("offset".into(), serde_json::json!(offset));
-                    map.insert("returned".into(), serde_json::json!(returned));
-                    map.insert("truncated".into(), serde_json::json!(end < result.total_rows));
-                    if end < result.total_rows {
-                        map.insert("next_offset".into(), serde_json::json!(end));
-                    }
+                    // `total_rows` stays for what already reads it; `total` is the name every other tool uses.
+                    mcp_bounds::describe_page(map, &info);
                 }
                 let text = mcp_bounds::bounded(&answer, "build_report", REPORT_ADVICE)
                     .map_err(|m| McpError::invalid_params(m, None))?;
@@ -2307,11 +2295,9 @@ impl ServerHandler for RoommateMcp {
                  the CSV over HTTP to the running roommate server, which stays the single writer \
                  and hot-swaps its own registry. Requires the same [storage] root as the HTTP \
                  server (via --server-settings) to see real data -- this process does not share \
-                 memory with it. Entity tools return whole records and can be very large: to list or \
-                 count things use build_report, narrow with level/building/filter, and page with \
-                 limit/offset. An answer says when it is partial (`truncated`, `next_offset`) and what a \
-                 summary leaves out (`omitted`)."
-                    .to_string(),
+                 memory with it. "
+                    .to_string()
+                    + &mcp_bounds::bounding_note(),
             )
     }
 }
@@ -2427,6 +2413,24 @@ async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
+    /// Every tool declares how it bounds its answer, and the declaration is the tool list: a tool added
+    /// without one, or a declared tool that no longer exists, fails here.
+    #[test]
+    fn test_every_tool_declares_how_it_is_bounded() {
+        let mut registered: Vec<String> =
+            RoommateMcp::tool_router().list_all().iter().map(|t| t.name.to_string()).collect();
+        let mut declared: Vec<String> = mcp_bounds::TOOL_KINDS.iter().map(|(n, _)| (*n).to_string()).collect();
+        registered.sort();
+        declared.sort();
+        assert_eq!(registered, declared);
+    }
+
+    #[test]
+    fn test_the_instructions_name_the_paged_tools() {
+        let text = mcp_bounds::bounding_note();
+        assert!(text.contains("get_rooms") && text.contains("list_tasks") && text.contains("get_validation"));
+    }
+
     #[derive(serde::Serialize)]
     struct FakeList {
         revision: String,
