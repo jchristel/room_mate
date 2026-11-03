@@ -34,7 +34,6 @@ pub const ANSWER_MAX_BYTES: usize = 256 * 1024;
 const READ_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// How much of an error body is shown.
 const ERROR_BODY_MAX_CHARS: usize = 500;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub enum Answer {
@@ -49,12 +48,14 @@ pub struct Client {
     base_url: Option<String>,
     database: Option<String>,
     project: Option<String>,
+    timeout: Duration,
 }
 
 impl Client {
     pub fn new(config: &Config, auth: Arc<dyn Authenticator>) -> Self {
+        let timeout = Duration::from_secs(config.timeout_secs.unwrap_or(crate::config::DEFAULT_TIMEOUT_SECS));
         let http = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("a client with only a timeout and a redirect policy always builds");
@@ -64,6 +65,7 @@ impl Client {
             base_url: config.base_url.clone(),
             database: config.database.clone(),
             project: config.project.clone(),
+            timeout,
         }
     }
 
@@ -86,19 +88,20 @@ impl Client {
         let request = self.auth.authenticate(request).await?;
 
         let response = request.send().await.map_err(|e| {
-            let what = if e.is_timeout() {
-                "timed out"
-            } else if e.is_connect() {
-                "could not connect"
-            } else {
-                "failed"
-            };
+            if e.is_timeout() {
+                return ToolError(format!(
+                    "the request to dRofus timed out after {}s; some endpoints are slow on dRofus's side (a table's change log, \
+                     for one): raise the limit with --timeout or DROFUS_TIMEOUT_SECS",
+                    self.timeout.as_secs()
+                ));
+            }
+            let what = if e.is_connect() { "could not connect" } else { "failed" };
             ToolError(format!("the request to dRofus {what}; check the configured address ({base})"))
         })?;
         let status = response.status();
         if !status.is_success() {
             let body = read_capped(response, ERROR_BODY_MAX_CHARS * 4).await.map(|b| b.0).unwrap_or_default();
-            return Err(status_error(status, &String::from_utf8_lossy(&body)));
+            return Err(status_error(status, &String::from_utf8_lossy(&body), endpoint.is_sub_resource()));
         }
 
         match endpoint.kind {
@@ -118,11 +121,20 @@ fn is_local(url: &reqwest::Url) -> bool {
 }
 
 /// `401` and `403` are the caller's sign-in, `404` is the id, the rest is shown as it came (truncated).
-fn status_error(status: StatusCode, body: &str) -> ToolError {
+///
+/// **A `404` on a sub-resource is not necessarily a bad id.** dRofus answers `rooms/75349` with 200 and
+/// `rooms/75349/files` with 404 when the room has no files, so for a read under a record the message says both
+/// things it can mean instead of sending the caller to check an id that is fine.
+fn status_error(status: StatusCode, body: &str, sub_resource: bool) -> ToolError {
     ToolError(match status {
         StatusCode::UNAUTHORIZED => "dRofus answered 401: authentication is required".to_string(),
         StatusCode::FORBIDDEN => {
             "dRofus answered 403: authentication was refused, or this user may not read this".to_string()
+        }
+        StatusCode::NOT_FOUND if sub_resource => {
+            "not found: either the record has none of these (dRofus answers 404 for an \
+             empty list of files, images or sub-items) or the id does not exist; check the id, `db` and `pr`"
+                .to_string()
         }
         StatusCode::NOT_FOUND => "not found: dRofus has no such record (check the id, `db` and `pr`)".to_string(),
         s => {
@@ -400,6 +412,43 @@ mod tests {
                 "only an unmapped status shows the body: {err}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_404_under_a_record_says_it_may_just_have_none() {
+        let m = mock(404, "text/plain", Vec::new()).await;
+        let c = client(Some(&m.base), Arc::new(Stamp));
+        let under = c.call(ep("drofus_rooms_files"), &args(json!({"id": 4}))).await.unwrap_err();
+        assert!(under.0.contains("none of these") && under.0.contains("does not exist"), "{under}");
+        let record = c.call(ep("drofus_rooms_get"), &args(json!({"id": 4}))).await.unwrap_err();
+        assert!(record.0.contains("no such record"), "a record itself keeps the plain message: {record}");
+    }
+
+    #[test]
+    fn only_a_read_under_a_record_is_a_sub_resource() {
+        assert!(ep("drofus_rooms_files").is_sub_resource());
+        assert!(ep("drofus_rooms_images").is_sub_resource());
+        assert!(!ep("drofus_rooms_get").is_sub_resource());
+        assert!(!ep("drofus_rooms_list").is_sub_resource());
+    }
+
+    /// A server that accepts and never answers: the configured timeout ends the call and the error says how long
+    /// it waited and how to raise it.
+    #[tokio::test]
+    async fn a_slow_answer_times_out_after_the_configured_seconds_and_says_how_to_raise_it() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+        let mut config = Config::resolve(Some(base), None, Some("dbx".into()), Some("prx".into()), |_| None);
+        config.timeout_secs = Some(1);
+        let c = Client::new(&config, Arc::new(Stamp));
+        let err = c.call(ep("drofus_rooms_list"), &args(json!({}))).await.unwrap_err();
+        assert!(err.0.contains("timed out after 1s") && err.0.contains("--timeout"), "{err}");
     }
 
     #[tokio::test]

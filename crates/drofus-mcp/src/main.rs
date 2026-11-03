@@ -35,6 +35,11 @@ struct Args {
     #[arg(long)]
     api_key: Option<String>,
 
+    /// Seconds one request may take (1 to 600; default 60). Raise it for the slow endpoints, such as a table's change
+    /// log. Falls back to DROFUS_TIMEOUT_SECS.
+    #[arg(long, env = "DROFUS_TIMEOUT_SECS", value_parser = clap::value_parser!(u64).range(1..=600))]
+    timeout: Option<u64>,
+
     /// Turn on the approval gate that any write tool must pass. Off by default. There is no write tool yet,
     /// so today this changes nothing but what `server_info` says.
     #[arg(long, env = "DROFUS_ALLOW_WRITES")]
@@ -57,8 +62,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
-    let config =
+    let mut config =
         Config::resolve(args.base_url, args.api_key, args.database, args.project, |name| std::env::var(name).ok());
+    config.timeout_secs = args.timeout;
     for missing in config.missing() {
         tracing::warn!("not configured yet: {missing}");
     }
