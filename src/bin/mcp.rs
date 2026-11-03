@@ -43,6 +43,7 @@
 //! only sees the same room data if pointed at the same `[storage]` root via
 //! `--server-settings`, since `MemStore` state isn't shared across processes.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -57,6 +58,7 @@ use rmcp::{
 use roommate::bootstrap::build_state;
 use roommate::contract::{CeilingPayload, FloorPayload};
 use roommate::default_http_addr;
+use roommate::mcp_bounds::{self, Detail, Page};
 use roommate::reports_api;
 use roommate::service::{
     adjacency, areas, comparison, connectivity, items, milestones, openings, projects, reach, reference, reports,
@@ -189,6 +191,16 @@ struct GetRoomsParams {
     /// case-insensitive. Omit for every level. Unknown names are refused with the names there are.
     #[serde(default)]
     level: Option<String>,
+    /// `summary` (the default) returns each room's id, name, number and level only; `full` returns the
+    /// whole record: outline, every property and the reference-source joins (about 3 KB a room).
+    #[serde(default)]
+    detail: Option<String>,
+    /// Rooms per page. Defaults to 1000 for a summary and 100 for `full`; lowered to 5000 and 500.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Rooms to skip, for the next page: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 /// `get_ceilings` and `get_floors` parameters. Its own type rather than
@@ -637,28 +649,60 @@ fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpErro
     Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
 }
 
-/// The most a room read puts in one answer. A large project's rooms run to tens of megabytes
-/// (roughly 3 KB a room), far past what a model can read, and a client that is handed that
-/// either drops the connection or fills its context with it. Refusing with advice is cheaper
-/// than either.
-const ROOMS_ANSWER_MAX_BYTES: usize = 1024 * 1024;
+/// What to try when a rooms answer is too big to give.
+const ROOMS_ADVICE: &str = "Ask for less: `level` (one storey), `building`, `filter`, a smaller `limit` with `offset` \
+    to page, or `detail=summary`. To list or count rooms use build_report. For bulk geometry use the HTTP API or \
+    the SVG export, which are not bounded.";
 
-/// `json_result`, refusing above `max` bytes with a message that says how to ask for less.
-fn bounded_json_result<T: serde::Serialize>(value: &T, max: usize, tool: &str) -> Result<CallToolResult, McpError> {
-    let json = serde_json::to_string(value)
-        .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
-    if json.len() > max {
-        return Err(McpError::invalid_params(
-            format!(
-                "{tool}: the answer is {} MB, over the {} MB limit. Ask for less: pass `level` (one storey), \
-                 `building` or `filter`; or use build_report for a table of chosen columns.",
-                json.len() / (1024 * 1024),
-                max / (1024 * 1024)
-            ),
-            None,
-        ));
+/// Shape a rooms answer for a model: a summary row per room, or the whole record, one page of either.
+fn rooms_answer(mut result: rooms::RoomsResult, detail: Detail, page: Page) -> Result<serde_json::Value, String> {
+    let level_name: HashMap<String, String> = result.levels.iter().map(|l| (l.id.clone(), l.name.clone())).collect();
+    let (kept, info) = mcp_bounds::paginate(std::mem::take(&mut result.rooms), page);
+    let mut answer = match detail {
+        Detail::Full => {
+            result.rooms = kept;
+            serde_json::to_value(&result).map_err(|e| format!("failed to serialize response: {e}"))?
+        }
+        Detail::Summary => {
+            let rows: Vec<serde_json::Value> = kept
+                .iter()
+                .map(|r| {
+                    let number = r.room.properties.get("Number").map(|v| v.value.as_str());
+                    serde_json::json!({
+                        "id": r.room.id,
+                        "name": r.room.name,
+                        "number": number,
+                        "level_id": r.room.level_id,
+                        "level": level_name.get(&r.room.level_id),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "schema_version": result.schema_version,
+                "revision": result.revision,
+                "levels": result.levels,
+                "phase_by_model": result.phase_by_model,
+                "rooms": rows,
+            })
+        }
+    };
+    if let serde_json::Value::Object(map) = &mut answer {
+        mcp_bounds::describe(
+            map,
+            detail,
+            &info,
+            &[
+                "outline (loops)",
+                "properties",
+                "reference-source joins",
+                "reference_labels",
+                "boundary_by_level",
+            ],
+            "pass detail=full for outlines, properties and reference joins (about 3 KB a room: combine with \
+             level, building, filter and limit/offset), or use build_report for chosen columns",
+        );
     }
-    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    Ok(answer)
 }
 
 /// Narrow a rooms answer to one level, by name or id. Refuses an unknown one and lists what exists.
@@ -851,7 +895,10 @@ impl RoommateMcp {
     /// has no MCP status-code equivalent, so it becomes a short plain-text
     /// answer instead of a JSON body; an LLM client reads either just fine.
     #[tool(
-        description = "Fetch merged rooms and levels across stored models, optionally scoped by project id, building key, milestone name, and property filter. \
+        description = "Fetch merged rooms and levels across stored models, optionally scoped by project id, building key, milestone name, level and property filter. \
+                          THE DEFAULT ANSWER IS A SUMMARY (`detail`: id, name, number, level per room; one page of up to 1000), which says what it leaves out and how to get it. \
+                          `detail=full` returns the whole record -- outline, every property, reference joins, about 3-5 KB a room -- 100 per page by default, paged with `limit`/`offset` (see `next_offset`); \
+                          an answer over 1 MB is refused. To LIST or COUNT rooms with chosen columns, prefer build_report. \
                           A project whose hierarchy has no 'Building' tier matches nothing under a building filter (check list_buildings' tier_configured before filtering); \
                           under a milestone filter, models are served from the snapshots that milestone pins instead of their latest. \
                           Prefer the 'filter' parameter over fetching every room and matching client-side -- it answers property questions ('which rooms are Department = Cardiology?') \
@@ -886,7 +933,16 @@ impl RoommateMcp {
                 if let Some(level) = p.level.as_deref() {
                     keep_level(&mut result, level).map_err(|msg| to_mcp_error(ServiceError::Invalid(msg)))?;
                 }
-                bounded_json_result(&result, ROOMS_ANSWER_MAX_BYTES, "get_rooms")
+                let detail = Detail::parse(p.detail.as_deref()).map_err(|m| to_mcp_error(ServiceError::Invalid(m)))?;
+                let (default, ceiling) = match detail {
+                    Detail::Summary => (1000, 5000),
+                    Detail::Full => (100, 500),
+                };
+                let rooms_text = rooms_answer(result, detail, Page::new(p.limit, p.offset, default, ceiling))
+                    .map_err(|m| McpError::internal_error(m, None))?;
+                let text = mcp_bounds::bounded(&rooms_text, "get_rooms", ROOMS_ADVICE)
+                    .map_err(|m| McpError::invalid_params(m, None))?;
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
             }
         }
     }
@@ -1879,7 +1935,10 @@ impl ServerHandler for RoommateMcp {
                  the CSV over HTTP to the running roommate server, which stays the single writer \
                  and hot-swaps its own registry. Requires the same [storage] root as the HTTP \
                  server (via --server-settings) to see real data -- this process does not share \
-                 memory with it."
+                 memory with it. Entity tools return whole records and can be very large: to list or \
+                 count things use build_report, narrow with level/building/filter, and page with \
+                 limit/offset. An answer says when it is partial (`truncated`, `next_offset`) and what a \
+                 summary leaves out (`omitted`)."
                     .to_string(),
             )
     }
@@ -1996,13 +2055,6 @@ async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn test_an_oversized_answer_is_refused_with_advice() {
-        let big = vec!["x".repeat(1000); 10];
-        let err = bounded_json_result(&big, 100, "get_rooms").unwrap_err();
-        assert!(err.message.contains("level") && err.message.contains("get_rooms"), "{}", err.message);
-        assert!(bounded_json_result(&big, 1_000_000, "get_rooms").is_ok());
-    }
 
     use super::*;
     use roommate::state::{AppState, ProjectSettings};
