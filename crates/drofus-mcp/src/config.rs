@@ -41,8 +41,9 @@ impl fmt::Display for Secret {
 /// ask what is missing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Config {
-    /// The dRofus API's base address, for example `https://api-no.drofus.com`. Which regional host a
-    /// project lives on is the operator's to say, so there is no default.
+    /// The dRofus API's base address, for example `https://api-no.drofus.com` or an organisation's own
+    /// `https://api.example.org`. Which host a project lives on is the operator's to say, so there is no
+    /// default and no assumed suffix.
     pub base_url: Option<String>,
     /// The database every path starts with (`/api/{db}/{pr}/...`); a tool's `db` argument overrides it.
     pub database: Option<String>,
@@ -65,12 +66,15 @@ impl Config {
         env: impl Fn(&str) -> Option<String>,
     ) -> Self {
         let clean = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let address = clean(base_url).or_else(|| clean(env("DROFUS_BASE_URL"))).map(|u| split_address(&u));
+        let (base_url, from_db, from_pr) = match address {
+            Some((base, db, pr)) => (Some(base), db, pr),
+            None => (None, None, None),
+        };
         Self {
-            base_url: clean(base_url)
-                .or_else(|| clean(env("DROFUS_BASE_URL")))
-                .map(|u| u.trim_end_matches('/').to_string()),
-            database: clean(database).or_else(|| clean(env("DROFUS_DATABASE"))),
-            project: clean(project).or_else(|| clean(env("DROFUS_PROJECT"))),
+            base_url,
+            database: clean(database).or_else(|| clean(env("DROFUS_DATABASE"))).or(from_db),
+            project: clean(project).or_else(|| clean(env("DROFUS_PROJECT"))).or(from_pr),
             api_key: clean(api_key).or_else(|| clean(env("DROFUS_API_KEY"))).map(Secret::new),
         }
     }
@@ -92,6 +96,33 @@ impl Config {
         }
         out
     }
+}
+
+/// Reduce whatever was given as the address to the part that names the host, plus the database and
+/// project when it was a whole request address.
+///
+/// Which host serves a project is the operator's: dRofus runs on its regional hosts
+/// (`api-no.drofus.com`) and also on an organisation's own domain, so nothing here assumes a suffix. A
+/// person copying the address out of a working request (`https://host/api/{db}/{pr}/rooms?$select=...`)
+/// gets the host, and the database and project from the path; a bare host gets `https://`. An address
+/// that is not a URL is passed on as typed, for the request to report.
+fn split_address(raw: &str) -> (String, Option<String>, Option<String>) {
+    let with_scheme = if raw.contains("://") { raw.to_string() } else { format!("https://{raw}") };
+    let Ok(mut url) = reqwest::Url::parse(&with_scheme) else {
+        return (raw.trim_end_matches('/').to_string(), None, None);
+    };
+    let segs: Vec<String> = url
+        .path_segments()
+        .map(|s| s.filter(|p| !p.is_empty()).map(String::from).collect())
+        .unwrap_or_default();
+    let (prefix, db, pr) = match segs.iter().position(|s| s.eq_ignore_ascii_case("api")) {
+        Some(i) => (segs[..i].join("/"), segs.get(i + 1).cloned(), segs.get(i + 2).cloned()),
+        None => (segs.join("/"), None, None),
+    };
+    url.set_path(&prefix);
+    url.set_query(None);
+    url.set_fragment(None);
+    (url.as_str().trim_end_matches('/').to_string(), db, pr)
 }
 
 #[cfg(test)]
@@ -130,5 +161,29 @@ mod tests {
         let shown = format!("{c:?} {}", c.api_key.clone().unwrap());
         assert!(!shown.contains("hunter2"), "{shown}");
         assert!(shown.contains("<set>"));
+    }
+
+    #[test]
+    fn any_host_is_accepted_and_a_bare_one_gets_https() {
+        let c = Config::resolve(Some("api.example.org/".into()), None, None, None, env_of(&[]));
+        assert_eq!(c.base_url.as_deref(), Some("https://api.example.org"));
+        let c = Config::resolve(Some("http://localhost:8080".into()), None, None, None, env_of(&[]));
+        assert_eq!(c.base_url.as_deref(), Some("http://localhost:8080"));
+    }
+
+    #[test]
+    fn a_pasted_request_address_gives_host_database_and_project() {
+        let pasted = "https://api.example.org/api/db-1/01/rooms?$select=id,name&$filter=a+eq+%271%27";
+        let c = Config::resolve(Some(pasted.into()), None, None, None, env_of(&[]));
+        assert_eq!(c.base_url.as_deref(), Some("https://api.example.org"));
+        assert_eq!((c.database.as_deref(), c.project.as_deref()), (Some("db-1"), Some("01")));
+        let c = Config::resolve(Some(pasted.into()), None, Some("other".into()), None, env_of(&[]));
+        assert_eq!(c.database.as_deref(), Some("other"), "a flag still wins");
+    }
+
+    #[test]
+    fn a_path_in_front_of_api_is_kept() {
+        let c = Config::resolve(Some("https://gw.example.org/drofus/api/d/p".into()), None, None, None, env_of(&[]));
+        assert_eq!(c.base_url.as_deref(), Some("https://gw.example.org/drofus"));
     }
 }
