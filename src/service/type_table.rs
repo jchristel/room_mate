@@ -64,6 +64,34 @@ pub fn tabulate<E>(
     sets
 }
 
+/// Keep only the table rows `elements` still point at, renumbering their rows to match.
+///
+/// For a response that carries a page of the elements: the table was built over all of them, and a
+/// page that shipped it whole would send every other page's bags too (on a large project most of
+/// the body). Rows keep their relative order, so the result is deterministic.
+pub fn restrict<E>(
+    elements: &mut [E],
+    table: &[Arc<PropertyMap>],
+    row: impl Fn(&mut E) -> &mut Option<u32>,
+) -> Vec<Arc<PropertyMap>> {
+    let mut renumbered: HashMap<u32, u32> = HashMap::new();
+    let mut kept: Vec<Arc<PropertyMap>> = Vec::new();
+    let mut used: Vec<u32> = elements.iter_mut().filter_map(|e| *row(e)).collect();
+    used.sort_unstable();
+    used.dedup();
+    for old in used {
+        if let Some(bag) = table.get(old as usize) {
+            renumbered.insert(old, kept.len() as u32);
+            kept.push(bag.clone());
+        }
+    }
+    for e in elements {
+        let r = row(e);
+        *r = r.and_then(|old| renumbered.get(&old).copied());
+    }
+    kept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +128,19 @@ mod tests {
         assert_eq!(sets[0]["Width"].value, "820");
         assert_eq!(sets[1]["Width"].value, "920");
         assert!(elements.iter().all(|e| e.type_properties.is_empty()), "moved, not copied");
+    }
+
+    #[test]
+    fn test_restrict_keeps_only_the_rows_a_page_uses_and_renumbers_them() {
+        let table = vec![bag("a"), bag("b"), bag("c")];
+        let mut page = vec![
+            Element { type_properties: Default::default(), type_properties_ref: Some(2) },
+            Element { type_properties: Default::default(), type_properties_ref: Some(0) },
+            Element { type_properties: Default::default(), type_properties_ref: Some(2) },
+        ];
+        let kept = restrict(&mut page, &table, |e| &mut e.type_properties_ref);
+        assert_eq!(kept, vec![table[0].clone(), table[2].clone()]);
+        let rows: Vec<_> = page.iter().map(|e| e.type_properties_ref).collect();
+        assert_eq!(rows, vec![Some(1), Some(0), Some(1)]);
     }
 }
