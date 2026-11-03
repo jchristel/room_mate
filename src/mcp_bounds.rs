@@ -97,6 +97,16 @@ impl Detail {
 /// `more` says how to get it. Both appear only on a summary.
 pub fn describe(answer: &mut Map<String, Value>, detail: Detail, info: &PageInfo, omitted: &[&str], more: &str) {
     answer.insert("detail".into(), json!(detail.as_str()));
+    describe_page(answer, info);
+    if detail == Detail::Summary {
+        answer.insert("omitted".into(), json!(omitted));
+        answer.insert("more".into(), json!(more));
+    }
+}
+
+/// Just the paging half of [`describe`], for a list that has no summary form: `total`, `returned`,
+/// `offset`, `truncated`, `next_offset`, and a sentence saying where the next page starts.
+pub fn describe_page(answer: &mut Map<String, Value>, info: &PageInfo) {
     if let Value::Object(page) = serde_json::to_value(info).unwrap_or(Value::Null) {
         answer.extend(page);
     }
@@ -111,10 +121,31 @@ pub fn describe(answer: &mut Map<String, Value>, detail: Detail, info: &PageInfo
             )),
         );
     }
-    if detail == Detail::Summary {
-        answer.insert("omitted".into(), json!(omitted));
-        answer.insert("more".into(), json!(more));
-    }
+}
+
+/// Page the list in `value` and put the paging description beside it.
+///
+/// A bare array becomes `{key: [...], total, ...}`; an object keeps its other fields and has its `key`
+/// list paged in place. **Always an object, even when nothing is cut**, so a client never has to
+/// handle two shapes depending on how much data there happens to be. An object with no such list is
+/// passed on untouched.
+pub fn page_list(value: Value, key: &str, page: Page) -> Value {
+    let (mut answer, items) = match value {
+        Value::Array(items) => (Map::new(), items),
+        Value::Object(mut map) => match map.remove(key) {
+            Some(Value::Array(items)) => (map, items),
+            Some(other) => {
+                map.insert(key.to_string(), other);
+                return Value::Object(map);
+            }
+            None => return Value::Object(map),
+        },
+        other => return other,
+    };
+    let (kept, info) = paginate(items, page);
+    answer.insert(key.to_string(), Value::Array(kept));
+    describe_page(&mut answer, &info);
+    Value::Object(answer)
 }
 
 /// One list that [`cap_lists`] cut short.
@@ -246,5 +277,26 @@ mod tests {
         assert_eq!(v["items"]["ffe"]["short"], json!([1]));
         assert_eq!(cut, vec![CutList { path: "items.ffe.without_room".into(), total: 5, returned: 2 }]);
         assert!(cap_lists(&mut v, 2).is_empty(), "a second pass has nothing left to cut");
+    }
+
+    #[test]
+    fn test_page_list_wraps_an_array_and_pages_an_object_in_place() {
+        let a = page_list(json!([1, 2, 3]), "things", Page { limit: 2, offset: 0 });
+        assert_eq!(a["things"], json!([1, 2]));
+        assert_eq!((a["total"].as_u64(), a["next_offset"].as_u64()), (Some(3), Some(2)));
+        let b = page_list(
+            json!({"tier_configured": true, "buildings": [1, 2, 3]}),
+            "buildings",
+            Page { limit: 5, offset: 1 },
+        );
+        assert_eq!(b["buildings"], json!([2, 3]));
+        assert_eq!(b["tier_configured"], true);
+        assert_eq!(b["truncated"], false);
+        let c = page_list(json!({"other": 1}), "buildings", Page { limit: 5, offset: 0 });
+        assert_eq!(c, json!({"other": 1}), "an object without the list is left alone");
+        assert!(page_list(json!([]), "things", Page { limit: 5, offset: 0 })["things"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 }

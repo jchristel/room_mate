@@ -120,6 +120,30 @@ struct ValidationParams {
     list_limit: Option<usize>,
 }
 
+/// A list with nothing to scope it by.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct PageParams {
+    /// Entries per page (default 200, ceiling 1000).
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Entries to skip, for the next page: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
+/// A project's list.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct ListParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// Entries per page (default 200, ceiling 1000).
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Entries to skip, for the next page: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct ListTasksParams {
     /// The project id, as returned by `list_projects`.
@@ -130,6 +154,12 @@ struct ListTasksParams {
     /// Only tasks in this state: queued, in_progress, completed, completed_with_warnings, failed, aborted or dismissed.
     #[serde(default)]
     state: Option<String>,
+    /// Entries per page (default 200, ceiling 1000).
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Entries to skip, for the next page: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -247,6 +277,12 @@ struct GetSurfacesParams {
 struct SavedReportsParams {
     /// Project id whose saved reports to list.
     project: String,
+    /// Entries per page (default 200, ceiling 1000).
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Entries to skip, for the next page: pass the answer's `next_offset`.
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 /// `get_saved_report` parameters.
@@ -934,6 +970,18 @@ fn adjacency_result(mut result: adjacency::AdjacencyResult, p: &AdjacencyParams)
     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
+/// A list tool's answer: one page, in the shared envelope, under the key the list sits at.
+fn list_result<T: serde::Serialize>(
+    value: &T,
+    key: &str,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<CallToolResult, McpError> {
+    let value = serde_json::to_value(value)
+        .map_err(|e| McpError::internal_error(format!("failed to serialize response: {e}"), None))?;
+    json_result(&mcp_bounds::page_list(value, key, Page::new(limit, offset, 200, 1000)))
+}
+
 /// What to try when a report is too big to give.
 const REPORT_ADVICE: &str = "Ask for fewer columns, a smaller `limit`, or a `filter`; page with `offset`.";
 
@@ -1164,17 +1212,17 @@ impl RoommateMcp {
     /// Lists every project with at least one stored model -- see
     /// `service::projects::list_projects`.
     #[tool(description = "List every project with at least one stored model")]
-    fn list_projects(&self) -> Result<CallToolResult, McpError> {
+    fn list_projects(&self, Parameters(p): Parameters<PageParams>) -> Result<CallToolResult, McpError> {
         let result = projects::list_projects(&self.state).map_err(to_mcp_error)?;
-        json_result(&result)
+        list_result(&result, "projects", p.limit, p.offset)
     }
 
     /// Lists the distinct "Building" classification values for one project
     /// -- see `service::projects::list_buildings`.
     #[tool(description = "List the distinct Building classification values found in one project's rooms")]
-    fn list_buildings(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+    fn list_buildings(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
         let result = projects::list_buildings(&self.state, &p.project_id).map_err(to_mcp_error)?;
-        json_result(&result)
+        list_result(&result, "buildings", p.limit, p.offset)
     }
 
     /// Merges every stored model's levels and rooms, optionally scoped by
@@ -1484,7 +1532,7 @@ impl RoommateMcp {
     fn list_saved_reports(&self, Parameters(p): Parameters<SavedReportsParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let listed = reports_api::list_reports(&dir, &p.project).map_err(reports_to_mcp_error)?;
-        json_result(&listed)
+        list_result(&listed, "reports", p.limit, p.offset)
     }
 
     /// One saved report, whole -- see `reports_api::get_report`.
@@ -1550,9 +1598,9 @@ impl RoommateMcp {
     #[tool(
         description = "List one project's milestones: named dates with data snapshots pinned to them, newest first — each carries its model-pin count and `reference_snapshots`, a map of reference source name to the snapshot id that milestone pins for it (absent sources are joined at their current data). Pass a milestone's name to get_rooms to view the project as captured at that milestone, rooms AND every reference source."
     )]
-    fn list_milestones(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+    fn list_milestones(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
         let result = milestones::list_milestones(&self.state, &p.project_id).map_err(to_mcp_error)?;
-        json_result(&result)
+        list_result(&result, "milestones", p.limit, p.offset)
     }
 
     /// Compares N milestones against a baseline for one project -- see
@@ -1584,9 +1632,9 @@ impl RoommateMcp {
     #[tool(
         description = "List every stored snapshot id (RFC3339 UTC taken_at) for one project, grouped per model, each group carrying its latest"
     )]
-    fn list_snapshots(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+    fn list_snapshots(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
         let result = snapshots::list_project_snapshots(&self.state, &p.project_id).map_err(to_mcp_error)?;
-        json_result(&result)
+        list_result(&result, "models", p.limit, p.offset)
     }
 
     /// The latest snapshot id for one model -- see
@@ -1845,11 +1893,11 @@ impl RoommateMcp {
     #[tool(
         description = "List the blueprints authored for one project, by name. A BLUEPRINT is a room and the FF&E in it written as RECIPES against the room's edges (which edge, how far along it, how far into the room, which way it faces), so the same layout can be placed in another room; it is authored data, not read from the model. Each row has `id`, `name`, `taken_at` (the blueprint's version), `source` (the room it was captured from: a record, not a reference that must still resolve), `current_revision` (the revision new assignments use), `in_use` (a blueprint is never deleted, only marked not in use: it then takes no new assignment and its sheets are not suggested), `revisions` (how many), `pending` (revisions pushed from elsewhere and waiting for a person to accept or reject them) and `items` (in the current revision, excluded ones not counted) and `sheets` (how many library sheets are bound to it: a blueprint holds no sheets itself, list_sheets shows them with their `blueprint`). Revisions are append-only: an edit is a new revision. Read one with get_blueprint; to see what a room would capture as, use capture_blueprint. A blueprint is made only by the Revit push, which sends its room layout sheets to the library bound to it; writing is HTTP-only (POST /projects/{id}/blueprints/from-revit)."
     )]
-    fn list_blueprints(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+    fn list_blueprints(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let rows =
             roommate::blueprints_api::list_with_sheet_counts(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
-        json_result(&rows)
+        list_result(&rows, "blueprints", p.limit, p.offset)
     }
 
     /// One blueprint with all its revisions -- see `blueprints::load`.
@@ -1942,10 +1990,10 @@ impl RoommateMcp {
     #[tool(
         description = "List the project's blueprint ASSIGNMENTS: which blueprint a person placed in which room. Authored data, one per room. Each row has `id`, `blueprint_id` and `blueprint_name`, the pinned `revision` (an edit to the blueprint later changes nothing here until a person re-assigns), `current_revision`, `newer_revision` (the blueprint has moved on since), `blueprint_missing` (it was deleted: a reported state), `room` ({model_id, room_id}), `room_name` as it was when assigned, `mapping` (a `shift`, or an `edge_map` the person chose by hand, or neither for the best fit) and an optional `note`. Placements are NOT stored: to see where the items land, call resolve_blueprint with the row's blueprint, revision, room and mapping. Writing is HTTP-only (POST /projects/{id}/assignments)."
     )]
-    fn list_assignments(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+    fn list_assignments(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let rows = roommate::assignments::list(&dir, &p.project_id).map_err(blueprints_to_mcp_error)?;
-        json_result(&rows)
+        list_result(&rows, "assignments", p.limit, p.offset)
     }
 
     /// Room tasks, as a Revit session sees them -- see `tasks::list`.
@@ -1963,7 +2011,7 @@ impl RoommateMcp {
         };
         let rows =
             roommate::tasks::list(&dir, &p.project_id, p.model_id.as_deref(), state).map_err(tasks_to_mcp_error)?;
-        json_result(&rows)
+        list_result(&rows, "tasks", p.limit, p.offset)
     }
 
     /// One task in full -- see `tasks::load`.
@@ -1980,20 +2028,20 @@ impl RoommateMcp {
     #[tool(
         description = "List the room layout sheets in one project's sheet LIBRARY: sheets a person chose to export from Revit and keep as exported, so the closest one can be offered for a room. It is authored data, kept apart from blueprints, not read from the model. Each row has `id`, `taken_at` (the record's version), `revit_sheet_id` and `document_title` (together a sheet's identity: a sheet id is unique only within its document), `sheet_number`, `sheet_name`, `blueprint` (the room blueprint the sheet is bound to, absent for a GENERIC sheet), `room_key` (a generic sheet's identifier: its room's bounding rectangle in mm and its item count, like `4000x3000-12`), `size_mm` (the paper size measured from the title block), `rooms` (labels of the rooms it covers), `room_summary` (their combined figures), `room` (the room it was made for, set by a blueprint push: a reference that may no longer resolve), `viewports` (how many) and `pending` (pushes held back for a person to confirm, because the sheet number changed). Read one with get_sheet; to find the sheets closest to a room use suggest_sheets. Writing is HTTP-only (POST /projects/{id}/sheets)."
     )]
-    fn list_sheets(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+    fn list_sheets(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let rows = roommate::sheets::list(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
-        json_result(&rows)
+        list_result(&rows, "sheets", p.limit, p.offset)
     }
 
     /// Tag rules -- see `tag_rules::list`.
     #[tool(
         description = "List the project's TAG RULES: where a tag goes relative to the element it tags, learned from tags in Revit views and kept as ONE rule per key. The key is the tagged item's TYPE CODE (`type_code`: the value of the type parameter the project names in `tag_type_code`, read under `code_parameter`; never Revit ids or family and type names, because a blueprint places new elements with new ids), the tag's category, family and type (`tag_*`) and the `viewport_type` it was read in. A rule is generic (`blueprint` empty) or bound to a room blueprint (`blueprint`, and for an item's tag the blueprint item it is for in `instance`); a room tag's `placement.boundary` is its place against the room's boundary. `placement` is the answer: `head`, `elbow` and `end` are offsets in PAPER millimetres in the element's own frame (x along its facing, y to its left), `rotation` is radians relative to the facing, plus `orientation`, `has_leader` and `leader_end_condition`; `sample_count` is how many tags it was made from (the median of them). `tag_kind` is `independent`, `room`, `space` or `area`. Read one, with its samples, with get_tag_rule. Writing is HTTP-only (POST /projects/{id}/tagrules/observations)."
     )]
-    fn list_tag_rules(&self, Parameters(p): Parameters<ProjectIdParams>) -> Result<CallToolResult, McpError> {
+    fn list_tag_rules(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
         let rows = roommate::tag_rules::list(&dir, &p.project_id).map_err(tag_rules_to_mcp_error)?;
-        json_result(&rows)
+        list_result(&rows, "tag_rules", p.limit, p.offset)
     }
 
     /// One tag rule with its samples -- see `tag_rules::load`.
