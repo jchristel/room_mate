@@ -48,6 +48,11 @@ wants from the roommate server is copied, never imported.
 | Project (`/api/{db}/{pr}/...`) | `--project` | `DROFUS_PROJECT` |
 | API key (`Authorization: Reference`) | `--api-key` (shows in the process list: prefer the environment) | `DROFUS_API_KEY` |
 
+The base address is whatever host serves your project: a dRofus regional host (`https://api-no.drofus.com`)
+or your organisation's own domain (`https://api.example.org`); nothing is appended to it. Pasting the
+address of a working request (`https://api.example.org/api/<db>/<pr>/rooms?...`) also works: the host, the
+database and the project are taken from it, and the query is ignored.
+
 A flag wins over the environment. Nothing is read from a file in the repository. A credential is wrapped in
 `config::Secret`, which never prints.
 

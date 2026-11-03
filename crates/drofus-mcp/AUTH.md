@@ -43,7 +43,7 @@ prefers is **not built** and is blocked on dRofus (no OAuth endpoints are known)
   endpoints, scopes (`openid profile`) and a loopback callback port, all marked "future", "obtained from drofus
   after manual registration". So the browser flow is not available without registering a client with dRofus
   support; nobody has the endpoints.
-- **Hosts are regional**: `https://api-{no|eu|us|ca|au}.drofus.com`. Every path is `/api/{database}/{project}/...`,
+- **Hosts are regional or the customer's own**: `https://api-{no|eu|us|ca|au}.drofus.com`, or an organisation's own domain. Every path is `/api/{database}/{project}/...`,
   which the PushIt settings call database id and project number (e.g. `01`).
 - Its connection test is `GET .../rooms`; it pages with `$top`/`$skip` (500 per call) and reads
   `OPTIONS .../rooms` and `GET .../attributeconfigurations` for field metadata.

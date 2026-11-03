@@ -135,6 +135,8 @@ host at:
   Env:      DROFUS_API_KEY=<your dRofus API key>
 
 Use full expanded paths. Put the key in the host's env setting, not in Args:
-arguments show up in process listings. The region host (api-no, api-eu, api-us,
-api-ca, api-au) is yours to choose. With no key every call is refused before
+arguments show up in process listings. The host is whatever serves your
+project: a dRofus regional host (api-no, api-eu, api-us, api-ca, api-au .drofus.com) or your
+organisation's own domain. You can paste the address of a working request instead; the host,
+database and project are taken from it. With no key every call is refused before
 anything is sent, and the tool "server_info" says what is missing.

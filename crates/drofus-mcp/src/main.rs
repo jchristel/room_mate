@@ -15,7 +15,7 @@ use rmcp::{transport::stdio, ServiceExt};
 #[derive(Parser)]
 #[command(version, about = "An MCP server for dRofus")]
 struct Args {
-    /// The dRofus API's base address, for example https://api-no.drofus.com. Falls back to the DROFUS_BASE_URL environment variable.
+    /// The dRofus API's base address, for example https://api-no.drofus.com or your organisation's own host (a whole request address is accepted too: the host, database and project are taken from it). Falls back to the DROFUS_BASE_URL environment variable.
     #[arg(long)]
     base_url: Option<String>,
 
