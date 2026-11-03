@@ -117,12 +117,63 @@ pub fn describe(answer: &mut Map<String, Value>, detail: Detail, info: &PageInfo
     }
 }
 
+/// One list that [`cap_lists`] cut short.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CutList {
+    /// Where it sits, as keys and indexes joined by `.` (for example `items.ffe.without_room`).
+    pub path: String,
+    pub total: usize,
+    pub returned: usize,
+}
+
+/// Cut every list in a nested answer to `cap` entries and say which were cut and from how many.
+///
+/// For a report that is mostly counts but carries, deep inside it, a list of every offender: a
+/// project with thirty thousand unattributed items would otherwise answer a question about
+/// totals with thirty thousand lines. The first `cap` entries are kept in their order, so the
+/// answer stays a prefix of the whole; the totals are in `cut`, never silently lost.
+pub fn cap_lists(value: &mut Value, cap: usize) -> Vec<CutList> {
+    let mut cut = Vec::new();
+    walk(value, cap, &mut String::new(), &mut cut);
+    cut
+}
+
+fn walk(value: &mut Value, cap: usize, path: &mut String, cut: &mut Vec<CutList>) {
+    let mark = path.len();
+    match value {
+        Value::Array(items) => {
+            if items.len() > cap {
+                cut.push(CutList { path: path.clone(), total: items.len(), returned: cap });
+                items.truncate(cap);
+            }
+            for (i, item) in items.iter_mut().enumerate() {
+                path.push_str(&format!("[{i}]"));
+                walk(item, cap, path, cut);
+                path.truncate(mark);
+            }
+        }
+        Value::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(key);
+                walk(item, cap, path, cut);
+                path.truncate(mark);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Serialise `value`, refusing above [`ANSWER_MAX_BYTES`] with `advice` on how to ask for less.
+/// An empty `tool` leaves the name out, for the caller that does not know it.
 pub fn bounded<T: Serialize>(value: &T, tool: &str, advice: &str) -> Result<String, String> {
     let text = serde_json::to_string(value).map_err(|e| format!("failed to serialize response: {e}"))?;
     if text.len() > ANSWER_MAX_BYTES {
+        let who = if tool.is_empty() { String::new() } else { format!("{tool}: ") };
         return Err(format!(
-            "{tool}: the answer is {:.1} MB, over the {} MB limit. {advice}",
+            "{who}the answer is {:.1} MB, over the {} MB limit. {advice}",
             text.len() as f64 / (1024.0 * 1024.0),
             ANSWER_MAX_BYTES / (1024 * 1024)
         ));
@@ -185,5 +236,15 @@ mod tests {
         let err = bounded(&big, "get_rooms", "Narrow it.").unwrap_err();
         assert!(err.starts_with("get_rooms:") && err.ends_with("Narrow it."), "{err}");
         assert!(bounded(&vec![1, 2, 3], "t", "a").is_ok());
+    }
+
+    #[test]
+    fn test_cap_lists_keeps_a_prefix_and_names_what_it_cut() {
+        let mut v = json!({"total": 5, "items": {"ffe": {"without_room": [1, 2, 3, 4, 5], "short": [1]}}});
+        let cut = cap_lists(&mut v, 2);
+        assert_eq!(v["items"]["ffe"]["without_room"], json!([1, 2]));
+        assert_eq!(v["items"]["ffe"]["short"], json!([1]));
+        assert_eq!(cut, vec![CutList { path: "items.ffe.without_room".into(), total: 5, returned: 2 }]);
+        assert!(cap_lists(&mut v, 2).is_empty(), "a second pass has nothing left to cut");
     }
 }
