@@ -52,7 +52,17 @@ pub struct Config {
     /// The dRofus API key, sent as `Authorization: Reference {key}` (`auth::ReferenceKey`). A [`Secret`], so
     /// it can never reach a log line.
     pub api_key: Option<Secret>,
+    /// How long one request may take, in seconds; `None` is [`DEFAULT_TIMEOUT_SECS`]. Some endpoints are slow on
+    /// the service's side (a one-row read of a table's change log was measured at over thirty seconds), so
+    /// this is the operator's to raise.
+    pub timeout_secs: Option<u64>,
 }
+
+/// The request timeout when none is configured.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
+
+// A one-row read of a table's change log took about 34 s on the live service; a default under that makes it fail always.
+const _: () = assert!(DEFAULT_TIMEOUT_SECS >= 60);
 
 impl Config {
     /// Build from flag values (each `None` when the flag was absent), falling back to the
@@ -76,6 +86,7 @@ impl Config {
             database: clean(database).or_else(|| clean(env("DROFUS_DATABASE"))).or(from_db),
             project: clean(project).or_else(|| clean(env("DROFUS_PROJECT"))).or(from_pr),
             api_key: clean(api_key).or_else(|| clean(env("DROFUS_API_KEY"))).map(Secret::new),
+            timeout_secs: None,
         }
     }
 

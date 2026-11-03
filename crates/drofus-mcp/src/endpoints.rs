@@ -78,6 +78,13 @@ pub struct Endpoint {
     pub notes: &'static str,
 }
 
+impl Endpoint {
+    /// A read under a record (`/rooms/{id}/files`), as opposed to the record itself (`/rooms/{id}`) or a table.
+    pub fn is_sub_resource(&self) -> bool {
+        self.path.contains("}/")
+    }
+}
+
 /// A refused or failed call, in words for the caller. Never holds a credential.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolError(pub String);
