@@ -114,6 +114,15 @@ impl Config {
         Ok(self)
     }
 
+    /// Fill the API key from the OS credential store when nothing else gave one. The lookup is passed in, so the order
+    /// (a given key always wins, and the store is not even asked) is testable without touching a real store.
+    pub fn with_stored_key(mut self, lookup: impl FnOnce() -> Result<Option<Secret>, String>) -> Result<Self, String> {
+        if self.api_key.is_none() {
+            self.api_key = lookup()?;
+        }
+        Ok(self)
+    }
+
     /// The names of what is not set yet, for a tool that says what is missing.
     pub fn missing(&self) -> Vec<&'static str> {
         let mut out = Vec::new();
@@ -127,7 +136,7 @@ impl Config {
             out.push("project (--project or DROFUS_PROJECT; or pass `pr` to a tool)");
         }
         if self.api_key.is_none() {
-            out.push("api_key (DROFUS_API_KEY, or DROFUS_API_KEY_FILE naming a file that holds it)");
+            out.push("api_key (DROFUS_API_KEY, DROFUS_API_KEY_FILE naming a file that holds it, or the OS credential store: `drofus-mcp --store-key`)");
         }
         out
     }
@@ -245,5 +254,19 @@ mod tests {
         assert!(err.contains("could not be read"), "{err}");
         assert!(Config::default().with_key_file(None).unwrap().api_key.is_none());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_credential_store_is_asked_last_and_only_when_nothing_gave_a_key() {
+        let c = Config::resolve(None, Some("given".into()), None, None, env_of(&[]))
+            .with_stored_key(|| panic!("a given key must not consult the store"))
+            .unwrap();
+        assert_eq!(c.api_key.as_ref().map(Secret::expose), Some("given"));
+
+        let c = Config::default().with_stored_key(|| Ok(Some(Secret::new("stored")))).unwrap();
+        assert_eq!(c.api_key.as_ref().map(Secret::expose), Some("stored"));
+
+        assert!(Config::default().with_stored_key(|| Ok(None)).unwrap().api_key.is_none());
+        assert!(Config::default().with_stored_key(|| Err("locked".into())).is_err());
     }
 }

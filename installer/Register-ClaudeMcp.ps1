@@ -13,8 +13,9 @@
       docs/mcp-host-setup.md, 2b), so a colleague's whole setup is one command.
     * -Drofus: asks for the dRofus database, project and API key, then registers drofus-mcp.exe.
       Nothing can fill those in beforehand, which is why this one is a question and not a default.
-      The key is written to a file only your account can read (under %LOCALAPPDATA%\RoomMate\secrets)
-      and Claude Code is given the file's path, so its own configuration never holds the key.
+      The key goes into the Windows Credential Manager (drofus-mcp.exe stores it itself, reading it from
+      standard input); if that is unavailable, into a file only your account can read (under
+      %LOCALAPPDATA%\RoomMate\secrets). Either way Claude Code's own configuration never holds the key.
     * -Remove: takes both back out. Run by the uninstaller.
 
     Registering is repeatable: an existing entry of the same name is replaced, so running it again
@@ -38,6 +39,11 @@
 .PARAMETER Drofus
     Register the dRofus server instead (prompts).
 
+.PARAMETER Unattended
+    With -Drofus: take region, database, project and API key from the ROOMMATE_SETUP_REGION, _DATABASE, _PROJECT
+    and _KEY environment variables instead of asking, and never wait for a key press. The installer's own page
+    collects them and sets them for this one process, so the key is on no command line.
+
 .PARAMETER Remove
     Remove the registrations this script makes.
 
@@ -50,6 +56,7 @@ param(
     [string] $Token,
     [switch] $AskToken,
     [switch] $Drofus,
+    [switch] $Unattended,
     [switch] $Remove,
     [switch] $DryRun
 )
@@ -78,7 +85,7 @@ function Stop-Here {
     param([string] $Message, [int] $Code = 0)
     Write-Host $Message
     # Hold the window only when somebody can read it: the installer runs this in its own console.
-    if ([Environment]::UserInteractive) { Read-Host 'Press Enter to close' | Out-Null }
+    if ([Environment]::UserInteractive -and -not $Unattended) { Read-Host 'Press Enter to close' | Out-Null }
     exit $Code
 }
 
@@ -124,47 +131,80 @@ if ($Remove) {
     foreach ($name in 'roommate', 'drofus') {
         Invoke-Claude -Arguments @('mcp', 'remove', $name, '--scope', 'user') | Out-Null
     }
-    if (-not $DryRun) { Remove-Item -LiteralPath $KeyFile -Force -ErrorAction SilentlyContinue }
+    if (-not $DryRun) {
+        Remove-Item -LiteralPath $KeyFile -Force -ErrorAction SilentlyContinue
+        $drofusExe = Join-Path $AppRoot 'drofus-mcp.exe'
+        if (Test-Path $drofusExe) {
+            $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            try { & $drofusExe --clear-key *> $null } catch { } finally { $ErrorActionPreference = $previous }
+        }
+    }
     exit 0
+}
+
+# Keeps the dRofus key where Claude Code's own (plain text) configuration need not hold it, and returns the `--env`
+# values the registration needs. First choice: the OS credential store, written by drofus-mcp.exe itself with the key
+# on standard input, so it is on no command line. Fallback: a file only this account can read.
+function Save-DrofusKey {
+    param([string] $Key, [string] $Exe)
+    if ($DryRun) {
+        Write-Host '(would store the API key in the Windows Credential Manager, else in a file only you can read)'
+        return @{ Where = 'the Windows Credential Manager'; Env = @() }
+    }
+    $global:LASTEXITCODE = 1
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $Key | & $Exe --store-key *> $null } catch { } finally { $ErrorActionPreference = $previous }
+    if ($LASTEXITCODE -eq 0) { return @{ Where = 'the Windows Credential Manager'; Env = @() } }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path $KeyFile) | Out-Null
+    # Empty first and locked down before the key is written, so it is never readable by anyone else.
+    Set-Content -LiteralPath $KeyFile -Value '' -NoNewline
+    & icacls.exe $KeyFile /inheritance:r /grant:r "${env:USERNAME}:(R,W,D)" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $KeyFile -Force
+        Stop-Here 'Could not restrict the key file to your account; nothing was stored.' 1
+    }
+    Set-Content -LiteralPath $KeyFile -Value $Key -NoNewline
+    return @{ Where = "$KeyFile (readable by your account only)"; Env = @("DROFUS_API_KEY_FILE=$KeyFile") }
 }
 
 if ($Drofus) {
     $Exe = Join-Path $AppRoot 'drofus-mcp.exe'
     if (-not (Test-Path $Exe)) { Stop-Here "drofus-mcp.exe was not found beside this script ($AppRoot)." 1 }
 
-    Write-Host 'dRofus: these three values come from your dRofus account.'
-    Write-Host 'Region host: api-no (default), api-eu, api-us, api-ca or api-au.'
-    $region = Read-Host 'Region [api-no]'
+    if ($Unattended) {
+        $region = $env:ROOMMATE_SETUP_REGION
+        $database = $env:ROOMMATE_SETUP_DATABASE
+        $project = $env:ROOMMATE_SETUP_PROJECT
+        $key = $env:ROOMMATE_SETUP_KEY
+        # The values were for this process alone; do not leave the key in its environment.
+        foreach ($name in 'REGION', 'DATABASE', 'PROJECT', 'KEY') { Remove-Item "Env:ROOMMATE_SETUP_$name" -ErrorAction SilentlyContinue }
+    } else {
+        Write-Host 'dRofus: these three values come from your dRofus account.'
+        Write-Host 'Region host: api-no (default), api-eu, api-us, api-ca or api-au.'
+        $region = Read-Host 'Region [api-no]'
+        $database = Read-Host 'Database'
+        $project  = Read-Host 'Project'
+        $secure   = Read-Host 'API key (not shown)' -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try { $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
     if (-not $region) { $region = 'api-no' }
-    $database = Read-Host 'Database'
-    $project  = Read-Host 'Project'
-    $secure   = Read-Host 'API key (not shown)' -AsSecureString
-    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    try { $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    if ($region -notmatch '^[A-Za-z0-9-]+$') { Stop-Here "The region '$region' is not a host name part such as api-no; nothing was registered." 1 }
     if (-not $database -or -not $project -or -not $key) {
         Stop-Here 'Database, project and API key are all needed; nothing was registered.' 1
     }
 
-    # The key goes in a file only this account can read; Claude Code is told the path, never the key.
-    if ($DryRun) {
-        Write-Host "(would write the API key to $KeyFile, readable by $env:USERNAME only)"
-    } else {
-        New-Item -ItemType Directory -Force -Path (Split-Path $KeyFile) | Out-Null
-        # Empty first and locked down before the key is written, so it is never readable by anyone else.
-        Set-Content -LiteralPath $KeyFile -Value '' -NoNewline
-        & icacls.exe $KeyFile /inheritance:r /grant:r "${env:USERNAME}:(R,W,D)" *> $null
-        if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $KeyFile -Force; Stop-Here 'Could not restrict the key file to your account; nothing was stored.' 1 }
-        Set-Content -LiteralPath $KeyFile -Value $key -NoNewline
-    }
+    $saved = Save-DrofusKey -Key $key -Exe $Exe
 
     # The name goes first: --env takes any number of values and would swallow it otherwise.
     $tail = @('--', $Exe, '--base-url', "https://$region.drofus.com", '--database', $database, '--project', $project)
-    $head = @('mcp', 'add', 'drofus', '--scope', 'user', '--env')
-    Add-Server -Name 'drofus' `
-        -AddArguments ($head + @("DROFUS_API_KEY_FILE=$KeyFile") + $tail) `
-        -Shown        ($head + @("DROFUS_API_KEY_FILE=$KeyFile") + $tail)
-    Write-Host "The API key is stored in $KeyFile (readable by your account only). Claude Code's configuration holds only that path."
+    $head = @('mcp', 'add', 'drofus', '--scope', 'user')
+    if ($saved.Env.Count -gt 0) { $head = $head + @('--env') + $saved.Env }
+    Add-Server -Name 'drofus' -AddArguments ($head + $tail) -Shown ($head + $tail)
+    Write-Host "The API key is stored in $($saved.Where). Claude Code's configuration does not hold it."
     Stop-Here 'Done. Restart Claude Code to pick it up.'
 }
 

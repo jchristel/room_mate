@@ -39,6 +39,15 @@ struct Args {
     #[arg(long, env = "DROFUS_API_KEY_FILE")]
     api_key_file: Option<String>,
 
+    /// Read the API key from standard input (one line) and keep it in the OS credential store (macOS Keychain,
+    /// Windows Credential Manager), then exit. The key never touches a command line. Not available on Linux.
+    #[arg(long)]
+    store_key: bool,
+
+    /// Remove the API key from the OS credential store, then exit.
+    #[arg(long)]
+    clear_key: bool,
+
     /// Seconds one request may take (1 to 600; default 60). Raise it for the slow endpoints, such as a table's change
     /// log. Falls back to DROFUS_TIMEOUT_SECS.
     #[arg(long, env = "DROFUS_TIMEOUT_SECS", value_parser = clap::value_parser!(u64).range(1..=600))]
@@ -53,6 +62,24 @@ struct Args {
     /// Required with --allow-writes: a gate that cannot be audited is not started.
     #[arg(long, env = "DROFUS_AUDIT_LOG")]
     audit_log: Option<std::path::PathBuf>,
+}
+
+/// `--store-key` / `--clear-key`: keep the key in, or remove it from, the OS credential store, then exit. The key is
+/// read from stdin so it is never on a command line, and nothing printed contains it.
+fn manage_stored_key(store: bool) -> anyhow::Result<()> {
+    if store {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if line.trim().is_empty() {
+            anyhow::bail!("no key on standard input; pipe the key in, one line");
+        }
+        drofus_mcp::keystore::store(&line).map_err(anyhow::Error::msg)?;
+        eprintln!("The API key is stored in the OS credential store.");
+    } else {
+        drofus_mcp::keystore::clear().map_err(anyhow::Error::msg)?;
+        eprintln!("The stored API key was removed.");
+    }
+    Ok(())
 }
 
 /// A key file other accounts can read is no better than the plain-text host configuration it replaces, so say so.
@@ -81,6 +108,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    if args.store_key || args.clear_key {
+        return manage_stored_key(args.store_key);
+    }
     if args.api_key.is_some() {
         tracing::warn!(
             "--api-key is deprecated: it is visible in the process list. Use DROFUS_API_KEY_FILE or DROFUS_API_KEY"
@@ -92,6 +122,13 @@ async fn main() -> anyhow::Result<()> {
         warn_if_key_file_is_shared(path);
     }
     config = match config.clone().with_key_file(args.api_key_file.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("{e}");
+            config
+        }
+    };
+    config = match config.clone().with_stored_key(drofus_mcp::keystore::load) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("{e}");

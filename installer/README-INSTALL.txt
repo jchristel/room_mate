@@ -92,15 +92,16 @@ uninstall. To redo it, or if Claude Code was installed afterwards:
   powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Programs\RoomMate\Register-ClaudeMcp.ps1"
 
 The dRofus server needs three things only you have (database, project, API key).
-The last page of the setup offers to ask for them; or run the same script with
--Drofus. To use a RoomMate server somebody else runs on the network, run it with
+Tick "Set up the dRofus MCP server" in the setup and it asks for them on the next page (the key
+in a password box); or run the same script with -Drofus. To use a RoomMate server somebody else runs on the network, run it with
 -Url http://<address>:5152/mcp and -AskToken (it asks for the secret and shows nothing; -Token <secret> works
 but leaves the secret in your shell history).
 
-The script writes the dRofus API key to a file only your account can read
-(%LOCALAPPDATA%\RoomMate\secrets\drofus.key) and gives Claude Code the path, so Claude Code's own
-configuration never holds the key. Use a read-only or project-scoped key you can rotate. The uninstaller
-deletes the file. A shared RoomMate secret, unlike the key, has to sit in Claude Code's configuration file
+The dRofus API key goes into the Windows Credential Manager (drofus-mcp.exe stores it itself; the key
+is passed on standard input, never a command line) and Claude Code's own configuration never holds it.
+If that is unavailable the key goes into a file only your account can read
+(%LOCALAPPDATA%\RoomMate\secrets\drofus.key) and Claude Code is given the path. Use a read-only or project-scoped key you can rotate. The uninstaller
+removes the stored key. A shared RoomMate secret, unlike the key, has to sit in Claude Code's configuration file
 as a header, in plain text.
 
 The MCP server
@@ -122,7 +123,7 @@ data, which forwards to the running server.
 To share one MCP server with colleagues on a closed network, run it yourself on the
 computer that holds the data (the host does not launch this one):
 
-  set ROOMMATE_MCP_TOKEN=<a shared secret>
+  set ROOMMATE_MCP_TOKEN=<a shared secret>        (or ROOMMATE_MCP_TOKEN_FILE=<a file holding it>)
   mcp.exe --server-settings <...\server.toml> --project-settings <...\projects> --http 5152 --bind 0.0.0.0
 
 It prints the address to give out. Each person adds it by URL with the header

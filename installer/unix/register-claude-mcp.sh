@@ -8,7 +8,8 @@
 #                    (prompts, nothing shown) or set ROOMMATE_MCP_TOKEN. --token SECRET still
 #                    works but is deprecated: a command line shows in history and `ps`
 #   --drofus         ask for region, database, project and API key; register drofus-mcp. The key
-#                    goes into a file only you can read, and Claude Code is given its path
+#                    goes into the OS credential store (macOS) or else a file only you can read;
+#                    Claude Code is given at most a path
 #   --remove         take both back out
 #   --dry-run        print what would run (the API key and token shown as ***)
 #
@@ -64,7 +65,10 @@ add() { # add <name> <shown args, then @@, then real args>
 
 if [ "$REMOVE" = 1 ]; then
   for name in roommate drofus; do run mcp remove "$name" --scope user @@ mcp remove "$name" --scope user || true; done
-  [ "$DRY" = 1 ] || rm -f "$KEY_FILE"
+  if [ "$DRY" != 1 ]; then
+    rm -f "$KEY_FILE"
+    [ -x "$APP/drofus-mcp" ] && "$APP/drofus-mcp" --clear-key >/dev/null 2>&1 || true
+  fi
   exit 0
 fi
 
@@ -80,15 +84,25 @@ if [ "$DROFUS" = 1 ]; then
     echo "Database, project and API key are all needed; nothing was registered." >&2; exit 1
   fi
   tail=(-- "$APP/drofus-mcp" --base-url "https://$region.drofus.com" --database "$database" --project "$project")
-  # The key goes in a file only this user can read; Claude Code is told the path, never the key.
-  if [ "$DRY" = 1 ]; then echo "(would write the API key to $KEY_FILE, mode 600)"; else
+  # The key is kept where Claude Code's own (plain text) configuration need not hold it. First choice: the OS
+  # credential store, written by drofus-mcp itself with the key on standard input (macOS Keychain; Linux has none
+  # it can rely on and says so). Fallback: a file only this user can read. Claude Code is told a path at most.
+  env_args=(); where=
+  if [ "$DRY" = 1 ]; then
+    echo "(would store the API key in the OS credential store if there is one, else in $KEY_FILE, mode 600)"
+    where="the OS credential store or $KEY_FILE"
+  elif printf '%s\n' "$key" | "$APP/drofus-mcp" --store-key >/dev/null 2>&1; then
+    where="the OS credential store"
+  else
     ( umask 077; mkdir -p "$(dirname "$KEY_FILE")"; printf '%s\n' "$key" > "$KEY_FILE" )
     chmod 600 "$KEY_FILE"
+    env_args=(--env "DROFUS_API_KEY_FILE=$KEY_FILE")
+    where="$KEY_FILE (readable by you only)"
   fi
   # The name goes first: --env takes any number of values and would swallow it otherwise.
-  add drofus mcp add drofus --scope user --env "DROFUS_API_KEY_FILE=$KEY_FILE" "${tail[@]}" \
-    @@ mcp add drofus --scope user --env "DROFUS_API_KEY_FILE=$KEY_FILE" "${tail[@]}"
-  echo "The API key is stored in $KEY_FILE (readable by you only). Claude Code's configuration holds only that path."
+  add drofus mcp add drofus --scope user ${env_args[@]+"${env_args[@]}"} "${tail[@]}" \
+    @@ mcp add drofus --scope user ${env_args[@]+"${env_args[@]}"} "${tail[@]}"
+  echo "The API key is stored in $where. Claude Code's configuration does not hold it."
   exit 0
 fi
 
