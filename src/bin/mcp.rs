@@ -2349,6 +2349,11 @@ struct Args {
     #[arg(long, env = "ROOMMATE_MCP_TOKEN", hide_env_values = true)]
     token: Option<String>,
 
+    /// A file holding the shared secret (one line), for `--http`, instead of `ROOMMATE_MCP_TOKEN`. Also read from
+    /// `ROOMMATE_MCP_TOKEN_FILE`. Used only when no token is given directly. Keep it readable by you alone.
+    #[arg(long, env = "ROOMMATE_MCP_TOKEN_FILE")]
+    token_file: Option<std::path::PathBuf>,
+
     /// Let `upload_reference` run. Always on over stdio (the process is the user's own); over
     /// `--http` it is off unless this is given, because any caller could use it to replace a
     /// project's reference data.
@@ -2384,6 +2389,24 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The shared secret `--http` enforces: a token given directly wins, else the first line of `--token-file`.
+///
+/// A file that was asked for and cannot be used is an ERROR, not "no token": the operator meant the server to be
+/// protected, and starting it open on a network because a path was mistyped is the wrong way to fail.
+fn effective_token(token: Option<&str>, file: Option<&std::path::Path>) -> anyhow::Result<Option<String>> {
+    if let Some(t) = token.filter(|t| !t.is_empty()) {
+        return Ok(Some(t.to_string()));
+    }
+    let Some(path) = file else { return Ok(None) };
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("the token file {} could not be read: {}", path.display(), e.kind()))?;
+    let token = text.trim();
+    if token.is_empty() {
+        anyhow::bail!("the token file {} is empty", path.display());
+    }
+    Ok(Some(token.to_string()))
+}
+
 /// `--http`: the same tools behind `/mcp`. See `roommate::mcp_http` for what stands in front.
 async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()> {
     use roommate::network::{self, HostPolicy};
@@ -2391,18 +2414,19 @@ async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()>
     let hostname = network::machine_hostname();
     let hosts = HostPolicy::for_bind(args.bind, hostname.as_deref(), &args.allow_host);
     let (url, allow_upload) = (args.server_url.clone(), args.allow_upload);
+    let token = effective_token(args.token.as_deref(), args.token_file.as_deref())?;
     let app = roommate::mcp_http::router(
         move || Ok(RoommateMcp::new(state.clone(), url.clone()).with_upload(allow_upload)),
         hosts,
-        args.token.clone().filter(|t| !t.is_empty()),
+        token.clone(),
     );
     let addr = std::net::SocketAddr::new(args.bind, port);
     for base in network::reachable_urls(addr, hostname.as_deref()) {
         tracing::info!("MCP endpoint: {base}{}", roommate::mcp_http::MCP_PATH);
     }
-    if network::serves_network(args.bind) && args.token.as_deref().is_none_or(str::is_empty) {
+    if network::serves_network(args.bind) && token.is_none() {
         tracing::warn!(
-            "serving a network with no token: anyone who can reach this port can read every project. Set ROOMMATE_MCP_TOKEN."
+            "serving a network with no token: anyone who can reach this port can read every project. Set ROOMMATE_MCP_TOKEN or ROOMMATE_MCP_TOKEN_FILE."
         );
     }
     if !allow_upload {
@@ -2413,6 +2437,22 @@ async fn serve_http(state: Shared, args: &Args, port: u16) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_token_comes_directly_then_from_the_file_and_a_bad_file_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("mcp-token-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("t");
+        std::fs::write(&file, "from-file\n").unwrap();
+        assert_eq!(super::effective_token(None, Some(&file)).unwrap().as_deref(), Some("from-file"));
+        assert_eq!(super::effective_token(Some("direct"), Some(&file)).unwrap().as_deref(), Some("direct"));
+        assert_eq!(super::effective_token(Some(""), Some(&file)).unwrap().as_deref(), Some("from-file"));
+        assert_eq!(super::effective_token(None, None).unwrap(), None);
+        std::fs::write(&file, " \n").unwrap();
+        assert!(super::effective_token(None, Some(&file)).is_err(), "an empty file must not mean no token");
+        assert!(super::effective_token(None, Some(&dir.join("missing"))).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// Every tool declares how it bounds its answer, and the declaration is the tool list: a tool added
     /// without one, or a declared tool that no longer exists, fails here.
     #[test]

@@ -31,14 +31,21 @@ install.sh registers the RoomMate data server with Claude Code if it is installe
 --no-claude). Redo it, or add the others, with register-claude-mcp.sh in the app folder:
 
   register-claude-mcp.sh                 the data server, against this install
-  register-claude-mcp.sh --drofus        asks for region, database, project and API key
-  register-claude-mcp.sh --url http://<address>:5152/mcp --token <secret>
+  register-claude-mcp.sh --drofus        asks for region, database, project and API key; the key is
+                                         kept in the macOS Keychain, else (Linux) in
+                                         ~/.config/roommate/secrets/drofus.key, mode 600; Claude
+                                         Code is given at most that path
+  register-claude-mcp.sh --url http://<address>:5152/mcp --ask-token
+                                         (--token <secret> works but leaves it in your shell history)
                                          use a RoomMate server somebody else shares
+  register-claude-mcp.sh --print-config claude-desktop|cursor|vscode|codex
+                                         print the entries and file for another AI client (changes nothing;
+                                         formats are the client's own, not tested by us)
   register-claude-mcp.sh --remove        take them back out
 
 To share the MCP server with colleagues, run on this machine:
 
-  ROOMMATE_MCP_TOKEN=<a shared secret> ~/.local/share/roommate/app/mcp \
+  ROOMMATE_MCP_TOKEN=<a shared secret> ~/.local/share/roommate/app/mcp   # or ROOMMATE_MCP_TOKEN_FILE=<file> \
     --server-settings ~/.local/share/roommate/settings/server.toml \
     --project-settings ~/.local/share/roommate/settings/projects --http 5152 --bind 0.0.0.0
 

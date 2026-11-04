@@ -69,7 +69,7 @@ pub fn info(config: &Config, gate: &Gate) -> Info {
         authentication: if config.api_key.is_some() {
             "API key set: sent as `Authorization: Reference <key>` (not checked until a call is made)"
         } else {
-            "NO API KEY: every dRofus tool stops with an error before any request is sent; set DROFUS_API_KEY (see AUTH.md)"
+            "NO API KEY: every dRofus tool stops with an error before any request is sent; set DROFUS_API_KEY_FILE or DROFUS_API_KEY (see AUTH.md)"
         },
         drofus_tools: ENDPOINTS.len(),
         writes: if gate.enabled() {

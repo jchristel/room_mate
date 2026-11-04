@@ -211,8 +211,10 @@ runs in the foreground.
   `Register-ClaudeMcp.ps1`, run from the "claudemcp" task (ticked by default, so it
   works out of the box) and undone by the uninstaller; it uses `claude mcp add
   --scope user`, the supported route, and does nothing when `claude` is not found.
-  The dRofus server is offered on the last page, unticked, because it needs a
-  database, project and API key that only the user has. Nothing writes to
+  The dRofus server is a task, unticked, that adds a page asking for the
+  database, project and API key that only the user has (the key in a password box;
+  it reaches the script through that one process's environment, never a command line,
+  and is kept in the Credential Manager). Nothing writes to
   `claude_desktop_config.json` — an installer editing another application's
   config file is a surprise, and the paths are in `README-INSTALL.txt` for
   anyone who wants it. See [mcp-host-setup.md](../docs/mcp-host-setup.md).

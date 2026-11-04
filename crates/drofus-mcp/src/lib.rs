@@ -13,6 +13,7 @@
 //! - [`client`] -- the one generic HTTP path, its error mapping and its size caps.
 //! - [`approval`] -- the human gate any future write must pass: dry run, out-of-band approval, audit log.
 //!   No tool uses it yet.
+//! - [`keystore`] -- the OS credential store (Keychain, Credential Manager) as the last place the API key is looked for.
 //! - [`auth`] -- the authentication seam, with nothing implemented behind it.
 //! - [`server`] -- the MCP tools, one method each, and the server's identity.
 //!
@@ -23,4 +24,5 @@ pub mod auth;
 pub mod client;
 pub mod config;
 pub mod endpoints;
+pub mod keystore;
 pub mod server;

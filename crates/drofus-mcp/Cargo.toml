@@ -37,3 +37,9 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# The OS credential store, on the two platforms that always have one (macOS Keychain, Windows Credential Manager). Not
+# on Linux: the Secret Service needs a desktop session and a system library, and a headless server has neither, so
+# Linux keeps to the key file. No default features, so nothing else is pulled in.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }

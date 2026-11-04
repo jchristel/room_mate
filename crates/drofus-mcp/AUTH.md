@@ -48,8 +48,8 @@ prefers is **not built** and is blocked on dRofus (no OAuth endpoints are known)
 - Its connection test is `GET .../rooms`; it pages with `$top`/`$skip` (500 per call) and reads
   `OPTIONS .../rooms` and `GET .../attributeconfigurations` for field metadata.
 
-**Implemented: `auth::ReferenceKey`**, `Authorization: Reference {key}`, the key from `DROFUS_API_KEY` (or
-`--api-key`) as a `Secret`. The header is marked sensitive so a debug-printed request hides it, a key that cannot
+**Implemented: `auth::ReferenceKey`**, `Authorization: Reference {key}`, the key from `--api-key`, `DROFUS_API_KEY` or a file named by `DROFUS_API_KEY_FILE`, or the OS credential store (`--store-key`; macOS and Windows), so the host
+configuration holds a path or nothing, not the key as a `Secret`. The header is marked sensitive so a debug-printed request hides it, a key that cannot
 be a header value is refused without echoing it, and a key is never attached to plain `http` off this machine
 (loopback is allowed for a tunnel or a mock). With no key, `Unauthenticated` refuses every call before any request
 and says what to set. **Untested against the live service from this crate**: no credentialed call has been made
