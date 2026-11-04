@@ -31,8 +31,11 @@ install.sh registers the RoomMate data server with Claude Code if it is installe
 --no-claude). Redo it, or add the others, with register-claude-mcp.sh in the app folder:
 
   register-claude-mcp.sh                 the data server, against this install
-  register-claude-mcp.sh --drofus        asks for region, database, project and API key
-  register-claude-mcp.sh --url http://<address>:5152/mcp --token <secret>
+  register-claude-mcp.sh --drofus        asks for region, database, project and API key; the key is
+                                         kept in ~/.config/roommate/secrets/drofus.key (mode 600) and
+                                         Claude Code is given only that path
+  register-claude-mcp.sh --url http://<address>:5152/mcp --ask-token
+                                         (--token <secret> works but leaves it in your shell history)
                                          use a RoomMate server somebody else shares
   register-claude-mcp.sh --remove        take them back out
 

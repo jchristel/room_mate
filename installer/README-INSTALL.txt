@@ -94,7 +94,14 @@ uninstall. To redo it, or if Claude Code was installed afterwards:
 The dRofus server needs three things only you have (database, project, API key).
 The last page of the setup offers to ask for them; or run the same script with
 -Drofus. To use a RoomMate server somebody else runs on the network, run it with
--Url http://<address>:5152/mcp and -Token <secret>.
+-Url http://<address>:5152/mcp and -AskToken (it asks for the secret and shows nothing; -Token <secret> works
+but leaves the secret in your shell history).
+
+The script writes the dRofus API key to a file only your account can read
+(%LOCALAPPDATA%\RoomMate\secrets\drofus.key) and gives Claude Code the path, so Claude Code's own
+configuration never holds the key. Use a read-only or project-scoped key you can rotate. The uninstaller
+deletes the file. A shared RoomMate secret, unlike the key, has to sit in Claude Code's configuration file
+as a header, in plain text.
 
 The MCP server
 --------------
@@ -132,10 +139,10 @@ host at:
 
   Command:  %LOCALAPPDATA%\Programs\RoomMate\drofus-mcp.exe
   Args:     --base-url https://api-no.drofus.com --database <db> --project <project>
-  Env:      DROFUS_API_KEY=<your dRofus API key>
+  Env:      DROFUS_API_KEY_FILE=<path to a file that holds your dRofus API key>
 
-Use full expanded paths. Put the key in the host's env setting, not in Args:
-arguments show up in process listings. The host is whatever serves your
+Use full expanded paths. Keep the key in a file only you can read and give the host its path, not the key:
+the host's configuration is plain text, and arguments show up in process listings. (DROFUS_API_KEY still works.) The host is whatever serves your
 project: a dRofus regional host (api-no, api-eu, api-us, api-ca, api-au .drofus.com) or your
 organisation's own domain. You can paste the address of a working request instead; the host,
 database and project are taken from it. With no key every call is refused before

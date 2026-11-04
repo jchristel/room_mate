@@ -30,10 +30,14 @@ struct Args {
     project: Option<String>,
 
     /// The dRofus API key (from the Power Query credentials dialog), sent as `Authorization: Reference <key>`.
-    /// Prefer the DROFUS_API_KEY environment variable: a flag shows up in the process list.
-    /// flag shows up in the process list.
+    /// Deprecated: a flag shows up in the process list. Use DROFUS_API_KEY_FILE or DROFUS_API_KEY.
     #[arg(long)]
     api_key: Option<String>,
+
+    /// A file holding the API key (one line). Lets the MCP host's own configuration hold a path instead of
+    /// the key. Used only when neither --api-key nor DROFUS_API_KEY is set. Keep it readable by you alone.
+    #[arg(long, env = "DROFUS_API_KEY_FILE")]
+    api_key_file: Option<String>,
 
     /// Seconds one request may take (1 to 600; default 60). Raise it for the slow endpoints, such as a table's change
     /// log. Falls back to DROFUS_TIMEOUT_SECS.
@@ -51,6 +55,21 @@ struct Args {
     audit_log: Option<std::path::PathBuf>,
 }
 
+/// A key file other accounts can read is no better than the plain-text host configuration it replaces, so say so.
+/// A warning and not a refusal: a person who made the file by hand should be told, not locked out.
+#[cfg(unix)]
+fn warn_if_key_file_is_shared(path: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path)
+        && meta.permissions().mode() & 0o077 != 0
+    {
+        tracing::warn!("the API key file {path} can be read by other accounts; run: chmod 600 {path}");
+    }
+}
+
+#[cfg(not(unix))]
+fn warn_if_key_file_is_shared(_path: &str) {}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -62,8 +81,23 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    if args.api_key.is_some() {
+        tracing::warn!(
+            "--api-key is deprecated: it is visible in the process list. Use DROFUS_API_KEY_FILE or DROFUS_API_KEY"
+        );
+    }
     let mut config =
         Config::resolve(args.base_url, args.api_key, args.database, args.project, |name| std::env::var(name).ok());
+    if let Some(path) = args.api_key_file.as_deref() {
+        warn_if_key_file_is_shared(path);
+    }
+    config = match config.clone().with_key_file(args.api_key_file.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("{e}");
+            config
+        }
+    };
     config.timeout_secs = args.timeout;
     for missing in config.missing() {
         tracing::warn!("not configured yet: {missing}");

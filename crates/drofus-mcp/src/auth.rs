@@ -52,7 +52,7 @@ impl Authenticator for Unauthenticated {
     fn authenticate(&self, _request: reqwest::RequestBuilder) -> AuthFuture<'_> {
         Box::pin(async {
             Err(AuthError(
-                "no API key is configured, so no dRofus request was sent. Set DROFUS_API_KEY (or --api-key) to \
+                "no API key is configured, so no dRofus request was sent. Set DROFUS_API_KEY_FILE (a file holding the key) or DROFUS_API_KEY to \
                  an API key from dRofus's Power Query credentials dialog; AUTH.md has the details."
                     .to_string(),
             ))

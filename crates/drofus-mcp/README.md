@@ -46,12 +46,18 @@ wants from the roommate server is copied, never imported.
 | dRofus API base address | `--base-url` | `DROFUS_BASE_URL` |
 | Database (`/api/{db}/...`) | `--database` | `DROFUS_DATABASE` |
 | Project (`/api/{db}/{pr}/...`) | `--project` | `DROFUS_PROJECT` |
-| API key (`Authorization: Reference`) | `--api-key` (shows in the process list: prefer the environment) | `DROFUS_API_KEY` |
+| API key (`Authorization: Reference`) | `--api-key` (deprecated: it shows in the process list) | `DROFUS_API_KEY_FILE` (a file holding the key; preferred), or `DROFUS_API_KEY` |
 
 The base address is whatever host serves your project: a dRofus regional host (`https://api-no.drofus.com`)
 or your organisation's own domain (`https://api.example.org`); nothing is appended to it. Pasting the
 address of a working request (`https://api.example.org/api/<db>/<pr>/rooms?...`) also works: the host, the
 database and the project are taken from it, and the query is ignored.
+
+The key is read from, in order: `--api-key`, `DROFUS_API_KEY`, then the file named by `DROFUS_API_KEY_FILE` (or
+`--api-key-file`). Prefer the file: the MCP host's configuration is plain text, so it should hold a path and not the
+key. Keep the file readable by you alone (`chmod 600` on Mac/Linux; the register scripts do this for you, and on
+Windows restrict it to your account), keep it out of any repository and out of backups, and use a read-only or
+project-scoped key you can rotate. A key file is no defence against other software running as you.
 
 A flag wins over the environment. Nothing is read from a file in the repository. A credential is wrapped in
 `config::Secret`, which never prints.
@@ -69,7 +75,7 @@ An MCP client entry (for example `.mcp.json`) looks like:
   "mcpServers": {
     "drofus": {
       "command": "target/debug/drofus-mcp",
-      "env": { "DROFUS_BASE_URL": "https://drofus.example.com", "DROFUS_API_KEY": "..." }
+      "env": { "DROFUS_BASE_URL": "https://drofus.example.com", "DROFUS_API_KEY_FILE": "/path/to/drofus.key" }
     }
   }
 }

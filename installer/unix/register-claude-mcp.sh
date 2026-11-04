@@ -4,8 +4,11 @@
 #
 #   (no option)      the RoomMate data server (mcp), against this install's settings
 #   --url URL        a RoomMate server somebody else runs on the network instead
-#                    (docs/mcp-host-setup.md, 2b); add --token SECRET if it has one
-#   --drofus         ask for region, database, project and API key; register drofus-mcp
+#                    (docs/mcp-host-setup.md, 2b); if it has a shared secret, add --ask-token
+#                    (prompts, nothing shown) or set ROOMMATE_MCP_TOKEN. --token SECRET still
+#                    works but is deprecated: a command line shows in history and `ps`
+#   --drofus         ask for region, database, project and API key; register drofus-mcp. The key
+#                    goes into a file only you can read, and Claude Code is given its path
 #   --remove         take both back out
 #   --dry-run        print what would run (the API key and token shown as ***)
 #
@@ -15,16 +18,19 @@ set -euo pipefail
 
 APP=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SETTINGS=${ROOMMATE_HOME:-$HOME/.local/share/roommate}/settings
-URL= TOKEN= DROFUS=0 REMOVE=0 DRY=0
+# Where the dRofus key is kept: a file only this user can read, so Claude Code's configuration holds a path.
+KEY_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/roommate/secrets/drofus.key
+URL= TOKEN=${ROOMMATE_MCP_TOKEN:-} ASK_TOKEN=0 DROFUS=0 REMOVE=0 DRY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL=$2; shift 2 ;;
-    --token) TOKEN=$2; shift 2 ;;
+    --token) TOKEN=$2; echo "warning: --token puts the secret in your shell history; use --ask-token" >&2; shift 2 ;;
+    --ask-token) ASK_TOKEN=1; shift ;;
     --drofus) DROFUS=1; shift ;;
     --remove) REMOVE=1; shift ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -58,6 +64,7 @@ add() { # add <name> <shown args, then @@, then real args>
 
 if [ "$REMOVE" = 1 ]; then
   for name in roommate drofus; do run mcp remove "$name" --scope user @@ mcp remove "$name" --scope user || true; done
+  [ "$DRY" = 1 ] || rm -f "$KEY_FILE"
   exit 0
 fi
 
@@ -73,17 +80,24 @@ if [ "$DROFUS" = 1 ]; then
     echo "Database, project and API key are all needed; nothing was registered." >&2; exit 1
   fi
   tail=(-- "$APP/drofus-mcp" --base-url "https://$region.drofus.com" --database "$database" --project "$project")
+  # The key goes in a file only this user can read; Claude Code is told the path, never the key.
+  if [ "$DRY" = 1 ]; then echo "(would write the API key to $KEY_FILE, mode 600)"; else
+    ( umask 077; mkdir -p "$(dirname "$KEY_FILE")"; printf '%s\n' "$key" > "$KEY_FILE" )
+    chmod 600 "$KEY_FILE"
+  fi
   # The name goes first: --env takes any number of values and would swallow it otherwise.
-  add drofus mcp add drofus --scope user --env "DROFUS_API_KEY=***" "${tail[@]}" \
-    @@ mcp add drofus --scope user --env "DROFUS_API_KEY=$key" "${tail[@]}"
-  echo "The API key is stored in Claude Code's configuration file."
+  add drofus mcp add drofus --scope user --env "DROFUS_API_KEY_FILE=$KEY_FILE" "${tail[@]}" \
+    @@ mcp add drofus --scope user --env "DROFUS_API_KEY_FILE=$KEY_FILE" "${tail[@]}"
+  echo "The API key is stored in $KEY_FILE (readable by you only). Claude Code's configuration holds only that path."
   exit 0
 fi
 
 if [ -n "$URL" ]; then
+  if [ "$ASK_TOKEN" = 1 ] && [ -z "$TOKEN" ]; then read -r -s -p "Shared secret (not shown): " TOKEN; echo; fi
   if [ -n "$TOKEN" ]; then
     add roommate mcp add --transport http --scope user roommate "$URL" --header "Authorization: Bearer ***" \
       @@ mcp add --transport http --scope user roommate "$URL" --header "Authorization: Bearer $TOKEN"
+    echo "Claude Code stores this header in its configuration file in plain text."
   else
     add roommate mcp add --transport http --scope user roommate "$URL" \
       @@ mcp add --transport http --scope user roommate "$URL"

@@ -13,6 +13,8 @@
       docs/mcp-host-setup.md, 2b), so a colleague's whole setup is one command.
     * -Drofus: asks for the dRofus database, project and API key, then registers drofus-mcp.exe.
       Nothing can fill those in beforehand, which is why this one is a question and not a default.
+      The key is written to a file only your account can read (under %LOCALAPPDATA%\RoomMate\secrets)
+      and Claude Code is given the file's path, so its own configuration never holds the key.
     * -Remove: takes both back out. Run by the uninstaller.
 
     Registering is repeatable: an existing entry of the same name is replaced, so running it again
@@ -25,8 +27,13 @@
     The address of a shared RoomMate MCP server, e.g. http://192.168.1.20:5152/mcp.
 
 .PARAMETER Token
-    The shared secret that server was started with. Sent as a bearer token. It is stored in
-    Claude Code's configuration file in plain text, like every header it is given.
+    The shared secret that server was started with. Sent as a bearer token. Deprecated as a
+    parameter: a command line shows in history and the process list. Use -AskToken, or set
+    ROOMMATE_MCP_TOKEN. Claude Code stores the header in its configuration file in plain text,
+    like every header it is given.
+
+.PARAMETER AskToken
+    Prompt for the shared secret (nothing is shown) instead of taking it on the command line.
 
 .PARAMETER Drofus
     Register the dRofus server instead (prompts).
@@ -41,6 +48,7 @@
 param(
     [string] $Url,
     [string] $Token,
+    [switch] $AskToken,
     [switch] $Drofus,
     [switch] $Remove,
     [switch] $DryRun
@@ -50,6 +58,8 @@ $ErrorActionPreference = 'Stop'
 
 $AppRoot  = $PSScriptRoot
 $Settings = Join-Path $env:LOCALAPPDATA 'RoomMate\settings'
+# Where the dRofus key is kept: a file only this account can read, so Claude Code's configuration holds a path.
+$KeyFile  = Join-Path $env:LOCALAPPDATA 'RoomMate\secrets\drofus.key'
 
 function Find-Claude {
     $found = Get-Command claude -ErrorAction SilentlyContinue
@@ -114,6 +124,7 @@ if ($Remove) {
     foreach ($name in 'roommate', 'drofus') {
         Invoke-Claude -Arguments @('mcp', 'remove', $name, '--scope', 'user') | Out-Null
     }
+    if (-not $DryRun) { Remove-Item -LiteralPath $KeyFile -Force -ErrorAction SilentlyContinue }
     exit 0
 }
 
@@ -135,22 +146,45 @@ if ($Drofus) {
         Stop-Here 'Database, project and API key are all needed; nothing was registered.' 1
     }
 
+    # The key goes in a file only this account can read; Claude Code is told the path, never the key.
+    if ($DryRun) {
+        Write-Host "(would write the API key to $KeyFile, readable by $env:USERNAME only)"
+    } else {
+        New-Item -ItemType Directory -Force -Path (Split-Path $KeyFile) | Out-Null
+        # Empty first and locked down before the key is written, so it is never readable by anyone else.
+        Set-Content -LiteralPath $KeyFile -Value '' -NoNewline
+        & icacls.exe $KeyFile /inheritance:r /grant:r "${env:USERNAME}:(R,W,D)" *> $null
+        if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $KeyFile -Force; Stop-Here 'Could not restrict the key file to your account; nothing was stored.' 1 }
+        Set-Content -LiteralPath $KeyFile -Value $key -NoNewline
+    }
+
     # The name goes first: --env takes any number of values and would swallow it otherwise.
     $tail = @('--', $Exe, '--base-url', "https://$region.drofus.com", '--database', $database, '--project', $project)
     $head = @('mcp', 'add', 'drofus', '--scope', 'user', '--env')
     Add-Server -Name 'drofus' `
-        -AddArguments ($head + @("DROFUS_API_KEY=$key") + $tail) `
-        -Shown        ($head + @('DROFUS_API_KEY=***') + $tail)
-    Write-Host 'The API key is stored in Claude Code''s configuration file.'
+        -AddArguments ($head + @("DROFUS_API_KEY_FILE=$KeyFile") + $tail) `
+        -Shown        ($head + @("DROFUS_API_KEY_FILE=$KeyFile") + $tail)
+    Write-Host "The API key is stored in $KeyFile (readable by your account only). Claude Code's configuration holds only that path."
     Stop-Here 'Done. Restart Claude Code to pick it up.'
 }
 
 if ($Url) {
+    if (-not $Token) { $Token = $env:ROOMMATE_MCP_TOKEN }
+    if ($Token -and $PSBoundParameters.ContainsKey('Token')) {
+        Write-Warning '-Token puts the secret in your shell history; use -AskToken or ROOMMATE_MCP_TOKEN.'
+    }
+    if ($AskToken -and -not $Token) {
+        $secureToken = Read-Host 'Shared secret (not shown)' -AsSecureString
+        $tb = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+        try { $Token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tb) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tb) }
+    }
     $head = @('mcp', 'add', '--transport', 'http', '--scope', 'user', 'roommate', $Url)
     if ($Token) {
         Add-Server -Name 'roommate' `
             -AddArguments ($head + @('--header', "Authorization: Bearer $Token")) `
             -Shown        ($head + @('--header', 'Authorization: Bearer ***'))
+        Write-Host 'Claude Code stores this header in its configuration file in plain text.'
     } else {
         Add-Server -Name 'roommate' -AddArguments $head
     }
