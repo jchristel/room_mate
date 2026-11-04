@@ -54,7 +54,8 @@ from room_m.post_tags import all_observations, post_observations
 from room_m.post_tasks import claim_tasks, report_tasks
 from room_m import project_settings, rls_settings, server_config, task_dispatch, task_log
 from room_m import report as run_report
-from room_m.post_common import SERVER_URL_PROJECTS, fetch_projects
+from room_m.post_common import SERVER_URL_PROJECTS, fetch_projects, fetch_text
+from room_m import phase_hint, prefs
 from room_m.sheet_tags import describe_outcome as describe_tag_outcome, describe_problems
 
 from room_m.utils.post_envelope import (
@@ -568,7 +569,7 @@ def sheets_export_entry(doc, uiapp, output, forms):
             return_value.update_sep(False, "Export aborted: the model has no sheets.")
             return return_value
 
-        from room_m import sheet_export_window
+        from room_m import sheet_export_form, sheet_export_window
         from room_m.post_common import fetch_projects
         from room_m.utils.sheets import all_placed_rooms
 
@@ -582,10 +583,13 @@ def sheets_export_entry(doc, uiapp, output, forms):
             return_value.update_sep(False, "Export aborted: the server has no registered projects.")
             return return_value
 
-        choice = sheet_export_window.show(forms, doc.Title, payload, sheets, all_placed_rooms(doc))
+        choice = sheet_export_window.show(
+            forms, doc.Title, payload, sheets, all_placed_rooms(doc), saved=prefs.section("sheets"))
         if choice is None:
-            return_value.append_message("Export cancelled")
+            return_value.append_message(run_report.say(
+                "Cancelled: no sheet was exported.", run_report.CANCELLED))
             return return_value
+        prefs.save_section("sheets", sheet_export_form.to_save(choice["project"], choice["filter"], choice["rule"]))
         _push_sheets(choice["project"], choice["assignments"], doc, None, return_value, forms)
     except Exception as e:
         return_value.update_sep(False, "Sheet export failed with exception: {}".format(e))
@@ -1126,10 +1130,17 @@ def export_all_entry(doc, uiapp, output, forms):
             return_value.update_sep(False, "Export aborted: no common phase.")
             return return_value
 
-        choice = export_window.show(forms, selected_docs, payload, phases, [document_levels(d) for d in selected_docs])
+        model_ids = [d.Title for d in selected_docs]
+        choice = export_window.show(
+            forms, selected_docs, payload, phases, [document_levels(d) for d in selected_docs],
+            saved=prefs.section("export"),
+            phase_lookup=lambda project_id: phase_hint.phases_held(fetch_text, project_id, model_ids))
         if choice is None:
-            return_value.append_message("Export cancelled")
+            return_value.append_message(run_report.say(
+                "Cancelled: nothing was exported.", run_report.CANCELLED))
             return return_value
+        # what to start with next time: the project, what was ticked and the levels
+        prefs.save_section("export", export_form.to_save(choice["project"], choice["entities"], choice["levels"]))
 
         return_value.append_message(export_form.summary(
             choice["entities"], choice["project"]["name"], choice["phase"], selected_docs, choice["levels"]))

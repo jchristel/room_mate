@@ -21,8 +21,10 @@ from room_m import export_form as form
 XAML_PATH = os.path.join(os.path.dirname(__file__), "export.xaml")
 
 
-def show(forms, docs, projects, phases, levels_by_doc):
-    """Show the window. Returns `{"project": {"id", "name"}, "phase", "entities", "levels"}` (`levels` is
+def show(forms, docs, projects, phases, levels_by_doc, saved=None, phase_lookup=None):
+    """Show the window. `saved` is what `room_m.prefs` kept from the last export (the project, what was ticked and the
+    levels), and `phase_lookup(project_id)` the phases the server holds for these models, so the phase can be
+    pre-selected (`export_form.default_phase`). Returns `{"project": {"id", "name"}, "phase", "entities", "levels"}` (`levels` is
     None for the whole model, else the chosen level names), or None when cancelled."""
     names = form.level_names(levels_by_doc)
 
@@ -37,19 +39,30 @@ def show(forms, docs, projects, phases, levels_by_doc):
             self.tx_server.Text = server_config.short()
             self.cb_project.ItemsSource = [p["name"] for p in self._projects]
             self.cb_phase.ItemsSource = list(phases)
-            if len(self._projects) == 1:
+            back = form.remembered(saved, self._projects, names)
+            if back["project"] is not None:
+                self.cb_project.SelectedIndex = back["project"]
+            elif len(self._projects) == 1:
                 self.cb_project.SelectedIndex = 0
             if phases:
                 self.cb_phase.SelectedIndex = 0
+            for name_, _key, _label in form.ENTITIES:
+                getattr(self, name_).IsChecked = name_ in back["entities"]
             for name in names:
                 box = CheckBox()
                 box.Content = name
                 box.Margin = Thickness(0, 2, 0, 2)
+                box.IsChecked = back["levels"] is not None and name in back["levels"]
                 box.Checked += self.on_change
                 box.Unchecked += self.on_change
                 self.sp_levels.Children.Add(box)
                 self._level_boxes.append(box)
+            if back["levels"] is not None:
+                self.rb_levels.IsChecked = True
+                self.sp_levels.IsEnabled = True
+                self.sp_levels_all.IsEnabled = True
             self._ready = True
+            self._phase_for_project()
             self._status()
 
         # -- handlers, named in the XAML ------------------------------------------------------
@@ -57,11 +70,30 @@ def show(forms, docs, projects, phases, levels_by_doc):
         def on_change(self, sender, args):
             self._status()
 
+        def on_project(self, sender, args):
+            if not self._ready:
+                return
+            self._phase_for_project()
+            self._status()
+
         def on_scope(self, sender, args):
             if not self._ready:
                 return
             self.sp_levels.IsEnabled = bool(self.rb_levels.IsChecked)
+            self.sp_levels_all.IsEnabled = bool(self.rb_levels.IsChecked)
             self._status()
+
+        def on_entities_all(self, sender, args):
+            self._set_entities(form.entities_all())
+
+        def on_entities_none(self, sender, args):
+            self._set_entities(set())
+
+        def on_levels_all(self, sender, args):
+            self._set_levels(True)
+
+        def on_levels_none(self, sender, args):
+            self._set_levels(False)
 
         def on_cancel(self, sender, args):
             self.result = None
@@ -80,6 +112,32 @@ def show(forms, docs, projects, phases, levels_by_doc):
             self.Close()
 
         # -- helpers --------------------------------------------------------------------------
+
+        def _set_entities(self, ticked):
+            self._ready = False  # one status refresh at the end, not one per box
+            for name_, _key, _label in form.ENTITIES:
+                getattr(self, name_).IsChecked = name_ in ticked
+            self._ready = True
+            self._status()
+
+        def _set_levels(self, value):
+            self._ready = False
+            for box in self._level_boxes:
+                box.IsChecked = value
+            self._ready = True
+            self._status()
+
+        def _phase_for_project(self):
+            """Pre-select the phase the server holds for the chosen project (the first phase on a first push)."""
+            index = self.cb_project.SelectedIndex
+            if index < 0 or not phases:
+                self.tx_phase_note.Text = ""
+                return
+            held = phase_lookup(self._projects[index]["id"]) if phase_lookup else []
+            phase, why = form.default_phase(list(phases), held)
+            if phase is not None:
+                self.cb_phase.SelectedItem = phase
+            self.tx_phase_note.Text = why
 
         def _ticked(self):
             return set(name for name, _key, _label in form.ENTITIES if getattr(self, name).IsChecked)
